@@ -5,7 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance } from 'fastify'
-import { buildApp } from '../src/app.js'
+import { buildApp, type BuildAppOptions } from '../src/app.js'
 import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { setupBrowserSmokeAuth } from './auth.js'
 
@@ -24,8 +24,9 @@ export async function startFastBootstrapHarness(
   database: Record<string, unknown>,
   options: {
     temporaryDirectoryPrefix?: string
-    /** Migrate an initialized fixture before app startup without installing a temporary writer. */
-    databaseSeedMode?: 'writer-import' | 'unowned-migration'
+    /** Import normally, migrate an unowned fixture, or leave application state uninitialized. */
+    databaseSeedMode?: 'writer-import' | 'unowned-migration' | 'empty'
+    generationChat?: BuildAppOptions['generationChat']
   } = {},
 ): Promise<FastBootstrapHarness> {
   process.env.LOG_LEVEL = 'silent'
@@ -52,6 +53,7 @@ export async function startFastBootstrapHarness(
     },
     assetGc: false,
     memoryWorker: false,
+    generationChat: options.generationChat,
   })
 
   try {
@@ -61,13 +63,34 @@ export async function startFastBootstrapHarness(
       throw new Error('Fast-bootstrap browser harness did not bind to a TCP port')
     }
     const assertion = await setupBrowserSmokeAuth(app)
-    if (options.databaseSeedMode === 'unowned-migration') {
+    if (options.databaseSeedMode === 'unowned-migration' || options.databaseSeedMode === 'empty') {
       const db = new DatabaseSync(path.join(dataDir, 'risu.db'), { readOnly: true })
       try {
         expect(
           db.prepare('SELECT active_writer_session_id, writer_epoch FROM database_metadata WHERE id = 1').get(),
         ).toMatchObject({ active_writer_session_id: null, writer_epoch: 0 })
-        expect(fs.existsSync(path.join(dataDir, 'db.json.migrated'))).toBe(true)
+        if (options.databaseSeedMode === 'unowned-migration') {
+          expect(fs.existsSync(path.join(dataDir, 'db.json.migrated'))).toBe(true)
+        } else {
+          expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toBeUndefined()
+          expect(db.prepare('SELECT revision FROM schema_version WHERE id = 1').get()).toMatchObject({ revision: 0 })
+          expect(
+            db.prepare('SELECT epoch FROM generation_operation_projection_state WHERE id = 1').get(),
+          ).toMatchObject({ epoch: 0 })
+          const tables = db
+            .prepare(
+              "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('database_metadata', 'generation_operation_projection_state', 'schema_version') ORDER BY name",
+            )
+            .all() as Array<{ name: string }>
+          for (const { name } of tables) {
+            expect(
+              db.prepare(`SELECT COUNT(*) AS rows FROM "${name.replaceAll('"', '""')}"`).get(),
+              `${name} starts empty`,
+            ).toMatchObject({ rows: 0 })
+          }
+          expect(fs.existsSync(path.join(dataDir, 'db.json'))).toBe(false)
+          expect(fs.existsSync(path.join(dataDir, 'db.json.migrated'))).toBe(false)
+        }
       } finally {
         db.close()
       }
