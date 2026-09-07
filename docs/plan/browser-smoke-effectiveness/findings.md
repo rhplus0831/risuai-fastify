@@ -1586,3 +1586,41 @@ includes all direct/local-alias references in specs and the two new support
 helpers. Discovery and these qualified controls do not replace the still-required
 final `test:agent` and phase-ending `test:all`; earlier failed gates remain
 recorded. No additional production fault matrix is introduced.
+
+## BSE-007: Generation-Settings Fixture Races Native Chat Selection
+
+Classification: reproduced browser-fixture ordering defect at `f430dc3a1`;
+repair verification pending. S05's full-suite failure occurs before the named
+server-restart trigger. The accepted-send spec shares one durable harness across
+separate case pages/chats. Its setup obtains actual writer authority and checks
+background readiness/generic composer visibility, then directly configures the
+target chat with an authenticated generation-settings PUT outside the client
+outbox. Native route selection is asynchronous and can still be pending.
+
+The trace proves the adverse order: direct PUT `chat-restart`, baseRevision 16,
+starts 21,146.811ms and commits revision 17; native PATCH of that same chat with
+`{patch:{},select:true}`, baseRevision 16, starts 21,152.166ms and receives real
+409/current 17. Refresh restores the previous S04 mobile selection. Later actual
+composer fill/click do not issue any generation-operation POST, and row zero
+still displays `mobile reload request`. This does not establish an application
+wrong-target send or restart failure. Original artifacts/build are preserved at
+`/tmp/smoke-phase3-restart-case-failure`.
+
+The imported fixture's `configured:true` is not an effective ready precondition:
+`server/fastify/src/risuSave/importSnapshot.ts:486` deliberately resets imported
+chat settings to false. Actual pre-setup character reads at 20,302.151ms and
+20,937.046ms show that false value; the later accepted PUT is necessary. Its
+existing retry handles the opposite revision ordering only. App route loading
+is inert, and composer dispatch checks the fresh selected target; readiness
+milestones alone are not routing/selection completion. One read-only production
+review and root's manual fixture/trace review establish these distinct boundaries.
+
+Owner: Smoke Phase 3, shared `ensureChatGenerationSettingsReady` used by initial
+boot and concurrent-chat navigation. The repair will require exact route URL/
+ready key, local selected identity and actual persisted selected chat, plus the
+relevant selection intent's completion, before direct configuration. No fixture
+assignment may create that state. Preserve the initial already-selected no-op
+case, all eleven original journey bodies, required configuration/revision retry,
+and actual send/restart/reload/Stop/effect assertions. Focused consumer baseline,
+named production selection fault and restored control, then the mandatory full
+phase gate own acceptance; no extra generation/geometry matrix is required.

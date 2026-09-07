@@ -22,7 +22,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 
 | Spec                                       | Default cases | Primary review phase                      | Review state                                         |
 | ------------------------------------------ | ------------: | ----------------------------------------- | ---------------------------------------------------- |
-| `acceptedSendProtocol.spec.ts`             |            11 | 2: generation/recovery                    | Retained/strengthened; complete scenario review      |
+| `acceptedSendProtocol.spec.ts`             |            11 | 2: generation/recovery                    | Reviewed; BSE-007 fixture repair pending             |
 | `bardWikiLifecycle.spec.ts`                |             1 | 3: memory lifecycle                       | Retained/strengthened; complete scenario review      |
 | `chatEntryLayout.spec.ts`                  |             8 | 2: transcript/entry; 3: final review      | Retained/strengthened; complete scenario review      |
 | `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Retained/strengthened; complete scenario review      |
@@ -106,7 +106,7 @@ row unless the detailed review states a narrower boundary.
 | S02 | `acceptedSendProtocol.spec.ts:413`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Retained; 2c/2d review                          |
 | S03 | `acceptedSendProtocol.spec.ts:449`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Retained; 2c/2d review                          |
 | S04 | `acceptedSendProtocol.spec.ts:492`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Retained; 2c/2d review                          |
-| S05 | `acceptedSendProtocol.spec.ts:520`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Retained; 2c/2d review                          |
+| S05 | `acceptedSendProtocol.spec.ts:520`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | BSE-007 fixture ordering repair pending         |
 | S06 | `acceptedSendProtocol.spec.ts:557`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Retained; 2c/2d review                          |
 | S07 | `acceptedSendProtocol.spec.ts:586`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Retained; 2c/2d review                          |
 | S08 | `acceptedSendProtocol.spec.ts:623`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Retained; 2c/2d review                          |
@@ -729,3 +729,10 @@ complete ID/source/control map reconcile all 92 cases/22 specs, twelve support
 files and four PNGs. There are no pending or partial current scenario/control
 review owners; the required full phase gate remains in
 [status](status.md#phase-3-focused-proof-and-final-gate).
+
+The Phase 3 full gate at `f430dc3a1` is 91/92: S05's direct configuration setup
+wins a revision race against native route selection before any generation or
+restart. [BSE-007](findings.md#bse-007-generation-settings-fixture-races-native-chat-selection)
+reopens that shared setup boundary; other reviewed dispositions remain valid.
+Its bounded actual-selection precondition repair, consumer/fault/restored proof
+and repeated full gate are pending. No wrong-target production send is claimed.

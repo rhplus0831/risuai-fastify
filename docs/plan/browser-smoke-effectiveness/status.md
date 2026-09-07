@@ -8,14 +8,14 @@ Updated: 2026-09-08
   reconciliation and the remaining scenario review are active.
 - Current implementation: production through `a703b9d4b`, browser through
   `60ac61bde`; reader final gates pass at clean `eb9673942` with 92/92 cases.
-- Current scope: Phase 3 scenario/support review and S38/S57 scope corrections
-  and focused critical browser evidence are complete; its required full gate
-  remains pending.
+- Current scope: Phase 3 review and the eight-case focused cohort are complete.
+  Its full gate is 91/92 because S05's direct fixture configuration races native
+  chat selection. BSE-007 owns the bounded setup repair and repeated final gate.
 - Next action: finish Phase 3 and its required full gate, then execute Phase 4
   verification, final findings and closeout.
-- Confirmed gaps: BSE-001–006 have their named repaired/strengthened controls;
-  renewed BSE-005/BSE-006 and all reader gates pass. Earlier fault demonstrations
-  retain their exact source/oracle limits.
+- Confirmed gaps: BSE-001–006 retain their verified controls. New BSE-007 is a
+  reproduced fixture ordering defect in accepted-send setup; its repair/control
+  verification is pending. No new production wrong-chat send is established.
 - Blockers: none. Reader default/FALSE rollout and archive are owned by the
   [accepted reader handoff](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08).
   Smoke Phase 3/4 acceptance remains separate.
@@ -408,7 +408,7 @@ are reconciled with the 92-case universe.
 The affected critical cohort is S01 normal send/completed reload, S22 continuous
 reversal/readable pause, S77 conservative lineage recovery, S91 connected import
 recovery, both Realm decisions, and the two renamed S38/S57 cases. Reuse the
-passing Reader final normal build because production inputs are unchanged; keep
+passing Reader final normal build with unchanged application code and test bodies; keep
 one worker and each spec's existing trace configuration. The original P0-T
 geometry fault retains its source limit; the changed remount/route/Reader
 transitions have the renewed BSE-005/BSE-006 and Reader Phase 5 fault/restored
@@ -441,3 +441,59 @@ does not rerun or relabel the unmanifested old geometry candidates.
 ignore override and whitespace checks pass. Phase 3's implementing-agent
 `pnpm test:all` now owns its final acceptance evidence at the completed review
 source. No required check is transferred to the user.
+
+### Phase 3 Full-Gate Failure: Native Selection Versus Fixture Setup
+
+At clean `f430dc3a1`, the required `pnpm test:all` exits 1 in **6m 20.3s**:
+**91/92 browser cases pass** and all twelve other lanes pass, including types,
+topology, docs, 8,842 ordinary frontend tests, 241 UI tests, formatting, 18 current
+compatibility cases, 4,228 server tests, the selected Realm scale case and six
+performance cases. The existing three frontend/two server skips and scale filter
+retain their scope. S05 fails before its actual server restart: visible row zero
+contains S04's earlier `mobile reload request`, not S05's `restart request`.
+The original full log/trace/build are preserved in
+`/tmp/smoke-phase3-restart-case-failure`; no rerun replaces this failure.
+
+Raw network bodies establish the cause. The fixture's direct generation-settings
+PUT for `chat-restart` starts at 21,146.811ms with baseRevision 16 and commits
+revision 17. The page's actual empty-patch `select:true` chat command starts at
+21,152.166ms with the same baseRevision 16 and receives real HTTP 409/current 17.
+Authoritative refresh restores the prior persisted mobile selection. Composer
+fill/click occur later at 21,307.374/21,354.116ms; there is **no generation-operation
+POST**. This is not a failed restart or proof of generation in the wrong chat.
+
+One of two read-only Luna reviews completes; root manually closes the fixture
+review timeout with trace bodies, all helper callers and import/selection source.
+Writer/background readiness does not imply completed routing. App's inert route
+content and exact send-target guards explain why a visible composer does not
+prove valid target readiness. `importSnapshot.ts` explicitly resets imported
+chat generation settings to `configured:false`, confirmed by actual pre-setup
+character GETs, so deleting the required fixture PUT would be incorrect.
+
+BSE-007's bounded repair must wait for the actual target URL/ready route, local
+selected chat and authoritative persisted selection before the direct setup PUT,
+plus completion of the relevant selection intent. It must accept an already-
+selected initial chat and preserve concurrent-chat navigation, the existing PUT
+retry and every original send/reload/restart/Stop/effect oracle. Implementation,
+focused consumer proof, a named selection fault/restored control and repeated
+Phase 3 full gate remain pending. Reader acceptance remains tied to its recorded
+passing source; no product behavior change or new feature gap is inferred.
+
+### Build Provenance Across Checkouts
+
+A read-only audit explains why main's passing `eb9673942` build differs from the
+qualified `60ac61bde` detached lab. The shared dependency symlink changes nine
+Svelte slider/color-picker filename-derived CSS scopes. Main's newer findings
+prose also adds the literal `row-298`, which Tailwind scans into one extra
+22-byte rule, `.row-298{grid-row:298}`; no application/test source uses that
+literal class. All 420 manifest entries and 414 textual manifest assets match
+after only the documented dependency-path/chunk-hash/scope normalizations; global
+index CSS has exactly that extra utility. Neither checkout has a local env file.
+
+Thus documentation is a Tailwind build input. Application code and test bodies
+were unchanged for the focused cohort, but cross-checkout byte identity is not
+claimed. Its own 503-file main catalog is preserved; all same-checkout negative/
+restored byte proofs remain valid. Required full gates rebuild current source and
+current scanned documentation. The compact audit is
+`/tmp/reader-cross-cwd-emission-audit-ukhdfuih/conclusion.json`. This finding does
+not introduce a build-hygiene workstream or expand the behavioral claim.
