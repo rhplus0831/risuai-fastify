@@ -273,6 +273,16 @@ cross-layer startup, recovery, navigation, command, and durability evidence;
 they do not prove the live auth UI, external providers, production refresh
 timing, memory workers, or asset garbage collection.
 
+Ordinary `fastBootstrapHarness.ts` fixtures import through the real authenticated
+API before any writer is registered. Bootstrap and, when the data directory is
+available, SQLite must report a null writer and epoch zero both before and after
+import. This lets the first browser exercise normal initial acquisition.
+Explicit `writer-import`, `unowned-migration`, and `empty` modes retain their
+owned, legacy-normalization, and genuine first-run purposes. Seeding cannot
+reset ownership after a browser has acquired it. Shared accepted-send cases use
+**Use this device** when a preceding case still owns the fixture; reload and
+restart inside a case retain the current session's recovery path.
+
 ### Fixtures And Specialized Helpers
 
 Shared-core import/export/compatibility ownership is consolidated in

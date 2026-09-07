@@ -2,6 +2,8 @@
 
 Last audited: 2026-09-04.
 
+Targeted source check: 2026-09-08 (connected-reader boundaries and evidence).
+
 This area covers the path from chat intent through prompt construction, provider dispatch orchestration, streaming, persistence, post-processing, cancellation, and reroll recovery. Provider wire formats are assessed in [Providers, Models, and Media](providers-models-and-media.md); scripting engines are assessed in [Scripting, Parsing, and Automation](scripting-parsing-and-automation.md); memory retrieval is assessed in [Memory and Embeddings](memory-and-embeddings.md).
 
 ## Test groups
@@ -34,6 +36,45 @@ concurrent chats and queued finalization with the same deterministic provider
 boundary. Browser lifecycle events and mobile profiles are controlled Chromium
 conditions; they do not certify physical devices or a live external provider.
 
+## Connected-reader viewing and writer effects
+
+`src/ts/server/readerGenerationObservation.ts` and `src/ts/server/readerGenerationStream.ts`
+provide selected-chat observation independently of the writer's `sendChat` and
+recovery stores. Their focused suites cover immutable lineage/operation/attempt/job
+identity, incomplete descriptors, bounded status/stream retries and deadlines,
+half-stream/Continue replay, exact terminal hydration, auth loss and teardown
+without cancellation. `src/ts/server/chatMessageHydration.test.ts` verifies exact
+generation-suffix reads and late-reader fences;
+`src/lib/ReaderTranscript.svelte.test.ts` and
+`src/lib/ChatScreens/readerGenerationRows.test.ts` cover transient row presentation and handoff.
+
+The writer path remains in `src/ts/process/reattach.ts`. Its focused suite reproduces
+the missing-descriptor eligibility loss using real operation helpers and verifies
+one bounded authority probe, retained recoverable jobs, metadata arrival, timeout
+and stale projection rejection. `src/ts/server/generationOperations.test.ts` also
+covers promoted-writer Stop when bootstrap supplies operation authority without a
+local cancellation record, preserving the exact chat target and cancellation
+request without submitting another generation.
+
+`src/ts/process/generationEffectLedger.svelte-node.test.ts` and
+`src/ts/process/recoveredGenerationEffects.svelte-node.test.ts` keep claims, callbacks, lease
+renewals and receipts restricted to the current writer generation. The IGP client
+tests under `src/ts/process/__tests__/igp.test.ts` and server
+`server/fastify/__tests__/generationIgpCommit.test.ts` pair stable-message append
+preconditions with atomic append/effect receipt, stale-claim rejection, transaction
+rollback and command replay protection.
+
+`server/fastify/browser-smoke/connectedReaderGeneration.spec.ts` supplies five real
+browser compositions: visible partial-to-persisted convergence; chat switching and
+close/reopen without cancelling the provider job; writer transfer during streaming
+and Stop; transfer while a finalization journal is queued; and an accepted IGP
+append whose PATCH response is held across writer loss. The last case requires one
+provider effect, one append and unchanged completed receipt state through transfer
+and refresh. Reader request audits, viewer counts, persisted messages and durable
+effect rows are separate oracles. Providers, response holds and journal failures
+are deterministic fixtures; physical-device behavior and live external providers
+remain outside this evidence.
+
 ## Especially critical tests
 
 - The local and server-backed `sendChat.fixtures*` suites are the broadest protection against prompt-content drift.
@@ -51,9 +92,10 @@ files are discussed in the linked feature documents rather than listed twice.
 | ------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `src/ts/process/__tests__/`     | `buildDescription`, `buildHistoryWindow`, `buildLorebookContext`, `buildPlainPromptSections`, `buildStaticPromptSections`, `charEmotionStore`, `dispatchRequest`, `emotionFallbackEmbedding`, `emotionFallbackLlm`, `emotionFromResponse`, `finalizeRequestBudget`, `formatHistoryMessage`, `igp`, `imggenStableDiff`, `nonStreamResponse`, `normalizeTemplate`, `notification`, `orchestrateResponse`, `outputTrigger`, `preflightTemplateTokens`, `reattach`, `renderFinalPrompt`, `runStage4`, `sendChat.fixtures`, `sendChat.fixtures.serverBacked`, `sendChat.serverPreview`, `sendChatContext`, `sendChatErrors`, `sendChatPromptAssembly.lazyPromptTemplate`, `stage4Finalize`, `streamCoalescer`, `streamResponse`. |
 | `src/ts/process/`               | `agentPresetProgress.test.ts`; `generationEffectLedger.svelte-node.test.ts`; `generationPersistenceState.test.ts`; `recoveredGenerationEffects.svelte-node.test.ts`; `inlayFinalization.test.ts`; `inputHooks.test.ts`; `messageCompletionSound.test.ts`; `prereroll.test.ts`; `promptTokenizeMemo.test.ts`; `rerollNavigation.test.ts`; `rerollNavigation.owner.test.ts`; `rerollNavigation.rollback.test.ts`; `sendChatCompletion.test.ts`; `serverBackedSendChat.findMessage.test.ts`.                                                                                                                                                                                                                                   |
+| Reader generation / operations  | `src/ts/server/readerGenerationObservation.test.ts`; `readerGenerationStream.test.ts`; `generationOperations.test.ts`. Mounted transcript and row presentation tests are indexed in [App Navigation and Chat](app-navigation-and-chat.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | Browser tokenizer               | `src/ts/tokenizer.test.ts` (Google Cloud bounded-cache cases).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
 | Prompt conversion               | `src/ts/process/prompt.conversionDurability.test.ts` (expanded input/outcome cases).                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | Agent Preset browser records    | `src/ts/agentPresetRecords.test.ts`, `agentPresetResolver.test.ts`, `agentPresetDiagnostics.test.ts`, and `agentPresets.test.ts`. Model/profile record ownership is cross-indexed in [Providers, Models, and Media](providers-models-and-media.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `src/ts/process/request/tests/` | `durableGeneration`, `providerCapability`, `serverChat`, `serverCompletion`, `serverMessagePatch`, `serverPromptAssembly`, `sseParse`. Provider-specific request tests are inventoried in [Providers, Models, and Media](providers-models-and-media.md).                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| Server prompt/generation        | `agentPresetExecution`, `assemble`, `boundedRegex`, `budgetFinalize`, `durableGeneration`, `generation.chat`, `generationBodyCap`, `generationEffects`, `generationOperations`, `generationOperationsStartup`, `generationTraceSidecar`, `history`, `jsonControls`, `lorebook`, `plainSections`, `preflight`, `promptVariables`, `staticSections`, `stripCoTFrames`, `templates`, `terminalFrameAssertions`, and `tokens` under `server/fastify/__tests__/`. Scripts, triggers, Lua, memory, and provider files are owned by their focused documents.                                                                                                                                                                       |
-| Browser and explicit gates      | `server/fastify/browser-smoke/acceptedSendProtocol.spec.ts`; `server/fastify/browser-smoke/debugEchoLayoutStability.spec.ts`; `server/fastify/browser-smoke/rerollSwipePersistence.spec.ts`; generation-relevant portions of `fastifyBrowserSmoke.spec.ts`; `src/ts/__tests__/renderCostHarness.test.ts`; `src/ts/__tests__/sendCloneCountProbe.test.ts`.                                                                                                                                                                                                                                                                                                                                                                   |
+| Server prompt/generation        | `agentPresetExecution`, `assemble`, `boundedRegex`, `budgetFinalize`, `durableGeneration`, `generation.chat`, `generationBodyCap`, `generationEffects`, `generationIgpCommit`, `generationOperations`, `generationOperationsStartup`, `generationTraceSidecar`, `history`, `jsonControls`, `lorebook`, `plainSections`, `preflight`, `promptVariables`, `staticSections`, `stripCoTFrames`, `templates`, `terminalFrameAssertions`, and `tokens` under `server/fastify/__tests__/`. Scripts, triggers, Lua, memory, and provider files are owned by their focused documents.                                                                                                                                                |
+| Browser and explicit gates      | `server/fastify/browser-smoke/acceptedSendProtocol.spec.ts`; `server/fastify/browser-smoke/connectedReaderGeneration.spec.ts`; `server/fastify/browser-smoke/debugEchoLayoutStability.spec.ts`; `server/fastify/browser-smoke/rerollSwipePersistence.spec.ts`; generation-relevant portions of `fastifyBrowserSmoke.spec.ts`; `src/ts/__tests__/renderCostHarness.test.ts`; `src/ts/__tests__/sendCloneCountProbe.test.ts`.                                                                                                                                                                                                                                                                                                 |

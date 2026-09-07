@@ -4,7 +4,7 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite and reader Phases 0–4 accepted; Phase 5 verification and rollout are next.
+- State: Stage 1 smoke prerequisite and reader Phases 0–4 accepted; Phase 5 combined verification and rollout are in progress.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Current task scope: implement the coordinated connected-reader plan after the
   accepted smoke prerequisite. Reader Phases 0–4 are accepted.
@@ -25,14 +25,14 @@ active [phase](phases/README.md) for detailed execution instructions.
 
 ## Phase Router
 
-| Phase                                                                                             | State    | Next evidence required                                                                               |
-| ------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.                    |
-| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.               |
-| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Accepted | Reader/browser/fault controls, final test:agent and all 13 test:all lanes passed.                    |
-| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Accepted | Projection review, UI switching/setup/durable-generation browser faults and both phase gates passed. |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Accepted | Five browser journeys, six qualified faults/restored controls and both final phase gates passed.     |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.                       |
+| Phase                                                                                             | State       | Next evidence required                                                                               |
+| ------------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted    | Source/transition/draft contract, 34 dispositions and required full suite passed.                    |
+| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted    | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.               |
+| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Accepted    | Reader/browser/fault controls, final test:agent and all 13 test:all lanes passed.                    |
+| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Accepted    | Projection review, UI switching/setup/durable-generation browser faults and both phase gates passed. |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Accepted    | Five browser journeys, six qualified faults/restored controls and both final phase gates passed.     |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | In progress | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.                       |
 
 ## Verification Ledger
 
@@ -921,3 +921,43 @@ local work, and current guide updates. Read-only preparation has identified
 fixture ownership and evidence gaps; it does not establish rollout acceptance.
 The public flag stays disabled until Phase 5 applies the authorized default and
 verifies it. Smoke Phases 3–4 remain pending until the completed reader handoff.
+
+## Phase 5 Combined Verification and Rollout — 2026-09-08
+
+Prerequisite: Phase 4 accepted in `987ea4745`. The public default remains
+disabled while the remaining combined evidence is prepared. Four read-only
+Luna preparations and a separate lifecycle/operational review were reconciled
+with the actual source and accepted test limits.
+
+Three bounded implementation owners are active. The browser owner extends S80
+to keep two Readers simultaneously connected and prepares a real server-restart
+journey plus conservative fallback with an actual pending command and unsent
+draft. The fixture owner preserves real authenticated API import but leaves
+ordinary initial fixtures unowned, auditing null owner/epoch zero before and
+after import. Explicit writer-import, migration and empty fixtures retain their
+named purposes. A focused operational companion will exercise nonempty
+memory/BardWiki projections, real listener delivery and zero mutation transport.
+The existing source/gated-UI policy does not add a Reader authoring workspace.
+
+Existing focused/mounted proof already covers heartbeat/replay-unavailable
+recovery, authenticated projection clearing, old-lineage queries, stale direct
+writes and operational version ordering. Those results retain their precise
+scope; they are not relabeled as physical-device or full browser replacement
+journeys. The missing actual Reader/server-restart composition is added rather
+than expanding every ordering variant into a browser campaign.
+
+After the combined feature evidence passes, this phase applies the authorized
+default-enabled flag and verifies the normal no-override build and explicit
+conservative fallback. Prepared guide edits remain unapplied while they would
+state a default that the source has not yet adopted. Final-source focused,
+fault/restored, aggregate, documentation and archive work remain pending.
+
+The focused operational companion is committed in `d0fae009e`: all 20 reader
+sync tests pass, including nonempty memory/BardWiki snapshots and listener
+updates, independent stream versions, reconnect fences and exactly four
+GETs with no mutation transport. This is actual projection-consumer execution
+with controlled transport, not a mounted Reader BardWiki workspace.
+`b898d6e6a` changes ordinary browser seeding to authenticated unowned import;
+six fixture tests and browser TypeScript pass. The fixture proves null owner
+and epoch zero around the real import rather than clearing ownership afterward.
+Neither result enables the public default or accepts the pending browser work.
