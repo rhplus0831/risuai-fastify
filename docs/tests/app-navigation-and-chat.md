@@ -17,6 +17,16 @@ that managed read-route capability never invokes writer route handlers or mounts
 writer authoring overlays. Reader route capability is intentional; canonical
 writer selection and persistence effects have a separate gate.
 
+The mounted App suite also holds route promises to verify that newer writer
+navigation supersedes a different retained Reader route, equivalent aliases
+retain retry behavior, and an obsolete completion cannot consume the newer
+intent. `selectedLocaleRuntime.spec.ts` provides the built-browser companion:
+it holds the actual emitted character-handler request after writer readiness,
+uses the production router to open Settings, and requires the visible language
+selector before releasing the older handler. It then checks the same document
+and Settings after real delivery and two paint frames; precise completion
+ordering remains the mounted test's assertion.
+
 `src/lib/ReaderTranscript.svelte.test.ts` mounts the transcript to verify certified
 committed content, history/copy controls, failed-refresh retention, exclusion of
 parked writer edits, transient generation rows, exact terminal handoff and auth-loss
@@ -46,6 +56,16 @@ Initial acquisition preview has mounted checks that prevent transcript/detail
 reads before the first resolved role; established Readers retain readable content
 during later recovery. The unchanged startup-rendering browser cases verify that
 raw intermediate text stays hidden and older display sources are requested once.
+
+`chatHistoryScroll.spec.ts` retains both fixed passes of seven reversal gestures
+and every original pause, traversal, remount and residency oracle. One additional
+pause at the proven ordinary-row remount return waits, within five seconds, for
+the first geometric visible row to become readable. That exact snapshot is
+sample zero; all 30 samples must retain its identity, readability and position
+within one pixel. Preparation and measured frames both count toward the existing
+76-row bound. This guarantees a measured readable pause without choosing a later
+surviving row; it does not make all immediate post-gesture samples readable.
+The cached-parser-owner fault protects direct remount readability separately.
 
 ## Routing, history, hotkeys, and shell ownership
 

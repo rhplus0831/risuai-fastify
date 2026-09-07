@@ -75,6 +75,14 @@ Reader before releasing the old PATCH's real 409, then verifies observer-only
 traffic, explicit same-owner writer recovery and the restored character sidebar.
 Focused auth/lifecycle tests retain their controlled-response scope.
 
+`selectedLocaleRuntime.spec.ts` also holds a real initial character-handler asset
+while an authorized writer navigates to Settings. The visible language selector
+must render before that older response is released. This separates route
+completion from `background-ready` and detects a retained Reader intent taking
+priority over a newer writer URL; mounted App tests independently fence obsolete
+asynchronous completions. The existing locale selection and retry cases keep
+their original interactions and assertions.
+
 Browser fixtures that own Playwright's page context close that context before
 closing their Fastify harness. Closing only the page can leave an idle pooled
 HTTP socket delaying server shutdown after all product assertions have passed.

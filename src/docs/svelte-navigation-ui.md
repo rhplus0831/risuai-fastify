@@ -71,6 +71,14 @@ read-only guidance rather than mounting writer controls. The latest local
 route is retained by `observerRouteIntent.ts` for current writer-safe
 application after promotion, without creating an outbox command.
 
+While an asynchronous writer route is loading, newer navigation takes precedence
+over a retained reader route with a different semantic route key. App consumes
+only that superseded intent's sequence; equivalent URL aliases and a failed
+application keep their matching retry intent. Each route effect fences its
+completion by its own lifetime, so an older successful handler cannot replace
+the newer visible route or consume a later intent. Startup's `background-ready`
+milestone does not mean the initial route handler has finished.
+
 During unresolved automatic writer startup, the coherent shell and local
 navigation stay visible. `canUseClientReaderContent()` defers character-detail
 reads, transcript mounting, and automatic missing-route repair until an actual
