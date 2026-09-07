@@ -16,7 +16,7 @@ Updated: 2026-09-08
   renewed BSE-005/BSE-006 and all reader gates pass. Earlier fault demonstrations
   retain their exact source/oracle limits.
 - Blockers: none. Reader default/FALSE rollout and archive are owned by the
-  [accepted reader handoff](../connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08).
+  [accepted reader handoff](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08).
   Smoke Phase 3/4 acceptance remains separate.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
@@ -251,7 +251,7 @@ this stage; isolated faults were restored. The normal-send spec changed in
 | 2d stale response/recovery    | P0-R real held lineage-tagged request/import/conflict/new-document recovery and visible newer view choice; omitted restoration fails its final DOM oracle. Outbox identity, one revision/receipt, event-gap ordering, takeover and queued-finalization companions retain verified current-source evidence. |
 
 **Phase 2 and Stage 1 accepted.** The receiving
-[reader status](../connected-read-only-clients/status.md#stage-1-smoke-prerequisite)
+[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#stage-1-smoke-prerequisite)
 links this prerequisite. No high-risk critical gap was deferred. All remaining
 smoke scenario reviews, including S65–S72 and other still-pending inventory
 rows, stay for Phase 3 after reader implementation. Stage 3 must reconcile
@@ -271,7 +271,7 @@ records their real paths, controls, oracles and remaining limits. Required
 production-fault evidence belongs to the
 [findings](findings.md#reader-phase-2-production-fault-evidence), and final
 focused/aggregate phase evidence belongs to
-[reader status](../connected-read-only-clients/status.md).
+[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md).
 
 This update maintains Stage 1's affected evidence during implementation; it
 accepts no smoke Phase 3/4 work. Resume the remaining scenario audit only after
@@ -348,7 +348,7 @@ entries after the expanded flag tests and guarded legacy setup helper. All
 frontend/server tests, Svelte check, topology, docs and smoke build pass, but the
 aggregate remains failed until the reviewed count/removal reconciliation and
 final checks pass. This changes no browser assertion, production owner or rollout
-behavior; [reader status](../connected-read-only-clients/status.md#final-aggregate-inventory-reconciliation)
+behavior; [reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#final-aggregate-inventory-reconciliation)
 retains the precise source, result and remaining gates.
 
 Reader Phase 5's repeated agent aggregate passes at `90069ac9c`, but its required
@@ -369,7 +369,7 @@ now repeats its final aggregate gates; Smoke Phase 3/4 acceptance is still pendi
 
 ## Stage 3 Reader Completion Handoff — 2026-09-08
 
-Received [accepted reader Phases 0–5](../connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08)
+Received [accepted reader Phases 0–5](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08)
 at `eb9673942`: final `test:agent` passes in 2m 21.3s and all thirteen required
 `test:all` lanes pass in 7m 16.0s, including 92/92 browser cases. Normal connected
 startup and actual compiled-FALSE intent/draft recovery pass; named faults and

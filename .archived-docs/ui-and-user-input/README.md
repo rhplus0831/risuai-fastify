@@ -3,6 +3,12 @@
 Historical visible-state testing, user-input persistence, settings controls,
 and async stale-state work.
 
+## Connected Readers
+
+| Record                                                             | Scope                                                                                                                                                                                                                                                                                                |
+| ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [Connected read-only clients](connected-read-only-clients/PLAN.md) | Completed reader/writer lifecycle, local browsing, explicit switching, draft/intent retention and live generation; [accepted rollout and evidence](connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08), including normal/FALSE builds and all 92 browser cases. |
+
 ## Visible State
 
 | Record                                                                                               | Scope                                                                                                      |
@@ -23,11 +29,11 @@ and async stale-state work.
 
 ## Chat And Settings UI
 
-| Record                                                                       | Scope                                                                                                      |
-| ---------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [`chat-screen-width-2026-07-20.md`](chat-screen-width-2026-07-20.md)         | Fixed chat-column width setting, responsive layout contract, and existing-database hydration constraint.  |
-| [`saved-toggles-rework-2026-07-20.md`](saved-toggles-rework-2026-07-20.md)   | Saved-toggle state model, dialog selection, Pick merge semantics, and historical validation baseline.     |
-| [`data-driven-ui.md`](data-driven-ui.md)                                    | Dated 2026-08-17 inventory of data-dependent UI variants and their implementation owners.                  |
+| Record                                                                     | Scope                                                                                                    |
+| -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [`chat-screen-width-2026-07-20.md`](chat-screen-width-2026-07-20.md)       | Fixed chat-column width setting, responsive layout contract, and existing-database hydration constraint. |
+| [`saved-toggles-rework-2026-07-20.md`](saved-toggles-rework-2026-07-20.md) | Saved-toggle state model, dialog selection, Pick merge semantics, and historical validation baseline.    |
+| [`data-driven-ui.md`](data-driven-ui.md)                                   | Dated 2026-08-17 inventory of data-dependent UI variants and their implementation owners.                |
 
 Within each consolidated audit record, later verification and stale-state
 sections supersede conflicting baseline verdicts. The initial and post-fix June

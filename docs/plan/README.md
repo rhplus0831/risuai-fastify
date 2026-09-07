@@ -5,11 +5,10 @@ progress. The codebase and current architecture guides remain the source of
 truth for shipped behavior. Completed or retired planning records belong in
 `.archived-docs/`.
 
-For coordinated execution of the two plans below, start with the
-[Browser Smoke and Connected Readers Coordination Plan](browser-smoke-and-connected-readers.md).
-It owns the execution order and handoffs; each plan's status file owns progress.
+The active smoke audit follows the completed connected-reader workstream.
+The [Browser Smoke and Connected Readers Coordination Plan](browser-smoke-and-connected-readers.md)
+records their execution order and handoffs; the smoke status owns remaining work.
 
 | Plan                        | State                                    | Entry point                                                                                            |
 | --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Browser smoke effectiveness | Phases 0–2 accepted; Phase 3 in progress | [Plan](browser-smoke-effectiveness/PLAN.md), [execution status](browser-smoke-effectiveness/status.md) |
-| Connected read-only clients | Complete; accepted and ready to archive  | [Plan](connected-read-only-clients/PLAN.md), [execution status](connected-read-only-clients/status.md) |

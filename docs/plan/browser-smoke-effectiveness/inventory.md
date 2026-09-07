@@ -491,7 +491,7 @@ public flag. S80 adds one registered case; S32 and S60 are materially updated
 existing cases. The required full gate also exposed S22’s pause-sampling gap;
 its bounded BSE-005 repair retains the registered case and input workload. The default universe is 80 cases in 19 specs, with no removal.
 Final browser/fault/aggregate evidence belongs to
-[reader status](../connected-read-only-clients/status.md#phase-2-implementation-2026-09-07)
+[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-2-implementation-2026-09-07)
 and the [fault record](findings.md#reader-phase-2-production-fault-evidence).
 This is a Stage 2 handoff update, not acceptance of the remaining smoke audit.
 
@@ -536,7 +536,7 @@ Source: `7c3da2160`; three new cases extend discovery to 83 cases in 20 specs.
 The public flag remains disabled. The complete three-case baseline passed in
 9.9s; production-fault and restored controls are recorded in
 [findings](findings.md#reader-phase-3-production-fault-evidence), with aggregate
-acceptance in [reader status](../connected-read-only-clients/status.md).
+acceptance in [reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md).
 No existing case or integration artifact identity is removed or renamed.
 
 | Scenario/control             | Real boundary and independent oracle                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Scope and limits                                                                                                                                                                                                                                                                                                                      |
@@ -557,7 +557,7 @@ changes; this record does not accept the remaining smoke Phase 3 scenarios.
 Source `40b3eb516` adds five cases and one shared generation harness; the public
 flag remains disabled. The initial four-case run at `a45fa4b39` failed all four
 cases. Its actual runtime defects and test-contract corrections are recorded in
-[reader status](../connected-read-only-clients/status.md#phase-4-implementation-2026-09-07).
+[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-4-implementation-2026-09-07).
 The final five-case baseline passes in 49.2s after the recorded production and
 assertion corrections. All six exact production faults fail their intended oracles, and the unchanged
 five-case restored control passes in 51.1s. Both phase-ending aggregate gates pass at that implementation, as recorded in
@@ -585,7 +585,7 @@ pending until the completed reader handoff.
 
 The three-case TRUE baseline at `4dfac6c1e` passes, but the first full enabled
 cohort is 80/90. Its exact failures and source-backed fixes are in
-[reader status](../connected-read-only-clients/status.md#phase-5-enabled-build-baseline-and-integration-repairs).
+[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-enabled-build-baseline-and-integration-repairs).
 S80 now keeps its copied-identity Reader connected through the shared commit,
 independent navigation/commit and the other Reader's offline catch-up. S89
 restarts Fastify/SQLite in place and observes actual native SSE closure,

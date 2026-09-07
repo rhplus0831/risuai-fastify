@@ -11,7 +11,7 @@ or duplicate its persisted result or effects.
 
 Primary inventory owners: B09–B12. Read
 [generation client](../../../../src/docs/generation-client.md) and
-[streaming contracts](../../../structure/data-and-events.md#sse-and-streaming).
+[streaming contracts](../../../../docs/structure/data-and-events.md#sse-and-streaming).
 
 ## Bounded Slices
 

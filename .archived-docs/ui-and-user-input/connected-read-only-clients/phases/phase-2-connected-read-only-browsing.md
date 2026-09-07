@@ -10,8 +10,8 @@ Writer-to-reader transition with pending edits is completed in Phase 3; this
 phase's reader startup must never bypass those recovery requirements.
 
 Primary inventory owners: B02, B04–B06, B10, B13–B14. Read
-[resource hydration](../../../structure/server-resources-and-bridges.md) and
-[event recovery](../../../structure/durable-mutations-and-recovery.md#event-invalidation-and-recovery).
+[resource hydration](../../../../docs/structure/server-resources-and-bridges.md) and
+[event recovery](../../../../docs/structure/durable-mutations-and-recovery.md#event-invalidation-and-recovery).
 
 ## Bounded Slices
 

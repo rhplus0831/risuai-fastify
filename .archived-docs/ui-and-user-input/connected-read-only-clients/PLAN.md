@@ -18,12 +18,12 @@ and acceptance checks. [Inventory](inventory.md) owns the source-boundary map
 and its implementation dispositions. Only `status.md` owns execution progress,
 phase acceptance, source anchors, and verification summaries. Planning a phase
 does not complete it. Current source and the
-[architecture guides](../../structure/README.md) remain authoritative for
+[architecture guides](../../../docs/structure/README.md) remain authoritative for
 shipped behavior.
 
 Use the project's stable-plan, moving-status, bounded-phase structure, as in
-the [maintainability workstream](../../../.archived-docs/performance-and-stability/maintainability-and-performance/PLAN.md).
-The [fast-bootstrap observer work](../../../.archived-docs/fast-bootstrap/06-observer-shell.md)
+the [maintainability workstream](../../performance-and-stability/maintainability-and-performance/PLAN.md).
+The [fast-bootstrap observer work](../../fast-bootstrap/06-observer-shell.md)
 is historical background. Recheck its claims against current code; extend the
 current observer foundations in this new workstream.
 
@@ -225,7 +225,7 @@ compatibility mode or forced upgrade is assumed by this plan.
 
 ## Verification and Completion
 
-Follow the [current test workflow](../../tests/README.md#running-the-suite).
+Follow the [current test workflow](../../../docs/tests/README.md#running-the-suite).
 During implementation use `pnpm test -- <one-test-or-source-file>` for a named
 contract. A selected browser-smoke spec builds and executes that spec. Required
 browser cases must use separate authenticated sessions and the real UI/server
@@ -245,7 +245,7 @@ phase's final source; missing required evidence leaves the phase pending. This
 overrides the default user/CI-only ownership for this workstream. The command
 includes full browser execution and current compatibility; additional pinned
 compatibility lanes retain their existing user/CI ownership. See the
-[coordination policy](../browser-smoke-and-connected-readers.md#verification-and-completion).
+[coordination policy](../../../docs/plan/browser-smoke-and-connected-readers.md#verification-and-completion).
 Do not claim that a planning check or an earlier passing commit proves later
 behavior.
 

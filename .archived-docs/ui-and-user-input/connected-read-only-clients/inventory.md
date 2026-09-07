@@ -78,9 +78,9 @@ evidence that they cover the proposed behavior.
 | Server ownership and streams       | `server/fastify/__tests__/activeWriter.test.ts`, `server/fastify/__tests__/routeProtection.test.ts`, `server/fastify/__tests__/bootstrap.test.ts`, `server/fastify/__tests__/events.test.ts`, `server/fastify/__tests__/generationOperations.test.ts`, `server/fastify/__tests__/generationEffects.test.ts`, `server/fastify/__tests__/durableGeneration.test.ts` |
 | Real browser transitions           | `server/fastify/browser-smoke/startupRecoveryIntegrationMatrix.spec.ts`, `server/fastify/browser-smoke/startupDirectLinks.spec.ts`                                                                                                                                                                                                                                |
 
-Use the [browser recovery](../../tests/browser-state-sync-and-recovery.md),
-[navigation/chat](../../tests/app-navigation-and-chat.md), and
-[generation](../../tests/prompting-generation-and-streaming.md) test guides for
+Use the [browser recovery](../../../docs/tests/browser-state-sync-and-recovery.md),
+[navigation/chat](../../../docs/tests/app-navigation-and-chat.md), and
+[generation](../../../docs/tests/prompting-generation-and-streaming.md) test guides for
 additional owners. Add a focused connected-reader browser spec if extending the
 existing startup matrix would mix unrelated contracts. Record its real path
 when created; no hypothetical test file counts as verification.

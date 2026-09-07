@@ -8,8 +8,8 @@ Turn the [product contract](../PLAN.md#product-contract) and seed
 [inventory](../inventory.md) into an executable boundary map. This phase does
 not enable connected-reader behavior.
 
-Read [server resources](../../../structure/server-resources-and-bridges.md),
-[mutation recovery](../../../structure/durable-mutations-and-recovery.md),
+Read [server resources](../../../../docs/structure/server-resources-and-bridges.md),
+[mutation recovery](../../../../docs/structure/durable-mutations-and-recovery.md),
 [client runtime](../../../../src/docs/client-runtime.md), and the source owners
 listed in inventory B01–B13 as needed for each boundary.
 

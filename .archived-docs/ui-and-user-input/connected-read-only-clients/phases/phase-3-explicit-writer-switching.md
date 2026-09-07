@@ -9,8 +9,8 @@ a connected reader, and both clients retain correct data and local recovery
 state. The server guard remains the authority under concurrent requests.
 
 Primary inventory owners: B02–B04, B07–B08, B11, B13. Read
-[durable mutation recovery](../../../structure/durable-mutations-and-recovery.md)
-and [auth/writer policy](../../../structure/data-and-events.md#auth-and-active-writer).
+[durable mutation recovery](../../../../docs/structure/durable-mutations-and-recovery.md)
+and [auth/writer policy](../../../../docs/structure/data-and-events.md#auth-and-active-writer).
 
 ## Bounded Slices
 
