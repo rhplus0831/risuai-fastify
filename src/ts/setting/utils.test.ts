@@ -271,6 +271,91 @@ afterEach(() => {
 })
 
 describe('server-backed data-driven settings', () => {
+  it('starts a fresh deferred root edit after repromotion without adopting old path edits or deleting their intent', () => {
+    vi.useFakeTimers()
+    replaceResourceDatabase({ NAIImgConfig: { steps: 10, scale: 1 } } as any)
+    enterClientWriter()
+    const context = { db: getResourceDatabase(), modelInfo: {}, subModelInfo: {} } as SettingContext
+    setDeferredSettingValue(
+      { id: 'steps', type: 'number', bindPath: 'NAIImgConfig.steps' } as SettingItem,
+      20,
+      context,
+      { delayMs: 60_000 },
+    )
+    const original = durableSettingState.stages[0]
+    demoteClientSession()
+    expect(applySettingsResource({ revision: 1, settings: { NAIImgConfig: { steps: 30, scale: 1 } } })).toBe(true)
+    repromoteClientWriter()
+    setDeferredSettingValue(
+      { id: 'scale', type: 'number', bindPath: 'NAIImgConfig.scale' } as SettingItem,
+      2,
+      context,
+      { delayMs: 60_000 },
+    )
+    expect(durableSettingState.stages).toHaveLength(2)
+    const current = durableSettingState.stages[1]
+    expect(current.handle.mutationId).not.toBe(original.handle.mutationId)
+    expect(current.intent.requests).toEqual([
+      { method: 'PATCH', path: '/settings/media', body: { patch: { NAIImgConfig: { steps: 30, scale: 2 } } } },
+    ])
+    expect(getResourceDatabase().NAIImgConfig).toEqual({ steps: 30, scale: 2 })
+    expect(durableSettingState.acknowledgements).toEqual([])
+    expect(durableSettingState.dispatches).toEqual([])
+  })
+
+  it.each(['immediate', 'delayed'] as const)(
+    'keeps %s renderer intent dormant through reader and repromoted authoritative reads',
+    async (mode) => {
+      replaceResourceDatabase({ textTheme: 'before' } as any)
+      enterClientWriter()
+      durableSettingState.retainFailures = true
+      const response = deferredResponse()
+      const calls: CapturedFetch[] = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+          const url = String(input)
+          calls.push({ url, method: init.method ?? 'GET', body: null })
+          if (url === '/api/v1/bootstrap') return jsonResponse({ revision: 4 })
+          if (url === '/api/v1/commands/settings/display') return response.promise
+          return jsonResponse({ error: `unexpected ${url}` }, 404)
+        }),
+      )
+      const item = { id: 'textTheme', type: 'text', bindKey: 'textTheme' } as SettingItem
+      const context = { db: getResourceDatabase(), modelInfo: {}, subModelInfo: {} } as SettingContext
+      if (mode === 'delayed') {
+        vi.useFakeTimers()
+        setDeferredSettingValue(item, 'old intent', context, { delayMs: 50 })
+      } else {
+        setSettingValue(item, 'old intent', context)
+        await vi.waitFor(() => expect(calls.some((call) => call.url.endsWith('/settings/display'))).toBe(true))
+      }
+      const staged = [...durableSettingState.stages]
+      expect(staged).toHaveLength(1)
+      demoteClientSession()
+      expect(applySettingsResource({ revision: 4, settings: { textTheme: 'reader server' } })).toBe(true)
+      expect(getResourceDatabase().textTheme).toBe('reader server')
+      repromoteClientWriter()
+      expect(
+        applySettingsGroupResource({ revision: 5, group: 'display', settings: { textTheme: 'repromoted server' } }, [
+          'textTheme',
+        ]),
+      ).toBe(true)
+      expect(getResourceDatabase().textTheme).toBe('repromoted server')
+      if (mode === 'delayed') await vi.advanceTimersByTimeAsync(100)
+      else {
+        response.resolve(jsonResponse({ error: 'temporarily unavailable' }, 503))
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      }
+      expect(applySettingsResource({ revision: 6, settings: { textTheme: 'old intent' } })).toBe(true)
+      publishDurableSettingSettlement(staged[0].handle.mutationId, 'discarded')
+      expect(getResourceDatabase().textTheme).toBe('old intent')
+      expect(durableSettingState.stages).toEqual(staged)
+      expect(durableSettingState.acknowledgements).toEqual([])
+      if (mode === 'delayed') expect(durableSettingState.dispatches).toEqual([])
+    },
+  )
+
   it('rejects immediate and deferred renderer writes after writer access is lost', () => {
     replaceResourceDatabase({ notification: false } as any)
     const item: SettingItem = {

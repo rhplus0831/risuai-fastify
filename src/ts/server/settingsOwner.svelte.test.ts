@@ -2,6 +2,7 @@ import { demoteClientSession, resetClientSessionForTests } from '../clientSessio
 import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
+import type { ServerShellSettings } from '@risuai/protocol/shell-resource'
 
 const recorded = vi.hoisted(() => ({
   patches: [] as Array<{
@@ -254,6 +255,7 @@ import {
   applyCollectionsResource,
   applySettingsResource,
   applySettingsGroupResource,
+  applyShellSettingsResource,
   captureSettingsGroupProjectionEpoch,
   hasSettingsGroupProjectionEpochChanged,
   replaceResourceDatabase,
@@ -409,6 +411,121 @@ afterEach(async () => {
 })
 
 describe('settings owner mutations', () => {
+  it.each(['accepted', 'discarded'] as const)(
+    'settles an exact settings receipt as %s after writer loss without restoring its overlay',
+    async (settlement) => {
+      setupSettings({ textTheme: 'before' })
+      enterClientWriter()
+      durabilityMocks.retainFailures = true
+      recorded.patchResults.push({ status: 'unavailable' })
+      const receipt = await persistServerBackedSettingsPatchWithSettlement({ textTheme: 'old intent' })
+      if (receipt.status !== 'queued') throw new Error('Expected queued settings intent')
+      const listener = vi.fn()
+      receipt.subscribeSettlement(listener)
+      demoteClientSession()
+      expect(applySettingsResource({ revision: 1, settings: { textTheme: 'old intent' } })).toBe(true)
+      publishSettingsSettlement(receipt.mutationId, settlement)
+      await expect(receipt.settlement).resolves.toBe(settlement === 'accepted' ? 'accepted' : 'failed')
+      expect(listener).toHaveBeenCalledExactlyOnceWith(settlement === 'accepted' ? 'accepted' : 'failed')
+      expect(testDatabaseState.db.textTheme).toBe('old intent')
+      repromoteClientWriter()
+      expect(
+        applySettingsGroupResource({ revision: 2, group: 'display', settings: { textTheme: 'new server' } }, [
+          'textTheme',
+        ]),
+      ).toBe(true)
+      expect(testDatabaseState.db.textTheme).toBe('new server')
+      expect(durabilityMocks.acknowledged).toEqual([])
+    },
+  )
+
+  it.each(['patch', 'sparse'] as const)(
+    'keeps held %s intent dormant across reader and repromoted resource reads',
+    async (kind) => {
+      const key = kind === 'patch' ? 'textTheme' : 'NAIImgConfig'
+      const original = kind === 'patch' ? 'before' : { steps: 10 }
+      const attempted = kind === 'patch' ? 'old intent' : { steps: 20 }
+      const authoritative = kind === 'patch' ? 'server value' : { steps: 30 }
+      setupSettings({ [key]: original })
+      enterClientWriter()
+      durabilityMocks.retainFailures = true
+      const response = createDeferred<unknown>()
+      if (kind === 'patch') recorded.patchResults.push(response.promise)
+      else recorded.objectResults.push(response.promise)
+      applyServerBackedSettingsPatch({ [key]: attempted })
+      await flushAndSettle()
+      expect(durabilityMocks.staged).toHaveLength(1)
+      demoteClientSession()
+      expect(applySettingsResource({ revision: 1, settings: { [key]: authoritative } })).toBe(true)
+      expect(testDatabaseState.db[key]).toEqual(authoritative)
+      repromoteClientWriter()
+      expect(
+        applySettingsGroupResource(
+          { revision: 2, group: kind === 'patch' ? 'display' : 'media', settings: { [key]: authoritative } },
+          [key],
+        ),
+      ).toBe(true)
+      expect(testDatabaseState.db[key]).toEqual(authoritative)
+      response.resolve({ status: 'unavailable' })
+      await flushAndSettle()
+      await flushAndSettle()
+      if (kind === 'patch') {
+        const shell: ServerShellSettings = {
+          language: 'en',
+          username: 'User',
+          textTheme: 'server shell',
+          colorSchemeName: 'custom',
+          colorScheme: {
+            bgcolor: '',
+            darkbg: '',
+            borderc: '',
+            selected: '',
+            draculared: '',
+            textcolor: '',
+            textcolor2: '',
+            darkBorderc: '',
+            darkbutton: '',
+            type: 'dark',
+          },
+          customTextTheme: {
+            FontColorStandard: '',
+            FontColorBold: '',
+            FontColorItalic: '',
+            FontColorItalicBold: '',
+            FontColorQuote1: '',
+            FontColorQuote2: '',
+          },
+          font: 'default',
+          customFont: '',
+          customCSS: '',
+          animationSpeed: 0.4,
+          reducedMotion: false,
+          heightMode: 'percent',
+          sideBarSize: 0,
+          roundIcons: false,
+          menuSideBar: false,
+          showFolderName: true,
+          showSavingIcon: true,
+          hamburgerButtonBottom: false,
+          botSettingAtStart: false,
+          enableDevTools: false,
+          doNotWarnExternalServers: false,
+          keepSessionAlive: 'off',
+        }
+        expect(applyShellSettingsResource({ revision: 3, settings: shell })).toBe(true)
+        expect(testDatabaseState.db.textTheme).toBe('server shell')
+      } else {
+        expect(applySettingsResource({ revision: 3, settings: { [key]: authoritative } })).toBe(true)
+        expect(testDatabaseState.db[key]).toEqual(authoritative)
+      }
+      expect(durabilityMocks.acknowledged).toEqual([])
+      expect(durabilityMocks.staged).toHaveLength(1)
+      publishSettingsSettlement(durabilityMocks.staged[0].mutationId, 'discarded')
+      expect(testDatabaseState.db[key]).toEqual(kind === 'patch' ? 'server shell' : authoritative)
+      resetSettingsOwnerForDatabaseReplacement()
+    },
+  )
+
   it('releases a dirty draft when replacement database ownership is adopted', async () => {
     setupSettings({ textTheme: 'before' })
     const { draft, stop } = await createSettingDraft('textTheme', '')

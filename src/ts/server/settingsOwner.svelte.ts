@@ -56,7 +56,7 @@ import {
   type PendingMutationHandle,
 } from './pendingMutationOutbox'
 import { registerPendingOwnerResetter, registerPendingOwnerMutationFlusher } from './pendingOwnerMutationRegistry'
-import { registerPendingSettingsProjectionOverlay } from './settingsPendingProjection'
+import { canProjectPendingSettings, registerPendingSettingsProjectionOverlay } from './settingsPendingProjection'
 import { hypaV3PresetIndexFromStableId } from '@risuai/shared-core/hypa-v3-preset-selection-identity'
 
 interface PendingSettingsPatch {
@@ -71,6 +71,7 @@ interface PendingSettingsPatch {
 }
 
 interface PendingSettingsAttempt {
+  sessionGeneration: number
   sequence: number
   previous: SettingsPatch
   attempted: SettingsPatch
@@ -147,6 +148,10 @@ const sparseObjectSettingQueues = new Map<string, SparseObjectSettingQueue>()
 registerPendingSettingsProjectionOverlay((target, allowedKeys) => {
   const settledAttempts: PendingSettingsAttempt[] = []
   for (const attempt of [...pendingSettingsAttempts]) {
+    if (!canProjectPendingSettings(attempt.sessionGeneration)) {
+      if (attempt.phase === 'accepted-replay') settledAttempts.push(attempt)
+      continue
+    }
     for (const [key, value] of Object.entries(attempt.attempted)) {
       if (allowedKeys && !allowedKeys.has(key)) continue
       if (attempt.phase === 'accepted-replay') {
@@ -161,11 +166,13 @@ registerPendingSettingsProjectionOverlay((target, allowedKeys) => {
   }
 
   for (const [key, value] of Object.entries(pendingSettingsPatch.attempted)) {
+    if (!canProjectPendingSettings(pendingSettingsPatch.sessionGeneration)) break
     if (allowedKeys && !allowedKeys.has(key)) continue
     target[key] = cloneJsonValue(value)
   }
 
   for (const state of sparseObjectSettingQueues.values()) {
+    if (!canProjectPendingSettings(state.sessionGeneration)) continue
     if (allowedKeys && !allowedKeys.has(state.key)) continue
     if (state.settlementPhase === 'accepted-replay') {
       clearSparseObjectSettingSettlement(state)
@@ -185,18 +192,20 @@ registerPendingSettingsProjectionOverlay((target, allowedKeys) => {
 })
 
 function createSettingsSaveFailureReporter(): () => void {
+  const generation = captureClientSessionGeneration()
   let reported = false
   return () => {
-    if (reported) return
+    if (reported || !canProjectPendingSettings(generation)) return
     reported = true
     alertError(language.errors.settingsSaveFailed)
   }
 }
 
 function createSettingsQueuedReporter(): () => void {
+  const generation = captureClientSessionGeneration()
   let reported = false
   return () => {
-    if (reported) return
+    if (reported || !canProjectPendingSettings(generation)) return
     reported = true
     alertNormal(language.settingsSaveQueued)
   }
@@ -813,6 +822,7 @@ export async function persistServerBackedSettingsPatchWithSettlement(
   patch: SettingsPatch,
 ): Promise<ServerBackedSettingsPersistenceReceipt> {
   if (!canUseClientWriteAccess()) return { status: 'failed' }
+  const sessionGeneration = captureClientSessionGeneration()
   const prepared = prepareServerBackedSettingsPatch(patch)
   if (!prepared) return { status: 'accepted' }
   const projectionEpochs = captureSettingsPatchProjectionEpochs(prepared.commandPatch)
@@ -882,6 +892,7 @@ export async function persistServerBackedSettingsPatchWithSettlement(
     const dispatch = dispatchDurableMutation(outbox, intent, (transport) => {
       failureRollbackDisposition = transport.failureRollbackDisposition
       return dispatchTrackedServerBackedSettingsPatch({
+        sessionGeneration,
         patch: prepared.commandPatch,
         optimisticProjectionEpochs: projectionEpochs,
         previous: prepared.previous,
@@ -1007,6 +1018,12 @@ function dispatchServerBackedSettingsPatch(
 
 function queueSettingsPatch(patch: SettingsPatch, previous: SettingsPatch, delay: number): void {
   if (!canUseClientWriteAccess()) return
+  if (!isClientSessionGenerationCurrent(pendingSettingsPatch.sessionGeneration)) {
+    if (pendingSettingsPatch.timer) clearTimeout(pendingSettingsPatch.timer)
+    // A new edit starts a fresh local queue; the retired durable row remains
+    // available for explicit recovery under its original session generation.
+    resetPendingSettingsPatch()
+  }
   pendingSettingsPatch.sessionGeneration = captureClientSessionGeneration()
   for (const [key, value] of Object.entries(patch)) {
     if (queueSparseObjectSettingPatch(key, previous[key], value, delay)) continue
@@ -1023,7 +1040,7 @@ function queueSettingsPatch(patch: SettingsPatch, previous: SettingsPatch, delay
 }
 
 function rebasePendingSettingsPatchKey(key: string, authoritative: unknown, rebased: unknown, delay: number): boolean {
-  if (!canUseClientWriteAccess()) return false
+  if (!canProjectPendingSettings(pendingSettingsPatch.sessionGeneration)) return false
   if (!hasOwnKey(pendingSettingsPatch.attempted, key)) return false
   pendingSettingsPatch.previous[key] = cloneJsonValue(authoritative)
   pendingSettingsPatch.attempted[key] = cloneJsonValue(rebased)
@@ -1053,7 +1070,7 @@ function discardPendingSettingsPatchKey(key: string, delay: number): boolean {
 }
 
 function refreshPendingSettingsPatch(delay: number): void {
-  if (!canUseClientWriteAccess()) return
+  if (!canProjectPendingSettings(pendingSettingsPatch.sessionGeneration)) return
   const netChangedKeys = changedSettingsPatchKeys(pendingSettingsPatch.previous, pendingSettingsPatch.attempted)
   pendingSettingsPatch.patch = pendingSettingsDurableClosure(netChangedKeys)
   prunePendingSettingsPatchProjectionEpochs()
@@ -1162,6 +1179,7 @@ function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {
   const commandAttempted = pendingSettingsPatch.attempted
   const optimisticProjectionEpochs = pendingSettingsPatch.projectionEpochs
   const stagedOutbox = pendingSettingsPatch.outbox
+  const sessionGeneration = pendingSettingsPatch.sessionGeneration
   resetPendingSettingsPatch()
 
   if (Object.keys(commandPatch).length === 0) {
@@ -1173,6 +1191,7 @@ function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {
   const outbox = stagedOutbox ?? stagePendingMutation(SETTINGS_BRIDGE_MUTATION_KEY, intent)
   void dispatchDurableMutation(outbox, intent, (transport) =>
     dispatchTrackedServerBackedSettingsPatch({
+      sessionGeneration,
       patch: commandPatch,
       optimisticProjectionEpochs,
       keepalive: options.keepalive,
@@ -1188,6 +1207,7 @@ function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {
 }
 
 function dispatchTrackedServerBackedSettingsPatch(input: {
+  sessionGeneration?: number
   patch: SettingsPatch
   optimisticProjectionEpochs: SettingsGroupProjectionEpochs
   previous: SettingsPatch
@@ -1203,11 +1223,15 @@ function dispatchTrackedServerBackedSettingsPatch(input: {
 }): Promise<ServerCommandResult> {
   const reportFailure = input.reportFailure ?? createSettingsSaveFailureReporter()
   const reportQueued = input.reportQueued ?? createSettingsQueuedReporter()
-  const attempt = registerSettingsAttempt(input.previous, input.attempted, input.mutationId)
+  const attempt = registerSettingsAttempt(input.previous, input.attempted, input.mutationId, input.sessionGeneration)
   if (input.mutationId) {
     attempt.settlementCleanup = registerDurableMutationSettlementListener(input.mutationId, (settlement) => {
       if (!isSettingsAttemptCurrent(attempt)) return
       if (settlement === 'accepted') {
+        if (!canProjectPendingSettings(attempt.sessionGeneration)) {
+          clearSettingsAttempt(attempt)
+          return
+        }
         attempt.phase = 'accepted-replay'
         attempt.acceptedReplayPendingKeys = new Set(Object.keys(attempt.attempted))
         return
@@ -1264,8 +1288,10 @@ function registerSettingsAttempt(
   previous: SettingsPatch,
   attempted: SettingsPatch,
   mutationId?: string,
+  sessionGeneration = captureClientSessionGeneration(),
 ): PendingSettingsAttempt {
   const attempt = {
+    sessionGeneration,
     sequence: ++nextSettingsAttemptSequence,
     previous,
     attempted,
@@ -1283,8 +1309,10 @@ function isSettingsAttemptCurrent(attempt: PendingSettingsAttempt): boolean {
 }
 
 function rollbackSettingsAttempt(attempt: PendingSettingsAttempt): void {
-  rollbackServerBackedSettings(attempt.previous, attempt.attempted)
-  rebaseLaterSettingsAttempts(attempt)
+  if (canProjectPendingSettings(attempt.sessionGeneration)) {
+    rollbackServerBackedSettings(attempt.previous, attempt.attempted)
+    rebaseLaterSettingsAttempts(attempt)
+  }
   clearSettingsAttempt(attempt)
 }
 
@@ -1295,7 +1323,12 @@ function rebaseLaterSettingsAttempts(failed: PendingSettingsAttempt): void {
     // dependent successor for this key; if it also fails, it propagates the
     // confirmed baseline to the next successor in the chain.
     for (const later of pendingSettingsAttempts) {
-      if (later.sequence <= failed.sequence || !hasOwnKey(later.attempted, key)) continue
+      if (
+        later.sequence <= failed.sequence ||
+        !hasOwnKey(later.attempted, key) ||
+        !canProjectPendingSettings(later.sessionGeneration)
+      )
+        continue
       if (!hasOwnKey(later.previous, key)) continue
       if (!isJsonSnapshotEqual(later.previous[key], failed.attempted[key])) continue
 
@@ -1310,6 +1343,7 @@ function rebaseLaterSettingsAttempts(failed: PendingSettingsAttempt): void {
 
     if (
       !rebased &&
+      canProjectPendingSettings(pendingSettingsPatch.sessionGeneration) &&
       hasOwnKey(pendingSettingsPatch.attempted, key) &&
       hasOwnKey(pendingSettingsPatch.previous, key) &&
       isJsonSnapshotEqual(pendingSettingsPatch.previous[key], failed.attempted[key])
@@ -1351,6 +1385,13 @@ function queueSparseObjectSettingPatch(key: string, previous: unknown, attempted
 
   const netUpdate = diffSparseObjectSetting(previous, attempted)
   let state = sparseObjectSettingQueues.get(key)
+  if (state && !isClientSessionGenerationCurrent(state.sessionGeneration)) {
+    state.retired = true
+    if (state.timer) clearTimeout(state.timer)
+    clearSparseObjectSettingSettlement(state)
+    sparseObjectSettingQueues.delete(key)
+    state = undefined
+  }
   if (!state) {
     if (!netUpdate) return true
     state = {
@@ -1442,6 +1483,13 @@ async function dispatchSparseObjectSettingQueue(
         state.outbox = null
         return
       }
+      if (!canProjectPendingSettings(state.sessionGeneration)) {
+        state.running = false
+        clearSparseObjectSettingSettlement(state)
+        if (!state.desired && !state.outbox && sparseObjectSettingQueues.get(state.key) === state)
+          sparseObjectSettingQueues.delete(state.key)
+        return
+      }
       if (state.desired && state.stagedUpdate && state.intent && state.outbox) {
         // A later absolute successor already covers the visible desired value.
         // Retire only the discarded predecessor and let that successor run.
@@ -1485,7 +1533,7 @@ async function dispatchSparseObjectSettingQueue(
             options.keepalive,
           ),
         rollback: () => {
-          if (state.retired) return
+          if (state.retired || !canProjectPendingSettings(state.sessionGeneration)) return
           failed = true
           markSettingsGroupAcknowledgementTainted(state.group)
           reportFailure()
@@ -1612,6 +1660,7 @@ function rebaseSparseObjectSettingDesired(
 }
 
 function refreshSparseObjectSettingOutbox(state: SparseObjectSettingQueue): boolean {
+  if (!canProjectPendingSettings(state.sessionGeneration)) return false
   const desired = state.desired
   if (!desired) {
     state.stagedUpdate = null

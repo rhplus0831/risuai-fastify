@@ -65,7 +65,10 @@ import {
   type DurableMutationIntent,
   type PendingMutationHandle,
 } from '../server/pendingMutationOutbox'
-import { registerPendingSettingsProjectionOverlay } from '../server/settingsPendingProjection'
+import {
+  canProjectPendingSettings,
+  registerPendingSettingsProjectionOverlay,
+} from '../server/settingsPendingProjection'
 import { reportWriterAccessLostMutation } from '../server/activeWriterSession'
 
 /**
@@ -133,6 +136,7 @@ interface PendingDeferredSettingWrite {
 }
 
 interface PendingDeferredServerSettingAttempt {
+  sessionGeneration: number
   sequence: number
   ownerKey: string
   rootKey: string
@@ -152,6 +156,10 @@ registerPendingOwnerResetter('setting-renderer-inputs', resetDeferredSettingWrit
 registerPendingSettingsProjectionOverlay((target, allowedKeys) => {
   const converged: PendingDeferredServerSettingAttempt[] = []
   for (const attempt of [...pendingDeferredServerSettingAttempts]) {
+    if (!canProjectPendingSettings(attempt.sessionGeneration)) {
+      if (attempt.phase === 'accepted-replay') converged.push(attempt)
+      continue
+    }
     if (allowedKeys && !allowedKeys.has(attempt.rootKey)) continue
     if (
       attempt.phase === 'accepted-replay' &&
@@ -163,6 +171,7 @@ registerPendingSettingsProjectionOverlay((target, allowedKeys) => {
     target[attempt.rootKey] = cloneJsonValue(attempt.attemptedRoot)
   }
   for (const pending of pendingDeferredSettingWrites.values()) {
+    if (!canProjectPendingSettings(pending.sessionGeneration)) continue
     if (pending.target.kind !== 'server') continue
     if (allowedKeys && !allowedKeys.has(pending.target.rootKey)) continue
     target[pending.target.rootKey] = cloneJsonValue(pending.desiredRoot)
@@ -171,9 +180,10 @@ registerPendingSettingsProjectionOverlay((target, allowedKeys) => {
 })
 
 function createSettingSaveFailureReporter(): () => void {
+  const generation = captureClientSessionGeneration()
   let reported = false
   return () => {
-    if (reported) return
+    if (reported || !canProjectPendingSettings(generation)) return
     reported = true
     alertError(language.errors.settingsSaveFailed)
   }
@@ -445,8 +455,11 @@ function queueDeferredSettingWrite(
   delayMs: number,
 ): boolean {
   if (!canUseClientWriteAccess()) return false
-  const existing = pendingDeferredSettingWrites.get(target.ownerKey)
-  if (existing) clearTimeout(existing.timer)
+  const sessionGeneration = captureClientSessionGeneration()
+  const retained = pendingDeferredSettingWrites.get(target.ownerKey)
+  if (retained) clearTimeout(retained.timer)
+  // Retiring a local merge buffer never acknowledges its durable intent.
+  const existing = retained && isClientSessionGenerationCurrent(retained.sessionGeneration) ? retained : undefined
 
   const edits = existing?.edits ?? new Map<string, DeferredSettingEdit>()
   const editKey = path.join('\u0000')
@@ -483,7 +496,7 @@ function queueDeferredSettingWrite(
   if (target.kind === 'preset') {
     if (!mirrorTopLevelPresetFieldToTarget(target.target, desiredRoot)) return false
     pendingDeferredSettingWrites.set(target.ownerKey, {
-      sessionGeneration: captureClientSessionGeneration(),
+      sessionGeneration,
       desiredRoot: cloneJsonValue(desiredRoot),
       edits,
       previousRoot: baseline,
@@ -495,7 +508,7 @@ function queueDeferredSettingWrite(
   if (target.kind === 'promptOverride') {
     if (!mirrorPromptPresetModelOverrideFieldToTarget(target.target, desiredRoot)) return false
     pendingDeferredSettingWrites.set(target.ownerKey, {
-      sessionGeneration: captureClientSessionGeneration(),
+      sessionGeneration,
       desiredRoot: cloneJsonValue(desiredRoot),
       edits,
       previousRoot: baseline,
@@ -517,7 +530,7 @@ function queueDeferredSettingWrite(
   const outbox = stagePendingMutation(SETTINGS_BRIDGE_MUTATION_KEY, intent, existing?.outbox)
 
   const pending: PendingDeferredSettingWrite = {
-    sessionGeneration: captureClientSessionGeneration(),
+    sessionGeneration,
     desiredRoot: cloneJsonValue(desiredRoot),
     durableAttemptedRoot: cloneJsonValue(desiredRoot),
     edits,
@@ -602,17 +615,27 @@ function dispatchDeferredSettingWrite(ownerKey: string, options: ServerCommandTr
     pending.previousRoot,
     attemptedRoot,
     pending.outbox,
+    pending.sessionGeneration,
   )
+  const rollbackAttempt = () => {
+    if (canProjectPendingSettings(attempt.sessionGeneration)) {
+      rollbackDeferredServerSetting(serverTarget, attemptedRoot, attempt.previousRoot, pending.edits)
+      rebaseLaterDeferredServerSettingAttempt(attempt)
+    }
+    clearDeferredServerSettingAttempt(attempt)
+    reportFailure()
+  }
   attempt.settlementCleanup = registerDurableMutationSettlementListener(pending.outbox.mutationId, (settlement) => {
     if (!isDeferredServerSettingAttemptCurrent(attempt)) return
     if (settlement === 'accepted') {
+      if (!canProjectPendingSettings(attempt.sessionGeneration)) {
+        clearDeferredServerSettingAttempt(attempt)
+        return
+      }
       attempt.phase = 'accepted-replay'
       return
     }
-    rollbackDeferredServerSetting(serverTarget, attemptedRoot, attempt.previousRoot, pending.edits)
-    rebaseLaterDeferredServerSettingAttempt(attempt)
-    clearDeferredServerSettingAttempt(attempt)
-    reportFailure()
+    rollbackAttempt()
   })
 
   const dispatched = dispatchDurableMutation(pending.outbox, pending.intent, (transport) => {
@@ -622,12 +645,7 @@ function dispatchDeferredSettingWrite(ownerKey: string, options: ServerCommandTr
       optimisticProjectionEpochs: pending.optimisticProjectionEpochs,
       keepalive: options.keepalive,
       signal: options.signal,
-      rollback: () => {
-        rollbackDeferredServerSetting(serverTarget, attemptedRoot, attempt.previousRoot, pending.edits)
-        rebaseLaterDeferredServerSettingAttempt(attempt)
-        clearDeferredServerSettingAttempt(attempt)
-        reportFailure()
-      },
+      rollback: rollbackAttempt,
       ...transport,
     })
     void result.then(
@@ -650,14 +668,13 @@ function dispatchDeferredSettingWrite(ownerKey: string, options: ServerCommandTr
   })
   void dispatched.catch(async () => {
     if (!isDeferredServerSettingAttemptCurrent(attempt)) return
-    if ((await pending.outbox!.ready) === 'persisted') {
+    const persistence = await pending.outbox!.ready
+    if (!isDeferredServerSettingAttemptCurrent(attempt)) return
+    if (persistence === 'persisted') {
       attempt.phase = 'queued'
       return
     }
-    rollbackDeferredServerSetting(serverTarget, attemptedRoot, attempt.previousRoot, pending.edits)
-    rebaseLaterDeferredServerSettingAttempt(attempt)
-    clearDeferredServerSettingAttempt(attempt)
-    reportFailure()
+    rollbackAttempt()
   })
 }
 
@@ -667,8 +684,10 @@ function registerDeferredServerSettingAttempt(
   previousRoot: unknown,
   attemptedRoot: unknown,
   outbox: PendingMutationHandle,
+  sessionGeneration: number,
 ): PendingDeferredServerSettingAttempt {
   const attempt = {
+    sessionGeneration,
     sequence: ++nextDeferredServerSettingAttemptSequence,
     ownerKey,
     rootKey,
@@ -689,14 +708,19 @@ function isDeferredServerSettingAttemptCurrent(attempt: PendingDeferredServerSet
 
 function rebaseLaterDeferredServerSettingAttempt(failed: PendingDeferredServerSettingAttempt): void {
   for (const later of pendingDeferredServerSettingAttempts) {
-    if (later.sequence <= failed.sequence || later.ownerKey !== failed.ownerKey) continue
+    if (
+      later.sequence <= failed.sequence ||
+      later.ownerKey !== failed.ownerKey ||
+      !canProjectPendingSettings(later.sessionGeneration)
+    )
+      continue
     if (snapshotJson(later.previousRoot) !== snapshotJson(failed.attemptedRoot)) continue
     later.previousRoot = cloneJsonValue(failed.previousRoot)
     return
   }
 
   const pending = pendingDeferredSettingWrites.get(failed.ownerKey)
-  if (!pending || pending.target.kind !== 'server') return
+  if (!pending || pending.target.kind !== 'server' || !canProjectPendingSettings(pending.sessionGeneration)) return
   if (snapshotJson(pending.previousRoot) !== snapshotJson(failed.attemptedRoot)) return
   pending.previousRoot = cloneJsonValue(failed.previousRoot)
 }

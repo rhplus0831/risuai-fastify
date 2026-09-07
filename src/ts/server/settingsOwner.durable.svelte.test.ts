@@ -1,6 +1,8 @@
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 
 const recorded = vi.hoisted(() => ({
   dispatched: [] as Array<{ key: string; mutationId: string; intent: unknown }>,
@@ -123,7 +125,7 @@ vi.mock('../process/templates/templates', () => ({
 
 import type { Database } from '../storage/database.svelte'
 import '../stores.svelte'
-import { applySettingsResource, replaceResourceDatabase } from './resourceState.svelte'
+import { applySettingsResource, applySettingsGroupResource, replaceResourceDatabase } from './resourceState.svelte'
 import {
   beginPendingMutationDispatch,
   clearPendingMutationOutbox,
@@ -140,6 +142,7 @@ import {
   createServerBackedSettingDraft,
   dispatchDurableServerBackedSettingsPatch,
   flushPendingSettingsOwnerMutations,
+  resetSettingsOwnerForDatabaseReplacement,
   type ServerBackedSettingDraft,
 } from './settingsOwner.svelte'
 import { getResourceDatabase } from 'src/ts/__tests__/resourceDatabaseState'
@@ -204,6 +207,7 @@ async function expectMarkerWinnerAndSuccessor(
 }
 
 beforeEach(async () => {
+  resetClientSessionForTests()
   vi.stubGlobal('indexedDB', new IDBFactory())
   resetPendingMutationOutboxForTests()
   await preparePendingMutationOutbox({
@@ -225,10 +229,70 @@ afterEach(async () => {
   await clearPendingMutationOutbox()
   resetPendingMutationOutboxForTests()
   ;(testDatabaseState as { db: unknown }).db = {}
+  resetClientSessionForTests()
   vi.unstubAllGlobals()
 })
 
 describe('settings owner durable marker ordering', () => {
+  it.each(['patch', 'sparse'] as const)(
+    'preserves the dormant encrypted %s row while a new writer starts a separate edit',
+    async (kind) => {
+      await preparePendingMutationOutbox({
+        writerSessionId: 'draft-test-session',
+        writerEpoch: 1,
+        databaseLineage: 'draft-test-lineage',
+        requestedWriterWasActive: true,
+      })
+      setupSettings({ textTheme: 'before', notification: false, NAIImgConfig: { steps: 10, scale: 1 } })
+      enterClientWriter()
+      const old = createSettingsOwnerDraft<unknown>(kind === 'patch' ? 'textTheme' : 'NAIImgConfig', null)
+      let current: ReturnType<typeof createSettingsOwnerDraft<unknown>> | undefined
+      try {
+        old.draft.value = kind === 'patch' ? 'old intent' : { steps: 20, scale: 1 }
+        flushSync()
+        let original: PendingMutationOutboxEntry[] = []
+        await vi.waitFor(async () => {
+          original = await listPendingMutations()
+          expect(original).toHaveLength(1)
+        })
+        demoteClientSession()
+        const authoritative = { textTheme: 'server text', notification: false, NAIImgConfig: { steps: 30, scale: 1 } }
+        expect(applySettingsResource({ revision: 1, settings: authoritative })).toBe(true)
+        flushSync()
+        expect(testDatabaseState.db.textTheme).toBe('server text')
+        expect(testDatabaseState.db.NAIImgConfig).toEqual({ steps: 30, scale: 1 })
+        repromoteClientWriter()
+        expect(
+          applySettingsGroupResource(
+            { revision: 2, group: kind === 'patch' ? 'display' : 'media', settings: authoritative },
+            kind === 'patch' ? ['textTheme', 'notification'] : ['NAIImgConfig'],
+          ),
+        ).toBe(true)
+        current = createSettingsOwnerDraft<unknown>(kind === 'patch' ? 'notification' : 'NAIImgConfig', null)
+        current.draft.value = kind === 'patch' ? true : { steps: 30, scale: 2 }
+        flushSync()
+        let pending: PendingMutationOutboxEntry[] = []
+        await vi.waitFor(async () => {
+          pending = await listPendingMutations()
+          expect(pending).toHaveLength(2)
+        })
+        expect(pending.find(({ handle }) => handle.mutationId === original[0].handle.mutationId)?.intent).toEqual(
+          original[0].intent,
+        )
+        const newIntent = pending.find(({ handle }) => handle.mutationId !== original[0].handle.mutationId)!.intent
+        expect(newIntent.requests[0].body).toEqual(
+          kind === 'patch' ? { patch: { notification: true } } : { patch: { scale: 2 } },
+        )
+        expect(testDatabaseState.db.textTheme).toBe('server text')
+        expect(recorded.dispatched).toEqual([])
+      } finally {
+        old.stop()
+        current?.stop()
+        resetSettingsOwnerForDatabaseReplacement()
+      }
+    },
+  )
+
   it('drops a queued old-lineage overlay before applying restored settings', async () => {
     setupSettings({ textTheme: 'before' })
     recorded.patchResults.push({ status: 'unavailable' })
