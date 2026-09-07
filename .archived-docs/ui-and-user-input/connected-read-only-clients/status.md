@@ -4,7 +4,8 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: all reader Phases 0–5 accepted; the connected-reader workstream is complete.
+- State: all reader Phases 0–5 accepted at the recorded source; the smoke
+  closeout now revalidates a subsequently exposed writer-startup race.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Accepted implementation: production through `a703b9d4b`, browser repairs through
   `60ac61bde`, with final agent/full gates at clean `eb9673942`.
@@ -15,8 +16,11 @@ Updated: 2026-09-08
   FALSE builds, named production faults and restored controls are recorded below.
 - Archive: this intact bundle is preserved under UI/user input. Continue the
   [smoke workstream](../../../docs/plan/browser-smoke-effectiveness/status.md) at Stage 3.
-- Blockers and undisposed in-scope surfaces: none. Original follow-up product
-  scope and browser/provider/device limits remain explicit below.
+- Follow-up: [BSE-009](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
+  changes writer startup when the retained route supersedes pending hydration.
+  Focused red/green proof passes; affected browser/fault and final-source full
+  verification remain pending before combined completion. Original product
+  follow-up scope and browser/provider/device limits remain explicit below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the

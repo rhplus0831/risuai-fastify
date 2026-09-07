@@ -12,12 +12,13 @@ Updated: 2026-09-08
   complete scenario/control dispositions; no pending or partial review owner.
 - Confirmed gaps: BSE-001–007 have verified named controls. Earlier failed runs
   and unqualified candidate faults retain their explicit source limits.
-- Next action: complete final discovery/finding reconciliation, run Phase 4's
-  required `test:agent` and `test:all`, collect matching CI when available, then
-  archive the smoke bundle and coordination record.
-- Blockers: none. The [reader workstream](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
-  is accepted and archived; normal default and compiled-FALSE protection remain
-  verified at the recorded implementation.
+- Next action: verify the S51 warm-cache prerequisite and S81 writer-startup
+  repair exposed by Phase 4's first full gate, reconcile their evidence, then
+  repeat final `test:agent` and `test:all` before acceptance and archive.
+- Verification pending: BSE-008/009 below. Earlier
+  [reader acceptance](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
+  retains its source limits; the writer-startup change needs affected Reader
+  revalidation before combined completion.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
@@ -607,3 +608,53 @@ input, so browser/Reader behavior and the 92-case discovery remain unchanged.
 No browser production-fault campaign is claimed or required for this separate
 clock/ID fixture correction. Repeat final `test:agent`, then the required full
 phase gate at the corrected final source.
+
+### Phase 4 First Full-Gate Failure and Targeted Follow-Up
+
+At clean `6ee9bf1b7`, repeated `pnpm test:agent` passes all seven lanes in
+**2m 22.0s**. The required `pnpm test:all` then fails in **6m 16.6s**:
+**90/92 browser cases pass**, with all twelve other lanes passing. Those lanes
+include 8,842 ordinary frontend tests, 241 UI tests, 4,228 server tests, 18 current
+compatibility cases, one selected Realm scale case and six performance cases;
+the three frontend/two server skips and 29-case scale filter retain their scope.
+Svelte reports zero errors/warnings. Original logs, traces and artifacts are
+preserved under `/tmp/smoke-phase4-first-full-failure`; the earlier worker-fixture
+failure remains separately recorded above. Neither failure accepts Phase 4.
+
+- **BSE-008 / S51:** the large warm population sends no cached hashes for its
+  six personas, yielding 36 hits/six misses instead of zero misses. Its cold
+  personas response contains all six actual values. The test reloads immediately
+  after background readiness, while authoritative resource delivery deliberately
+  does not await optional IndexedDB persistence. `955eff041` adds a passive
+  pending-write observation; `bb61dc8b3` waits for zero pending writes after
+  capturing cold metrics and before the warm reload. It does not flush the
+  cache, delay the measured readiness boundary, or change any original cache
+  assertion. All 23 cache-delivery tests pass, including delivery while native
+  cache maintenance remains held and eventual zero pending writes.
+- **BSE-009 / S81:** A reacquires writer epoch three and the correct persisted
+  selection, but `canGenerate` remains false for the full 30-second assertion.
+  No page error or wrong-target generation occurs. A bounded subagent reproduces
+  the lost readiness update: retained-route restoration changes B to A while B
+  hydration is pending; the old read correctly returns false, then promotion
+  installs synchronization with A already selected and misses that change.
+  `f87624888` reevaluates changed semantic targets, preserves errors for unchanged
+  targets and fences superseded sessions. Four focused regressions protect the
+  lost selection update, changed prompt owner, stable failure and ownership
+  supersession; all 217 bootstrap tests pass. Qualified browser fault/restored
+  evidence and affected Reader revalidation are still required.
+
+Both independent read-only Luna reviews time out; root manually closes the cache
+source/trace review, and the implementation agent closes the writer source review
+with deterministic red/green evidence. At diagnostic source `bb61dc8b3`, before
+the production repair, three declared repetitions of each original failing
+browser case pass **6/6 in 21.6s** with one worker. Those green scheduling samples
+do not disprove the deterministic writer race or replace a qualified fault.
+The new terminal writer artifact records coordinator, generation blockers,
+session, route and revision through read-only hooks; all original journey
+assertions remain intact. Browser/server/shared types and formatting pass.
+
+The final matching Quality workflow query at `6ee9bf1b7` succeeds with no matching
+run. There is no supplemental CI URL; required execution stays with the agent.
+The final-source/finding reconciliation above is superseded only for these new
+follow-ups. Both controls, final discovery, repeated required gates and archival
+actions remain pending.

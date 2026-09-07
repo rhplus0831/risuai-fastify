@@ -767,3 +767,14 @@ contracts and follow-up scope. Qualified controls and Phase 3's full current
 cohort cover every changed boundary; Phase 4 introduces no behavioral edit or new
 unresolved ordering question requiring another focused campaign. Its own final
 agent/full gates and closeout remain in [status](status.md).
+
+The first Phase 4 full gate subsequently exposes two follow-ups at `6ee9bf1b7`:
+S51's immediate reload does not establish that optional cache writes completed,
+and S81 can lose a retained-route readiness update during writer promotion.
+The [failure and repair record](status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
+supersedes final acceptance claims for those boundaries. Passive cache/write and
+generation diagnostics are observations; the cache's zero-pending-write wait is
+a warm-fixture prerequisite after cold measurement. All original startup/cache
+and writer/draft/ownership assertions remain. Source anchors and shared hook
+ownership will be reconciled after focused fault/restored verification; the
+unchanged scenario dispositions retain their recorded limits.
