@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
 import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
 import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
+import type { NAIImgConfig } from '../storage/database.svelte'
 
 const recorded = vi.hoisted(() => ({
   dispatched: [] as Array<{ key: string; mutationId: string; intent: unknown }>,
@@ -256,7 +257,11 @@ describe('settings owner durable marker ordering', () => {
           expect(original).toHaveLength(1)
         })
         demoteClientSession()
-        const authoritative = { textTheme: 'server text', notification: false, NAIImgConfig: { steps: 30, scale: 1 } }
+        const authoritative = {
+          textTheme: 'server text',
+          notification: false,
+          NAIImgConfig: { steps: 30, scale: 1 } as NAIImgConfig,
+        }
         expect(applySettingsResource({ revision: 1, settings: authoritative })).toBe(true)
         flushSync()
         expect(testDatabaseState.db.textTheme).toBe('server text')

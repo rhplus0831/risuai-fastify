@@ -1,5 +1,6 @@
 import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
 import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
+import type { NAIImgConfig } from '../storage/database.svelte'
 import { flushSync, mount, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -284,7 +285,9 @@ describe('server-backed data-driven settings', () => {
     )
     const original = durableSettingState.stages[0]
     demoteClientSession()
-    expect(applySettingsResource({ revision: 1, settings: { NAIImgConfig: { steps: 30, scale: 1 } } })).toBe(true)
+    expect(
+      applySettingsResource({ revision: 1, settings: { NAIImgConfig: { steps: 30, scale: 1 } as NAIImgConfig } }),
+    ).toBe(true)
     repromoteClientWriter()
     setDeferredSettingValue(
       { id: 'scale', type: 'number', bindPath: 'NAIImgConfig.scale' } as SettingItem,
