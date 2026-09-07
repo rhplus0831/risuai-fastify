@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { untrack } from 'svelte'
 import { get } from 'svelte/store'
 import {
@@ -34,6 +39,7 @@ import { normalizeScriptModelOverrides } from '@risuai/shared-core/script-model-
 import { subscribeServerCommandLocalEffectApplied } from './commandLocalEffectEvents'
 
 interface PendingCharacterPatch {
+  sessionGeneration: number
   characterId: string
   patch: CharacterSnapshot
   previous: CharacterStateSnapshot
@@ -85,6 +91,7 @@ export type CharacterDraftValue = Record<string, any> & CharacterSnapshot
 export interface CharacterOwnerDraft {
   characterId: string | null
   value: CharacterDraftValue
+  captureRecoveryDraft(): { characterId: string; value: CharacterDraftValue; baseline: CharacterDraftValue } | null
 }
 
 export interface CharacterOwnerDraftOptions {
@@ -95,15 +102,25 @@ export function createCharacterOwnerDraft(
   keys: readonly string[],
   options: CharacterOwnerDraftOptions = {},
 ): CharacterOwnerDraft {
+  const sessionGeneration = captureClientSessionGeneration()
   const delayMs = options.delayMs ?? CHARACTER_DRAFT_DELAY_MS
   const initialSelected = get(selectedCharID)
   const initialCharacter = selectedCharacterOwner(initialSelected)
   const initialCharacterId =
     initialCharacter && !isServerCharacterShell(initialCharacter) ? (initialCharacter.chaId ?? null) : null
   const initialSeed = currentCharacterDraftSeed(initialSelected, initialCharacterId, keys)
+  let recoveryBaseline = cloneJsonValue(initialSeed.serverValue)
   const draft = $state<CharacterOwnerDraft>({
     characterId: initialCharacterId,
     value: cloneJsonValue(initialSeed.serverValue),
+    captureRecoveryDraft() {
+      if (!draft.characterId || snapshotJson(draft.value) === snapshotJson(recoveryBaseline)) return null
+      return {
+        characterId: draft.characterId,
+        value: cloneJsonValue(draft.value),
+        baseline: cloneJsonValue(recoveryBaseline),
+      }
+    },
   })
   let initialized = false
   let suppressDraftDispatch = false
@@ -171,6 +188,7 @@ export function createCharacterOwnerDraft(
     const { serverSnapshot, serverValue } = untrack(() => currentCharacterDraftSeed(selected, characterId, keys))
 
     if (identityChanged || !characterId) {
+      recoveryBaseline = cloneJsonValue(serverValue)
       dirtyFields.clear()
     }
 
@@ -194,8 +212,11 @@ export function createCharacterOwnerDraft(
           projection: serverValue,
           dirtyFields,
         })
-        reassertDirtyDraftFields(selected, characterId, draft.value, dirtyFields)
+        if (isClientSessionGenerationCurrent(sessionGeneration)) {
+          reassertDirtyDraftFields(selected, characterId, draft.value, dirtyFields)
+        }
       } else {
+        recoveryBaseline = cloneJsonValue(serverValue)
         dirtyFields.clear()
         draft.characterId = characterId
         draft.value = cloneJsonValue(serverValue)
@@ -212,6 +233,10 @@ export function createCharacterOwnerDraft(
   $effect(() =>
     subscribeServerCommandLocalEffectApplied((_event, localEffect) => {
       if (localEffect.kind !== 'characterPatch' || localEffect.characterId !== draft.characterId) return
+      for (const key of keys) {
+        if (Object.prototype.hasOwnProperty.call(localEffect.patch, key))
+          recoveryBaseline[key] = cloneJsonValue(localEffect.patch[key])
+      }
 
       for (const key of Array.from(dirtyFields)) {
         if (
@@ -245,6 +270,7 @@ export function createCharacterOwnerDraft(
     previousDraftDispatchSnapshot = draftSnapshot
 
     untrack(() => {
+      if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
       const character = uniqueCharacterOwner(characterId)
       if (!character || isServerCharacterShell(character)) return
       const previousProfile = scalarCharacterProfile(character as unknown as Record<string, unknown>)
@@ -294,6 +320,7 @@ function reassertDirtyDraftFields(
   draft: CharacterDraftValue,
   dirtyFields: ReadonlySet<keyof CharacterDraftValue & string>,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!characterId || dirtyFields.size === 0) return
 
   const patch: CharacterSnapshot = {}
@@ -356,6 +383,7 @@ function queueCharacterPatch(
   previous: CharacterStateSnapshot,
   delay: number,
 ): void {
+  if (!canUseClientWriteAccess()) return
   const pendingPatch = pendingPatches.get(characterId)
   if (pendingPatch?.timer) clearTimeout(pendingPatch.timer)
 
@@ -368,6 +396,7 @@ function queueCharacterPatch(
 
   const intent = characterPatchDurableIntent(characterId, commandPatch)
   const nextPatch: PendingCharacterPatch = {
+    sessionGeneration: captureClientSessionGeneration(),
     characterId,
     patch: commandPatch,
     previous: pendingPatch?.previous ?? previous,
@@ -381,6 +410,7 @@ function queueCharacterPatch(
 }
 
 export function flushPendingCharacterDraftPatches(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   for (const characterId of Array.from(pendingPatches.keys())) {
     runPendingCharacterPatch(characterId, options)
   }
@@ -389,8 +419,9 @@ export function flushPendingCharacterDraftPatches(options: ServerCommandTranspor
 registerPendingOwnerMutationFlusher('character-draft', flushPendingCharacterDraftPatches)
 
 function runPendingCharacterPatch(characterId: string, options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   const commandPatch = pendingPatches.get(characterId)
-  if (!commandPatch) return
+  if (!commandPatch || !isClientSessionGenerationCurrent(commandPatch.sessionGeneration)) return
   if (commandPatch.timer) clearTimeout(commandPatch.timer)
   pendingPatches.delete(characterId)
 

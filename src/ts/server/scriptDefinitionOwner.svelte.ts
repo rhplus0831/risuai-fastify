@@ -1,3 +1,9 @@
+import {
+  canUseClientWriteAccess,
+  assertClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { untrack } from 'svelte'
 import { v4 } from 'uuid'
 import type { RisuModule } from '../process/modules'
@@ -104,6 +110,7 @@ export type ScopedScriptDefinitionAttempt =
 export type ScriptDefinitionRollback = ScriptDefinitionStateSnapshot | ScopedScriptDefinitionRollback
 
 interface PendingCollectionReplacement {
+  sessionGeneration: number
   key: string
   previous: ScriptDefinitionRollback
   finalDefinitions: readonly unknown[]
@@ -162,6 +169,7 @@ interface DispatchedScriptDefinitionAttempt {
 }
 
 interface PendingCharacterScriptDefinitionDraft {
+  sessionGeneration: number
   characterId: string
   scripts: customscript[]
   triggers: triggerscript[]
@@ -226,6 +234,7 @@ export function scheduleCharacterScriptDefinitionDraft(
   triggers: triggerscript[],
   delayMs = CHARACTER_SCRIPT_DEFINITION_SAVE_DELAY_MS,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!characterId) return false
   if (!characterDefinitionOwners().some((candidate) => candidate.chaId === characterId)) return false
 
@@ -234,6 +243,7 @@ export function scheduleCharacterScriptDefinitionDraft(
   const previous = pendingCharacterScriptDefinitionDrafts.get(characterId)
   if (previous) clearTimeout(previous.timer)
   const pending: PendingCharacterScriptDefinitionDraft = {
+    sessionGeneration: captureClientSessionGeneration(),
     characterId,
     scripts,
     triggers,
@@ -244,8 +254,9 @@ export function scheduleCharacterScriptDefinitionDraft(
 }
 
 export function flushPendingCharacterScriptDefinitionDraft(characterId: string): boolean {
+  if (!canUseClientWriteAccess()) return false
   const pending = pendingCharacterScriptDefinitionDrafts.get(characterId)
-  if (!pending) return false
+  if (!pending || !isClientSessionGenerationCurrent(pending.sessionGeneration)) return false
   clearTimeout(pending.timer)
   pendingCharacterScriptDefinitionDrafts.delete(characterId)
   return applyCharacterScriptDefinitionDraft(characterId, pending.scripts, pending.triggers, 0)
@@ -302,6 +313,7 @@ export function applyCharacterScriptDefinitionDraft(
   triggers: triggerscript[],
   delayMs = 250,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!characterId) return false
   const character = characterDefinitionOwners().find((candidate) => candidate.chaId === characterId)
   if (!character) return false
@@ -364,6 +376,7 @@ export function applyModuleScriptDefinitionDraft(
   triggers: triggerscript[],
   delayMs = 250,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!moduleId) return false
 
   const liveModule = findModule(moduleId)
@@ -458,6 +471,7 @@ export function dispatchReplaceCharacterScripts(
   previous: ScriptDefinitionRollback,
   delayMs = 250,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const optimisticRowEpoch = captureCharacterRowProjectionEpoch(characterId)
   ensureClientScriptDefinitionIds(scripts)
@@ -490,6 +504,7 @@ export function dispatchReplaceCharacterTriggers(
   previous: ScriptDefinitionRollback,
   delayMs = 250,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const optimisticRowEpoch = captureCharacterRowProjectionEpoch(characterId)
   ensureClientTriggerDefinitionIds(triggers)
@@ -522,6 +537,7 @@ export function dispatchReplaceModuleScripts(
   previous: ScriptDefinitionRollback,
   delayMs = 250,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const optimisticCollectionEpoch = captureCollectionProjectionEpoch('modules')
   ensureClientScriptDefinitionIds(scripts)
@@ -554,6 +570,7 @@ export function dispatchReplaceModuleTriggers(
   previous: ScriptDefinitionRollback,
   delayMs = 250,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const optimisticCollectionEpoch = captureCollectionProjectionEpoch('modules')
   ensureClientTriggerDefinitionIds(triggers)
@@ -587,6 +604,7 @@ export function beginCharacterScriptDefinitionStructuralWrite(
   rollback: Extract<ScopedScriptDefinitionRollback, { kind: typeof kind }>,
   optimisticRowEpoch: number,
 ): CharacterScriptDefinitionStructuralWriteAttempt {
+  assertClientWriteAccess()
   const key = `${kind}:${characterId}`
   if (!canUseServerCommands()) return Object.freeze({ key })
 
@@ -636,6 +654,8 @@ export function rejectCharacterScriptDefinitionStructuralWrite(
 }
 
 export function watchGlobalScriptOwnerDraft(options: { delayMs?: number } = {}): () => void {
+  const sessionGeneration = captureClientSessionGeneration()
+  if (!canUseClientWriteAccess()) return () => {}
   if (!canUseServerCommands()) return () => {}
   const delayMs = options.delayMs ?? 250
   let initialized = false
@@ -655,7 +675,10 @@ export function watchGlobalScriptOwnerDraft(options: { delayMs?: number } = {}):
         return
       }
       if (!scripts || currentSnapshot === previousSnapshot) return
-      untrack(() => queueWatchedGlobalScripts(previousSnapshot, delayMs))
+      untrack(() => {
+        if (!isClientSessionGenerationCurrent(sessionGeneration)) return
+        queueWatchedGlobalScripts(previousSnapshot, delayMs)
+      })
       previousSnapshot = currentSnapshot
     })
   })
@@ -839,6 +862,7 @@ function queueReplacement(
   settingsGroupProjectionEpoch?: number,
   mutation?: QueuedScriptDefinitionMutation,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!mutation) throw new TypeError('A queued script-definition mutation is required')
   const existing = pendingReplacements.get(key)
   if (existing?.timer) clearTimeout(existing.timer)
@@ -908,6 +932,7 @@ function queueReplacement(
     existing && sameProjection ? existing.outbox : undefined,
   )
   const pending: PendingCollectionReplacement = {
+    sessionGeneration: captureClientSessionGeneration(),
     key,
     previous: effectivePrevious,
     finalDefinitions: cloneJsonValue(mutation.finalDefinitions),
@@ -1073,6 +1098,7 @@ function scriptDefinitionDurableIntent(
 }
 
 function queueWatchedGlobalScripts(previousSnapshot: string, delayMs: number): void {
+  if (!canUseClientWriteAccess()) return
   const optimisticProjectionEpoch = captureSettingsGroupProjectionEpoch('advanced')
   const previousScripts = parseSnapshotArray<customscript>(previousSnapshot)
   const scripts = currentGlobalScriptsForWatchedCommand()
@@ -1651,6 +1677,7 @@ function trackPendingScriptDefinitionSettlement(pending: PendingCollectionReplac
 }
 
 export function flushPendingScriptDefinitionMutations(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   for (const characterId of Array.from(pendingCharacterScriptDefinitionDrafts.keys())) {
     flushPendingCharacterScriptDefinitionDraft(characterId)
   }
@@ -1675,8 +1702,10 @@ function scriptDefinitionOwnerMutationKey(key: string, mutation: QueuedScriptDef
 }
 
 function runPendingScriptDefinitionReplacement(key: string, options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   const pending = pendingReplacements.get(key)
   if (!pending) return
+  if (!isClientSessionGenerationCurrent(pending.sessionGeneration)) return
   if (pending.timer) clearTimeout(pending.timer)
   pendingReplacements.delete(key)
   if (

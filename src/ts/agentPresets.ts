@@ -1,3 +1,4 @@
+import { canUseClientWriteAccess } from './clientSession'
 import {
   AGENT_PRESET_SCHEMA_VERSION,
   normalizeAgentPresets,
@@ -274,6 +275,7 @@ export function createAgentPreset(
   preset: AgentPresetSnapshot,
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const attempted = safeStructuredClone(preset)
   const latch: AgentPresetGeneratedProjectionLatch = {
     kind: 'preset',
@@ -300,6 +302,7 @@ export function updateAgentPreset(
   patch: AgentPresetSnapshot,
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const attempted = safeStructuredClone(patch)
   const optimistic = optimisticallyPatchAgentPreset(presetId, patch)
   const intent: DurableMutationIntent = {
@@ -333,6 +336,7 @@ export function duplicateAgentPreset(
   presetId: string,
   options: AgentPresetCommandOptions & { name?: string } = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string; sourcePresetId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const source = getAgentPresetById(presetId)
   const expectedName = options.name ?? (source ? `${source.name} Copy` : 'Agent Preset Copy')
   const latch: AgentPresetGeneratedProjectionLatch = {
@@ -373,6 +377,7 @@ export function deleteAgentPreset(
     clearedLoadoutCount: number
   }>
 > {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const rollback = taintedAgentPresetRollback(optimisticallyDeleteAgentPreset(presetId))
   const intent: DurableMutationIntent = {
     version: 1,
@@ -391,6 +396,7 @@ export function reorderAgentPresets(
   presetIds: string[],
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ agentPresetDefaultId: string | null }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const attemptedPresetIds = [...presetIds]
   const rollback = optimisticallyReorderAgentPresets(attemptedPresetIds)
   const intent: DurableMutationIntent = {
@@ -417,6 +423,7 @@ export function setAgentPresetDefault(
   agentPresetId: string | null,
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ agentPresetDefaultId: string | null }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const rollback = optimisticallySetAgentPresetDefault(agentPresetId)
   const intent: DurableMutationIntent = {
     version: 1,
@@ -443,6 +450,7 @@ export function createAgentPresetStep(
   step: AgentPresetStepSnapshot,
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string; stepId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const attempted = safeStructuredClone(step)
   const expectedName = typeof attempted.name === 'string' ? attempted.name : 'New Step'
   const expectedOutputKey = typeof attempted.outputKey === 'string' ? attempted.outputKey : undefined
@@ -482,6 +490,7 @@ export function updateAgentPresetStep(
   patch: AgentPresetStepSnapshot,
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string; stepId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const attempted = safeStructuredClone(patch)
   const optimistic = optimisticallyPatchAgentPresetStep(presetId, stepId, patch)
   const intent: DurableMutationIntent = {
@@ -517,6 +526,7 @@ export function duplicateAgentPresetStep(
   stepId: string,
   options: AgentPresetCommandOptions & { name?: string } = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string; stepId: string; sourceStepId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const source = getAgentPresetById(presetId)?.steps.find((candidate) => candidate.id === stepId)
   const expectedName = options.name ?? (source ? `${source.name} Copy` : 'Agent Preset Step Copy')
   const expectedOutputKey = source
@@ -569,6 +579,7 @@ export function deleteAgentPresetStep(
   stepId: string,
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string; stepId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const rollback = taintedAgentPresetRollback(optimisticallyDeleteAgentPresetStep(presetId, stepId))
   const intent: DurableMutationIntent = {
     version: 1,
@@ -594,6 +605,7 @@ export function reorderAgentPresetSteps(
   stepIds: string[],
   options: AgentPresetCommandOptions = {},
 ): Promise<AgentPresetMutationOutcome<{ presetId: string }>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const attemptedStepIds = [...stepIds]
   const rollback = taintedAgentPresetRollback(optimisticallyReorderAgentPresetSteps(presetId, attemptedStepIds))
   const intent: DurableMutationIntent = {

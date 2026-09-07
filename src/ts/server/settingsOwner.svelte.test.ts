@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
 
@@ -373,6 +375,7 @@ function advanceProjectionForKey(key: string): void {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.useFakeTimers()
   recorded.patches.length = 0
   recorded.patchResults.length = 0
@@ -1362,4 +1365,80 @@ describe('settings owner mutations', () => {
     expect(draft.value).toEqual([{ id: 'script-a', in: 'clean server', out: '', type: 'editinput' }])
     stop()
   })
+})
+
+it.each([false, true])(
+  'retains settings draft intent without dispatch after demotion (repromoted: %s)',
+  async (repromoted) => {
+    setupSettings({ notification: false, NAIImgConfig: { steps: 20 } })
+    enterClientWriter()
+    const normal = await createSettingDraft('notification', false)
+    const sparse = await createSettingDraft('NAIImgConfig', { steps: 20 })
+    try {
+      normal.draft.value = true
+      sparse.draft.value = { steps: 30 }
+      await flushAndSettle()
+      const staged = [...durabilityMocks.staged]
+      expect(JSON.stringify(staged)).toContain('notification')
+      expect(JSON.stringify(staged)).toContain('NAIImgConfig')
+      demoteClientSession()
+      if (repromoted) repromoteClientWriter()
+      await vi.advanceTimersByTimeAsync(DELAY * 2)
+      flushPendingSettingsOwnerMutations()
+      expect(durabilityMocks.staged).toEqual(staged)
+      expect(durabilityMocks.dispatched).toEqual([])
+      expect(durabilityMocks.acknowledged).toEqual([])
+      expect(recorded.patches).toEqual([])
+      expect(recorded.objectPatches).toEqual([])
+      expect(normal.draft.value).toBe(true)
+      expect(sparse.draft.value).toEqual({ steps: 30 })
+    } finally {
+      normal.stop()
+      sparse.stop()
+      resetSettingsOwnerForDatabaseReplacement()
+      resetClientSessionForTests()
+    }
+  },
+)
+
+it('does not apply a settings draft effect that runs after demotion and re-promotion', async () => {
+  setupSettings({ notification: false })
+  enterClientWriter()
+  const mounted = await createSettingDraft('notification', false)
+  try {
+    mounted.draft.value = true
+    demoteClientSession()
+    repromoteClientWriter()
+    await flushAndSettle()
+    expect(testDatabaseState.db.notification).toBe(false)
+    expect(mounted.draft.value).toBe(true)
+    expect(durabilityMocks.staged).toEqual([])
+    expect(recorded.patches).toEqual([])
+  } finally {
+    mounted.stop()
+    resetClientSessionForTests()
+  }
+})
+
+it('captures pre-effect typing against the same normalized baseline that seeded the editor', async () => {
+  setupSettings({ globalscript: [{ in: 'Original' }] })
+  let nextId = 0
+  let draft!: ReturnType<typeof createServerBackedSettingDraft<Array<{ id?: string; in: string }>>>
+  const stop = $effect.root(() => {
+    draft = createServerBackedSettingDraft<Array<{ id?: string; in: string }>>('globalscript', [{ in: 'Original' }], {
+      dispatch: false,
+      normalizeDraft: (rows) => rows.map((row) => ({ ...row, id: row.id ?? `normalized-${++nextId}` })),
+    })
+  })
+  try {
+    await flushAndSettle()
+    expect(draft.captureRecoveryDraft()).toBeNull()
+    draft.value[0].in = 'Unsubmitted input'
+    expect(draft.captureRecoveryDraft()).toMatchObject({
+      value: [{ in: 'Unsubmitted input' }],
+      baseline: [{ in: 'Original' }],
+    })
+  } finally {
+    stop()
+  }
 })

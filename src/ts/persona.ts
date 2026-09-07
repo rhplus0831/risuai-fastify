@@ -1,3 +1,9 @@
+import {
+  canUseClientWriteAccess,
+  assertClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from './clientSession'
 import { saveImage, type Database } from './storage/database.svelte'
 import { sleep } from './util'
 import { selectSingleFile } from './filePicker'
@@ -110,6 +116,7 @@ interface PersonaProfileMirrorRollbackMatches {
 }
 
 const pendingPersonaUpdate = {
+  sessionGeneration: captureClientSessionGeneration(),
   timer: null as ReturnType<typeof setTimeout> | null,
   previous: null as PersonaStateSnapshot | null,
   durableAttempted: null as PersonaStateSnapshot | null,
@@ -135,6 +142,7 @@ let personaSettingsWatcherSuppressionToken = 0
 let nextImportedPersonaCreateOperationId = 1
 const pendingImportedPersonaCreates: PendingImportedPersonaCreate[] = []
 const dirtySelectedPersonaFieldsById = new Map<string, Map<SelectedPersonaDirtyField, SelectedPersonaDirtyValue>>()
+const selectedPersonaRecoveryBaselines = new Map<string, Map<SelectedPersonaDirtyField, SelectedPersonaDirtyValue>>()
 const personaProfileMirrorFields: readonly PersonaProfileMirrorField[] = [
   'username',
   'userIcon',
@@ -977,6 +985,42 @@ function selectedPersonaFieldProjectionValue(
   return persona?.[rowField] ?? ''
 }
 
+function captureSelectedPersonaRecoveryBaseline(field: SelectedPersonaDirtyField): void {
+  const personaId = selectedPersonaId()
+  if (!personaId) return
+  let baseline = selectedPersonaRecoveryBaselines.get(personaId)
+  if (!baseline) {
+    baseline = new Map()
+    selectedPersonaRecoveryBaselines.set(personaId, baseline)
+  }
+  if (baseline.has(field) && dirtySelectedPersonaFieldsById.get(personaId)?.has(field)) return
+  const persona = personaRowFromSnapshot(currentPersonaStateSnapshot(), personaId)
+  const value = selectedPersonaFieldProjectionValue(persona, field)
+  if (value !== undefined) baseline.set(field, cloneJsonValue(value))
+}
+
+/** Detached dirty values for loss-of-authority recovery; never restores owner state. */
+export function captureSelectedPersonaRecoveryDraft(): {
+  personaId: string
+  value: Partial<Record<SelectedPersonaDirtyField, SelectedPersonaDirtyValue>>
+  baseline: Partial<Record<SelectedPersonaDirtyField, SelectedPersonaDirtyValue>>
+} | null {
+  const personaId = selectedPersonaId()
+  if (!personaId) return null
+  const dirty = dirtySelectedPersonaFieldsById.get(personaId)
+  if (!dirty?.size) return null
+  const baselines = selectedPersonaRecoveryBaselines.get(personaId)
+  const value: Partial<Record<SelectedPersonaDirtyField, SelectedPersonaDirtyValue>> = {}
+  const baseline: Partial<Record<SelectedPersonaDirtyField, SelectedPersonaDirtyValue>> = {}
+  for (const [field, current] of dirty) {
+    const previous = baselines?.get(field)
+    if (previous !== undefined && exactJsonValuesEqual(previous, current)) continue
+    value[field] = cloneJsonValue(current)
+    if (previous !== undefined) baseline[field] = cloneJsonValue(previous)
+  }
+  return Object.keys(value).length > 0 ? { personaId, value, baseline } : null
+}
+
 function markSelectedPersonaFieldDirty(field: SelectedPersonaDirtyField, value: SelectedPersonaDirtyValue): void {
   const personaId = selectedPersonaId()
   if (!personaId) return
@@ -1023,7 +1067,10 @@ function clearPersonaPatchDirtyFields(
       dirtyFields.delete(field)
     }
   }
-  if (dirtyFields.size === 0) dirtySelectedPersonaFieldsById.delete(personaId)
+  if (dirtyFields.size === 0) {
+    dirtySelectedPersonaFieldsById.delete(personaId)
+    selectedPersonaRecoveryBaselines.delete(personaId)
+  }
 }
 
 function clearDirtySelectedPersonaFieldsMatchingProjection(
@@ -1065,11 +1112,16 @@ export function settleAcceptedPersonaPatchDirtyFields(
 
   for (const field of acceptedFields) {
     const attemptedValue = selectedPersonaFieldProjectionValue(attemptedPersona as Persona, field)
+    if (attemptedValue !== undefined)
+      selectedPersonaRecoveryBaselines.get(personaId)?.set(field, cloneJsonValue(attemptedValue))
     if (attemptedValue !== undefined && exactJsonValuesEqual(dirtyFields.get(field), attemptedValue)) {
       dirtyFields.delete(field)
     }
   }
-  if (dirtyFields.size === 0) dirtySelectedPersonaFieldsById.delete(personaId)
+  if (dirtyFields.size === 0) {
+    dirtySelectedPersonaFieldsById.delete(personaId)
+    selectedPersonaRecoveryBaselines.delete(personaId)
+  }
 }
 
 subscribeServerCommandLocalEffectApplied((_event, localEffect) => {
@@ -1091,6 +1143,7 @@ subscribeServerCommandLocalEffectApplied((_event, localEffect) => {
 })
 
 export function reconcileSelectedPersonaProjectionEpoch(): void {
+  if (!canUseClientWriteAccess()) return
   reassertPendingImportedPersonaCreates()
   const owner = getPersonaOwnerStateSnapshot()
   const personaId = owner?.selectedPersonaId ?? null
@@ -1202,6 +1255,7 @@ function dispatchPersonaProfilePatch(input: {
   attempted: PersonaStateSnapshot
   rollbackRowKeys: readonly PersonaRowRollbackField[]
 }): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
 
   void flushPendingSelectedPersonaUpdate()
@@ -1246,6 +1300,7 @@ function dispatchPersonaProfilePatch(input: {
 }
 
 function dispatchCreatePersona(persona: Persona, previous: PersonaStateSnapshot): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const createdPersonaId = nonBlankPersonaId(persona)
   if (!createdPersonaId) return Promise.resolve('failed')
@@ -1306,6 +1361,7 @@ function dispatchImportedPersonaCreate(
   persona: Persona,
   previous: PersonaStateSnapshot,
 ): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const personaId = nonBlankPersonaId(persona)
   if (!personaId) return Promise.resolve('failed')
@@ -1372,6 +1428,7 @@ function dispatchDeletePersona(
   previous: PersonaStateSnapshot,
   rollbackReferences: () => void,
 ): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const previousIndex = findPersonaIndexById(previous.personas, personaId)
   const previousPersona = previousIndex === -1 ? null : previous.personas[previousIndex]
@@ -1428,6 +1485,7 @@ function dispatchDeletePersona(
 }
 
 function dispatchReorderPersonas(previous: PersonaStateSnapshot): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const personaIds = personaCommandIdList()
   if (!personaIds) return Promise.resolve('failed')
@@ -1478,12 +1536,14 @@ function dispatchReorderPersonas(previous: PersonaStateSnapshot): Promise<Person
 }
 
 export function queueSelectedPersonaUpdate(previous: PersonaStateSnapshot, attempted: PersonaStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands() || personaSettingsWatcherSuppressed) return
   const personaId = selectedPersonaId()
   if (!personaId) return
   if (pendingPersonaUpdate.personaId && pendingPersonaUpdate.personaId !== personaId) {
     clearPendingSelectedPersonaUpdate()
   }
+  pendingPersonaUpdate.sessionGeneration = captureClientSessionGeneration()
   pendingPersonaUpdate.personaId = personaId
   pendingPersonaUpdate.previous ??= cloneJsonValue(previous)
   pendingPersonaUpdate.collectionProjectionEpoch ??= captureCollectionProjectionEpoch('personas')
@@ -1569,8 +1629,10 @@ function takePendingSelectedPersonaUpdate(): {
 export function flushPendingSelectedPersonaUpdate(
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult<{ personaId: string }> | null> {
+  if (!canUseClientWriteAccess()) return Promise.resolve(null)
   if (!canUseServerCommands()) return Promise.resolve(null)
 
+  if (!isClientSessionGenerationCurrent(pendingPersonaUpdate.sessionGeneration)) return Promise.resolve(null)
   const pending = takePendingSelectedPersonaUpdate()
   if (!pending) {
     return pendingPersonaUpdate.promise ?? Promise.resolve(null)
@@ -1649,8 +1711,10 @@ registerPendingOwnerMutationFlusher('selected-persona-profile', (options) => {
 })
 
 export function updateSelectedPersonaField(field: SelectedPersonaProfileField, value: string): void {
+  if (!canUseClientWriteAccess()) return
   const personaId = selectedPersonaId()
   if (!personaId) return
+  captureSelectedPersonaRecoveryBaseline(field)
   const applied = updatePersonaOwnerState((draft) => {
     const persona = draft.personas[findPersonaIndexById(draft.personas, personaId)]
     if (!persona) return false
@@ -1675,6 +1739,7 @@ export function updateSelectedPersonaFieldWithOutcome(
   field: SelectedPersonaProfileField,
   value: string,
 ): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const personaId = selectedPersonaId()
   if (!personaId) {
     return Promise.resolve('failed')
@@ -1697,8 +1762,10 @@ export function updateSelectedPersonaFieldWithOutcome(
 }
 
 export function updateSelectedPersonaLargePortrait(value: boolean): void {
+  if (!canUseClientWriteAccess()) return
   const personaId = selectedPersonaId()
   if (!personaId) return
+  captureSelectedPersonaRecoveryBaseline('largePortrait')
   const applied = updatePersonaOwnerState((draft) => {
     const persona = draft.personas[findPersonaIndexById(draft.personas, personaId)]
     if (!persona) return false
@@ -1708,8 +1775,10 @@ export function updateSelectedPersonaLargePortrait(value: boolean): void {
 }
 
 export function updateSelectedPersonaDisplayName(value: string): void {
+  if (!canUseClientWriteAccess()) return
   const personaId = selectedPersonaId()
   if (!personaId) return
+  captureSelectedPersonaRecoveryBaseline('displayName')
   const applied = updatePersonaOwnerState((draft) => {
     const persona = draft.personas[findPersonaIndexById(draft.personas, personaId)]
     if (!persona) return false
@@ -1719,6 +1788,7 @@ export function updateSelectedPersonaDisplayName(value: string): void {
 }
 
 export function updateSelectedPersonaModules(moduleIds: readonly string[]): void {
+  if (!canUseClientWriteAccess()) return
   const personaId = selectedPersonaId()
   const modules = collectionsResourceState.values.modules
   if (!personaId || collectionsResourceState.statuses.modules === 'error' || !Array.isArray(modules)) return
@@ -1736,6 +1806,7 @@ export function updateSelectedPersonaModules(moduleIds: readonly string[]): void
       }),
     ),
   )
+  captureSelectedPersonaRecoveryBaseline('modules')
   const applied = updatePersonaOwnerState((draft) => {
     const persona = draft.personas[findPersonaIndexById(draft.personas, personaId)]
     if (!persona) return false
@@ -1753,6 +1824,7 @@ export interface NewUserPersonaMutation {
 }
 
 export function createNewUserPersonaWithOutcome(): NewUserPersonaMutation {
+  assertClientWriteAccess()
   const previous = currentPersonaStateSnapshot()
   const persona = {
     id: v4(),
@@ -1791,6 +1863,7 @@ export function reorderUserPersonasByIndicesWithOutcome(
   indices: number[],
   selectedPersonaId: string | null,
 ): Promise<PersonaPersistenceStatus> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const owner = getPersonaOwnerStateSnapshot()
   if (!owner || selectedPersonaId !== owner.selectedPersonaId) return null
   const previous = currentPersonaStateSnapshot()
@@ -1817,6 +1890,7 @@ export function reorderUserPersonasByIndices(indices: number[], selectedPersonaI
 export function deleteSelectedUserPersonaWithOutcome(
   expectedPersonaId?: string,
 ): Promise<PersonaPersistenceStatus> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const owner = getPersonaOwnerStateSnapshot()
   if (!owner || owner.personas.length === 1) return null
   if (!personaCommandIdList()) return null
@@ -1863,6 +1937,8 @@ function currentPersonaIconUploadFreshness() {
 }
 
 export async function selectUserImg() {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   const initialFreshness = currentPersonaIconUploadFreshness()
   const target = initialFreshness ? capturePersonaIconUploadTarget(initialFreshness) : null
   if (!target) return
@@ -1879,6 +1955,7 @@ export async function selectUserImg() {
       return
     }
 
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     const selectedFreshness = currentPersonaIconUploadFreshness()
     if (!selectedFreshness || resolveFreshPersonaIconUploadIndex(operation, selectedFreshness) === null) {
       alertError(language.fileSelectionStale)
@@ -1886,6 +1963,7 @@ export async function selectUserImg() {
     }
 
     const imgp = await saveImage(selected.data)
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     const encodedFreshness = currentPersonaIconUploadFreshness()
     const personaIndex = encodedFreshness ? resolveFreshPersonaIconUploadIndex(operation, encodedFreshness) : null
     if (personaIndex === null) {
@@ -1941,6 +2019,7 @@ export async function selectUserImg() {
     }
     return status
   } catch (error) {
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     console.error(error)
     alertError(language.personaIconSaveFailed)
     return 'failed'
@@ -1952,6 +2031,7 @@ export async function selectUserImg() {
 }
 
 export function saveUserPersona(options: { dispatch?: boolean } = {}): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const dispatch = options.dispatch ?? true
   const previous = currentPersonaStateSnapshot()
   if (!previous.selectedPersonaId || !personaRowFromSnapshot(previous, previous.selectedPersonaId)) {
@@ -1975,6 +2055,7 @@ export function saveUserPersona(options: { dispatch?: boolean } = {}): Promise<P
 }
 
 export function setSelectedPersonaPromptFromTrigger(value: string): Promise<PersonaPersistenceStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const personaId = selectedPersonaId()
   if (!personaId) return Promise.resolve('failed')
   const previous = currentPersonaStateSnapshot()
@@ -2000,6 +2081,7 @@ export function setSelectedPersonaPromptFromTrigger(value: string): Promise<Pers
 }
 
 export function selectUserPersonaLocally(id: number, save: 'save' | 'noSave' = 'save'): boolean {
+  if (!canUseClientWriteAccess()) return false
   const owner = getPersonaOwnerStateSnapshot()
   if (!owner || !personaCommandIdList(owner.personas)) return false
   const targetPersonaId = uniquePersonaIdAt(owner.personas, id)
@@ -2020,6 +2102,7 @@ export function changeUserPersonaWithOutcome(
   id: number,
   save: 'save' | 'noSave' = 'save',
 ): Promise<PersonaPersistenceStatus> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!personaCommandIdList()) return null
   const personaId = validUniquePersonaIdAt(id)
   if (!personaId) return null
@@ -2143,11 +2226,14 @@ export async function exportUserPersona() {
 }
 
 export async function importUserPersona() {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   try {
     const v = await selectSingleFile(['png'])
     if (!v) {
       return
     }
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     const readGenerator = PngChunk.readGenerator(v.data)
     let decoded: string | undefined
 
@@ -2162,17 +2248,21 @@ export async function importUserPersona() {
       alertError(language.errors.noData)
       return
     }
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     const data: PersonaCard = JSON.parse(Buffer.from(decoded, 'base64').toString('utf-8'))
     if (data.name && data.personaPrompt) {
+      const encoded = await reencodeImage(v.data)
+      if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
       const persona = {
         name: data.name,
         displayName: data.displayName ?? '',
-        icon: await saveImage(await reencodeImage(v.data)),
+        icon: await saveImage(encoded),
         personaPrompt: data.personaPrompt,
         note: data.note,
         modules: [],
         id: v4(),
       }
+      if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
       const previous = currentPersonaStateSnapshot()
       const applied = updatePersonaOwnerState((draft) => {
         draft.personas.push(persona)
@@ -2195,6 +2285,7 @@ export async function importUserPersona() {
       alertError(language.errors.noData)
     }
   } catch (error) {
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     console.error(error)
     alertError(language.personaImportFailed)
     return 'failed'

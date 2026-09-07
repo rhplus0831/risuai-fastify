@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { SvelteSet } from 'svelte/reactivity'
 import { get } from 'svelte/store'
 import { v4 } from 'uuid'
@@ -102,6 +107,7 @@ type LorebookProjectionEpochs =
   | { kind: 'module'; moduleId: string; collectionEpoch: number }
 
 interface PendingCollectionReplacement {
+  sessionGeneration: number
   key: string
   previous: LorebookReplacementSnapshot
   attemptedEntries: loreBook[]
@@ -645,6 +651,7 @@ export function applyLorebookEntryDraftEdit(
   value: loreBook,
   delayMs = 250,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (scope.kind === 'character' && !isCharacterLorebookMutationReady(scope.characterId)) {
     return false
   }
@@ -760,6 +767,7 @@ export function setChatLorebookLocalActivationWithOutcome(
   active: boolean,
   delayMs = 250,
 ): ScopedLorebookMutationOperation | null {
+  if (!canUseClientWriteAccess()) return null
   if (!chatId) return null
   const scope = { kind: 'chat', chatId } as const
   flushPendingLorebookEntryBeforeCollectionMutation(scope)
@@ -825,6 +833,7 @@ export function replaceModuleLorebookCollectionDraft(
   entries: loreBook[],
   delayMs = 250,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!moduleId) return false
 
   const scope = { kind: 'module', moduleId } as const
@@ -886,6 +895,7 @@ function replaceLorebookCollectionWithOutcome(
   delayMs: number,
   source: LorebookReplacementSource = 'collection',
 ): ScopedLorebookMutationOperation | null {
+  if (!canUseClientWriteAccess()) return null
   flushPendingLorebookEntryBeforeCollectionMutation(scope)
   const previous = currentLorebookCollectionScopedSnapshot(scope)
   const cloned = cloneJsonValue(entries ?? [])
@@ -1088,6 +1098,7 @@ function replaceLorebookEntryInPlace(target: loreBook, next: loreBook): void {
 }
 
 export function createGlobalLorebook(): boolean {
+  if (!canUseClientWriteAccess()) return false
   const previous = currentGlobalLorebookStateSnapshot()
   const lorebook: GlobalLorebook = {
     id: v4(),
@@ -1106,6 +1117,7 @@ export function createGlobalLorebook(): boolean {
 }
 
 export function renameGlobalLorebook(index: number, name: string): boolean {
+  if (!canUseClientWriteAccess()) return false
   const current = ((collectionsResourceState.values.loreBook ?? []) as GlobalLorebook[])[index]
   if (!current) return false
   const lorebookId = stableGlobalLorebookId(current.id)
@@ -1126,6 +1138,7 @@ export function renameGlobalLorebook(index: number, name: string): boolean {
 }
 
 export function renameGlobalLorebookById(lorebookId: string, name: string): boolean {
+  if (!canUseClientWriteAccess()) return false
   const index = uniqueGlobalLorebookIndexById(lorebookId)
   return index >= 0 ? renameGlobalLorebook(index, name) : false
 }
@@ -1165,20 +1178,24 @@ function startGlobalLorebookDelete(index: number): StartedGlobalLorebookDelete {
 }
 
 export function deleteGlobalLorebook(index: number): boolean {
+  if (!canUseClientWriteAccess()) return false
   return startGlobalLorebookDelete(index).deleted
 }
 
 export function deleteGlobalLorebookWithOutcome(index: number): Promise<GlobalLorebookDeleteOutcome> | null {
+  if (!canUseClientWriteAccess()) return null
   const started = startGlobalLorebookDelete(index)
   return started.deleted ? started.outcome : null
 }
 
 export function deleteGlobalLorebookById(lorebookId: string): boolean {
+  if (!canUseClientWriteAccess()) return false
   const index = uniqueGlobalLorebookIndexById(lorebookId)
   return index >= 0 ? deleteGlobalLorebook(index) : false
 }
 
 export function deleteGlobalLorebookByIdWithOutcome(lorebookId: string): Promise<GlobalLorebookDeleteOutcome> | null {
+  if (!canUseClientWriteAccess()) return null
   const index = uniqueGlobalLorebookIndexById(lorebookId)
   return index >= 0 ? deleteGlobalLorebookWithOutcome(index) : null
 }
@@ -1188,6 +1205,7 @@ export function deleteGlobalLorebookByIdWithOutcome(lorebookId: string): Promise
 // failures must not restore an old full list over newer sibling rows or
 // selection changes.
 export function dispatchCreateGlobalLorebook(lorebook: GlobalLorebook, previous: GlobalLorebookStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const collectionProjectionEpoch = captureCollectionProjectionEpoch('loreBook')
   lorebook.id = typeof lorebook.id === 'string' && lorebook.id.trim() ? lorebook.id : v4()
@@ -1234,6 +1252,7 @@ export function dispatchUpdateGlobalLorebook(
   patch: Pick<GlobalLorebook, 'name'>,
   previous: LorebookStateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const collectionProjectionEpoch = captureCollectionProjectionEpoch('loreBook')
   const attempted = cloneJsonValue(patch)
@@ -1274,6 +1293,7 @@ export function dispatchDeleteGlobalLorebook(
   lorebookId: string,
   previous: GlobalLorebookStateSnapshot,
 ): Promise<GlobalLorebookDeleteOutcome> | null {
+  if (!canUseClientWriteAccess()) return null
   if (!canUseServerCommands()) return null
   return dispatchStagedGlobalLorebookDelete(lorebookId, previous, stageGlobalLorebookDeleteMutation(lorebookId))
 }
@@ -1435,6 +1455,7 @@ function applyAcceptedGlobalLorebookDeleteProjection(lorebookId: string): void {
 }
 
 export function dispatchReorderGlobalLorebooks(previous: LorebookStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   const collectionProjectionEpoch = captureCollectionProjectionEpoch('loreBook')
   const pageProjectionEpoch = captureLorebookPageProjectionEpoch()
@@ -1514,7 +1535,7 @@ export function dispatchReplaceGlobalLorebookEntriesWithOutcome(
   source: LorebookReplacementSource = 'collection',
 ): ScopedLorebookMutationOperation {
   const scope = { kind: 'global', lorebookId } as const
-  if (!canUseServerCommands()) {
+  if (!canUseClientWriteAccess() || !canUseServerCommands()) {
     return settledScopedLorebookMutationOperation(lorebookCollectionScopeKey(scope), {
       status: 'failed',
       error: 'Server commands are unavailable.',
@@ -1542,7 +1563,7 @@ export function dispatchReplaceCharacterLorebooksWithOutcome(
   source: LorebookReplacementSource = 'collection',
 ): ScopedLorebookMutationOperation {
   const scope = { kind: 'character', characterId } as const
-  if (!canUseServerCommands()) {
+  if (!canUseClientWriteAccess() || !canUseServerCommands()) {
     return settledScopedLorebookMutationOperation(lorebookCollectionScopeKey(scope), {
       status: 'failed',
       error: 'Server commands are unavailable.',
@@ -1579,7 +1600,7 @@ export function dispatchReplaceChatLorebooksWithOutcome(
   source: LorebookReplacementSource = 'collection',
 ): ScopedLorebookMutationOperation {
   const scope = { kind: 'chat', chatId } as const
-  if (!canUseServerCommands()) {
+  if (!canUseClientWriteAccess() || !canUseServerCommands()) {
     return settledScopedLorebookMutationOperation(lorebookCollectionScopeKey(scope), {
       status: 'failed',
       error: 'Server commands are unavailable.',
@@ -2282,6 +2303,7 @@ export function dispatchReplaceModuleLorebooks(
   delayMs = 250,
   source: LorebookReplacementSource = 'collection',
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   if (source === 'collection') ensureClientLorebookEntryIds(entries)
   queueScopedLorebookReplacement({ kind: 'module', moduleId }, entries, previous, delayMs, source)
@@ -2495,6 +2517,7 @@ function queueReplacement(
   scope: DiscreteLorebookEditScope,
   operation: PendingScopedLorebookMutationOperation | null,
 ): void {
+  if (!canUseClientWriteAccess()) return
   const existing = pendingReplacements.get(key)
   if (existing?.timer) clearTimeout(existing.timer)
 
@@ -2573,6 +2596,7 @@ function queueReplacement(
   }
 
   const pending: PendingCollectionReplacement = {
+    sessionGeneration: captureClientSessionGeneration(),
     key,
     previous: rollbackPrevious,
     attemptedEntries,
@@ -2625,6 +2649,7 @@ function isLorebookCollectionReplacementSource(source: LorebookReplacementSource
 }
 
 export function flushPendingLorebookOwnerMutations(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   for (const key of Array.from(pendingReplacements.keys())) {
     runPendingReplacement(key, options)
   }
@@ -2646,8 +2671,10 @@ function lorebookOwnerMutationKey(scope: DiscreteLorebookEditScope): string {
 }
 
 function runPendingReplacement(key: string, options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   const pending = pendingReplacements.get(key)
   if (!pending) return
+  if (!isClientSessionGenerationCurrent(pending.sessionGeneration)) return
   if (pending.timer) clearTimeout(pending.timer)
   pendingReplacements.delete(key)
   if (hasLorebookProjectionEpochChanged(pending.projectionEpochs)) {

@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { flushSync } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -122,6 +124,7 @@ async function settleEffects(): Promise<void> {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.useFakeTimers()
   recorded.results.length = 0
   recorded.stages.length = 0
@@ -130,6 +133,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   flushPendingCharacterDraftPatches()
   vi.useRealTimers()
   selectedCharID.set(-1)
@@ -273,4 +277,43 @@ describe('character owner draft', () => {
     expect(recorded.updates[0].patch).toEqual({ loreSettings: null })
     stop()
   })
+})
+
+it.each([false, true])('keeps staged character edits dormant after demotion (repromoted: %s)', async (repromoted) => {
+  seed([characterRow('char-a', 'Original')])
+  enterClientWriter()
+  const mounted = await mountDraft(['name'])
+  try {
+    mounted.draft.value.name = 'Pending writer edit'
+    await settleEffects()
+    const staged = [...recorded.stages]
+    expect(staged).toHaveLength(1)
+    demoteClientSession()
+    if (repromoted) repromoteClientWriter()
+    await vi.advanceTimersByTimeAsync(100)
+    flushPendingCharacterDraftPatches()
+    expect(recorded.stages).toEqual(staged)
+    expect(recorded.updates).toEqual([])
+    expect(mounted.draft.value.name).toBe('Pending writer edit')
+  } finally {
+    mounted.stop()
+  }
+})
+
+it('does not apply a draft effect that runs after demotion and re-promotion', async () => {
+  seed([characterRow('char-a', 'Original')])
+  enterClientWriter()
+  const mounted = await mountDraft(['name'])
+  try {
+    mounted.draft.value.name = 'Unflushed writer draft'
+    demoteClientSession()
+    repromoteClientWriter()
+    await settleEffects()
+    expect(getResourceDatabase().characters[0].name).toBe('Original')
+    expect(mounted.draft.value.name).toBe('Unflushed writer draft')
+    expect(recorded.stages).toEqual([])
+    expect(recorded.updates).toEqual([])
+  } finally {
+    mounted.stop()
+  }
 })

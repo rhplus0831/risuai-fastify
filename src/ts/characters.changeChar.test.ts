@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from './clientSession'
+import { enterClientWriter, repromoteClientWriter } from './__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
@@ -156,6 +158,7 @@ async function waitForCharacterRowFetch(calls: CapturedFetch[]): Promise<void> {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.mocked(alertAddCharacter).mockReset()
   characterCardsState.importCharacter.mockReset()
   clearCachedServerCommandRevision()
@@ -171,6 +174,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   stopSelectedCharacterShellHydration()
   activeGenerationTarget.set(null)
   doingChat.set(false)
@@ -502,4 +506,46 @@ describe('addCharacter import navigation freshness', () => {
     expect(charactersResourceState.currentChar).toBe(0)
     expect(selectedCharacterCommandIds(calls)).toEqual([])
   })
+})
+
+it('does not revive a pre-demotion selection after hydration and re-promotion', async () => {
+  const characterRow = deferred<Response>()
+  const calls = stubChangeCharFetch(characterRow.promise)
+  selectedCharID.set(1)
+  charactersResourceState.currentChar = 1
+  enterClientWriter()
+  const pending = changeChar(0)
+  await waitForCharacterRowFetch(calls)
+  demoteClientSession()
+  repromoteClientWriter()
+  characterRow.resolve(jsonResponse({ revision: 10, character: hydratedCharacter('char-a', 'Hydrated A') }))
+  await pending
+  await drainServerCommandExecutionForTests()
+  expect(testDatabaseState.db.characters[0].name).toBe('Hydrated A')
+  expect(get(selectedCharID)).toBe(1)
+  expect(charactersResourceState.currentChar).toBe(1)
+  expect(selectedCharacterCommandIds(calls)).toEqual([])
+})
+
+it('does not navigate from an accepted import that completes after demotion and re-promotion', async () => {
+  const calls = stubChangeCharFetch(Promise.resolve(jsonResponse({})))
+  const imported = deferred<{ status: 'accepted'; characterId: string }>()
+  testDatabaseState.db = {
+    currentChar: 0,
+    characters: [fullCharacter('char-a', 'Character A'), fullCharacter('char-b', 'Character B')],
+    characterOrder: ['char-a', 'char-b'],
+  } as any
+  selectedCharID.set(0)
+  vi.mocked(alertAddCharacter).mockResolvedValue('importCharacter')
+  characterCardsState.importCharacter.mockReturnValue(imported.promise)
+  enterClientWriter()
+  const pending = addCharacter()
+  await vi.waitFor(() => expect(characterCardsState.importCharacter).toHaveBeenCalledTimes(1))
+  demoteClientSession()
+  repromoteClientWriter()
+  imported.resolve({ status: 'accepted', characterId: 'char-b' })
+  await pending
+  expect(get(selectedCharID)).toBe(0)
+  expect(charactersResourceState.currentChar).toBe(0)
+  expect(selectedCharacterCommandIds(calls)).toEqual([])
 })

@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { flushSync, mount, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -245,6 +247,7 @@ function serverCommandKeyForSetting(item: SettingItem): string | null {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   durableSettingState.nextId = 0
   durableSettingState.retainFailures = false
   durableSettingState.stages.length = 0
@@ -260,6 +263,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   clearDeferredSettingWrites()
   setServerCommandSuccessReconciler(null)
   vi.unstubAllGlobals()
@@ -1431,3 +1435,24 @@ describe('server-backed data-driven settings', () => {
     expect(calls.filter((call) => call.url === '/api/v1/commands/model-presets/model-a')).toHaveLength(1)
   })
 })
+
+it.each([false, true])(
+  'preserves deferred renderer intent without a stale dispatch after demotion (repromoted: %s)',
+  async (repromoted) => {
+    vi.useFakeTimers()
+    enterClientWriter()
+    const item = { id: 'notification', type: 'check', bindKey: 'notification' } as SettingItem
+    const context = { db: getResourceDatabase(), modelInfo: {}, subModelInfo: {} } as SettingContext
+    expect(setDeferredSettingValue(item, true, context, { delayMs: 50 }).queued).toBe(true)
+    const staged = [...durableSettingState.stages]
+    expect(staged).toHaveLength(1)
+    demoteClientSession()
+    if (repromoted) repromoteClientWriter()
+    await vi.advanceTimersByTimeAsync(100)
+    flushDeferredSettingWrites()
+    expect(durableSettingState.stages).toEqual(staged)
+    expect(durableSettingState.dispatches).toEqual([])
+    expect(durableSettingState.acknowledgements).toEqual([])
+    expect(getResourceDatabase().notification).toBe(true)
+  },
+)

@@ -1,3 +1,4 @@
+import { canUseClientWriteAccess } from './clientSession'
 import { get } from 'svelte/store'
 import { v4 } from 'uuid'
 import {
@@ -799,6 +800,7 @@ export function applyCharacterCreateOptimistically(
   character: character,
   options: { lastInteraction?: number } = {},
 ): number {
+  if (!canUseClientWriteAccess()) return -1
   if (!character.chaId || uniqueCharacterOwnerById(character.chaId)) return -1
   let index = -1
   const applied = updateCharacterRowsOwner((characters) => {
@@ -813,6 +815,7 @@ export function applyCharacterCreateOptimistically(
 
 /** Remove one uniquely identified optimistic character collection row. */
 export function applyCharacterDeleteOptimistically(characterId: string): boolean {
+  if (!canUseClientWriteAccess()) return false
   const owner = uniqueCharacterOwnerById(characterId)
   if (!owner) return false
   return updateCharacterRowsOwner((characters) => {
@@ -825,6 +828,7 @@ export function applyCharacterDeleteOptimistically(characterId: string): boolean
 
 /** Apply selection and interaction time to the exact stable-id owner. */
 export function applyCharacterSelectionOptimistically(characterId: string, lastInteraction: number): number {
+  if (!canUseClientWriteAccess()) return -1
   const character = uniqueCharacterOwnerById(characterId)
   if (!character) return -1
   const index = characterRowsOwner().indexOf(character)
@@ -887,6 +891,7 @@ export function runCharacterCommand<T extends Record<string, unknown>>(
   rollback: () => void,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult<T>> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   if (!canUseServerCommands()) return
   return runServerCommand({ command, rollback, ...options })
 }
@@ -895,6 +900,7 @@ export function dispatchCreateCharacter(
   character: character,
   previous: CharacterStateSnapshot,
 ): Promise<CharacterMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   recordHydratedCharacterLorebooks([character])
   const rollback = characterCreateRollbackFromState(character, previous, false)
   repairCharacterOrderOptimistically({ dispatchReorder: false })
@@ -962,6 +968,7 @@ export function dispatchCreateAndSelectCharacter(
   lastInteraction: number,
   options: CreateAndSelectCharacterDispatchOptions = {},
 ): Promise<CharacterMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   recordHydratedCharacterLorebooks([character])
   const rollback = characterCreateRollbackFromState(character, previous, true)
   repairCharacterOrderOptimistically({ dispatchReorder: false })
@@ -1330,6 +1337,7 @@ export function dispatchUpdateCharacter(
   rollback: (snapshot: CharacterStateSnapshot) => void = restoreCharacterState,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   return dispatchUpdateCharacterWith(characterId, patch, () => rollback(previous), options)
 }
 
@@ -1373,6 +1381,7 @@ export function dispatchUpdateCharacterScoped(
   patch: CharacterSnapshot,
   previous: CharacterRowSnapshot,
 ): Promise<ServerCommandResult> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   return prepareUpdateCharacterScoped(characterId, patch, previous)?.promise
 }
 
@@ -1381,6 +1390,7 @@ export function dispatchUpdateCharacterScopedWithOutcome(
   patch: CharacterSnapshot,
   previous: CharacterRowSnapshot,
 ): Promise<CharacterMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const execution = prepareUpdateCharacterScoped(characterId, patch, previous)
   return execution ? compatibleCharacterMutationOutcome(execution) : undefined
 }
@@ -1420,6 +1430,7 @@ export function dispatchUpdateCharacterTrashTime(
   trashTime: number,
   previous: CharacterTrashTimeSnapshot,
 ): Promise<ServerCommandResult> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   return prepareUpdateCharacterTrashTime(characterId, trashTime, previous)?.promise
 }
 
@@ -1428,6 +1439,7 @@ export function dispatchUpdateCharacterTrashTimeWithOutcome(
   trashTime: number,
   previous: CharacterTrashTimeSnapshot,
 ): Promise<CharacterMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const execution = prepareUpdateCharacterTrashTime(characterId, trashTime, previous)
   return execution ? compatibleCharacterMutationOutcome(execution) : undefined
 }
@@ -1459,6 +1471,7 @@ export function dispatchUpdateCharacterSupaMemory(
   enabled: boolean,
   previous: CharacterSupaMemorySnapshot,
 ): Promise<ServerCommandResult> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   return prepareUpdateCharacterSupaMemory(characterId, enabled, previous)?.promise
 }
 
@@ -1467,6 +1480,7 @@ export function dispatchUpdateCharacterSupaMemoryWithOutcome(
   enabled: boolean,
   previous: CharacterSupaMemorySnapshot,
 ): Promise<CharacterMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const execution = prepareUpdateCharacterSupaMemory(characterId, enabled, previous)
   return execution ? compatibleCharacterMutationOutcome(execution) : undefined
 }
@@ -1511,6 +1525,7 @@ export function dispatchCompatibleCharacterUpdate(
   nextCharacter: character | undefined,
   previous: CharacterStateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   dispatchCompatibleCharacterUpdateWith(previousCharacter, nextCharacter, () => restoreCharacterState(previous))
 }
 
@@ -1522,6 +1537,7 @@ export function dispatchCompatibleCharacterUpdateScoped(
   nextCharacter: character | undefined,
   previous: CharacterRowSnapshot,
 ): Promise<ServerCommandResult> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   const characterId = previousCharacter?.chaId
   if (!characterId || !previousCharacter || !nextCharacter) return
   const attempted = sanitizeCharacterPatch(changedCharacterFields(previousCharacter, nextCharacter))
@@ -1534,6 +1550,7 @@ export function applyCharacterRowMutationScoped(
   characterId: string,
   mutate: (character: character) => void,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const previous = currentCharacterRowSnapshot(index)
   const target = uniqueCharacterOwnerAt(index)
   if (!target || target.chaId !== characterId || uniqueCharacterOwnerById(characterId) !== target) return false
@@ -1632,6 +1649,7 @@ export function applyCompatibleCharacterPatch(previousCharacter: character, patc
 }
 
 export function dispatchDeleteCharacter(characterId: string, previous: CharacterStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   void prepareDeleteCharacter(characterId, previous)?.promise
 }
 
@@ -1639,6 +1657,7 @@ export function dispatchDeleteCharacterWithOutcome(
   characterId: string,
   previous: CharacterStateSnapshot,
 ): Promise<CharacterMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const execution = prepareDeleteCharacter(characterId, previous)
   return execution ? compatibleCharacterMutationOutcome(execution) : undefined
 }
@@ -1739,6 +1758,7 @@ export function dispatchSelectCharacter(
   previous: CharacterSelectionSnapshot,
   lastInteraction?: number,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchSelectCharacterWithOutcome(characterId, previous, lastInteraction)
 }
 
@@ -1747,6 +1767,7 @@ export function dispatchSelectCharacterWithOutcome(
   previous: CharacterSelectionSnapshot,
   lastInteraction?: number,
 ): Promise<CharacterMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const execution = prepareSelectCharacter(characterId, previous, lastInteraction)
   return compatibleCharacterMutationOutcome(execution)
 }
@@ -1973,6 +1994,7 @@ export function dispatchReorderCharacters(
   previousOrder: (string | folder)[],
   dependencyCharacterIds: readonly string[] = [],
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchReorderCharactersWithOutcome(previousOrder, dependencyCharacterIds)
 }
 
@@ -1980,6 +2002,7 @@ export function dispatchReorderCharactersWithOutcome(
   previousOrder: (string | folder)[],
   dependencyCharacterIds: readonly string[] = [],
 ): Promise<CharacterMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const rollback = characterOrderRollbackFromOrders(previousOrder, characterOrderOwner())
   return dispatchCharacterOrderCommandWithOutcome(
     { attemptedOrder: rollback.attemptedOrder },
@@ -2138,6 +2161,7 @@ export function repairCharacterOrderOptimistically(
     dispatchReorder?: boolean
   } = {},
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const normalized = normalizeCharacterOrder(characterOrderOwner(), characterRowsOwner())
   if (!normalized.changed) return false
 
@@ -2156,6 +2180,7 @@ export function moveCharacterOrderItem(
   mainIndex: CharacterOrderDragPosition,
   targetIndex: CharacterOrderDragPosition,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   return prepareMoveCharacterOrderItem(mainIndex, targetIndex).applied
 }
 
@@ -2163,6 +2188,8 @@ export function moveCharacterOrderItemWithOutcome(
   mainIndex: CharacterOrderDragPosition,
   targetIndex: CharacterOrderDragPosition,
 ): CharacterOrderMutationHandle {
+  if (!canUseClientWriteAccess())
+    return { applied: false, settlement: Promise.resolve({ status: 'failed', result: { status: 'unavailable' } }) }
   return prepareMoveCharacterOrderItem(mainIndex, targetIndex)
 }
 
@@ -2265,6 +2292,7 @@ export function createCharacterOrderFolder(
   createFolderId: () => string = v4,
   folderName = 'New Folder',
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   return prepareCreateCharacterOrderFolder(mainIndex, targetIndex, createFolderId, folderName).applied
 }
 
@@ -2274,6 +2302,8 @@ export function createCharacterOrderFolderWithOutcome(
   createFolderId: () => string = v4,
   folderName = 'New Folder',
 ): CharacterOrderMutationHandle {
+  if (!canUseClientWriteAccess())
+    return { applied: false, settlement: Promise.resolve({ status: 'failed', result: { status: 'unavailable' } }) }
   return prepareCreateCharacterOrderFolder(mainIndex, targetIndex, createFolderId, folderName)
 }
 
@@ -2350,6 +2380,7 @@ export function updateCharacterOrderFolder(
   folderIdOrIndex: CharacterOrderFolderTarget,
   patch: CharacterOrderFolderMetadataPatch,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   return prepareUpdateCharacterOrderFolder(folderIdOrIndex, patch).applied
 }
 
@@ -2357,6 +2388,8 @@ export function updateCharacterOrderFolderWithOutcome(
   folderIdOrIndex: CharacterOrderFolderTarget,
   patch: CharacterOrderFolderMetadataPatch,
 ): CharacterOrderMutationHandle {
+  if (!canUseClientWriteAccess())
+    return { applied: false, settlement: Promise.resolve({ status: 'failed', result: { status: 'unavailable' } }) }
   return prepareUpdateCharacterOrderFolder(folderIdOrIndex, patch)
 }
 
@@ -2585,6 +2618,7 @@ export function setCharacterSupaMemory(
   characterId: string,
   enabled: boolean,
 ): Promise<ServerCommandResult> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   return startCharacterSupaMemoryMutation(characterId, enabled)?.promise
 }
 
@@ -2592,6 +2626,7 @@ export function setCharacterSupaMemoryWithOutcome(
   characterId: string,
   enabled: boolean,
 ): Promise<CharacterMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const execution = startCharacterSupaMemoryMutation(characterId, enabled)
   return execution ? compatibleCharacterMutationOutcome(execution) : undefined
 }

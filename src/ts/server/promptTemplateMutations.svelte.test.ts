@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount, tick, unmount } from 'svelte'
 
@@ -591,6 +593,7 @@ async function applyPromptSettingsProjection(apply: () => void): Promise<void> {
 let promptSettingsProjectionRevision = 10_000
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.useFakeTimers()
   vi.stubGlobal(
     'confirm',
@@ -632,6 +635,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   resetPendingPromptTemplateStructuralMutationsForTests()
   durableState.settlementListeners.clear()
   vi.useRealTimers()
@@ -3602,3 +3606,32 @@ describe('reconcilePromptTemplateDraft', () => {
     expect(result.nextDraft).toBeNull()
   })
 })
+
+it.each([false, true])(
+  'retains prompt item and settings intent without dispatch after demotion (repromoted: %s)',
+  async (repromoted) => {
+    seedTemplate()
+    enterClientWriter()
+    let draftItems = draftCopy()
+    draftItems[0] = item('p-0', 'Pending')
+    const binding: PromptTemplateDraftBinding = {
+      getItems: () => draftItems,
+      setItems: (items) => {
+        draftItems = items
+      },
+    }
+    queuePromptItemProjectionUpdate(binding, 'p-0', item('p-0', 'small'), 50)
+    queuePromptSettingsProjectionPatch({ jsonSchemaEnabled: false }, { jsonSchemaEnabled: true }, 50)
+    const staged = [...durableState.stages]
+    expect(staged).toHaveLength(2)
+    demoteClientSession()
+    if (repromoted) repromoteClientWriter()
+    await vi.advanceTimersByTimeAsync(100)
+    commitPendingPromptTemplateMutations()
+    expect(durableState.stages).toEqual(staged)
+    expect(durableState.dispatches).toEqual([])
+    expect(durableState.acknowledgements).toEqual([])
+    expect(commandState.commands).toEqual([])
+    expect(textOf(draftItems[0])).toBe('Pending')
+  },
+)

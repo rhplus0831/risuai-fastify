@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { flushSync } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -117,6 +119,7 @@ async function settle(): Promise<void> {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.useFakeTimers()
   recorded.calls.length = 0
   recorded.results.length = 0
@@ -126,6 +129,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   flushPendingScriptDefinitionMutations()
   vi.useRealTimers()
   setDatabaseLite({} as Database)
@@ -242,3 +246,49 @@ describe('script definition owners', () => {
     expect(charactersResourceState.characters[0].customscript).toEqual(previous)
   })
 })
+
+it.each([false, true])(
+  'retains scheduled script drafts without applying them after demotion (repromoted: %s)',
+  async (repromoted) => {
+    enterClientWriter()
+    expect(
+      scheduleCharacterScriptDefinitionDraft(
+        'char-a',
+        [script('char-script-a', 'deferred')] as any,
+        [trigger('char-trigger-a')] as any,
+        50,
+      ),
+    ).toBe(true)
+    demoteClientSession()
+    if (repromoted) repromoteClientWriter()
+    await vi.advanceTimersByTimeAsync(100)
+    flushPendingScriptDefinitionMutations()
+    expect(charactersResourceState.characters[0].customscript[0].in).toBe('character')
+    expect(recorded.staged).toEqual([])
+    expect(recorded.calls).toEqual([])
+  },
+)
+
+it.each([false, true])(
+  'retains staged script replacement intent without dispatch after demotion (repromoted: %s)',
+  async (repromoted) => {
+    enterClientWriter()
+    expect(
+      applyCharacterScriptDefinitionDraft(
+        'char-a',
+        [script('char-script-a', 'pending')] as any,
+        [trigger('char-trigger-a')] as any,
+        50,
+      ),
+    ).toBe(true)
+    const staged = structuredClone(recorded.staged)
+    expect(staged).toHaveLength(1)
+    demoteClientSession()
+    if (repromoted) repromoteClientWriter()
+    await vi.advanceTimersByTimeAsync(100)
+    flushPendingScriptDefinitionMutations()
+    expect(recorded.staged).toEqual(staged)
+    expect(recorded.calls).toEqual([])
+    expect(charactersResourceState.characters[0].customscript[0].in).toBe('pending')
+  },
+)

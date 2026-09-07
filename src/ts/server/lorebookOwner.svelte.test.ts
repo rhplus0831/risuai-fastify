@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const recorded = vi.hoisted(() => ({
@@ -283,6 +285,7 @@ function publishLorebookSettlement(mutationId: string, settlement: 'accepted' | 
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.useFakeTimers()
   resetLorebookHydration()
   recorded.commands.length = 0
@@ -296,6 +299,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   resetLorebookOwnerForTests()
   vi.useRealTimers()
   selectedCharID.set(-1)
@@ -2691,3 +2695,30 @@ describe('lorebook editor entry draft scope', () => {
     )
   })
 })
+
+it.each([false, true])(
+  'retains lorebook intent without dispatch after demotion (repromoted: %s)',
+  async (repromoted) => {
+    setupCharacter([{ id: 'entry-1', key: 'a', content: 'Original' }] as Entry[])
+    markCharacterLorebookHydrated('c1')
+    enterClientWriter()
+    expect(
+      applyLorebookEntryDraftEdit(
+        { kind: 'character', characterId: 'c1' },
+        0,
+        { id: 'entry-1', key: 'a', content: 'Pending' } as any,
+        DELAY,
+      ),
+    ).toBe(true)
+    const staged = [...durableRecorded.staged]
+    expect(staged).toHaveLength(1)
+    demoteClientSession()
+    if (repromoted) repromoteClientWriter()
+    await vi.advanceTimersByTimeAsync(DELAY * 2)
+    flushPendingLorebookOwnerMutations()
+    expect(durableRecorded.staged).toEqual(staged)
+    expect(durableRecorded.dispatched).toEqual([])
+    expect(durableRecorded.acknowledged).toEqual([])
+    expect(recorded.commands).toEqual([])
+  },
+)

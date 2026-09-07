@@ -1,4 +1,9 @@
 import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from './clientSession'
+import {
   applyPersonaStateSnapshotLocally,
   currentPersonaStateSnapshot,
   flushPendingSelectedPersonaUpdate,
@@ -1422,6 +1427,7 @@ function readablePresetName(preset: { name?: unknown } | undefined): string {
 }
 
 function dispatchCreateLoadout(loadout: Loadout): Promise<Exclude<LoadoutMutationStatus, 'not-found'>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const attemptedLoadout = cloneJsonValue(loadout)
   const attemptedIndex = Math.max(
@@ -1463,6 +1469,7 @@ function dispatchDeleteLoadout(
   previousIndex: number,
   ownerRevision: number | null,
 ): Promise<Exclude<LoadoutMutationStatus, 'not-found'>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const intent: DurableMutationIntent = {
     version: 1,
@@ -1496,6 +1503,7 @@ function dispatchDeleteLoadout(
 function dispatchFavoriteLoadout(
   rollback: LoadoutFavoriteRollback,
 ): Promise<Exclude<LoadoutMutationStatus, 'not-found'>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   if (!canUseServerCommands()) return Promise.resolve('accepted')
   const intent: DurableMutationIntent = {
     version: 1,
@@ -1557,6 +1565,7 @@ async function settleLoadoutMutation(
 }
 
 export function toggleLoadoutFavorite(loadoutId: string): Promise<LoadoutMutationStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const owner = currentLoadoutCollectionOwner()
   if (!owner) return Promise.resolve('failed')
   const previousIndex = owner.findIndex((item) => item.id === loadoutId)
@@ -1579,6 +1588,7 @@ export function toggleLoadoutFavorite(loadoutId: string): Promise<LoadoutMutatio
 }
 
 export function deleteLoadout(loadoutId: string): Promise<LoadoutMutationStatus> {
+  if (!canUseClientWriteAccess()) return Promise.resolve('failed')
   const owner = currentLoadoutCollectionOwner()
   if (!owner) return Promise.resolve('failed')
   const index = owner.findIndex((loadout) => loadout.id === loadoutId)
@@ -1907,6 +1917,8 @@ export async function applyLoadout(
   loadout: Loadout,
   apply: LoadoutApplyOption[] = ['modules', 'globalVariables', 'preset', 'persona'],
 ): Promise<LoadoutApplyStatus> {
+  if (!canUseClientWriteAccess()) return 'persistence-failed'
+  const sessionGeneration = captureClientSessionGeneration()
   const intent = ++loadoutApplyIntent
   const requested = new Set(apply)
   const activeChatAgentPresetTarget = requested.has('preset') ? currentActiveChatRecord() : null
@@ -1923,6 +1935,7 @@ export async function applyLoadout(
   if (legacyPreset && !legacyPresetId) return 'preset-hydration-failed'
   if (legacyPresetId && !presetHasHydratedSettings(legacyPreset)) {
     const hydrated = await ensureBotPresetHydratedById(legacyPresetId)
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return 'superseded'
     if (!hydrated) return 'preset-hydration-failed'
     if (
       intent !== loadoutApplyIntent ||
@@ -1963,16 +1976,19 @@ async function applyLoadoutNow(
   activeChatAgentPresetTarget: ReturnType<typeof currentActiveChatRecord>,
   currentCharacterId: string | undefined,
 ): Promise<LoadoutApplyStatus> {
+  const sessionGeneration = captureClientSessionGeneration()
   return runSerializedLoadoutApply(() =>
-    applyLoadoutNowExclusive(
-      loadout,
-      apply,
-      legacyPresetId,
-      intent,
-      legacySelectionIntent,
-      activeChatAgentPresetTarget,
-      currentCharacterId,
-    ),
+    !canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)
+      ? Promise.resolve('superseded')
+      : applyLoadoutNowExclusive(
+          loadout,
+          apply,
+          legacyPresetId,
+          intent,
+          legacySelectionIntent,
+          activeChatAgentPresetTarget,
+          currentCharacterId,
+        ),
   )
 }
 
@@ -1985,6 +2001,7 @@ async function applyLoadoutNowExclusive(
   activeChatAgentPresetTarget: ReturnType<typeof currentActiveChatRecord>,
   currentCharacterId: string | undefined,
 ): Promise<LoadoutApplyStatus> {
+  if (!canUseClientWriteAccess()) return 'persistence-failed'
   if (intent !== loadoutApplyIntent) return 'superseded'
   if (legacySelectionIntent !== null && !isLegacyPresetSelectionIntentCurrent(legacySelectionIntent))
     return 'superseded'
@@ -2540,6 +2557,7 @@ async function applyLoadoutNowExclusive(
 
 export async function saveCurrentLoadout(name: string): Promise<LoadoutCreateResult> {
   const loadout = makeLoadout({ name })
+  if (!canUseClientWriteAccess()) return { status: 'failed', loadout }
   const owner = currentLoadoutCollectionOwner()
   if (!owner || !isCanonicalLoadout(loadout) || owner.some((candidate) => candidate.id === loadout.id)) {
     return { status: 'failed', loadout }

@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from './clientSession'
+import { enterClientWriter, repromoteClientWriter } from './__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 type MockSelectedFile = { name: string; data: Uint8Array }
@@ -322,6 +324,7 @@ function baseCharacter(overrides: Partial<character> = {}): character {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   clearCachedServerCommandRevision()
   selectedCharID.set(0)
   selectedFileState.singleQueue.length = 0
@@ -333,6 +336,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   vi.unstubAllGlobals()
 })
 
@@ -797,4 +801,22 @@ describe('character emotion image upload freshness', () => {
     })
     expect(commandCalls(calls)).toHaveLength(0)
   })
+})
+
+it('does not apply a pre-demotion avatar upload after re-promotion', async () => {
+  const calls = stubCommandFetch()
+  const upload = deferred<string>()
+  selectedFileState.singleQueue.push(avatarFile('delayed.png', { Description: 'stale metadata' }))
+  saveImageState.queue.push(upload.promise)
+  testDatabaseState.db = { characters: [baseCharacter({ image: 'old-avatar', ccAssets: [] })] } as any
+  enterClientWriter()
+  const pending = selectCharImg(0)
+  await vi.waitFor(() => expect(saveImageState.calls).toHaveLength(1))
+  demoteClientSession()
+  repromoteClientWriter()
+  upload.resolve('uploaded-before-demotion')
+  await pending
+  expect(testDatabaseState.db.characters[0].image).toBe('old-avatar')
+  expect(testDatabaseState.db.characters[0].ccAssets).toEqual([])
+  expect(commandCalls(calls)).toEqual([])
 })

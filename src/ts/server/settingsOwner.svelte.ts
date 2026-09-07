@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { untrack } from 'svelte'
 import { language } from '../../lang'
 import { alertError, alertNormal } from '../alert'
@@ -55,6 +60,7 @@ import { registerPendingSettingsProjectionOverlay } from './settingsPendingProje
 import { hypaV3PresetIndexFromStableId } from '@risuai/shared-core/hypa-v3-preset-selection-identity'
 
 interface PendingSettingsPatch {
+  sessionGeneration: number
   patch: SettingsPatch
   previous: SettingsPatch
   attempted: SettingsPatch
@@ -80,6 +86,7 @@ interface HypaV3PresetRollbackResult {
 }
 
 const pendingSettingsPatch: PendingSettingsPatch = {
+  sessionGeneration: captureClientSessionGeneration(),
   patch: {},
   previous: {},
   attempted: {},
@@ -115,6 +122,7 @@ function settingsDraftProjectionToken(key: string): string {
 }
 
 interface SparseObjectSettingQueue {
+  sessionGeneration: number
   key: string
   group: SettingsGroup
   baseline: Record<string, unknown>
@@ -214,6 +222,7 @@ export interface ServerBackedSettingDraftOptions<T = unknown> {
 
 export interface ServerBackedSettingDraft<T> {
   value: T
+  captureRecoveryDraft(): { value: T; baseline: T } | null
 }
 
 export interface ApplyOnboardingServerBackedSettingsOptions {
@@ -231,12 +240,19 @@ export function createServerBackedSettingDraft<T>(
   fallback: T,
   options: ServerBackedSettingDraftOptions<T> = {},
 ): ServerBackedSettingDraft<T> {
+  const sessionGeneration = captureClientSessionGeneration()
   const initialValue = currentSettingValue(key, fallback)
   const cloneDraftValue = (value: T): T => {
     const cloned = cloneJsonValue(value)
     return options.normalizeDraft ? options.normalizeDraft(cloned) : cloned
   }
-  const draft = $state<ServerBackedSettingDraft<T>>({ value: cloneDraftValue(initialValue) })
+  const draft = $state<ServerBackedSettingDraft<T>>({
+    value: cloneDraftValue(initialValue),
+    captureRecoveryDraft() {
+      if (snapshotJson(draft.value) === snapshotJson(dirtyBaseline)) return null
+      return { value: cloneDraftValue(draft.value), baseline: cloneDraftValue(dirtyBaseline) }
+    },
+  })
   const delayMs = options.delayMs ?? 250
   let initialized = false
   let suppressDraftDispatch = false
@@ -246,7 +262,7 @@ export function createServerBackedSettingDraft<T>(
   let previousOwnerKey = currentServerBackedSettingDraftOwnerKey(key, options.dispatch)
   let dirty = false
   let dirtyOwnerKey: string | null = null
-  let dirtyBaseline = cloneDraftValue(initialValue)
+  let dirtyBaseline = cloneJsonValue(draft.value)
 
   $effect(() => {
     const ownerProjectionToken = settingsDraftProjectionToken(key)
@@ -266,6 +282,7 @@ export function createServerBackedSettingDraft<T>(
       if (serverSnapshot !== draftSnapshot) {
         suppressDraftDispatch = true
         draft.value = cloneDraftValue(serverValue)
+        dirtyBaseline = cloneJsonValue(draft.value)
         queueMicrotask(() => {
           suppressDraftDispatch = false
         })
@@ -276,7 +293,7 @@ export function createServerBackedSettingDraft<T>(
         if (ownerProjectionChanged && dirty) {
           const normalizedServerValue = cloneDraftValue(serverValue)
           if (snapshotJson(dirtyBaseline) === snapshotJson(normalizedServerValue)) {
-            reassertDirtySettingDraftValue(key, draft.value)
+            if (isClientSessionGenerationCurrent(sessionGeneration)) reassertDirtySettingDraftValue(key, draft.value)
           } else {
             const rebased = mergeSettingDraftValues(dirtyBaseline, draft.value, normalizedServerValue)
             if (rebased.ambiguous && discardPendingSettingsPatchKey(key, delayMs)) {
@@ -289,8 +306,10 @@ export function createServerBackedSettingDraft<T>(
               const rebasedValue = cloneDraftValue(rebased.value)
               dirtyBaseline = cloneDraftValue(normalizedServerValue)
               draft.value = rebasedValue
-              reassertDirtySettingDraftValue(key, rebasedValue)
-              rebasePendingSettingsPatchKey(key, normalizedServerValue, rebasedValue, delayMs)
+              if (isClientSessionGenerationCurrent(sessionGeneration)) {
+                reassertDirtySettingDraftValue(key, rebasedValue)
+                rebasePendingSettingsPatchKey(key, normalizedServerValue, rebasedValue, delayMs)
+              }
             }
           }
         } else {
@@ -298,6 +317,7 @@ export function createServerBackedSettingDraft<T>(
           dirtyOwnerKey = null
           dirtyBaseline = cloneDraftValue(serverValue)
           draft.value = cloneDraftValue(serverValue)
+          dirtyBaseline = cloneJsonValue(draft.value)
         }
         queueMicrotask(() => {
           suppressDraftDispatch = false
@@ -351,6 +371,7 @@ export function createServerBackedSettingDraft<T>(
     previousDraftDispatchSnapshot = snapshot
 
     untrack(() => {
+      if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
       if (!settingsGroupForKey(key)) {
         dirtyOwnerKey = `local:${key}`
         return
@@ -409,6 +430,7 @@ function currentServerBackedSettingDraftOwnerKey(key: string, dispatch: boolean 
 }
 
 function reassertDirtySettingDraftValue<T>(key: string, value: T): void {
+  if (!canUseClientWriteAccess()) return
   if (!settingsGroupForKey(key)) return
 
   if (key === 'hypaV3Presets' || key === 'selectedHypaV3PresetId') {
@@ -729,6 +751,7 @@ function normalizeHypaV3PresetOwnerPatch(patch: SettingsPatch): SettingsPatch | 
 }
 
 function applyOptimisticServerBackedSettingsPatch(commandPatch: SettingsPatch): boolean {
+  if (!canUseClientWriteAccess()) return false
   const genericPatchEntries = Object.entries(commandPatch).filter(
     ([key]) => !HYPA_V3_PRESET_OWNER_KEYS.includes(key as never),
   )
@@ -760,6 +783,7 @@ function applyOptimisticServerBackedSettingsPatch(commandPatch: SettingsPatch): 
 }
 
 export function applyServerBackedSettingsPatch(patch: SettingsPatch): void {
+  if (!canUseClientWriteAccess()) return
   const prepared = prepareServerBackedSettingsPatch(patch)
   if (!prepared) return
   if (!applyOptimisticServerBackedSettingsPatch(prepared.commandPatch)) return
@@ -788,6 +812,7 @@ export async function persistServerBackedSettingsPatch(
 export async function persistServerBackedSettingsPatchWithSettlement(
   patch: SettingsPatch,
 ): Promise<ServerBackedSettingsPersistenceReceipt> {
+  if (!canUseClientWriteAccess()) return { status: 'failed' }
   const prepared = prepareServerBackedSettingsPatch(patch)
   if (!prepared) return { status: 'accepted' }
   const projectionEpochs = captureSettingsPatchProjectionEpochs(prepared.commandPatch)
@@ -894,6 +919,7 @@ export async function persistServerBackedSettingsPatchWithSettlement(
 export function dispatchDurableServerBackedSettingsPatch(
   input: Parameters<typeof patchServerBackedSettings>[0],
 ): Promise<ServerCommandResult> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   const intent = settingsPatchDurableIntent(input.patch)
   if (intent.requests.length === 0) return Promise.resolve({ status: 'unavailable' })
   const outbox = stagePendingMutation(SETTINGS_BRIDGE_MUTATION_KEY, intent)
@@ -980,6 +1006,8 @@ function dispatchServerBackedSettingsPatch(
 }
 
 function queueSettingsPatch(patch: SettingsPatch, previous: SettingsPatch, delay: number): void {
+  if (!canUseClientWriteAccess()) return
+  pendingSettingsPatch.sessionGeneration = captureClientSessionGeneration()
   for (const [key, value] of Object.entries(patch)) {
     if (queueSparseObjectSettingPatch(key, previous[key], value, delay)) continue
     const group = settingsGroupForKey(key)
@@ -995,6 +1023,7 @@ function queueSettingsPatch(patch: SettingsPatch, previous: SettingsPatch, delay
 }
 
 function rebasePendingSettingsPatchKey(key: string, authoritative: unknown, rebased: unknown, delay: number): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!hasOwnKey(pendingSettingsPatch.attempted, key)) return false
   pendingSettingsPatch.previous[key] = cloneJsonValue(authoritative)
   pendingSettingsPatch.attempted[key] = cloneJsonValue(rebased)
@@ -1005,6 +1034,8 @@ function rebasePendingSettingsPatchKey(key: string, authoritative: unknown, reba
 }
 
 function discardPendingSettingsPatchKey(key: string, delay: number): boolean {
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pendingSettingsPatch.sessionGeneration))
+    return false
   if (!hasOwnKey(pendingSettingsPatch.attempted, key)) return false
   if (pendingSettingsPatch.timer) {
     clearTimeout(pendingSettingsPatch.timer)
@@ -1022,6 +1053,7 @@ function discardPendingSettingsPatchKey(key: string, delay: number): boolean {
 }
 
 function refreshPendingSettingsPatch(delay: number): void {
+  if (!canUseClientWriteAccess()) return
   const netChangedKeys = changedSettingsPatchKeys(pendingSettingsPatch.previous, pendingSettingsPatch.attempted)
   pendingSettingsPatch.patch = pendingSettingsDurableClosure(netChangedKeys)
   prunePendingSettingsPatchProjectionEpochs()
@@ -1083,6 +1115,7 @@ function resetPendingSettingsPatch(): void {
 }
 
 export function flushPendingSettingsOwnerMutations(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   dispatchPendingSettingsPatch(options)
   for (const state of sparseObjectSettingQueues.values()) {
     if (state.timer) {
@@ -1119,6 +1152,7 @@ export function resetSettingsOwnerForDatabaseReplacement(): void {
 }
 
 function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pendingSettingsPatch.sessionGeneration)) return
   if (pendingSettingsPatch.timer) {
     clearTimeout(pendingSettingsPatch.timer)
     pendingSettingsPatch.timer = null
@@ -1309,6 +1343,7 @@ function prunePendingSettingsPatchProjectionEpochs(): void {
 }
 
 function queueSparseObjectSettingPatch(key: string, previous: unknown, attempted: unknown, delay: number): boolean {
+  if (!canUseClientWriteAccess()) return false
   const group = settingsGroupForKey(key)
   if (!group || !SPARSE_OBJECT_SETTING_KEYS.has(key) || !isPlainJsonObject(previous) || !isPlainJsonObject(attempted)) {
     return false
@@ -1327,6 +1362,7 @@ function queueSparseObjectSettingPatch(key: string, previous: unknown, attempted
       intent: null,
       durableAttempted: null,
       desiredTouchedKeys: new Set(),
+      sessionGeneration: captureClientSessionGeneration(),
       queuedProjectionEpoch: captureSettingsGroupProjectionEpoch(group),
       timer: null,
       running: false,
@@ -1367,6 +1403,7 @@ async function dispatchSparseObjectSettingQueue(
   state: SparseObjectSettingQueue,
   options: ServerCommandTransportOptions = {},
 ): Promise<void> {
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(state.sessionGeneration)) return
   if (state.retired || state.running || !state.desired || !state.stagedUpdate || !state.intent || !state.outbox) {
     return
   }
@@ -1478,7 +1515,10 @@ async function dispatchSparseObjectSettingQueue(
   clearSparseObjectSettingSettlement(state)
 
   await Promise.resolve()
-  if (state.retired) return
+  if (state.retired || !canUseClientWriteAccess() || !isClientSessionGenerationCurrent(state.sessionGeneration)) {
+    state.running = false
+    return
+  }
   let baseline: Record<string, unknown> | null = null
   let usedAuthoritativeBaseline = false
   if (result.status === 'ok') {
@@ -1494,7 +1534,10 @@ async function dispatchSparseObjectSettingQueue(
   }
   if (!baseline) {
     baseline = await refreshSparseObjectSettingBaseline(state.group, state.key, options.signal)
-    if (state.retired) return
+    if (state.retired || !canUseClientWriteAccess() || !isClientSessionGenerationCurrent(state.sessionGeneration)) {
+      state.running = false
+      return
+    }
     usedAuthoritativeBaseline = baseline !== null
   }
   if (!baseline) baseline = cloneJsonValue(state.baseline)

@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import type { SettingItem, SettingContext } from './types'
 import type { Database } from '../storage/databaseTypes'
 import { flushPendingSplitPresetPatch } from '../storage/database.svelte'
@@ -115,6 +120,7 @@ interface DeferredSettingEdit {
 }
 
 interface PendingDeferredSettingWrite {
+  sessionGeneration: number
   desiredRoot: unknown
   durableAttemptedRoot?: unknown
   edits: Map<string, DeferredSettingEdit>
@@ -203,6 +209,7 @@ export function getSettingValue(item: SettingItem, ctx: SettingContext): any {
 }
 
 export function setSettingValue(item: SettingItem, newValue: any, ctx: SettingContext): void {
+  if (!canUseClientWriteAccess()) return
   if (reportWriterAccessLostMutation()) return
   const previousValue = getSettingValue(item, ctx)
   const commandPatch = buildServerSettingsPatch(item)
@@ -248,7 +255,7 @@ export function setDeferredSettingValue(
   ctx: SettingContext,
   options: { delayMs?: number } = {},
 ): DeferredSettingWriteResult {
-  if (reportWriterAccessLostMutation()) {
+  if (!canUseClientWriteAccess() || reportWriterAccessLostMutation()) {
     return {
       ownerKey: localSettingOwnerKey(item),
       queued: false,
@@ -302,6 +309,7 @@ export function setDeferredSettingValue(
 
 /** Reapply a dirty control after a projection without scheduling another command. */
 export function reassertSettingValue(item: SettingItem, value: any, ctx: SettingContext): void {
+  if (!canUseClientWriteAccess()) return
   if (snapshotJson(getSettingValue(item, ctx)) === snapshotJson(value)) return
   writeLocalSettingValue(item, cloneJsonValue(value), ctx)
 }
@@ -342,6 +350,7 @@ export function getSettingOwnerProjectionToken(item: SettingItem, ctx: SettingCo
 }
 
 export function flushDeferredSettingWrites(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   for (const ownerKey of [...pendingDeferredSettingWrites.keys()]) {
     dispatchDeferredSettingWrite(ownerKey, options)
   }
@@ -435,6 +444,7 @@ function queueDeferredSettingWrite(
   optimisticProjectionEpochs: SettingsGroupProjectionEpochs | undefined,
   delayMs: number,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const existing = pendingDeferredSettingWrites.get(target.ownerKey)
   if (existing) clearTimeout(existing.timer)
 
@@ -473,6 +483,7 @@ function queueDeferredSettingWrite(
   if (target.kind === 'preset') {
     if (!mirrorTopLevelPresetFieldToTarget(target.target, desiredRoot)) return false
     pendingDeferredSettingWrites.set(target.ownerKey, {
+      sessionGeneration: captureClientSessionGeneration(),
       desiredRoot: cloneJsonValue(desiredRoot),
       edits,
       previousRoot: baseline,
@@ -484,6 +495,7 @@ function queueDeferredSettingWrite(
   if (target.kind === 'promptOverride') {
     if (!mirrorPromptPresetModelOverrideFieldToTarget(target.target, desiredRoot)) return false
     pendingDeferredSettingWrites.set(target.ownerKey, {
+      sessionGeneration: captureClientSessionGeneration(),
       desiredRoot: cloneJsonValue(desiredRoot),
       edits,
       previousRoot: baseline,
@@ -505,6 +517,7 @@ function queueDeferredSettingWrite(
   const outbox = stagePendingMutation(SETTINGS_BRIDGE_MUTATION_KEY, intent, existing?.outbox)
 
   const pending: PendingDeferredSettingWrite = {
+    sessionGeneration: captureClientSessionGeneration(),
     desiredRoot: cloneJsonValue(desiredRoot),
     durableAttemptedRoot: cloneJsonValue(desiredRoot),
     edits,
@@ -553,8 +566,9 @@ function applyDeferredSettingEdit(root: unknown, edit: DeferredSettingEdit): unk
 }
 
 function dispatchDeferredSettingWrite(ownerKey: string, options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   const pending = pendingDeferredSettingWrites.get(ownerKey)
-  if (!pending) return
+  if (!pending || !isClientSessionGenerationCurrent(pending.sessionGeneration)) return
   clearTimeout(pending.timer)
   pendingDeferredSettingWrites.delete(ownerKey)
   const reportFailure = createSettingSaveFailureReporter()

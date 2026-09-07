@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from './clientSession'
 import { get, writable } from 'svelte/store'
 import { Sha256 } from '@aws-crypto/sha256-js'
 import {
@@ -146,6 +151,8 @@ export async function createNewCharacter(
     select?: boolean
   } = {},
 ): Promise<CharacterCreationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
+  const sessionGeneration = captureClientSessionGeneration()
   const navigationScope = captureCharacterNavigationScope()
   const previous = currentCharacterStateSnapshot()
   const character = characterFormatUpdate(createBlankChar())
@@ -164,7 +171,13 @@ export async function createNewCharacter(
   }
 
   index = findLiveCharacterIndex(character.chaId)
-  if (select && index !== -1 && characterNavigationScopeMatches(navigationScope)) {
+  if (
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    select &&
+    index !== -1 &&
+    characterNavigationScopeMatches(navigationScope)
+  ) {
     index = applyCharacterSelectionOptimistically(character.chaId, lastInteraction)
   }
   return { ...outcome, characterId: character.chaId, index }
@@ -179,6 +192,8 @@ export async function selectCharacterAvatarImage(
   charIndex: number,
   onSelected: (selection: CharacterAvatarImageSelection) => void,
 ): Promise<void> {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   const previous = currentCharacterRowSnapshot(charIndex)
   const previousCharacter = previous.character
   const characterId = previousCharacter?.chaId
@@ -188,6 +203,8 @@ export async function selectCharacterAvatarImage(
   const avatarSnapshot = characterAvatarSnapshot(previousCharacter)
   const editorScope = captureCharacterNavigationScope()
   const isFreshAvatarUpload = (token: LatestOperationToken<string>) =>
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
     isCurrentCharacterAvatarUpload({ token, charIndex, characterId, avatarSnapshot, editorScope })
 
   let token: LatestOperationToken<string> | null = null
@@ -257,6 +274,9 @@ export async function selectCharacterAvatarImage(
     }
 
     onSelected({ image: imgp, pngExif })
+  } catch (error) {
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
+    throw error
   } finally {
     if (token) {
       characterAvatarUploadGuard.clear(token)
@@ -265,6 +285,7 @@ export async function selectCharacterAvatarImage(
 }
 
 export async function selectCharImg(charIndex: number) {
+  if (!canUseClientWriteAccess()) return
   const characterId = characterOwnerAt(charIndex)?.chaId
   if (!characterId) return
 
@@ -285,6 +306,7 @@ export async function selectCharImg(charIndex: number) {
 }
 
 export function dumpCharImage(charIndex: number, options: { dispatch?: boolean } = {}) {
+  if (!canUseClientWriteAccess()) return
   const dispatch = options.dispatch ?? true
   const characterId = characterOwnerAt(charIndex)?.chaId
   if (!characterId) return
@@ -297,6 +319,7 @@ export function dumpCharImage(charIndex: number, options: { dispatch?: boolean }
 }
 
 export function changeCharImage(charIndex: number, changeIndex: number) {
+  if (!canUseClientWriteAccess()) return
   const characterId = characterOwnerAt(charIndex)?.chaId
   if (!characterId) return
   applyCharacterRowMutationScoped(charIndex, characterId, (char) => {
@@ -336,6 +359,8 @@ function isCurrentCharacterEmotionUpload(operation: CharacterEmotionUploadOperat
 }
 
 export async function addCharEmotion(charId: number) {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   addingEmotion.set(true)
   const previous = currentCharacterRowSnapshot(charId)
   const target = captureCharacterEmotionUploadTarget({
@@ -364,12 +389,20 @@ export async function addCharEmotion(charId: number) {
       const uploadedEntries: CharacterEmotionImageEntry[] = []
 
       for (const f of selected) {
-        if (!isCurrentCharacterEmotionUpload(activeOperation, charId)) {
+        if (
+          !canUseClientWriteAccess() ||
+          !isClientSessionGenerationCurrent(sessionGeneration) ||
+          !isCurrentCharacterEmotionUpload(activeOperation, charId)
+        ) {
           return
         }
 
         const imgp = await saveImage(f.data)
-        if (!isCurrentCharacterEmotionUpload(activeOperation, charId)) {
+        if (
+          !canUseClientWriteAccess() ||
+          !isClientSessionGenerationCurrent(sessionGeneration) ||
+          !isCurrentCharacterEmotionUpload(activeOperation, charId)
+        ) {
           return
         }
 
@@ -392,12 +425,16 @@ export async function addCharEmotion(charId: number) {
         clearCharacterEmotionUpload(operation)
       }
     }
+  } catch (error) {
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
+    throw error
   } finally {
     addingEmotion.set(false)
   }
 }
 
 export function rmCharEmotion(charId: number, emotionId: number) {
+  if (!canUseClientWriteAccess()) return
   const characterId = characterOwnerAt(charId)?.chaId
   if (!characterId) return
   applyCharacterRowMutationScoped(charId, characterId, (dbChar) => {
@@ -721,6 +758,8 @@ function reportChatImportCommandResult(result: Awaited<ReturnType<typeof dispatc
 }
 
 export async function importChat() {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   const capturedTarget = captureCurrentChatImportTarget()
   if (!capturedTarget) {
     return
@@ -732,6 +771,7 @@ export async function importChat() {
     if (!dat) {
       return
     }
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
     const target = resolveFreshChatImportTarget(capturedTarget, importToken)
     if (!target) {
       return
@@ -789,6 +829,7 @@ export async function importChat() {
       selectedCharacter.chatPage = 0
       if (characterId) {
         const result = await dispatchCreateChatForImport(characterId, newChat, previous)
+        if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
         if (!reportChatImportCommandResult(result)) return
       }
       alertNormal(language.successImport)
@@ -812,6 +853,7 @@ export async function importChat() {
         selectedCharacter.chatFolders.push(...folders)
         selectedCharacter.chats.unshift(...chats)
         const result = await dispatchCreateImportedChats(characterId, folders, chats, previous)
+        if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
         if (!reportChatImportCommandResult(result)) return
         alertNormal(language.successImport)
         return
@@ -834,6 +876,7 @@ export async function importChat() {
           })
           selectedCharacter.chats.unshift(...normalizedChats)
           const result = await dispatchCreateImportedChats(characterId, [], normalizedChats, previous)
+          if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
           if (!reportChatImportCommandResult(result)) return
           alertNormal(language.successImport)
           return
@@ -858,7 +901,9 @@ export async function importChat() {
           normalizeImportedChatGenerationSettings(das)
           selectedCharacter.chats.unshift(das)
           if (characterId) {
+            if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
             const result = await dispatchCreateChatForImport(characterId, das, previous, false)
+            if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
             if (!reportChatImportCommandResult(result)) return
           }
           alertNormal(language.successImport)
@@ -893,6 +938,7 @@ export async function importChat() {
         selectedCharacter.chats.unshift(json)
         if (characterId) {
           const result = await dispatchCreateChatForImport(characterId, json, previous, false)
+          if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
           if (!reportChatImportCommandResult(result)) return
         }
         alertNormal(language.successImport)
@@ -1249,6 +1295,8 @@ export async function removeChar(
   name: string,
   type: 'normal' | 'permanent' | 'permanentForce' = 'normal',
 ): Promise<CharacterMutationOutcome | null> {
+  if (!canUseClientWriteAccess()) return null
+  const sessionGeneration = captureClientSessionGeneration()
   const characterId = characterOwnerAt(index)?.chaId
   if (!characterId || pendingCharacterRemovalIds.has(characterId)) return null
   pendingCharacterRemovalIds.add(characterId)
@@ -1258,11 +1306,13 @@ export async function removeChar(
       if (!conf) {
         return null
       }
+      if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return null
       const conf2 = await alertConfirm(language.removeConfirm2 + name)
       if (!conf2) {
         return null
       }
     }
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return null
     const liveIndex = findLiveCharacterIndex(characterId)
     if (liveIndex < 0) return null
     const liveCharacter = characterOwnerAt(liveIndex)
@@ -1294,9 +1344,12 @@ export async function addCharacter(
     reseter?: () => any
   } = {},
 ) {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   MobileGUIStack.set(100)
   const reseter = arg.reseter ?? (() => {})
   const r = await alertAddCharacter()
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
   if (r === 'importFromRealm') {
     selectedCharID.set(-1)
     OpenRealmStore.set(true)
@@ -1308,6 +1361,7 @@ export async function addCharacter(
     case 'createfromScratch':
       {
         const outcome = await createNewCharacter({ select: true })
+        if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
         if (outcome.status === 'queued') {
           alertNormal(language.characterCreationQueued)
         } else if (outcome.status === 'failed') {
@@ -1321,6 +1375,7 @@ export async function addCharacter(
         const navigationToken = characterImportNavigationGuard.issue(CHARACTER_IMPORT_NAVIGATION_TARGET)
         try {
           const imported = await importCharacter()
+          if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
           if (imported?.status === 'accepted' && isFreshCharacterImportNavigation(navigationToken, navigationScope)) {
             const index = findLiveCharacterIndex(imported.characterId)
             if (index !== -1) {
@@ -1341,6 +1396,7 @@ export async function addCharacter(
       MobileGUIStack.set(1)
       return
   }
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return
   MobileGUIStack.set(1)
 }
 
@@ -1384,9 +1440,15 @@ function isFreshCharacterImportNavigation(
 }
 
 export async function changeChar(index: number, arg: ChangeCharOptions = {}) {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   const reseter = arg.reseter ?? (() => {})
   const selectionAttemptId = ++changeCharSelectionAttemptId
-  const isFreshSelectionAttempt = () => selectionAttemptId === changeCharSelectionAttemptId && (arg.isFresh?.() ?? true)
+  const isFreshSelectionAttempt = () =>
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    selectionAttemptId === changeCharSelectionAttemptId &&
+    (arg.isFresh?.() ?? true)
   reseter()
   botMakerMode.set(false)
   if (characterOwnerAt(index)?.coldstorage) {

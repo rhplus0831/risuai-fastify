@@ -1,3 +1,4 @@
+import { canUseClientWriteAccess } from './clientSession'
 import {
   currentChatGenerationSettingsSnapshot,
   currentChatScopedSnapshot,
@@ -742,6 +743,7 @@ export function runModuleCommand<T extends Record<string, unknown>>(
   rollback: () => void,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult<T>> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   if (!canUseServerCommands()) return Promise.resolve({ status: 'unavailable' })
   return runServerCommand({ command, rollback, ...options })
 }
@@ -750,6 +752,7 @@ export function dispatchCreateModule(
   module: RisuModule,
   previous: GlobalModuleStateSnapshot,
 ): Promise<ServerCommandResult> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   if (!canUseServerCommands()) return Promise.resolve({ status: 'unavailable' })
   const moduleSnapshot = toModuleSnapshot(module)
   const rollbackEntry = moduleCreateRollbackEntry(moduleSnapshot as RisuModule)
@@ -791,6 +794,7 @@ export function dispatchUpdateModule(
   patch: ModuleSnapshot,
   previous: GlobalModuleStateSnapshot,
 ): Promise<ServerCommandResult> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   if (!canResolveGlobalModuleTarget(moduleId)) return Promise.resolve(unavailableModuleOwnerResult())
   const commandPatch = changedModulePatch(moduleId, patch, previous, { complete: true })
   if (Object.keys(commandPatch).length === 0) return null
@@ -840,6 +844,7 @@ export function dispatchModuleInfoPatch(
   enabled: boolean | null,
   previous: GlobalModuleStateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!canResolveGlobalModuleTarget(moduleId) || (enabled !== null && !canWriteEnabledModuleOwner())) return
   if (!canUseServerCommands()) return
 
@@ -885,6 +890,7 @@ export async function dispatchDeleteModule(
   moduleId: string,
   previous: GlobalModuleStateSnapshot,
 ): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canUseServerCommands()) return { status: 'failed', result: { status: 'unavailable' } }
   flushPendingSettingsOwnerMutations()
   flushPendingCharacterDraftPatches()
@@ -948,6 +954,7 @@ export async function dispatchEnableModule(
   enabled: boolean,
   previous: GlobalModuleStateSnapshot,
 ): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canResolveGlobalModuleTarget(moduleId) || !canWriteEnabledModuleOwner()) {
     return { status: 'failed', result: unavailableModuleOwnerResult() }
   }
@@ -998,6 +1005,7 @@ export async function dispatchEnableModule(
 }
 
 export async function setGlobalModuleEnabled(moduleId: string, enabled: boolean): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canResolveGlobalModuleTarget(moduleId) || !canWriteEnabledModuleOwner()) {
     return { status: 'failed', result: unavailableModuleOwnerResult() }
   }
@@ -1020,6 +1028,7 @@ export async function setGlobalModuleEnabled(moduleId: string, enabled: boolean)
 }
 
 export async function createGlobalModule(module: RisuModule): Promise<ServerCommandResult | null> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
   // Classified interchange repair: every production caller of this legacy API
   // is a module import path. Imported child rows may have missing or duplicate
   // ids, so normalize them once before the durable create owns the result.
@@ -1041,6 +1050,7 @@ export async function createGlobalModule(module: RisuModule): Promise<ServerComm
 
 /** Outcome-aware create used by explicit editors that must retain recovery drafts until acceptance. */
 export async function createGlobalModuleWithOutcome(module: RisuModule): Promise<ModuleEditorSaveOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canUseServerCommands()) {
     moduleCollectionOwnerWrite([...moduleCollectionOwnerRead(), module])
     reloadGuiAfterDefinitionChange()
@@ -1117,6 +1127,7 @@ export async function createGlobalModuleWithOutcome(module: RisuModule): Promise
 }
 
 export async function updateGlobalModule(moduleId: string, module: RisuModule): Promise<ServerCommandResult | null> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
   if (!canResolveGlobalModuleTarget(moduleId)) return unavailableModuleOwnerResult()
   if (canUseServerCommands()) {
     const previous = currentGlobalModuleStateSnapshot()
@@ -1148,6 +1159,7 @@ export async function saveGlobalModuleDraftWithOutcome(
   moduleId: string,
   module: RisuModule,
 ): Promise<ModuleEditorSaveOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canResolveGlobalModuleTarget(moduleId)) return { status: 'failed', result: unavailableModuleOwnerResult() }
   if (!canUseServerCommands()) {
     const modules = moduleCollectionOwnerRead()
@@ -1289,6 +1301,7 @@ export async function saveGlobalModuleDraftWithOutcome(
 }
 
 export async function saveGlobalModuleDraft(moduleId: string, module: RisuModule): Promise<ServerCommandResult | null> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
   const outcome = await saveGlobalModuleDraftWithOutcome(moduleId, module)
   return outcome.status === 'failed' ? outcome.result : null
 }
@@ -1315,6 +1328,7 @@ function applyOptimisticGlobalModulePatch(moduleId: string, patch: ModuleSnapsho
 }
 
 export async function deleteGlobalModule(moduleId: string): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canResolveGlobalModuleTarget(moduleId)) return { status: 'failed', result: unavailableModuleOwnerResult() }
   if (canUseServerCommands()) {
     const previous = currentGlobalModuleStateSnapshot(moduleId)
@@ -1400,6 +1414,7 @@ function removeProjectedModuleReferences(moduleId: string): void {
 }
 
 export async function dispatchReorderModules(previous: GlobalModuleStateSnapshot): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canUseServerCommands()) return { status: 'accepted', result: null }
   const attemptedModuleIds = moduleCollectionOwnerRead().map((module) => module.id)
   const attemptedModules = moduleCollectionOwnerRead()
@@ -1446,6 +1461,7 @@ export async function dispatchReorderModules(previous: GlobalModuleStateSnapshot
 }
 
 export async function createModuleFolder(folder: ModuleFolder): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canWriteModuleOrganizationOwner() || moduleFoldersOwnerRead().some((candidate) => candidate.id === folder.id)) {
     return { status: 'failed', result: unavailableModuleOwnerResult() }
   }
@@ -1475,6 +1491,7 @@ export async function createModuleFolder(folder: ModuleFolder): Promise<ModuleMu
 }
 
 export async function renameModuleFolder(folderId: string, name: string): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canWriteModuleOrganizationOwner()) return { status: 'failed', result: unavailableModuleOwnerResult() }
   const folders = moduleFoldersOwnerRead()
   const index = folders.findIndex((folder) => folder.id === folderId)
@@ -1514,6 +1531,7 @@ export async function renameModuleFolder(folderId: string, name: string): Promis
 }
 
 export async function deleteModuleFolder(folderId: string): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canWriteModuleOrganizationOwner()) return { status: 'failed', result: unavailableModuleOwnerResult() }
   const folders = moduleFoldersOwnerRead()
   const index = folders.findIndex((folder) => folder.id === folderId)
@@ -1553,6 +1571,7 @@ export async function deleteModuleFolder(folderId: string): Promise<ModuleMutati
 }
 
 export async function reorderModuleFolders(folderIds: readonly string[]): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canWriteModuleOrganizationOwner()) return { status: 'failed', result: unavailableModuleOwnerResult() }
   const folders = moduleFoldersOwnerRead()
   if (folderIds.length !== folders.length || new Set(folderIds).size !== folderIds.length) {
@@ -1594,6 +1613,7 @@ export async function reorderModuleFolders(folderIds: readonly string[]): Promis
 }
 
 export async function reorderGlobalModules(modules: RisuModule[]): Promise<ModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canWriteModuleOrganizationOwner() || !isStableModuleCollection(modules)) {
     return { status: 'failed', result: unavailableModuleOwnerResult() }
   }
@@ -1627,6 +1647,8 @@ export function dispatchModuleCollectionPatch(
   modules: RisuModule[],
   previous: GlobalModuleStateSnapshot,
 ): Promise<CharacterOwnedDurableBatchResult> | null {
+  if (!canUseClientWriteAccess())
+    return Promise.resolve({ status: 'failure', acceptedCount: 0, failure: { status: 'unavailable' } })
   if (!canUseServerCommands()) return null
 
   const beforeModules = new Map(previous.modules.map((module) => [module.id, module]))
@@ -1714,6 +1736,8 @@ export function dispatchEnabledModulesPatch(
   previous: GlobalModuleStateSnapshot,
   modules: RisuModule[],
 ): Promise<CharacterOwnedDurableBatchResult> | null {
+  if (!canUseClientWriteAccess())
+    return Promise.resolve({ status: 'failure', acceptedCount: 0, failure: { status: 'unavailable' } })
   if (!canUseServerCommands()) return null
 
   const before = new Set(previous.enabledModules)
@@ -2794,6 +2818,7 @@ function dispatchReorderCharacterModulesWithGenerationSettings(
 }
 
 export function dispatchReorderCharacterModules(characterId: string, previous: CharacterModuleStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   const character = findCharacterById(characterId)
   if (!character) return
   void dispatchReorderCharacterModulesWithGenerationSettings(characterId, character.modules ?? [], previous, null)
@@ -2814,6 +2839,7 @@ function selectedCharacterModuleOwner(): character | undefined {
 }
 
 export function toggleSelectedChatModule(moduleId: string): Promise<ScopedModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const character = selectedCharacterModuleOwner()
   const chatIndex = character?.chatPage
   const chat = Number.isInteger(chatIndex) ? character?.chats?.[chatIndex] : undefined
@@ -2837,6 +2863,7 @@ export function toggleSelectedChatModule(moduleId: string): Promise<ScopedModule
 }
 
 export function toggleSelectedCharacterModule(moduleId: string): Promise<ScopedModuleMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const character = selectedCharacterModuleOwner()
   if (!character?.chaId) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
 

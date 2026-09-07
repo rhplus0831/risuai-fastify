@@ -1,3 +1,9 @@
+import {
+  canUseClientWriteAccess,
+  assertClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from './clientSession'
 import { get } from 'svelte/store'
 import { normalizeChatPageIndex } from '@risuai/shared-core/chat-page'
 import {
@@ -401,6 +407,7 @@ export async function dispatchCharacterOwnedDurableBatch(
   characterId: string | undefined,
   steps: readonly CharacterOwnedDurableBatchStep[],
 ): Promise<CharacterOwnedDurableBatchResult> {
+  if (!canUseClientWriteAccess()) return { status: 'failure', acceptedCount: 0, failure: { status: 'unavailable' } }
   return dispatchOwnedDurableBatch(
     characterId ? characterOwnerMutationKey(characterId) : undefined,
     steps,
@@ -417,6 +424,7 @@ export async function dispatchOwnedDurableBatch(
   steps: readonly CharacterOwnedDurableBatchStep[],
   missingOwnerError = 'Missing durable mutation owner',
 ): Promise<CharacterOwnedDurableBatchResult> {
+  if (!canUseClientWriteAccess()) return { status: 'failure', acceptedCount: 0, failure: { status: 'unavailable' } }
   if (steps.length === 0 || !canUseServerCommands()) return { status: 'ok', acceptedCount: 0 }
 
   const definitions = steps.map((step) => {
@@ -660,6 +668,7 @@ export function applyOptimisticCreatedChat(
   chat: Chat,
   snapshot: ChatCreateBaseline,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   let applied = false
   withChatOwnerProjectionWrite(() => {
     const character = locateSnapshotCharacter(characterId, snapshot.selectedCharID)
@@ -683,6 +692,7 @@ export function applyOptimisticResetChats(
   chat: Chat,
   snapshot: ChatResetBaseline,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!chat.id) return false
   let applied = false
   withChatOwnerProjectionWrite(() => {
@@ -701,6 +711,7 @@ export function applyOptimisticCreatedChatFolder(
   folder: ChatFolder,
   snapshot: ChatFolderCreateBaseline,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   let applied = false
   withChatOwnerProjectionWrite(() => {
     const character = locateSnapshotCharacter(characterId, snapshot.selectedCharID)
@@ -728,6 +739,7 @@ export function applyOptimisticDeletedChat(
   chatId: string | undefined,
   snapshot: ChatDeleteBaseline,
 ): OptimisticDeletedChatResult {
+  if (!canUseClientWriteAccess()) return { applied: false, selectedChatId: undefined }
   const result: OptimisticDeletedChatResult = {
     applied: false,
     selectedChatId: undefined,
@@ -981,6 +993,7 @@ export interface ChatGenerationSettingsSnapshot {
 }
 
 interface PendingChatGenerationSettingsJob {
+  sessionGeneration: number
   intent: SparseChatGenerationSettingsUpdate
   originalTarget: ChatGenerationSettings
   fallbackRollback: ChatGenerationSettingsSnapshot
@@ -2609,6 +2622,7 @@ export function runChatCommand<T extends Record<string, unknown>>(
   rollback: () => void,
   options: ServerCommandTransportOptions = {},
 ): void {
+  if (!canUseClientWriteAccess()) return
   void runChatCommandAsync(command, rollback, options)
 }
 
@@ -2616,6 +2630,7 @@ export function runMessageCommand<T extends Record<string, unknown>>(
   command: (baseRevision: number) => Promise<ServerCommandResult<T>>,
   rollback: () => void,
 ): void {
+  if (!canUseClientWriteAccess()) return
   runChatCommand(command, rollback)
 }
 
@@ -2627,6 +2642,7 @@ export function runOptimisticCommandSequence(
   commands: readonly ServerCommandSequenceEntry[],
   rollback: () => void,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void runServerCommandSequence(commands, rollback)
 }
 
@@ -2634,6 +2650,7 @@ export async function runOptimisticCommandSequenceAsync(
   commands: readonly ServerCommandSequenceEntry[],
   rollback: () => void,
 ): Promise<ServerCommandResult | null> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
   return runServerCommandSequence(commands, rollback)
 }
 
@@ -2842,6 +2859,7 @@ function hasOneLiveChatFolder(characterId: string, folderId: string): boolean {
 }
 
 export function dispatchCreateChat(characterId: string, chat: Chat, previous: ChatCreateBaseline, select = true): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchCreateChatWithOutcome(characterId, chat, previous, select)
 }
 
@@ -2851,6 +2869,7 @@ export function dispatchCreateChatWithOutcome(
   previous: ChatCreateBaseline,
   select = true,
 ): Promise<ChatMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   // Explicit create seam: the existing compact create certificate still uses
   // the broad refresh epoch in server/commands.ts. All normal chat mutations
   // below use character-row or chat-body owner fences instead.
@@ -2898,8 +2917,12 @@ export async function dispatchResetChatsWithOutcome(
   chat: Chat,
   previous: ChatResetBaseline,
 ): Promise<ChatMutationOutcome> {
+  const sessionGeneration = captureClientSessionGeneration()
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   flushRegisteredPendingOwnerMutation('chat-metadata', {})
   await flushPendingCharacterChatNoteOwnerMutations(characterId)
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration))
+    return { status: 'failed', result: { status: 'unavailable' } }
   const attemptedChat = cloneJsonValue(chat)
   const body = freezeDurableChatRequestBody({ chat: toChatSnapshot(attemptedChat) })
   const intent = durableChatMutationIntent('PUT', `/characters/${encodeURIComponent(characterId)}/chats`, body)
@@ -3021,6 +3044,7 @@ export async function dispatchCreateChatForImport(
   previous: ChatStateSnapshot | ChatImportSnapshot,
   select = true,
 ): Promise<ChatImportDispatchResult> {
+  if (!canUseClientWriteAccess()) return { status: 'error', error: 'client_write_access_required' }
   for (const message of chat.message ?? []) ensureMessageId(message)
   const attemptedChat = cloneJsonValue(chat)
   const rollback = chatCreateRollbackFromState(characterId, attemptedChat, previous, select)
@@ -3048,6 +3072,7 @@ export async function dispatchCreateImportedChats(
   chats: Chat[],
   previous: ChatStateSnapshot | ChatImportSnapshot,
 ): Promise<ChatImportDispatchResult> {
+  if (!canUseClientWriteAccess()) return { status: 'error', error: 'client_write_access_required' }
   if (!characterId) return { status: 'error', error: 'server_command_unavailable' }
 
   for (const chat of chats) {
@@ -3204,6 +3229,7 @@ export function dispatchUpdateChat(
   select = false,
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchUpdateChatWithOutcome(chatId, patch, previous, select, rollbackRowMetadata)
 }
 
@@ -3214,6 +3240,7 @@ export function dispatchUpdateChatWithOutcome(
   select = false,
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const commandPatch = sanitizeFrozenChatPatch(patch)
   if (Object.keys(commandPatch).length === 0 && !select) return
   const rollback = chatMetadataRollbackFromPatch(chatId, commandPatch, previous)
@@ -3232,6 +3259,7 @@ export function dispatchChatMetadataPatchWithOutcome(
   snapshot: ChatMetadataPatchSnapshot,
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   return dispatchChatMetadataWithOutcome(
     snapshot.chatId,
     sanitizeFrozenChatPatch(snapshot.attempted),
@@ -3314,6 +3342,7 @@ export function dispatchUpdateChatAsync(
   select = false,
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): Promise<ServerCommandResult> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   return dispatchUpdateChatResult(chatId, patch, previous, select, rollbackRowMetadata)
 }
 
@@ -3321,6 +3350,7 @@ export function dispatchUpdateChatAsync(
 // same empty-patch select command, with the local optimistic write limited to the
 // owning character's `chatPage` instead of cloning the whole characters array.
 export function dispatchSelectChat(chatId: string, previous: ChatSelectionSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
   applyOptimisticChatSelection(chatId, previous)
   const body = freezeDurableChatRequestBody({ patch: {}, select: true })
@@ -3350,6 +3380,7 @@ export function dispatchUpdateChatRow(
   options: ServerCommandTransportOptions = {},
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): Promise<ServerCommandResult> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   const commandPatch = sanitizeFrozenChatPatch(patch)
   if (Object.keys(commandPatch).length === 0) return null
   const rollbackSnapshot: ChatRowMetadataSnapshot = {
@@ -3411,6 +3442,7 @@ export function dispatchUpdateChatScoped(
   previous: ChatScopedSnapshot,
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchUpdateChatScopedWithOutcome(chatId, patch, previous, rollbackRowMetadata)
 }
 
@@ -3420,6 +3452,7 @@ export function dispatchUpdateChatScopedWithOutcome(
   previous: ChatScopedSnapshot,
   rollbackRowMetadata: ChatRowMetadataRollback = restoreChatRowMetadata,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const commandPatch = sanitizeFrozenChatPatch(patch)
   if (Object.keys(commandPatch).length === 0) return
   const rollback = chatScopedMetadataRollbackFromPatch(chatId, commandPatch, previous)
@@ -3572,6 +3605,7 @@ export function setCurrentChatGreetingIndex(
   fmIndex: number,
   options: SetCurrentChatGreetingIndexOptions = {},
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const current = currentChatScopedSnapshot(options)
   const characterId = current.characterId
   const chatId = current.chatId
@@ -3590,6 +3624,7 @@ export function setCurrentChatSelectedDraftHookId(
   hookId: string | null,
   options: SetCurrentChatSelectedDraftHookIdOptions = {},
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const current = currentChatScopedSnapshot(options)
   const characterId = current.characterId
   const chatId = current.chatId
@@ -3623,6 +3658,7 @@ export function setCurrentChatTranslationSettingWithOutcome<Field extends ChatTr
   field: Field,
   value: ChatTranslationSettingValueByField[Field],
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const previous = currentChatScopedSnapshot()
   const characterId = previous.characterId
   const chatId = previous.chatId
@@ -3633,6 +3669,7 @@ export function setCurrentChatTranslationSettingWithOutcome<Field extends ChatTr
 }
 
 export function setCurrentChatPinnedWithOutcome(pinned: boolean): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const previous = currentChatScopedSnapshot()
   const characterId = previous.characterId
   const chatId = previous.chatId
@@ -3671,6 +3708,7 @@ export function dispatchSaveChatGenerationSettingsWithOutcome(
   generationSettings: ChatGenerationSettings,
   options: ServerCommandTransportOptions = {},
 ): ChatGenerationSettingsSaveOperation | null {
+  if (!canUseClientWriteAccess()) return null
   const commandSettings = cloneJsonValue(generationSettings)
   const rollbackSnapshot = currentChatGenerationSettingsSnapshot(chatId)
   if (!rollbackSnapshot) return null
@@ -3728,6 +3766,7 @@ export function dispatchSaveChatGenerationSettingsWithOutcome(
     return operation
   }
   const job: PendingChatGenerationSettingsJob = {
+    sessionGeneration: captureClientSessionGeneration(),
     intent,
     originalTarget: commandSettings,
     fallbackRollback: rollback,
@@ -3747,6 +3786,7 @@ export function dispatchSaveChatGenerationSettings(
   generationSettings: ChatGenerationSettings,
   options: ServerCommandTransportOptions = {},
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   return dispatchSaveChatGenerationSettingsWithOutcome(chatId, generationSettings, options) !== null
 }
 
@@ -3799,6 +3839,10 @@ function executeChatGenerationSettingsQueueSlot(
       let lastResult: ServerCommandResult = { status: 'unavailable' }
       while (state.jobs.length > 0) {
         const head = state.jobs[0]!
+        if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(head.sessionGeneration)) {
+          retainOptimisticFailure = true
+          return { status: 'unavailable' }
+        }
         const prepared = prepareChatGenerationSettingsSave(chatId, state, head)
         activePrepared = prepared
         const outcome = await executePreparedDurableMutationWithinQueue(
@@ -4061,6 +4105,8 @@ function projectChatGenerationSettingsQueue(
   state: PendingChatGenerationSettingsQueue,
   replaceAllPendingTokens = false,
 ): void {
+  if (!canUseClientWriteAccess() || state.jobs.some((job) => !isClientSessionGenerationCurrent(job.sessionGeneration)))
+    return
   if (!state.confirmed) return
   const projected = projectPendingChatGenerationSettings(state.confirmed, state.jobs)
   writeChatGenerationSettingsProjection(projected)
@@ -4121,6 +4167,7 @@ export function dispatchCompatibleChatUpdate(
   nextChat: Chat | undefined,
   previous: ChatStateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   prepareCompatibleChatUpdate(previousChat, nextChat, previous).dispatch()
 }
 
@@ -4132,6 +4179,7 @@ export function dispatchCompatibleChatUpdateScoped(
   nextChat: Chat | undefined,
   previous: ChatScopedSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   prepareCompatibleChatUpdateScoped(previousChat, nextChat, previous).dispatch()
 }
 
@@ -4140,6 +4188,7 @@ export async function dispatchCompatibleChatUpdateScopedAsync(
   nextChat: Chat | undefined,
   previous: ChatScopedSnapshot,
 ): Promise<CharacterOwnedDurableBatchResult | null> {
+  if (!canUseClientWriteAccess()) return { status: 'failure', acceptedCount: 0, failure: { status: 'unavailable' } }
   return prepareCompatibleChatUpdateScoped(previousChat, nextChat, previous).dispatchAsync()
 }
 
@@ -4163,6 +4212,7 @@ export function mutateChatWithScopedCommand(
   mutate: (chat: Chat, character: character) => void,
   options: MutateChatScopedOptions = {},
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const selectedChar = options.selectedChar ?? get(selectedCharID)
   const character = characterOwnerAt(selectedChar)
   if (!character?.chats) return false
@@ -4199,6 +4249,7 @@ export async function mutateChatWithScopedCommandAsync(
   mutate: (chat: Chat, character: character) => void,
   options: MutateChatScopedOptions = {},
 ): Promise<boolean> {
+  if (!canUseClientWriteAccess()) return false
   const selectedChar = options.selectedChar ?? get(selectedCharID)
   const character = characterOwnerAt(selectedChar)
   if (!character?.chats) return false
@@ -4687,6 +4738,7 @@ function chatScriptstateSnapshotFromScoped(previous: ChatScopedSnapshot, chatId:
 }
 
 export function dispatchDeleteChat(chatId: string, previous: ChatDeleteBaseline): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchDeleteChatWithOutcome(chatId, previous)
 }
 
@@ -4694,6 +4746,8 @@ export async function dispatchDeleteChatWithOutcome(
   chatId: string,
   previous: ChatDeleteBaseline,
 ): Promise<ChatMutationOutcome | undefined> {
+  const sessionGeneration = captureClientSessionGeneration()
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   if (!canUseServerCommands()) return
   const rollback = chatDeleteRollbackFromState(chatId, previous)
   const optimisticRowEpoch =
@@ -4704,6 +4758,8 @@ export async function dispatchDeleteChatWithOutcome(
         : undefined
   flushRegisteredPendingOwnerMutation('chat-metadata', {})
   await flushPendingChatNoteOwnerMutation(chatId)
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration))
+    return { status: 'failed', result: { status: 'unavailable' } }
   const intent: DurableMutationIntent = {
     version: 1,
     requests: [
@@ -4749,6 +4805,7 @@ export function dispatchForkChat(
     select?: boolean
   },
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchForkChatWithOutcome(sourceChatId, previous, input)
 }
 
@@ -4762,6 +4819,7 @@ export function dispatchForkChatWithOutcome(
     select?: boolean
   },
 ): Promise<ChatMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   // Explicit create seam: forking creates a new chat (and optionally a folder),
   // whose current compact certificate still requires the broad refresh epoch.
   const optimisticEpoch = captureDestructiveRefreshEpoch()
@@ -4828,6 +4886,7 @@ export function dispatchForkChatWithOutcome(
 }
 
 export function dispatchReorderChats(characterId: string, previous: ChatOrderBaseline, selectedChatId?: string): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchReorderChatsWithOutcome(characterId, previous, selectedChatId)
 }
 
@@ -4836,6 +4895,7 @@ export function dispatchReorderChatsWithOutcome(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const character = getCharacterResourceOwner(characterId)
   if (!character) return
   const folderByChatId: Record<string, string | null> = {}
@@ -4859,6 +4919,7 @@ export function dispatchReorderChatsByIds(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchReorderChatsByIdsWithOutcome(characterId, chatIds, folderByChatId, previous, selectedChatId)
 }
 
@@ -4869,6 +4930,7 @@ export function dispatchReorderChatsByIdsWithOutcome(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): Promise<ChatMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const optimisticRowEpoch = captureCharacterRowProjectionEpoch(characterId)
   const rollback = chatReorderRollbackFromState(characterId, chatIds, folderByChatId, previous)
   const attemptedIds = rollback?.attemptedIds ?? cloneJsonValue(chatIds)
@@ -4910,6 +4972,7 @@ export function dispatchReorderChatFoldersAndChatsByIds(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchReorderChatFoldersAndChatsByIdsWithOutcome(
     characterId,
     folderIds,
@@ -4928,6 +4991,7 @@ export function dispatchReorderChatFoldersAndChatsByIdsWithOutcome(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): Promise<ChatMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const optimisticRowEpoch = captureCharacterRowProjectionEpoch(characterId)
   const attemptedFolderIds = cloneJsonValue(folderIds)
   const attemptedChatIds = cloneJsonValue(chatIds)
@@ -4993,6 +5057,7 @@ export function dispatchCreateChatFolder(
   folder: ChatFolder,
   previous: ChatFolderCreateBaseline,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchCreateChatFolderWithOutcome(characterId, folder, previous)
 }
 
@@ -5001,6 +5066,7 @@ export function dispatchCreateChatFolderWithOutcome(
   folder: ChatFolder,
   previous: ChatFolderCreateBaseline,
 ): Promise<ChatMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   // Explicit create seam retained for the compact folder-create certificate.
   const optimisticEpoch = captureDestructiveRefreshEpoch()
   const optimisticRowEpoch = captureCharacterRowProjectionEpoch(characterId)
@@ -5040,6 +5106,7 @@ export function dispatchUpdateChatFolder(
   previous: ChatStateSnapshot,
   rollbackFolderMetadata: ChatFolderRowMetadataRollback = restoreChatFolderRowMetadata,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchUpdateChatFolderWithOutcome(folderId, patch, previous, rollbackFolderMetadata)
 }
 
@@ -5049,6 +5116,7 @@ export function dispatchUpdateChatFolderWithOutcome(
   previous: ChatStateSnapshot,
   rollbackFolderMetadata: ChatFolderRowMetadataRollback = restoreChatFolderRowMetadata,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   if (!canUseServerCommands()) return
   const folderLocation = locateChatFolderInState(previous, folderId)
   if (!folderLocation) return
@@ -5063,6 +5131,7 @@ export function dispatchChatFolderMetadataPatchWithOutcome(
   snapshot: ChatFolderMetadataPatchSnapshot,
   rollbackFolderMetadata: ChatFolderRowMetadataRollback = restoreChatFolderRowMetadata,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   if (reportWriterAccessLostMutation()) {
     rollbackFolderMetadata(snapshot)
     return writerAccessLostChatMutationOutcome()
@@ -5129,6 +5198,7 @@ export function dispatchUpdateChatFolderRow(
   options: ServerCommandTransportOptions = {},
   rollbackFolderMetadata: ChatFolderRowMetadataRollback = restoreChatFolderRowMetadata,
 ): Promise<ServerCommandResult> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   const attemptedPatch = freezeJsonValue(cloneJsonValue(patch))
   if (Object.keys(attemptedPatch).length === 0) return null
   if (!canUseServerCommands()) return null
@@ -5262,6 +5332,7 @@ function clearChatFolderMetadataAttempt(attempt: PendingChatFolderMetadataAttemp
 }
 
 export function dispatchDeleteChatFolder(folderId: string, previous: ChatFolderDeleteBaseline): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchDeleteChatFolderWithOutcome(folderId, previous)
 }
 
@@ -5269,6 +5340,7 @@ export function dispatchDeleteChatFolderWithOutcome(
   folderId: string,
   previous: ChatFolderDeleteBaseline,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   if (!canUseServerCommands()) return
   flushRegisteredPendingOwnerMutation('chat-metadata', {})
   const rollback = chatFolderDeleteRollbackFromState(folderId, previous)
@@ -5316,6 +5388,7 @@ export function dispatchReorderChatFolders(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchReorderChatFoldersWithOutcome(characterId, previous, selectedChatId)
 }
 
@@ -5324,6 +5397,7 @@ export function dispatchReorderChatFoldersWithOutcome(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const character = getCharacterResourceOwner(characterId)
   if (!character) return
   return dispatchReorderChatFoldersByIdsWithOutcome(
@@ -5340,6 +5414,7 @@ export function dispatchReorderChatFoldersByIds(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): void {
+  if (!canUseClientWriteAccess()) return
   void dispatchReorderChatFoldersByIdsWithOutcome(characterId, folderIds, previous, selectedChatId)
 }
 
@@ -5349,6 +5424,7 @@ export function dispatchReorderChatFoldersByIdsWithOutcome(
   previous: ChatOrderBaseline,
   selectedChatId?: string,
 ): Promise<ChatMutationOutcome> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const optimisticRowEpoch = captureCharacterRowProjectionEpoch(characterId)
   const previousIds = chatFolderOrderFromBaseline(characterId, previous)
   const attemptedIds = cloneJsonValue(folderIds)
@@ -5391,6 +5467,7 @@ export function toChatFolderSnapshot(folder: ChatFolder): ChatFolderSnapshot {
 }
 
 export function dispatchAppendMessage(chatId: string, message: Message, previous: ChatStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   ensureMessageId(message)
   const scoped = chatScopedSnapshotForChatInState(previous, chatId)
   if (!scoped) return
@@ -5426,6 +5503,7 @@ export function dispatchAppendMessage(chatId: string, message: Message, previous
 }
 
 export function appendCurrentChatEmptyCharMessage(): void {
+  if (!canUseClientWriteAccess()) return
   const selectedChar = get(selectedCharID)
   const message: Message = {
     role: 'char',
@@ -5477,6 +5555,7 @@ export async function appendCurrentChatUserMessageForSend(
   input: string | Message,
   options: AppendCurrentChatUserMessageForSendOptions = {},
 ): Promise<AppendCurrentChatUserMessageResult> {
+  if (!canUseClientWriteAccess()) return { status: 'error', error: 'client_write_access_required' }
   if (options.expectedTarget !== undefined && !isActiveChatTargetFresh(options.expectedTarget)) {
     return { status: 'error', error: 'The active chat changed before the message could be appended.' }
   }
@@ -5583,6 +5662,7 @@ export function appendOptimisticGenerationOperationUserMessage(
   target: ActiveChatTarget,
   message: Message,
 ): OptimisticGenerationOperationAppendResult {
+  if (!canUseClientWriteAccess()) return { status: 'error', error: 'client_write_access_required' }
   if (!isActiveChatTargetFresh(target)) {
     return { status: 'error', error: 'The active chat changed before the message could be staged.' }
   }
@@ -5624,6 +5704,7 @@ export function appendOptimisticGenerationOperationUserMessage(
  * resolves true.
  */
 export async function clearCurrentChatMessagesBeforeSend(target: ActiveChatTarget): Promise<boolean> {
+  if (!canUseClientWriteAccess()) return false
   if (!isActiveChatTargetFresh(target)) return false
   const previous = currentChatScopedSnapshot()
   const chatId = previous.chatId
@@ -6126,6 +6207,7 @@ function dispatchUpdateMessageWith(
 }
 
 export function dispatchUpdateMessage(messageId: string, patch: MessageSnapshot, previous: ChatStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   const scoped = chatScopedSnapshotForMessageInState(previous, messageId)
   if (!scoped) return
   void dispatchUpdateMessageScoped(messageId, patch, scoped, { optimisticPatchAlreadyApplied: true })
@@ -6151,6 +6233,7 @@ export function dispatchUpdateMessageScoped(
   previous: ChatScopedSnapshot,
   options: DispatchUpdateMessageScopedOptions = {},
 ): Promise<ChatMutationOutcome> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const optimisticProjection = captureChatBodyProjectionFenceForScopedSnapshot(previous)
   const { commandPatch, dispatcherAppliedKeys } = applyScopedMessagePatchAttempt(
     previous,
@@ -6261,6 +6344,7 @@ function dispatchDeleteMessageWith(
 }
 
 export function dispatchDeleteMessage(messageId: string, previous: ChatStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   const scoped = chatScopedSnapshotForMessageInState(previous, messageId)
   if (!scoped) return
   void dispatchDeleteMessageScoped(messageId, scoped)
@@ -6287,6 +6371,7 @@ export async function dispatchDeleteMessageScoped(
   messageId: string,
   previous: ChatScopedSnapshot,
 ): Promise<DeleteMessageScopedResult> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', error: 'client_write_access_required' }
   const optimisticProjection = captureChatBodyProjectionFenceForScopedSnapshot(previous)
   const attemptedMessages = attemptedMessagesAfterDelete(previous, messageId)
   const pendingAttempt = registerScopedTranscriptAttempt(
@@ -6480,6 +6565,7 @@ export function dispatchTruncateMessages(
   afterMessageId: string | null,
   previous: ChatStateSnapshot,
 ): Promise<ServerCommandResult | null> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   const scoped = chatScopedSnapshotForChatInState(previous, chatId)
   if (!scoped) return Promise.resolve(null)
   const attemptedMessages = attemptedMessagesAfterTruncate(scoped, afterMessageId)
@@ -6509,6 +6595,7 @@ export function dispatchTruncateMessagesScoped(
   afterMessageId: string | null,
   previous: ChatScopedSnapshot,
 ): Promise<ChatMutationOutcome> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   const optimisticChatBodyProjectionEpoch = captureChatBodyProjectionEpoch(chatId)
   const attemptedMessages = attemptedMessagesAfterTruncate(previous, afterMessageId)
   const pendingAttempt = registerScopedTranscriptAttempt(
@@ -6572,6 +6659,7 @@ export function dispatchReplaceTailMessages(
   messages: Message[],
   previous: ChatStateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   const scoped = chatScopedSnapshotForChatInState(previous, chatId)
   if (!scoped || !prepareReplaceTailMessages(messages)) return
   const attemptedMessages = attemptedMessagesAfterReplaceTail(scoped, afterMessageId, messages)
@@ -6603,6 +6691,7 @@ export function dispatchReplaceTailMessagesScoped(
   messages: Message[],
   previous: ChatScopedSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!prepareReplaceTailMessages(messages)) return
   const optimisticChatBodyProjectionEpoch = captureChatBodyProjectionEpoch(chatId)
   const attemptedMessages = attemptedMessagesAfterReplaceTail(previous, afterMessageId, messages)
@@ -6690,6 +6779,7 @@ function hasServerChatMessagePlaceholders(messages: readonly Message[]): boolean
 }
 
 export function dispatchReplaceMessages(chatId: string, messages: Message[], previous: ChatStateSnapshot): void {
+  if (!canUseClientWriteAccess()) return
   const scoped = chatScopedSnapshotForChatInState(previous, chatId)
   if (!scoped) return
   void dispatchReplaceMessagesScoped(chatId, messages, scoped)
@@ -6700,6 +6790,7 @@ export function dispatchReplaceMessagesScoped(
   messages: Message[],
   previous: ChatScopedSnapshot,
 ): Promise<ChatMutationOutcome> | undefined {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'failed', result: { status: 'unavailable' } })
   if (!prepareReplaceMessages(messages)) return
   const optimisticChatBodyProjectionEpoch = captureChatBodyProjectionEpoch(chatId)
   const attemptedMessages = cloneJsonValue(messages)
@@ -6781,6 +6872,7 @@ export function dispatchPatchChatScriptstate(
   deleteKeys: string[],
   previous: ChatStateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   const scoped = chatScopedSnapshotForChatInState(previous, chatId)
   if (!scoped?.chat) return
   dispatchPatchChatScriptstateScoped(chatId, patch, deleteKeys, {
@@ -6800,6 +6892,7 @@ export function dispatchPatchChatScriptstateScoped(
   deleteKeys: string[],
   previous: ChatScriptstateSnapshot,
 ): void {
+  if (!canUseClientWriteAccess()) return
   const commandPatch = sanitizeScriptstatePatch(patch)
   const commandDeleteKeys = sanitizeScriptstateDeleteKeys(deleteKeys)
   void dispatchPatchChatScriptstateWith(chatId, commandPatch, commandDeleteKeys, previous.characterId, () =>
@@ -6812,12 +6905,14 @@ export function dispatchCurrentChatScriptstatePatch(
   deleteKeys: string[] = [],
   previous: ChatScriptstateSnapshot = currentChatScriptstateSnapshot(),
 ): void {
+  if (!canUseClientWriteAccess()) return
   const chatId = currentSelectedChatId()
   if (!chatId) return
   dispatchPatchChatScriptstateScoped(chatId, patch, deleteKeys, previous)
 }
 
 export function setChatScriptstateValue(chatId: string | undefined, key: string, value: unknown): boolean {
+  if (!canUseClientWriteAccess()) return false
   return patchChatScriptstateValue(chatId, { [key]: value })
 }
 
@@ -6826,6 +6921,7 @@ export function patchChatScriptstateValue(
   patch: Record<string, unknown>,
   deleteKeys: readonly string[] = [],
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   if (!chatId) return false
 
   const commandPatch = sanitizeScriptstatePatch(patch)
@@ -6861,6 +6957,7 @@ export function dispatchUpdateChatNoteScoped(
   previous: ChatScriptstateSnapshot,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult> | null {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
   if (!canUseServerCommands()) return null
   if (appliedChatNoteRollbacks.get(chatId)?.rollback === previous) appliedChatNoteRollbacks.delete(chatId)
   const body = freezeDurableChatRequestBody({ patch: sanitizeChatPatch({ note }), select: false })
@@ -6889,6 +6986,7 @@ export function dispatchUpdateChatNoteScoped(
 }
 
 export interface StagedChatNoteMutation {
+  sessionGeneration: number
   chatId: string
   characterId?: string
   note: string
@@ -6920,11 +7018,13 @@ async function flushPendingChatNoteOwnerMutation(
   options: ServerCommandTransportOptions = {},
 ): Promise<boolean> {
   const pending = pendingChatNoteOwnerMutations.get(chatId)
-  if (!pending) return false
-  pendingChatNoteOwnerMutations.delete(chatId)
+  if (!pending || !canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pending.mutation.sessionGeneration))
+    return false
   const live = locateChatById(chatId, pending.rollback.characterId)
   if (live && live.chat !== pending.owner) return false
   const persistence = await pending.mutation.outbox.ready
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pending.mutation.sessionGeneration)) return false
+  if (pendingChatNoteOwnerMutations.get(chatId) === pending) pendingChatNoteOwnerMutations.delete(chatId)
   if (persistence === 'unavailable') {
     await dispatchStagedChatNoteMutation(pending.mutation, pending.rollback, options)
   }
@@ -6939,10 +7039,12 @@ async function flushPendingCharacterChatNoteOwnerMutations(
     ([, pending]) => (pending.mutation.characterId ?? pending.rollback.characterId) === characterId,
   )
   for (const [chatId, pending] of owners) {
-    pendingChatNoteOwnerMutations.delete(chatId)
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pending.mutation.sessionGeneration)) return
     const live = locateChatById(chatId, characterId)
     if (live && live.chat !== pending.owner) continue
     const persistence = await pending.mutation.outbox.ready
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pending.mutation.sessionGeneration)) return
+    if (pendingChatNoteOwnerMutations.get(chatId) === pending) pendingChatNoteOwnerMutations.delete(chatId)
     if (persistence === 'unavailable') {
       await dispatchStagedChatNoteMutation(pending.mutation, pending.rollback, options)
     }
@@ -6955,6 +7057,7 @@ export function stageChatNoteMutation(input: {
   note: string
   previous?: PendingMutationHandle | null
 }): StagedChatNoteMutation {
+  assertClientWriteAccess()
   const intent: DurableMutationIntent = {
     version: 1,
     requests: [
@@ -6966,6 +7069,7 @@ export function stageChatNoteMutation(input: {
     ],
   }
   const mutation: StagedChatNoteMutation = {
+    sessionGeneration: captureClientSessionGeneration(),
     chatId: input.chatId,
     ...(input.characterId ? { characterId: input.characterId } : {}),
     note: input.note,
@@ -6988,6 +7092,8 @@ export function dispatchStagedChatNoteMutation(
   previous: ChatScriptstateSnapshot,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult> {
+  if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'unavailable' })
+  if (!isClientSessionGenerationCurrent(mutation.sessionGeneration)) return Promise.resolve({ status: 'unavailable' })
   if (pendingChatNoteOwnerMutations.get(mutation.chatId)?.mutation === mutation) {
     pendingChatNoteOwnerMutations.delete(mutation.chatId)
   }
@@ -7003,6 +7109,7 @@ export function dispatchStagedChatNoteMutation(
 
 /** Apply an author-note edit optimistically without starting its transport. */
 export function applyChatNoteValueLocally(chatId: string | undefined, note: string): ChatScriptstateSnapshot | null {
+  if (!canUseClientWriteAccess()) return null
   if (!chatId) return null
 
   const location = locateChatById(chatId)
@@ -7024,6 +7131,7 @@ export function setChatNoteValue(
   note: string,
   options: SetChatNoteValueOptions = {},
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const previous = applyChatNoteValueLocally(chatId, note)
   if (!previous) return false
 

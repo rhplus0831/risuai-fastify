@@ -1,3 +1,9 @@
+import {
+  canUseClientWriteAccess,
+  assertClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import type { PromptItem } from '../process/prompt'
 import {
   canUseServerCommands,
@@ -159,6 +165,7 @@ export interface FailedPromptTemplateItemReorderRollback {
 }
 
 interface PendingPromptItemUpdate {
+  sessionGeneration: number
   ownerId: string | null
   itemId: string
   previousItem: PromptItem
@@ -188,6 +195,7 @@ interface SparsePromptItemUpdate {
 }
 
 interface PendingPromptSettingsPatch {
+  sessionGeneration: number
   patch: SettingsPatch
   previous: SettingsPatch
   attempted: SettingsPatch
@@ -255,6 +263,7 @@ interface PendingPromptTemplateStructuralAttempt {
 const pendingPromptItemUpdates = new Map<string, PendingPromptItemUpdate>()
 const pendingPromptItemAttempts: PendingPromptItemAttempt[] = []
 const pendingPromptSettingsPatch: PendingPromptSettingsPatch = {
+  sessionGeneration: captureClientSessionGeneration(),
   patch: {},
   previous: {},
   attempted: {},
@@ -286,6 +295,7 @@ export function applyPromptItemProjectionWrite(
   itemId: string,
   ownerId: string | null = currentPromptTemplateOwnerId(),
 ): PromptItem | null {
+  if (!canUseClientWriteAccess()) return null
   if (!isPromptTemplateHydrated(ownerId)) return null
   const draftItem = (draftItems ?? []).find((item) => item.id === itemId)
   if (!draftItem) return null
@@ -394,6 +404,7 @@ export async function runPromptTemplateOwnerCommand<T extends Record<string, unk
   ownerId: string | null,
   command: () => Promise<ServerCommandResult<T>>,
 ): Promise<ServerCommandResult<T>> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
   if (!isCurrentPromptTemplateOwner(ownerId)) return { status: 'unavailable' }
   return command()
 }
@@ -419,6 +430,7 @@ export async function dispatchPromptTemplateStructuralMutation(input: {
   rollback: () => void
   onFinalSettlement?: (settlement: PromptTemplateStructuralFinalSettlement) => void
 }): Promise<PromptTemplateStructuralMutationOutcome> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', result: { status: 'unavailable' } }
   const attempt: PendingPromptTemplateStructuralAttempt = {
     sequence: ++nextPromptTemplateStructuralAttemptSequence,
     ownerId: input.ownerId,
@@ -720,6 +732,7 @@ export function queuePromptItemProjectionUpdate(
   promptPresetId: string | null = currentPromptTemplateOwnerId(),
   projectionFence?: PromptTemplateOwnerMutationFence,
 ): void {
+  if (!canUseClientWriteAccess()) return
   if (!isPromptTemplateHydrated(promptPresetId)) return
   if (projectionFence && projectionFence.ownerId !== promptPresetId) return
   const pendingKey = promptItemStateKey(promptPresetId, itemId)
@@ -746,6 +759,7 @@ export function queuePromptItemProjectionUpdate(
   }
   const intent = promptItemUpdateDurableIntent(promptPresetId, itemId, sparseUpdate)
   const pending: PendingPromptItemUpdate = {
+    sessionGeneration: captureClientSessionGeneration(),
     ownerId: promptPresetId,
     itemId,
     previousItem: retainedPreviousItem,
@@ -787,6 +801,7 @@ function trackPendingPromptItemSettlement(pendingKey: string, pending: PendingPr
  * remains an ordered predecessor instead of being overtaken or orphaned.
  */
 export function stagePromptItemDeleteMutation(ownerId: string | null, itemId: string): StagedPromptItemDeleteMutation {
+  assertClientWriteAccess()
   const pendingKey = promptItemStateKey(ownerId, itemId)
   const pending = pendingPromptItemUpdates.get(pendingKey)
   if (pending?.timer) clearTimeout(pending.timer)
@@ -812,9 +827,10 @@ export function armPendingPromptItemProjectionUpdate(
   promptPresetId: string | null = currentPromptTemplateOwnerId(),
   projectionFence?: PromptTemplateOwnerMutationFence,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const pendingKey = promptItemStateKey(promptPresetId, itemId)
   const pending = pendingPromptItemUpdates.get(pendingKey)
-  if (!pending) return false
+  if (!pending || !isClientSessionGenerationCurrent(pending.sessionGeneration)) return false
   if (pending.timer) clearTimeout(pending.timer)
   if (projectionFence?.ownerId === promptPresetId) pending.projectionFence = projectionFence
   pending.timer = setTimeout(() => runPendingPromptItemUpdate(pendingKey), delayMs)
@@ -822,7 +838,9 @@ export function armPendingPromptItemProjectionUpdate(
 }
 
 export function queuePromptSettingsProjectionPatch(patch: SettingsPatch, previous: SettingsPatch, delayMs = 250): void {
+  if (!canUseClientWriteAccess()) return
   if (!canUseServerCommands()) return
+  pendingPromptSettingsPatch.sessionGeneration = captureClientSessionGeneration()
   for (const [key, value] of Object.entries(patch)) {
     if (!(key in pendingPromptSettingsPatch.previous)) {
       pendingPromptSettingsPatch.previous[key] = cloneJsonValue(previous[key])
@@ -855,6 +873,7 @@ export function dropPendingPromptSettingsProjectionPatchKeys(keys: readonly stri
 }
 
 export function replacePendingPromptSettingsProjectionPatchValue(key: string, value: unknown): void {
+  if (!canUseClientWriteAccess()) return
   if (!hasOwnField(pendingPromptSettingsPatch.attempted, key)) return
   pendingPromptSettingsPatch.attempted[key] = cloneJsonValue(value)
   const correctionOnly = refreshPendingPromptSettingsMutation()
@@ -862,6 +881,7 @@ export function replacePendingPromptSettingsProjectionPatchValue(key: string, va
 }
 
 export function commitPendingPromptTemplateMutations(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   for (const pendingKey of Array.from(pendingPromptItemUpdates.keys())) {
     runPendingPromptItemUpdate(pendingKey, options)
   }
@@ -875,6 +895,7 @@ export function commitPendingPromptTemplateOwnerMutations(
   ownerIds: ReadonlySet<string | null>,
   options: ServerCommandTransportOptions = {},
 ): void {
+  if (!canUseClientWriteAccess()) return
   for (const [pendingKey, pending] of Array.from(pendingPromptItemUpdates.entries())) {
     if (ownerIds.has(pending.ownerId)) runPendingPromptItemUpdate(pendingKey, options)
   }
@@ -966,8 +987,9 @@ function promptSettingsDurableIntent(patch: SettingsPatch): DurableMutationInten
 }
 
 function runPendingPromptItemUpdate(pendingKey: string, options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   const pending = pendingPromptItemUpdates.get(pendingKey)
-  if (!pending) return
+  if (!pending || !isClientSessionGenerationCurrent(pending.sessionGeneration)) return
   if (pending.timer) clearTimeout(pending.timer)
   pendingPromptItemUpdates.delete(pendingKey)
 
@@ -1016,6 +1038,8 @@ function dispatchPromptItemUpdate(pending: PendingPromptItemUpdate, options: Ser
 }
 
 function runPendingPromptSettingsPatch(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(pendingPromptSettingsPatch.sessionGeneration))
+    return
   if (pendingPromptSettingsPatch.timer) {
     clearTimeout(pendingPromptSettingsPatch.timer)
     pendingPromptSettingsPatch.timer = null
