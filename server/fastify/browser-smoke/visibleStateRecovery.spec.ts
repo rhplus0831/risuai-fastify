@@ -37,22 +37,34 @@ interface RevisionedResponseBody {
 let harness: Harness
 const diagnosticLinesByPage = new WeakMap<Page, string[]>()
 
-test.beforeAll(async () => {
+test.beforeEach(async () => {
+  // Fresh pages need fresh unowned databases so each case can acquire its own
+  // writer without inheriting another case's ownership or mutations.
   harness = await startHarness()
   const assertion = await setupBrowserSmokeAuth(harness.app)
   await importDatabase(harness.app, assertion, phase0FixtureDatabase())
 })
 
-test.afterAll(async () => {
-  await harness.app.close()
-  rmSync(harness.dataDir, { recursive: true, force: true })
-})
-
 test.afterEach(async ({ page }, testInfo) => {
-  if (testInfo.status === testInfo.expectedStatus) return
-  const diagnostics = diagnosticLinesByPage.get(page)?.slice(-20).join('\n')
-  if (!diagnostics) return
-  await testInfo.attach('browser diagnostics', { body: diagnostics, contentType: 'text/plain' })
+  try {
+    if (testInfo.status !== testInfo.expectedStatus) {
+      const diagnostics = diagnosticLinesByPage.get(page)?.slice(-20).join('\n')
+      if (diagnostics) await testInfo.attach('browser diagnostics', { body: diagnostics, contentType: 'text/plain' })
+    }
+  } finally {
+    try {
+      // Release browser subscriptions before shutting down the case's server.
+      await page.close()
+    } finally {
+      if (harness) {
+        try {
+          await harness.app.close()
+        } finally {
+          rmSync(harness.dataDir, { recursive: true, force: true })
+        }
+      }
+    }
+  }
 })
 
 test('switching chats repaints the active-chat generation picker', async ({ page }) => {

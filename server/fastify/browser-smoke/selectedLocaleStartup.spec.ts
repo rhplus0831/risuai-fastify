@@ -21,17 +21,19 @@ test('selected locale is usable on cold startup and refresh', async ({ browser }
   }> = []
   for (const locale of ['en', 'ko'] as const) {
     const label = locale === 'ko' ? '메시지 입력' : 'Message input'
-    const database = smallFastBootstrapFixture()
-    database.language = locale
-    const harness = await startFastBootstrapHarness(database)
-    try {
-      for (let repetition = 0; repetition < 3; repetition++) {
+    for (let repetition = 0; repetition < 3; repetition++) {
+      // Each cold/warm pair owns its durable writer; later fresh contexts must
+      // not inherit an earlier repetition's owner or add a takeover to timing.
+      const database = smallFastBootstrapFixture()
+      database.language = locale
+      const harness = await startFastBootstrapHarness(database)
+      try {
         const context = await browser.newContext()
-        const page = await context.newPage()
-        const errors: string[] = []
-        page.on('pageerror', (error) => errors.push(error.message))
-        await observeFirstComposerLabel(page)
         try {
+          const page = await context.newPage()
+          const errors: string[] = []
+          page.on('pageerror', (error) => errors.push(error.message))
+          await observeFirstComposerLabel(page)
           for (const cache of ['cold', 'warm'] as const) {
             if (cache === 'cold') {
               await page.goto(`${harness.baseUrl}/character/fast-bootstrap-small-character/fast-bootstrap-small-chat`)
@@ -75,9 +77,9 @@ test('selected locale is usable on cold startup and refresh', async ({ browser }
         } finally {
           await context.close()
         }
+      } finally {
+        await closeFastBootstrapHarness(harness)
       }
-    } finally {
-      await closeFastBootstrapHarness(harness)
     }
   }
   // Keep every readiness/transfer sample while storing identical script paths
