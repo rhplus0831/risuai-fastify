@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -1434,4 +1440,51 @@ describe('CharConfig draft-type-less character actions', () => {
     await settleComponent()
     expect(getDatabase().characters[0].customscript).toHaveLength(2)
   })
+})
+
+it('captures the newest character typing synchronously before demotion unmounts its owner', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    await mountCharConfig(0)
+    const input = target.querySelector<HTMLInputElement>('input[aria-label="Character Name"]')!
+    const original = input.value
+    input.value = 'Newest character draft'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'character:char-1',
+          data: expect.objectContaining({ name: 'Newest character draft' }),
+          baseline: expect.objectContaining({ name: original }),
+        }),
+      ]),
+    )
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('captures character script edits retained after the script section is collapsed', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    await mountCharConfig(4)
+    buttonByAccessibleName(`${language.add}: ${language.regexScript}`).click()
+    await settleComponent()
+    CharConfigSubMenu.set(0)
+    await settleComponent()
+    demoteClientSession()
+    const saved = capturedWriterDrafts().find((draft) => draft.key === 'character-scripts:char-1')
+    expect(saved?.data).toMatchObject({ scripts: [expect.objectContaining({ out: '', type: 'editinput' })] })
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

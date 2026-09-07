@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -1170,4 +1176,28 @@ describe('ModuleSettings derived module rows', () => {
     await tick()
     expect(editable.getAttribute('contenteditable')).toBe('true')
   })
+})
+
+it('hands the newest module field to its existing recovery store synchronously on demotion', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    mountSettings()
+    moduleAction('alpha-id', 'edit').click()
+    await tick()
+    const input = target.querySelector<HTMLInputElement>('input[type="text"]')!
+    expect(input).toBeTruthy()
+    input.value = 'newest module draft'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(moduleDraftStoreSpies.writeModuleEditorDraft).toHaveBeenLastCalledWith(
+      expect.objectContaining({ tempModule: expect.objectContaining({ name: 'newest module draft' }) }),
+    )
+    expect(capturedWriterDrafts()).toHaveLength(0)
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

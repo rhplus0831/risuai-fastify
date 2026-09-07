@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { writerDraftValueFields } from 'src/ts/server/writerDraftFields'
+
   import { PlusIcon, ArrowLeftIcon, ArrowDownIcon, ArrowUpIcon, DownloadIcon, UploadIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -181,6 +184,7 @@
   let isEffectDragging = $state(false)
   let effectDragOverIndex = $state(-1)
   let editTrigger: triggerEffectV2 = $state(null as triggerEffectV2)
+  let effectRecoveryBaseline = ''
   let addElse = $state(false)
   let selectMode = $state(0) //0 = trigger 1 = effect
   let contextMenu = $state(false)
@@ -226,6 +230,24 @@
 
   let triggerDrag: TriggerDragState | null = null
   let effectDrag: EffectDragState | null = null
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      if ((menuMode !== 2 && menuMode !== 3) || !editTrigger || !effectRecoveryBaseline) return null
+      const data = $state.snapshot({ effect: editTrigger, addElse })
+      const baseline = JSON.parse(effectRecoveryBaseline)
+      const fields = writerDraftValueFields(data, baseline, { effect: language.trigger, addElse: language.addElse })
+      if (fields.length === 0) return null
+      const trigger = value[selectedIndex]
+      return {
+        key: `trigger-effect:${ownerKey}:${trigger?.id ?? selectedIndex}:${menuMode === 2 ? 'new' : selectedEffectIndex}`,
+        label: `${language.trigger}: ${trigger?.comment || editTrigger.type}`,
+        fields,
+        data,
+        baseline,
+      }
+    }),
+  )
 
   let isRestoringMode = $state(false)
   let previousSelectedTriggerIndex = $state(-1)
@@ -2755,6 +2777,7 @@
                     selectedTriggerIndex = selectedIndex
                     selectedEffectIndexSaved = selectedEffectIndex
                   }
+                  effectRecoveryBaseline = JSON.stringify({ effect: editTrigger, addElse })
                   menuMode = 3
                   contextMenu = false
                 }}>
@@ -3537,6 +3560,7 @@
                         selectedTriggerIndex = selectedIndex
                         selectedEffectIndexSaved = selectedEffectIndex
                       }
+                      effectRecoveryBaseline = JSON.stringify({ effect: editTrigger, addElse })
                       menuMode = 2
                     }}>
                     <div>

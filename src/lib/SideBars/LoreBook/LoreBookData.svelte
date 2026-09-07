@@ -16,6 +16,9 @@
 </script>
 
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { writerDraftValueFields } from 'src/ts/server/writerDraftFields'
+
   import { XIcon, LinkIcon, SunIcon, BookCopyIcon, FolderIcon, FolderOpen, PlusIcon } from '@lucide/svelte'
   import { language } from '../../../lang'
   import type { Chat, character, loreBook } from '../../../ts/storage/database.svelte'
@@ -110,6 +113,7 @@
   let draftInitialized = false
   let draftTargetKey = lorebookEntryDraftTargetKey(value)
   const dirtyDraftFields = new Set<LorebookEntryDirtyField>()
+  let recoveryBaseline = cloneJsonValue(value)
   let previousValueSnapshot = snapshotJson(value)
   let lastDraftDispatchSnapshot = snapshotJson(value)
   let draftNeedsSettlement = false
@@ -202,6 +206,9 @@
       draftTargetKey = nextTargetKey
     }
 
+    if (targetChanged || valueSnapshot !== previousValueSnapshot) {
+      recoveryBaseline = cloneJsonValue(value)
+    }
     if (valueSnapshot !== previousValueSnapshot) {
       const draftSnapshot = snapshotJson(draft)
       if (!targetChanged && dirtyDraftFields.size > 0) {
@@ -300,6 +307,30 @@
     open = false
     onClose(draft.mode !== 'folder')
   }
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      if (deletionCommitted) return null
+      if (entryDraftScopeKey?.startsWith('module:') && snapshotJson(draft) === lastDraftDispatchSnapshot) return null
+      const fields = writerDraftValueFields(
+        draft as unknown as Record<string, unknown>,
+        recoveryBaseline as unknown as Record<string, unknown>,
+        {
+          comment: language.name,
+          content: language.prompt,
+          key: language.key,
+        },
+      )
+      if (fields.length === 0) return null
+      return {
+        key: `lorebook:${draftTargetKey}`,
+        label: `${language.loreBook}: ${draft.comment || draft.key || draft.id || idx + 1}`,
+        fields,
+        data: $state.snapshot(draft),
+        baseline: recoveryBaseline,
+      }
+    }),
+  )
 
   onDestroy(() => {
     closeOpenRegistration()

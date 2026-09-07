@@ -37,6 +37,8 @@
 </script>
 
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { language } from 'src/lang'
 
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -745,6 +747,11 @@
     void restoreLatestModuleEditorDraft(attempt)
   })
 
+  const unregisterModuleWriterDraft = registerWriterDraftCapture(() => {
+    if (editorDirty) captureCurrentModuleEditorDraft()
+    // Module recovery already owns its encrypted record and restore/discard flow.
+    return null
+  })
   const unregisterModuleEditorLeaveGuard = registerModuleEditorLeaveGuard(requestModuleEditorLeave)
 
   onDestroy(() => {
@@ -752,6 +759,7 @@
     restoreAttempt += 1
     saveAttempt += 1
     window.removeEventListener('beforeunload', handleBeforeUnload)
+    unregisterModuleWriterDraft()
     unregisterModuleEditorLeaveGuard()
     unregisterDraftStorageFailure()
     refreshModules()

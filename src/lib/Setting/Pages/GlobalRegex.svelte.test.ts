@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -17,7 +23,16 @@ vi.mock('src/ts/process/scripts', () => ({
   importRegexRows: regexMocks.importRegexRows,
 }))
 vi.mock('src/ts/server/settingsOwner.svelte', () => ({
-  createServerBackedSettingDraft: (_key: string, fallback: unknown) => ({ value: fallback }),
+  createServerBackedSettingDraft: (_key: string, fallback: unknown) => {
+    const draft = {
+      value: fallback,
+      captureRecoveryDraft: () =>
+        JSON.stringify(draft.value) === JSON.stringify(fallback)
+          ? null
+          : { value: JSON.parse(JSON.stringify(draft.value)), baseline: JSON.parse(JSON.stringify(fallback)) },
+    }
+    return draft
+  },
 }))
 vi.mock('src/ts/server/scriptDefinitionOwner.svelte', () => ({
   ensureClientScriptDefinitionIds: (scripts: unknown) => scripts,
@@ -99,4 +114,29 @@ describe('GlobalRegex toolbar', () => {
       expect.objectContaining({ id: 'imported', comment: 'Imported' }),
     ])
   })
+})
+
+it('captures a dirty global script collection before its settings owner unmounts', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(GlobalRegex, { target })
+    await tick()
+    target
+      .querySelector<HTMLButtonElement>(`button[aria-label="${language.add}: ${language.globalRegexScript}"]`)!
+      .click()
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        key: 'global-regex',
+        data: { scripts: [expect.objectContaining({ type: 'editinput', out: '' })] },
+        baseline: { scripts: [] },
+      }),
+    ])
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

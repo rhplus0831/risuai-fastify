@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { captureSelectedPersonaRecoveryDraft } from 'src/ts/persona'
   import { language } from 'src/lang'
   import BaseRoundedButton from 'src/lib/UI/BaseRoundedButton.svelte'
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -180,6 +182,31 @@
       ...sortableOptions,
     })
   }
+
+  const unregisterWriterDraft = registerWriterDraftCapture(() => {
+    const recovery = captureSelectedPersonaRecoveryDraft()
+    if (!recovery) return null
+    const labels: Record<string, string> = {
+      username: language.name,
+      displayName: language.displayName,
+      personaPrompt: language.persona,
+      userNote: language.note,
+      userIcon: language.image,
+      modules: language.modules,
+      largePortrait: language.largePortrait,
+    }
+    return {
+      key: `persona:${recovery.personaId}`,
+      label: `${language.persona}: ${selectedPersona ? getPersonaDisplayName(selectedPersona) : recovery.personaId}`,
+      fields: Object.entries(recovery.value).map(([key, value]) => ({
+        label: labels[key] ?? key,
+        value: typeof value === 'string' ? value : JSON.stringify(value, null, 2),
+      })),
+      data: recovery.value,
+      baseline: recovery.baseline,
+    }
+  })
+  onDestroy(unregisterWriterDraft)
 
   onMount(createStb)
 

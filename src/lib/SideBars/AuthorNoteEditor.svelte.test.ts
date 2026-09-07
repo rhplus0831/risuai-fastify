@@ -1,7 +1,14 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const authorNoteMocks = vi.hoisted(() => ({
+  settlements: new Map<string, (settlement: 'accepted' | 'discarded') => void>(),
   acknowledgePendingMutation: vi.fn(async () => 'deleted'),
   applyChatNoteValueLocally: vi.fn((_chatId: string, _note: string) => ({
     chatId: 'chat-a',
@@ -57,6 +64,13 @@ vi.mock('src/ts/chatCommands', () => ({
   applyChatNoteValueLocally: authorNoteMocks.applyChatNoteValueLocally,
   dispatchStagedChatNoteMutation: authorNoteMocks.dispatchStagedChatNoteMutation,
   stageChatNoteMutation: authorNoteMocks.stageChatNoteMutation,
+}))
+
+vi.mock('src/ts/server/durableMutationDispatch', () => ({
+  registerDurableMutationSettlementListener: (id: string, listener: (settlement: 'accepted' | 'discarded') => void) => {
+    authorNoteMocks.settlements.set(id, listener)
+    return () => authorNoteMocks.settlements.delete(id)
+  },
 }))
 
 vi.mock('src/ts/server/pendingMutationOutbox', () => ({
@@ -129,6 +143,7 @@ beforeEach(() => {
     note: 'initial note',
   })
   authorNoteMocks.nextMutationId = 0
+  authorNoteMocks.settlements.clear()
   target = document.createElement('div')
   document.body.appendChild(target)
 })
@@ -332,4 +347,87 @@ describe('AuthorNoteEditor debounce persistence', () => {
     await vi.advanceTimersByTimeAsync(300)
     expect(authorNoteMocks.dispatchStagedChatNoteMutation).toHaveBeenCalledOnce()
   })
+})
+
+it('captures composition text before the author-note debounce or unmount flush', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(AuthorNoteEditor, { target, props: { chara: makeCharacter() } })
+    await tick()
+    const textarea = target.querySelector<HTMLTextAreaElement>('[data-testid="author-note-input"]')!
+    textarea.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }))
+    textarea.value = '작성 중인 author note'
+    textarea.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        key: 'author-note:character-a:chat-a',
+        fields: [{ label: 'Author note', value: '작성 중인 author note' }],
+        baseline: { note: 'initial note' },
+      }),
+    ])
+    expect(authorNoteMocks.dispatchStagedChatNoteMutation).not.toHaveBeenCalled()
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('preserves newer author-note text while an older save is in flight', async () => {
+  await beginWriterDraftCaptureTest()
+  let resolveSave!: (value: any) => void
+  authorNoteMocks.dispatchStagedChatNoteMutation.mockReturnValueOnce(
+    new Promise((resolve) => {
+      resolveSave = resolve
+    }),
+  )
+  try {
+    component = mount(AuthorNoteEditor, { target, props: { chara: makeCharacter() } })
+    await tick()
+    const textarea = target.querySelector<HTMLTextAreaElement>('[data-testid="author-note-input"]')!
+    textarea.value = 'older attempted note'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    await vi.advanceTimersByTimeAsync(250)
+    expect(authorNoteMocks.dispatchStagedChatNoteMutation).toHaveBeenCalledOnce()
+    textarea.value = 'newer unsubmitted note'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()[0]?.fields[0].value).toBe('newer unsubmitted note')
+    resolveSave({ status: 'ok', revision: 2, event: {} })
+    await tick()
+    expect(capturedWriterDrafts()[0]?.fields[0].value).toBe('newer unsubmitted note')
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('does not retain an author note whose queued mutation was later accepted', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    authorNoteMocks.dispatchStagedChatNoteMutation.mockResolvedValueOnce({ status: 'error', error: 'offline' } as any)
+    component = mount(AuthorNoteEditor, { target, props: { chara: makeCharacter() } })
+    await tick()
+    const textarea = target.querySelector<HTMLTextAreaElement>('[data-testid="author-note-input"]')!
+    textarea.value = 'queued then accepted'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    await vi.advanceTimersByTimeAsync(250)
+    authorNoteMocks.settlements.get('author-note-mutation-1')!('accepted')
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toHaveLength(0)
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

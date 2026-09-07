@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { writerDraftValueFields } from 'src/ts/server/writerDraftFields'
   import { language } from '../../lang'
   import { tokenizeAccurate } from '../../ts/tokenizer'
   import {
@@ -256,10 +258,33 @@
       characterRemovalPending = false
     }
   }
+  const unregisterCharacterRecovery = registerWriterDraftCapture(() => {
+    const recovery = characterDraft.captureRecoveryDraft()
+    if (!recovery) return null
+    return {
+      key: `character:${recovery.characterId}`,
+      label: selectedCharacterOwner() ? getCharacterDisplayName(selectedCharacterOwner()!) : recovery.characterId,
+      fields: writerDraftValueFields(recovery.value, recovery.baseline, {
+        name: language.name,
+        displayName: language.displayName,
+        desc: language.description,
+        firstMessage: language.firstMessage,
+        systemPrompt: language.systemPrompt,
+        creatorNotes: language.creatorNotes,
+        personality: language.personality,
+        scenario: language.scenario,
+      }),
+      data: recovery.value,
+      baseline: recovery.baseline,
+    }
+  })
+  onDestroy(unregisterCharacterRecovery)
+
   let characterScriptsDraft = $state<customscript[]>([])
   let characterTriggersDraft = $state<triggerscript[]>([])
   let scriptDraftCharacterId = $state<string | null>(null)
   let scriptDraftSnapshot = ''
+  let scriptRecoveryBaseline: { scripts: customscript[]; triggers: triggerscript[] } = { scripts: [], triggers: [] }
   let previousScriptDraftOwnerId: string | null = null
   let previousScriptDraftOwnerProjectionEpoch: number | null = null
   let suppressScriptDraftDispatch = false
@@ -277,6 +302,23 @@
     if (scriptDraftCharacterId) flushPendingCharacterScriptDefinitionDraft(scriptDraftCharacterId)
   }
 
+  const unregisterScriptRecovery = registerWriterDraftCapture(() => {
+    if (!scriptDraftCharacterId) return null
+    const data = $state.snapshot({ scripts: characterScriptsDraft, triggers: characterTriggersDraft })
+    const fields = writerDraftValueFields(data, scriptRecoveryBaseline, {
+      scripts: language.regexScript,
+      triggers: language.trigger,
+    })
+    if (fields.length === 0) return null
+    return {
+      key: `character-scripts:${scriptDraftCharacterId}`,
+      label: `${selectedCharacterOwner() ? getCharacterDisplayName(selectedCharacterOwner()!) : scriptDraftCharacterId}: ${language.scripts}`,
+      fields,
+      data,
+      baseline: scriptRecoveryBaseline,
+    }
+  })
+  onDestroy(unregisterScriptRecovery)
   onDestroy(flushCurrentCharacterScriptDefinitionDraft)
 
   function voicevoxStyles(value: unknown): Array<{ id: string | number; name: string }> {
@@ -324,12 +366,14 @@
       }
 
       if (localEffect.operation === 'scripts') {
+        scriptRecoveryBaseline.scripts = cloneJsonValue(localEffect.definitions as customscript[])
         clearDirtyScriptDefinitionFieldsMatchingAttempt(
           scriptDirtyFieldsById,
           characterScriptsDraft,
           localEffect.definitions as customscript[],
         )
       } else {
+        scriptRecoveryBaseline.triggers = cloneJsonValue(localEffect.definitions as triggerscript[])
         clearDirtyScriptDefinitionFieldsMatchingAttempt(
           triggerDirtyFieldsById,
           characterTriggersDraft,
@@ -361,6 +405,12 @@
       clearScriptDraftDirtyState()
     }
 
+    if (targetChanged || ownerProjectionChanged) {
+      scriptRecoveryBaseline = {
+        scripts: cloneJsonValue(character?.customscript ?? []),
+        triggers: cloneJsonValue(character?.triggerscript ?? []),
+      }
+    }
     if (targetChanged || snapshot !== scriptDraftSnapshot) {
       suppressScriptDraftDispatch = true
       scriptDraftCharacterId = characterId

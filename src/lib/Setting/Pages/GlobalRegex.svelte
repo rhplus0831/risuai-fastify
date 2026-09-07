@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { writerDraftValueFields } from 'src/ts/server/writerDraftFields'
+
   import { DownloadIcon, HardDriveUploadIcon, PlusIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Help from 'src/lib/Others/Help.svelte'
@@ -25,6 +28,21 @@
   )
   const stopWatchingGlobalScripts = watchGlobalScriptOwnerDraft()
   onDestroy(stopWatchingGlobalScripts)
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const recovery = globalScriptDraft.captureRecoveryDraft()
+      if (!recovery) return null
+      const data = { scripts: recovery.value }
+      const baseline = { scripts: recovery.baseline }
+      return {
+        key: 'global-regex',
+        label: language.globalRegexScript,
+        fields: writerDraftValueFields(data, baseline, { scripts: language.globalRegexScript }),
+        data,
+        baseline,
+      }
+    }),
+  )
 </script>
 
 <h2 class="mb-2 text-2xl font-bold mt-2">

@@ -3,6 +3,9 @@
 </script>
 
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from 'src/ts/clientSession'
+
   import { onDestroy, untrack } from 'svelte'
 
   import { language } from 'src/lang'
@@ -19,6 +22,7 @@
   import type { ServerCommandTransportOptions } from 'src/ts/server/commands'
   import { registerPendingOwnerMutationFlusher } from 'src/ts/server/pendingOwnerMutationRegistry'
   import { acknowledgePendingMutation } from 'src/ts/server/pendingMutationOutbox'
+  import { registerDurableMutationSettlementListener } from 'src/ts/server/durableMutationDispatch'
 
   import Help from '../Others/Help.svelte'
   import TextAreaInput from '../UI/GUI/TextAreaInput.svelte'
@@ -33,6 +37,8 @@
   let authorNoteChatId: string | null = $state(null)
   let authorNoteServerNote = ''
   let authorNoteLastSubmitted = ''
+  let authorNoteRecoveryBaseline = ''
+  const noteSettlementCleanups = new Map<string, () => void>()
   let tokenCount = $state(0)
   let lastTokenizedNote = ''
   let tokenizeRun = 0
@@ -65,7 +71,11 @@
 
   function clearPendingAuthorNoteSave(): void {
     clearAuthorNoteSaveTimer()
-    if (pendingAuthorNoteSave) void acknowledgePendingMutation(pendingAuthorNoteSave.outbox)
+    if (pendingAuthorNoteSave) {
+      noteSettlementCleanups.get(pendingAuthorNoteSave.outbox.mutationId)?.()
+      noteSettlementCleanups.delete(pendingAuthorNoteSave.outbox.mutationId)
+      void acknowledgePendingMutation(pendingAuthorNoteSave.outbox)
+    }
     pendingAuthorNoteSave = null
   }
 
@@ -75,7 +85,16 @@
     clearAuthorNoteSaveTimer()
     pendingAuthorNoteSave = null
     authorNoteLastSubmitted = pending.note
-    void dispatchStagedChatNoteMutation(pending, pending.rollback, options)
+    const sessionGeneration = captureClientSessionGeneration()
+    void dispatchStagedChatNoteMutation(pending, pending.rollback, options).then((result) => {
+      if (
+        result.status === 'ok' &&
+        pending.chatId === authorNoteChatId &&
+        isClientSessionGenerationCurrent(sessionGeneration)
+      ) {
+        authorNoteRecoveryBaseline = pending.note
+      }
+    })
   }
 
   function scheduleAuthorNoteSave(chatId: string, note: string, rollback: ChatScriptstateSnapshot): void {
@@ -87,6 +106,24 @@
       note,
       previous: previousPending?.outbox,
     })
+    if (previousPending && previousPending.outbox.mutationId !== staged.outbox.mutationId) {
+      noteSettlementCleanups.get(previousPending.outbox.mutationId)?.()
+      noteSettlementCleanups.delete(previousPending.outbox.mutationId)
+    }
+    const sessionGeneration = captureClientSessionGeneration()
+    noteSettlementCleanups.get(staged.outbox.mutationId)?.()
+    const stopSettlement = registerDurableMutationSettlementListener(staged.outbox.mutationId, (settlement) => {
+      stopSettlement()
+      noteSettlementCleanups.delete(staged.outbox.mutationId)
+      if (
+        settlement === 'accepted' &&
+        chatId === authorNoteChatId &&
+        isClientSessionGenerationCurrent(sessionGeneration)
+      ) {
+        authorNoteRecoveryBaseline = note
+      }
+    })
+    noteSettlementCleanups.set(staged.outbox.mutationId, stopSettlement)
     pendingAuthorNoteSave = {
       ...staged,
       rollback: previousPending?.rollback ?? rollback,
@@ -136,7 +173,9 @@
       authorNoteDraft = nextNote
       authorNoteServerNote = nextNote
       authorNoteLastSubmitted = nextNote
+      authorNoteRecoveryBaseline = nextNote
     } else if (nextNote !== authorNoteServerNote) {
+      authorNoteRecoveryBaseline = nextNote
       authorNoteServerNote = nextNote
       if (authorNoteDraft === authorNoteLastSubmitted) {
         authorNoteDraft = nextNote
@@ -150,7 +189,21 @@
     flushPendingAuthorNoteSave,
   )
 
+  const unregisterWriterDraft = registerWriterDraftCapture(() => {
+    if (!authorNoteChatId || authorNoteDraft === authorNoteRecoveryBaseline) return null
+    return {
+      key: `author-note:${chara.chaId}:${authorNoteChatId}`,
+      label: `${chara.name}: ${language.authorNote}`,
+      fields: [{ label: language.authorNote, value: authorNoteDraft }],
+      data: { note: authorNoteDraft },
+      baseline: { note: authorNoteRecoveryBaseline },
+    }
+  })
+
   onDestroy(() => {
+    unregisterWriterDraft()
+    for (const stopSettlement of noteSettlementCleanups.values()) stopSettlement()
+    noteSettlementCleanups.clear()
     unregisterPendingAuthorNoteFlush()
     flushPendingAuthorNoteSave()
   })

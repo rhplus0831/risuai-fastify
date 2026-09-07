@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -532,4 +538,55 @@ describe('TextAreaInput autocomplete selection', () => {
     expect(ancestorKeydown).not.toHaveBeenCalled()
     expect(autocompleteSuggestion('char')).toBeNull()
   })
+})
+
+it.each([true, false])('captures only the active popup owner before polling, with open=%s', async (open) => {
+  await beginWriterDraftCaptureTest()
+  let other: MountedComponent | undefined
+  try {
+    component = mount(TextAreaInput, { target, props: { value: 'initial popup value', ariaLabel: 'Description' } })
+    const originalTextArea = textarea()
+    other = mount(TextAreaInput, { target, props: { value: 'unrelated textarea', ariaLabel: 'Unrelated' } })
+    originalTextArea.dispatchEvent(new KeyboardEvent('keydown', { key: 'e', ctrlKey: true, bubbles: true }))
+    await tick()
+    expect(popUpEditorStore.open).toBe(true)
+    popUpEditorStore.value = 'newest popup text before polling'
+    popUpEditorStore.open = open
+    demoteClientSession()
+    expect(originalTextArea.value).toBe('initial popup value')
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        label: 'Description',
+        fields: [{ label: 'Description', value: 'newest popup text before polling' }],
+        baseline: { value: 'initial popup value' },
+      }),
+    ])
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    if (other) await unmount(other)
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('keeps ordinary popup unmount cancellation from creating a recovery record on later demotion', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(TextAreaInput, { target, props: { value: 'initial', ariaLabel: 'Description' } })
+    textarea().dispatchEvent(new KeyboardEvent('keydown', { key: 'e', ctrlKey: true, bubbles: true }))
+    await tick()
+    popUpEditorStore.value = 'cancelled popup draft'
+    await unmount(component)
+    component = undefined
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toHaveLength(0)
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

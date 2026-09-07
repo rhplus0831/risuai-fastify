@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { Maximize2Icon } from '@lucide/svelte'
   import { textAreaSize, textAreaTextSize } from 'src/ts/gui/guisize'
   import { highlighter, getNewHighlightId, removeHighlight, AllCBS } from 'src/ts/gui/highlight'
@@ -74,6 +76,8 @@
   let popupEditorRun = 0
   let popupEditorContextRevision = 0
   let activePopupEditorSessionId: number | null = null
+  let popupRecoveryBaseline = ''
+  let popupRecoveryContext: unknown
   let sidebarSettingsReady = $derived(settingsResourceState.groupStatuses.sidebar === 'ready')
   let popupEditorHotkey = $derived(
     sidebarSettingsReady
@@ -102,6 +106,8 @@
     hideAutoComplete()
     const sessionId = openPopupEditorSession(value, popupLanguage)
     activePopupEditorSessionId = sessionId
+    popupRecoveryBaseline = initialValue
+    popupRecoveryContext = initialContext
 
     try {
       while (
@@ -303,11 +309,35 @@
     autocompleteContents = []
   }
 
+  const unregisterPopupDraft = registerWriterDraftCapture(() => {
+    if (
+      activePopupEditorSessionId === null ||
+      !isPopupEditorSessionCurrent(activePopupEditorSessionId) ||
+      value !== popupRecoveryBaseline ||
+      popupEditorContext !== popupRecoveryContext ||
+      popUpEditorStore.value === popupRecoveryBaseline
+    )
+      return null
+    const label = ariaLabel || placeholder || language.hotkeyDesc.popupEditor
+    return {
+      key: `popup-editor:${activePopupEditorSessionId}`,
+      label,
+      fields: [{ label, value: popUpEditorStore.value }],
+      data: {
+        value: popUpEditorStore.value,
+        context: typeof popupEditorContext === 'string' ? popupEditorContext : undefined,
+        language: popupLanguage,
+      },
+      baseline: { value: popupRecoveryBaseline },
+    }
+  })
+
   onMount(() => {
     scheduleHighlight()
   })
 
   onDestroy(() => {
+    unregisterPopupDraft()
     popupEditorRun++
     if (activePopupEditorSessionId !== null) {
       closePopupEditorSession(activePopupEditorSessionId)

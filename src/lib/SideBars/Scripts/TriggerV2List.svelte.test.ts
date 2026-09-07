@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -986,4 +992,54 @@ describe('TriggerV2List effect display', () => {
     await settle()
     expect(component.getValue()[2].effect.map((effect) => (effect as { value?: string }).value)).toEqual(['Two', 'One'])
   })
+})
+
+it('captures an unpublished new trigger effect before demotion destroys its modal', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(TriggerV2ListHarness, {
+      target,
+      props: {
+        initialOwnerKey: 'character:char-a',
+        initialValue: [
+          { id: 'header', comment: 'Header', type: 'manual', conditions: [], effect: [] },
+          { id: 'trigger-a', comment: 'Draft trigger', type: 'start', conditions: [], effect: [] },
+        ],
+      },
+    }) as MountedComponent
+    await openEditor()
+    const addEffect = document.querySelector<HTMLButtonElement>(`[aria-label="${language.add}: ${language.effect}"]`)!
+    addEffect.click()
+    addEffect.click()
+    await settle()
+    const commentOption = [...document.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === language.triggerDesc.v2Comment,
+    )!
+    expect(commentOption).toBeTruthy()
+    commentOption.click()
+    await settle()
+    const editor = [
+      ...document.querySelectorAll<HTMLInputElement | HTMLTextAreaElement>('input:not([type=checkbox]), textarea'),
+    ].at(-1)!
+    expect(editor).toBeTruthy()
+    editor.value = 'unpublished effect draft'
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(component.getValue()[1].effect).toHaveLength(0)
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        key: 'trigger-effect:character:char-a:trigger-a:new',
+        data: {
+          effect: expect.objectContaining({ type: 'v2Comment', value: 'unpublished effect draft' }),
+          addElse: false,
+        },
+      }),
+    ])
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Database, loreBook } from 'src/ts/storage/database.svelte'
@@ -1241,5 +1247,39 @@ describe('LoreBookList', () => {
       kind: 'global',
       lorebookId: 'global-book',
     })
+  })
+
+  it('captures an edited lorebook row after it is collapsed and before demotion unmounts it', async () => {
+    await beginWriterDraftCaptureTest()
+    try {
+      component = mountHarness([makeLoreBook({ id: 'entry-capture', comment: 'Capture me', content: 'original lore' })])
+      await flushAsyncWork()
+      const row = rowByEntryId('entry-capture')
+      toggleButtonForRow(row).click()
+      await flushAsyncWork()
+      const editor = row.querySelector<HTMLTextAreaElement | HTMLDivElement>('textarea, [contenteditable="true"]')!
+      expect(editor).toBeTruthy()
+      if (editor instanceof HTMLTextAreaElement) editor.value = 'newest lore draft'
+      else editor.textContent = 'newest lore draft'
+      editor.dispatchEvent(new InputEvent('input', { bubbles: true, isComposing: true }))
+      await flushAsyncWork()
+      toggleButtonForRow(row).click()
+      await flushAsyncWork()
+      demoteClientSession()
+      expect(capturedWriterDrafts()).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            data: expect.objectContaining({ id: 'entry-capture', content: 'newest lore draft' }),
+            baseline: expect.objectContaining({ content: 'original lore' }),
+          }),
+        ]),
+      )
+    } finally {
+      if (component) {
+        await unmount(component)
+        component = undefined
+      }
+      await endWriterDraftCaptureTest()
+    }
   })
 })

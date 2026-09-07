@@ -39,6 +39,7 @@ import './stores.svelte'
 import { setDatabaseLite } from './storage/database.svelte'
 import {
   beginPersonaReorder,
+  captureSelectedPersonaRecoveryDraft,
   changeUserPersona,
   changeUserPersonaWithOutcome,
   createNewUserPersona,
@@ -2746,4 +2747,28 @@ describe('selected persona dirty projection reconciliation', () => {
 
     expect(getDatabase().personas[0].largePortrait).toBe(false)
   })
+})
+
+it('keeps newest persona recovery text while an earlier accepted save advances its baseline', () => {
+  seedPersonaState([makePersona({ id: 'recovery-persona', name: 'Original', personaPrompt: 'baseline' })])
+  updateSelectedPersonaField('personaPrompt', 'submitted')
+  updateSelectedPersonaField('personaPrompt', 'newest typing')
+  settleAcceptedPersonaPatchDirtyFields(
+    'recovery-persona',
+    { personaPrompt: 'submitted' },
+    { personaPrompt: 'submitted' } as any,
+    false,
+  )
+  expect(captureSelectedPersonaRecoveryDraft()).toMatchObject({
+    personaId: 'recovery-persona',
+    value: { personaPrompt: 'newest typing' },
+    baseline: { personaPrompt: 'submitted' },
+  })
+  settleAcceptedPersonaPatchDirtyFields(
+    'recovery-persona',
+    { personaPrompt: 'newest typing' },
+    { personaPrompt: 'newest typing' } as any,
+    false,
+  )
+  expect(captureSelectedPersonaRecoveryDraft()).toBe(null)
 })

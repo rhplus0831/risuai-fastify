@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import { writerDraftValueFields } from 'src/ts/server/writerDraftFields'
+
   import type { Chat, character, Database } from 'src/ts/storage/database.svelte'
   import { language } from '../../../lang'
   import {
@@ -43,6 +47,19 @@
 
   let submenu = $state(0)
   const characterLoreSettingsDraft = createCharacterOwnerDraft(['loreSettings', 'lorePlus'])
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const recovery = characterLoreSettingsDraft.captureRecoveryDraft()
+      if (!recovery || globalMode) return null
+      return {
+        key: `character-lore-settings:${recovery.characterId}`,
+        label: language.loreBook,
+        fields: writerDraftValueFields(recovery.value, recovery.baseline),
+        data: recovery.value,
+        baseline: recovery.baseline,
+      }
+    }),
+  )
   interface Props {
     globalMode?: boolean
   }

@@ -1,3 +1,9 @@
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -135,4 +141,41 @@ describe('PersonaSettings owner changes', () => {
 
     expect(target.querySelectorAll('[data-risu-idx]')).toHaveLength(0)
   })
+})
+
+it('captures a persona field even before its optimistic watcher queues the save', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    setDatabaseLite({
+      characters: [],
+      modules: [],
+      enabledModules: [],
+      personas: [{ id: 'persona-draft', name: 'Original persona', icon: '', personaPrompt: '', note: '' }],
+      selectedPersonaId: 'persona-draft',
+      selectedPersona: 0,
+      username: 'Original persona',
+      userIcon: '',
+      personaPrompt: '',
+      userNote: '',
+    } as any)
+    component = mount(PersonaSettings, { target })
+    await tick()
+    const input = target.querySelector<HTMLInputElement>('input[placeholder="User"]')!
+    input.value = 'Newest persona typing'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        key: 'persona:persona-draft',
+        data: { username: 'Newest persona typing' },
+        baseline: { username: 'Original persona' },
+      }),
+    ])
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })
