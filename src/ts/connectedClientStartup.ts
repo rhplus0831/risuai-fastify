@@ -29,6 +29,7 @@ export async function resolveConnectedClientStartup(
   options: {
     onOperationStarted?: (operation: ClientSessionOperation) => void
     onCoherentReadView?: (runtime: ServerBootstrapRuntime, operation: ClientSessionOperation) => Promise<void>
+    onInitializationRequired?: (operation: ClientSessionOperation) => Promise<boolean>
   } = {},
 ): Promise<ConnectedStartupResult> {
   const identity = await resolveConnectedTabIdentity()
@@ -45,8 +46,18 @@ export async function resolveConnectedClientStartup(
   }
   let runtime = result.bootstrap
   const ownership = bootstrapOwnership(runtime)
+  let initializationConfirmed = false
   if (
-    identity.exclusive &&
+    identity.exclusive === false &&
+    runtime.initialized === false &&
+    ownership.writer.sessionId === null &&
+    options.onInitializationRequired
+  ) {
+    initializationConfirmed = await options.onInitializationRequired(operation)
+    assertCurrent()
+  }
+  if (
+    (identity.exclusive || initializationConfirmed) &&
     (ownership.writer.sessionId === null || ownership.writer.sessionId === identity.sessionId)
   ) {
     if (runtime.initialized && options.onCoherentReadView) {

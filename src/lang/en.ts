@@ -2145,6 +2145,9 @@ export const languageEnglish = {
     connecting: 'Connecting to updates…',
     interrupted: 'Connection interrupted. Showing the last received content.',
     switching: 'Preparing write access. You can keep reading.',
+    setupServerTitle: 'Set up this server',
+    setupServerBody: 'This server is empty. Set it up on this device to create the initial data and begin using it.',
+    setupThisServer: 'Set up on this device',
     useThisDevice: 'Use this device',
     useThisDeviceHelp:
       'Move write access to this device. The other device will keep receiving updates in read-only mode.',
