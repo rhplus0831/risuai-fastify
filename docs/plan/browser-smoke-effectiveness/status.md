@@ -4,13 +4,13 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Phases 0–1 accepted; Phase 2 in progress; the 2c send/durable-reload slice is verified.
+- State: Phases 0–1 accepted; Phase 2 in progress; the 2c and 2d slices are verified; confirmation is next.
 - Execution source: `4585333b4` (accepted Phase 1), with the Phase 2c normal-send
   reload regression in progress.
 - Current scope: the four critical browser contracts; prioritize normal-send
   durable reload (2c) and stale-response recovery (2d).
-- Next action: finish the 2d stale-response/recovery review, then 2a operation
-  confirmation and 2b transcript acceptance. Run the full Phase 2 gates afterward.
+- Next action: add the real Realm progress-to-confirmation browser journey (2a),
+  then finish transcript acceptance (2b) and the full Phase 2 gates.
 - Confirmed gaps: BSE-002 (browser operation confirmation, Phase 2a) and BSE-003
   (completed normal-send reload, Phase 2c). BSE-001/004 are verified repairs.
 - Blockers: none. Reader implementation and smoke Phases 3–4 remain pending.
@@ -171,3 +171,20 @@ and bootstrap. The remaining accepted-send cases retain specific Retry, Stop,
 viewer-loss, restart, concurrent-chat and queued-finalization coverage; reroll
 and Debug Echo remain separate companion contracts. The 2c slice is verified;
 Phase 2 stays in progress pending the other slices and its aggregate/full gate.
+
+## Phase 2d — Stale Responses and Recovery
+
+The [scenario dispositions](inventory.md#critical-contract-2d-stale-responses-and-recovery)
+review real outbox admission/replay, response loss, event-gap refresh ordering,
+writer takeover, imported lineage recovery, concurrent chats and queued
+finalization. **2d slice verified** using the unchanged P0-R production-fault
+proof and restored focused browser result, Phase 1's final full-browser execution
+of those unchanged owners, and 2c's restored eleven-case accepted-send run.
+No new code or test control was needed for this slice; no new execution is
+claimed for this source-only review. Lower-layer stale/revision/outbox companions
+remain explicitly narrower than the browser view-recovery oracle.
+
+The current old-writer freeze is an existing contract, not the desired connected
+reader behavior. Its replacement and new ownership/draft protections are required
+at the reader handoff and Stage 3 reconciliation. Phase 2 is still in progress;
+confirmation/transcript acceptance and the final phase gates remain.

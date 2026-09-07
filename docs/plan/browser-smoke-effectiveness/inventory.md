@@ -89,16 +89,16 @@ row unless the detailed review states a narrower boundary.
 | ID  | Spec and source line                           | Full registered title                                                                                                 | Disposition                    |
 | --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
 | S01 | `acceptedSendProtocol.spec.ts:353`             | send -> mid-stream and completed reloads retain one exact reply                                                       | Strengthened; BSE-003          |
-| S02 | `acceptedSendProtocol.spec.ts:374`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Pending                        |
-| S03 | `acceptedSendProtocol.spec.ts:410`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Pending                        |
-| S04 | `acceptedSendProtocol.spec.ts:453`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Pending                        |
-| S05 | `acceptedSendProtocol.spec.ts:481`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Pending                        |
-| S06 | `acceptedSendProtocol.spec.ts:518`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Pending                        |
-| S07 | `acceptedSendProtocol.spec.ts:547`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Pending                        |
-| S08 | `acceptedSendProtocol.spec.ts:584`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Pending                        |
-| S09 | `acceptedSendProtocol.spec.ts:603`             | preserved runtime reconciles completion after its observer and replay job expire                                      | Pending                        |
-| S10 | `acceptedSendProtocol.spec.ts:633`             | two concurrent chats keep stable-target UI, recovery, and jobs isolated                                               | Pending                        |
-| S11 | `acceptedSendProtocol.spec.ts:670`             | queued finalization keeps a provisional row through reload and later settles                                          | Pending                        |
+| S02 | `acceptedSendProtocol.spec.ts:374`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Retained; 2c/2d review         |
+| S03 | `acceptedSendProtocol.spec.ts:410`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Retained; 2c/2d review         |
+| S04 | `acceptedSendProtocol.spec.ts:453`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Retained; 2c/2d review         |
+| S05 | `acceptedSendProtocol.spec.ts:481`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Retained; 2c/2d review         |
+| S06 | `acceptedSendProtocol.spec.ts:518`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Retained; 2c/2d review         |
+| S07 | `acceptedSendProtocol.spec.ts:547`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Retained; 2c/2d review         |
+| S08 | `acceptedSendProtocol.spec.ts:584`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Retained; 2c/2d review         |
+| S09 | `acceptedSendProtocol.spec.ts:603`             | preserved runtime reconciles completion after its observer and replay job expire                                      | Retained; 2c/2d review         |
+| S10 | `acceptedSendProtocol.spec.ts:633`             | two concurrent chats keep stable-target UI, recovery, and jobs isolated                                               | Retained; 2c/2d review         |
+| S11 | `acceptedSendProtocol.spec.ts:670`             | queued finalization keeps a provisional row through reload and later settles                                          | Retained; 2c/2d review         |
 | S12 | `bardWikiLifecycle.spec.ts:39`                 | BardWiki settings, manual document, confirmation status, and lifecycle tools are visible end to end                   | Pending                        |
 | S13 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a short last message without a transient jump                                              | Pending                        |
 | S14 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a tall last message without a transient jump                                               | Pending                        |
@@ -119,7 +119,7 @@ row unless the detailed review states a narrower boundary.
 | S29 | `fastifyBrowserSmoke.spec.ts:345`              | authored settings survive local backup restore and a full reload                                                      | Pending                        |
 | S30 | `fastifyBrowserSmoke.spec.ts:420`              | authored character identity fields survive command acceptance and a full reload                                       | Pending                        |
 | S31 | `fastifyBrowserSmoke.spec.ts:487`              | translator preset bindings persist independently across chats                                                         | Pending                        |
-| S32 | `fastifyBrowserSmoke.spec.ts:566`              | flagged observer shell survives denial and cross-tab writer takeover without mutation                                 | Pending                        |
+| S32 | `fastifyBrowserSmoke.spec.ts:566`              | flagged observer shell survives denial and cross-tab writer takeover without mutation                                 | Retained; 2c/2d review         |
 | S33 | `fastifyBrowserSmoke.spec.ts:647`              | core chat controls and blocking alerts remain accessible across responsive viewports                                  | Pending                        |
 | S34 | `fastifyBrowserSmoke.spec.ts:728`              | latest-message start alignment never mutates spacer geometry during free scrolling                                    | Pending                        |
 | S35 | `fastifyBrowserSmoke.spec.ts:833`              | mobile in-flow composer opens from a button above the stable keyboard viewport                                        | Pending                        |
@@ -145,9 +145,9 @@ row unless the detailed review states a narrower boundary.
 | S55 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 4/4 hydrates 11 empty-cache routes                                          | Pending                        |
 | S56 | `startupRecoveryIntegrationMatrix.spec.ts:41`  | startup rollout matrix proves flag-off and flag-on boundaries on small and large fixtures                             | Pending                        |
 | S57 | `startupRecoveryIntegrationMatrix.spec.ts:61`  | legacy and null shell state is repaired before built-browser bootstrap                                                | Pending                        |
-| S58 | `startupRecoveryIntegrationMatrix.spec.ts:114` | durable recovery replays offline work and committed work whose response was lost                                      | Pending                        |
-| S59 | `startupRecoveryIntegrationMatrix.spec.ts:218` | event-gap recovery performs an authoritative refresh before reconnecting                                              | Pending                        |
-| S60 | `startupRecoveryIntegrationMatrix.spec.ts:345` | multi-tab journey denies observer mutation, then safely promotes a takeover writer                                    | Pending                        |
+| S58 | `startupRecoveryIntegrationMatrix.spec.ts:114` | durable recovery replays offline work and committed work whose response was lost                                      | Retained; 2c/2d review         |
+| S59 | `startupRecoveryIntegrationMatrix.spec.ts:218` | event-gap recovery performs an authoritative refresh before reconnecting                                              | Retained; 2c/2d review         |
+| S60 | `startupRecoveryIntegrationMatrix.spec.ts:345` | multi-tab journey denies observer mutation, then safely promotes a takeover writer                                    | Retained; 2c/2d review         |
 | S61 | `startupRecoveryIntegrationMatrix.spec.ts:432` | background runtimes cannot delay or fail shell, mutation, and chat readiness                                          | Pending                        |
 | S62 | `startupRecoveryIntegrationMatrix.spec.ts:508` | inlay runtime stays route-local when slow or failed and recovers through Retry                                        | Pending                        |
 | S63 | `transcriptResidency.spec.ts:89`               | transcript residency desktop 30 rows repetition 0                                                                     | Pending                        |
@@ -162,9 +162,9 @@ row unless the detailed review states a narrower boundary.
 | S72 | `transcriptResidency.spec.ts:906`              | transcript legacy paging rollback traverses 180 mounted rows without spacers                                          | Pending                        |
 | S73 | `transcriptResidency.spec.ts:953`              | transcript residency promotes readable visible messages during rapid movement and settles                             | Pending                        |
 | S74 | `transcriptResidency.spec.ts:1040`             | transcript residency expands its working window to fill a compact message viewport                                    | Pending                        |
-| S75 | `visibleStateRecovery.spec.ts:58`              | switching chats repaints the active-chat generation picker                                                            | Pending                        |
-| S76 | `visibleStateRecovery.spec.ts:93`              | a sidebar toggle flip survives the command + resource refresh                                                         | Pending                        |
-| S77 | `visibleStateRecovery.spec.ts:133`             | the same-character sidebar view survives old-lineage recovery after import                                            | Pilot reviewed; see P0-R       |
+| S75 | `visibleStateRecovery.spec.ts:58`              | switching chats repaints the active-chat generation picker                                                            | Retained; 2c/2d review         |
+| S76 | `visibleStateRecovery.spec.ts:93`              | a sidebar toggle flip survives the command + resource refresh                                                         | Retained; 2c/2d review         |
+| S77 | `visibleStateRecovery.spec.ts:133`             | the same-character sidebar view survives old-lineage recovery after import                                            | Retained; P0-R and 2d          |
 
 ## Conditional and Expanded Execution
 
@@ -335,3 +335,37 @@ Behavior-driving hook distinctions at the Phase 1 source:
 
 Source line references above are anchored to `7399389f9`; renamed/changed calls
 must be reconciled during the reader handoff and final audit.
+
+## Critical Contract 2d: Stale Responses and Recovery
+
+Reviewed at `e503af81f`; production recovery/routing owners are unchanged from
+P0-R's `711b1d583` fault source. Phase 1's final 77-case browser run re-executed
+all these unchanged callers after the artifact repair. The 2c restored
+accepted-send run additionally executes its eleven cases at the new test source.
+These linked results are reused rather than mislabeled as new focused runs.
+
+| Scenario                                             | Real path and independent outcome                                                                                                                                                                                                     | Disposition / companion limit                                                                                                                                                                                                                   |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S77 old-lineage recovery                             | Actual chat/sidebar clicks, durable outbox settings command held at transport, real import, conflict response and new-document reload; imported revision/chat identities and the user's newer sidebar choice agree in the visible UI. | Retained; P0-R's omitted production view-restoration fault fails the visible assertion after authoritative recovery. `router.test.ts`, `resourceRefresh.test.ts`, and replacement/outbox tests cover finer stale-response/lineage permutations. |
+| S58 offline-before-send / response-lost-after-commit | Browser offline or abort after real upstream commit; outbox admission/retained mutation ID, reload replay, exactly one revision increment and one receipt acknowledgement.                                                            | Retained durable replay contract; hook dispatch is the actual command, not UI settings input. S76 separately proves the visible toggle survives accepted command/resource refresh.                                                              |
+| S59 event gap                                        | Real events connection and command mutation, controlled removal of one SQLite event, reconnect held until replay rejection; four authoritative resource reads finish before live reconnection and applied revision/value recover.     | Retained ordering contract. Event deletion is the explicit fault precondition, not a fabricated recovered store. Resource-refresh/event units cover supersession and failed reads without advancing cursors.                                    |
+| S60 and S32 writer denial/takeover                   | Distinct browser contexts, actual takeover UI/handshake; observer and revoked writer submit no commands, promoted writer has one accepted command.                                                                                    | Retained current conservative/partial-observer behavior. Reader implementation must replace old-writer frozen-offline expectations with connected reading and rerun ownership fault evidence at the changed transition.                         |
+| S02 lost operation acceptance response               | Real composer POST is fetched upstream then aborted to the browser; foreground recovery finds the accepted operation/job, visible partial and one canonical completed reply, one provider call.                                       | Retained unknown-outcome recovery; bootstrap/SSE may mask a simplistic retained-to-rejected fault, so that unexecuted suggestion is not claimed as proof.                                                                                       |
+| S05 restart, S08 viewer loss, S09 expired replay     | Actual harness restart or detached observer/expired job, durable operation identity and canonical final content remain; Retry/reattach stays exact and bounded.                                                                       | Retained three distinct recovery contracts; provider/job controls replace external conditions, not client reconciliation. Real browser-process crash remains outside scope.                                                                     |
+| S10 two chats                                        | Real UI navigation and composer sends; concurrent jobs remain scoped to stable chat IDs and each provider runs once.                                                                                                                  | Retained cross-chat isolation; not concurrent-writer editing.                                                                                                                                                                                   |
+| S11 queued finalization                              | SQLite finalization hold creates a real queued provisional result, survives full reload, then settles to canonical messages with empty pending lifecycle state.                                                                       | Retained pending/settled durability; 100ms smoke refresh differs from production's 5s interval.                                                                                                                                                 |
+
+The required named browser fault for 2d is P0-R, with its independent path
+observations, failed stale-view restoration and passing restored spec. Current
+readiness, revision/lineage ordering, outbox identity and exactly-once boundaries
+have faithful owners; no demonstrated high-risk gap is waived. Deep crash,
+quota, real-device and live-provider conditions retain their original explicit
+limits. Reader work will change several of these owners; this acceptance is
+limited to the current implementation and is not advance certification of it.
+
+Other accepted-send variants reviewed for 2c: S03 uses visible exact Retry and
+billing confirmation without duplicating the accepted user; S04 repeats the
+mid-generation reload under Pixel emulation; S06/S07 hold Stop acknowledgement,
+observe Stopping, persist one cancelled partial, and assert no success effects.
+The unchanged per-scenario controls remain distinct from S01's strengthened
+completed normal-send identity proof.
