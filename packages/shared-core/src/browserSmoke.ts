@@ -86,12 +86,19 @@ export interface FastifyBrowserSmokeHook<
   activeWriterHeaders: () => Promise<Record<string, string>>
   clearResourceCache: () => Promise<void>
   getAppliedServerResourceRevision: () => number | null
+  getPendingResourceCacheWriteCount: () => number
   getDatabaseSnapshot: () => BrowserSmokeDatabaseSnapshot
   getCurrentRoute: () => AppRoute
   getClientSessionSnapshot: () => BrowserSmokeClientSessionSnapshot
   getLifecycleSnapshot: () => Promise<FastifyBrowserSmokeLifecycleSnapshot>
   getRouteResourceLoadState: () => BrowserSmokeRouteResourceLoadState
   getStartupCoordinatorSnapshot: () => StartupCoordinatorSnapshot
+  getGenerationReadinessDiagnostic: () => {
+    ready: boolean
+    blockers: string[]
+    phase: StartupMilestone | null
+    failureCode?: string
+  }
   getStartupSnapshot: () => StartupReadinessSnapshot
   isLoaded: () => boolean
   patchRuntimeSettings: (patch: Record<string, unknown>) => Promise<BrowserSmokeCommandResult>

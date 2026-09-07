@@ -12,6 +12,7 @@ vi.mock('../observerProjectionLifecycle', () => ({
 import {
   clearResourceCache,
   flushResourceCacheMaintenanceForTests,
+  getPendingResourceCacheWriteCount,
   invalidateResourceCacheWork,
   persistResourceCache,
   readResourceCacheSnapshots,
@@ -209,11 +210,13 @@ describe('validated resource delivery and optional cache maintenance', () => {
         vi.stubGlobal('fetch', fetchMock)
         expect(await within(fixture.read())).toMatchObject({ status: 'ok', revision: 2 })
         expect(fetchMock).toHaveBeenCalledTimes(1)
+        expect(getPendingResourceCacheWriteCount()).toBeGreaterThan(0)
       } finally {
         gate.release()
         await maintenance
       }
       await flushResourceCacheMaintenanceForTests()
+      expect(getPendingResourceCacheWriteCount()).toBe(0)
       const snapshots = await readResourceCacheSnapshots([fixture.key])
       expect(snapshots?.get(fixture.key)?.hashes.length).toBeGreaterThan(0)
     })

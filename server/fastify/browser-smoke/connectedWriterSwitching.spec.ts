@@ -545,6 +545,25 @@ async function finishPair(
 ): Promise<void> {
   try {
     evidence.terminalDurable = durableSnapshot(pair.harness.dataDir)
+    evidence.terminalClients = await Promise.all(
+      [pair.a, pair.b].map(async (client) => ({
+        client: client.name,
+        snapshot: await client.page
+          .evaluate(() => {
+            const smoke = window.__RISU_FASTIFY_BROWSER_SMOKE__
+            if (!smoke) return null
+            return {
+              coordinator: smoke.getStartupCoordinatorSnapshot(),
+              generationReadiness: smoke.getGenerationReadinessDiagnostic(),
+              session: smoke.getClientSessionSnapshot(),
+              route: smoke.getCurrentRoute(),
+              routeResources: smoke.getRouteResourceLoadState(),
+              appliedRevision: smoke.getAppliedServerResourceRevision(),
+            }
+          })
+          .catch(() => null),
+      })),
+    )
     const output = testInfo.outputPath('connected-writer-switching.json')
     writeFileSync(
       output,

@@ -80,6 +80,11 @@ let unprunedManifests = 0
 const resourceCacheTransactions = new Set<IDBTransaction>()
 const verifiedResourceCacheValues = new Map<string, unknown>()
 
+/** Observe optional writes without flushing them or delaying resource delivery. */
+export function getPendingResourceCacheWriteCount(): number {
+  return pendingJobs
+}
+
 /**
  * Load the current content-addressed entries for several logical resources.
  * `null` means IndexedDB or Web Crypto is unavailable; an empty snapshot means

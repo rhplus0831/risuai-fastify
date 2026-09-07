@@ -16,10 +16,11 @@ import { currentRoute, navigate } from '../router'
 import { QuickSettings } from '../stores.svelte'
 import { generationOperationCancellations, generationOperationProjections } from './generationOperations'
 import { listPendingMutationReceiptAcknowledgements, listPendingMutations } from './pendingMutationOutbox'
-import { clearResourceCache } from './resourceCache'
+import { clearResourceCache, getPendingResourceCacheWriteCount } from './resourceCache'
 import { currentRouteResourceLoadState } from './routeResourceLoader'
 import {
   backgroundReady,
+  getGenerationReadinessDiagnostic,
   getStartupCoordinatorSnapshot,
   getStartupReadinessSnapshot,
   waitForStartupMilestone,
@@ -48,6 +49,7 @@ export function installFastifyBrowserSmokeHook() {
       ...activeWriterSessionHeader(),
     }),
     clearResourceCache,
+    getPendingResourceCacheWriteCount,
     getAppliedServerResourceRevision: peekAppliedServerResourceRevision,
     getCurrentRoute: () => structuredClone(get(currentRoute)),
     getClientSessionSnapshot: () => structuredClone(getClientSessionSnapshot()),
@@ -74,6 +76,7 @@ export function installFastifyBrowserSmokeHook() {
       })),
     }),
     getStartupCoordinatorSnapshot,
+    getGenerationReadinessDiagnostic,
     getStartupSnapshot: getStartupReadinessSnapshot,
     getRouteResourceLoadState: currentRouteResourceLoadState,
     isLoaded: backgroundReady,
