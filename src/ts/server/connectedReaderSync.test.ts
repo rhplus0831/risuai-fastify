@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
-import type { SubscribeServerCommandEventsInput } from './events'
+import {
+  BARDWIKI_PROTOCOL_VERSION,
+  DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+  type BardWikiChatResource,
+  type BardWikiJobSummary,
+} from '@risuai/protocol'
+import type { ServerMemoryEvent, ServerMemoryJobSnapshot, SubscribeServerCommandEventsInput } from './events'
 import type { ServerResourceRefreshOptions } from './resourceInvalidation'
+import type { ServerMemoryJob } from '../process/request/serverMemory'
 
 const api = vi.hoisted(() => ({
   bootstrap: vi.fn(),
@@ -23,8 +30,10 @@ const api = vi.hoisted(() => ({
   applied: null as number | null,
 }))
 vi.mock('./bootstrap', () => ({ fetchServerBootstrapReadOnly: api.bootstrap }))
+vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: async () => 'reader-auth' }))
 vi.mock('./events', () => ({ subscribeServerCommandEvents: api.subscribe }))
 vi.mock('./commands', () => ({
+  peekCachedServerCommandRevision: () => api.known,
   peekAppliedServerResourceRevision: () => api.applied,
   setAppliedServerResourceRevision: (revision: number) => {
     api.applied = Math.max(api.applied ?? 0, revision)
@@ -71,8 +80,20 @@ import {
   startConnectedReaderSync,
   type ConnectedReaderSync,
 } from './connectedReaderSync'
-import { memoryJobProjectionStore, resetMemoryJobProjectionForTests } from './memoryJobProjection.svelte'
-import { subscribeServerBardWikiJobEvents } from './bardWikiJobEvents'
+import {
+  memoryJobProjectionStore,
+  resetMemoryJobProjectionForTests,
+  selectMemoryJobs,
+  selectMemoryProgress,
+} from './memoryJobProjection.svelte'
+import {
+  publishServerBardWikiJobEvent,
+  publishServerBardWikiJobSnapshot,
+  subscribeServerBardWikiJobEvents,
+  type ServerBardWikiJobEvent,
+  type ServerBardWikiJobSnapshot,
+} from './bardWikiJobEvents'
+import { getBardWikiChatResource, loadBardWikiChatResource, resetBardWikiResource } from './bardWikiResource'
 import { charactersResourceState } from './resourceState.svelte'
 import { recordObserverRouteIntent, resetObserverRouteIntentForTests } from '../observerRouteIntent'
 
@@ -139,12 +160,14 @@ beforeEach(() => {
   streams.length = 0
   resetClientSessionForTests()
   resetMemoryJobProjectionForTests()
+  resetBardWikiResource()
   reader()
 })
 afterEach(() => {
   for (const sync of controllers.splice(0)) sync.stop()
   for (const stop of cleanups.splice(0)) stop()
   resetClientSessionForTests()
+  resetBardWikiResource()
   vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -440,50 +463,187 @@ describe('connected reader synchronization', () => {
     expect(streams).toHaveLength(2)
   })
 
-  it('keeps memory and BardWiki stream versions independent from the command cursor', async () => {
-    const bardEvent = vi.fn(),
-      bardSnapshot = vi.fn()
-    cleanups.push(subscribeServerBardWikiJobEvents(bardEvent, bardSnapshot))
+  it('converges memory and BardWiki projection consumers across independent cursors and teardown without writes', async () => {
+    const memoryJob: ServerMemoryJob = {
+      id: 'memory-a',
+      instanceId: 'memory-instance-a',
+      chatId: 'chat-a',
+      kind: 'summarize',
+      status: 'pending',
+      attemptCount: 0,
+      maxAttempts: 3,
+      updatedAt: '2026-09-08T00:00:00.000Z',
+    }
+    const bardJob: BardWikiJobSummary = {
+      id: 'bard-a',
+      instanceId: 'bard-instance-a',
+      chatId: 'chat-a',
+      receiptId: null,
+      kind: 'rebuild_chat',
+      status: 'pending',
+      errorCode: null,
+      errorSummary: null,
+      attemptCount: 0,
+      maxAttempts: 3,
+      progressCurrent: 0,
+      progressTotal: 3,
+      nextRunAt: '2026-09-08T00:00:00.000Z',
+      createdAt: '2026-09-08T00:00:00.000Z',
+      updatedAt: '2026-09-08T00:00:00.000Z',
+    }
+    let serverBardResource: BardWikiChatResource = {
+      protocolVersion: BARDWIKI_PROTOCOL_VERSION,
+      revision: 5,
+      chatId: 'chat-a',
+      globalSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      chatSettings: null,
+      effectiveSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      confirmationCandidate: null,
+      documents: [],
+      receipts: [],
+      jobs: [bardJob],
+    }
+    const transport = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify(serverBardResource), { headers: { 'content-type': 'application/json' } }),
+    )
+    vi.stubGlobal('fetch', transport)
+    const bardEvents: ServerBardWikiJobEvent[] = []
+    const bardSnapshots: ServerBardWikiJobSnapshot[] = []
+    const resourceReads: ReturnType<typeof loadBardWikiChatResource>[] = []
+    // Exercise the real event bus and scoped resource reader used by the gated
+    // workspace's job listeners. This is projection-consumer proof, not a mounted
+    // Reader workspace or authoring surface.
+    const stopBard = subscribeServerBardWikiJobEvents(
+      (event) => {
+        bardEvents.push(event)
+        if (event.chatId === 'chat-a') resourceReads.push(loadBardWikiChatResource(event.chatId))
+      },
+      (snapshot) => {
+        bardSnapshots.push(snapshot)
+        resourceReads.push(loadBardWikiChatResource('chat-a'))
+      },
+    )
+    cleanups.push(stopBard)
+    async function settleBardRead(job: BardWikiJobSummary) {
+      expect(await Promise.all(resourceReads.splice(0))).toEqual([
+        expect.objectContaining({ status: 'ok', chatId: 'chat-a', jobs: [job] }),
+      ])
+      expect(getBardWikiChatResource('chat-a')?.jobs).toEqual([job])
+    }
+    function snapshot(
+      streamId: string,
+      version: number,
+      memory: ServerMemoryJob,
+      bard: BardWikiJobSummary,
+    ): ServerMemoryJobSnapshot {
+      return { type: 'memory.snapshot', streamId, version, jobs: [memory], bardWikiJobs: [bard] }
+    }
+    function memoryEvent(streamId: string, version: number, job: ServerMemoryJob): ServerMemoryEvent {
+      const { chatId, ...eventJob } = job
+      return { type: 'memory.job', streamId, version, chatId, job: eventJob }
+    }
+    function bardEvent(streamId: string, version: number, job: BardWikiJobSummary): ServerBardWikiJobEvent {
+      const { chatId, createdAt: _createdAt, nextRunAt: _nextRunAt, ...eventJob } = job
+      return { type: 'bardwiki.job', streamId, version, chatId, job: eventJob }
+    }
+
     const { sync } = start()
     await sync.ready
     const first = streams[0].input
-    first.onMemorySnapshot?.({ type: 'memory.snapshot', streamId: 'jobs-a', version: 10, jobs: [], bardWikiJobs: [] })
-    first.onMemoryEvent?.({
-      type: 'memory.job',
-      streamId: 'jobs-a',
-      version: 11,
-      chatId: 'chat-a',
-      job: {
-        id: 'job-a',
-        instanceId: 'instance-a',
-        kind: 'summarize',
-        status: 'running',
-        attemptCount: 1,
-        maxAttempts: 3,
-      },
-    })
-    first.onBardWikiEvent?.({ streamId: 'jobs-a', version: 12 } as any)
-    first.onBardWikiEvent?.({ streamId: 'jobs-a', version: 11 } as any)
-    first.onMemorySnapshot?.({ type: 'memory.snapshot', streamId: 'jobs-a', version: 9, jobs: [], bardWikiJobs: [] })
+    first.onMemorySnapshot?.(snapshot('jobs-a', 10, memoryJob, bardJob))
+    await settleBardRead(bardJob)
+    expect(selectMemoryJobs(get(memoryJobProjectionStore))).toEqual([memoryJob])
+    expect(bardSnapshots).toEqual([{ streamId: 'jobs-a', version: 10, jobs: [bardJob] }])
+
+    const runningMemory = { ...memoryJob, status: 'running' as const, attemptCount: 1 }
+    const runningBard = { ...bardJob, status: 'running' as const, attemptCount: 1, progressCurrent: 1 }
+    serverBardResource = { ...serverBardResource, jobs: [runningBard] }
+    first.onMemoryEvent?.(memoryEvent('jobs-a', 11, runningMemory))
+    first.onBardWikiEvent?.(bardEvent('jobs-a', 12, runningBard))
+    await settleBardRead(runningBard)
+    first.onBardWikiEvent?.(bardEvent('jobs-a', 11, bardJob))
+    first.onMemoryEvent?.(memoryEvent('jobs-a', 10, memoryJob))
+    first.onMemorySnapshot?.(snapshot('jobs-a', 9, memoryJob, bardJob))
     expect(get(memoryJobProjectionStore)).toMatchObject({ streamId: 'jobs-a', version: 11 })
-    expect(bardEvent).toHaveBeenCalledOnce()
-    expect(bardSnapshot).toHaveBeenCalledOnce()
+    expect(selectMemoryProgress(get(memoryJobProjectionStore), 'chat-a', true)).toMatchObject({
+      activeCount: 1,
+      presentedJobs: [runningMemory],
+    })
+    expect(bardEvents).toEqual([bardEvent('jobs-a', 12, runningBard)])
+    expect(bardSnapshots).toHaveLength(1)
+    expect(resourceReads).toHaveLength(0)
     expect(api.applied).toBe(5)
     expect(api.known).toBe(5)
+    // Operational versions 10–12 neither skip nor create a command revision.
+    first.onCommandEvent(command(6))
+    await flush()
+    expect(api.targeted).toHaveBeenCalledOnce()
+    expect(api.applied).toBe(6)
+    expect(api.known).toBe(6)
+
     sync.retry()
     await flush()
-    streams[1].input.onMemorySnapshot?.({
-      type: 'memory.snapshot',
-      streamId: 'jobs-b',
-      version: 1,
-      jobs: [],
-      bardWikiJobs: [],
-    })
-    first.onBardWikiEvent?.({ streamId: 'jobs-a', version: 999 } as any)
+    expect(streams[0].stop).toHaveBeenCalledOnce()
+    expect(streams[1].input).toMatchObject({ mode: 'reader', sinceRevision: 6 })
+    const second = streams[1].input
+    const replacementMemory = { ...memoryJob, instanceId: 'memory-instance-b' }
+    const replacementBard = { ...bardJob, instanceId: 'bard-instance-b' }
+    serverBardResource = { ...serverBardResource, revision: 6, jobs: [replacementBard] }
+    second.onMemorySnapshot?.(snapshot('jobs-b', 1, replacementMemory, replacementBard))
+    await settleBardRead(replacementBard)
+    first.onMemoryEvent?.(memoryEvent('jobs-a', 999, runningMemory))
+    first.onBardWikiEvent?.(bardEvent('jobs-a', 999, runningBard))
+    first.onMemorySnapshot?.(snapshot('jobs-a', 1000, memoryJob, bardJob))
     expect(get(memoryJobProjectionStore)).toMatchObject({ streamId: 'jobs-b', version: 1 })
-    expect(bardSnapshot).toHaveBeenCalledTimes(2)
-    expect(bardEvent).toHaveBeenCalledOnce()
-    expect(api.targeted).not.toHaveBeenCalled()
+    expect(selectMemoryJobs(get(memoryJobProjectionStore))).toEqual([replacementMemory])
+    expect(bardSnapshots).toEqual([
+      { streamId: 'jobs-a', version: 10, jobs: [bardJob] },
+      { streamId: 'jobs-b', version: 1, jobs: [replacementBard] },
+    ])
+    expect(bardEvents).toHaveLength(1)
+    expect(resourceReads).toHaveLength(0)
+
+    const completedMemory = { ...replacementMemory, status: 'completed' as const, attemptCount: 1 }
+    const completedBard = { ...replacementBard, status: 'completed' as const, attemptCount: 1, progressCurrent: 3 }
+    serverBardResource = { ...serverBardResource, jobs: [completedBard] }
+    second.onMemoryEvent?.(memoryEvent('jobs-b', 2, completedMemory))
+    second.onBardWikiEvent?.(bardEvent('jobs-b', 3, completedBard))
+    await settleBardRead(completedBard)
+    expect(selectMemoryJobs(get(memoryJobProjectionStore))).toEqual([completedMemory])
+    expect(selectMemoryProgress(get(memoryJobProjectionStore), 'chat-a', true).activeCount).toBe(0)
+    expect(bardEvents).toEqual([bardEvent('jobs-a', 12, runningBard), bardEvent('jobs-b', 3, completedBard)])
+    expect(api.applied).toBe(6)
+    expect(api.known).toBe(6)
+    expect(canUseClientWriteAccess()).toBe(false)
+
+    sync.stop()
+    second.onMemoryEvent?.(memoryEvent('jobs-b', 4, replacementMemory))
+    second.onBardWikiEvent?.(bardEvent('jobs-b', 5, replacementBard))
+    second.onMemorySnapshot?.(snapshot('jobs-b', 6, replacementMemory, replacementBard))
+    stopBard()
+    publishServerBardWikiJobEvent(bardEvent('jobs-b', 7, replacementBard))
+    publishServerBardWikiJobSnapshot({ streamId: 'jobs-b', version: 8, jobs: [replacementBard] })
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(bardEvents).toHaveLength(2)
+    expect(bardSnapshots).toHaveLength(2)
+    expect(resourceReads).toHaveLength(0)
+    expect(getBardWikiChatResource('chat-a')?.jobs).toEqual([completedBard])
+    expect(selectMemoryJobs(get(memoryJobProjectionStore))).toEqual([completedMemory])
+    expect(streams).toHaveLength(2)
+    expect(streams[1].stop).toHaveBeenCalledOnce()
+    expect(api.stopLifecycle).toHaveBeenCalledOnce()
+    expect(vi.getTimerCount()).toBe(0)
+    expect(api.targeted).toHaveBeenCalledOnce()
+    expect(api.full).not.toHaveBeenCalled()
+    // Every callback transport must be this authenticated scoped GET: no
+    // mutation, provider, rebuild, retry, cancellation or writer registration.
+    expect(transport.mock.calls).toEqual(
+      Array.from({ length: 4 }, () => [
+        '/api/v1/bardwiki/chats/chat-a',
+        { method: 'GET', signal: undefined, headers: { 'risu-auth': 'reader-auth' } },
+      ]),
+    )
   })
 
   it('bounds backoff and invalid random inputs', () => {
