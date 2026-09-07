@@ -912,7 +912,11 @@ export async function expectEffectReceipts(
     ['igp', 'durable', 'not_configured'],
     ['notification', 'ephemeral', delivery === 'late_recovery' ? 'late_recovery' : 'not_configured'],
     ['plugin_output', 'durable', 'not_configured'],
-    ['tts', 'ephemeral', delivery === 'late_recovery' ? 'late_recovery' : 'not_requested'],
+    [
+      'tts',
+      'ephemeral',
+      options.liveIgpPatchAccepted || delivery === 'live_terminal' ? 'not_requested' : 'late_recovery',
+    ],
   ].map(([effect_kind, effect_class, reason]) => ({
     effect_kind,
     effect_class,
@@ -921,7 +925,7 @@ export async function expectEffectReceipts(
     delivery:
       effect_kind === 'generated_translation'
         ? 'server'
-        : options.liveIgpPatchAccepted && (effect_kind === 'igp' || effect_kind === 'plugin_output')
+        : options.liveIgpPatchAccepted && ['igp', 'plugin_output', 'tts'].includes(effect_kind)
           ? 'live_terminal'
           : delivery,
   }))

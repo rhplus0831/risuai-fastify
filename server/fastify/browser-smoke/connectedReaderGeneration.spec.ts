@@ -432,8 +432,8 @@ test('an accepted IGP append is already receipted when its writer loses ownershi
       { type: 'message.updated', id: resultId, parent_id: CHAT, origin_writer_session_id: pair.a.sessionId },
     ])
     expect(accepted.truth.messageUpdateEvents).toHaveLength(1)
-    // Server terminal reconciliation settles plugin output before index.svelte
-    // invokes IGP. Stage-four effects have not started while this PATCH waits.
+    // Server terminal reconciliation settles TTS and then plugin output before
+    // index.svelte invokes IGP. Stage-four effects have not started yet.
     expect(
       accepted.truth.effects.map(({ effect_kind, status, delivery, reason }) => ({
         effect_kind,
@@ -448,7 +448,7 @@ test('an accepted IGP append is already receipted when its writer loses ownershi
       { effect_kind: 'igp', status: 'completed', delivery: 'live_terminal', reason: null },
       { effect_kind: 'notification', status: 'pending', delivery: null, reason: null },
       { effect_kind: 'plugin_output', status: 'skipped', delivery: 'live_terminal', reason: 'not_configured' },
-      { effect_kind: 'tts', status: 'pending', delivery: null, reason: null },
+      { effect_kind: 'tts', status: 'skipped', delivery: 'live_terminal', reason: 'not_requested' },
     ])
     const terminalAtHold = accepted.truth.effects.filter((effect) => effect.status !== 'pending')
     for (const effect of accepted.truth.effects.filter((effect) => effect.status === 'pending')) {
