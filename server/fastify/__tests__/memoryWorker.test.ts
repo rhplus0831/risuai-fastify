@@ -342,14 +342,19 @@ describe('memory worker lifecycle and dispatch', () => {
     const db = openDatabase(makeDataDir())
     try {
       const totalJobs = MEMORY_JOB_BATCH_MAX_JOBS + 1
+      const jobIdWidth = String(totalJobs).length
       for (let index = 1; index <= totalJobs; index += 1) {
         enqueueMemoryJob(db, {
-          id: `job-${index}`,
+          id: `job-${String(index).padStart(jobIdWidth, '0')}`,
           chatId: 'chat-1',
           kind: 'chunk',
           payload: {},
         })
       }
+      // SQLite's creation clock is independent of fake JS timers. Exercise
+      // equal creation times explicitly; padded IDs retain the intended order
+      // under the repository's created_at/id sort, regardless of insert speed.
+      db.prepare('UPDATE memory_jobs SET created_at = ?').run(new Date().toISOString())
 
       const batches: string[][] = []
       const batchGates = [deferred(), deferred()]
