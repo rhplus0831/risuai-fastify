@@ -4,15 +4,17 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Phases 0–2 accepted; Stage 1 handed off to connected-reader Phase 0.
+- State: Phases 0–2 accepted; Stage 2 connected-reader implementation is active.
 - Execution source: `6f39fb8f0` plus the new Realm browser regression and
   final Phase 2 evidence/guidance records.
 - Current scope: Stage 1 prerequisite accepted. Smoke Phases 3–4 intentionally
   remain unfinished while the connected-reader plan executes.
-- Next action: execute [reader Phase 0](../connected-read-only-clients/phases/phase-0-contract-and-inventory.md).
+- Next action: continue the [reader workstream](../connected-read-only-clients/status.md) through its Phase 5 acceptance.
   Resume this workstream at Stage 3 reconciliation after reader Phase 5 is accepted.
-- Confirmed required gaps: BSE-001–004 are verified repairs. No open high-risk
-  gap remains in the four critical contracts at the Stage 1 source.
+- Confirmed required gaps: BSE-001–005 are verified repairs. No open high-risk
+  gap remains in the four critical contracts at the Stage 1 source. Reader
+  Phase 2 validation repaired BSE-005 at `9387d1464974`; its fault controls and
+  final agent/full-suite gates passed in reader status.
 - Blockers: none. The receiving [reader status](../connected-read-only-clients/status.md)
   owns the next execution cursor; smoke Phases 3–4 remain pending.
 
@@ -255,3 +257,30 @@ rows, stay for Phase 3 after reader implementation. Stage 3 must reconcile
 changed startup, ownership, recovery, navigation and generation-observation
 behavior, rerun affected browser evidence, and repeat faults where the tested
 transition/assertion changed; this handoff does not certify future reader code.
+
+## Stage 2 Reader Handoff Maintenance — 2026-09-07
+
+Reader Phase 2 changes startup, event composition, reader rendering and passive
+writer demotion behind the default-disabled rollout flag. Its source is
+`6003c596e` (production through `81efb67c3`). Smoke discovery grows from 79/18
+to 80 cases/19 specs: S80 is added; S32/S60 retain their identities and receive
+new mixed-client expectations. The bounded
+[inventory reconciliation](inventory.md#reader-phase-2-smoke-reconciliation)
+records their real paths, controls, oracles and remaining limits. Required
+production-fault evidence belongs to the
+[findings](findings.md#reader-phase-2-production-fault-evidence), and final
+focused/aggregate phase evidence belongs to
+[reader status](../connected-read-only-clients/status.md).
+
+This update maintains Stage 1's affected evidence during implementation; it
+accepts no smoke Phase 3/4 work. Resume the remaining scenario audit only after
+the reader handoff completes. Preserve original-source limits for unaffected
+critical checks and reconcile any later switching/viewer browser additions.
+
+Reader Phase 2 is accepted at `9387d1464974` plus these evidence records. The
+final `pnpm test:agent` and all 13 `pnpm test:all` lanes passed, including 80/80
+browser cases. S22's added remount contract detects its declared production
+cache-owner fault twice and passes both restored controls; BSE-005 is verified.
+Unmanifested height/anchor candidates remain unqualified and the original P0-T
+proof retains its earlier source limit. Reader Phase 3 continues the feature
+work before this smoke audit resumes.

@@ -459,3 +459,260 @@ server/fastify/browser-smoke/displayPaintCache.spec.ts --workers=1`:
   barriers prevent vacuous sampler success; it does not claim every browser
   frame on physical devices is observed.
 - Disposition: verified repair; Phase 1 aggregate and full-browser evidence passed in status.
+
+## Reader Phase 2 Production-Fault Evidence
+
+The Reader implementation materially adds S80 and changes S32/S60. Their current
+fixture/control/oracle limits are in the
+[inventory reconciliation](inventory.md#reader-phase-2-smoke-reconciliation).
+These experiments verify the new browser assertions; they do not reopen the
+accepted Stage 1 critical-contract repairs or claim later promotion/viewer work.
+
+Source: `6003c596ecaa3a1a41ed864b2c1397f4abfd10e0`, with production through
+`81efb67c3`. Final controls passed all nine selected cases: S80 plus the seven
+startup-recovery cases (27.9s total), followed by S32 (4.3s total). The separate
+`e8431655d` register update changes only three test-file reference counts and its
+matching total; production/browser sources are identical.
+
+Each fault was applied separately in a detached disposable checkout of that
+commit. No test, fixture, assertion, hook result or server record was changed.
+The checkout used the existing dependency installation and
+`pnpm --config.verify-deps-before-run=false build:smoke` before each browser run.
+All fault builds succeeded. Browser commands used the ordinary Chromium smoke
+config, one worker, and the unchanged tests below. Restore each production file
+before applying the next fault; restore both before the final control build.
+
+Unchanged SHA-256 test identities, useful for reproducing the source pairing:
+
+- S80 file: `16de60aa6c85bfd78d9a5a39e08113a844186b05ba91a18c5ea7e6fca4c6da9f`.
+- S60 file: `8286c40642a29774d5263067b77579bfd44ed09669faf904137146e4609e9131`.
+- S32 file: `3cc9c9344506b96ee82564721d8d962b10d4a539aaf310bed27250597f562711`.
+
+### R2-F1: committed message projection
+
+In `src/ts/server/connectedReaderSync.ts`, the actual reader invalidation hook:
+
+```diff
+-      applyChatMessages: applyServerChatMessagesResource,
++      applyChatMessages: () => true,
+```
+
+Command: `pnpm --config.verify-deps-before-run=false exec playwright test -c
+playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts --workers=1`.
+
+The unchanged S80 regression failed at line 345: the exact live message was
+absent after its 30-second bounded visible-text assertion. This is a production
+projection fault that can acknowledge refresh without applying messages. The
+request trace proves HTTP 200 for the real message append at revision 1. The
+failure-finally SQLite snapshot independently contains
+`connected-reader-live-message` in `connected-reader-chat-a`, with its exact
+text and `message.appended` event attributed to Writer A. Reader mutations and
+page errors were both empty. Startup and the accepted command path completed;
+the failure is neither collection nor initialization failure.
+
+### R2-F2: passive demotion resubscription
+
+In `src/ts/bootstrap.ts`, remove only the reading branch at the end of the
+lost-writer lifecycle subscriber:
+
+```diff
+       connectedReaderRefreshTimer = null
+-      if (state.lifecycle === 'reading') void refreshConnectedReader()
+```
+
+Command: `pnpm --config.verify-deps-before-run=false exec playwright test -c
+playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/startupRecoveryIntegrationMatrix.spec.ts --workers=1
+-g 'mixed-client journey denies pre-authority mutation and keeps the old writer connected after legacy takeover'`.
+
+The unchanged S60 case failed at line 413: the demoted A resource projection
+remained `streamGeminiThoughts=false` after C committed `true`. The named
+five-second convergence predicate failed; case duration was 7.0s. The trace
+contains C's real `PATCH /api/v1/commands/settings/runtime` with HTTP 200 and
+revision 1. The preceding assertions establish explicit legacy takeover,
+connected-reader role/route availability and denied A mutation. This fault
+therefore exposes missing read synchronization despite successful demotion.
+
+### R2-F3: subsequent foreign-writer frame
+
+In `src/ts/server/connectedReaderSync.ts`, add the old teardown behavior only
+when a later frame changes the observed writer:
+
+```diff
+         onWriterEvent: (writer) => {
+           if (!current(sourceEpoch)) return
++          if (getClientSessionSnapshot().writer?.sessionId !== writer.sessionId) {
++            stop()
++            return
++          }
+           if (observeClientWriter(writer) && current(sourceEpoch)) options.onWriterEvent?.(writer)
+```
+
+Command: `pnpm --config.verify-deps-before-run=false exec playwright test -c
+playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/fastifyBrowserSmoke.spec.ts --workers=1
+-g 'a connected reader keeps receiving updates through a legacy writer takeover'`.
+
+The unchanged S32 case reached C's accepted character rename (HTTP 200), then
+failed at line 628: `Open Updated Smoke Character` never became visible within
+five seconds. The initial foreign-writer snapshot remains valid under this
+fault; only the subsequent ownership frame stops the production reader service.
+The legacy confirmation and old A's offline choice completed, so the failure
+isolates continued reader updates through takeover.
+
+### Restoration and limit
+
+Both production files were restored to `6003c596e`, with a clean tracked
+checkout and unchanged test hashes. The final smoke rebuild passed. One
+single-worker command selected S80, S32 and S60 using the three file paths and
+an alternation of their exact unique titles: **3/3 passed in 13.6s** (7.7s,
+2.4s and 2.0s cases). No test/fixture/oracle change occurred between the
+negative runs and the restored controls. The owning reader status records the
+required aggregate gates separately.
+
+These faults prove committed message application, demotion resubscription and
+subsequent foreign-frame continuity. They do not prove explicit upgraded
+promotion, pending-edit A → B → A behavior, live generation streaming or
+exactly-once generation effects; the reader plan assigns those to Phases 3–4.
+The existing Stage 1 send/confirmation/transcript faults retain their original
+source and scope limits until Stage 3 reconciliation.
+
+## BSE-005: Pause sampling misses readable anchors after hydration
+
+- Classification: source-supported pause-coverage gap, reproduced in the
+  required Reader Phase 2 full suite at `b7d3f88f1`. No production scroll defect
+  was reproduced. Risk: a critical transcript test can fail its coverage guard
+  even though its saved observations contain a stable readable pause.
+- Scenario: S22, `300-message history stays readable with rapid reversals and
+pauses among tall messages`, in `chatHistoryScroll.spec.ts`. Production
+  cached-height behavior and its original fault remain owned by
+  [P0-T](#p0-t-returning-transcript-rows-during-continuous-input).
+- The full run passed 79/80 browser cases and all 12 other quality lanes.
+  S22 failed only at line 139: `anchoredPauses` was zero. Every pause's first
+  sample was empty or unreadable, but pause 3 first gained readable message 275
+  at sample 12, then kept it readable at exactly the same top for 18 samples.
+  There were no page errors. DOM trace remains off to avoid changing scheduling;
+  the attached structured viewport observations provide the evidence.
+- The unchanged case then passed two isolated repetitions, 37.5s and 32.0s,
+  against the same emitted source. That rerun does not erase the recorded
+  full-suite failure or establish a production fix.
+- The initial selection-only proposal was rejected after both exploratory
+  repetitions failed. Selecting a newly readable first row mid-pause can choose
+  a different identity from the row captured by the app at the last scroll;
+  one such upper row left view while the original lower anchor stayed fixed.
+  Another run had no early enough candidate. Those exploratory runs overlapped
+  a browser TypeScript check and do not certify a product defect. The original
+  test was restored; no proposal was committed or subjected to a qualifying
+  production-fault experiment.
+- Source review confirms `captureResidencyAnchor` chooses the first geometric
+  visible row and retains its identity across parser reconciliations. A test
+  must not choose a surviving row by inspecting later outcomes, which would
+  hide the visibility failure it is meant to catch. The scoped-context diff
+  also leaves the writer's existing message owner and cloning path unchanged;
+  no reader-code regression has been established in this flag-off scenario.
+- The accepted workload retains the original sample-zero readable anchor rule.
+  `38604f7f9` adds two fixed passes of the original seven real reversal gestures,
+  separated by a return toward recent history. Both passes always run; each
+  pause records 30 samples at 32ms cadence, and every original visibility/1px
+  geometry check remains. `d75ecfe375` moves the unchanged nonempty coverage
+  guard after the independent continuous-input and full-traversal assertions.
+  No outcome-based retry or surviving-row filter is used.
+- At `d75ecfe375`, the original P0-T cached-height omission produced one
+  coverage-guard failure and one pass; a separate omission of
+  `container.scrollTop += delta` in anchor reconciliation passed both runs.
+  Neither candidate manifested the required geometry/readability fault, so
+  neither is qualifying fault evidence. Their restored controls passed twice
+  each. Build/worktree provenance was retained, but those older trace-off
+  runs did not capture served-script response receipts. Evidence is under
+  `/tmp/reader-phase2-transcript-guard-order-fault-evidence` and
+  `/tmp/reader-phase2-transcript-anchor-restoration-fault-evidence`.
+- `9387d1464974` adds a direct remount contract to the fixed return. The initial
+  30 ordinary bodies are already readable; after the first seven gestures,
+  message 298 must be absent from the DOM. A fixed real CDP return gesture and
+  one real wheel event then require its original text and readable viewport
+  intersection. Message 299 is always pinned and cannot prove an unmount; the
+  discarded pinned-row trial is excluded. The subsequent second pass and all
+  original geometry/history/residency checks remain unchanged.
+- Final unprofiled, trace-off, single-worker baselines at `9387d1464974` passed
+  **2/2 (44.3s, 44.5s)**. Both supplied the unmount/remount preconditions and
+  retained 117 successful script URL/path/status receipts, with zero console or
+  page errors. Browser TypeScript, formatting and whitespace checks passed
+  after browser execution. The frozen test SHA256 is
+  `66aef54cf98b5691387ac078d0f7a574dba6221d809506576df3620aeb20a624`;
+  baseline evidence is `/tmp/reader-phase2-transcript-remount-receipts-baseline`.
+- A separate predeclared production fault binds a cached parse promise to its
+  first component's `ChatBodyParseOwnerReaders` object. Reuse by a new component
+  then waits indefinitely instead of returning the cached result. This models
+  stale component ownership stranding remounted content. The fault contains no
+  fixture IDs/text or DOM writes. Its diagnostic marker records the reached
+  branch and message ID; the independent DOM oracle still owns pass/fail.
+  Qualification requires two direct message-298 remount failures after startup
+  and proven unmount, the corresponding marker, the served fault chunk, then
+  restoration/build and the same two passing controls. Startup-only or unrelated
+  failures cannot qualify.
+- The predeclared negatives both failed at the direct remount text assertion
+  (20.0s, 19.3s), after initial readiness, seven real gestures, proven unmount
+  and fixed return input. The body remained blank. Both recorded the specific
+  `[chat-body-parse-owner-mismatch] transcript-residency-chat residency-message-298 298`
+  marker, five older-page requests, no page errors, and an HTTP 200 receipt for
+  `/assets/Chat-ChX9s9hZ.js`. The preserved fault chunk SHA256 is
+  `c9510736a7a78d7889017d0517d4cd30dd21c4a589dbc84f965059b49b14c95b`.
+  This is qualifying remount-readability fault detection; it does not relabel
+  the unmanifested height/anchor candidates as detected geometry defects.
+- The exact production source was restored and rebuilt. The unchanged two
+  controls passed **2/2 (44.0s, 43.8s)**, receiving the restored chunk
+  `/assets/Chat-DLvx2m3D.js` with SHA256
+  `d27026b7eb3a406236f549b13ef4850e6d4bdb1c92c1fe90b05f358f7d1e1a59`;
+  its fault marker is absent. Final controls complete the focused repair proof.
+- Owner/disposition: Reader Phase 2 validation repair, **verified repair**.
+  Final `pnpm test:agent` passed in 2m 26.6s and phase-ending `pnpm test:all`
+  passed all 13 lanes in 5m 49.2s at `9387d1464974` plus the evidence records.
+  All 80 browser cases passed, including S22 in 44.9s. These final gates close
+  the recorded coverage gap; the original failed full run remains in the ledger.
+
+The reviewed fault is confined to `src/lib/ChatScreens/ChatBodyParseMemo.ts` in
+`/tmp/risu-transcript-pause-fault` at `9387d1464974`:
+
+```diff
+ const parseMemo = new Map<string, Promise<string>>()
++const parseMemoOwners = new WeakMap<Promise<string>, ChatBodyParseOwnerReaders>()
+@@
+     const cached = parseMemo.get(key)
+     if (cached) {
++      if (parseMemoOwners.get(cached) !== input.owners) {
++        Reflect.apply(console.warn, console, [
++          '[chat-body-parse-owner-mismatch]',
++          input.chatId,
++          input.messageId,
++          input.chatID,
++        ])
++        return new Promise<string>(() => {})
++      }
+       return refresh(parseMemo, key, cached)
+@@
++    parseMemoOwners.set(promise, input.owners)
+     rememberParseMemoEntry(key, promise)
+```
+
+The frozen test uses ordinary DOM text/visibility observations; it does not read
+this owner map or infer success from its diagnostic marker. Detailed manifests,
+logs, emitted chunks and observations are retained under
+`/tmp/reader-phase2-transcript-remount-owner-fault-evidence`.
+
+Build command in that disposable checkout: `pnpm
+--config.verify-deps-before-run=false run build:smoke` (fault and restored builds
+passed in 12.5s and 12.15s). The unchanged browser command for both pairs was:
+
+```sh
+pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/chatHistoryScroll.spec.ts \
+  --grep 'rapid reversals and pauses among tall messages' \
+  --repeat-each=2 --workers=1
+```
+
+The spec keeps trace off. The final manifest confirms the disposable checkout
+is clean, all three relevant source files match `9387d1464974` and main, and no
+owned build/browser job remains active. The dependency-verification override
+applies only to the lab's shared `node_modules` link.

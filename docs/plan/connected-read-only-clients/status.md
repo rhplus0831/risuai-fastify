@@ -4,19 +4,19 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite and reader Phases 0–1 accepted; Phase 2 is ready.
+- State: Stage 1 smoke prerequisite and reader Phases 0–2 accepted; Phase 3 is ready.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Current task scope: implement the coordinated connected-reader plan after the
-  accepted smoke prerequisite. Reader Phases 0–1 are accepted.
-- Current slice: [Phase 2](phases/phase-2-connected-read-only-browsing.md),
-  authenticated reader startup/event services and explicit local transcript
-  read context. Phase 1 guard/read/gate proof and both aggregate gates passed.
+  accepted smoke prerequisite. Reader Phases 0–2 are accepted.
+- Current slice: [Phase 3](phases/phase-3-explicit-writer-switching.md),
+  pending-edit demotion, explicit in-place promotion and repeated UI switching.
+  Phase 2 browser/fault controls and both final aggregate gates passed.
   The public rollout default remains disabled until Phase 5.
 - Production behavior: conservative writer flow remains the default. Additive
   ownership metadata/preconditions are available; connected readers are not
   publicly enabled.
-- Blockers: none. Phase 0 implementation choices and its required baseline gate
-  and Phase 1 protection gates are accepted below.
+- Blockers: none. The Phase 2 full-suite S22 coverage failure is repaired and
+  verified as BSE-005, with its original failure and source limits retained below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -24,14 +24,14 @@ active [phase](phases/README.md) for detailed execution instructions.
 
 ## Phase Router
 
-| Phase                                                                                             | State    | Next evidence required                                                                        |
-| ------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.             |
-| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.        |
-| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending  | Begin reader startup/service separation and scoped transcript; then actual two-session proof. |
-| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending  | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.             |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending  | Streaming continuity; observers execute no writer-only actions or effects.                    |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.                |
+| Phase                                                                                             | State    | Next evidence required                                                                 |
+| ------------------------------------------------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.      |
+| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed. |
+| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Accepted | Reader/browser/fault controls, final test:agent and all 13 test:all lanes passed.      |
+| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending  | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.      |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending  | Streaming continuity; observers execute no writer-only actions or effects.             |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.         |
 
 ## Verification Ledger
 
@@ -434,3 +434,161 @@ scroll/hydration owners, separate their reader policies, and prove actual
 startup and visible two-session convergence before opening Phase 3. The
 read-only source cross-check completed three independent Luna tasks; it added
 no implementation or browser evidence.
+
+## Phase 2 Implementation — 2026-09-07
+
+Prerequisite: Phase 1 accepted at `95a70ed44`. Public activation remains disabled
+by default. Read-only Luna preparation covered startup/services, local read
+context and the real browser fixture. Scoped implementation and an independent
+coordinator review were reconciled against current source.
+
+Implementation slices, accepted after the final gates below:
+
+- `f3e6f9103` scopes existing transcript owners, translations, metadata, module
+  activation/assets and portraits to the reader's stable character/chat IDs.
+  Existing history/residency and safe mobile copy remain in the shared transcript.
+  Seven focused suites passed 164 tests.
+- `c984321e2` deduplicates copied tab identities with exclusive page-lifetime Web
+  Locks, retains the same ID on legitimate reload, and preserves originating
+  recovery metadata on unsupported lock facilities. Six focused tests passed,
+  including a lock callback delivered after teardown.
+- `5fbdd01f5` adds reader-only event transport, ordered targeted/full refresh,
+  bounded reconnect, separate known/applied cursors, memory/BardWiki snapshots,
+  local greeting updates and auth/lineage response fences. Ten focused suites
+  passed 281 tests; five affected suites passed again after final transport
+  admission changes (206 tests, overlapping the earlier group).
+- `b2bf25116` fences writer-only authoritative refresh completion and applies
+  synchronous auth/lineage projection resets. `28ea39cd0` includes actively
+  loading resources in invalidation; the final affected set passed 120 tests.
+- `eba3973a6` implements the local reader shell/transcript and read-only display
+  dependency loader. Initial UI proof passed 34 tests; final display-loader and
+  transcript proof passed 16 tests, including the held-demand/committed-update
+  race. Mobile copy, scoped history and graceful dependency retry are covered.
+- `af7903297` composes managed startup, read-only authentication, conditional
+  acquisition, passive demotion, owner revalidation, recovery and generation
+  fences. Parent proof passed 253 tests across six suites; route/App proof
+  passed 65 tests and event transport proof passed 15. Delayed plugin, chat and
+  background completions cannot revive stale readiness or demote a newer writer.
+- `e8beb57bb` fences pending settings overlays by their originating writer
+  generation and separates new edits from dormant encrypted intent. Four
+  focused suites passed 102 tests. `41b9f8763` types their sparse fixtures;
+  its two affected suites passed 54 tests and Svelte check reported zero errors
+  and warnings.
+- `54db7b589` supports identities on insecure origins without `randomUUID`;
+  seven identity tests passed. `81efb67c3` adds prompt offline interruption,
+  bounded online recovery and authoritative full read refresh after demotion.
+  Its two affected suites passed 207 tests; final bootstrap proof passed 187.
+
+The real disposable-server browser implementation exposed and fixed two
+production gaps: App stopped tracking live URLs after consuming a nonreactive
+reader intent, and initial shell data lacked display preferences/module/persona
+inputs needed by shared transcript rendering and mobile copy. Mounted
+regressions cover both. Canonical normalization was separately added to the
+unowned migration fixture; this repaired fixture-only missing greeting and
+character fields without changing production display-source validation.
+
+The complete Reader scenario proves actual unowned initialization, separate
+writer/reader startup, copied-session-storage isolation, stable writer reload
+identity, older-history wheel input, visible committed updates, actual clipboard
+copy, local navigation/history, reader reload/focus, unchanged writer URL and
+full durable SQLite snapshot, and offline committed catch-up. It observes zero
+forbidden reader requests and zero page errors. Observation includes service
+worker requests. The exact read-only cache/display POST allowlist follows server
+route policy; writer headers on bootstrap/events are forbidden even when empty.
+
+The full Reader scenario is S80; S32/S60 retain their IDs while changing their
+mixed-client expectations. Artifact identities and required payload semantics
+remain unchanged. Pending-edit presentation across a complete A → B → A switch
+and live generation viewing remain Phases 3 and 4; these results do not certify
+those transitions.
+
+### Final Phase 2 browser and production-fault controls
+
+At browser source `6003c596e` (production `81efb67c3`, fixture typing
+`41b9f8763`), the emitted build passed. Single-worker Playwright executed
+`connectedReaderBrowsing.spec.ts` plus `startupRecoveryIntegrationMatrix.spec.ts`:
+**8/8 passed in 27.9s**. The unique S32 title in `fastifyBrowserSmoke.spec.ts`
+then passed **1/1 in 4.3s**. An initial overly anchored grep collected zero tests
+and is excluded. Browser TypeScript, formatting and whitespace checks passed.
+
+S80 verifies separate sessions, read/history/copy/mobile/status behavior and zero
+domain mutation observations. S60 verifies passive upgraded-writer demotion after
+a legacy takeover and subsequent settings convergence. S32 preserves the older
+client's frozen choice while an upgraded reader receives a visible committed
+rename. Both changed journeys retain server guards and no-pre-authority mutation
+assertions. At `e8431655d`, the source inventory and discovery were reconciled to
+80 browser cases/19 specs; current docs and explicit plan validation passed.
+
+Three independent faults at `6003c596e` failed their intended unchanged browser
+oracles after real accepted server commands: skipped message projection (S80),
+omitted demotion resubscription (S60), and reader teardown on a subsequent foreign
+writer frame (S32). R2-F1 additionally retains independent SQLite message/event
+origin proof. Exact hunks, commands, hashes and limits are recorded in the
+[smoke findings](../browser-smoke-effectiveness/findings.md#reader-phase-2-production-fault-evidence).
+Both production files were restored; a clean build and the same three selected
+controls passed **3/3 in 13.6s**. Production remains unchanged by the later test
+repairs, so these three results retain their source scope.
+
+### Phase 2 aggregate verification and transcript repair
+
+`b7d3f88f1` establishes actual readiness in existing generation lifecycle race
+fixtures. The subsequent `pnpm test:agent` passed in **2m 20.3s**. The first
+phase-ending `pnpm test:all` failed in **6m 0.2s**: all 12 nonbrowser lanes passed,
+including frontend tests (8,611 plus 241 UI cases), 4,183 server tests, current
+compatibility (18), scale and performance; browser passed 79/80 cases. S22 alone
+failed its nonempty pause-coverage guard. Saved observations contained a stable
+readable pause after its first sample; no production scroll defect was shown.
+
+[BSE-005](../browser-smoke-effectiveness/findings.md#bse-005-pause-sampling-misses-readable-anchors-after-hydration)
+owns the bounded repair. The unchanged test passed two isolated controls, but
+that did not erase the failed full gate. `38604f7f9` adds a fixed second pass over
+recently measured history, preserving the original sample-zero anchor oracle.
+`d75ecfe375` moves the unchanged coverage guard after the independent traversal
+checks. Neither the cached-height omission nor anchor-restoration omission
+produced qualifying geometry failures at that source; their unqualified results
+are retained separately. The direct message-298 unmount/remount oracle at `9387d1464974` now detects
+a separately declared cache-owner fault in both repetitions. No test oracle
+selects anchors from future outcomes or weakens readability/geometry tolerances.
+
+At `9387d1464974`, final isolated baselines passed twice (44.3s, 44.5s).
+The cache-owner fault failed the intended remount assertion twice (20.0s,
+19.3s), with exact message-298 markers and received fault-chunk evidence.
+Restoration, rebuild and the same controls passed twice (44.0s, 43.8s).
+All runs used one worker, trace off and no concurrent checks. The test stayed
+byte-identical; no production fault remains in the main or disposable source.
+
+Final documentation validation passed for 49 current guides and all 22 explicit
+plan/index documents. At `9387d1464974` plus these six evidence records, the final
+`pnpm test:agent` passed in **2m 26.6s**: server/browser typechecks, topology,
+current documentation, frontend tests/check, server tests and smoke build.
+The required phase-ending `pnpm test:all` then passed at that same source in
+**5m 49.2s**, including every required lane and all 80 browser cases. Detailed
+acceptance follows; earlier failed or exploratory runs remain excluded.
+
+### Phase 2 Acceptance and Phase 3 Handoff — 2026-09-07
+
+Final tested source: `9387d1464974`; production through `81efb67c3`, followed by
+the documented fixture/readiness/transcript test repairs and these six evidence
+records. `pnpm test:agent` passed in 2m 26.6s and `pnpm test:all` passed in
+5m 49.2s. All 13 full-suite lanes passed: server/browser typechecks, topology,
+current documentation, frontend tests/check, compatibility register/current
+harness, server tests, Realm scale, browser smoke, UI coverage, formatting and
+frontend performance. The full browser lane passed **80/80 in 3m 0s**
+(3m 10.6s including its build/runner); S22 passed in 44.9s, S80 in 11.8s, and
+both changed mixed-client cases passed. Existing suite skips and the Realm
+scale command's deliberate name exclusions remain unchanged. Additional pinned
+compatibility comparisons were not run and are not claimed.
+
+The current-guide validator passed 49 files; explicit coordination/index/bundle
+validation passed all 22 documents. Final Markdown formatting and whitespace
+checks passed. Logs are `/tmp/reader-phase2-final-test-agent.log` and
+`/tmp/reader-phase2-final-test-all.log`; BSE-005 retains its own frozen baseline,
+fault and restored artifacts. R2-F1/F2/F3 source remains unchanged and all three
+normal browser controls passed again in the full run.
+
+**Phase 2 accepted.** The public feature remains disabled as agreed. Phase 3
+now owns explicit A → B → A switching, authoritative reader presentation during
+pending work, late settlement and draft restoration, and durable generation
+survival through takeover. Phase 4 owns live reader generation attachment and
+effects separation. Smoke Phases 3–4 remain pending until reader Phase 5 hands
+back the completed implementation.
