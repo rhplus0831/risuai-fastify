@@ -113,7 +113,7 @@ row unless the detailed review states a narrower boundary.
 | S23 | `chatStartupRendering.spec.ts:9`               | direct chat startup waits for display dependencies and preserves the first processed body through background startup  | Retained; 2b review            |
 | S24 | `chatStartupRendering.spec.ts:9`               | refresh chat startup waits for display dependencies and preserves the first processed body through background startup | Retained; 2b review            |
 | S25 | `chatStartupRendering.spec.ts:112`             | direct chat startup releases the newest rows before older display work and preserves their scroll anchor              | Retained; 2b review            |
-| S26 | `debugEchoLayoutStability.spec.ts:61`          | debug echo send stays visually stable through the first-token wait and foreground recovery                            | Pending                        |
+| S26 | `debugEchoLayoutStability.spec.ts:61`          | debug echo send stays visually stable through the first-token wait and foreground recovery                            | Retained visual contract; 2c   |
 | S27 | `displayPaintCache.spec.ts:34`                 | warm reload keeps appearance stable before the bundle, shell, and Display response arrive                             | Strengthened; BSE-004 verified |
 | S28 | `fastifyBrowserSmoke.spec.ts:128`              | Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command                           | Pending                        |
 | S29 | `fastifyBrowserSmoke.spec.ts:345`              | authored settings survive local backup restore and a full reload                                                      | Pending                        |
@@ -133,7 +133,7 @@ row unless the detailed review states a narrower boundary.
 | S43 | `lazyFirstOpen.spec.ts:486`                    | preset and persona lazy dialogs stay within the viewport after first-open loading                                     | Pending                        |
 | S44 | `lazyFirstOpen.spec.ts:523`                    | an offline first open shows local Retry and succeeds when connectivity returns                                        | Pending                        |
 | S45 | `lazyFirstOpen.spec.ts:551`                    | a stale emitted stylesheet shows local recovery and reloads the current route                                         | Pending                        |
-| S46 | `rerollSwipePersistence.spec.ts:32`            | rerolled candidates survive a reload and stay swipe-recoverable                                                       | Pending                        |
+| S46 | `rerollSwipePersistence.spec.ts:32`            | rerolled candidates survive a reload and stay swipe-recoverable                                                       | Retained reconstruction; 2c    |
 | S47 | `selectedLocaleRuntime.spec.ts:21`             | a delayed locale cannot overwrite a newer selection and is reused on the next switch                                  | Pending                        |
 | S48 | `selectedLocaleRuntime.spec.ts:71`             | a failed locale chunk leaves the current UI usable and a later selection retries it                                   | Pending                        |
 | S49 | `selectedLocaleRuntime.spec.ts:106`            | cold selected-locale failure retries before exposing its first composer                                               | Pending                        |
@@ -401,3 +401,17 @@ page-reset pins, hidden-route jumps and legacy paging (S65–S72) remain explici
 Phase 3 scenario reviews; the residency file is therefore still partial. Reader
 changes to supported transcript entry/rendering require the planned Stage 3
 reconciliation and fresh affected browser evidence.
+
+### Generation Companion Claim Corrections
+
+At `736fbe490`, S26's final response helper reads the client projection; it does
+not independently fetch the final messages API. Retain S26 as transient layout,
+focus/opacity and DOM-identity evidence with real composer/generation/SSE, and
+use S01 for the complete visible/authoritative/reload durability contract.
+S46 now drives the actual message reroll button and asserts the operation POST
+without truncation, then rebuilds candidates after reload and calls the
+production reroll-back helper. Retain it as candidate persistence/reconstruction
+and navigation evidence, with the final pointer gesture explicitly unproved.
+Current test/architecture guides now state these actual paths. No test or
+production change is needed to correct these documentation claims; Phase 1's
+passing browser run applies to the unchanged specs.
