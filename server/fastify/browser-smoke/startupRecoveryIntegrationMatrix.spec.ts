@@ -58,7 +58,7 @@ test('startup rollout matrix proves flag-off and flag-on boundaries on small and
   }
 })
 
-test('legacy and null shell state is repaired before built-browser bootstrap', async ({ browser }) => {
+test('legacy and null shell values normalize during built-browser startup', async ({ browser }) => {
   const harness = await startFastBootstrapHarness(smallFastBootstrapFixture(), {
     temporaryDirectoryPrefix: 'risu-phase2-legacy-shell-',
   })

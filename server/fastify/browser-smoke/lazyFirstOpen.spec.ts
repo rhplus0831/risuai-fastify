@@ -278,7 +278,7 @@ test.afterEach(async ({ page }) => {
   fs.rmSync(harness.dataDir, { recursive: true, force: true })
 })
 
-test('smoke manifest accounts for every lazy boundary', async () => {
+test('smoke manifest accounts for the 60 registered lazy boundaries', async () => {
   const expectedSources = new Set<string>([
     ...appOwnedSources,
     ...sidebarSources,
