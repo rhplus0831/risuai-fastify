@@ -193,13 +193,16 @@ import {
   setPendingRecoveredGenerationEffects,
 } from './process/recoveredGenerationEffects'
 import {
+  advanceStartupChatReadinessEvaluation,
   backgroundReady,
   beginStartupAttempt,
+  beginStartupChatReadinessEvaluation,
   canRenderShell,
   canMutate,
   completeStartupAttempt,
   configureStartupObserverShell,
   failStartupAttempt,
+  finishStartupChatReadinessEvaluation,
   recordStartupCapabilityFailure,
   recordStartupMilestone,
   restoreStartupWriterCapabilities,
@@ -1274,50 +1277,58 @@ async function ensureStartupChatReadiness(): Promise<void> {
   // evaluate that new target instead of losing the change or certifying the old one.
   while (true) {
     const target = currentStartupChatReadinessTarget()
+    const evaluationId = beginStartupChatReadinessEvaluation(generation, target)
     try {
-      await ensureResourceSurfaces(['runtime:chat-generation'])
-      assertCurrent()
-      if (target !== currentStartupChatReadinessTarget()) continue
-      const characterHydrated = await hydrateSelectedCharacterShell()
-      assertCurrent()
-      if (target !== currentStartupChatReadinessTarget()) continue
-      if (!characterHydrated) {
-        throw new StartupChatDependencyError(
-          'selected-character-hydration-failed',
-          'Selected character detail hydration failed',
-        )
+      try {
+        await ensureResourceSurfaces(['runtime:chat-generation'])
+        assertCurrent()
+        if (target !== currentStartupChatReadinessTarget()) continue
+        advanceStartupChatReadinessEvaluation(evaluationId, 'character')
+        const characterHydrated = await hydrateSelectedCharacterShell()
+        assertCurrent()
+        if (target !== currentStartupChatReadinessTarget()) continue
+        if (!characterHydrated) {
+          throw new StartupChatDependencyError(
+            'selected-character-hydration-failed',
+            'Selected character detail hydration failed',
+          )
+        }
+        const promptPresetId = currentStartupPromptTemplateOwnerId()
+        advanceStartupChatReadinessEvaluation(evaluationId, 'chat-and-prompt')
+        const [chatHydrated, promptHydrated] = await Promise.all([
+          hydrateActiveChat(),
+          ensurePromptTemplateHydrated({
+            ...(promptPresetId !== currentGlobalPromptTemplateOwnerId() ? { applyProjection: false } : {}),
+            promptPresetId,
+            minimumRevision: peekAppliedServerResourceRevision() ?? undefined,
+          }),
+        ])
+        assertCurrent()
+        if (target !== currentStartupChatReadinessTarget()) continue
+        if (!chatHydrated) {
+          throw new StartupChatDependencyError('selected-chat-hydration-failed', 'Selected chat hydration failed')
+        }
+        if (!promptHydrated) {
+          throw new StartupChatDependencyError(
+            'selected-prompt-template-hydration-failed',
+            'Selected prompt-template owner hydration failed',
+          )
+        }
+      } catch (error) {
+        assertCurrent()
+        if (target !== currentStartupChatReadinessTarget()) continue
+        throw error
       }
-      const promptPresetId = currentStartupPromptTemplateOwnerId()
-      const [chatHydrated, promptHydrated] = await Promise.all([
-        hydrateActiveChat(),
-        ensurePromptTemplateHydrated({
-          ...(promptPresetId !== currentGlobalPromptTemplateOwnerId() ? { applyProjection: false } : {}),
-          promptPresetId,
-          minimumRevision: peekAppliedServerResourceRevision() ?? undefined,
-        }),
-      ])
+      startupChatReattachReady = true
+      advanceStartupChatReadinessEvaluation(evaluationId, 'reattach')
+      startActiveGenerationReattach()
+      await prepareOpenChatGenerationReattach()
       assertCurrent()
-      if (target !== currentStartupChatReadinessTarget()) continue
-      if (!chatHydrated) {
-        throw new StartupChatDependencyError('selected-chat-hydration-failed', 'Selected chat hydration failed')
-      }
-      if (!promptHydrated) {
-        throw new StartupChatDependencyError(
-          'selected-prompt-template-hydration-failed',
-          'Selected prompt-template owner hydration failed',
-        )
-      }
-    } catch (error) {
-      assertCurrent()
-      if (target !== currentStartupChatReadinessTarget()) continue
-      throw error
+      if (target === currentStartupChatReadinessTarget()) return
+      startupChatReattachReady = false
+    } finally {
+      finishStartupChatReadinessEvaluation(evaluationId)
     }
-    startupChatReattachReady = true
-    startActiveGenerationReattach()
-    await prepareOpenChatGenerationReattach()
-    assertCurrent()
-    if (target === currentStartupChatReadinessTarget()) return
-    startupChatReattachReady = false
   }
 }
 

@@ -5,6 +5,7 @@ import {
   type BrowserContext,
   type Page,
   type Request,
+  type Route,
   type TestInfo,
 } from '@playwright/test'
 import { writeFileSync } from 'node:fs'
@@ -418,6 +419,130 @@ async function promoteViaUi(pair: Pair, client: Client, previous: Client, route:
   await expectNoReload(pair)
 }
 
+async function holdNativeGetResponses(page: Page, pathname: string) {
+  let release!: () => void
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const responses: Array<{ status: number; delivered: boolean; deliveryFailed?: boolean }> = []
+  const matches = (url: URL) => url.pathname === pathname
+  const handler = async (route: Route) => {
+    if (route.request().method() !== 'GET') return route.fallback()
+    const response = await route.fetch()
+    const record = { status: response.status(), delivered: false, deliveryFailed: false }
+    responses.push(record)
+    await held
+    try {
+      // Preserve the complete native response; only its delivery is scheduled.
+      await route.fulfill({ response })
+      record.delivered = true
+    } catch {
+      record.deliveryFailed = true
+    }
+  }
+  await page.route(matches, handler)
+  return {
+    responses,
+    release,
+    async dispose() {
+      release()
+      await page.unroute(matches, handler)
+    },
+  }
+}
+
+async function promoteWithPendingStartupChat(pair: Pair, evidence: Record<string, unknown>): Promise<void> {
+  const characterA = await holdNativeGetResponses(pair.a.page, `/api/v1/characters/${CHARACTER_A}`)
+  const chatB = await holdNativeGetResponses(pair.a.page, `/api/v1/chats/${CHAT_B}/messages`)
+  const scheduling: Record<string, unknown> = {
+    heldResponses: { characterA: characterA.responses, chatB: chatB.responses },
+  }
+  evidence.startupTargetScheduling = scheduling
+  let promotion: Promise<void> | undefined
+  try {
+    promotion = promoteViaUi(pair, pair.a, pair.b, ROUTE_A, 3)
+    void promotion.catch(() => undefined)
+    await expect.poll(() => characterA.responses.length, { timeout: 30_000 }).toBeGreaterThan(0)
+    await expect.poll(() => chatB.responses.length, { timeout: 30_000 }).toBeGreaterThan(0)
+    expect(characterA.responses.every((response) => response.status === 200 && !response.delivered)).toBe(true)
+    expect(chatB.responses.every((response) => response.status === 200 && !response.delivered)).toBe(true)
+
+    // Eager hydration can also request B. Require the actual startup owner to
+    // be awaiting B before allowing the retained A route to finish its reads.
+    const pendingB = () =>
+      pair.a.page.evaluate(
+        ({ characterId, chatId }) => {
+          const smoke = window.__RISU_FASTIFY_BROWSER_SMOKE__!
+          const generation = smoke.getClientSessionSnapshot().generation
+          return smoke.getStartupChatReadinessEvaluations().find((evaluation) => {
+            const target = evaluation.target.split('\u0000')
+            return (
+              evaluation.sessionGeneration === generation &&
+              evaluation.phase === 'chat-and-prompt' &&
+              target[3] === characterId &&
+              target[4] === chatId
+            )
+          })
+        },
+        { characterId: CHARACTER_B, chatId: CHAT_B },
+      )
+    await expect.poll(pendingB, { timeout: 30_000 }).toBeTruthy()
+    const evaluation = (await pendingB())!
+    scheduling.pendingBeforeRouteRelease = evaluation
+    const beforeRouteRelease = durableSnapshot(pair.harness.dataDir)
+    expect(beforeRouteRelease.selectedCharacterId).toBe(CHARACTER_B)
+    expect(beforeRouteRelease.ownership).toMatchObject({
+      active_writer_session_id: pair.a.sessionId,
+      writer_epoch: 3,
+    })
+
+    characterA.release()
+    await expect
+      .poll(() => durableSnapshot(pair.harness.dataDir).selectedCharacterId, { timeout: 30_000 })
+      .toBe(CHARACTER_A)
+    const selection = durableSnapshot(pair.harness.dataDir).events.find(
+      (event) => event.revision > beforeRouteRelease.revision && event.type === 'character.selected',
+    )
+    expect(selection).toMatchObject({ id: CHARACTER_A, origin_writer_session_id: pair.a.sessionId })
+    await expect(pair.a.page.locator('[data-observer-shell]')).toHaveCount(0)
+    await expect(messageBody(pair.a.page, 'switch-seed-A')).toContainText('Committed switch seed A.')
+    await expect(messageBody(pair.a.page, 'switch-seed-A')).toBeVisible()
+    const beforeChatRelease = await pair.a.page.evaluate(() => {
+      const smoke = window.__RISU_FASTIFY_BROWSER_SMOKE__!
+      return {
+        route: smoke.getCurrentRoute(),
+        capabilities: smoke.getStartupCoordinatorSnapshot().capabilities,
+        generationReadiness: smoke.getGenerationReadinessDiagnostic(),
+        evaluations: smoke.getStartupChatReadinessEvaluations(),
+      }
+    })
+    expect(beforeChatRelease.route).toMatchObject({ path: ROUTE_A, chaId: CHARACTER_A, chatId: CHAT_A })
+    expect(beforeChatRelease.capabilities).toMatchObject({ canMutate: true, canGenerate: false })
+    expect(beforeChatRelease.evaluations).toContainEqual(evaluation)
+    expect(chatB.responses.every((response) => !response.delivered)).toBe(true)
+    scheduling.acceptedSelection = selection
+    scheduling.beforeChatRelease = beforeChatRelease
+
+    chatB.release()
+    await promotion
+    await expect
+      .poll(
+        () =>
+          [...characterA.responses, ...chatB.responses].every(
+            (response) => response.status === 200 && response.delivered && !response.deliveryFailed,
+          ),
+        { timeout: 30_000 },
+      )
+      .toBe(true)
+    scheduling.nativeResponsesDelivered = true
+  } finally {
+    characterA.release()
+    chatB.release()
+    await Promise.all([characterA.dispose(), chatB.dispose()])
+    await promotion?.catch(() => undefined)
+  }
+}
+
 async function writerHeaders(client: Client): Promise<Record<string, string>> {
   return client.page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders())
 }
@@ -555,6 +680,7 @@ async function finishPair(
             return {
               coordinator: smoke.getStartupCoordinatorSnapshot(),
               generationReadiness: smoke.getGenerationReadinessDiagnostic(),
+              chatReadinessEvaluations: smoke.getStartupChatReadinessEvaluations(),
               session: smoke.getClientSessionSnapshot(),
               route: smoke.getCurrentRoute(),
               routeResources: smoke.getRouteResourceLoadState(),
@@ -651,7 +777,7 @@ test('Use this device switches A to B to A in place while preserving reader rout
     )
     expect(durableSnapshot(pair.harness.dataDir).selectedCharacterId).toBe(CHARACTER_B)
 
-    await promoteViaUi(pair, pair.a, pair.b, ROUTE_A, 3)
+    await promoteWithPendingStartupChat(pair, evidence)
     await expectReader(pair.b, ROUTE_B, CHAT_B)
     await expect(pair.a.page.getByTestId('default-chat-composer')).toHaveValue(UNSENT_A)
     await expectStaleMessageRejected(pair, pair.b, headersB, 'switch-stale-b-message')

@@ -395,6 +395,7 @@ import { getActiveWriterSessionId, resetWriterAccessLostForTests } from './serve
 import { adoptReplacementDatabaseOwnership } from './server/replacementDatabaseOwnership'
 import {
   backgroundReady,
+  getStartupChatReadinessEvaluations,
   getStartupCoordinatorSnapshot,
   getStartupReadinessSnapshot,
   recordStartupMilestone,
@@ -1404,14 +1405,32 @@ describe('API-backed client bootstrap', () => {
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
     await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
 
+    let releaseNewerChat!: (ready: boolean) => void
+    hydrationApi.hydrateActiveChat.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseNewerChat = resolve
+        }),
+    )
     withTestDatabaseWrite(() => {
       getDatabase().characters[1].chatPage = 0
     })
     hydrationApi.readinessRefreshHook?.()
+    await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledTimes(2))
+    const evaluations = getStartupChatReadinessEvaluations()
+    expect(evaluations).toHaveLength(2)
+    expect(new Set(evaluations.map((evaluation) => evaluation.evaluationId)).size).toBe(2)
+    expect(evaluations.map((evaluation) => evaluation.target.split('\u0000')[4]).sort()).toEqual([
+      'chat-b',
+      'chat-b-new',
+    ])
+    expect(evaluations.every((evaluation) => evaluation.phase === 'chat-and-prompt')).toBe(true)
+    releaseNewerChat(true)
     await vi.waitFor(() => expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true))
+    expect(getStartupChatReadinessEvaluations()).toHaveLength(1)
 
     releaseOlderChat(false)
-    await Promise.resolve()
+    await vi.waitFor(() => expect(getStartupChatReadinessEvaluations()).toEqual([]))
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
   })
@@ -6076,6 +6095,14 @@ describe('explicit connected writer switching', () => {
     await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
     expect(get(selectedCharID)).toBe(1)
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
+    expect(getStartupChatReadinessEvaluations()).toEqual([
+      {
+        evaluationId: expect.any(Number),
+        sessionGeneration: getClientSessionSnapshot().generation,
+        target: ['character', '/character/char-a/chat-a', '1', 'char-b', 'chat-b', ''].join('\u0000'),
+        phase: 'chat-and-prompt',
+      },
+    ])
 
     // Writer recovery restores the persisted B selection before App finishes
     // applying this reader's retained A route.
@@ -6086,6 +6113,7 @@ describe('explicit connected writer switching', () => {
     expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
     expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
     expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledTimes(2)
+    expect(getStartupChatReadinessEvaluations()).toEqual([])
   })
 
   it('keeps generation gated for a prompt owner changed during writer startup hydration', async () => {
@@ -6155,6 +6183,12 @@ describe('explicit connected writer switching', () => {
 
     const switching = promoteConnectedReader()
     await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
+    const pendingEvaluations = getStartupChatReadinessEvaluations()
+    expect(pendingEvaluations).toHaveLength(1)
+    expect(pendingEvaluations[0]).toMatchObject({
+      sessionGeneration: getClientSessionSnapshot().generation,
+      phase: 'chat-and-prompt',
+    })
     selectedCharID.set(0)
     newerWriter()
     selectedChat.resolve(false)
@@ -6163,6 +6197,7 @@ describe('explicit connected writer switching', () => {
     expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: false, canGenerate: false })
     expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce()
     expect(runtimeApi.prepareOpenChatGenerationReattach).not.toHaveBeenCalled()
+    expect(getStartupChatReadinessEvaluations()).toEqual([])
   })
 
   it('cancels without takeover, replay, or blocking a fresh reader subscription', async () => {

@@ -99,6 +99,12 @@ export interface FastifyBrowserSmokeHook<
     phase: StartupMilestone | null
     failureCode?: string
   }
+  getStartupChatReadinessEvaluations: () => Array<{
+    evaluationId: number
+    sessionGeneration: number
+    target: string
+    phase: string
+  }>
   getStartupSnapshot: () => StartupReadinessSnapshot
   isLoaded: () => boolean
   patchRuntimeSettings: (patch: Record<string, unknown>) => Promise<BrowserSmokeCommandResult>

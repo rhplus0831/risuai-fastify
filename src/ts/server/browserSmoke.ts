@@ -21,6 +21,7 @@ import { currentRouteResourceLoadState } from './routeResourceLoader'
 import {
   backgroundReady,
   getGenerationReadinessDiagnostic,
+  getStartupChatReadinessEvaluations,
   getStartupCoordinatorSnapshot,
   getStartupReadinessSnapshot,
   waitForStartupMilestone,
@@ -77,6 +78,7 @@ export function installFastifyBrowserSmokeHook() {
     }),
     getStartupCoordinatorSnapshot,
     getGenerationReadinessDiagnostic,
+    getStartupChatReadinessEvaluations,
     getStartupSnapshot: getStartupReadinessSnapshot,
     getRouteResourceLoadState: currentRouteResourceLoadState,
     isLoaded: backgroundReady,

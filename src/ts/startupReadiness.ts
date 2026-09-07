@@ -65,6 +65,39 @@ export interface GenerationReadinessDiagnostic {
   failureCode?: StartupAttemptFailureCode
 }
 
+export interface StartupChatReadinessEvaluation {
+  evaluationId: number
+  sessionGeneration: number
+  target: string
+  phase: 'resources' | 'character' | 'chat-and-prompt' | 'reattach'
+}
+
+let nextChatReadinessEvaluationId = 1
+const chatReadinessEvaluations = new Map<number, StartupChatReadinessEvaluation>()
+
+/** Passive metadata for each actual target evaluation; never changes capability state. */
+export function beginStartupChatReadinessEvaluation(sessionGeneration: number, target: string): number {
+  const evaluationId = nextChatReadinessEvaluationId++
+  chatReadinessEvaluations.set(evaluationId, { evaluationId, sessionGeneration, target, phase: 'resources' })
+  return evaluationId
+}
+
+export function advanceStartupChatReadinessEvaluation(
+  evaluationId: number,
+  phase: StartupChatReadinessEvaluation['phase'],
+): void {
+  const evaluation = chatReadinessEvaluations.get(evaluationId)
+  if (evaluation) evaluation.phase = phase
+}
+
+export function finishStartupChatReadinessEvaluation(evaluationId: number): void {
+  chatReadinessEvaluations.delete(evaluationId)
+}
+
+export function getStartupChatReadinessEvaluations(): StartupChatReadinessEvaluation[] {
+  return [...chatReadinessEvaluations.values()].map((evaluation) => ({ ...evaluation }))
+}
+
 export interface StartupCoordinatorReadable {
   subscribe(run: (snapshot: StartupCoordinatorSnapshot) => void): () => void
 }
@@ -581,6 +614,8 @@ export function waitForStartupMilestone(milestone: StartupMilestone, timeoutMs =
 
 /** Test-only reset for the module singleton. */
 export function resetStartupReadinessForTests(): void {
+  chatReadinessEvaluations.clear()
+  nextChatReadinessEvaluationId = 1
   observedMilestoneTimes.clear()
   transitionTimes.clear()
   attempts.length = 0
