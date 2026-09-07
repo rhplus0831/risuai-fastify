@@ -749,3 +749,21 @@ all thirteen full-suite lanes pass, including 92/92 browser cases. BSE-007's
 shared setup repair and named fault/restored proof are complete. No current
 scenario/control owner is pending or partial; Phase 4 retains its separate final
 verification and archive requirements.
+
+## Final Phase 4 Reconciliation
+
+Fresh discovery at `173b8fb14` confirms **92 cases in 22 specs**, twelve local
+TypeScript support files and four PNG baselines. All 92 spec/title identities
+and source anchors match this inventory; the twenty-four direct/alias hook owners
+include both Reader helper files. The eleven lifecycle bodies remain unchanged
+through BSE-007's native-selection precondition repair. Only S38/S57 titles were
+renamed; no case or protected contract was removed. Conditional matrices, static
+manifest scope and the four batches' 44 route subjourneys remain explicit.
+
+Every current case/control has an accepted retained, strengthened or reclassified
+review disposition. The [final finding table](findings.md#final-finding-dispositions)
+reconciles BSE-001–007, source-limited pilots, Reader maintenance, accurate narrow
+contracts and follow-up scope. Qualified controls and Phase 3's full current
+cohort cover every changed boundary; Phase 4 introduces no behavioral edit or new
+unresolved ordering question requiring another focused campaign. Its own final
+agent/full gates and closeout remain in [status](status.md).

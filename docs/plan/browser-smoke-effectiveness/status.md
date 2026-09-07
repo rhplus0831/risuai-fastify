@@ -553,3 +553,29 @@ has been relabeled as a passing result. The complete full log is
 Phase 4 now reconciles final discovery/findings and runs its own required agent
 and full gates. This acceptance supplies that prerequisite; it does not replace
 Phase 4's explicit final validation or archival actions.
+
+## Phase 4 Final Source and Finding Reconciliation
+
+Fresh list-mode discovery at `173b8fb14` confirms **92 cases/22 specs**, twelve
+local support files and four PNGs, without collection errors. A complete
+bijection matches all current spec/title/source records and the direct/alias
+hook map; no current owner is pending or partial. The only renamed identities
+are S38/S57's scoped titles, with unchanged assertions. BSE-007 adds a read-only
+setup prerequisite and preserves all eleven lifecycle bodies and existing
+configuration retry. No case, subjourney or critical contract was removed.
+
+Root reconciles the [compact final findings](findings.md#final-finding-dispositions)
+against their named source, literal fault/reproduction commands, intended failed
+assertion, restored control and limits. All four critical contracts retain the
+required browser-fault evidence. Changed Reader, remount, route and selection
+boundaries have their own qualified controls; unmanifested old geometry candidates
+remain unqualified. There is no open high-risk gap or deferred required repair.
+
+Focused evidence applies to the final application/test source: the eight-case
+critical cohort, then all-eleven BSE-007 baseline/restored consumers, and all
+92 cases in the accepted Phase 3 full gate. Phase 4 changes evidence records only,
+so no additional scheduling or mutation campaign is justified. The required final
+`pnpm test:agent` and phase-ending `pnpm test:all` are now run at a clean candidate.
+Collect matching Quality `smoke` CI when available; its absence does not replace
+or transfer these implementing-agent gates. Final acceptance/archive remain
+pending until both gates pass and the completed records are validated.
