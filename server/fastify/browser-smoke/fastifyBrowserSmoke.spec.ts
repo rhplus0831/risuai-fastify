@@ -5,7 +5,7 @@ import path from 'node:path'
 import { buildApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
 import { setupBrowserSmokeAuth } from './auth.js'
-import { importFastBootstrapDatabase } from './fastBootstrapHarness.js'
+import { importFastBootstrapDatabase, setObserverShellMode } from './fastBootstrapHarness.js'
 
 interface Harness {
   app: FastifyInstance
@@ -569,13 +569,12 @@ test('a connected reader keeps receiving updates through a legacy writer takeove
   const writerContext = await browser.newContext()
   const readerContext = await browser.newContext()
   const takeoverContext = await browser.newContext()
-  const flagKey = 'risu:fast-bootstrap-observer-shell'
   for (const [context, mode] of [
     [writerContext, 'disabled'],
     [readerContext, 'enabled'],
     [takeoverContext, 'disabled'],
   ] as const) {
-    await context.addInitScript(({ key, value }) => sessionStorage.setItem(key, value), { key: flagKey, value: mode })
+    await setObserverShellMode(context, mode)
   }
   const writerPage = await writerContext.newPage()
   const readerPage = await readerContext.newPage()
