@@ -142,10 +142,11 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
 
     releaseShell.resolve()
     await displayRequested.promise
-    await expect(page.locator('.chat-message-body').first()).toBeVisible()
+    // Paint is available immediately, while transcript rendering waits for
+    // authoritative Display settings and the other chat display dependencies.
+    await expect(page.locator('[data-chat-message-skeleton]')).toBeVisible()
+    await expect(page.locator('.chat-message-body')).toHaveCount(0)
     expect(await appearance(page)).toEqual(expected)
-    await expect(page.locator('.chat-message-body').first()).toHaveCSS('font-size', '19.6px')
-    await expect(page.locator('.chat-message-body').first()).toHaveCSS('line-height', '40.32px')
     // Cached paint values must not masquerade as hydrated Display settings.
     expect(
       await page.evaluate(() =>

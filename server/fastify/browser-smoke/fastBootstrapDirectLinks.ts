@@ -85,6 +85,7 @@ export function expectedDirectLinkSurfaces(): string[] {
     'route:not-found',
     'route:character',
     'route:character-chat',
+    'runtime:chat-display',
     'runtime:chat-generation',
     ...Object.values(SETTINGS_RESOURCE_SURFACE_BY_INDEX),
     ...Object.values(PLAYGROUND_RESOURCE_SURFACE_BY_INDEX),

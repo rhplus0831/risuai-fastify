@@ -1187,7 +1187,7 @@ test('prompt presets and model profiles reorder from an immediate mobile touch d
 
     await page.goto(`${harness.baseUrl}/settings/model`)
     await waitForBrowserSmokeLoaded(page)
-    await page.getByRole('button', { name: 'Profiles', exact: true }).click()
+    await page.getByRole('button', { name: 'Models', exact: true }).click()
     const profileRows = page.locator('[data-model-profile-row]')
     await expect(profileRows).toHaveCount(2)
     const profileReorder = page.waitForResponse(

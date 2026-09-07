@@ -48,7 +48,12 @@ test('BardWiki settings, manual document, confirmation status, and lifecycle too
   await expect(page).toHaveURL(`${harness.baseUrl}/settings/bardwiki`)
   await expect(page.locator('[data-risu-bardwiki-settings]')).toBeVisible()
   await expect(page.locator('[data-risu-bardwiki-settings]')).toContainText('may incur provider cost')
-  await expect(page.getByRole('checkbox', { name: 'Enable BardWiki for new chats', exact: true })).toBeChecked()
+  await expect(
+    page.getByRole('checkbox', {
+      name: 'Enable BardWiki by default (new and existing chats without an override)',
+      exact: true,
+    }),
+  ).toBeChecked()
 
   await page.goto(`${harness.baseUrl}/character/fast-bootstrap-small-character/fast-bootstrap-small-chat`)
   await waitForLoaded(page)
