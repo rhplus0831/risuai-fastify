@@ -27,6 +27,7 @@ export const PARTIAL = 'Connected reader partial'
 export const REPLY = `${PARTIAL} and canonical completed reply.`
 export const IGP_SUFFIX = ' [One durable IGP effect]'
 export const IGP_REPLY = `${REPLY}${IGP_SUFFIX}`
+export const IGP_PROMPT = '<|im_start|>system<|im_sep|>Return the deterministic fixture suffix.<|im_end|>'
 const SESSION_KEY = 'risu:active-writer-session-id'
 const GENERATION_SETTINGS = {
   configured: true,
@@ -87,7 +88,7 @@ function fixture(enabledIgp = false): Record<string, unknown> {
     echoDelay: 0,
     // The queued-finalization journey executes a real scoped IGP message update
     // through the built-in local echo provider; other journeys disable effects.
-    igpPrompt: enabledIgp ? '<|im_start|>system<|im_sep|>Return the deterministic fixture suffix.<|im_end|>' : '',
+    igpPrompt: enabledIgp ? IGP_PROMPT : '',
     notification: false,
     ttsAuto: false,
     playMessage: false,
@@ -145,7 +146,16 @@ export interface EffectRow {
 export function readGenerationTruth(dataDir: string) {
   const db = new DatabaseSync(path.join(dataDir, 'risu.db'), { readOnly: true })
   try {
+    const settings = JSON.parse(
+      (db.prepare('SELECT data_json FROM settings WHERE id = 1').get() as { data_json: string }).data_json,
+    ) as Record<string, unknown>
     return {
+      completionSettings: {
+        igpPrompt: settings.igpPrompt,
+        subModel: settings.subModel,
+        modelRoles: settings.modelRoles,
+        echoMessage: settings.echoMessage,
+      },
       ownership: db
         .prepare('SELECT lineage, active_writer_session_id, writer_epoch FROM database_metadata WHERE id = 1')
         .get() as { lineage: string; active_writer_session_id: string | null; writer_epoch: number },
@@ -679,9 +689,19 @@ const PURE_POST_PATHS = new Set([
   '/api/v1/characters/aggregate',
   '/api/v1/chats/messages/bulk',
   '/api/v1/characters/lorebooks/bulk',
-  ...['display', 'sidebar', 'advanced', 'media', 'modules', 'agents', 'language', 'prompt'].map(
-    (group) => `/api/v1/settings/${group}`,
-  ),
+  ...[
+    'display',
+    'sidebar',
+    'advanced',
+    'media',
+    'modules',
+    'agents',
+    'language',
+    'prompt',
+    'providers',
+    'runtime',
+    'memory',
+  ].map((group) => `/api/v1/settings/${group}`),
   ...['modules', 'promptPresets', 'modelPresets', 'personas', 'plugins'].map((name) => `/api/v1/collections/${name}`),
 ])
 
@@ -755,9 +775,17 @@ export function expectNoReaderControl(pair: GenerationPair): void {
         record.expectedWriterEpoch === String(record.session?.writer?.epoch) &&
         record.expectedLineage === record.session?.databaseLineage
       )
+    // Existing cache/display POST reads carry the caller's identity header;
+    // their exact allowlisted handlers grant no mutation or writer authority.
+    if (record.method === 'POST' && isPureRead(record))
+      return record.writerSession !== null && record.writerSession !== record.session?.sessionId
     if (record.writerSession !== null) return true
     return !isPureRead(record)
   })
+  pair.evidence.readerCalls = readerCalls
+  pair.evidence.authorizedRecoveryCalls = recoveries
+  pair.evidence.ownerships = pair.ownerships
+  pair.evidence.forbiddenReaderCalls = forbidden
   expect(
     forbidden,
     'Readers, including demoted former writers, never dispatch control/effect/provider mutations',
@@ -773,9 +801,6 @@ export function expectNoReaderControl(pair: GenerationPair): void {
     return remaining <= 0
   })
   expect(uncovered, 'Every mutation transport is covered by the synchronous role recorder').toEqual([])
-  pair.evidence.readerCalls = readerCalls
-  pair.evidence.authorizedRecoveryCalls = recoveries
-  pair.evidence.ownerships = pair.ownerships
 }
 
 export async function expectTerminalGeneration(

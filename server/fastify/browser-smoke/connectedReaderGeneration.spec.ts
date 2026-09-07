@@ -6,6 +6,7 @@ import {
   REPLY,
   IGP_REPLY,
   IGP_SUFFIX,
+  IGP_PROMPT,
   addGenerationClient,
   bootGenerationPair,
   createGenerationPair,
@@ -172,7 +173,7 @@ test('writer transfers during streaming and stopping preserve one cancelled part
     expect(terminal.effects).toEqual([])
     expect(terminal.ownership).toMatchObject({ active_writer_session_id: pair.a.sessionId, writer_epoch: 3 })
     const cancellations = pair.fetches.filter(
-      (record) => record.method === 'POST' && /\/generation-operations\/[^/]+\/cancellation$/u.test(record.path),
+      (record) => record.method === 'PUT' && /\/generation-operations\/[^/]+\/cancellation$/u.test(record.path),
     )
     expect(cancellations).toMatchObject([{ client: 'B', canMutate: true, writerSession: pair.b.sessionId }])
     expect(cancellations).toHaveLength(1)
@@ -208,6 +209,12 @@ test('writer transfer while a real finalization journal is queued commits one re
     await expect.poll(() => readGenerationTruth(pair.harness.dataDir).finalizations.length).toBe(1)
     await expect.poll(() => pair.provider.snapshot().done).toBe(true)
     const queued = readGenerationTruth(pair.harness.dataDir)
+    expect(queued.completionSettings).toMatchObject({
+      igpPrompt: IGP_PROMPT,
+      subModel: 'echo_model',
+      modelRoles: { emotion: 'echo_model' },
+      echoMessage: IGP_SUFFIX,
+    })
     expect(queued.operations[0]).toMatchObject({
       operation_id: operation.operation_id,
       desired_terminal_outcome: 'completed',
@@ -239,6 +246,7 @@ test('writer transfer while a real finalization journal is queued commits one re
       { generation_id: attempt.job_id, operation_id: operation.operation_id, status: 'pending' },
     ])
     expect(transferred.effects).toEqual([])
+    expect(transferred.completionSettings).toEqual(queued.completionSettings)
     pair.evidence.queuedAfterTransfer = transferred
     // The real journal and completed UI transfer are now independently proven.
     // Removing the failure lets the ordinary server retry worker commit it.

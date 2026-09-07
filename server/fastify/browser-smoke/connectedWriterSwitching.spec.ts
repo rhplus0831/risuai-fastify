@@ -896,7 +896,9 @@ test('an accepted server generation keeps its job and durable reply when Use thi
     expect(
       pair.apiRequests.filter(
         (request) =>
-          request.method === 'POST' && /^\/api\/v1\/generation-operations\/[^/]+\/cancellation$/u.test(request.path),
+          !['GET', 'HEAD', 'OPTIONS'].includes(request.method) &&
+          (/^\/api\/v1\/generation-operations\/[^/]+\/cancellation$/u.test(request.path) ||
+            /^\/api\/v1\/generate\/chat\/[^/]+$/u.test(request.path)),
       ),
     ).toEqual([])
     expect(terminal.ownership).toEqual({ ...initial, active_writer_session_id: pair.b.sessionId, writer_epoch: 2 })
