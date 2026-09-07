@@ -961,3 +961,54 @@ with controlled transport, not a mounted Reader BardWiki workspace.
 six fixture tests and browser TypeScript pass. The fixture proves null owner
 and epoch zero around the real import rather than clearing ownership afterward.
 Neither result enables the public default or accepts the pending browser work.
+
+### Phase 5 Enabled-Build Baseline and Integration Repairs
+
+`d3f3de973` extends S80 to keep two Readers live and adds S89/S90 for actual
+Fastify/SQLite restart and fallback preserving a native encrypted command plus
+a newer composer draft. The initial TRUE build passes, but its selected run is
+**1 passed / 1 failed / 1 interrupted**: S80 passes; restart reaches successful
+same-document reconnect, then the helper incorrectly expects an inline editor;
+fallback is interrupted at that same helper before its distinct contract.
+`4dfac6c1e` follows the actual Popup Editor → Plain text editor → Close save
+entry and bounds action waits. The fresh TRUE build then passes in 12.81s and
+all three cases pass in 16.1s. Both initial override values are null. S90 records
+one encrypted row, one same-ID replay with only baseRevision rebased, one edit/
+event/receipt/ACK, and the newer visible draft after conservative reload. S89
+records interrupted retained content, same-document reconnect on the same port,
+a real post-restart edit, and exact native SSE cleanup. This restarts the Fastify
+instance and SQLite on the same data directory; it is not an external process kill.
+
+The full TRUE cohort at `4dfac6c1e` then finishes **80 passed / 10 failed** in
+3.7m. Required integration-artifact merging succeeds; all frozen source inputs
+remain unchanged. Across selected/full runs, 21,977 successful script URLs map
+to the emitted catalog (URL attribution, not independently downloaded-byte
+hashing). The three new cases remain passing, but the failed cohort blocks
+rollout. Artifacts are `/tmp/reader-phase5-true-baseline-vqzd3lau` and
+`/tmp/reader-phase5-true-baseline-n6o1w41m`.
+
+| Failed boundary                                            | Source-backed disposition                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S23/S24 raw startup text; S25 two older-display requests   | The automatic writer preview mounts Reader detail/transcript before conditional acquisition and writer plugin/display readiness. `36f0d33ff` retains shell/navigation preview but defers reader content until an actual reading/writing disposition, including interrupted initial recovery. Two mounted pre-fix failures reproduce the unwanted reads; 66 focused tests pass. Original browser display oracles remain unchanged and await rerun.          |
+| S46 empty reroll candidates after visible completed reload | A deterministic real hydration/role/store regression reproduces a Reader-filled body satisfying writer fast paths without seeding persisted alternates. `f24d781ae` tracks unseeded body epochs across resets and metadata clones, requiring one authorized writer read; Reader event/bulk application cannot seed writer state. Hydration/reactivity/reroll-owner suites pass 102/6/6. Final browser composition remains pending.                         |
+| S49 cold selected-locale failure loses its retry flow      | Initial preview failure silently settled as a Reader before acquisition. `a9e2ad06e` keeps unresolved shell/locale failures on acknowledged startup retry and fences auth/session loss during the alert. Three pre-fix cases fail; all 231 bootstrap/startup tests pass. A subsequent typecheck found two alert-fixture return types; those are corrected before the next browser source.                                                                  |
+| S50 later fresh contexts; S76 later test startup           | Both reused a durable owner across new browser sessions. `e8333ffa2` creates one locale harness per cold/warm pair (all 12 samples retained) and one visible-state harness per case. Real auth-only import and all original actions/oracles are preserved.                                                                                                                                                                                                 |
+| S44 offline route-loader error absent                      | Managed offline clients intentionally expose interrupted reading and cannot execute writer Grid route loading. `1f682514c` retains only this route-loader case under explicit conservative startup; its failed-chunk/Retry/focus oracles are unchanged. Normal Reader offline recovery remains S80.                                                                                                                                                        |
+| S77 no forced reload after import                          | The real held PATCH receives 409 after a coherent new-lineage Reader has superseded its writer generation; the document correctly remains open. `ac83fdad2` retains the old forced-reload case explicitly conservative and adds S91: hold until actual Reader replacement, release the old conflict, prove no automatic acquisition, then Use this device and restore the original sidebar under same-owner authority. New browser/fault proof is pending. |
+| S16 390px tall chat-list entry timeout                     | The trace-free case reports only a 30s timeout. Its 58 frame samples end at 2.296s with readable tall content and a −0.296875px offset. This does not establish a geometry failure. The unchanged eight-case entry suite must rerun after the preview fix; a repeated failure requires bounded boundary/cleanup diagnostics.                                                                                                                               |
+
+The prior passing legacy takeover case also records three pre-navigation
+sessionStorage SecurityErrors from its unguarded setup script. Its mode setup
+now uses the existing guarded shared helper, preserving the exact modes and
+ownership assertions; the focused companion will verify this correction.
+The public default remains disabled. The next candidate must pass the seven
+affected specs (28 cases), that legacy companion, and the complete 91-case TRUE
+cohort before its frozen fault/restored campaign and default/FALSE-build checks.
+
+`48288d595` corrects the alert fixture types; `262385732` reuses guarded legacy
+mode setup. Final Svelte checking reports zero errors and warnings; protocol,
+shared-core, Fastify and browser types pass. Architecture counts remain 4,274
+fixture references and 22 reviewed seams, with no new owner allowance. Current
+documentation (49), explicit plan/index validation (22), formatting and whitespace
+pass. Playwright discovery confirms 91 cases in 22 specs. These are preparation
+checks, not acceptance of the pending corrected browser cohort.
