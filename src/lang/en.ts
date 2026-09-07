@@ -2144,6 +2144,7 @@ export const languageEnglish = {
     connected: 'Read only. Updates from the writer appear here.',
     connecting: 'Connecting to updates…',
     interrupted: 'Connection interrupted. Showing the last received content.',
+    generationInterrupted: 'Live generation updates were interrupted. Refresh to reconnect.',
     switching: 'Preparing write access. You can keep reading.',
     setupServerTitle: 'Set up this server',
     setupServerBody: 'This server is empty. Set it up on this device to create the initial data and begin using it.',

@@ -2788,7 +2788,7 @@
         }}>
         <TrashIcon size={20} />
       </button>
-    {:else if !isGenerationLoading}
+    {:else if !isGenerationLoading || (readOnly && isGenerationProjection && message.length > 0)}
       <span class="text-xs" aria-live="polite">{statusMessage}</span>
       <div class="flex items-center ml-2 gap-2">
         {@render translationButton()}

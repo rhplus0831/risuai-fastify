@@ -70,6 +70,8 @@
   import { scrollElementToContainerStart } from './chatScroll'
   import type { ActiveGenerationJob } from 'src/ts/server/bootstrap'
   import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
+  import type { ReaderGenerationProjection } from 'src/ts/server/readerGenerationTypes'
+  import { readerGenerationKey, readerGenerationRow } from './readerGenerationRows'
 
   const getCurrentChatRoomId = () => chatId ?? null
 
@@ -97,6 +99,7 @@
     initialDisplayPending = $bindable(false),
     initialRowsPending = false,
     readOnly = false,
+    readerGeneration = undefined,
   }: {
     messages: Message[]
     chatId?: string | null
@@ -121,10 +124,30 @@
     initialDisplayPending?: boolean
     initialRowsPending?: boolean
     readOnly?: boolean
+    /** Explicit null selects idle reader presentation; undefined retains the writer path. */
+    readerGeneration?: ReaderGenerationProjection | null
   } = $props()
+  const readerPresentation = $derived(readerGeneration !== undefined)
+  const activeReaderGeneration = $derived(
+    readerGeneration?.characterId === currentCharacter.chaId &&
+      readerGeneration.chatId === chatId &&
+      readerGeneration.databaseLineage === $clientSessionStore.databaseLineage
+      ? readerGeneration
+      : null,
+  )
+  // Handoff changes only this row view. The observer owns terminal reconciliation and release.
+  const readerRow = $derived(readerGenerationRow(messages, activeReaderGeneration))
+  let readerPresentationKeyAliases: Record<string, string> = $state({})
+  const readerPresentationKey = $derived.by(() => {
+    if (!activeReaderGeneration || !readerRow) return null
+    if (readerRow.append) return readerGenerationKey(activeReaderGeneration)
+    const target = activeReaderGeneration.targetMessageId
+    if (!target) return null
+    return readerPresentationKeyAliases[target] ?? `${target}:${get(ReloadChatPointer)[readerRow.index] ?? 0}`
+  })
   const writeActionsAllowed = $derived.by(() => {
     void $clientSessionStore
-    return !readOnly && canUseClientWriteAccess()
+    return !readOnly && !readerPresentation && canUseClientWriteAccess()
   })
 
   function legacyChatMetadataFallback(): ReturnType<typeof projectChatMetadata> | undefined {
@@ -220,12 +243,14 @@
     })
   }, tick)
   let activeHalfStreamingProgress = $derived.by(() => {
+    if (readerPresentation) return undefined
     const currentChatId = getCurrentChatRoomId()
     return $halfStreamingProgress.find(
       (entry) => entry.characterId === currentCharacter.chaId && entry.chatId === currentChatId,
     )
   })
   let activeRegenerateProjection = $derived.by(() => {
+    if (readerPresentation) return undefined
     const currentChatId = getCurrentChatRoomId()
     if (!currentChatId) return undefined
     return $generationDisplayProjections
@@ -240,6 +265,7 @@
   })
   let activeAppendActivity = $derived.by(() => {
     if (
+      readerPresentation ||
       !isGenerationActive ||
       generationActivity?.kind !== 'message' ||
       generationActivity.mode !== 'send' ||
@@ -251,6 +277,7 @@
   })
   let activeAppendJob = $derived.by(() => {
     if (
+      readerPresentation ||
       !isGenerationActive ||
       generationJob?.chatId !== getCurrentChatRoomId() ||
       (generationJob.mode !== undefined && generationJob.mode !== 'send')
@@ -357,13 +384,13 @@
     const currentChatId = chatId ?? null
     recordChatRowsBuild(currentChatId)
     const generationPersistenceLookup = buildGenerationPersistenceStateLookup(
-      getGenerationFinalizationPersistencesForChat(currentChatId),
+      readerPresentation ? [] : getGenerationFinalizationPersistencesForChat(currentChatId),
     )
     const lastMemoryId = currentChatMetadata?.lastMemory
     const { loadStart, loadEnd: configuredLoadEnd } = getTranscriptWindowRange({
       messageCount: messages.length,
       loadPages,
-      foldedMessageIndex: readOnly ? -1 : chatFoldedStateMessageIndex.index,
+      foldedMessageIndex: readOnly || readerPresentation ? -1 : chatFoldedStateMessageIndex.index,
     })
     // Send/streaming can reduce the ordinary page count while an older editor
     // or selection is still owned. Retain its already-hydrated logical range;
@@ -376,6 +403,9 @@
       activeRegenerateProjection?.targetMessageId,
       activeRegenerateProjection?.generationId,
       activeAppendMessageIndex >= 0 ? messages[activeAppendMessageIndex]?.chatId : undefined,
+      activeReaderGeneration?.targetMessageId,
+      activeReaderGeneration?.resultMessageId,
+      readerRow && readerRow.index >= 0 ? messages[readerRow.index]?.chatId : undefined,
     ]) {
       if (id) windowPins.add(id)
     }
@@ -406,8 +436,10 @@
       awaitInitialDisplayParse: boolean
       isRegenerationTarget: boolean
       isAppendGenerationPresentation: boolean
-      generationPresentationMode?: 'send' | 'regenerate'
+      generationPresentationMode?: 'send' | 'continue' | 'regenerate'
       generationDisplayProjection?: GenerationDisplayProjection
+      readerProjection?: ReaderGenerationProjection
+      readerCanonical?: boolean
     }[] = []
 
     for (let i = loadStart; i >= loadEnd; i--) {
@@ -432,8 +464,12 @@
         message.chatId ??
         `message-${i}`
       const isAppendGenerationPresentation = activeAppendMessageIndex === i && activeAppendPresentationKey !== null
+      const readerProjection = readerRow?.index === i ? activeReaderGeneration : null
       const presentationRowKey =
-        (message.chatId ? appendPresentationKeyAliases[message.chatId] : undefined) ??
+        (readerProjection ? readerPresentationKey : undefined) ??
+        (message.chatId
+          ? (readerPresentationKeyAliases[message.chatId] ?? appendPresentationKeyAliases[message.chatId])
+          : undefined) ??
         (isAppendGenerationPresentation ? activeAppendPresentationKey : `${presentationKey}:${reloadPointer}`)
       rows.push({
         key: `${currentChatId ?? 'unscoped'}:${presentationRowKey}`,
@@ -448,11 +484,48 @@
         scopeId: currentChatId ?? null,
         awaitInitialDisplayParse: shouldAwaitInitialDisplayParse(i, messages.length),
         isRegenerationTarget:
-          isGenerationActive && regenerateTargetMessageId !== null && regenerateTargetMessageId === message.chatId,
+          !readerPresentation &&
+          isGenerationActive &&
+          regenerateTargetMessageId !== null &&
+          regenerateTargetMessageId === message.chatId,
         isAppendGenerationPresentation,
         ...(isAppendGenerationPresentation ? { generationPresentationMode: 'send' as const } : {}),
         ...(generationDisplayProjection ? { generationPresentationMode: 'regenerate' as const } : {}),
         ...(generationDisplayProjection ? { generationDisplayProjection } : {}),
+        ...(readerProjection
+          ? {
+              readerProjection,
+              readerCanonical: readerRow?.canonical,
+              generationPresentationMode: readerProjection.mode,
+            }
+          : {}),
+      })
+    }
+
+    if (activeReaderGeneration && readerRow?.append && readerRow.index < 0 && readerPresentationKey) {
+      rows.unshift({
+        key: `${currentChatId ?? 'unscoped'}:${readerPresentationKey}`,
+        message: {
+          role: 'char',
+          data: '',
+          saying: currentCharacter.chaId,
+          time: activeReaderGeneration.startedAt,
+          chatId: activeReaderGeneration.resultMessageId ?? activeReaderGeneration.generationId,
+        },
+        idx: messages.length,
+        img: charImage,
+        largePortrait: currentCharacter.largePortrait ?? false,
+        name: getCharacterDisplayName(currentCharacter),
+        character: simpleChar,
+        generationPersistenceState: null,
+        isLastMemory: false,
+        scopeId: currentChatId,
+        awaitInitialDisplayParse: false,
+        isRegenerationTarget: false,
+        isAppendGenerationPresentation: false,
+        generationPresentationMode: activeReaderGeneration.mode,
+        readerProjection: activeReaderGeneration,
+        readerCanonical: false,
       })
     }
 
@@ -552,7 +625,12 @@
     if (residencyIds[0]) ids.add(residencyIds[0])
     if (jumpMessageId) ids.add(jumpMessageId)
     for (const row of chatRows) {
-      if (row.isRegenerationTarget || row.isAppendGenerationPresentation || row.generationDisplayProjection) {
+      if (
+        row.isRegenerationTarget ||
+        row.isAppendGenerationPresentation ||
+        row.generationDisplayProjection ||
+        row.readerProjection
+      ) {
         ids.add(row.message.chatId ?? row.key)
       }
     }
@@ -1221,6 +1299,7 @@
   }
 
   function currentGenerationPresentationKey(): string | null {
+    if (readerPresentation) return activeReaderGeneration ? readerGenerationKey(activeReaderGeneration) : null
     return regenerateProjectionKey(activeRegenerateProjection) ?? activeAppendPresentationKey
   }
 
@@ -1309,6 +1388,23 @@
     const projection = activeRegenerateProjection
     const projectionKey = currentGenerationPresentationKey()
     const currentChatRoomId = getCurrentChatRoomId()
+
+    if (activeReaderGeneration && readerPresentationKey) {
+      const ids = [
+        activeReaderGeneration.targetMessageId,
+        activeReaderGeneration.generationId,
+        activeReaderGeneration.resultMessageId,
+        readerRow && readerRow.index >= 0 ? messages[readerRow.index]?.chatId : undefined,
+      ].filter((id): id is string => !!id)
+      // Append must not alias an unrelated Continue base row.
+      const aliases = readerRow?.append ? ids.filter((id) => id !== activeReaderGeneration.targetMessageId) : ids
+      if (aliases.some((id) => readerPresentationKeyAliases[id] !== readerPresentationKey)) {
+        readerPresentationKeyAliases = {
+          ...readerPresentationKeyAliases,
+          ...Object.fromEntries(aliases.map((id) => [id, readerPresentationKey])),
+        }
+      }
+    }
 
     const activeAppendMessageId =
       activeAppendMessageIndex >= 0
@@ -1417,7 +1513,9 @@
     // Subscribe to the semantic startup signal, including localized failures.
     // Older rows never participate in the newest-row readiness registrations.
     void $startupCoordinatorStore
-    displayScheduler.setPaused(initialDisplayPending || initialRowsPending || (!readOnly && !backgroundReady()))
+    displayScheduler.setPaused(
+      initialDisplayPending || initialRowsPending || (!readOnly && !readerPresentation && !backgroundReady()),
+    )
   })
 
   $effect(() => {
@@ -1430,6 +1528,7 @@
     if (didChatOwnerChange(previousChatRoomId, currentChatRoomId)) {
       presentationKeyAliases = {}
       appendPresentationKeyAliases = {}
+      readerPresentationKeyAliases = {}
       clearVisibleChat(visibleChatRoomId)
       setVisibleChat(currentChatRoomId)
       visibleChatRoomId = currentChatRoomId
@@ -1571,12 +1670,18 @@
         data-risu-dyna-icons={row.key === dynaIconRowKey ? 'true' : undefined}
         data-generation-display-projection={row.generationPresentationMode}>
         <Chat
-          {readOnly}
-          message={row.generationDisplayProjection ? (row.generationDisplayProjection.text ?? '') : row.message.data}
-          translation={row.generationDisplayProjection ? null : (row.message.translation ?? null)}
+          readOnly={readOnly || readerPresentation}
+          message={row.readerProjection && !row.readerCanonical
+            ? (row.readerProjection.text ?? '')
+            : row.generationDisplayProjection
+              ? (row.generationDisplayProjection.text ?? '')
+              : row.message.data}
+          translation={(row.readerProjection && !row.readerCanonical) || row.generationDisplayProjection
+            ? null
+            : (row.message.translation ?? null)}
           isLastMemory={row.isLastMemory}
           idx={row.idx}
-          totalLength={messages.length}
+          totalLength={messages.length + (readerRow?.append && readerRow.index < 0 ? 1 : 0)}
           img={row.img}
           {onReroll}
           {unReroll}
@@ -1592,16 +1697,27 @@
           role={row.message.role}
           name={row.name}
           isComment={row.message.isComment ?? false}
-          isGenerationLoading={row.isRegenerationTarget ||
+          isGenerationLoading={row.readerProjection
+            ? row.readerProjection.status !== 'interrupted'
+            : row.isRegenerationTarget ||
+              row.isAppendGenerationPresentation ||
+              row.generationDisplayProjection !== undefined ||
+              (!readerPresentation &&
+                isGenerationActive &&
+                row.idx === messages.length - 1 &&
+                row.message.role === 'char' &&
+                row.message.data === '')}
+          isGenerationProjection={!!row.readerProjection ||
             row.isAppendGenerationPresentation ||
-            row.generationDisplayProjection !== undefined ||
-            (isGenerationActive &&
-              row.idx === messages.length - 1 &&
-              row.message.role === 'char' &&
-              row.message.data === '')}
-          isGenerationProjection={row.isAppendGenerationPresentation || row.generationDisplayProjection !== undefined}
-          generationPresentationMode={row.generationPresentationMode}
-          isChatGenerating={isGenerationActive}
+            row.generationDisplayProjection !== undefined}
+          generationPresentationMode={row.generationPresentationMode === 'continue'
+            ? readerRow?.append
+              ? 'send'
+              : 'regenerate'
+            : row.generationPresentationMode}
+          isChatGenerating={readerPresentation
+            ? !!row.readerProjection && row.readerProjection.status !== 'interrupted'
+            : isGenerationActive}
           halfStreamingTokensPerSecond={row.isAppendGenerationPresentation ||
           (row.idx === messages.length - 1 && row.message.role === 'char')
             ? activeHalfStreamingProgress?.tokensPerSecond
@@ -1611,11 +1727,13 @@
             ? activeHalfStreamingProgress?.generatedTokens
             : undefined}
           autoTranslateOnReady={!readOnly &&
+            !readerPresentation &&
             typeof row.message.chatId === 'string' &&
             $automaticTranslationMessageIds.includes(row.message.chatId) &&
             !$serverOwnedGeneratedMessageIds.has(row.message.chatId)}
           onAutoTranslationEligibilityConsumed={() => {
-            if (!readOnly && canUseClientWriteAccess()) consumeAutomaticTranslationEligibility(row.message.chatId ?? '')
+            if (!readOnly && !readerPresentation && canUseClientWriteAccess())
+              consumeAutomaticTranslationEligibility(row.message.chatId ?? '')
           }}
           onInitialDisplayParseStart={(registration) => {
             beginRowParse(entry.key, registration)
@@ -1625,18 +1743,27 @@
             settleRowParse(entry.key, registration)
             if (row.awaitInitialDisplayParse) initialDisplayReadiness.settle(row.scopeId, registration)
           }}
-          displayPriority={row.awaitInitialDisplayParse ? 'critical' : 'background'}
+          displayPriority={row.readerProjection || row.awaitInitialDisplayParse ? 'critical' : 'background'}
           generationPersistenceState={row.generationPersistenceState}
-          generationPhase={row.isAppendGenerationPresentation
-            ? (activeAppendPresentation?.phase ?? generationPhase)
-            : generationPhase}
-          generationStartedAt={row.isAppendGenerationPresentation
-            ? (activeAppendPresentation?.startedAt ?? generationActivity?.startedAt)
-            : undefined}
+          generationPhase={row.readerProjection
+            ? row.readerProjection.phase
+            : row.isAppendGenerationPresentation
+              ? (activeAppendPresentation?.phase ?? generationPhase)
+              : generationPhase}
+          generationStartedAt={row.readerProjection
+            ? row.readerProjection.startedAt
+            : row.isAppendGenerationPresentation
+              ? (activeAppendPresentation?.startedAt ?? generationActivity?.startedAt)
+              : undefined}
           generationStage={row.isAppendGenerationPresentation
             ? (activeAppendPresentation?.stage ?? generationStage)
             : generationStage}
           disabled={row.message.disabled ?? false} />
+        {#if row.readerProjection?.halfStreaming && row.readerProjection.generatedTokens !== undefined && !row.readerCanonical}
+          <p class="px-4 pb-2 text-sm text-textcolor2" role="status">
+            {language.halfStreamingGeneratedTokens(row.readerProjection.generatedTokens)}
+          </p>
+        {/if}
       </div>
     {/if}
   {/each}

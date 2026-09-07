@@ -2536,6 +2536,7 @@ export const languageKorean = {
     connected: '읽기 전용입니다. 쓰기 권한이 있는 기기의 변경 사항이 여기에 표시됩니다.',
     connecting: '업데이트에 연결하는 중…',
     interrupted: '연결이 끊겼습니다. 마지막으로 받은 내용을 표시합니다.',
+    generationInterrupted: '실시간 생성 업데이트가 끊겼습니다. 다시 연결하려면 새로고침하세요.',
     switching: '쓰기 권한을 준비하는 중입니다. 계속 읽을 수 있습니다.',
     setupServerTitle: '서버 설정',
     setupServerBody: '이 서버는 비어 있습니다. 이 기기에서 초기 데이터를 만들고 사용을 시작하세요.',

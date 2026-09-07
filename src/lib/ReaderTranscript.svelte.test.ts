@@ -2,6 +2,7 @@ import { flushSync, mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ReaderTranscript from './ReaderTranscript.svelte'
+import Chat from './ChatScreens/Chat.svelte'
 import { language } from '../lang'
 import { seedRenderCostMessages } from '../ts/__tests__/renderCostHarness'
 import { withTestDatabaseWrite } from '../ts/__tests__/resourceDatabaseState'
@@ -34,6 +35,22 @@ import { demoteClientSession } from '../ts/clientSession'
 import { setManagedWriterForTest } from '../ts/__tests__/managedClientSession'
 import { appendOptimisticGenerationOperationUserMessage } from '../ts/chatCommands'
 import type { character, Message } from '../ts/storage/database.svelte'
+import { startReaderGenerationObservation } from '../ts/server/readerGenerationObservation'
+import type { ReaderGenerationProjection } from '../ts/server/readerGenerationTypes'
+import ReaderTranscriptSelectionHarness from './ReaderTranscript.selectionHarness.svelte'
+import {
+  beginGenerationDisplayProjection,
+  generationDisplayProjections,
+  resetGenerationDisplayProjectionsForTests,
+  updateGenerationDisplayProjection,
+} from '../ts/process/generationDisplayProjection.svelte'
+import { halfStreamingProgress, resetHalfStreamingProgressForTests } from '../ts/process/halfStreamingProgress'
+import {
+  automaticTranslationMessageIds,
+  replaceAutomaticTranslationMessageIds,
+} from '../ts/process/generatedMessageTranslationEligibility'
+
+vi.mock('../ts/server/readerGenerationObservation', () => ({ startReaderGenerationObservation: vi.fn() }))
 
 vi.mock('../ts/process/modules', async (importActual) => ({
   ...(await importActual<typeof import('../ts/process/modules')>()),
@@ -47,6 +64,34 @@ vi.mock('../ts/process/modules', async (importActual) => ({
 
 let target: HTMLElement
 let component: ReturnType<typeof mount> | undefined
+let observations: {
+  input: Parameters<typeof startReaderGenerationObservation>[0]
+  stop: ReturnType<typeof vi.fn>
+  refresh: ReturnType<typeof vi.fn>
+}[] = []
+
+function liveProjection(overrides: Partial<ReaderGenerationProjection> = {}): ReaderGenerationProjection {
+  return {
+    databaseLineage: 'reader-tests',
+    characterId: 'reader-character',
+    chatId: 'reader-chat',
+    operationId: 'reader-operation',
+    attemptNo: 1,
+    jobId: 'reader-job',
+    generationId: 'reader-job',
+    projectionEpoch: 1,
+    mode: 'send',
+    text: 'Live reader output',
+    status: 'streaming',
+    phase: 'generating',
+    startedAt: Date.now(),
+    ...overrides,
+  }
+}
+
+function project(projection: ReaderGenerationProjection | null) {
+  observations.at(-1)!.input.onChange({ status: projection ? 'watching' : 'idle', projection })
+}
 
 async function settle() {
   flushSync()
@@ -108,10 +153,21 @@ function seedReaderChat(count = 3) {
 }
 
 beforeEach(() => {
+  observations = []
+  vi.mocked(startReaderGenerationObservation)
+    .mockReset()
+    .mockImplementation((input) => {
+      const observation = { input, stop: vi.fn(), refresh: vi.fn() }
+      observations.push(observation)
+      return observation
+    })
   resetReaderDisplayResourcesForTests()
   resetClientSessionForTests()
   resetStartupReadinessForTests()
   hydration.resetChatHydration()
+  resetGenerationDisplayProjectionsForTests()
+  resetHalfStreamingProgressForTests()
+  replaceAutomaticTranslationMessageIds([])
   clearChatBodyParseMemo()
   target = document.createElement('div')
   document.body.appendChild(target)
@@ -130,6 +186,9 @@ afterEach(async () => {
   resetReaderDisplayResourcesForTests()
   resetClientSessionForTests()
   hydration.resetChatHydration()
+  resetGenerationDisplayProjectionsForTests()
+  resetHalfStreamingProgressForTests()
+  replaceAutomaticTranslationMessageIds([])
   clearChatBodyParseMemo()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -137,6 +196,365 @@ afterEach(async () => {
 })
 
 describe('connected reader transcript', () => {
+  it('keeps writer generation controls hidden while its partial response is loading', async () => {
+    seedReaderChat(2)
+    setManagedWriterForTest()
+    const writer = charactersResourceState.characters[0]
+    component = mount(Chat, {
+      target,
+      props: {
+        character: writer.chaId,
+        displayChatId: writer.chats[0].id,
+        idx: 0,
+        isLastMemory: false,
+        message: 'Writer partial response',
+        role: 'char',
+        readOnly: false,
+        isGenerationLoading: true,
+        isGenerationProjection: true,
+        generationPresentationMode: 'send',
+        isChatGenerating: true,
+      },
+    })
+    await settle()
+    expect(target.querySelector('.chat-generation-loading')).not.toBeNull()
+    expect(target.querySelector('[data-risu-message-action]')).toBeNull()
+  })
+
+  it('renders partial send output without canonical writes and keeps one row through command-before-done handoff', async () => {
+    seedReaderChat(2)
+    startReader()
+    replaceAutomaticTranslationMessageIds(['writer-eligibility'])
+    const original = JSON.parse(
+      JSON.stringify(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages),
+    ) as Message[]
+    const writerBefore = JSON.stringify(charactersResourceState.characters)
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    const projection = liveProjection()
+    project(projection)
+    await settle()
+    const row = target.querySelector('.chat-message-container[data-generation-display-projection="send"]')
+    expect(row?.textContent).toContain('Live reader output')
+    expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
+    expect(JSON.stringify(charactersResourceState.characters)).toBe(writerBefore)
+    expect(get(automaticTranslationMessageIds)).toEqual(['writer-eligibility'])
+    expect(
+      vi
+        .mocked(parser.ParseMarkdown)
+        .mock.calls.some(([source, , , , , args]) => source === 'Live reader output' && args?.readOnly === true),
+    ).toBe(true)
+    expect(row?.querySelector('[data-risu-message-action="copy"]')).not.toBeNull()
+    expect(
+      row?.querySelector(
+        '[data-risu-message-action="edit"], [data-risu-message-action="translate"], [data-risu-message-action="reroll"]',
+      ),
+    ).toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+
+    project({ ...projection, text: 'More live reader output', projectionEpoch: 2 })
+    await settle()
+    expect(target.querySelector('.chat-message-container[data-generation-display-projection="send"]')).toBe(row)
+    const result: Message = {
+      role: 'char',
+      chatId: 'canonical-send',
+      data: 'Final server output',
+      generationInfo: {
+        generationId: projection.generationId,
+        operationId: projection.operationId,
+        attemptNo: projection.attemptNo,
+      },
+    }
+    hydration.applyServerChatMessagesResource('reader-chat', [...original, result], undefined, [])
+    await settle()
+    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('.chat-message-container')).toBe(
+      row,
+    )
+    expect(row?.textContent).toContain('Final server output')
+    expect(target.textContent).not.toContain('More live reader output')
+    expect(target.querySelectorAll('.chat-message-container[data-generation-display-projection="send"]')).toHaveLength(
+      1,
+    )
+    project(null)
+    await settle()
+    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('.chat-message-container')).toBe(
+      row,
+    )
+    expect(target.querySelector('.chat-generation-loading')).toBeNull()
+    expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual([...original, result])
+    project({ ...projection, attemptNo: 2, jobId: 'retry-job', generationId: 'retry-job', text: 'Retried live output' })
+    await settle()
+    expect(target.querySelector('.chat-message-container[data-generation-display-projection="send"]')).not.toBe(row)
+    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('.chat-message-container')).toBe(
+      row,
+    )
+    expect(target.textContent).toContain('Retried live output')
+  })
+
+  it.each(['append', 'extend'] as const)(
+    'presents Continue %s against its immutable base and adopts its exact result',
+    async (disposition) => {
+      const reader = seedReaderChat(2)
+      withTestDatabaseWrite(() => {
+        reader.chats[0].message[1].role = 'char'
+      })
+      startReader()
+      const original = JSON.parse(
+        JSON.stringify(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages),
+      ) as Message[]
+      const base = original[1]
+      component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+      await settle()
+      const baseRow = target
+        .querySelector(`[data-risu-message-id="${base.chatId}"]`)
+        ?.closest('.chat-message-container')
+      const projection = liveProjection({
+        mode: 'continue',
+        continueDisposition: disposition,
+        continueBase: base.data,
+        targetMessageId: base.chatId,
+        text: disposition === 'extend' ? `${base.data} plus live text` : 'Appended live text',
+      })
+      project(projection)
+      await settle()
+      const row = target.querySelector('.chat-message-container[data-generation-display-projection="continue"]')
+      expect(row?.textContent).toContain(projection.text)
+      expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
+      if (disposition === 'extend') expect(row).toBe(baseRow)
+      else expect(baseRow?.textContent).toContain(base.data)
+      // The target existed before this operation and must not dismiss live Continue.
+      project({ ...projection, status: 'finalizing', phase: 'finalizing', text: `${projection.text} completed` })
+      await settle()
+      expect(row?.textContent).toContain(`${projection.text} completed`)
+      expect(row?.querySelector('.chat-generation-loading')).not.toBeNull()
+      const result: Message = {
+        ...base,
+        chatId: disposition === 'extend' ? base.chatId : 'continued-append',
+        data: 'Authoritative continued output',
+        generationInfo: {
+          generationId: projection.generationId,
+          operationId: projection.operationId,
+          attemptNo: projection.attemptNo,
+        },
+      }
+      const finalMessages = disposition === 'extend' ? [original[0], result] : [...original, result]
+      hydration.applyServerChatMessagesResource('reader-chat', finalMessages, undefined, [])
+      await settle()
+      expect(row?.textContent).toContain('Authoritative continued output')
+      expect(
+        target.querySelector(`[data-risu-message-id="${result.chatId}"]`)?.closest('.chat-message-container'),
+      ).toBe(row)
+      project(null)
+      await settle()
+      expect(
+        target.querySelector(`[data-risu-message-id="${result.chatId}"]`)?.closest('.chat-message-container'),
+      ).toBe(row)
+      expect(target.querySelector('.chat-generation-loading')).toBeNull()
+      expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(finalMessages)
+    },
+  )
+
+  it('overlays only the regenerate target and keeps its presentation identity through replacement', async () => {
+    seedReaderChat(2)
+    startReader()
+    const original = JSON.parse(
+      JSON.stringify(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages),
+    ) as Message[]
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    const oldRow = target
+      .querySelector(`[data-risu-message-id="${original[0].chatId}"]`)
+      ?.closest('.chat-message-container')
+    const unrelatedRow = target.querySelector(`[data-risu-message-id="${original[1].chatId}"]`)
+    const projection = liveProjection({
+      mode: 'regenerate',
+      targetMessageId: original[0].chatId,
+      text: 'Regenerated live text',
+    })
+    project(projection)
+    await settle()
+    expect(target.querySelector('.chat-message-container[data-generation-display-projection="regenerate"]')).toBe(
+      oldRow,
+    )
+    expect(oldRow?.textContent).toContain('Regenerated live text')
+    expect(unrelatedRow?.textContent).toContain(original[1].data)
+    expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
+    const result: Message = {
+      role: 'char',
+      chatId: 'regenerated-result',
+      data: 'Final regenerated text',
+      generationInfo: {
+        generationId: projection.generationId,
+        operationId: projection.operationId,
+        attemptNo: projection.attemptNo,
+      },
+    }
+    hydration.applyServerChatMessagesResource('reader-chat', [result, original[1]], undefined, [])
+    await settle()
+    expect(oldRow?.textContent).toContain('Final regenerated text')
+    project(null)
+    await settle()
+    expect(
+      target.querySelector('[data-risu-message-id="regenerated-result"]')?.closest('.chat-message-container'),
+    ).toBe(oldRow)
+    expect(target.querySelector(`[data-risu-message-id="${original[1].chatId}"]`)).toBe(unrelatedRow)
+    expect(target.querySelectorAll('.risu-chat')).toHaveLength(2)
+  })
+
+  it('isolates the explicit reader path from writer regenerate and half-streaming stores even with a null projection', async () => {
+    seedReaderChat(2)
+    startReader()
+    const base = hydration.getReaderChatMessageOwnerState('reader-chat')!.messages[1]
+    const writer = beginGenerationDisplayProjection({
+      characterId: 'reader-character',
+      chatId: 'reader-chat',
+      operationId: 'stale-writer-operation',
+      attemptNo: 1,
+      mode: 'regenerate',
+      projectionEpoch: 1,
+      targetMessageId: base.chatId,
+      generationId: base.chatId,
+    })
+    updateGenerationDisplayProjection(writer, { text: 'Stale writer overlay', status: 'finalizing' })
+    halfStreamingProgress.set([
+      {
+        characterId: 'reader-character',
+        chatId: 'reader-chat',
+        generationId: base.chatId!,
+        generatedTokens: 98765,
+        tokensPerSecond: 54321,
+        updatedAt: Date.now(),
+      },
+    ])
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    expect(target.textContent).toContain(base.data)
+    expect(target.textContent).not.toContain('Stale writer overlay')
+    expect(target.querySelector('[data-generation-display-projection]')).toBeNull()
+    project(liveProjection())
+    await settle()
+    expect(target.textContent).toContain('Live reader output')
+    expect(target.textContent).not.toContain('98765')
+    expect(target.textContent).not.toContain('54321')
+    project(null)
+    await settle()
+    expect(target.textContent).toContain(base.data)
+    expect(target.textContent).not.toContain('Stale writer overlay')
+    expect(target.querySelector('.chat-generation-loading')).toBeNull()
+    expect(get(generationDisplayProjections)).toMatchObject([{ operationId: writer.operationId, status: 'finalizing' }])
+    expect(get(halfStreamingProgress)).toHaveLength(1)
+  })
+
+  it('pins a hydrated older generation target without expanding the reader paging owner', async () => {
+    seedReaderChat(6)
+    startReader()
+    const original = JSON.parse(
+      JSON.stringify(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages),
+    ) as Message[]
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    expect(target.querySelector(`[data-risu-message-id="${original[0].chatId}"]`)).toBeNull()
+    project(
+      liveProjection({ mode: 'regenerate', targetMessageId: original[0].chatId, text: 'Live older regeneration' }),
+    )
+    await settle()
+    expect(target.querySelector(`[data-risu-message-id="${original[0].chatId}"]`)?.textContent).toContain(
+      'Live older regeneration',
+    )
+    expect(observations[0].input.loadPages()).toBe(2)
+    expect(target.querySelectorAll('.risu-chat').length).toBeLessThanOrEqual(76)
+    expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
+    project(null)
+    await settle()
+    expect(target.querySelector(`[data-risu-message-id="${original[0].chatId}"]`)).toBeNull()
+  })
+
+  it('stops each selected-chat observer, rejects detached callbacks and refreshes the current read-only viewer', async () => {
+    seedReaderChat(4)
+    startReader()
+    const other = charactersResourceState.characters[0]
+    const mounted = mount(ReaderTranscriptSelectionHarness, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    component = mounted
+    await settle()
+    const first = observations[0]
+    expect(first.input).toMatchObject({ characterId: 'reader-character', chatId: 'reader-chat' })
+    expect(first.input.loadPages()).toBe(2)
+    target.querySelector<HTMLButtonElement>('[data-reader-load-more]')!.click()
+    await settle()
+    expect(first.input.loadPages()).toBe(4)
+    expect(observations).toHaveLength(1)
+    setClientConnectionState('interrupted')
+    await settle()
+    setClientConnectionState('live')
+    await settle()
+    expect(observations).toHaveLength(1)
+    mounted.select(other.chaId, other.chats[0].id!)
+    await settle()
+    expect(first.stop).toHaveBeenCalledOnce()
+    first.input.onChange({ status: 'watching', projection: liveProjection({ text: 'Detached old output' }) })
+    await settle()
+    expect(target.textContent).not.toContain('Detached old output')
+    const second = observations[1]
+    mounted.select('reader-character', 'reader-chat')
+    await settle()
+    expect(second.stop).toHaveBeenCalledOnce()
+    expect(observations).toHaveLength(3)
+    first.input.onChange({ status: 'watching', projection: liveProjection({ text: 'Detached old output' }) })
+    await settle()
+    expect(target.textContent).not.toContain('Detached old output')
+    target.querySelector<HTMLButtonElement>('[data-reader-refresh]')!.click()
+    await settle()
+    expect(observations[2].refresh).toHaveBeenCalledOnce()
+    expect(first.refresh).not.toHaveBeenCalled()
+    await unmount(mounted)
+    component = undefined
+    expect(observations[2].stop).toHaveBeenCalledOnce()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('shows an interrupted viewer without a transient row and preserves partial text without a busy indicator', async () => {
+    seedReaderChat(2)
+    startReader()
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    observations[0].input.onChange({ status: 'interrupted', projection: null })
+    await settle()
+    expect(target.querySelector('[data-reader-generation-interrupted]')?.textContent).toContain(
+      language.connectedReaders.generationInterrupted,
+    )
+    expect(target.textContent).toContain('Reader message 1')
+    expect(target.querySelector('[data-generation-display-projection]')).toBeNull()
+    observations[0].input.onChange({ status: 'interrupted', projection: liveProjection({ status: 'interrupted' }) })
+    await settle()
+    expect(target.textContent).toContain('Live reader output')
+    expect(target.querySelector('.chat-generation-loading')).toBeNull()
+    requireClientAuthentication()
+    await settle()
+    expect(observations[0].stop).toHaveBeenCalledOnce()
+    observations[0].input.onChange({ status: 'watching', projection: liveProjection() })
+    await settle()
+    expect(target.textContent).not.toContain('Live reader output')
+  })
+
+  it('shows reader half-streaming progress without borrowing writer token counts or parsing hidden output', async () => {
+    seedReaderChat(2)
+    startReader()
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    const parserCalls = vi.mocked(parser.ParseMarkdown).mock.calls.length
+    project(liveProjection({ halfStreaming: true, text: null, generatedTokens: 42, elapsedMs: 2000 }))
+    await settle()
+    const row = target.querySelector('.chat-message-container[data-generation-display-projection="send"]')
+    expect(row?.textContent).toContain(language.halfStreamingGeneratedTokens(42))
+    expect(row?.querySelector('.chat-generation-loading')).not.toBeNull()
+    expect(row?.querySelector('.chat-message-body')).toBeNull()
+    expect(vi.mocked(parser.ParseMarkdown).mock.calls).toHaveLength(parserCalls)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('renders its explicit chat with copy and a disabled composer without changing writer selection', async () => {
     seedReaderChat()
     startReader()
@@ -446,6 +864,7 @@ describe('connected reader transcript', () => {
     component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
     await settle()
     expect(target.textContent).toContain('Reader message 1')
+    const previousObservation = observations.at(-1)!
     vi.mocked(hydration.hydrateReaderChatMessageWindow).mockResolvedValue(false)
     applyCharacterResource({ revision: 2, character: { ...source, chats: [] } })
     if (!batched) {
@@ -457,6 +876,14 @@ describe('connected reader transcript', () => {
       character: { ...source, chats: source.chats.map((chat) => ({ ...chat, message: [] })) },
     })
     await settle()
+    expect(previousObservation.stop).toHaveBeenCalledOnce()
+    expect(observations.at(-1)!.input.incarnation).not.toBe(previousObservation.input.incarnation)
+    previousObservation.input.onChange({
+      status: 'watching',
+      projection: liveProjection({ text: 'Old incarnation live output' }),
+    })
+    await settle()
+    expect(target.textContent).not.toContain('Old incarnation live output')
     expect(hydration.getReaderChatMessageOwnerState('reader-chat')?.messages).toEqual([])
     expect(target.textContent).not.toContain('Reader message 1')
     hydration.applyServerChatMessagesResource(

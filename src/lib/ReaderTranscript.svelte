@@ -34,6 +34,8 @@
   } from '../ts/server/greetingTranslations.svelte'
   import { readerDisplayLimitedStore } from '../ts/server/displaySources'
   import { ensureReaderDisplayResources, readerDisplayResourcesReady } from '../ts/server/readerDisplayResources'
+  import { startReaderGenerationObservation } from '../ts/server/readerGenerationObservation'
+  import type { ReaderGenerationView } from '../ts/server/readerGenerationTypes'
   import { resolveReaderRoute } from '../ts/readerRouteScope'
   import {
     isServerChatMessagePlaceholder,
@@ -60,6 +62,19 @@
   let hasNewUnreadMessage = $state(false)
   let readRun = 0
   let destroyed = false
+  let generationView = $state.raw<ReaderGenerationView>({ status: 'idle', projection: null })
+  let generationObserver: ReturnType<typeof startReaderGenerationObservation> | null = null
+  const incarnation = $derived(getReaderChatIncarnation(characterId, chatId))
+  // Scalar scope prevents connection/page updates from recreating an observer; it owns those lifecycles.
+  const transcriptScope = $derived(JSON.stringify([characterId, chatId, incarnation, $clientSessionStore.generation]))
+  const observationScope = $derived(
+    $clientSessionStore.managed &&
+      $clientSessionStore.authenticated &&
+      ['reading', 'promoting'].includes($clientSessionStore.lifecycle) &&
+      incarnation !== null
+      ? transcriptScope
+      : null,
+  )
   let retained = $state.raw<{
     characterId: string
     chatId: string
@@ -149,6 +164,45 @@
     })
   })
 
+  $effect(() => {
+    const scope = observationScope
+    generationView = { status: 'idle', projection: null }
+    if (!scope) return
+    const [selectedCharacterId, selectedChatId, selectedIncarnation, generation] = JSON.parse(scope) as [
+      string,
+      string,
+      number,
+      number,
+    ]
+    let stopped = false
+    const observer = untrack(() =>
+      startReaderGenerationObservation({
+        characterId: selectedCharacterId,
+        chatId: selectedChatId,
+        incarnation: selectedIncarnation,
+        loadPages: () => loadPages,
+        onChange(view) {
+          if (
+            stopped ||
+            destroyed ||
+            characterId !== selectedCharacterId ||
+            chatId !== selectedChatId ||
+            getReaderChatIncarnation(selectedCharacterId, selectedChatId) !== selectedIncarnation ||
+            !isClientSessionGenerationCurrent(generation)
+          )
+            return
+          generationView = view
+        },
+      }),
+    )
+    generationObserver = observer
+    return () => {
+      stopped = true
+      observer.stop()
+      if (generationObserver === observer) generationObserver = null
+    }
+  })
+
   // This is a disposable same-route read snapshot. It never changes canonical
   // owners and is unavailable immediately after auth or lineage changes.
   $effect(() => {
@@ -226,6 +280,7 @@
 
   async function refreshTranscript(): Promise<void> {
     if (loading || displayResourcesLoading) return
+    generationObserver?.refresh()
     await Promise.all([loadDisplayResources(new AbortController()), loadWindow(loadPages, true)])
   }
 
@@ -365,6 +420,11 @@
       data-reader-limited-display>
       {language.connectedReaders.limitedDisplay}
     </p>{/if}
+  {#if generationView.status === 'interrupted'}
+    <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="status" data-reader-generation-interrupted>
+      {language.connectedReaders.generationInterrupted}
+    </p>
+  {/if}
   {#if loading && messages.length === 0}<p class="px-4 py-3 text-sm text-textcolor2" role="status">
       {language.loadingChatData}
     </p>{/if}
@@ -388,25 +448,28 @@
     }}
     onscroll={handleScroll}>
     {#if displayCharacter && displayChat}
-      <Chats
-        bind:this={chatsInstance}
-        {messages}
-        {chatId}
-        currentCharacter={displayCharacter}
-        {loadPages}
-        {scrollContainer}
-        readOnly={true}
-        rerollTarget={null}
-        onReroll={noWrite}
-        unReroll={noWrite}
-        onNewReroll={noWrite}
-        onSelectRerollCandidate={noWrite}
-        currentUsername={presentation.currentUsername}
-        userIcon={presentation.userIcon}
-        userIconPortrait={presentation.userIconPortrait}
-        initialRowsPending={loading && messages.length === 0}
-        bind:initialDisplayPending
-        bind:hasNewUnreadMessage />
+      {#key transcriptScope}
+        <Chats
+          bind:this={chatsInstance}
+          {messages}
+          {chatId}
+          currentCharacter={displayCharacter}
+          {loadPages}
+          {scrollContainer}
+          readOnly={true}
+          readerGeneration={generationView.projection}
+          rerollTarget={null}
+          onReroll={noWrite}
+          unReroll={noWrite}
+          onNewReroll={noWrite}
+          onSelectRerollCandidate={noWrite}
+          currentUsername={presentation.currentUsername}
+          userIcon={presentation.userIcon}
+          userIconPortrait={presentation.userIconPortrait}
+          initialRowsPending={loading && messages.length === 0}
+          bind:initialDisplayPending
+          bind:hasNewUnreadMessage />
+      {/key}
       {#if messages.length <= loadPages && greeting}
         <Chat
           character={simpleCharacter}
