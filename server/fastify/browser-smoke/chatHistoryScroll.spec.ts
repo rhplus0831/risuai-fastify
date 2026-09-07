@@ -66,10 +66,32 @@ for (const { pageDelay, assets, reverse, label } of [
     })
     const harness = await startFastBootstrapHarness(database)
     const errors: string[] = []
+    const scriptAssetPaths: string[] = []
+    const scriptAssetResponses: { url: string; path: string; status: number }[] = []
+    const consoleDiagnostics: { type: string; text: string }[] = []
     const samples: Awaited<ReturnType<typeof historyViewport>>[] = []
     const pauses: { delta: number; samples: Awaited<ReturnType<typeof historyViewport>>[] }[] = []
     let olderPageRequests = 0
     page.on('pageerror', (error) => errors.push(error.message))
+    if (reverse) {
+      page.on('request', (request) => {
+        if (request.resourceType() === 'script') scriptAssetPaths.push(new URL(request.url()).pathname)
+      })
+      page.on('response', (response) => {
+        if (response.request().resourceType() === 'script' && response.ok()) {
+          scriptAssetResponses.push({
+            url: response.url(),
+            path: new URL(response.url()).pathname,
+            status: response.status(),
+          })
+        }
+      })
+      page.on('console', (message) => {
+        if (message.type() === 'warning' || message.type() === 'error') {
+          consoleDiagnostics.push({ type: message.type(), text: message.text() })
+        }
+      })
+    }
     await page.setViewportSize({ width: 1721, height: 1271 })
     const cdp = await page.context().newCDPSession(page)
     await page.route(`**/api/v1/chats/${RESIDENCY_CHAT_ID}/messages?*`, async (route) => {
@@ -109,14 +131,28 @@ for (const { pageDelay, assets, reverse, label } of [
       let anchoredPauses = 0
       for (const pass of reverse ? [0, 1] : []) {
         if (pass === 1) {
-          // Revisit the same loaded/measured rows with a fixed warm-return pass.
+          const remountedMessage = page.locator('.risu-chat[data-risu-message-id="residency-message-298"]')
+          await expect(remountedMessage, 'previously readable ordinary row is unmounted').toHaveCount(0)
+          // Remount the same previously readable row with one fixed return gesture.
           await cdp.send('Input.synthesizeScrollGesture', {
             x: bounds.x + bounds.width / 2,
             y: bounds.y + bounds.height / 2,
-            yDistance: -105_000,
-            speed: 100_000,
+            yDistance: -1_000_000,
+            speed: 1_000_000,
             gestureSourceType: 'mouse',
           })
+          await page.mouse.wheel(0, -600)
+          await expect(
+            remountedMessage.locator('.chat-message-body'),
+            'ordinary row is readable after remount',
+          ).toContainText('History message 298.')
+          await expect
+            .poll(
+              async () =>
+                (await historyViewport(page)).visible.some((row) => row.id === 'residency-message-298' && row.readable),
+              { message: 'ordinary row is visible after remount' },
+            )
+            .toBe(true)
         }
         for (const delta of [-85_000, 35_000, -40_000, 25_000, -35_000, 30_000, -35_000]) {
           await cdp.send('Input.synthesizeScrollGesture', {
@@ -220,7 +256,18 @@ for (const { pageDelay, assets, reverse, label } of [
       if (reverse) expect(anchoredPauses, 'readable rows exercised across pauses').toBeGreaterThan(0)
     } finally {
       const observations = testInfo.outputPath('history-scroll-observations.json')
-      writeFileSync(observations, JSON.stringify({ assets, pageDelay, olderPageRequests, errors, pauses, samples }))
+      writeFileSync(
+        observations,
+        JSON.stringify({
+          assets,
+          pageDelay,
+          olderPageRequests,
+          errors,
+          pauses,
+          samples,
+          ...(reverse ? { scriptAssetPaths, scriptAssetResponses, consoleDiagnostics } : {}),
+        }),
+      )
       await testInfo.attach('history-scroll-observations', {
         path: observations,
         contentType: 'application/json',
