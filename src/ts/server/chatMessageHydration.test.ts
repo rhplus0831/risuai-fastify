@@ -49,6 +49,7 @@ import {
   getChatMessageOwnerState,
   getReaderChatMessageOwnerState,
   hydrateReaderChatMessageWindow,
+  hydrateReaderGenerationMessages,
   reconcileAcceptedSendCompletion,
   applyServerChatMessagesResource,
   applyMessageTranslationLocalEffect,
@@ -261,6 +262,58 @@ const db = () =>
   ).db
 
 describe('chat message hydration owner', () => {
+  it('aborts a reader window promptly and permits a new read while the old transport is still unresolved', async () => {
+    const committed = { role: 'char', data: 'Committed body', chatId: 'committed' }
+    applyServerChatMessagesResource('chat-1', [committed], undefined, [])
+    const held = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchChat.mockReturnValueOnce(held.promise)
+    const controller = new AbortController()
+    const reading = hydrateReaderChatMessageWindow('chat-1', 2, { force: true, signal: controller.signal })
+    expect(projectionState.fetchChat).toHaveBeenCalledWith('chat-1', { tail: 2, signal: controller.signal })
+    controller.abort()
+    await expect(reading).resolves.toBe(false)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([committed])
+    projectionState.fetchChat.mockResolvedValueOnce(okResult('chat-1', [{ ...committed, data: 'New read' }]))
+    await expect(hydrateReaderChatMessageWindow('chat-1', 2, { force: true })).resolves.toBe(true)
+    held.resolve(okResult('chat-1', [{ ...committed, data: 'Obsolete transport' }]))
+    await Promise.resolve()
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages[0]?.data).toBe('New read')
+    expect(hasChatMessageHydrationFailed('chat-1', 1)).toBe(false)
+  })
+
+  it('fetches an exact reader generation suffix and preserves omitted Hypa state and a certified prefix', async () => {
+    const prefix = { role: 'user', data: 'Prefix', chatId: 'prefix' }
+    const target = { role: 'char', data: 'Original target', chatId: 'target' }
+    applyServerChatMessagesResource('chat-1', [prefix, target], { retained: true }, [])
+    const result = { role: 'char', data: 'Replacement result', chatId: 'result' }
+    projectionState.fetchGenerationChat.mockResolvedValueOnce({
+      ...okWindowResult('chat-1', [result], 1, 2),
+      hypaV3DataIncluded: false,
+    })
+    await expect(hydrateReaderGenerationMessages('chat-1', 'result')).resolves.toBe(true)
+    expect(projectionState.fetchGenerationChat).toHaveBeenCalledWith('chat-1', 'result', { signal: undefined })
+    expect(projectionState.fetchChat).not.toHaveBeenCalled()
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([prefix, result])
+    expect((db().characters[0].chats[0] as { hypaV3Data?: unknown }).hypaV3Data).toEqual({ retained: true })
+  })
+
+  it('rejects an exact generation read after abort and after a newer reader session', async () => {
+    setManagedWriterForTest()
+    seedTwoStubChats()
+    demoteClientSession()
+    const cancelled = new AbortController()
+    cancelled.abort()
+    await expect(hydrateReaderGenerationMessages('chat-1', 'target', { signal: cancelled.signal })).resolves.toBe(false)
+    expect(projectionState.fetchGenerationChat).not.toHaveBeenCalled()
+    const held = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchGenerationChat.mockReturnValueOnce(held.promise)
+    const reading = hydrateReaderGenerationMessages('chat-1', 'target')
+    expect(beginClientPromotion()).not.toBeNull()
+    held.resolve(okResult('chat-1', [{ role: 'char', data: 'Obsolete exact generation', chatId: 'target' }]))
+    await expect(reading).resolves.toBe(false)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([])
+  })
+
   it('keeps the certified reader body through demotion and failed reads without retaining writer overlays', async () => {
     setManagedWriterForTest()
     seedTwoStubChats()

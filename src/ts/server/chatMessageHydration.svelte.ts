@@ -394,7 +394,12 @@ export function invalidateChatHydration(chatId: string): void {
   pendingChatHydrationFreshness.delete(chatId)
   for (const requestKey of inFlight.keys()) {
     const key = requestKey.replace(/^reader:/, '')
-    if (key === `full:${chatId}` || key.startsWith(`tail:${chatId}:`) || key.startsWith(`range:${chatId}:`)) {
+    if (
+      key === `full:${chatId}` ||
+      key.startsWith(`tail:${chatId}:`) ||
+      key.startsWith(`range:${chatId}:`) ||
+      key.startsWith(`generation:${chatId}:`)
+    ) {
       inFlight.delete(requestKey)
     }
   }
@@ -406,6 +411,7 @@ type ChatHydrationRangeRequest =
 
 interface ChatHydrationRequest {
   reader?: boolean
+  generationMessageId?: string
   force?: boolean
   range?: ChatHydrationRangeRequest
   seedReroll?: boolean
@@ -422,6 +428,7 @@ interface ChatMessagesHydrationOptions extends BulkHydrationOptions {
 }
 
 function chatHydrationRequestKey(chatId: string, request: ChatHydrationRequest): string {
+  if (request.generationMessageId) return `generation:${chatId}:${request.generationMessageId}`
   if (!request.range) return `full:${chatId}`
   if (request.range.tail !== undefined) return `tail:${chatId}:${request.range.tail}`
   return `range:${chatId}:${request.range.start}:${request.range.limit}`
@@ -487,10 +494,10 @@ function rangedHydrationOverlapsResidentMessages(
 }
 
 async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): Promise<boolean> {
-  if (!canUseServerResourceReads()) return false
+  if (!canUseServerResourceReads() || request.signal?.aborted) return false
   if (charactersResourceState.status === 'ready' && !uniqueChatForHydration(chatId)) return false
   const force = request.force ?? false
-  const wantsFullHydration = !request.range
+  const wantsFullHydration = !request.range && !request.generationMessageId
   if (!request.reader && !force && hydratedChatIds.has(chatId)) return true
   const requestKey = `${request.reader ? 'reader:' : ''}${chatHydrationRequestKey(chatId, request)}`
   const currentRequest = inFlight.get(requestKey)
@@ -513,14 +520,18 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
   requestPromise = (async (): Promise<boolean> => {
     try {
       const endRequest = beginHydrationRequest('chat')
-      const result = await fetchServerChatMessages(chatId, {
-        ...(request.range ?? {}),
-        ...(request.signal ? { signal: request.signal } : {}),
-      }).finally(endRequest)
-      if (request.signal?.aborted) {
+      const read = request.generationMessageId
+        ? fetchServerGenerationChatMessages(chatId, request.generationMessageId, { signal: request.signal })
+        : fetchServerChatMessages(chatId, {
+            ...(request.range ?? {}),
+            ...(request.signal ? { signal: request.signal } : {}),
+          })
+      const settled = await awaitUntilAborted(read, request.signal).finally(endRequest)
+      if (settled.status === 'aborted' || request.signal?.aborted) {
         shouldMarkAttempted = false
         return false
       }
+      const result = settled.value
       if (generation !== chatHydrationGeneration || readerHydrationSessionChanged(freshness)) {
         shouldMarkAttempted = false
         recordHydrationStaleDrop(
@@ -568,7 +579,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         return false
       }
       const applied = hydrateServerChatMessages(chatId, result.message, result.hypaV3Data, range, {
-        hypaV3DataIncluded: !hasNewerResourceRevision,
+        hypaV3DataIncluded: !hasNewerResourceRevision && result.hypaV3DataIncluded !== false,
       })
       if (!applied) {
         failedChatIds.add(chatId)
@@ -773,12 +784,17 @@ export async function hydrateChatMessageWindow(
 export async function hydrateReaderChatMessageWindow(
   chatId: string,
   loadPages: number,
-  options: { force?: boolean } = {},
+  options: { force?: boolean; signal?: AbortSignal | null } = {},
 ): Promise<boolean> {
+  if (options.signal?.aborted) return false
   const projection = getReaderChatMessageOwnerState(chatId)
   if (!projection) return false
+  const read = async (request: ChatHydrationRequest): Promise<boolean> => {
+    const result = await awaitUntilAborted(hydrateChat(chatId, { ...request, signal: options.signal }), options.signal)
+    return result.status === 'settled' && result.value && !options.signal?.aborted
+  }
   if (options.force || !projection.resourceLoaded || projection.messages.length === 0) {
-    return hydrateChat(chatId, {
+    return read({
       reader: true,
       force: true,
       seedReroll: false,
@@ -786,10 +802,30 @@ export async function hydrateReaderChatMessageWindow(
     })
   }
   for (const range of unloadedRangesForTail(projection.messages, loadPages)) {
-    if (!(await hydrateChat(chatId, { reader: true, range, seedReroll: false }))) return false
+    if (!(await read({ reader: true, range, seedReroll: false }))) return false
   }
   const current = getReaderChatMessageOwnerState(chatId)
   return !!current && !current.hydrationFailed && unloadedRangesForTail(current.messages, loadPages).length === 0
+}
+
+/** Fetch the suffix containing an exact live target or persisted generation result. */
+export async function hydrateReaderGenerationMessages(
+  chatId: string,
+  generationMessageId: string,
+  options: { signal?: AbortSignal | null } = {},
+): Promise<boolean> {
+  if (!generationMessageId || options.signal?.aborted || !getReaderChatMessageOwnerState(chatId)) return false
+  const result = await awaitUntilAborted(
+    hydrateChat(chatId, {
+      reader: true,
+      force: true,
+      generationMessageId,
+      seedReroll: false,
+      signal: options.signal,
+    }),
+    options.signal,
+  )
+  return result.status === 'settled' && result.value && !options.signal?.aborted
 }
 
 /** Hydrate the currently-open chat's complete transcript. */
