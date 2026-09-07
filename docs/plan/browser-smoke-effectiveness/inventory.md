@@ -1,11 +1,12 @@
 # Browser Smoke Review Inventory
 
-Execution inventory: 2026-09-07 at
-`711b1d583` (clean initial worktree).
+Initial execution inventory: 2026-09-07 at `711b1d583` (clean worktree).
+Phase 2 discovery: `6f39fb8f0` plus the real-operation Realm browser spec.
 
-Current discovery contains 77 registered cases in 17 specs, plus ten local
-TypeScript support owners and four screenshot baselines. The eight additions
-since planning are the viewport/entry/height cases in `chatEntryLayout.spec.ts`.
+Current discovery contains 79 registered cases in 18 specs, plus ten local
+TypeScript support owners and four screenshot baselines. The planning snapshot
+was extended by eight viewport/entry/height cases in `chatEntryLayout.spec.ts`
+and two real-operation Realm confirmation cases added during Phase 2.
 Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
@@ -24,6 +25,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Pending                                               |
 | `fastifyBrowserSmoke.spec.ts`              |            10 | 2: critical slices; 3: remaining journeys | Pending                                               |
 | `lazyFirstOpen.spec.ts`                    |             8 | 3: navigation/first open                  | Pending                                               |
+| `realmProgressConfirmation.spec.ts`        |             2 | 2: confirmation                           | Strengthened; BSE-002                                 |
 | `rerollSwipePersistence.spec.ts`           |             1 | 2: generation durability                  | Pending                                               |
 | `selectedLocaleRuntime.spec.ts`            |             3 | 3: locale transitions                     | Pending                                               |
 | `selectedLocaleStartup.spec.ts`            |             1 | 3: locale startup                         | Pending                                               |
@@ -32,7 +34,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Pending                                               |
 | `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Pending                                               |
 | `visibleStateRecovery.spec.ts`             |             3 | 2: visible/durable recovery               | Pending                                               |
-| **Total**                                  |        **77** |                                           | **Pilot evidence recorded; remaining review pending** |
+| **Total**                                  |        **79** |                                           | **Pilot evidence recorded; remaining review pending** |
 
 This file-level table is the current universe. The scenario records below are
 keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
@@ -165,6 +167,8 @@ row unless the detailed review states a narrower boundary.
 | S75 | `visibleStateRecovery.spec.ts:58`              | switching chats repaints the active-chat generation picker                                                            | Retained; 2c/2d review         |
 | S76 | `visibleStateRecovery.spec.ts:93`              | a sidebar toggle flip survives the command + resource refresh                                                         | Retained; 2c/2d review         |
 | S77 | `visibleStateRecovery.spec.ts:133`             | the same-character sidebar view survives old-lineage recovery after import                                            | Retained; P0-R and 2d          |
+| S78 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles YES                            | Strengthened; BSE-002          |
+| S79 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles NO                             | Strengthened; BSE-002          |
 
 ## Conditional and Expanded Execution
 
@@ -247,6 +251,7 @@ through a local alias are included during the independent control cross-check.
 | `startupRecoveryIntegrationMatrix.spec.ts` | `activeWriterHeaders`: 258; `getAppliedServerResourceRevision`: 143, 185, 256, 309; `getDatabaseSnapshot`: 96, 182, 285, 310, 475; `getLifecycleSnapshot`: 165, 179; `getRouteResourceLoadState`: 548, 557, 564; `getStartupCoordinatorSnapshot`: 317, 384, 400, 467, 488, 542, 567, 613, 644; `getStartupSnapshot`: 479, 643; `navigateTo`: 539; `patchRuntimeSettings`: 162, 373, 408, 414, 471; `waitForStartupMilestone`: 93, 140, 176, 253, 366, 392, 485, 520, 632 |
 | `transcriptResidency.spec.ts`              | `activeWriterHeaders`: 826, 1772; `getDatabaseSnapshot`: 722, 1802; `isLoaded`: 1304; `navigateTo`: 585, 590, 871, 876; `patchRuntimeSettings`: 417, 636, 717, 760                                                                                                                                                                                                                                                                                                       |
 | `visibleStateRecovery.spec.ts`             | `activeWriterHeaders`: 380; `getAppliedServerResourceRevision`: 370; `getDatabaseSnapshot`: 85, 125, 213; `patchRuntimeSettings`: 169; `selectCharacter`: 248; `waitForLoaded`: 244                                                                                                                                                                                                                                                                                      |
+| `realmProgressConfirmation.spec.ts`        | `waitForStartupMilestone`: 313; hook installation is observed at startup. Both are readiness observations; import and confirmation use visible controls.                                                                                                                                                                                                                                                                                                                 |
 
 ## Per-Spec Discovery Boundaries
 
@@ -415,3 +420,31 @@ and navigation evidence, with the final pointer gesture explicitly unproved.
 Current test/architecture guides now state these actual paths. No test or
 production change is needed to correct these documentation claims; Phase 1's
 passing browser run applies to the unchanged specs.
+
+## Critical Contract 2a: Operation Confirmation
+
+S78/S79 replace the missing browser-operation owner, with the exact fixture,
+path/oracle and production-fault evidence in
+[BSE-002](findings.md#bse-002-real-operation-browser-proof). The actual trigger is
+visible Realm URL/ID import through its warning/input/Terms controls; the only
+substituted service is the external HTTP catalog/CharX source. Its held byte
+stream is a timing precondition, and its low-level flag is real input to the
+server importer. No alert queue, parser, pending token, import result or durable
+outcome is supplied by the test.
+
+New inline controls are classified: local HTTP/ZIP builders and empty RisuSave
+import are setup; download release is external timing control; POST listeners,
+read-only SQLite/API reads and the forwarding raw-write recorder are observation;
+Realm controls and YES/NO are the actual user actions. All servers, contexts and
+temporary data are owned and cleaned up, including setup failure. The recorder
+preserves transport callbacks, encodings, this binding and return values.
+
+Both browser variants protect progress-to-confirmation admission, pending/no
+premature import, and answer-specific continuation. The accepted variant also
+protects token reuse, one external download, stable imported ID and durable
+reload; rejected input remains usable with unchanged storage. Stale low-level
+server responses while a newer import owns progress remain the explicitly
+component-level real-queue companion. The required browser admission fault
+fails both new cases at the intended dialog assertion and restored behavior
+passes. S33 remains alert presentation/focus/screenshot coverage; it is not
+relabeled as operation confirmation.

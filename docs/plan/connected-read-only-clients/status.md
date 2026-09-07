@@ -4,14 +4,15 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Planning prepared; implementation not started.
+- State: Stage 1 smoke prerequisite accepted; reader Phase 0 is next.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
-- Current task scope: planning documents only.
+- Current task scope: implement the coordinated connected-reader plan after the
+  accepted smoke prerequisite. Reader phase acceptance has not started.
 - Next implementation slice: [Phase 0](phases/phase-0-contract-and-inventory.md),
   confirm source and complete the mutation/runtime inventory and transition map.
 - Production behavior: unchanged; the new connected-reader contract is proposed.
-- Blockers: none known for planning. Phase 0 must resolve the implementation
-  choices listed below before dependent edits begin.
+- Blockers: none. Phase 0 must resolve the implementation choices below before
+  dependent feature edits begin.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -92,3 +93,20 @@ product questions requiring another approval round.
    which current editors need additional demotion preservation.
 5. Rollout flag ownership and old-client/protocol compatibility under the agreed
    disabled-during-implementation, enabled-after-verification default policy.
+
+## Stage 1 Smoke Prerequisite
+
+Received 2026-09-07: [smoke Phases 0–2 accepted](../browser-smoke-effectiveness/status.md#phase-2-acceptance-and-stage-1-handoff-2026-09-07),
+including all four critical contracts, their required fault demonstrations and
+restored browser proof, and the phase-ending agent-executed `pnpm test:all`
+(**79/79 browser cases, all 13 lanes pass**). No high-risk critical gap remains
+at the handoff source. See the smoke inventory/findings for exact source limits.
+
+This accepts the prerequisite only; reader Phases 0–5 remain pending. Start
+Phase 0 with current source confirmation, transition/entry-point/draft inventory
+and the rollout decision. Keep connected readers disabled during implementation,
+then apply the agreed enabled-by-default policy with fallback proof in Phase 5.
+Maintain affected smoke tests as behavior changes; replace obsolete old-writer
+freeze expectations while retaining ownership, draft, durability and exactly-once
+protections. The smoke workstream resumes with Stage 3 reconciliation and its
+remaining Phases 3–4 after reader completion.

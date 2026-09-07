@@ -300,7 +300,72 @@ in the phase-ending full suite.
   including acceptance/rejection and no premature continuation, paired with the
   queue ownership companion. Demonstrate a production admission fault at the
   browser assertion. Preserve S33's presentation/accessibility contract.
-- Disposition: **open**; prevents Stage 1 handoff until browser evidence passes.
+- Disposition: **verified repair**; Phase 2 agent and full-browser gates passed in status.
+
+### BSE-002 Real-Operation Browser Proof
+
+Source: `6f39fb8f0` plus new
+`server/fastify/browser-smoke/realmProgressConfirmation.spec.ts`. Two cases are
+registered as `Realm import moves from actual download progress to low-level
+confirmation and handles YES` / `...handles NO` (S78/S79). The existing alert
+presentation/accessibility case S33 stays independent and useful.
+
+Fixture provenance and actual path:
+
+1. Import an empty initialized RisuSave fixture through real Fastify/SQLite.
+   A local HTTP server supplies the external Realm catalog and a genuine
+   `chara_card_v3` ZIP with its low-level flag and one PNG asset; conversion,
+   staging, import routes, resource refresh and SQLite remain real.
+2. Click the visible Realm opener, external-server warning, Realm menu, URL/ID
+   import, input confirmation and Terms acceptance. No browser hook invokes the
+   operation or substitutes its answer.
+3. The external server sends half the CharX bytes and waits. The first real
+   import POST returns 200/SSE, the visible download progress exceeds 5%, and
+   request/body/storage assertions prove only one unapproved request and no
+   character/assets or character refresh.
+4. Release bytes. An observation-only wrapper copies original `reply.raw.write`
+   bytes, forwarding the original arguments, encoding/callback, this binding
+   and return value. The actual stream finishes with one low-level-access frame
+   and a nonempty server token, with no done frame or durable import. This
+   recorder replaces unavailable Chromium response-body diagnostics; it does
+   not supply frames or alter application parsing/queue admission.
+5. The actual low-level dialog must appear and expose enabled YES/NO controls.
+   YES reuses the exact pending token in one retry, performs no second external
+   download, creates one character/event and asset, navigates to its stable ID,
+   and preserves imported fields through reload. NO sends no retry/import,
+   leaves storage unchanged, permits opening/cancelling another visible input,
+   and remains empty after reload.
+
+Fixed focused command: `pnpm exec playwright test -c
+playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/realmProgressConfirmation.spec.ts --workers=1`:
+**2/2 pass**, 7.5s. Strict browser TypeScript and Prettier pass.
+
+Production fault in the disposable checkout, unchanged final regression/fixture:
+
+```diff
+       // Release the progress overlay so the queued confirmation can be shown.
+-      alertStore.set({ type: 'none', msg: '' })
+       const confirmed = await alertConfirm(language.lowLevelAccessConfirm)
+```
+
+After `pnpm build:smoke` in that checkout, the same selected browser command
+(with its previously documented pnpm dependency-verification option) produces
+**2/2 failures at line 187**: the bounded 5s assertion says the real low-level
+response must replace progress with actionable confirmation. All preceding real
+POST/SSE/download-progress/token/no-import assertions pass. This is the intended
+queue-admission hang, not a generic suite timeout or mocked confirmation return.
+Restore the production line, rebuild and execute the unchanged two cases:
+**2/2 pass**, YES 2.5s, NO 2.2s, 6.3s total.
+
+Initial authoring runs exposed an opener accessible-name mismatch and Chromium's
+unavailable completed fetch-SSE response body. Those were test instrumentation
+issues, resolved before the fixed/fault/restored experiment; no application
+failure is inferred from them. Progress and confirmation prevent launching a
+second import through this visible UI. The existing real-queue component
+companion P0-C covers a stale low-level server result arriving while a newer
+import owns progress; no programmatic concurrency is mislabeled as a browser
+entry journey. Phase 2's final frontend lane re-executes that unchanged companion.
 
 ## BSE-003: Completed normal-send identity survives full reload
 
@@ -352,7 +417,7 @@ same disposable-checkout pnpm dependency-check option described under Phase 0.
 - Restore the production field and strengthened test; execute all 11
   accepted-send cases. **11/11 pass in 26.4s** at the restored source.
 
-Disposition: **focused repair verified**; Phase 2 aggregate evidence pending. Generation failure/retry, Stop, transport loss, concurrent chats, and
+Disposition: **verified repair**; Phase 2 agent and full-browser gates passed in status. Generation failure/retry, Stop, transport loss, concurrent chats, and
 queued finalization keep their existing separate cases and deterministic
 external-provider boundaries.
 

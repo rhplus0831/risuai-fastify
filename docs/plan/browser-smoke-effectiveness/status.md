@@ -4,29 +4,30 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Phases 0–1 accepted; Phase 2 in progress; the 2c and 2d slices are verified; confirmation is next.
-- Execution source: `4585333b4` (accepted Phase 1), with the Phase 2c normal-send
-  reload regression in progress.
-- Current scope: the four critical browser contracts; prioritize normal-send
-  durable reload (2c) and stale-response recovery (2d).
-- Next action: add the real Realm progress-to-confirmation browser journey (2a),
-  then finish transcript acceptance (2b) and the full Phase 2 gates.
-- Confirmed gaps: BSE-002 (browser operation confirmation, Phase 2a) and BSE-003
-  (completed normal-send reload, Phase 2c). BSE-001/004 are verified repairs.
-- Blockers: none. Reader implementation and smoke Phases 3–4 remain pending.
+- State: Phases 0–2 accepted; Stage 1 handed off to connected-reader Phase 0.
+- Execution source: `6f39fb8f0` plus the new Realm browser regression and
+  final Phase 2 evidence/guidance records.
+- Current scope: Stage 1 prerequisite accepted. Smoke Phases 3–4 intentionally
+  remain unfinished while the connected-reader plan executes.
+- Next action: execute [reader Phase 0](../connected-read-only-clients/phases/phase-0-contract-and-inventory.md).
+  Resume this workstream at Stage 3 reconciliation after reader Phase 5 is accepted.
+- Confirmed required gaps: BSE-001–004 are verified repairs. No open high-risk
+  gap remains in the four critical contracts at the Stage 1 source.
+- Blockers: none. The receiving [reader status](../connected-read-only-clients/status.md)
+  owns the next execution cursor; smoke Phases 3–4 remain pending.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State       | Next evidence required                                              |
-| --------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted    | Evidence below; proceed to Phase 1                                  |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted    | Shared controls, repair faults, agent and full-suite evidence below |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | In progress | Complete 2c/2d, then 2a/2b and the phase-ending full gate           |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending     | Complete review dispositions and repaired confirmed gaps            |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending     | Final discovery, focused/aggregate/full-browser evidence, residuals |
+| Phase                                                                       | State    | Next evidence required                                              |
+| --------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------- |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                  |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted | Shared controls, repair faults, agent and full-suite evidence below |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted | Four contract faults, restored browsers and phase gates below       |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending  | Complete review dispositions and repaired confirmed gaps            |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending  | Final discovery, focused/aggregate/full-browser evidence, residuals |
 
 ## Verification Ledger
 
@@ -201,3 +202,56 @@ execution is claimed. Direct geometry/scroll controls retain narrower algorithm
 claims and do not replace real input. Unreviewed residency interactions remain
 for Phase 3. Phase 2a implementation is the only active code slice; full Phase 2
 acceptance still requires its browser fault proof and the phase-ending gates.
+
+## Phase 2a — Real Operation Confirmation
+
+[BSE-002](findings.md#bse-002-real-operation-browser-proof) adds two real UI Realm
+import journeys with genuine CharX conversion, streamed progress, pending-token
+confirmation, answer-specific storage/network consequences and reload. A bounded
+subagent implemented the fixture; parent review and isolated production-fault
+validation are complete. Fixed focused spec **2/2 pass**, removed production
+progress clear **2/2 fail** at the 5s dialog-admission oracle after real SSE
+proof, and restored clean build **2/2 pass** in 6.3s. Browser types/format pass.
+The real-queue stale-result companion retains its narrower component scope.
+
+**2a slice verified.** Together with 2b/2c/2d, every required critical contract
+has relevant named fault detection and passing restored browser evidence at its
+stated source. No high-risk gap was deferred. Final discovery now finds **79
+cases in 18 specs**; S78/S79 and their inline controls are in the inventory.
+Phase 2 remains pending final agent/full-suite validation, then Stage 1 hands
+off to connected-reader Phase 0. Smoke Phases 3–4 stay unfinished during Stage 2.
+
+## Phase 2 Acceptance and Stage 1 Handoff — 2026-09-07
+
+Final implementation: `6f39fb8f0` plus the Realm browser spec and evidence/docs
+committed with this record. No main-worktree production source was changed by
+this stage; isolated faults were restored. The normal-send spec changed in
+`e503af81f`, and the shared artifact/paint repairs are accepted Phase 1 changes.
+
+- `pnpm test:agent`: **all seven lanes pass**, 2m 31.2s, five existing ordinary
+  frontend/server skips. This builds smoke assets but does not run Playwright.
+- Required phase-ending `pnpm test:all`: **all 13 lanes pass**, 5m 56.5s,
+  including **79/79 browser cases** and the required current-run integration
+  artifact merge. The browser lane (build plus execution) takes 3m 6.0s.
+  Compatibility, coverage, scale and performance pass as well. No new skips;
+  opt-in transcript cost/profile, physical devices/other engines and the separate
+  pinned compatibility differential remain outside this execution.
+- Current documentation **49 pass**; explicit coordination/index/both-bundle
+  validation **22 pass**, with empty index specs/path exemptions. Changed
+  Markdown passes Prettier with the ignore override and whitespace checks.
+
+| Critical contract             | Accepted evidence                                                                                                                                                                                                                                                                                          |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 2a operation confirmation     | S78/S79 real UI/HTTP/CharX/SSE/queue/SQLite journeys; BSE-002 production progress-clear fault fails both bounded dialog assertions; both restored cases pass. Real-queue stale-result component companion retains its stated scope.                                                                        |
+| 2b transcript input/remount   | S21/S22 real input and nonempty content/geometry observations; P0-T cached-height fault fails both repetitions and restoration passes. Current entry/startup/residency companions are reviewed with explicit controlled-geometry limits.                                                                   |
+| 2c normal send/durable reload | S01 real composer/partial/terminal/completed reload with exact identities; BSE-003 omitted durable result-ID fault passes the old test and fails the strengthened post-reload assertion; restored full accepted-send spec passes.                                                                          |
+| 2d stale response/recovery    | P0-R real held lineage-tagged request/import/conflict/new-document recovery and visible newer view choice; omitted restoration fails its final DOM oracle. Outbox identity, one revision/receipt, event-gap ordering, takeover and queued-finalization companions retain verified current-source evidence. |
+
+**Phase 2 and Stage 1 accepted.** The receiving
+[reader status](../connected-read-only-clients/status.md#stage-1-smoke-prerequisite)
+links this prerequisite. No high-risk critical gap was deferred. All remaining
+smoke scenario reviews, including S65–S72 and other still-pending inventory
+rows, stay for Phase 3 after reader implementation. Stage 3 must reconcile
+changed startup, ownership, recovery, navigation and generation-observation
+behavior, rerun affected browser evidence, and repeat faults where the tested
+transition/assertion changed; this handoff does not certify future reader code.
