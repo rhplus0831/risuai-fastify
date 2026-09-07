@@ -59,6 +59,7 @@
     retryCurrentRouteApplication,
     syncRouteFromState,
   } from './ts/router'
+  import { routeKey } from './ts/routerRoute'
   import { prefetchCharacterRouteResource, routeResourceLoadState } from './ts/server/routeResourceLoader'
   import { prefetchRouteIntent } from './ts/routeIntentPrefetch'
   import { modalFocusTrap } from './ts/gui/modalFocusTrap'
@@ -277,20 +278,31 @@
     // Keep the live URL subscription even while a nonreactive reader intent
     // supplies the first route after promotion.
     const currentWriterRoute = $currentRoute
-    const observerIntent = peekObserverRouteIntent()
+    let observerIntent = peekObserverRouteIntent()
+    // New navigation supersedes the retained route; equivalent aliases keep
+    // their pending promotion/retry intent until application succeeds.
+    if (observerIntent && routeKey(observerIntent.route) !== routeKey(currentWriterRoute)) {
+      consumeObserverRouteIntent(observerIntent.sequence)
+      observerIntent = null
+    }
     const route = observerIntent?.route ?? currentWriterRoute
     if (consumeStateDrivenRouteUpdate() && !observerIntent) {
       renderedRoute = route
       return
     }
+    let current = true
     const sessionGeneration = captureClientSessionGeneration()
     untrack(() => {
       void applyRouteToStores(route).then((applied) => {
-        if (!applied || !canApplyWriterRoutes || !isClientSessionGenerationCurrent(sessionGeneration)) return
+        if (!current || !applied || !canApplyWriterRoutes || !isClientSessionGenerationCurrent(sessionGeneration))
+          return
         renderedRoute = route
         if (observerIntent) consumeObserverRouteIntent(observerIntent.sequence)
       })
     })
+    return () => {
+      current = false
+    }
   })
 
   $effect(() => {

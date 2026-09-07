@@ -12,6 +12,7 @@ import { get, writable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initialPushNotificationCoordinatorState, pushNotificationStateWriter } from './ts/server/pushNotificationState'
 import type { AppRoute } from './ts/router'
+import { parseRoute as parseAppRoute } from './ts/routerRoute'
 import type { Database, character } from './ts/storage/database.svelte'
 import { RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes'
 import {
@@ -826,6 +827,104 @@ describe('App route/refreeze mounted DOM behavior', () => {
       expect(target.querySelector('[data-rendered-route="/character/char-a/chat-a"]')).toBeNull()
     })
     expect(applyRoute).toHaveBeenCalledWith(settingsRoute)
+  })
+
+  it('lets newer writer navigation supersede a retained reader route before its initial application finishes', async () => {
+    await unmount(component!)
+    component = undefined
+    const router = appRouteDomMocks.state.exports!
+    const applyRoute = vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>)
+    const initialApplication = deferred<boolean>()
+    const nextApplication = deferred<boolean>()
+    applyRoute.mockClear().mockReturnValueOnce(initialApplication.promise).mockReturnValueOnce(nextApplication.promise)
+    enterClientWriter()
+    recordObserverRouteIntent(characterRoute)
+    appRouteDomMocks.state.pendingRouteApplication = true
+    try {
+      await mountApp()
+      expect(applyRoute).toHaveBeenCalledExactlyOnceWith(characterRoute)
+      expect(peekObserverRouteIntent()?.route).toEqual(characterRoute)
+      recordStartupMilestone('background-ready')
+      const nextRoute = parseAppRoute('/settings/language')
+      window.history.pushState(null, '', nextRoute.path)
+      router.currentRoute.set(nextRoute)
+      await tick()
+      expect(applyRoute).toHaveBeenCalledTimes(2)
+      expect(applyRoute).toHaveBeenLastCalledWith(nextRoute)
+      expect(peekObserverRouteIntent()).toBeNull()
+      nextApplication.resolve(true)
+      await tick()
+      await tick()
+      expect(target.querySelector('[data-risu-lazy-surface="settings"]')).not.toBeNull()
+      initialApplication.resolve(true)
+      await tick()
+      await tick()
+      expect(get(router.currentRoute)).toEqual(nextRoute)
+      expect(window.location.pathname).toBe('/settings/language')
+      expect(target.querySelector('[data-risu-lazy-surface="settings"]')).not.toBeNull()
+      expect(target.querySelector('[data-rendered-route="/character/char-a/chat-a"]')).toBeNull()
+    } finally {
+      initialApplication.resolve(false)
+      nextApplication.resolve(false)
+      await tick()
+    }
+  })
+
+  it('ignores an older successful route completion after a newer route renders in the same writer session', async () => {
+    const router = appRouteDomMocks.state.exports!
+    const applyRoute = vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>)
+    const olderApplication = deferred<boolean>()
+    const latestApplication = deferred<boolean>()
+    applyRoute.mockReturnValueOnce(olderApplication.promise).mockReturnValueOnce(latestApplication.promise)
+    appRouteDomMocks.state.pendingRouteApplication = true
+    try {
+      router.currentRoute.set(parseAppRoute('/settings/language'))
+      await tick()
+      const latestRoute = parseAppRoute('/character/char-b/chat-b')
+      router.currentRoute.set(latestRoute)
+      await tick()
+      latestApplication.resolve(true)
+      await tick()
+      await tick()
+      expect(target.querySelector('[data-rendered-route="/character/char-b/chat-b"]')).not.toBeNull()
+      olderApplication.resolve(true)
+      await tick()
+      await tick()
+      expect(target.querySelector('[data-rendered-route="/character/char-b/chat-b"]')).not.toBeNull()
+      expect(target.querySelector('[data-risu-lazy-surface="settings"]')).toBeNull()
+    } finally {
+      olderApplication.resolve(false)
+      latestApplication.resolve(false)
+      await tick()
+    }
+  })
+
+  it('retains a semantically matching reader alias through failed application and consumes it after a successful retry', async () => {
+    await unmount(component!)
+    component = undefined
+    const router = appRouteDomMocks.state.exports!
+    const applyRoute = vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>)
+    const retryApplication = deferred<boolean>()
+    const alias = parseAppRoute('/characters/char-a/chats/chat-a')
+    const intent = recordObserverRouteIntent(alias)
+    applyRoute.mockClear().mockResolvedValueOnce(false).mockReturnValueOnce(retryApplication.promise)
+    try {
+      await mountApp()
+      expect(applyRoute).toHaveBeenCalledExactlyOnceWith(alias)
+      expect(peekObserverRouteIntent()).toEqual(intent)
+      router.currentRoute.set({ ...characterRoute })
+      await tick()
+      expect(applyRoute).toHaveBeenLastCalledWith(alias)
+      expect(peekObserverRouteIntent()).toEqual(intent)
+      retryApplication.resolve(true)
+      await tick()
+      await tick()
+      expect(peekObserverRouteIntent()).toBeNull()
+      expect(window.location.pathname).toBe(routePath)
+    } finally {
+      retryApplication.resolve(false)
+      await tick()
+    }
   })
 
   it('shows a compact delayed pending status without unmounting route content', async () => {
