@@ -2,6 +2,7 @@
 
 Last audited: 2026-08-31.
 Targeted source check: 2026-09-05 (display paint-cache ownership).
+Targeted source check: 2026-09-08 (connected-reader startup and generation reads).
 
 This guide owns the Fastify-to-browser read boundary: bootstrap resources,
 root and targeted REST reads, hash-verified cache substitution, lazy body
@@ -17,22 +18,20 @@ the [architecture index](README.md) for adjacent ownership.
 `src/ts/startupReadiness.ts` publishes monotonic milestones and the narrow
 capabilities consumed by the shell and protocol adapters:
 
-- The pre-writer observer rollout is controlled by
-  `VITE_FAST_BOOTSTRAP_OBSERVER=TRUE` and remains disabled in a normal production
-  build unless that build-time flag is present. When enabled, startup first uses
-  read-only bootstrap without caching its revision as command authority and
-  reads `GET /api/v1/resources/shell`. A coherent,
-  initialized response publishes `observer-ready` and may render the dedicated
-  read-only observer UI; it does not enable route persistence, commands, or
-  generation. An unavailable or uninitialized observer read falls back to the
-  conservative writer-first path.
-- Before writer-intent bootstrap, startup reads any single unambiguous pending
-  mutation owner and can adopt that writer session so recoverable local work is
-  not orphaned by a new browser session. `fetchServerBootstrap()` then sends
-  writer intent to `GET /api/v1/bootstrap`. When another writer still has an
-  identified event stream open, bootstrap returns
-  `409 active_writer_connected`; the browser prompts before retrying with
-  explicit permission to disconnect that client.
+- Connected readers are enabled by default unless the build-time
+  `VITE_FAST_BOOTSTRAP_OBSERVER` value is exactly `FALSE`. This single rollout
+  switch retains the conservative writer-first fallback. Connected startup
+  resolves a page identity, discovers ownership through authenticated read-only
+  bootstrap, and installs a coherent shell for initialized state. An exclusive
+  page may conditionally acquire an unowned server or resume its own writer;
+  a foreign owner remains authoritative even while disconnected, so other pages
+  stay connected readers. Discovery failure does not silently request takeover.
+- Connected acquisition sends the discovered writer epoch and database lineage
+  as preconditions. A stale discovery returns `409 active_writer_changed`; a
+  connected foreign writer additionally returns `409 active_writer_connected`
+  until the user confirms disconnection. **Use this device** is the explicit
+  reader acquisition path. The conservative fallback separately retains its
+  pre-bootstrap adoption of one unambiguous local pending-mutation owner.
 - A successful writer bootstrap is deliberately runtime-only metadata:
   initialization state, revision/schema version, database lineage, durable
   writer epoch, the pre-takeover writer verdict, asset base URL, generation and
@@ -40,8 +39,10 @@ capabilities consumed by the shell and protocol adapters:
   finalization/effect recovery, startup telemetry configuration, and running plus
   bounded recent terminal message/greeting translations. It does not carry
   durable application data.
-- When bootstrap reports `initialized: false`, the browser attempts
-  `POST /api/v1/commands/state/initialize`. The server re-runs the classifier in
+- An authorized writer with `initialized: false` attempts
+  `POST /api/v1/commands/state/initialize`. A connected page that cannot establish
+  exclusive identity requires the explicit setup action before acquisition;
+  readers waiting on another owner do not initialize. The server re-runs the classifier in
   the command transaction and accepts only genuinely empty state; conflicting
   prior-install evidence fails closed. The winning client reuses the runtime
   metadata and accepted revision it already has, while a client that lost an
@@ -70,12 +71,22 @@ capabilities consumed by the shell and protocol adapters:
   projections, starts owner-mutation and hydration lifecycles, and subscribes to
   `/api/v1/events` from the applied shell revision. Only an accepted event
   subscription publishes `writer-ready`.
-- The resulting capability order is deliberate: `canRenderShell` opens at
-  `observer-ready` only for the flagged observer path, while `canApplyRoutes`
-  and `canMutate` require non-revoked `writer-ready`. `canGenerate` additionally
-  requires plugins, generation recovery, selected character/chat detail, and the
-  selected prompt-template owner to be coherent at `chat-ready`. Background
-  runtimes never become a global UI gate.
+- Managed `canRenderShell` and `canApplyRoutes` admit a coherent authenticated
+  read projection. Reader routing keeps its own stable character/chat intent and
+  hydrates only the selected view; it does not persist the writer's selection.
+  `canMutate` still requires current, live writer authority and `writer-ready`.
+  `canGenerate` additionally requires plugins, generation recovery, selected
+  character/chat detail, and the selected prompt-template owner to be coherent
+  at `chat-ready`. Read-only transcript display uses the bounded
+  `runtime:chat-display` resource surface rather than enabling writer runtimes.
+  Background runtimes never become a global UI gate.
+- During initial automatic acquisition, the preview exposes the shell and local
+  navigation while `canUseClientReaderContent()` defers selected detail,
+  transcript/display reads and missing-route repair until an actual reading or
+  writing disposition. Established Readers retain content through later recovery.
+  An initial shell or selected-locale failure before a coherent projection shows
+  the startup error and retries that boundary after acknowledgement; it cannot
+  silently settle as a Reader or claim successful writer startup.
 - `RESOURCE_SURFACE_MANIFEST` assigns settings groups, collections, standalone
   settings, and detail projections to shared, route, runtime, and overlay
   surfaces with `render`, `interact`, `mutate`, `generate`, or `editor-prefill`
@@ -98,7 +109,13 @@ capabilities consumed by the shell and protocol adapters:
   switch until both pre-route resources and target code are ready. Only the root
   shell has a cross-field atomic barrier; granular route resources apply
   independently through their explicit owners and revision fences.
-- Generation recovery treats SQLite `generation_operations`,
+- Reader event recovery belongs to `connectedReaderSync.ts`. It checks current
+  ownership/lineage, subscribes without writer headers from the applied-resource
+  cursor, and performs read-only targeted/full refreshes on events or replay
+  gaps. Local navigation is restored by stable identity after replacement.
+  Reconnect neither acquires a writer nor replays outbox work. Hypa/BardWiki
+  operational snapshots and progress use their own stream/version fences.
+- Writer generation recovery treats SQLite `generation_operations`,
   `generation_operation_attempts`, and `generation_effects` as durable
   authority. Active jobs are live attachment hints and local activities are
   observer state. Effect claims are writer-owned, lease-fenced, and settled by
@@ -115,31 +132,43 @@ capabilities consumed by the shell and protocol adapters:
   Terminal or expired jobs are not cleared until their affected transcript has
   been authoritatively hydrated, and the snapshot's finalization/effect
   projections are reconciled in the same recovery pass.
+- Reader generation uses `readerGenerationObservation.ts` and
+  `readerGenerationStream.ts` instead of the writer send/recovery pipeline. Only
+  the selected chat's exact operation/attempt/job is attached. Reads and silent
+  viewers have deadlines; retries are bounded, incomplete descriptors remain
+  eligible for refresh, and terminal handoff verifies the persisted message
+  identity. Hidden/offline state, selection changes, and teardown release the
+  HTTP viewer without cancelling its job. No finalization retry, effect claim,
+  translation submission, or completion callback is started by this observer.
 - Command success reconciliation and foreign command SSE events both flow
   through the same serialized resource path. Contiguous response-confirmed
   optimistic effects can advance their resource fences without a read;
   authoritative reads still apply in command-event order for every other event.
 
-| Path | Role |
-| --- | --- |
-| `src/ts/server/bootstrap.ts` | Validates the small runtime bootstrap and exposes writer-intent/read-only variants. |
-| `src/ts/server/resourceReads.ts` | Browser wrappers and response validation for settings, collections, characters, and the inlay catalog. |
-| `src/ts/server/shellHydration.ts` | Atomically preflights and applies the exact shell settings plus versioned character summaries at one revision. |
-| `packages/shared-core/src/resourceManifest.ts` | Audited ownership manifest for shared, route, deferred-runtime, and first-use resource surfaces. |
-| `src/ts/server/routeResourceLoader.ts` | Route/deferred-surface loading, deduplication, supersession, retry state, and idle character-detail prefetch. |
-| `src/ts/server/resourceCache.ts` | Disposable, non-authoritative SHA-256 manifests and verified IndexedDB values used only after authenticated hash confirmation. |
-| `src/ts/server/resourceState.svelte.ts` | Explicit Svelte resource owners plus per-slice revisions, status, errors, projection epochs, and acknowledgement fences. |
-| `src/ts/server/hydrationReads.ts` | Browser wrappers for chat, lorebook, legacy-preset, and prompt-template bodies. |
-| `src/ts/server/chatMessageHydration.svelte.ts` | Active/ranged/bulk chat hydration and character-lorebook hydration. |
-| `src/ts/server/characterShellHydration.svelte.ts` | Fetches a full character row when a consumer encounters a shell row. |
-| `src/ts/server/promptTemplateHydration.ts` | Fetches the template owned by a selected or explicitly requested prompt preset. |
-| `src/ts/server/messageTranslationJobs.ts` | Tracks detached manual or generated-message translation rows from bootstrap and refresh polling. |
-| `src/ts/server/greetingTranslations.svelte.ts` | Character-scoped greeting projection, source/settings fencing, manual translation, refresh, and job recovery. |
-| `packages/shared-core/src/settingsGroups.ts` | Shared settings-group membership, including the browser `sidebar` projection. |
-| `src/ts/process/serverGeneratedMessageTranslation.ts` | Applies translation results embedded in generation completion and seeds the shared translation-job state for running/failure UI. |
-| `src/ts/process/generatedMessageTranslationEligibility.ts` | Prevents the older rendered-row auto trigger from duplicating server-owned generated-message translation. |
-| `src/ts/server/inlayCatalog.ts` | Standalone browser projection and revision-aware writes for inlay metadata. |
-| `src/ts/server/displaySources.ts` | Batches intermediate-display source reads and falls back when the advertised protocol is unavailable. |
+| Path                                                                        | Role                                                                                                                             |
+| --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `src/ts/server/bootstrap.ts`                                                | Validates the small runtime bootstrap and exposes writer-intent/read-only variants.                                              |
+| `src/ts/connectedClientStartup.ts`                                          | Discovers ownership and conditionally enters connected reader or authorized writer recovery.                                     |
+| `src/ts/server/connectedReaderSync.ts`                                      | Reader event transport, revision reconciliation, ownership/lineage recovery, and operational snapshots.                          |
+| `src/ts/server/readerTranscriptProjection.svelte.ts`                        | Disposable reader transcript ownership and chat-incarnation fences.                                                              |
+| `src/ts/server/readerGenerationObservation.ts`, `readerGenerationStream.ts` | Selected generation observation and exact terminal transcript handoff without writer control.                                    |
+| `src/ts/server/resourceReads.ts`                                            | Browser wrappers and response validation for settings, collections, characters, and the inlay catalog.                           |
+| `src/ts/server/shellHydration.ts`                                           | Atomically preflights and applies the exact shell settings plus versioned character summaries at one revision.                   |
+| `packages/shared-core/src/resourceManifest.ts`                              | Audited ownership manifest for shared, route, deferred-runtime, and first-use resource surfaces.                                 |
+| `src/ts/server/routeResourceLoader.ts`                                      | Route/deferred-surface loading, deduplication, supersession, retry state, and idle character-detail prefetch.                    |
+| `src/ts/server/resourceCache.ts`                                            | Disposable, non-authoritative SHA-256 manifests and verified IndexedDB values used only after authenticated hash confirmation.   |
+| `src/ts/server/resourceState.svelte.ts`                                     | Explicit Svelte resource owners plus per-slice revisions, status, errors, projection epochs, and acknowledgement fences.         |
+| `src/ts/server/hydrationReads.ts`                                           | Browser wrappers for chat, lorebook, legacy-preset, and prompt-template bodies.                                                  |
+| `src/ts/server/chatMessageHydration.svelte.ts`                              | Active/ranged/bulk chat hydration and character-lorebook hydration.                                                              |
+| `src/ts/server/characterShellHydration.svelte.ts`                           | Fetches a full character row when a consumer encounters a shell row.                                                             |
+| `src/ts/server/promptTemplateHydration.ts`                                  | Fetches the template owned by a selected or explicitly requested prompt preset.                                                  |
+| `src/ts/server/messageTranslationJobs.ts`                                   | Tracks detached manual or generated-message translation rows from bootstrap and refresh polling.                                 |
+| `src/ts/server/greetingTranslations.svelte.ts`                              | Character-scoped greeting projection, source/settings fencing, manual translation, refresh, and job recovery.                    |
+| `packages/shared-core/src/settingsGroups.ts`                                | Shared settings-group membership, including the browser `sidebar` projection.                                                    |
+| `src/ts/process/serverGeneratedMessageTranslation.ts`                       | Applies translation results embedded in generation completion and seeds the shared translation-job state for running/failure UI. |
+| `src/ts/process/generatedMessageTranslationEligibility.ts`                  | Prevents the older rendered-row auto trigger from duplicating server-owned generated-message translation.                        |
+| `src/ts/server/inlayCatalog.ts`                                             | Standalone browser projection and revision-aware writes for inlay metadata.                                                      |
+| `src/ts/server/displaySources.ts`                                           | Batches intermediate-display source reads and falls back when the advertised protocol is unavailable.                            |
 
 Production code reads and updates the explicit settings, collection, character,
 chat/transcript, lorebook, prompt-template, and standalone feature owners. There
@@ -279,34 +308,37 @@ immediately, so a later refresh still reads the server.
 
 ### Endpoint Index
 
-| Data | Endpoint | Browser owner |
-| --- | --- | --- |
-| Minimal coherent application shell | `GET /api/v1/resources/shell` | `shellHydration.ts`, root startup |
-| One standalone legacy settings value | `GET /api/v1/resources/settings/:setting` | `routeResourceLoader.ts`, standalone setting state |
-| Persisted settings fields | Cache `POST /api/v1/settings`; full `GET` fallback | `resourceReads.ts`, `settingsResourceState` |
-| One settings group | Cache `POST /api/v1/settings/:group`; full `GET` fallback | Event-driven targeted invalidation |
-| Every split collection | Cache `POST /api/v1/collections`; full `GET` fallback | `resourceReads.ts`, `collectionsResourceState` |
-| One split collection | Cache `POST /api/v1/collections/:name`; full `GET` fallback | Event-driven targeted invalidation |
-| Legacy message-free character aggregate/order/current | Cache `POST /api/v1/characters/aggregate`; full `GET` fallback | External compatibility route; no first-party production consumer. |
-| Version 1 character summaries/order/current | Cache `POST /api/v1/characters`; full `GET` fallback | `resourceReads.ts`, `charactersResourceState` |
-| Inlay metadata catalog | `GET /api/v1/inlay-assets` | `inlayCatalog.ts` |
-| Character order only | `GET /api/v1/characters/order` | Character-order invalidation |
-| Character selection/interaction | `GET /api/v1/characters/:id/selection` | Character-selection invalidation |
-| One character row | `GET /api/v1/characters/:id` | Targeted invalidation and character-shell hydration |
-| One character's greeting translations | `GET /api/v1/characters/:id/greeting-translations` | `greetingTranslations.svelte.ts` |
-| Full, tail, ranged, or generation-suffix chat body | `GET /api/v1/chats/:id/messages` with optional `tail`, `start`/`limit`, or `generationMessageId` | `hydrateActiveChat*()` and event invalidation |
-| Many chat bodies | `POST /api/v1/chats/messages/bulk` | `ensureAllChatsHydrated()` |
-| Derived intermediate display text | `POST /api/v1/chats/:id/display-sources` | `displaySources.ts` negotiated batch/fallback client |
-| Generation-effect status | `GET /api/v1/generation-effects/:generationId` | `generationEffectLedger.ts`, recovery |
-| BardWiki chat summary/settings/index/receipts/jobs | `GET /api/v1/bardwiki/chats/:chatId` | `bardWikiResource.ts`, lazy active-chat workspace |
-| One BardWiki document and bounded versions | `GET /api/v1/bardwiki/chats/:chatId/documents/:documentId`; `.../versions` | Lazy BardWiki document/version hydration |
-| BardWiki receipt page and deterministic vault | `GET /api/v1/bardwiki/chats/:chatId/receipts`; `.../export` | BardWiki workspace/lifecycle adapter |
-| Generation-effect claim | `POST /api/v1/generation-effects/:generationId/:effectKind/claims` | Active-writer live/recovered effect delivery |
-| Generation-effect lease/receipt | `PUT /api/v1/generation-effects/:generationId/:effectKind/{lease,receipt}` | Claim renewal and exact settlement |
-| One character lorebook | Cache `POST /api/v1/characters/:id/lorebook`; full `GET` fallback | `hydrateActiveCharacterLorebook()` and invalidation |
-| Many character lorebooks | `POST /api/v1/characters/lorebooks/bulk` | `ensureAllCharacterLorebooksHydrated()` |
-| One legacy bot-preset body | Cache `POST /api/v1/legacy-presets/:id`; full `GET` fallback | `ensureBotPresetHydrated()` |
-| One prompt-preset template | Cache `POST /api/v1/prompt-presets/:id/template`; full `GET` fallback | `ensurePromptTemplateHydrated()` |
+| Data                                                  | Endpoint                                                                                            | Browser owner                                                        |
+| ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Minimal coherent application shell                    | `GET /api/v1/resources/shell`                                                                       | `shellHydration.ts`, root startup                                    |
+| One standalone legacy settings value                  | `GET /api/v1/resources/settings/:setting`                                                           | `routeResourceLoader.ts`, standalone setting state                   |
+| Persisted settings fields                             | Cache `POST /api/v1/settings`; full `GET` fallback                                                  | `resourceReads.ts`, `settingsResourceState`                          |
+| One settings group                                    | Cache `POST /api/v1/settings/:group`; full `GET` fallback                                           | Event-driven targeted invalidation                                   |
+| Every split collection                                | Cache `POST /api/v1/collections`; full `GET` fallback                                               | `resourceReads.ts`, `collectionsResourceState`                       |
+| One split collection                                  | Cache `POST /api/v1/collections/:name`; full `GET` fallback                                         | Event-driven targeted invalidation                                   |
+| Legacy message-free character aggregate/order/current | Cache `POST /api/v1/characters/aggregate`; full `GET` fallback                                      | External compatibility route; no first-party production consumer.    |
+| Version 1 character summaries/order/current           | Cache `POST /api/v1/characters`; full `GET` fallback                                                | `resourceReads.ts`, `charactersResourceState`                        |
+| Inlay metadata catalog                                | `GET /api/v1/inlay-assets`                                                                          | `inlayCatalog.ts`                                                    |
+| Character order only                                  | `GET /api/v1/characters/order`                                                                      | Character-order invalidation                                         |
+| Character selection/interaction                       | `GET /api/v1/characters/:id/selection`                                                              | Character-selection invalidation                                     |
+| One character row                                     | `GET /api/v1/characters/:id`                                                                        | Targeted invalidation and character-shell hydration                  |
+| One character's greeting translations                 | `GET /api/v1/characters/:id/greeting-translations`                                                  | `greetingTranslations.svelte.ts`                                     |
+| Full, tail, ranged, or generation-suffix chat body    | `GET /api/v1/chats/:id/messages` with optional `tail`, `start`/`limit`, or `generationMessageId`    | `hydrateActiveChat*()` and event invalidation                        |
+| Many chat bodies                                      | `POST /api/v1/chats/messages/bulk`                                                                  | `ensureAllChatsHydrated()`                                           |
+| Derived intermediate display text                     | `POST /api/v1/chats/:id/display-sources`                                                            | `displaySources.ts` negotiated batch/fallback client                 |
+| Durable generation operation                          | `GET /api/v1/generation-operations/:operationId`                                                    | Authenticated operation/attempt authority                            |
+| Exact operation viewer                                | `GET /api/v1/generation-operations/:operationId/stream?attemptNo=...&jobId=...&projectionEpoch=...` | Reader observation and writer reattach; no writer ownership required |
+| Verified terminal replay snapshot                     | `GET /api/v1/generate/chat/:jobId/terminal-snapshot`                                                | Exact stream reference, bounded by job retention                     |
+| Generation-effect status                              | `GET /api/v1/generation-effects/:generationId`                                                      | `generationEffectLedger.ts`, recovery                                |
+| BardWiki chat summary/settings/index/receipts/jobs    | `GET /api/v1/bardwiki/chats/:chatId`                                                                | `bardWikiResource.ts`, lazy active-chat workspace                    |
+| One BardWiki document and bounded versions            | `GET /api/v1/bardwiki/chats/:chatId/documents/:documentId`; `.../versions`                          | Lazy BardWiki document/version hydration                             |
+| BardWiki receipt page and deterministic vault         | `GET /api/v1/bardwiki/chats/:chatId/receipts`; `.../export`                                         | BardWiki workspace/lifecycle adapter                                 |
+| Generation-effect claim                               | `POST /api/v1/generation-effects/:generationId/:effectKind/claims`                                  | Active-writer live/recovered effect delivery                         |
+| Generation-effect lease/receipt                       | `PUT /api/v1/generation-effects/:generationId/:effectKind/{lease,receipt}`                          | Claim renewal and exact settlement                                   |
+| One character lorebook                                | Cache `POST /api/v1/characters/:id/lorebook`; full `GET` fallback                                   | `hydrateActiveCharacterLorebook()` and invalidation                  |
+| Many character lorebooks                              | `POST /api/v1/characters/lorebooks/bulk`                                                            | `ensureAllCharacterLorebooksHydrated()`                              |
+| One legacy bot-preset body                            | Cache `POST /api/v1/legacy-presets/:id`; full `GET` fallback                                        | `ensureBotPresetHydrated()`                                          |
+| One prompt-preset template                            | Cache `POST /api/v1/prompt-presets/:id/template`; full `GET` fallback                               | `ensurePromptTemplateHydrated()`                                     |
 
 ### Hydration Workflows
 
@@ -322,6 +354,13 @@ rows, and fills only newly visible ranges as the UI expands by
 workflows call full or batched hydration explicitly. Stale-response drops,
 hydration-generation resets, range stitching, reroll-alternate seeding, and
 queued-generation-persistence acknowledgement stay scoped to the chat body.
+
+Reader hydration can populate messages without seeding writer reroll state.
+`pendingRerollHydrationEpochs` records that outstanding work against the chat body
+projection epoch, including retained bodies across hydration resets and metadata
+clones. A later authorized writer hydration refetches the alternates once before
+using the resident-body fast path, then clears that entry. Reader events and bulk
+reads cannot seed writer reroll candidates merely by making messages resident.
 
 Ranged message application mutates a safe resident array in place: an appended
 generation suffix does not copy the loaded prefix, unchanged rows retain object

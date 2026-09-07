@@ -1,7 +1,7 @@
 # Client Runtime Guide
 
 Last audited: 2026-08-31.
-Targeted source check: 2026-09-05 (module organization, model ownership, diagnostics, and locale readiness).
+Targeted source check: 2026-09-08 (connected-reader startup, role transitions, and display isolation).
 
 This file covers browser TypeScript coordinators that influence visible Svelte
 UI. For component ownership and UI triage, start with the
@@ -15,17 +15,18 @@ messages on demand.
 
 ## Client TypeScript Areas
 
-| Path | Runtime ownership |
-| --- | --- |
-| `src/ts/server/` | Fastify browser adapters: runtime bootstrap, encrypted pending-mutation outbox/replay, REST resource reads, explicit resource owners/invalidation, commands, hydration, events, active writer, provider/media operations, assets, backups, Realm import, owner mutation lifecycles, push notifications, stale-operation guards, diagnostics, smoke hooks. |
-| `src/ts/storage/` | Server-backed auth/storage compatibility, resource-database accessors, `.risu` helpers, backup helpers, and auto-storage selection. |
-| `src/ts/process/` | `sendChat`, server-backed generation bridge, durable reattach, files/MCP/memory/embedding/post-generation helpers, retained parity helpers. |
-| `src/ts/process/request/` | Provider/server-routing classifiers, chat/completion/memory request adapters, SSE parsing, message patch helpers. |
-| `src/ts/model/`, `src/ts/horde/` | Browser model registry, profile UI/integration, and provider catalog adapters. Neutral profile records/resolution live in `packages/shared-core/`; see [Providers And Models](../../docs/structure/providers-and-models.md). |
-| `src/ts/plugins/` | Browser plugin loading/runtime and Plugin V3 API host. Fastify stores plugin records but does not execute plugins. |
-| `src/ts/process/mcp/` | Browser MCP clients, internal tools, Risu access tools, and plugin MCP clients. |
-| `src/ts/media/`, `src/ts/parser/`, `src/ts/gui/`, `src/ts/setting/`, `src/ts/translator/`, `src/ts/network/`, `src/ts/kei/`, `src/ts/util/` | Focused helper domains that feed visible UI and tests. |
-| `src/ts/stores.svelte.ts`, `src/ts/globalApi.svelte.ts`, `src/ts/characters.ts`, `src/ts/characterCards.ts`, `src/ts/characterFolderOpening.ts`, `src/ts/hotkey.ts`, `src/ts/lite.ts`, `src/ts/observer.svelte.ts` | Cross-cutting browser stores, compatibility helpers, character/card and folder-opening utilities, hotkeys, lite mode, and observers. |
+| Path                                                                                                                                                                                                               | Runtime ownership                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `src/ts/server/`                                                                                                                                                                                                   | Fastify browser adapters: runtime bootstrap, encrypted pending-mutation outbox/replay, REST resource reads, explicit resource owners/invalidation, commands, hydration, events, active writer, provider/media operations, assets, backups, Realm import, owner mutation lifecycles, push notifications, stale-operation guards, diagnostics, smoke hooks. |
+| `src/ts/clientSession.ts`, `src/ts/connectedClientStartup.ts`                                                                                                                                                      | Per-page identity, read/write capabilities, ownership discovery, and fenced promotion/recovery.                                                                                                                                                                                                                                                           |
+| `src/ts/storage/`                                                                                                                                                                                                  | Server-backed auth/storage compatibility, resource-database accessors, `.risu` helpers, backup helpers, and auto-storage selection.                                                                                                                                                                                                                       |
+| `src/ts/process/`                                                                                                                                                                                                  | `sendChat`, server-backed generation bridge, durable reattach, files/MCP/memory/embedding/post-generation helpers, retained parity helpers.                                                                                                                                                                                                               |
+| `src/ts/process/request/`                                                                                                                                                                                          | Provider/server-routing classifiers, chat/completion/memory request adapters, SSE parsing, message patch helpers.                                                                                                                                                                                                                                         |
+| `src/ts/model/`, `src/ts/horde/`                                                                                                                                                                                   | Browser model registry, profile UI/integration, and provider catalog adapters. Neutral profile records/resolution live in `packages/shared-core/`; see [Providers And Models](../../docs/structure/providers-and-models.md).                                                                                                                              |
+| `src/ts/plugins/`                                                                                                                                                                                                  | Browser plugin loading/runtime and Plugin V3 API host. Fastify stores plugin records but does not execute plugins.                                                                                                                                                                                                                                        |
+| `src/ts/process/mcp/`                                                                                                                                                                                              | Browser MCP clients, internal tools, Risu access tools, and plugin MCP clients.                                                                                                                                                                                                                                                                           |
+| `src/ts/media/`, `src/ts/parser/`, `src/ts/gui/`, `src/ts/setting/`, `src/ts/translator/`, `src/ts/network/`, `src/ts/kei/`, `src/ts/util/`                                                                        | Focused helper domains that feed visible UI and tests.                                                                                                                                                                                                                                                                                                    |
+| `src/ts/stores.svelte.ts`, `src/ts/globalApi.svelte.ts`, `src/ts/characters.ts`, `src/ts/characterCards.ts`, `src/ts/characterFolderOpening.ts`, `src/ts/hotkey.ts`, `src/ts/lite.ts`, `src/ts/observer.svelte.ts` | Cross-cutting browser stores, compatibility helpers, character/card and folder-opening utilities, hotkeys, lite mode, and observers.                                                                                                                                                                                                                      |
 
 Retained compatibility and parity helpers still exist under `src/ts/process/`,
 but they are not a selectable browser-local runtime. `src/ts/platform.ts`
@@ -66,23 +67,30 @@ repeat writer recovery, pending-mutation replay, resource loading, event
 subscription, or another completed runtime step. `App.svelte`, commands, and
 generation operations consume the narrow capabilities directly.
 
+Connected-reader startup is enabled by default.
+`VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` selects the conservative writer-first
+fallback through `src/ts/observerShellFlag.ts`.
+
 `loadData()` in `src/ts/bootstrap.ts` performs the visible startup work:
 
-1. Start the best-effort startup telemetry publisher. If the temporary observer
-   rollout is enabled, perform a read-only bootstrap without caching its
-   revision as command authority and load `GET /api/v1/resources/shell`. A
-   coherent initialized shell starts its selected locale download immediately
-   and waits for that locale before publishing `observer-ready` and render the dedicated read-only observer UI while writer
-   acquisition continues. A failed or uninitialized observer read falls back to
-   the conservative writer-first boundary.
-2. Adopt the sole pending-mutation writer identity, if one exists, then fetch
-   writer-intent `/api/v1/bootstrap`. If a different writer still has an
-   identified event connection open, ask whether to disconnect it before
-   retrying with explicit takeover confirmation. The successful response
-   supplies initialization, revision, database-lineage/writer metadata,
-   generation/display-source protocol projections, operation/job projections,
-   writer-scoped finalization/effect recovery, translation entries, and the
-   optional startup-telemetry configuration.
+1. Start best-effort startup telemetry. Connected startup resolves a per-page
+   identity through `connectedTabIdentity.ts`. Read-only bootstrap discovers
+   the database lineage and current writer without adopting the response
+   revision as command authority. A tab with exclusive ownership of its local
+   identity may conditionally acquire an unowned server or resume its own
+   writer; a foreign writer remains the owner even when disconnected. Without
+   tab exclusivity, automatic acquisition stays disabled; setting up a genuinely
+   empty server requires explicit confirmation.
+2. For a reader, `installConnectedReaderProjection()` loads the coherent shell,
+   waits for its selected locale, publishes `observer-ready`, and starts
+   `connectedReaderSync.ts`. Reader startup then settles without outbox replay,
+   writer plugins, or generation-effect recovery. For a writer, acquisition is
+   fenced by the discovered lineage and writer epoch, and the following steps
+   run under the accepted recovery operation. The conservative fallback
+   instead adopts a sole pending-mutation writer identity before writer bootstrap,
+   with takeover confirmation when another writer is connected. The
+   accepted writer response supplies operation/job, finalization/effect,
+   translation, and protocol projections for recovery.
 3. If bootstrap reports `initialized: false`, issue the initialization command.
    The server's transactional classifier accepts only genuinely empty state and
    rejects conflict state. The winning client reuses the returned revision;
@@ -99,20 +107,20 @@ generation operations consume the narrow capabilities directly.
    revision, allowlisted initial visual/account/sidebar settings, and the
    versioned character-summary projection at that same revision. It excludes
    collections, provider credentials, selected detail, prompt bodies, chats,
-   and inlays. When an observer projection was already visible, this post-replay
+   and inlays. When a reader projection was already visible, this post-replay
    read must replace it at an equal or newer revision.
 6. Seed selected-character identity from the summary projection, reset body and
    lorebook hydration, install the known-server and applied-event revision
    cursors, configure command reconciliation, apply the shell's visual settings,
-   and publish `observer-ready` if the earlier optional path did not already do
-   so. Marker-bearing summaries remain distinct from full character rows.
+   and publish `observer-ready` if a coherent read view was not already visible.
+   Marker-bearing summaries remain distinct from full character rows.
 7. Seed generation operations/jobs, writer-scoped generation-finalization and
    pending-effect state, and separate message/greeting translation recovery;
    install owner-mutation lifecycle flushing and the hydration runtimes, then subscribe to server
-   events from the coherently applied shell revision. Only an accepted
-   subscription publishes `writer-ready`, which makes ordinary commands and
-   persistence-capable route effects available. The shell was already visible
-   only when the observer rollout permitted it.
+   events from the coherently applied shell revision. Writer recovery requires
+   its own accepted subscription; an earlier reader stream cannot satisfy it.
+   Only the current recovery operation can complete writer readiness and enable
+   ordinary commands and persistence-capable route effects.
 8. Route application resolves `RESOURCE_SURFACE_MANIFEST` and loads the current
    route's settings groups, collections, standalone settings, selected detail,
    chat, and prompt owner through `routeResourceLoader.ts`. A newer navigation
@@ -145,15 +153,48 @@ Visible startup bugs often sit at the boundary between coordinator
 capabilities, `selectedCharID`, resource application, route application, lazy
 body reads, and CSS variable updates.
 
-The observer flag changes only when `canRenderShell` may open. It never relaxes
-`canApplyRoutes`, `canMutate`, or `canGenerate`. During takeover denial or a
-writer/bootstrap failure, an authenticated observer remains usable with a
-targeted Retry action. A retry shares one promotion attempt, resumes unfinished
-writer steps, applies the post-replay shell, installs events, and only then
-restores writer capability. A foreign writer event revokes writer capabilities
-immediately; with the flag enabled the UI returns to observer state instead of
-blanking the authenticated shell. Authentication loss clears the observer
-projection and intent, while lineage replacement fences and replaces it.
+A coherent locale-ready shell may render while automatic writer acquisition or
+initial recovery is unresolved. `canUseClientReaderContent()` keeps character
+detail, transcript body, display, and greeting work behind a separate content
+gate, so the preview cannot show a prospective writer's raw text before its
+display runtime is ready. The session records actual authenticated reading or
+writing disposition before publishing it, retains that readiness through later
+promotion and interrupted recovery, and resets it on authentication/session or
+lineage replacement. Shell readiness and mutation authority remain separate.
+
+If the initial shell or locale read fails before projection readiness,
+`bootstrap.ts` retains the unresolved startup operation, presents the error,
+and retries that startup boundary after acknowledgement. It does not silently
+settle the prospective writer as a permanent reader. Authentication loss, a
+superseding session, or a fatal bootstrap error while acknowledgement is
+pending prevents the old retry from continuing.
+
+For a managed reader, `canRenderShell` and `canApplyRoutes` expose the coherent
+read view and local navigation. `App.svelte` separately gates writer route
+application, so those read capabilities never enable persisted selection,
+`canMutate`, or `canGenerate`. Watching generation uses the independent reader
+viewer described in [Generation Client](generation-client.md#connected-reader-observation).
+
+`ObserverShell.svelte` exposes **Use this device** for explicit promotion.
+`promoteConnectedReader()` shares one attempt, refreshes ownership, and submits
+acquisition against the exact discovered lineage and writer epoch. Disconnect
+confirmation, when required, retains that same precondition. The read stream
+and local route remain usable while confirmation is pending. Writer recovery
+must reconcile retained commands, replace the resource projection, and establish
+writer events before mutation capability opens; plugins, generation effects,
+and chat dependencies still gate `canGenerate`. A current operation's cancellation
+or recovery failure returns to reading only while authenticated under the same
+lineage. Superseded attempts cannot change a newer operation's role. Remaining
+intent stays retained, and reader refresh never submits it. The latest local
+route is consumed only after authorized route application succeeds for the
+current writer.
+
+A foreign writer event revokes write authority synchronously, captures local
+drafts, and stops authority-bearing work before the UI returns to reading.
+Reader reconnect performs discovery and resource reads rather than acquiring
+the writer. Authentication loss clears the visible projection and local route
+intent; lineage replacement fences old work and installs a new read projection.
+Neither event makes saved drafts into server authority.
 
 ## Server Resources And Durable Mutations
 
@@ -177,16 +218,25 @@ only for interchange, browser-smoke diagnostics, and test adapters.
 
 The main client boundaries are:
 
-| Path | Responsibility |
-| --- | --- |
-| `src/ts/server/resourceReads.ts`, `resourceCache.ts` | Root/targeted reads and the disposable authenticated-hash cache. |
-| `src/ts/server/shellHydration.ts`, `src/ts/server/routeResourceLoader.ts`, `packages/shared-core/src/resourceManifest.ts` | Atomic root shell application and manifest-driven route/runtime resources. |
-| `src/ts/server/hydrationReads.ts`, `chatMessageHydration.svelte.ts`, `characterShellHydration.svelte.ts`, `promptTemplateHydration.ts` | Lazy owner-body and shell hydration. |
-| `src/ts/server/commands.ts`, `events.ts`, `resourceInvalidation.ts`, `resourceRefresh.ts` | Serialized commands, SSE reconciliation, targeted reads, and full recovery. |
-| `src/ts/server/pendingMutationOutbox.ts`, `durableMutationDispatch.ts`, `pendingMutationReplay.ts` | Encrypted crash-recovery intents and pre-hydration replay. |
-| `src/ts/server/greetingTranslations.svelte.ts` | Character-scoped greeting projection, refresh, manual translation, and job recovery. |
-| `src/ts/server/ownerMutationLifecycle.ts`, `pendingOwnerMutationRegistry.ts` | Registers and flushes loaded explicit owners at structural and lifecycle boundaries. |
-| `src/ts/server/settingsOwner.svelte.ts`, `lorebookOwner.svelte.ts`, `scriptDefinitionOwner.svelte.ts` | Owner-scoped drafts, narrow command dispatch, projection fencing, and field/row rollback. |
+| Path                                                                                                                                   | Responsibility                                                                                             |
+| -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| `src/ts/server/resourceReads.ts`, `resourceCache.ts`                                                                                   | Root/targeted reads and the disposable authenticated-hash cache.                                           |
+| `src/ts/server/connectedReaderSync.ts`, `readerTranscriptProjection.svelte.ts`, `readerDisplayResources.ts`                            | Reader event reconciliation, certified display/transcript projections, and read-only display dependencies. |
+| `src/ts/server/shellHydration.ts`, `src/ts/server/routeResourceLoader.ts`, `packages/shared-core/src/resourceManifest.ts`              | Atomic root shell application and manifest-driven route/runtime resources.                                 |
+| `src/ts/server/hydrationReads.ts`, `chatMessageHydration.svelte.ts`, `characterShellHydration.svelte.ts`, `promptTemplateHydration.ts` | Lazy owner-body and shell hydration.                                                                       |
+| `src/ts/server/commands.ts`, `events.ts`, `resourceInvalidation.ts`, `resourceRefresh.ts`                                              | Serialized commands, SSE reconciliation, targeted reads, and full recovery.                                |
+| `src/ts/server/pendingMutationOutbox.ts`, `durableMutationDispatch.ts`, `pendingMutationReplay.ts`                                     | Encrypted crash-recovery intents and pre-hydration replay.                                                 |
+| `src/ts/server/greetingTranslations.svelte.ts`                                                                                         | Character-scoped greeting projection, refresh, manual translation, and job recovery.                       |
+| `src/ts/server/ownerMutationLifecycle.ts`, `pendingOwnerMutationRegistry.ts`                                                           | Registers and flushes loaded explicit owners at structural and lifecycle boundaries.                       |
+| `src/ts/server/settingsOwner.svelte.ts`, `lorebookOwner.svelte.ts`, `scriptDefinitionOwner.svelte.ts`                                  | Owner-scoped drafts, narrow command dispatch, projection fencing, and field/row rollback.                  |
+
+Reader transcripts use the separately certified projection in
+`readerTranscriptProjection.svelte.ts`, populated from authoritative resource
+and command results before optimistic writer overlays are reapplied. It retains
+only the display character/chat/persona fields and certified message bodies.
+`ReaderTranscript.svelte` may retain a same-route read snapshot through a failed
+refresh, fenced by authentication, lineage, and chat incarnation. Local drafts,
+pending outbox rows, and transient generation text do not enter that snapshot.
 
 If a component shows stale or missing data, confirm whether the data is:
 
@@ -262,6 +312,13 @@ they are drafts, not durable commands, server receipts, or proof of acceptance.
   16 MiB per record, and 64 MiB total. `ModuleSettings.svelte` rebases a restored
   draft onto current canonical state and offers copy/export/discard recovery when
   the target disappeared.
+
+`src/ts/server/writerDraftRecovery.ts` also captures registered mounted editor
+and composer fields synchronously when writer authority is lost, retaining a
+memory copy before asynchronous encrypted persistence. `WriterDraftRecovery.svelte`
+exposes the saved local edits for comparison, copy/export, or explicit discard.
+Demotion and reader refresh do not replay them or substitute them for committed
+transcript text.
 
 Only an accepted save for the exact draft generation clears its recovery row.
 Queued, failed, or superseded work remains available so newer edits are not
@@ -341,25 +398,34 @@ subscription persistence remains in
 
 ## Active Writer Loss
 
-`src/ts/server/activeWriterSession.ts` owns the browser response to another
-session taking the single-writer lease. A live `writer` SSE frame, or a
-validated `423 active_writer_stale` response, latches writer loss immediately,
-blocks new mutations, stops resource events, chat hydration, translation
-refresh, and generation reattach, then asks the user to refresh or stay
-offline. Refresh retakes ownership through normal bootstrap. Staying offline
-freezes editable controls and adds a reload banner while leaving text
-selectable for recovery.
+A current SSE frame naming another writer, or a validated
+`423 active_writer_stale` response, revokes authority through `clientSession.ts`
+and `src/ts/server/activeWriterSession.ts`. Managed sessions synchronously capture
+mounted drafts and fence old callbacks. `bootstrap.ts` stops writer runtimes
+and replaces them with `connectedReaderSync.ts` and authoritative read
+projections; losing write access does not permanently close reader networking.
+The reader keeps local navigation and can observe the selected generation.
+Managed startup never acquires a foreign writer just because its event
+connection is absent. **Use this device** performs explicit conditional
+acquisition and recovery against freshly discovered ownership.
 
-Before that handoff, the event stream carries the browser's writer session so
-the server can tell whether the current writer is still connected. A new client
-must confirm the `409 active_writer_connected` bootstrap response before the
-server changes ownership; a durable owner with no live event connection is
-reclaimed without prompting.
+With `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE`, the conservative path retains its
+refresh-or-stay flow. It closes writer resource/hydration/translation/reattach
+services; staying offline freezes editable controls and adds the reload banner
+while keeping text selectable. Refresh re-enters conservative writer bootstrap,
+including connected-writer takeover confirmation when required.
 
-This flow is different from database-lineage and pending-mutation recovery
-failures, which still force a reload. When a mounted app suddenly stops all
-network work, inspect `activeWriterSession.ts`, `events.ts`, and the writer-loss
-styles in `src/styles.css` before treating each caller as independently broken.
+Managed import/restore observation can replace the lineage in place, enter
+reading even when the server still names the same writer session, and install
+new authoritative resources without reloading the document. Still-valid local
+routes remain available; explicit writer recovery restores their authoring
+view. Once that transition advances the client generation, a delayed
+old-lineage command response cannot trigger a reload or restore old state.
+A lineage conflict belonging to the still-current generation, and unsafe
+pending-mutation predecessor recovery, retain forced-reload paths; conservative
+old-lineage command recovery uses those paths. Inspect `bootstrap.ts`,
+`connectedReaderSync.ts`, `observerProjectionLifecycle.ts`, and the command's
+captured generation before assuming every lineage change requires a reload.
 
 ## Generation Client
 
@@ -399,12 +465,18 @@ in-flight fetch. Fastify converts that disconnect into an `AbortSignal` for the
 display stages, so an old chat cannot keep the new chat queued behind a full
 transform batch.
 
-The full client `processScriptFull` path remains the correctness fallback for
-browser edit hooks, unsupported fuzzy dynamic assets, missing protocol support,
-stale writer/revision/context, and network failure. Growing generation prefixes
-are marked as streaming: pending duplicate prefixes coalesce and server results
-bypass the shared stable-row LRU. Final Markdown, CSS scoping, DOMPurify, blob
-URLs, metadata, and DOM activation remain browser-owned.
+With current write access, the full client `processScriptFull` path remains the
+fallback for browser edit hooks, unsupported fuzzy dynamic assets, missing
+protocol support, stale writer/revision/context, and network failure. Readers
+use the same isolated server display bridge but fall back to readable source
+with localized limited-display feedback; they never enter general client
+scripts, plugin hooks, or provider effects. The display batch uses a read-only
+POST independently of the GET-only generation viewer.
+
+Growing generation prefixes are marked as streaming: pending duplicate
+prefixes coalesce and server results bypass the shared stable-row LRU. Final
+Markdown, CSS scoping, DOMPurify, blob URLs, metadata, and DOM activation remain
+browser-owned.
 
 ## Rendered Markup Sanitization
 
@@ -418,14 +490,14 @@ cover decoded output.
 
 ## Adjacent Runtime Owners
 
-| Topic | Browser entrypoints | Canonical guide |
-| --- | --- | --- |
-| Client diagnostics | `src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts` | [Client Diagnostics](../../docs/structure/development-and-observability.md#client-diagnostics) |
-| Module folders and organization | `src/ts/moduleOrganization.ts`, `src/ts/moduleCommands.ts` | [Module Organization](../../docs/structure/plugins-and-mcp.md#module-organization) |
-| Assets, inlay catalog, saves, backups, Realm, legacy storage | `src/ts/server/assets.ts`, `inlayCatalog.ts`, `backups.ts`, `realmImport.ts`; `src/ts/storage/backup.ts`, `fastifyStorage.ts` | [Assets And Saves](../../docs/structure/assets-and-saves.md) |
-| Plugins, modules, MCP | `src/ts/plugins/`, `src/ts/moduleActivation.ts`, `src/ts/process/modules.ts`, `src/ts/process/mcp/`; neutral parsing in `packages/shared-core/src/moduleIntegration.ts` | [Plugins And MCP](../../docs/structure/plugins-and-mcp.md) |
-| Providers, prompt assembly, and Agents | `src/ts/model/`, `src/ts/process/request/`, `src/ts/process/promptAssembly/` | [Providers And Models](../../docs/structure/providers-and-models.md), [Prompt Assembly And Scripting](../../docs/structure/prompt-assembly-and-scripting.md), [Agents And Presets](../../docs/structure/agents-and-presets.md) |
-| Retired/browser-local surfaces | `src/ts/platform.ts` | [Generated Files And Legacy Caveats](../../docs/structure/generated-and-legacy.md) |
+| Topic                                                        | Browser entrypoints                                                                                                                                                     | Canonical guide                                                                                                                                                                                                                |
+| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Client diagnostics                                           | `src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts`                                                                                                           | [Client Diagnostics](../../docs/structure/development-and-observability.md#client-diagnostics)                                                                                                                                 |
+| Module folders and organization                              | `src/ts/moduleOrganization.ts`, `src/ts/moduleCommands.ts`                                                                                                              | [Module Organization](../../docs/structure/plugins-and-mcp.md#module-organization)                                                                                                                                             |
+| Assets, inlay catalog, saves, backups, Realm, legacy storage | `src/ts/server/assets.ts`, `inlayCatalog.ts`, `backups.ts`, `realmImport.ts`; `src/ts/storage/backup.ts`, `fastifyStorage.ts`                                           | [Assets And Saves](../../docs/structure/assets-and-saves.md)                                                                                                                                                                   |
+| Plugins, modules, MCP                                        | `src/ts/plugins/`, `src/ts/moduleActivation.ts`, `src/ts/process/modules.ts`, `src/ts/process/mcp/`; neutral parsing in `packages/shared-core/src/moduleIntegration.ts` | [Plugins And MCP](../../docs/structure/plugins-and-mcp.md)                                                                                                                                                                     |
+| Providers, prompt assembly, and Agents                       | `src/ts/model/`, `src/ts/process/request/`, `src/ts/process/promptAssembly/`                                                                                            | [Providers And Models](../../docs/structure/providers-and-models.md), [Prompt Assembly And Scripting](../../docs/structure/prompt-assembly-and-scripting.md), [Agents And Presets](../../docs/structure/agents-and-presets.md) |
+| Retired/browser-local surfaces                               | `src/ts/platform.ts`                                                                                                                                                    | [Generated Files And Legacy Caveats](../../docs/structure/generated-and-legacy.md)                                                                                                                                             |
 
 `packages/shared-core/src/moduleIntegration.ts` parses and deduplicates the
 comma-separated module references shared by prompt and Agent Presets.
@@ -442,8 +514,10 @@ precedence stays in the focused guides linked above.
 - Character resources intentionally provide message-free chat rows and can
   provide lorebook stubs. Active chat messages and lorebooks hydrate later from
   their concrete endpoints.
-- Route effects run only while `canApplyRoutes`; writer loss leaves the coherent
-  shell readable but prevents route-owned persistent selection changes.
+- Writer route effects require App's `canApplyWriterRoutes`. Managed readers
+  keep `canApplyRoutes` for local navigation without persisted selection;
+  initial shell previews also defer automatic route repair until reader content
+  is admitted.
 - CSS variables are applied before the conservative `writer-ready` shell
   boundary. A theme bug may
   be runtime state, not component markup.

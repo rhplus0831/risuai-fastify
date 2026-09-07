@@ -34,8 +34,18 @@ Reader navigation and preservation of the originating draft. The separate
 `connectedReaderGeneration.spec.ts` verifies live output, viewer detachment and
 terminal convergence during transfers. These specs use built Chromium/Fastify
 fixtures; controlled lifecycle events and mobile emulation do not establish
-physical-device behavior. Default rollout, restart/fallback and simultaneous
-two-reader journeys require their own execution records.
+physical-device behavior. The browsing case keeps a second Reader live through
+shared commits and independent navigation. `connectedReaderRollout.spec.ts`
+verifies retained content and reconnect after an actual server-instance restart,
+and restores a newer composer draft while replaying one retained UI edit after
+conservative fallback. `visibleStateRecovery.spec.ts` separately checks the
+character sidebar after conservative reload and after connected import recovery
+followed by explicit same-owner writer promotion.
+
+Initial acquisition preview has mounted checks that prevent transcript/detail
+reads before the first resolved role; established Readers retain readable content
+during later recovery. The unchanged startup-rendering browser cases verify that
+raw intermediate text stays hidden and older display sources are requested once.
 
 ## Routing, history, hotkeys, and shell ownership
 

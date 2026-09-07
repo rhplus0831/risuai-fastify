@@ -1,6 +1,7 @@
 # Development And Observability
 
 Last audited: 2026-08-27.
+Targeted source check: 2026-09-08 (connected-reader rollout setting).
 
 Use this guide for local/full-stack servers, request and generation tracing,
 browser startup telemetry, startup and bundle verification,
@@ -385,12 +386,13 @@ Local/dev:
 
 Client/build:
 
-| Variable                                                                         | Notes                                                                                                                   |
-| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                  |
-| `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                        |
-| `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell. |
-| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                    |
+| Variable                                                                         | Notes                                                                                                                                                                                                                                                    |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                                                                                                                                                   |
+| `VITE_FAST_BOOTSTRAP_OBSERVER`                                                   | Connected readers are enabled by default; exact `FALSE` selects the conservative writer-first fallback. This is a build-time setting: rebuild the SPA and reload clients. The flag itself does not clear originating drafts or encrypted pending intent. |
+| `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                                                                                                                                                         |
+| `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell.                                                                                                                                  |
+| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                                                                                                                                                     |
 
 Test/audit summary variables include `RISU_TEST_INCLUDE_GATES`,
 `UPDATE_FIXTURES`, `RISU_DIRECT_REALM_IMPORT_TEST`,

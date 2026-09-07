@@ -44,7 +44,11 @@ recovery stores. Their focused suites cover immutable lineage/operation/attempt/
 identity, incomplete descriptors, bounded status/stream retries and deadlines,
 half-stream/Continue replay, exact terminal hydration, auth loss and teardown
 without cancellation. `src/ts/server/chatMessageHydration.test.ts` verifies exact
-generation-suffix reads and late-reader fences;
+generation-suffix reads and late-reader fences. Its Reader-to-writer regression
+uses actual role changes, retained-body hydration resets and equal-revision
+metadata clones to require one authorized alternates read before reroll candidates
+become ready. The existing reroll browser case verifies visible candidates after
+real reload.
 `src/lib/ReaderTranscript.svelte.test.ts` and
 `src/lib/ChatScreens/readerGenerationRows.test.ts` cover transient row presentation and handoff.
 

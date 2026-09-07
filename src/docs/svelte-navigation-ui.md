@@ -1,7 +1,7 @@
 # Svelte Navigation UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-05 (chat-scoped toggle hydration and writes).
+Targeted source check: 2026-09-08 (local reader navigation and explicit writer switching).
 
 This guide owns the sidebar, navigation controls, character and chat selection,
 character configuration, and list organization.
@@ -11,16 +11,17 @@ routes and shell priority.
 
 ## Fast Triage
 
-| Symptom | Inspect first | Then inspect |
-| --- | --- | --- |
-| Sidebar route, tab, character, folder, or grid button is wrong | `src/lib/SideBars/Sidebar.svelte` | `src/ts/router.ts`, `src/ts/stores.svelte.ts` |
-| Chat list, chat folder, branch graph, or export/reset flow is wrong | `src/lib/SideBars/SideChatList.svelte` | `src/ts/chatCommands.ts`, `src/ts/server/chatMessageHydration.svelte.ts` |
-| Character profile, media, lorebook, scripts, or TTS editor is wrong | `src/lib/SideBars/CharConfig.svelte` | The focused bridge/upload helper under `src/ts/server/` |
-| Character/chat reorder is stale, duplicated, or treated as file import | `src/lib/SideBars/sidebarDrag.ts`, `SideChatList.svelte`, `src/ts/dragTypes.ts` | [Drag, Drop, And Reordering](#drag-drop-and-reordering) |
+| Symptom                                                                | Inspect first                                                                   | Then inspect                                                                   |
+| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Sidebar route, tab, character, folder, or grid button is wrong         | `src/lib/SideBars/Sidebar.svelte`                                               | `src/ts/router.ts`, `src/ts/stores.svelte.ts`                                  |
+| Reader selection, missing-chat fallback, or Use this device is wrong   | `src/lib/ObserverShell.svelte`                                                  | `src/ts/readerRouteScope.ts`, `src/ts/bootstrap.ts`, `src/ts/clientSession.ts` |
+| Chat list, chat folder, branch graph, or export/reset flow is wrong    | `src/lib/SideBars/SideChatList.svelte`                                          | `src/ts/chatCommands.ts`, `src/ts/server/chatMessageHydration.svelte.ts`       |
+| Character profile, media, lorebook, scripts, or TTS editor is wrong    | `src/lib/SideBars/CharConfig.svelte`                                            | The focused bridge/upload helper under `src/ts/server/`                        |
+| Character/chat reorder is stale, duplicated, or treated as file import | `src/lib/SideBars/sidebarDrag.ts`, `SideChatList.svelte`, `src/ts/dragTypes.ts` | [Drag, Drop, And Reordering](#drag-drop-and-reordering)                        |
 
 ## Sidebar And Route Ownership
 
-`src/lib/SideBars/Sidebar.svelte` owns desktop navigation: home, settings, and
+`src/lib/SideBars/Sidebar.svelte` owns the writer's desktop navigation: home, settings, and
 Playground buttons; character avatars and folders; character organization;
 grid opening; quick settings; developer tools; and the switch between the chat
 list and character configuration. It consumes `selectedCharID`, `settingsOpen`,
@@ -58,6 +59,48 @@ chat ID put `SideChatList.svelte` into chat-open mode. The latter shows back,
 author-note, and generation-toggle controls and tears down list Sortable
 instances until the route returns to the chat list. The selected character tab
 is stored on the exact history entry through `src/ts/router.ts`.
+
+## Connected Reader Navigation
+
+`ObserverShell.svelte` owns the connected reader's character/chat browser and
+responsive navigation. It renders the authenticated read projection while
+`App.svelte` keeps writer route effects disabled. Home/grid and explicit stable
+character/chat routes remain local to the page; they do not update
+`selectedCharID`, `currentChar`, or persisted `chatPage`. Authoring routes show
+read-only guidance rather than mounting writer controls. The latest local
+route is retained by `observerRouteIntent.ts` for current writer-safe
+application after promotion, without creating an outbox command.
+
+During unresolved automatic writer startup, the coherent shell and local
+navigation stay visible. `canUseClientReaderContent()` defers character-detail
+reads, transcript mounting, and automatic missing-route repair until an actual
+reading or writing disposition has settled. A provisional shell therefore
+cannot replace a deep link that writer recovery has yet to reconcile.
+
+`readerRouteScope.ts` resolves only unique character/chat identities from the
+certified reader projection. A shell triggers a fenced detail read. An
+interrupted or failed resource read is not evidence of deletion: only a current
+authoritative missing character returns to the browser, and a missing chat
+chooses an available unique chat in the same character or its chat list.
+Ambiguous identities remain unavailable instead of selecting the first match.
+`ReaderTranscript.svelte` owns the selected transcript and generation viewer;
+its read-only rendering contract is in
+[Svelte Chat UI](svelte-chat-ui.md#connected-reader-transcript).
+
+**Use this device** is the explicit promotion action. It is available only from
+a connected reader, shares an in-progress attempt, and keeps reading/local
+navigation available while takeover confirmation is pending. Cancellation,
+supersession, interruption, and retained-work recovery failures have distinct
+localized feedback. A successful acquisition still waits for fenced writer
+recovery before mutation controls become usable; plugins, effects, and chat
+dependencies additionally gate generation. Reconnect and ordinary reader
+navigation do not request takeover.
+
+A demoted writer returns to the reader surface with its local route and captured
+editor/composer drafts retained. `WriterDraftRecovery.svelte` exposes those
+local copies without presenting them as committed messages or replaying them
+from the reader. Ownership discovery, recovery, and the conservative startup
+fallback belong in [Client Runtime](client-runtime.md#startup-sequence).
 
 ## Character Folder Opening
 

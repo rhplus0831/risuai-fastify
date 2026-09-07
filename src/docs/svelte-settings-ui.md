@@ -1,6 +1,7 @@
 # Svelte Settings UI Guide
 
 Last audited: 2026-09-04.
+Targeted source check: 2026-09-08 (reader gates and originating editor drafts).
 
 This guide owns settings navigation, data-driven rows, shared controls,
 authoring editors, model-profile presentation, and visible settings persistence
@@ -10,14 +11,14 @@ shell and routing model.
 
 ## Fast Triage
 
-| Symptom | Inspect first | Then inspect |
-| --- | --- | --- |
-| Category, slug, mobile back, or page switch is wrong | `src/lib/Setting/Settings.svelte`, `src/ts/router.ts` | [Shell And Routed Pages](#shell-and-routed-pages) |
-| A data-driven row is hidden, stale, or not saving | `src/lib/Setting/SettingRenderer.svelte`, the matching definition under `src/ts/setting/` | `src/ts/setting/utils.ts`, `src/lib/Setting/Wrappers/` |
-| A primitive control is wrong everywhere | The control in `src/lib/UI/GUI/` | Its settings wrapper if only rows are affected |
-| Agent, prompt, or input-hook editor is wrong | The matching page/drawer under `src/lib/Setting/Pages/` | The canonical runtime guide linked from its section below |
-| Role/profile summary, divider, provider panel, or credential editor is wrong | `src/lib/Setting/Pages/Model/` | `src/ts/model/modelProfileUiState.ts`, [Providers And Models](../../docs/structure/providers-and-models.md) |
-| Optimistic value rolls back, queues indefinitely, or survives page exit incorrectly | `src/ts/setting/utils.ts`, `src/ts/server/settingsOwner.svelte.ts` | [Settings Persistence](#settings-persistence) |
+| Symptom                                                                             | Inspect first                                                                             | Then inspect                                                                                                |
+| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| Category, slug, mobile back, or page switch is wrong                                | `src/lib/Setting/Settings.svelte`, `src/ts/router.ts`                                     | [Shell And Routed Pages](#shell-and-routed-pages)                                                           |
+| A data-driven row is hidden, stale, or not saving                                   | `src/lib/Setting/SettingRenderer.svelte`, the matching definition under `src/ts/setting/` | `src/ts/setting/utils.ts`, `src/lib/Setting/Wrappers/`                                                      |
+| A primitive control is wrong everywhere                                             | The control in `src/lib/UI/GUI/`                                                          | Its settings wrapper if only rows are affected                                                              |
+| Agent, prompt, or input-hook editor is wrong                                        | The matching page/drawer under `src/lib/Setting/Pages/`                                   | The canonical runtime guide linked from its section below                                                   |
+| Role/profile summary, divider, provider panel, or credential editor is wrong        | `src/lib/Setting/Pages/Model/`                                                            | `src/ts/model/modelProfileUiState.ts`, [Providers And Models](../../docs/structure/providers-and-models.md) |
+| Optimistic value rolls back, queues indefinitely, or survives page exit incorrectly | `src/ts/setting/utils.ts`, `src/ts/server/settingsOwner.svelte.ts`                        | [Settings Persistence](#settings-persistence)                                                               |
 
 ## Shell And Routed Pages
 
@@ -36,29 +37,29 @@ or replaces a direct entry with home.
 
 Primary indexes and canonical slugs are:
 
-| Index | Slug | Page or visible category |
-| --- | --- | --- |
-| `0` | `backup` | `src/lib/Setting/Pages/UserSettings.svelte` |
-| `1` | `bot-preset` | `src/lib/Setting/Pages/BotSettings.svelte` when legacy presets exist; otherwise model settings |
-| `2` | `memory` | `src/lib/Setting/Pages/OtherBotSettings.svelte`; visible label is **Memory** through `language.settingsNavMemory` and a brain icon |
-| `3` | `display` | `src/lib/Setting/Pages/DisplaySettings.svelte` |
-| `4` | `plugins` | `src/lib/Setting/Pages/PluginSettings.svelte` |
-| `6` | `advanced` | `src/lib/Setting/Pages/AdvancedSettings.svelte` |
-| `7` | `communities` | `src/lib/Setting/Pages/Communities.svelte` |
-| `8` | `global-lorebook` | Legacy `src/lib/Setting/Pages/GlobalLoreBookSettings.svelte`; nav is visibility-gated |
-| `9` | `global-regex` | Legacy `src/lib/Setting/Pages/GlobalRegex.svelte`; nav is visibility-gated |
-| `10` | `language` | `src/lib/Setting/Pages/LanguageSettings.svelte` |
-| `11` | `accessibility` | `src/lib/Setting/Pages/AccessibilitySettings.svelte` |
-| `12` | `persona` | `src/lib/Setting/Pages/PersonaSettings.svelte` |
-| `13`, `18` | `prompt`, `prompt-settings` | Prompt-template editor and prompt-preset shell |
-| `14` | `modules` | `src/lib/Setting/Pages/Module/ModuleSettings.svelte` |
-| `15` | `hotkeys` | `src/lib/Setting/Pages/HotkeySettings.svelte` |
-| `17` | `model` | Profile-first model settings |
-| `19`, `20` | `agent-presets`, `input-hooks` | `src/lib/Setting/Pages/AgentPresetSettings.svelte` and `src/lib/Setting/Pages/InputHookSettings.svelte` |
-| `21` | `request-history` | `src/lib/Setting/Pages/RequestHistorySettings.svelte` |
-| `22` | `source-code` | `src/lib/Setting/Pages/SourceCode.svelte` |
-| `23` | `bardwiki` | `src/lib/Setting/Pages/BardWikiSettings.svelte` |
-| `77` | `supporter` | `src/lib/Setting/Pages/ThanksPage.svelte` after the external-server warning when required |
+| Index      | Slug                           | Page or visible category                                                                                                           |
+| ---------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
+| `0`        | `backup`                       | `src/lib/Setting/Pages/UserSettings.svelte`                                                                                        |
+| `1`        | `bot-preset`                   | `src/lib/Setting/Pages/BotSettings.svelte` when legacy presets exist; otherwise model settings                                     |
+| `2`        | `memory`                       | `src/lib/Setting/Pages/OtherBotSettings.svelte`; visible label is **Memory** through `language.settingsNavMemory` and a brain icon |
+| `3`        | `display`                      | `src/lib/Setting/Pages/DisplaySettings.svelte`                                                                                     |
+| `4`        | `plugins`                      | `src/lib/Setting/Pages/PluginSettings.svelte`                                                                                      |
+| `6`        | `advanced`                     | `src/lib/Setting/Pages/AdvancedSettings.svelte`                                                                                    |
+| `7`        | `communities`                  | `src/lib/Setting/Pages/Communities.svelte`                                                                                         |
+| `8`        | `global-lorebook`              | Legacy `src/lib/Setting/Pages/GlobalLoreBookSettings.svelte`; nav is visibility-gated                                              |
+| `9`        | `global-regex`                 | Legacy `src/lib/Setting/Pages/GlobalRegex.svelte`; nav is visibility-gated                                                         |
+| `10`       | `language`                     | `src/lib/Setting/Pages/LanguageSettings.svelte`                                                                                    |
+| `11`       | `accessibility`                | `src/lib/Setting/Pages/AccessibilitySettings.svelte`                                                                               |
+| `12`       | `persona`                      | `src/lib/Setting/Pages/PersonaSettings.svelte`                                                                                     |
+| `13`, `18` | `prompt`, `prompt-settings`    | Prompt-template editor and prompt-preset shell                                                                                     |
+| `14`       | `modules`                      | `src/lib/Setting/Pages/Module/ModuleSettings.svelte`                                                                               |
+| `15`       | `hotkeys`                      | `src/lib/Setting/Pages/HotkeySettings.svelte`                                                                                      |
+| `17`       | `model`                        | Profile-first model settings                                                                                                       |
+| `19`, `20` | `agent-presets`, `input-hooks` | `src/lib/Setting/Pages/AgentPresetSettings.svelte` and `src/lib/Setting/Pages/InputHookSettings.svelte`                            |
+| `21`       | `request-history`              | `src/lib/Setting/Pages/RequestHistorySettings.svelte`                                                                              |
+| `22`       | `source-code`                  | `src/lib/Setting/Pages/SourceCode.svelte`                                                                                          |
+| `23`       | `bardwiki`                     | `src/lib/Setting/Pages/BardWikiSettings.svelte`                                                                                    |
+| `77`       | `supporter`                    | `src/lib/Setting/Pages/ThanksPage.svelte` after the external-server warning when required                                          |
 
 `/settings/memory` is canonical for the Memory page. `/settings/other-bots`
 and `/settings/otherbots` remain compatibility aliases and are replaced with
@@ -139,6 +140,14 @@ do not assume an unavailable stored option will remain displayed.
 
 ## Settings Persistence
 
+Settings authoring requires current writer capability. Managed readers see an
+explanatory gate; helpers and deferred owner/lifecycle callbacks also fence the
+originating client-session generation. Writer loss captures registered dirty
+editor fields before unmount through `src/ts/server/writerDraftRecovery.ts`.
+Those originating-session drafts remain separate from the canonical Reader
+projection and encrypted pending commands; see
+[Client Runtime](client-runtime.md#draft-recovery-stores).
+
 `src/ts/setting/utils.ts` centralizes data-driven value binding.
 `getSettingValue` reads from the composed resource projection, nested path, or
 custom getter. `setSettingValue` applies the optimistic projection, runs the
@@ -146,9 +155,9 @@ local side effect, stages encrypted durable intent, and dispatches through the
 explicit settings owner. Continuous controls are briefly delayed and coalesced
 by `src/ts/server/settingsOwner.svelte.ts`.
 
-`src/ts/server/pendingOwnerMutationRegistry.ts` lets navigation, structural
-actions, and page exit flush queued owner patches before another operation can
-overtake them. Retryable failures retain durable intent and the optimistic
+While write authority is current, `src/ts/server/pendingOwnerMutationRegistry.ts`
+lets navigation, structural actions, and page exit flush queued owner patches
+before another operation can overtake them. Retryable failures retain durable intent and the optimistic
 projection. Terminal or non-durable failures roll back only attempted fields
 whose optimistic value is still current; accepted responses can adopt a
 canonical server value.

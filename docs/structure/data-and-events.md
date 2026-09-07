@@ -1,6 +1,7 @@
 # Data And Events
 
 Last audited: 2026-08-30.
+Targeted source check: 2026-09-08 (connected readers and atomic IGP completion).
 
 Fastify owns authoritative application state. The browser reads authenticated
 REST resources and sends revision-checked commands or explicit server-owned
@@ -8,19 +9,19 @@ mutation requests; its durable outbox and recovery drafts are non-authoritative.
 
 ## Stores
 
-| Store | Location | Role |
-| --- | --- | --- |
-| SQLite | `data/risu.db` | Authoritative schema/revision/lineage plus normalized domain and operational tables. |
-| Asset bytes | `data/assets/<sha256>.<ext>` | Content-addressed supported asset payloads; metadata lives in SQLite `assets`. |
-| Inlay catalog | SQLite `inlay_catalog` | Revisioned names, dimensions, and aliases keyed to immutable `assets` rows; the browser keeps a separate read projection. |
-| Backups | `data/backups/<id>/` | Database snapshot, manifest, assets, and legacy storage when present; restore uses an explicit table allowlist. |
-| Legacy `db.json` | `data/db.json` | Import-only input: valid snapshots commit/checkpoint before rename; invalid envelopes quarantine, while malformed JSON stops startup. |
-| Legacy storage | `data/save/<hex-key>` | Compatibility bytes for `/api/v1/storage/*`; guarded writes do not bump the domain revision. |
-| Auth files | `data/__password`, `data/__known_public_key_hashes.json`, `data/__known_session_token_hashes.json` | Single-user password, registered browser-key hashes, and optional session-token hashes. |
-| Web Push keys | `data/__web_push_vapid_keys.json` | Generated VAPID keypair when keys are not supplied by environment; subscription rows live in SQLite. |
-| Resource cache | Browser IndexedDB `risu-resource-cache-v1` | Disposable authenticated-hash read cache; never offline or authoritative state. |
-| Mutation outbox | Browser IndexedDB `risu-pending-mutations-v1` | Crash-recovery journal with AES-GCM-encrypted intent payloads plus plaintext scope/order metadata and receipt-ACK rows; never server truth. |
-| Recovery drafts | Browser `sessionStorage` and IndexedDB `risu-recovery-drafts-v1` | Lineage/writer-scoped composer and module-editor drafts; editing recovery only, not mutation intent or proof of acceptance. |
+| Store            | Location                                                                                           | Role                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| SQLite           | `data/risu.db`                                                                                     | Authoritative schema/revision/lineage plus normalized domain and operational tables.                                                        |
+| Asset bytes      | `data/assets/<sha256>.<ext>`                                                                       | Content-addressed supported asset payloads; metadata lives in SQLite `assets`.                                                              |
+| Inlay catalog    | SQLite `inlay_catalog`                                                                             | Revisioned names, dimensions, and aliases keyed to immutable `assets` rows; the browser keeps a separate read projection.                   |
+| Backups          | `data/backups/<id>/`                                                                               | Database snapshot, manifest, assets, and legacy storage when present; restore uses an explicit table allowlist.                             |
+| Legacy `db.json` | `data/db.json`                                                                                     | Import-only input: valid snapshots commit/checkpoint before rename; invalid envelopes quarantine, while malformed JSON stops startup.       |
+| Legacy storage   | `data/save/<hex-key>`                                                                              | Compatibility bytes for `/api/v1/storage/*`; guarded writes do not bump the domain revision.                                                |
+| Auth files       | `data/__password`, `data/__known_public_key_hashes.json`, `data/__known_session_token_hashes.json` | Single-user password, registered browser-key hashes, and optional session-token hashes.                                                     |
+| Web Push keys    | `data/__web_push_vapid_keys.json`                                                                  | Generated VAPID keypair when keys are not supplied by environment; subscription rows live in SQLite.                                        |
+| Resource cache   | Browser IndexedDB `risu-resource-cache-v1`                                                         | Disposable authenticated-hash read cache; never offline or authoritative state.                                                             |
+| Mutation outbox  | Browser IndexedDB `risu-pending-mutations-v1`                                                      | Crash-recovery journal with AES-GCM-encrypted intent payloads plus plaintext scope/order metadata and receipt-ACK rows; never server truth. |
+| Recovery drafts  | Browser `sessionStorage` and IndexedDB `risu-recovery-drafts-v1`                                   | Lineage/writer-scoped composer and module-editor drafts; editing recovery only, not mutation intent or proof of acceptance.                 |
 
 Primary boundaries: `server/fastify/src/db.ts` owns
 schema/migrations/revision, `server/fastify/src/repository.ts` owns domain
@@ -131,14 +132,30 @@ before any request is sent. Terminal validation, lineage, and mutation-ID
 conflicts follow contract-specific disposal and recovery paths; only the
 request-level permanent-rejection path guarantees a scope-naming notice.
 
-Before writer-intent bootstrap, the browser may adopt one unambiguous pending
-owner. It prepares the outbox with its local session id plus the returned writer
-epoch and database lineage, flushes receipt acknowledgements, and replays current
-scope work before hydration. Same-lineage rows for other sessions remain dormant;
+The conservative startup path may adopt one unambiguous pending owner before
+writer-intent bootstrap. Connected startup instead resolves an exclusive page
+identity and discovers server ownership; foreign pending work does not grant
+that page writer access. Once recovery is authorized, the browser prepares the
+outbox with its local session id plus the returned writer epoch and database
+lineage, flushes receipt acknowledgements, and replays current-scope work before
+hydration. Same-lineage rows for other sessions remain dormant;
 old-lineage rows are discarded during preparation. Retained or unreadable rows
 for the current writer and lineage block hydration so authoritative reads cannot
 replace unresolved local intent. Full browser mechanics belong in
 [Durable Mutations And Recovery](durable-mutations-and-recovery.md#durable-mutation-recovery-command-queue-and-local-acknowledgements).
+
+A ledgered IGP append also carries `igpEffect: { generationId, claimId }` on
+`PATCH /api/v1/commands/messages/:messageId`. The data-only patch requires exact
+text/chat preconditions and a generation precondition when the stored row has
+generation metadata. Within the existing command transaction, the server checks
+the current lineage, unexpired claimed IGP effect, and exact message/chat/
+character identity, then commits the text and completed effect receipt together.
+Either failure rolls both back. Losing the PATCH response or writer authority
+cannot leave an accepted append available for another IGP claim. Command replay
+returns its original mutation receipt; a later completed effect receipt for the
+same IGP claim acknowledges the existing completion without another write.
+Different claims or terminal statuses remain stale. This additional atomic
+contract is specific to IGP, not a guarantee for arbitrary plugin effects.
 
 Base-revision mismatches return `409 revision_conflict`; stale writer sessions
 return `423 active_writer_stale`. Browser command helpers cache the latest
@@ -358,45 +375,57 @@ subscription create/delete routes remain authenticated.
 dev runner; `pnpm dev:agent` enables it by default, while `pnpm dev:human`
 leaves password auth enabled by default.
 
-The active-writer guard is separate. Authenticated event streams identify their
-`risu-writer-session`, allowing the server to distinguish a still-connected
-writer from a merely durable stale owner. A foreign writer-intent bootstrap
-receives `409 active_writer_connected` while the current writer's event stream
-is open; the new browser asks whether to disconnect that client and retries
-with explicit confirmation. With confirmation, or when the old writer is no
-longer connected, bootstrap latches the latest writer durably and advances a
-monotonic writer epoch. Routes whose manifest decision is `active-writer`
-reject stale sessions with `423 active_writer_stale` even after a server
-restart. Ownership changes are also published through a live-only writer event
-bus. With the temporary observer rollout disabled, a stale browser shows a
-refresh-or-stay dialog: refresh reclaims ownership with the same session id,
-while stay closes server communication and freezes the page offline/read-only so
-unfinished text remains selectable and copyable. Refresh is the only exit from
-that frozen state, and a stale guarded request returns
-`423 active_writer_stale` when the live event was missed.
+The active-writer guard is separate. Read-only bootstrap reports durable
+`writer: { sessionId, epoch }` and database lineage without registering a writer;
+`risu-writer-observer-session` identifies a requesting session without acquiring
+ownership. Writer-intent bootstrap and writer event streams use
+`risu-writer-session`; reader event streams omit it and do not count as a
+connected writer. Conditional acquisition supplies
+`risu-expected-writer-epoch` and `risu-expected-database-lineage`. The server
+checks both before registration and returns `409 active_writer_changed` if
+discovery is stale. A still-connected foreign writer also requires the existing
+`409 active_writer_connected` / `risu-disconnect-existing-writer: true`
+confirmation handshake. Changing the writer advances the durable writer
+epoch; guarded routes reject stale sessions with `423 active_writer_stale`,
+including after restart.
 
-With the observer rollout enabled, an authenticated foreign-writer event instead
-revokes route, mutation, and generation capability immediately while retaining
-the coherent shell as a read-only observer. Takeover denial, writer bootstrap
-failure, and writer loss have targeted promotion Retry behavior. Promotion still
-runs owner adoption, takeover, outbox preparation, receipt acknowledgement, and
-pending replay before it reloads the authoritative shell and opens a new event
-subscription; capabilities are restored only after that sequence completes.
-Authentication loss clears the observer projection. Pending-mutation rollback
-recovery and database-lineage changes retain their stricter replacement/reload
-fences. Read-only bootstrap, resource-read, and event routes do not need writer
-ownership.
+Connected readers are enabled by default; an exact build-time
+`VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` selects the conservative fallback.
+`src/ts/connectedClientStartup.ts` first discovers ownership. An exclusive page
+may acquire an unowned server or conditionally resume its own writer; an
+initialized server owned by another session opens for reading even when that
+writer is disconnected. An observed writer frame never grants write access.
+Explicit **Use this device** performs fresh discovery, conditional acquisition,
+current-scope outbox recovery, post-replay hydration, and writer event attachment
+before mutation capabilities return. Cancellation or a current failed switch
+returns to reading while authentication and lineage remain valid; superseded
+work cannot change a newer role.
+
+Writer loss immediately revokes mutation and generation control, captures local
+drafts, stops writer runtimes, and establishes connected reading. Reader
+navigation and authenticated resource/event reads remain available; navigation
+does not persist another selection or replay pending writes. Unsent drafts and
+encrypted intents stay scoped to their originating local session and lineage.
+Authentication loss clears protected projections immediately. Lineage changes
+invalidate old request, transcript, and cache identities before replacement.
+
+The explicit conservative fallback retains the older refresh-or-stay dialog:
+refresh reclaims through its writer flow, while stay closes communication and
+freezes the page with text still selectable and copyable. That compatibility
+choice is separate from an interrupted connected reader, which reconnects using
+authenticated reads. Changing the rollout flag does not itself delete local
+drafts or pending intents, and server writer guards apply to both client modes.
 
 `server/fastify/src/routeManifest.ts` is the source of truth for auth,
 active-writer, streaming, public exceptions, and read-only POST decisions.
 
 ## Resource Persistence And Event Ordering
 
-| Concern | Canonical source |
-| --- | --- |
+| Concern                                                              | Canonical source                           |
+| -------------------------------------------------------------------- | ------------------------------------------ |
 | Transaction, revision bump, receipt, commit, and live-emission order | `server/fastify/src/commands/mutations.ts` |
-| Event drafts, persisted replay rows, and retention window | `server/fastify/src/commands/events.ts` |
-| Browser interpretation of event resource keys | `src/ts/server/resourceInvalidation.ts` |
+| Event drafts, persisted replay rows, and retention window            | `server/fastify/src/commands/events.ts`    |
+| Browser interpretation of event resource keys                        | `src/ts/server/resourceInvalidation.ts`    |
 
 A normal resource-changing command writes its SQLite rows, increments the global
 revision once, and inserts one command event in the same transaction. The live
@@ -429,7 +458,8 @@ complete resource refresh before resubscribing. SQLite replay keeps a
 1000-revision window and persists `origin_writer_session_id` for own-echo
 suppression. The server emits 25-second heartbeat comments. The browser treats
 60 seconds of silence as stale, restarts immediately on visibility/online
-recovery, and retriggers current-scope outbox replay after reconnect. The live
+recovery, and the writer transport retriggers current-scope outbox replay after
+reconnect. The live
 command sink can also carry non-replay notifications such as export events at
 the current revision. Hypa `memory.job` and BardWiki `bardwiki.job` progress
 events are bounded, secret-free, and never replayed; the reconnect snapshot plus
@@ -452,14 +482,30 @@ command-event replay retries the event instead of waiting for a later mutation.
 Memory events update Hypa V3 and BardWiki job/progress UI directly without
 advancing the applied domain revision.
 
-The optional pre-writer observer read does not seed command authority. It may
-install the coherent shell revision as the applied-resource cursor so later
-replacement can be fenced, but the writer path always performs its post-replay
-shell read and then installs both the known-server command cursor and applied
-event cursor. The initial event subscription starts from that post-replay
-revision; only its acceptance publishes writer readiness. This prevents an
-event between observer display and promotion from being skipped and prevents an
-observer-era revision from becoming a mutation base.
+Connected readers use `src/ts/server/connectedReaderSync.ts`: authenticated
+ownership checks, an event subscription without writer headers, serialized
+resource invalidation, and full read refresh after a revision gap or unavailable
+replay. Their known-server and applied-resource cursors fence reads but grant no
+mutation authority. Reconnect does not replay outbox work or acquire a writer.
+Memory/Hypa/BardWiki snapshots and progress use their independent stream/version
+ordering and never advance the command revision. Promotion still performs its
+post-replay shell read and installs the writer subscription from that revision;
+only successful writer recovery restores mutation readiness.
+
+A selected reader watches generation through authenticated
+`GET /api/v1/generation-operations/:operationId/stream?attemptNo=...&jobId=...&projectionEpoch=...`.
+`readerGenerationObservation.ts` and `readerGenerationStream.ts` fence the
+database lineage, operation, attempt, job, selected chat incarnation, and client
+lifecycle. Protected replay from the same attempt may have older projection
+epochs; terminal authority may advance them. Job-only replay-gap and terminal
+snapshot wrappers are accepted only after a verified durable frame, and a
+snapshot fetch must use the exact job's terminal-snapshot URL. Tokens remain a
+temporary display projection. Authoritative messages establish the exact
+persisted result before handoff; a terminal that retains no result removes the
+overlay only after read reconciliation. EOF, hidden/offline suspension, chat
+switching, or closing a reader detaches its HTTP viewer without cancelling the
+durable job. Recovery is bounded and never invokes submission, cancellation,
+persistence retry, or effects.
 
 Chat generation SSE frame types are `stage`, `job_accepted`, `prompt`, `info`,
 `message_patch`, `token`, `side_effect`, `agent_preset_progress`,

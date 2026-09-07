@@ -1,6 +1,7 @@
 # Generation Client
 
 Last audited: 2026-08-29.
+Targeted source check: 2026-09-08 (reader viewing and IGP persistence/effect recovery).
 
 This guide owns the browser side of durable chat generation: operation
 acceptance, streaming, cancellation, reattach, terminal reconciliation,
@@ -11,9 +12,10 @@ in [Backend Map](../../docs/structure/backend.md#generation-and-background-work)
 
 ## Coordinator And Key Files
 
-`sendChat` in `src/ts/process/index.svelte.ts` is the browser coordinator for
+`sendChat` in `src/ts/process/index.svelte.ts` is the writer coordinator for
 chat generation UI. In Fastify mode it uses server prompt assembly and server
-provider dispatch.
+provider dispatch. Connected readers use a separate observation coordinator
+and never call `sendChat` to watch a generation.
 
 Important files:
 
@@ -58,7 +60,7 @@ Important files:
   adopted by the real assistant row and retained across activity settlement. A
   matching active-job projection bridges foreground observer replacement so
   the row and its loading animation are not remounted during reattach.
-- `src/ts/process/reattach.ts` coordinates background recovery by durable
+- `src/ts/process/reattach.ts` coordinates writer background recovery by durable
   `(databaseLineage, operationId)` authority. `jobId` and `attemptNo` remain
   expiring stream descriptors, while local viewer/activity state is only an
   observation projection. Foreground bootstrap reads have a bounded deadline
@@ -77,6 +79,10 @@ Important files:
   active, a failed foreground lifecycle probe receives bounded retries after
   500 ms, 2 s, and 5 s. A newer lifecycle signal, successful probe, settled
   activity, or teardown supersedes that retry sequence.
+- `src/ts/server/readerGenerationObservation.ts`, `readerGenerationStream.ts`,
+  and `readerGenerationTypes.ts` own selected-reader status discovery,
+  authenticated viewing, and disposable presentation independently of writer
+  operation/activity/effect stores.
 - `src/ts/process/generationEffectLedger.ts` claims and receipts client effects
   for the exact persisted generation. `recoveredGenerationEffects.ts` retries
   missing durable effects after bootstrap; late ephemeral effects are skipped.
@@ -96,6 +102,7 @@ adapter.
 
 ## Operations, Streams, And Reattach
 
+The controls and recovery in this section require current writer authority.
 Durable sends such as send, continue, and regenerate use operation-addressed
 streams when protocol v1 is advertised; job-ID-only attachment remains a
 compatibility fallback. Disconnect is an observation failure and does not imply
@@ -127,6 +134,51 @@ so the browser suppresses the old generation-result command in server-backed
 paths. The configured message-completion sound is emitted once through its
 ledgered successful terminal lifecycle, rather than from the selected chat
 component, so background and reattached generations retain the same behavior.
+
+## Connected Reader Observation
+
+Reader content admission is separate from an initial writer's coherent shell
+preview. Once admitted, `ReaderTranscript.svelte` starts one
+`readerGenerationObservation.ts` owner for its selected character/chat
+incarnation and client-session generation. Status
+discovery, the operation/attempt/job stream, terminal-snapshot reads, and
+transcript hydration use authenticated GET requests. The reader does not seed
+writer operation/activity stores, consume writer reattach eligibility, claim
+completion effects, or run submission, Stop, generation retry, or persistence
+retry actions. `canGenerate` remains false while it watches.
+
+`readerGenerationStream.ts` validates lineage, operation, attempt, and job
+identity on durable frames and any supplied nested identity. Protected replay
+for the same attempt can predate the descriptor's projection epoch; terminal
+frames may advance it. Request/watchdog deadlines and currentness checks fence
+every awaited boundary. Terminal snapshots are fetched only from the verified
+job's exact reference. Each viewer call owns one attachment; EOF and abort
+retire the HTTP viewer without cancelling the durable operation.
+
+The coordinator owns bounded discovery/reconnect work and cumulative raw text.
+Reopen resets the accumulator, replay gaps suppress incomplete suffix display,
+and half-streaming withholds token text while exposing token counts. Continue
+extension uses the immutable server-supplied base, never a displayed partial.
+Prompt frames, stream message patches, and effect-bearing callbacks do not
+modify the reader transcript. Hidden/offline pages suspend observation;
+visibility/reconnect and the transcript's Refresh action retry reads. Changing
+chat, incarnation, session, or lineage retires the old viewer and callbacks.
+
+Before attaching to an unloaded Continue/regenerate target, the coordinator
+uses `hydrateReaderGenerationMessages()` to read the authoritative suffix
+containing that target. Terminal reconciliation similarly resolves the exact
+persisted result and checks its operation/attempt/generation identity against
+current authority before releasing the transient view. Command SSE can expose
+the canonical row before `done`; the presentation hands off without a duplicate
+row while the coordinator finishes reconciliation. A non-persisting terminal
+requires an authoritative read before its projection disappears. Interrupted
+viewing leaves readable content and explicit status without retaining a busy
+indicator.
+
+Promotion and demotion replace read/write lifecycles without cancelling the
+server job. Only the recovered current writer may resume generation controls
+and completion effects. Row composition, stable presentation keys, and scroll
+ownership remain in [Svelte Chat UI](svelte-chat-ui.md#connected-reader-transcript).
 
 ## Projection And Terminal Reconciliation
 
@@ -228,6 +280,25 @@ omission preserves resident Hypa data, while full and ordinary ranged reads
 retain the historical absent-means-clear behavior. Reroll alternates remain
 included because every generation finalization can clear or replace that
 authoritative candidate set.
+
+IGP uses an explicit generation-settings database in both delivery paths:
+`index.svelte.ts` passes the live send's scoped database, while
+`recoveredGenerationEffects.ts` loads the generation resource surface and
+resolves the exact recovered character/chat before calling
+`postGeneration/igp.ts`. A missing recovery dependency cannot become a permanent
+not-configured receipt. The append is fenced by writer/effect currentness,
+abort state, stable message identity, expected source text, and generation id.
+
+For a ledgered append, `evaluateIgp()` carries the optional exact
+`igpEffect: { generationId, claimId }` through the message PATCH and waits for
+durable acceptance, including queued settlement. The server accepts that claim
+only with a data-only patch and matching text/chat preconditions, validates its
+lineage, lease, and generation/message identity, and completes the effect
+receipt in the same transaction as the text write. A failed transaction retains
+neither change. The ordinary command receipt handles replay of an accepted
+command; a later matching `igp`/`completed` receipt acknowledgement for the same
+claim is idempotent, including after the original HTTP response was lost.
+Readers perform neither the provider call nor the append/receipt work.
 
 Ledgered completion callbacks emit development performance entries named
 `risu:generation-effect:<kind>:<delivery>`. Best-effort emotion/image and plugin

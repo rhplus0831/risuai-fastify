@@ -58,9 +58,26 @@ adds visible A → B → A switching with an originating draft, an existing dura
 generation across transfer, and explicit initialization without Web Locks.
 `connectedReaderGeneration.spec.ts` owns live viewing and effect-transfer proof in
 [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
-Default-enabled rollout, simultaneous two-reader operation and restart/fallback
-journeys require separately recorded execution; these earlier specs do not by
-themselves establish those results.
+The browsing case keeps two Readers simultaneously connected through committed
+updates and independent navigation. `connectedReaderRollout.spec.ts` adds a real
+Fastify/SQLite restart on the same port and data directory, with retained visible
+content, same-document reconnect, a post-restart edit and native subscription
+cleanup. This restarts the server instance; it does not kill an external process.
+Its fallback case saves an edit through the actual Popup Editor, holds the
+accepted response across reload, and observes a native encrypted intent plus a
+newer composer draft. It requires same-ID/body replay, one edit/event/receipt/ACK
+and restored newer text. The compiled `FALSE` variant removes the smoke override
+before reload to exercise the documented build-time fallback.
+
+`visibleStateRecovery.spec.ts` keeps separate conservative forced-reload and
+connected import-replacement cases. The latter waits for a coherent new-lineage
+Reader before releasing the old PATCH's real 409, then verifies observer-only
+traffic, explicit same-owner writer recovery and the restored character sidebar.
+Focused auth/lifecycle tests retain their controlled-response scope.
+
+Browser fixtures that own Playwright's page context close that context before
+closing their Fastify harness. Closing only the page can leave an idle pooled
+HTTP socket delaying server shutdown after all product assertions have passed.
 
 ## Test groups
 

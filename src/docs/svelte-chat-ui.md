@@ -1,6 +1,7 @@
 # Svelte Chat UI Guide
 
 Last audited: 2026-08-29.
+Targeted source check: 2026-09-08 (reader transcript, live presentation, and read-only display).
 
 This guide owns the visible chat frame, transcript, message rows, composer
 variants, generation/loading feedback, and in-chat confirmations. Return to the
@@ -16,13 +17,14 @@ Direct sections: [hydration/scroll](#transcript-hydration-and-paging),
 [keyboard viewport](#keyboard-viewport-coordination),
 [send phases](#message-generation-phases), [regenerate](#targeted-regenerate-presentation).
 
-| Symptom | Inspect first | Then inspect |
-| --- | --- | --- |
-| Chat frame, background, or display mode is wrong | `src/lib/ChatScreens/ChatScreen.svelte` | `src/lib/ChatScreens/BackgroundDom.svelte`, `src/styles.css` |
-| Transcript window, hydration, scroll, composer, or menu is wrong | `src/lib/ChatScreens/DefaultChatScreen.svelte` | `src/lib/ChatScreens/DefaultChatScreen.loadPages.ts`, `src/ts/server/chatMessageHydration.svelte.ts` |
-| One message, translation, parser result, or partial edit is wrong | `src/lib/ChatScreens/Chat.svelte`, `src/lib/ChatScreens/ChatBody.svelte` | `src/lib/ChatScreens/ChatBodyParseMemo.ts`, `src/lib/ChatScreens/PartialEditController.svelte` |
-| Generation text, progress bar, stage color, or cancel state is wrong | `src/lib/ChatScreens/chatGenerationLoading.ts`, `Chat.svelte`, `DefaultChatScreen.svelte` | `src/ts/process/index.svelte.ts`, durable generation state in [Generation Client](generation-client.md) |
-| Draft/BTW hook controls or review state are wrong | `src/lib/SideBars/ChatDraftHookSelector.svelte`, `src/lib/ChatScreens/InputHookPickerDialog.svelte`, `DefaultChatScreen.svelte` | [Translation And Input Hooks](../../docs/structure/translation-and-input-hooks.md) |
+| Symptom                                                              | Inspect first                                                                                                                   | Then inspect                                                                                            |
+| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
+| Chat frame, background, or display mode is wrong                     | `src/lib/ChatScreens/ChatScreen.svelte`                                                                                         | `src/lib/ChatScreens/BackgroundDom.svelte`, `src/styles.css`                                            |
+| Transcript window, hydration, scroll, composer, or menu is wrong     | `src/lib/ChatScreens/DefaultChatScreen.svelte`                                                                                  | `src/lib/ChatScreens/DefaultChatScreen.loadPages.ts`, `src/ts/server/chatMessageHydration.svelte.ts`    |
+| Reader transcript, partial output, or viewer refresh is wrong        | `src/lib/ReaderTranscript.svelte`                                                                                               | `src/ts/server/readerGenerationObservation.ts`, `src/lib/ChatScreens/readerGenerationRows.ts`           |
+| One message, translation, parser result, or partial edit is wrong    | `src/lib/ChatScreens/Chat.svelte`, `src/lib/ChatScreens/ChatBody.svelte`                                                        | `src/lib/ChatScreens/ChatBodyParseMemo.ts`, `src/lib/ChatScreens/PartialEditController.svelte`          |
+| Generation text, progress bar, stage color, or cancel state is wrong | `src/lib/ChatScreens/chatGenerationLoading.ts`, `Chat.svelte`, `DefaultChatScreen.svelte`                                       | `src/ts/process/index.svelte.ts`, durable generation state in [Generation Client](generation-client.md) |
+| Draft/BTW hook controls or review state are wrong                    | `src/lib/SideBars/ChatDraftHookSelector.svelte`, `src/lib/ChatScreens/InputHookPickerDialog.svelte`, `DefaultChatScreen.svelte` | [Translation And Input Hooks](../../docs/structure/translation-and-input-hooks.md)                      |
 
 ## Chat Surface Ownership
 
@@ -30,7 +32,7 @@ Direct sections: [hydration/scroll](#transcript-hydration-and-paging),
 standard, waifu, and mobile-waifu display modes, applies background and text
 screen styles, renders `BackgroundDom`, and opens chat/module modals.
 
-`DefaultChatScreen.svelte` coordinates the active character and chat, message
+`DefaultChatScreen.svelte` coordinates the writer's active character and chat, message
 hydration, transcript window, scroll-to-message work, the composer and attached
 files, suggestions and stickers, send/continue/reroll actions, generation and
 hook cancellation, and chat quick menus. Active transcript rendering fans out
@@ -170,6 +172,56 @@ not expand or shrink it. Geometry events likewise cannot change anchor modes;
 only chat entry, generation start/settlement, and the explicit new-message
 action do so. Empty chats retain their ordinary greeting/composer layout.
 
+### Connected Reader Transcript
+
+`ObserverShell.svelte` lazy-loads `ReaderTranscript.svelte` for an explicit local
+character/chat route only when `canUseClientReaderContent()` admits content.
+An initial writer's coherent shell preview does not start character detail,
+transcript body, display, or greeting work. Established readers and previous
+writers retain content admission through promotion and interrupted recovery.
+`ReaderTranscript.svelte` also guards its own reads and rendering, including
+manual Refresh, so a direct mount cannot bypass this boundary.
+
+The reader supplies `Chats.svelte` with certified messages
+from `readerTranscriptProjection.svelte.ts` through its own chat-read owners.
+Its character, greeting, persona, and transcript do not borrow pending writer
+edits or persisted writer selection. A failed/sparse refresh can retain the
+last usable same-route snapshot; authentication, lineage, deletion/recreation,
+and chat incarnation fence both retained content and late reads.
+
+`readerDisplayResources.ts` loads display dependencies without starting writer
+plugins or generation recovery. The reader keeps shared sanitized Markdown,
+asset display, stored translation, native selection, and plain-text copy.
+Unsupported display processing reports limited-display status with readable
+source. Its composer is disabled, and mutation, translation-start, generation
+control, and effect actions remain unavailable.
+
+`readerGeneration` is an explicit optional presentation input to `Chats.svelte`:
+`undefined` retains the writer path, while `null` means an idle reader. The
+reader path ignores writer regenerate, half-streaming, and finalization stores,
+even when no reader projection exists. Live text never enters canonical
+messages, retained read snapshots, or pending-mutation intent.
+
+Send and append-mode Continue use a synthetic assistant row with a stable
+operation/attempt key. Extend-mode Continue displays the immutable base plus
+observed text on the exact target; regenerate replaces that target's visible
+text while retaining its presentation key. Exact canonical result identity can
+adopt the row before the stream terminal arrives without showing a duplicate.
+An existing Continue target id alone cannot complete the handoff. The observer
+owns terminal hydration and projection release, including target/result suffix
+reads outside the ordinary tail window.
+
+Reader projections parse promptly through the same read-only `ChatBody` path,
+retain copy for nonempty partial text, and pin generation rows in the existing
+bounded residency layer. The existing user-controlled scroll anchors remain
+in charge. Half-streaming shows reader token counts while withholding text;
+interruption keeps partial content readable, removes the busy indicator, and
+shows localized viewer status even when no transient row exists. Refresh
+retries the read-only viewer and transcript. Selection, incarnation, session,
+and teardown stop the old viewer; visibility/offline handling belongs to the
+observer service. Transport and authority contracts are in
+[Generation Client](generation-client.md#connected-reader-observation).
+
 ## Message Rendering
 
 ### Row Ownership And Parse Dependencies
@@ -272,9 +324,10 @@ the first subsequently sent message does not reopen the skeleton. An authoritati
 re-stub or resync can start a new cycle.
 The skeleton stays within the transcript, leaving the composer and app-owned
 responsive sidebar available while the chat finishes rendering.
-Plugin hooks and unsupported surfaces transparently run the former all-client
-path, while raw message, translation, copy, edit, TTS, and prompt sources remain
-unchanged.
+With writer access, plugin hooks and unsupported surfaces retain the former
+all-client path. Readers instead keep readable source and limited-display
+feedback without general script/plugin fallback or new provider work. Raw
+message and stored translation sources remain unchanged.
 
 ### Finalization Indicators And Render Isolation
 
@@ -376,7 +429,9 @@ The composer owns five reload-recoverable fields: message, translated message,
 attached files, reviewed Draft output, and BTW output.
 `DefaultChatScreen.composerDrafts.ts` retains them per transcript in bounded,
 lineage/writer-scoped `sessionStorage`. Only an accepted save for the exact
-draft generation clears recovery. The complete storage contract is in
+draft generation clears recovery. Writer demotion also captures mounted fields
+through `writerDraftRecovery.ts`; the reader's disabled composer does not submit
+or replace those saved copies. The complete storage contract is in
 [Client Runtime](client-runtime.md#draft-recovery-stores).
 
 One Svelte snippet owns the composer row, draft-persistence and generation
