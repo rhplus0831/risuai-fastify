@@ -887,6 +887,81 @@ function setReadyManagedWriter(): void {
 }
 
 describe('generation operation writer lifecycle', () => {
+  it('stops a bootstrapped operation after promotion without a prior local cancellation record', async () => {
+    setManagedReaderForTest()
+    const operation = {
+      ...responseBody().operation,
+      creatorWriterSessionId: 'previous-writer',
+      currentAttempt: {
+        ...responseBody().operation.currentAttempt!,
+        actorWriterSessionId: 'previous-writer',
+      },
+    }
+    expect(
+      applyGenerationOperationBootstrap({
+        initialized: true,
+        revision: 8,
+        databaseLineage: 'database-a',
+        generationOperationProtocol: { version: 1 },
+        generationOperationProjectionEpoch: operation.projectionEpoch,
+        generationOperations: [operation],
+        activeGenerationJobs: [{ chatId: 'chat-a', jobId: 'job-a', operationId }],
+      }),
+    ).toBe(true)
+    expect(get(generationOperationCancellations)).toEqual([])
+    demoteAndRepromoteForTest()
+    settleCurrentGenerationReadiness()
+    const stoppingOperation = {
+      ...operation,
+      state: 'stopping' as const,
+      stateVersion: 3,
+      projectionEpoch: 4,
+      currentAttempt: { ...operation.currentAttempt, status: 'stopping' as const },
+    }
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({ operation: stoppingOperation, disposition: 'cancelling', knownAttemptMatched: true }),
+          { status: 202 },
+        ),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(stopGenerationOperation(operationId)).resolves.toMatchObject({
+      status: 'acknowledged',
+      disposition: 'cancelling',
+      knownAttemptMatched: true,
+    })
+
+    const cancellationBody = { reason: 'user_stop', knownStateVersion: 2, knownAttemptNo: 1, knownJobId: 'job-a' }
+    expect(operationMocks.stage).toHaveBeenCalledExactlyOnceWith(`generation-operation-cancel:${operationId}`, {
+      version: 1,
+      kind: 'generation-operation-cancel',
+      requests: [{ method: 'PUT', path: `/generation-operations/${operationId}/cancellation`, body: cancellationBody }],
+    })
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-operations/${operationId}/cancellation`,
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({ 'risu-writer-session': 'writer-a', 'risu-database-lineage': 'database-a' }),
+        body: JSON.stringify(cancellationBody),
+      }),
+    )
+    expect(get(generationOperationCancellations)).toEqual([
+      expect.objectContaining({
+        operationId,
+        target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+        state: 'stop_waiting',
+        operationState: 'stopping',
+        stateVersion: 3,
+        projectionEpoch: 4,
+        attemptNo: 1,
+        jobId: 'job-a',
+      }),
+    ])
+    expect(operationMocks.appendOptimistic).not.toHaveBeenCalled()
+  })
+
   it('rejects Reader staging and cancellation before local staging or transport', async () => {
     setManagedReaderForTest()
     const fetchMock = vi.fn()

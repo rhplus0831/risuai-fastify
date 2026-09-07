@@ -831,7 +831,7 @@ function cancellationTargetFromOperation(
   operation: GenerationOperationProjection,
   previous?: GenerationOperationCancellation,
 ): ActiveChatTarget | undefined {
-  if (previous.target) return previous.target
+  if (previous?.target) return previous.target
   if (!operation.chatId && !operation.characterId) return undefined
   return {
     selectedCharID: -1,
