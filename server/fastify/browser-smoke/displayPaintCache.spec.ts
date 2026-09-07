@@ -109,10 +109,11 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
     })
 
     await page.addInitScript((expectedAppearance) => {
-      const observations = { mismatches: [] as string[] }
+      const observations = { samples: 0, mismatches: [] as string[] }
       ;(window as unknown as { displayPaintObservations: typeof observations }).displayPaintObservations = observations
       const sample = () => {
         if (document.querySelector('#app, #preloading') && observations.mismatches.length < 10) {
+          observations.samples++
           const root = getComputedStyle(document.documentElement)
           for (const [key, value] of Object.entries(expectedAppearance)) {
             const actual = root.getPropertyValue(key).trim()
@@ -133,12 +134,14 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
     expect(await page.evaluate(() => Boolean(window.__RISU_FASTIFY_BROWSER_SMOKE__))).toBe(false)
     expect(await appearance(page)).toEqual(expected)
     await expect(page.locator('#preloading')).toHaveCSS('background-color', 'rgb(245, 247, 252)')
+    await expectPaintFrame(page)
 
     releaseEntry.resolve()
     await shellRequested.promise
     await expect(page.locator('#preloading')).toHaveCount(0)
     expect(await appearance(page)).toEqual(expected)
     await expect(page.locator('main [role="status"]').first()).toHaveCSS('background-color', 'rgb(245, 247, 252)')
+    await expectPaintFrame(page)
 
     releaseShell.resolve()
     await displayRequested.promise
@@ -153,6 +156,7 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
         Object.hasOwn(window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot(), 'zoomsize'),
       ),
     ).toBe(false)
+    await expectPaintFrame(page)
 
     releaseDisplay.resolve()
     await page.evaluate(() =>
@@ -164,6 +168,7 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
     expect(await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot())).toMatchObject({
       zoomsize: 140,
     })
+    await expectPaintFrame(page)
     expect(
       await page.evaluate(
         () =>
@@ -180,3 +185,14 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
     await closeFastBootstrapHarness(harness)
   }
 })
+
+/** Each held startup phase must actually reach the paint sampler before release. */
+async function expectPaintFrame(page: Page): Promise<void> {
+  const readSamples = () =>
+    page.evaluate(() => (Reflect.get(window, 'displayPaintObservations') as { samples: number }).samples)
+  const before = await readSamples()
+  await expect.poll(readSamples, { message: 'the held startup phase produces a paint sample' }).toBeGreaterThan(before)
+  expect(
+    await page.evaluate(() => (Reflect.get(window, 'displayPaintObservations') as { mismatches: string[] }).mismatches),
+  ).toEqual([])
+}

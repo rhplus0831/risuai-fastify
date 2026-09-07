@@ -262,3 +262,42 @@ exactly-once generation, and writer transitions remain separate Phase 2 owners.
   keeping operation/message identity and no duplicate provider invocation.
   Demonstrate an appropriate persistence/finalization fault with unchanged test.
 - Disposition: **open**; separate from any claim of a current persistence bug.
+
+## BSE-004: Paint-cache observation must sample every held phase
+
+- Classification: source-supported assertion gap, medium test-harness risk;
+  no new application defect. Source: `7399389f9`; consumer S27 in
+  `server/fastify/browser-smoke/displayPaintCache.spec.ts`.
+- The sampler accumulated only mismatches. An empty observation set therefore
+  satisfied its final `[]` assertion even when a held startup phase produced
+  no sample. Existing computed-style checkpoints remain useful independently;
+  they were not evidence of continuous sampling.
+- Repair: count actual sampler invocations and, before releasing each held
+  entry/shell/Display phase and after hydration, wait for a strictly newer sample
+  and assert no mismatch. The barrier observes a real browser frame without
+  assigning application layout or making a timing budget. One spec is affected.
+- Fixed baseline using the already built matching SPA: `pnpm exec playwright
+test -c playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/displayPaintCache.spec.ts --workers=1`:
+  **1/1 pass** (2.4s case, 4.0s total).
+- Production fault in the disposable checkout, unchanged strengthened test:
+
+  ```diff
+  -              document.documentElement.style.setProperty(property, value)
+  +              // Fault: skip restoring validated cached display properties.
+  ```
+
+  This is the synchronous cache restore in `index.html`, before application
+  entry. Build smoke assets, then run the same selected browser command. Actual:
+  **1/1 fails** at the independent pre-bundle appearance assertion (line 135):
+  background `#282a36` instead of cached `#f5f7fc`, font Arial instead of Georgia,
+  and missing cached sidebar size. The preloader is visible and the smoke hook
+  absent, proving the claimed pre-bundle transition. The test does not assign
+  the expected or broken style, or rely on a generic timeout.
+
+- Restored clean rebuild and identical focused execution: **1/1 pass** (2.3s
+  case, 3.7s total). Phase aggregate validation remains in status.
+  Limit: this fault proves paint restoration, while the new explicit frame
+  barriers prevent vacuous sampler success; it does not claim every browser
+  frame on physical devices is observed.
+- Disposition: focused repair verified; Phase 1 aggregate evidence pending.
