@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../../clientSession'
 import { type character, type Database, type MessageGenerationInfo } from '../../storage/database.svelte'
 import { settingsResourceState } from '../../server/resourceState.svelte'
 import { loadAndTrimCharEmotion } from './charEmotionStore'
@@ -53,6 +58,9 @@ export interface RunStage4Args {
  * preserving production behavior verbatim).
  */
 export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = () => isClientSessionGenerationCurrent(sourceGeneration) && canUseClientWriteAccess()
+  if (!isCurrent()) return { status: 'done' }
   const {
     req,
     currentChar,
@@ -87,6 +95,7 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
         () => skippedGenerationEffect('resend', false),
       ),
     ])
+    if (!isCurrent()) return { status: 'done' }
     finalizeStage4({ stageTimings, generationInfo, target })
     return { status: 'resend' }
   }
@@ -95,7 +104,8 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
     args.effectLedger,
     'notification',
     args.effectDelivery ?? 'live_terminal',
-    async () => {
+    async (effectContext) => {
+      if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
       if (
         settingsResourceState.status !== 'ready' ||
         !(settingsResourceState.value as Record<string, unknown>).notification
@@ -107,6 +117,7 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
     },
   )
 
+  if (!isCurrent()) return { status: 'done' }
   if (
     !currentChar.inlayViewScreen &&
     !abortSignal.aborted &&
@@ -114,11 +125,13 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
   ) {
     await yieldBeforeCompletionEffect()
   }
+  if (!isCurrent()) return { status: 'done' }
   const stateEffect = await runLedgeredGenerationEffect(
     args.effectLedger,
     'emotion_image_state',
     args.effectDelivery ?? 'live_terminal',
-    async () => {
+    async (effectContext) => {
+      if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed', false)
       if (req.special && applyEmotionFromResponse({ emotion: req.special.emotion, currentChar })) {
         emoChanged = true
       }
@@ -134,6 +147,7 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
           (settingsResourceState.value as Record<string, unknown>).emotionProcesser === 'embedding'
         ) {
           await runEmotionEmbeddingFallback({
+            isCurrent: effectContext.isCurrent,
             result,
             currentChar,
             tempEmotion,
@@ -143,10 +157,11 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
         }
 
         await runEmotionLlmFallback({
+          isCurrent: effectContext.isCurrent,
           database: args.database,
           result,
           currentChar,
-          abortSignal,
+          abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
           throwError,
           emotionPrompt2:
             settingsResourceState.status === 'ready'
@@ -158,12 +173,17 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
         return completedGenerationEffect(true)
       }
       if (currentChar.viewScreen === 'imggen') {
-        await runImggenStableDiff({ currentChar, target, abortSignal })
+        await runImggenStableDiff({
+          currentChar,
+          target,
+          abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
+        })
         return completedGenerationEffect(false)
       }
       return skippedGenerationEffect('current_state_not_applicable', false)
     },
   )
+  if (!isCurrent()) return { status: 'done' }
   if (stateEffect.value === true) return { status: 'done' }
 
   finalizeStage4({ stageTimings, generationInfo, target })

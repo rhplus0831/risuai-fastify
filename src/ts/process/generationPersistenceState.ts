@@ -1,3 +1,9 @@
+import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  clientSessionStore,
+} from '../clientSession'
 import { get, writable } from 'svelte/store'
 import type { Writable } from 'svelte/store'
 import { createSubscriber } from 'svelte/reactivity'
@@ -131,13 +137,21 @@ const GENERATION_FINALIZATION_REFRESH_INTERVAL_MS = import.meta.env.VITE_FASTIFY
 let refreshEnabled = false
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let refreshInFlight = false
+let refreshEpoch = 0
 
 function hasReplayableFinalizations(entries: readonly QueuedGenerationPersistence[]): boolean {
   return entries.some((entry) => entry.state === undefined || entry.state === 'queued' || entry.state === 'stalled')
 }
 
 function scheduleGenerationFinalizationRefresh(entries: readonly QueuedGenerationPersistence[]): void {
-  if (!refreshEnabled || refreshTimer || refreshInFlight || !hasReplayableFinalizations(entries)) return
+  if (
+    !canUseClientRecoveryAccess() ||
+    !refreshEnabled ||
+    refreshTimer ||
+    refreshInFlight ||
+    !hasReplayableFinalizations(entries)
+  )
+    return
   refreshTimer = setTimeout(() => {
     refreshTimer = null
     void refreshGenerationFinalizationPersistences()
@@ -145,15 +159,23 @@ function scheduleGenerationFinalizationRefresh(entries: readonly QueuedGeneratio
 }
 
 async function refreshGenerationFinalizationPersistences(): Promise<void> {
-  if (!refreshEnabled || refreshInFlight) return
+  if (!canUseClientRecoveryAccess() || !refreshEnabled || refreshInFlight) return
+  const sourceGeneration = captureClientSessionGeneration()
+  const startedEpoch = refreshEpoch
+  const isCurrent = () =>
+    refreshEnabled &&
+    startedEpoch === refreshEpoch &&
+    canUseClientRecoveryAccess() &&
+    isClientSessionGenerationCurrent(sourceGeneration)
   refreshInFlight = true
   const retryTriggers = get(generationFinalizationPersistences).filter(
     (entry) => entry.state === undefined || entry.state === 'queued' || entry.state === 'stalled',
   )
   try {
     const { fetchServerBootstrapReadOnly } = await import('../server/bootstrap')
+    if (!isCurrent()) return
     const result = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
-    if (refreshEnabled && result.status === 'ok' && result.bootstrap.generationFinalizations) {
+    if (isCurrent() && result.status === 'ok' && result.bootstrap.generationFinalizations) {
       const { applyGenerationOperationBootstrap } = getGenerationOperationsRuntime()
       const recoveredGenerationEffects = getRecoveredEffectsRuntime()
       applyGenerationOperationBootstrap(result.bootstrap, 'bootstrap')
@@ -162,9 +184,10 @@ async function refreshGenerationFinalizationPersistences(): Promise<void> {
       // Keep the last queued/stalled projection as the refresh trigger until
       // every newly published effect has reconciled. Clearing it first would
       // leave no timer owner when a transient effect runtime failure occurs.
-      setGenerationFinalizationPersistences(result.bootstrap.generationFinalizations)
+      if (isCurrent()) setGenerationFinalizationPersistences(result.bootstrap.generationFinalizations)
     }
   } catch {
+    if (!isCurrent()) return
     // Recovered-effect reconciliation force-hydrates the committed transcript.
     // That hydration can acknowledge and clear the provisional row before a
     // transient effect failure is reported. Restore only missing trigger rows
@@ -201,7 +224,7 @@ function findChatMessages(chatId: string): Message[] | null {
 function reapplyGenerationFinalizationProjection(entry: QueuedGenerationPersistence): void {
   const message = entry.provisionalMessage
   const fence = entry.projectionFence
-  if (!message || !fence) return
+  if (!canUseClientRecoveryAccess() || !message || !fence) return
   const messages = findChatMessages(entry.chatId)
   if (!messages) return
   if (
@@ -229,10 +252,18 @@ export function setGenerationFinalizationPersistences(entries: readonly QueuedGe
   releaseRetainedFinalizationProjections()
   const next = entries.map((entry) => structuredClone(entry))
   generationFinalizationPersistences.set(next)
+  const sourceGeneration = captureClientSessionGeneration()
   for (const entry of next) {
-    if (!entry.provisionalMessage || !entry.projectionFence || entry.state === 'committed_cleanup_pending') continue
-    const release = registerRetainedChatProjection({ kind: 'chat-body', chatId: entry.chatId }, () =>
-      reapplyGenerationFinalizationProjection(entry),
+    if (
+      !canUseClientRecoveryAccess() ||
+      !entry.provisionalMessage ||
+      !entry.projectionFence ||
+      entry.state === 'committed_cleanup_pending'
+    )
+      continue
+    const release = registerRetainedChatProjection(
+      { kind: 'chat-body', chatId: entry.chatId },
+      () => isClientSessionGenerationCurrent(sourceGeneration) && reapplyGenerationFinalizationProjection(entry),
     )
     retainedProjectionReleases.set(entry.generationId, release)
   }
@@ -240,6 +271,7 @@ export function setGenerationFinalizationPersistences(entries: readonly QueuedGe
 }
 
 export function markGenerationPersistenceQueued(entry: QueuedGenerationPersistence): void {
+  if (!canUseClientRecoveryAccess()) return
   generationFinalizationPersistences.update((entries) => [
     ...entries.filter(
       (candidate) => candidate.chatId !== entry.chatId || candidate.generationId !== entry.generationId,
@@ -339,12 +371,21 @@ export function resetGenerationFinalizationPersistencesForTests(): void {
 }
 
 export function startGenerationFinalizationPersistenceRefresh(): void {
+  if (!canUseClientRecoveryAccess()) return
+  if (!refreshEnabled) refreshEpoch += 1
   refreshEnabled = true
   scheduleGenerationFinalizationRefresh(get(generationFinalizationPersistences))
 }
 
 export function stopGenerationFinalizationPersistenceRefresh(): void {
+  refreshEpoch += 1
   refreshEnabled = false
   if (refreshTimer) clearTimeout(refreshTimer)
   refreshTimer = null
 }
+
+clientSessionStore.subscribe(() => {
+  if (canUseClientRecoveryAccess()) return
+  stopGenerationFinalizationPersistenceRefresh()
+  releaseRetainedFinalizationProjections()
+})

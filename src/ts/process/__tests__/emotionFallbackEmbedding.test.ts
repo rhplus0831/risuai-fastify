@@ -1,3 +1,5 @@
+import { resetClientSessionForTests } from '../../clientSession'
+import { setManagedWriterForTest, demoteAndRepromoteForTest } from '../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { addTextSpy, similaritySearchScoredSpy } = vi.hoisted(() => ({
@@ -36,6 +38,7 @@ function freshState(): { tempEmotion: CharEmotionEntry[]; charemotions: CharEmot
 
 describe('runEmotionEmbeddingFallback', () => {
   beforeEach(() => {
+    resetClientSessionForTests()
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(2000))
     CharEmotion.set({})
@@ -46,6 +49,26 @@ describe('runEmotionEmbeddingFallback', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+  })
+
+  it('does not project a held similarity result after writer loss and re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (value: [string, number][]) => void
+    similaritySearchScoredSpy.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = runEmotionEmbeddingFallback({
+      result: 'r',
+      currentChar: makeChar([['happy', 'h.png']]),
+      ...freshState(),
+    })
+    await vi.waitFor(() => expect(similaritySearchScoredSpy).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release([['emotion:happy', 1]])
+    await pending
+    expect(get(CharEmotion)).toEqual({})
   })
 
   it('feeds HypaProcesser an "emotion:"-prefixed list and searches with the result text', async () => {

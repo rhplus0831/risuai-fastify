@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../../server/activeWriterSession'
 import { getNodeServerProxyAuth } from '../../storage/fastifyStorage'
 
@@ -189,11 +191,13 @@ async function requestMemoryJson<T>(
   init: RequestInit = {},
   options: { activeWriter?: boolean; decode: (body: unknown) => T | null },
 ): Promise<ServerMemoryResult<T>> {
-  if (!canUseServerMemoryApi()) return { status: 'unavailable' }
+  if (!canUseServerMemoryApi() || (options.activeWriter && !canUseClientWriteAccess())) return { status: 'unavailable' }
+  const sourceGeneration = captureClientSessionGeneration()
 
   let response: Response
   try {
     const auth = await getNodeServerProxyAuth()
+    if (options.activeWriter && !isClientWriteOperationCurrent(sourceGeneration)) return { status: 'unavailable' }
     response = await fetch(path, {
       ...init,
       headers: {
@@ -221,7 +225,7 @@ async function requestMemoryJson<T>(
   }
 
   if (!response.ok) {
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, sourceGeneration)
     return {
       status: 'error',
       error: errorMessageFromBody(body, `HTTP ${response.status}`),

@@ -1,3 +1,5 @@
+import { resetClientSessionForTests } from '../../clientSession'
+import { setManagedWriterForTest, demoteAndRepromoteForTest } from '../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { requestChatDataSpy } = vi.hoisted(() => ({
@@ -138,6 +140,7 @@ const baseOpts = {
 
 describe('evaluateIgp', () => {
   beforeEach(() => {
+    resetClientSessionForTests()
     clearCachedServerCommandRevision()
     vi.unstubAllGlobals()
     requestChatDataSpy.mockReset()
@@ -146,6 +149,25 @@ describe('evaluateIgp', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals()
+  })
+
+  it('does not append an old IGP provider result after writer loss and re-promotion', async () => {
+    seed(makeChar())
+    setManagedWriterForTest()
+    const calls = stubCommandFetch()
+    let release!: (value: unknown) => void
+    requestChatDataSpy.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = evaluateIgp({ ...baseOpts, promptTemplate: '<|im_start|>system<|im_sep|>Rate it.<|im_end|>' })
+    await vi.waitFor(() => expect(requestChatDataSpy).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release({ type: 'success', result: 'old-result' })
+    await expect(pending).resolves.toBe(false)
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('hello')
+    expect(calls).toEqual([])
   })
 
   it('is a no-op when the prompt template is empty', async () => {

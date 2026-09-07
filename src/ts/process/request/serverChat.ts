@@ -1,3 +1,11 @@
+import {
+  canUseClientWriteAccess,
+  canUseClientReadServices,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  clientSessionStore,
+} from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 /**
  * Browser client adapter for `POST /api/v1/generate/chat`.
  *
@@ -339,9 +347,13 @@ function reconcileServerCommandRevision(info: ServerChatInfo): void {
  * treating dispatch as cancellation success.
  */
 export async function cancelServerChatGeneration(generationId: string): Promise<LegacyGenerationCancellationResult> {
+  if (!canUseClientWriteAccess()) return { status: 'failed', error: 'client_write_access_required' }
+  const sourceGeneration = captureClientSessionGeneration()
   if (!generationId) return { status: 'failed', error: 'Generation job ID is required.' }
   try {
     const auth = await getNodeServerProxyAuth()
+    if (!isClientWriteOperationCurrent(sourceGeneration))
+      return { status: 'failed', error: 'client_write_operation_stale' }
     const response = await fetch(`${CHAT_ENDPOINT}/${encodeURIComponent(generationId)}`, {
       method: 'DELETE',
       headers: {
@@ -369,7 +381,7 @@ export async function cancelServerChatGeneration(generationId: string): Promise<
       }
     }
     if (!response.ok) {
-      handleActiveWriterStaleResponse(response, body)
+      handleActiveWriterStaleResponse(response, body, sourceGeneration)
       return {
         status: 'failed',
         error: cancellationHttpError(body, response.status, response.statusText),
@@ -415,6 +427,7 @@ async function openChatResponse(
   reattachJobId?: string,
   operationStream?: ServerChatOperationStream,
   staleAttemptRedirects = 0,
+  sourceGeneration = captureClientSessionGeneration(),
 ): Promise<
   | { status: 'ok'; response: Response; requestUid?: string; operationStream?: ServerChatOperationStream }
   | {
@@ -427,7 +440,12 @@ async function openChatResponse(
     }
   | { status: 'aborted' }
 > {
+  const canOpen = () =>
+    isClientSessionGenerationCurrent(sourceGeneration) &&
+    (reattachJobId || operationStream ? canUseClientReadServices() : canUseClientWriteAccess())
+  if (!canOpen()) return { status: 'error', error: 'client_write_access_required', retryable: false }
   const auth = await getNodeServerProxyAuth()
+  if (!canOpen()) return { status: 'aborted' }
 
   let response: Response
   try {
@@ -440,7 +458,7 @@ async function openChatResponse(
             headers: {
               'risu-auth': auth,
               'x-risu-caller': operationStream ? 'generation-operation-stream' : 'chat-reattach',
-              ...activeWriterSessionHeader(),
+              ...(canUseClientWriteAccess() ? activeWriterSessionHeader() : {}),
             },
             signal: signal ?? undefined,
           })
@@ -490,8 +508,9 @@ async function openChatResponse(
     } catch {
       // ignore parse failure
     }
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, sourceGeneration)
     if (
+      isClientSessionGenerationCurrent(sourceGeneration) &&
       operationStream &&
       response.status === 409 &&
       code === 'stale_generation_attempt' &&
@@ -511,7 +530,7 @@ async function openChatResponse(
           },
           'stale_attempt_redirect',
         )
-        return openChatResponse(input, signal, undefined, authority.stream, staleAttemptRedirects + 1)
+        return openChatResponse(input, signal, undefined, authority.stream, staleAttemptRedirects + 1, sourceGeneration)
       }
     }
     debugServerChat('server-chat-response-error', { requestUid, status: response.status, error: reason })
@@ -536,6 +555,10 @@ async function openChatResponse(
     }
   }
 
+  if (!isClientSessionGenerationCurrent(sourceGeneration)) {
+    void response.body?.cancel().catch(() => {})
+    return { status: 'aborted' }
+  }
   if (!response.body) {
     const error = 'Server did not return a streaming response body.'
     debugServerChat('server-chat-response-error', { requestUid, status: response.status, error })
@@ -611,7 +634,8 @@ async function waitForDurableReconnect(delayMs: number, signal: AbortSignal | nu
  * terminal and surfaces its message; an abort resolves as `aborted`.
  */
 export async function requestServerChat(input: ServerChatInput, signal: AbortSignal | null): Promise<ServerChatResult> {
-  const opened = await openChatResponse(input, signal)
+  const sourceGeneration = captureClientSessionGeneration()
+  const opened = await openChatResponse(input, signal, undefined, undefined, 0, sourceGeneration)
   if (opened.status !== 'ok') {
     return opened.status === 'error'
       ? {
@@ -634,6 +658,7 @@ export async function requestServerChat(input: ServerChatInput, signal: AbortSig
   // payload carries the remaining fields with `type` stripped (see the
   // server's `writePromptChatEvent`).
   for await (const frame of iterateSseEvents(response.body, signal)) {
+    if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'aborted' }
     const event = parsePromptChatSseEvent(frame.event, parseData(frame.data))
     if (!event) continue
     switch (event.type) {
@@ -763,6 +788,9 @@ export async function requestServerChatGeneration(
   reattachJobId?: string,
   operationStream?: ServerChatOperationStream,
 ): Promise<ServerChatGenerationResult> {
+  const sourceGeneration = captureClientSessionGeneration()
+  if (!reattachJobId && !operationStream && !canUseClientWriteAccess())
+    return { status: 'error', error: 'client_write_access_required' }
   let authoritativeOperationStream = operationStream
   const agentPresetSession = beginAgentPresetProgress(input.chatId)
   const postGenerationSession = beginPostGenerationProgress({
@@ -808,6 +836,7 @@ export async function requestServerChatGeneration(
       )
     : () => undefined
   const cancelDurableOnAbort = (): void => {
+    if (!isClientWriteOperationCurrent(sourceGeneration)) return
     // Protocol-v1 Stop is addressed before a job ID exists and stages its own
     // durable control before detaching this viewer.
     if (authoritativeOperationStream?.operationId) {
@@ -822,10 +851,18 @@ export async function requestServerChatGeneration(
     void cancelServerChatGeneration(durableJobId)
   }
   const onOwnerAbort = (): void => {
+    if (!isClientWriteOperationCurrent(sourceGeneration)) {
+      retireObserver()
+      return
+    }
     cancelDurableOnAbort()
     if (!authoritativeOperationStream?.operationId) viewerAbortController.abort()
   }
+  const stopSessionWatch = clientSessionStore.subscribe(() => {
+    if (!isClientSessionGenerationCurrent(sourceGeneration)) retireObserver()
+  })
   const stopWatchingAbort = (): void => {
+    stopSessionWatch()
     signal?.removeEventListener('abort', onOwnerAbort)
     unregisterGenerationOperationViewer()
     unregisterGenerationJobViewer()
@@ -842,6 +879,8 @@ export async function requestServerChatGeneration(
     viewerAbortController.signal,
     reattachJobId,
     authoritativeOperationStream,
+    0,
+    sourceGeneration,
   )
   if (opened.status !== 'ok') {
     stopWatchingAbort()
@@ -1070,6 +1109,8 @@ export async function requestServerChatGeneration(
             viewerAbortController.signal,
             authoritativeOperationStream ? undefined : durableJobId,
             authoritativeOperationStream,
+            0,
+            sourceGeneration,
           )
           if (next.status === 'ok') {
             authoritativeOperationStream = next.operationStream ?? authoritativeOperationStream
@@ -1106,6 +1147,10 @@ export async function requestServerChatGeneration(
           let transportError = 'stream ended without a done event'
           try {
             for await (const frame of iterateSseEvents(activeOpened.response.body!, viewerAbortController.signal)) {
+              if (!isClientSessionGenerationCurrent(sourceGeneration)) {
+                settleAborted()
+                return
+              }
               const event = parsePromptChatSseEvent(frame.event, parseData(frame.data))
               if (!event) continue
               switch (event.type) {
@@ -1300,6 +1345,10 @@ export async function requestServerChatGeneration(
                         donePayload.terminalSnapshot,
                         viewerAbortController.signal,
                       )
+                      if (!isClientSessionGenerationCurrent(sourceGeneration)) {
+                        settleAborted()
+                        return
+                      }
                       donePayload = { ...snapshotPayload, ...donePayload }
                     } catch (error) {
                       settleTransportError(
@@ -1387,7 +1436,7 @@ export async function requestServerChatGeneration(
           }
 
           if (consumerDetached) return
-          if (signal?.aborted || operationStopDetached) {
+          if (observerSuperseded || signal?.aborted || operationStopDetached) {
             settleAborted()
             return
           }

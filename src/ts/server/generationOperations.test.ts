@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import type { GenerationOperationProjection } from './bootstrap'
@@ -92,6 +98,7 @@ import {
   reconcileGenerationOperationErrorBody,
   reconcileGenerationOperationTranscriptHydration,
   resetGenerationOperationClientForTests,
+  retryGenerationOperation,
   stageAcceptedSendGenerationOperation,
   stageTargetedGenerationOperation,
   stopGenerationOperation,
@@ -167,6 +174,7 @@ function responseBody(state: GenerationOperationProjection['state'] = 'owned_by_
 
 beforeEach(() => {
   vi.clearAllMocks()
+  resetClientSessionForTests()
   resetStartupReadinessForTests()
   for (const milestone of [
     'entry',
@@ -851,5 +859,103 @@ describe('generation operation client', () => {
     reconcileGenerationOperationTranscriptHydration('chat-a', messages)
 
     expect(operationMocks.acknowledgeHydratedRecoveries).toHaveBeenCalledWith('chat-a', messages)
+  })
+})
+
+function stageManagedSend() {
+  return stageAcceptedSendGenerationOperation({
+    target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
+    message: 'hello',
+    generation: {
+      syntheticSayNothing: false,
+      resetMessages: false,
+      inlayAssetRefs: [],
+      clientContext: {},
+      clientCapabilities: {},
+    },
+  })
+}
+
+describe('generation operation writer lifecycle', () => {
+  it('rejects Reader staging and cancellation before local staging or transport', async () => {
+    setManagedReaderForTest()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(stageManagedSend()).resolves.toMatchObject({ status: 'error' })
+    await expect(stopGenerationOperation(operationId)).resolves.toMatchObject({ status: 'failed' })
+    await expect(retryGenerationOperation(operationId, 2)).resolves.toMatchObject({ status: 'retained' })
+    expect(operationMocks.stage).not.toHaveBeenCalled()
+    expect(operationMocks.appendOptimistic).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('cannot submit a stage created before writer loss and re-promotion', async () => {
+    setManagedWriterForTest()
+    const staged = await stageManagedSend()
+    if ('status' in staged) throw new Error(staged.error)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    setManagedReaderForTest()
+    await expect(dispatchGenerationOperationPendingReplay(staged.handle, staged.intent)).resolves.toMatchObject({
+      disposition: 'retained',
+    })
+    setManagedWriterForTest()
+    await expect(submitStagedAcceptedSendOperation(staged)).resolves.toMatchObject({ status: 'retained' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+  })
+
+  it('settles an exact accepted response without projecting it into the newer writer session', async () => {
+    setManagedWriterForTest()
+    const staged = await stageManagedSend()
+    if ('status' in staged) throw new Error(staged.error)
+    let release!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = submitStagedAcceptedSendOperation(staged)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    operationMocks.setRevision.mockClear()
+    operationMocks.applyAcceptedOperation.mockClear()
+    demoteAndRepromoteForTest()
+    release(new Response(JSON.stringify(responseBody()), { status: 200 }))
+    await expect(pending).resolves.toMatchObject({ status: 'accepted' })
+    expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
+    expect(operationMocks.setRevision).not.toHaveBeenCalled()
+    expect(operationMocks.applyAcceptedOperation).not.toHaveBeenCalled()
+    expect(operationMocks.reconcileDirectEvent).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a held cancellation acknowledgement after writer loss and re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = stopGenerationOperation(operationId)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    const before = get(generationOperationCancellations)
+    demoteAndRepromoteForTest()
+    release(
+      new Response(
+        JSON.stringify({
+          operation: responseBody('cancel_requested').operation,
+          disposition: 'cancelling',
+          knownAttemptMatched: true,
+        }),
+        { status: 200 },
+      ),
+    )
+    await expect(pending).resolves.toMatchObject({ status: 'acknowledged', disposition: 'cancelling' })
+    expect(get(generationOperationCancellations)).toEqual(before)
+    expect(operationMocks.applyAcceptedOperation).not.toHaveBeenCalled()
   })
 })

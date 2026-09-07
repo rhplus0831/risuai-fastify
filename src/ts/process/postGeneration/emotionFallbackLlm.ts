@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 import type { Database, character } from '../../storage/database.svelte'
 import type { OpenAIChat } from '../index.svelte'
 import { tokenizeNum } from '../../tokenizer'
@@ -7,6 +9,7 @@ import { pushCharEmotionEntry, type CharEmotionEntry, type CharEmotionMap } from
 
 export interface RunEmotionLlmFallbackOptions {
   database: Database
+  isCurrent?: () => boolean
   result: string
   currentChar: character
   abortSignal: AbortSignal
@@ -28,6 +31,10 @@ function shuffleArray(array: string[]): string[] {
 }
 
 export async function runEmotionLlmFallback(opts: RunEmotionLlmFallbackOptions): Promise<void> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = opts.isCurrent ?? (() => isClientWriteOperationCurrent(sourceGeneration))
+  if (!isCurrent()) return
+
   const currentEmotion = opts.currentChar.emotionImages
   let emotionList = currentEmotion.map((a) => a[0])
 
@@ -35,6 +42,7 @@ export async function runEmotionLlmFallback(opts: RunEmotionLlmFallbackOptions):
 
   for (const emo of emotionList) {
     const tokens = await tokenizeNum(emo, opts.database)
+    if (!isCurrent() || opts.abortSignal.aborted) return
     for (const token of tokens) {
       emobias[token] = 10
     }
@@ -44,6 +52,7 @@ export async function runEmotionLlmFallback(opts: RunEmotionLlmFallbackOptions):
     const emo = opts.tempEmotion[i]
 
     const tokens = await tokenizeNum(emo[0], opts.database)
+    if (!isCurrent() || opts.abortSignal.aborted) return
     const modifier = 20 - (opts.tempEmotion.length - (i + 1)) * (20 / 4)
 
     for (const token of tokens) {
@@ -85,6 +94,7 @@ export async function runEmotionLlmFallback(opts: RunEmotionLlmFallbackOptions):
     opts.abortSignal,
   )
 
+  if (!isCurrent() || opts.abortSignal.aborted) return
   if (rq.type === 'fail') {
     if (opts.abortSignal.aborted) return
     opts.throwError(rq.result)

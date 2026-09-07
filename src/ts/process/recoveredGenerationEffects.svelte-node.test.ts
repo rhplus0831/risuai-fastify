@@ -96,7 +96,12 @@ vi.mock('./generationEffectLedger', async (importOriginal) => {
         return { executed: false, status: 'already_receipted' }
       }
       if (ledger.receipts.has(kind)) return { executed: false, status: 'already_receipted' }
-      const result = await effect({ idempotencyKey: `test:${kind}`, reclaimed: false })
+      const result = await effect({
+        idempotencyKey: `test:${kind}`,
+        reclaimed: false,
+        isCurrent: () => true,
+        signal: new AbortController().signal,
+      })
       ledger.receipts.add(kind)
       return { executed: true, status: result.status, value: result.value }
     }),
@@ -230,6 +235,7 @@ describe('late recovered generation effects', () => {
 
     await expect(reconcileRecoveredGenerationEffects(ref)).rejects.toThrow('Plugin runtime is not ready')
 
+    expect(ledger.calls).toEqual([])
     expect(ledger.receipts.has('plugin_output')).toBe(false)
     expect(state.order).toEqual([])
   })

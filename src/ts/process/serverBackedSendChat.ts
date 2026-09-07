@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { get } from 'svelte/store'
 import {
   type Database,
@@ -536,6 +538,9 @@ export async function assembleServerBackedSendChat(args: {
    */
   durable?: boolean
 }): Promise<ServerBackedAssemblyResult> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return { status: 'aborted' }
   const restorationGuard = captureServerBackedRestorationGuard(args.currentChat.id)
   // `resolveServerPromptAssembly` has already verified that a send ends in a
   // text user or assistant row. A user tail supplies the submitted text; an
@@ -573,6 +578,7 @@ export async function assembleServerBackedSendChat(args: {
   const wantsServerDispatch = !args.preview && !args.previewPrompt
   if (wantsServerDispatch) {
     const scripts = await waitForPendingCharacterScriptDefinitionSave(args.currentChar.chaId)
+    if (!isCurrent()) return { status: 'aborted' }
     if (scripts === 'queued' || scripts === 'failed') {
       return {
         status: 'failed',
@@ -585,6 +591,7 @@ export async function assembleServerBackedSendChat(args: {
   // uploaded before dispatch and sent as id->assetId aliases only; no inlay bytes
   // ride the chat request anymore.
   const inlayAssetRefs = await collectServerInlayAssetRefs(args.currentChat)
+  if (!isCurrent()) return { status: 'aborted' }
   if (inlayAssetRefs.length > 0) {
     input.inlayAssetRefs = inlayAssetRefs
   }
@@ -616,10 +623,12 @@ export async function assembleServerBackedSendChat(args: {
         clientCapabilities: { ...SERVER_CHAT_CLIENT_CAPABILITIES },
       },
     })
+    if (!isCurrent()) return { status: 'aborted' }
     if ('status' in staged) {
       return { status: 'failed', error: staged.error, currentChat: args.currentChat }
     }
     const submitted = await submitStagedTargetedGenerationOperation(staged)
+    if (!isCurrent()) return { status: 'aborted' }
     if (submitted.status !== 'accepted' || !submitted.stream) {
       return {
         status: 'failed',
@@ -661,12 +670,14 @@ export async function assembleServerBackedSendChat(args: {
       : await requestServerChat(input, args.abortSignal)
   }
 
+  if (!isCurrent()) return { status: 'aborted' }
   if (
     wantsServerDispatch &&
     served.status === 'error' &&
     served.code === HYPA_CONTEXT_TRUNCATION_CONFIRMATION_REQUIRED
   ) {
     const confirmed = await alertConfirm(language.hypaContextTruncationConfirm)
+    if (!isCurrent()) return { status: 'aborted' }
     if (!confirmed || args.abortSignal.aborted) return { status: 'aborted' }
 
     const acknowledgement = await acknowledgeHypaContextTruncation({
@@ -676,6 +687,7 @@ export async function assembleServerBackedSendChat(args: {
       chatId: args.currentChat.id ?? '',
       currentChat: args.currentChat,
     })
+    if (!isCurrent()) return { status: 'aborted' }
     if (acknowledgement.status === 'failed') {
       return {
         status: 'failed',
@@ -687,6 +699,7 @@ export async function assembleServerBackedSendChat(args: {
     served = await requestServerChatGeneration(input, args.abortSignal)
   }
 
+  if (!isCurrent()) return { status: 'aborted' }
   if (served.status === 'aborted') {
     if (regenerateDisplayProjection) finishGenerationDisplayProjection(regenerateDisplayProjection)
     return { status: 'aborted' }
@@ -805,6 +818,7 @@ export async function reattachServerBackedSendChat(args: {
   continue?: boolean
   regenerateMessageId?: string
 }): Promise<ServerBackedAssemblyResult> {
+  const sourceGeneration = captureClientSessionGeneration()
   const restorationGuard = captureServerBackedRestorationGuard(args.currentChat.id)
   args.setProcessStage(1)
   args.stageTimings.stage1Start = Date.now()
@@ -839,6 +853,7 @@ export async function reattachServerBackedSendChat(args: {
     args.operationStream,
   )
 
+  if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'aborted' }
   if (served.status === 'aborted') {
     if (regenerateDisplayProjection) finishGenerationDisplayProjection(regenerateDisplayProjection)
     return { status: 'aborted' }
@@ -927,6 +942,15 @@ export async function applyServerBackedTerminal(args: {
   restorationGuard?: ServerBackedRestorationGuard
   streamProjection?: StreamMessageProjection
 }): Promise<ServerBackedTerminalResult> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  const superseded = (): ServerBackedTerminalResult => ({
+    status: 'cancelled',
+    currentChat: args.currentChat,
+    resendChat: false,
+    reattachOutcome: 'observer_superseded',
+  })
+  if (!isCurrent()) return superseded()
   const displayProjection = args.streamProjection?.displayProjection
   const observeDisplayProjectionAuthority = async (messageId?: string): Promise<boolean> => {
     if (!displayProjection) return false
@@ -937,6 +961,7 @@ export async function applyServerBackedTerminal(args: {
     })
     if (!displayProjection.chatId || !generationId) return false
     await hydrateChatMessages(displayProjection.chatId, { force: true, strict: true }).catch(() => {})
+    if (!isCurrent()) return false
     const resolution = resolveServerBackedLiveChat({
       selectedChar: args.selectedChar,
       selectedChat: args.selectedChat,
@@ -969,6 +994,7 @@ export async function applyServerBackedTerminal(args: {
     const displayAuthorityObserved = retainedPartial
       ? await observeDisplayProjectionAuthority(args.terminal.done?.postGeneration?.messageId)
       : false
+    if (!isCurrent()) return superseded()
     if (retainedPartial) {
       applyInterruptedTerminalSnapshot({
         selectedChar: args.selectedChar,
@@ -1038,6 +1064,7 @@ export async function applyServerBackedTerminal(args: {
     const displayAuthorityObserved = retainedPartial
       ? await observeDisplayProjectionAuthority(postGeneration?.messageId)
       : false
+    if (!isCurrent()) return superseded()
     const target = targetFromPayloadOrContext(postGeneration?.messagePatch, contextTarget)
     const generationId = args.generationInfo.generationId ?? ''
     applyInterruptedTerminalSnapshot({
@@ -1099,6 +1126,7 @@ export async function applyServerBackedTerminal(args: {
   const generationId = args.generationInfo.generationId ?? ''
   const terminalTarget = targetFromPayloadOrContext(postGen?.messagePatch, contextTarget)
   const displayAuthorityObserved = await observeDisplayProjectionAuthority(postGen?.messageId ?? generationId)
+  if (!isCurrent()) return superseded()
   const terminalProjectionIsFresh = (() => {
     const guard = args.restorationGuard
     if (
@@ -1199,9 +1227,11 @@ export async function applyServerBackedTerminal(args: {
   // A fresh terminal patch is already durable on the server. Mirror it before
   // waiting on best-effort client TTS; stale terminal projections are left to
   // the newer local/server authority selected above.
-  await runLedgeredGenerationEffect(effectLedger, 'tts', 'live_terminal', async () => {
+  await runLedgeredGenerationEffect(effectLedger, 'tts', 'live_terminal', async (effectContext) => {
+    if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
     if (pendingTtsTexts.length === 0) return skippedGenerationEffect('not_requested')
     for (let index = 0; index < pendingTtsTexts.length; index++) {
+      if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
       const text = pendingTtsTexts[index]
       // The server payload is post-editoutput; inlay remains browser-owned. Reuse
       // the primary display pass when possible, then process each alternate in
@@ -1215,7 +1245,9 @@ export async function applyServerBackedTerminal(args: {
     return completedGenerationEffect(undefined)
   })
 
+  if (!isCurrent()) return superseded()
   const settleInlayProjection = (finalization: InlayFinalizationState, finalData: string, persisted: boolean): void => {
+    if (!isCurrent()) return
     if (captureChatMessageMutationIntentEpoch(terminalTarget.chatId) !== finalization.mutationIntentEpoch) return
     const resolution = resolveServerBackedLiveChat({
       selectedChar: args.selectedChar,
@@ -1251,6 +1283,7 @@ export async function applyServerBackedTerminal(args: {
       settleInlayProjection(pendingInlay, pendingInlay.expectedServerData, false)
       promiseFailed = true
     }
+    if (!isCurrent()) return superseded()
     let canFinalize = !promiseFailed
     if (
       captureChatMessageMutationIntentEpoch(terminalTarget.chatId) !== pendingInlay.mutationIntentEpoch ||
@@ -1282,6 +1315,7 @@ export async function applyServerBackedTerminal(args: {
     }
   }
 
+  if (!isCurrent()) return superseded()
   const providerAlternates = args.terminal.done?.alternates
   if (terminalProjectionIsFresh && Array.isArray(providerAlternates) && providerAlternates.length > 0) {
     const resolution = resolveServerBackedLiveChat({
@@ -1331,20 +1365,26 @@ export async function applyServerBackedTerminal(args: {
       : undefined)
 
   if (chatOutputListeners.size > 0) await yieldBeforeCompletionEffect()
+  if (!isCurrent()) return superseded()
   await runLedgeredGenerationEffect(effectLedger, 'plugin_output', 'live_terminal', async (effectContext) => {
+    if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
     if (!finalResolution || chatOutputListeners.size === 0) return skippedGenerationEffect('not_configured')
     const characters = characterRowsForGeneration()
-    await runChatOutputListeners({
-      char: finalResolution.character,
-      chat: finalChat,
-      characterIndex: characters.indexOf(finalResolution.character),
-      chatIndex: finalResolution.character.chats.indexOf(finalChat),
-      messageIndex: finalAssistant ? finalChat.message.indexOf(finalAssistant) : -1,
-      effectIdempotencyKey: effectContext.idempotencyKey,
-    })
+    await runChatOutputListeners(
+      {
+        char: finalResolution.character,
+        chat: finalChat,
+        characterIndex: characters.indexOf(finalResolution.character),
+        chatIndex: finalResolution.character.chats.indexOf(finalChat),
+        messageIndex: finalAssistant ? finalChat.message.indexOf(finalAssistant) : -1,
+        effectIdempotencyKey: effectContext.idempotencyKey,
+      },
+      effectContext,
+    )
     return completedGenerationEffect(undefined)
   })
 
+  if (!isCurrent()) return superseded()
   if (postGen?.agentPresetError) {
     if (displayProjection && displayAuthorityObserved) finishGenerationDisplayProjection(displayProjection)
     return {

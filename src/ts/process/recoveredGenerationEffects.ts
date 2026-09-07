@@ -1,3 +1,8 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import type { Message, character } from '../storage/database.svelte'
 import { chatOutputListeners, isChatOutputRuntimeReady, runChatOutputListeners } from '../plugins/chatOutputListeners'
 import { getChatMessageOwnerState, hydrateChatMessages } from '../server/chatMessageHydration.svelte'
@@ -25,6 +30,12 @@ import {
   settingsResourceState,
 } from '../server/resourceState.svelte'
 
+function recoveryIsCurrent(generation: number): boolean {
+  return canUseClientWriteAccess() && isClientSessionGenerationCurrent(generation)
+}
+
+const unavailableEffects = () => ({ durableEffectsReconciled: false, allEffectsReconciled: false })
+
 let bootstrapPendingEffects: PendingGenerationEffect[] = []
 
 interface RecoveredGenerationResolution {
@@ -46,24 +57,34 @@ export function setPendingRecoveredGenerationEffects(effects: readonly PendingGe
 }
 
 export async function reconcilePendingRecoveredGenerationEffects(): Promise<void> {
+  const sourceGeneration = captureClientSessionGeneration()
+  if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_access_required')
+  const pendingEffects = bootstrapPendingEffects
   const refs = new Map<string, ServerGenerationEffectLedgerRef>()
-  for (const effect of bootstrapPendingEffects) {
+  for (const effect of pendingEffects) {
     const ref = generationEffectRefFromPending(effect)
     refs.set(`${ref.databaseLineage}:${ref.generationId}`, ref)
   }
   for (const ref of refs.values()) {
+    if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
     await hydrateChatMessages(ref.chatId, { force: true, strict: true })
+    if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
     const result = await reconcileRecoveredGenerationEffects(ref)
     if (!result.allEffectsReconciled) {
       throw new Error(`Generation effects remain unavailable for ${ref.generationId}`)
     }
   }
-  bootstrapPendingEffects = []
+  if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
+  if (bootstrapPendingEffects === pendingEffects) bootstrapPendingEffects = []
 }
 
 /** Permanently skip the unfinished client effects so later generations are no longer gated by them. */
 export async function discardPendingRecoveredGenerationEffects(): Promise<void> {
-  for (const effect of bootstrapPendingEffects) {
+  const sourceGeneration = captureClientSessionGeneration()
+  if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_access_required')
+  const pendingEffects = bootstrapPendingEffects
+  for (const effect of pendingEffects) {
+    if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
     if (effect.kind === 'generated_translation') {
       throw new Error(`Server-owned generation effect cannot be discarded by the client: ${effect.kind}`)
     }
@@ -75,7 +96,8 @@ export async function discardPendingRecoveredGenerationEffects(): Promise<void> 
       throw new Error(`Generation effect could not be discarded for ${effect.generationId}: ${effect.kind}`)
     }
   }
-  bootstrapPendingEffects = []
+  if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
+  if (bootstrapPendingEffects === pendingEffects) bootstrapPendingEffects = []
 }
 
 export async function reconcileAcceptedSendGenerationEffects(
@@ -93,6 +115,9 @@ export async function reconcileAcceptedSendGenerationEffects(
 export async function reconcileRecoveredGenerationEffects(
   ref: ServerGenerationEffectLedgerRef,
 ): Promise<RecoveredGenerationEffectResult> {
+  const sourceGeneration = captureClientSessionGeneration()
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
+  if (!isChatOutputRuntimeReady()) throw new Error('Plugin runtime is not ready for recovered output effects')
   // Late delivery never invokes these callbacks: the server atomically turns
   // each pending ephemeral row into a permanent late_recovery skip.
   const unexpectedEphemeral = () => completedGenerationEffect(undefined)
@@ -102,6 +127,7 @@ export async function reconcileRecoveredGenerationEffects(
     runLedgeredGenerationEffect(ref, 'completion_sound', 'late_recovery', unexpectedEphemeral),
   ])
 
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
   const initial = resolveGeneration(ref)
   if (!initial) return { durableEffectsReconciled: false, allEffectsReconciled: false }
   const completionText = initial.message.data
@@ -112,25 +138,30 @@ export async function reconcileRecoveredGenerationEffects(
     const resolution = resolveGeneration(ref)
     if (!isChatOutputRuntimeReady()) throw new Error('Plugin runtime is not ready for recovered output effects')
     if (!resolution || chatOutputListeners.size === 0) return skippedGenerationEffect('not_configured')
-    await runChatOutputListeners({
-      char: resolution.character,
-      chat: resolution.chat,
-      characterIndex: resolution.characterIndex,
-      chatIndex: resolution.chatIndex,
-      messageIndex: resolution.messageIndex,
-      effectIdempotencyKey: effectContext.idempotencyKey,
-    })
+    await runChatOutputListeners(
+      {
+        char: resolution.character,
+        chat: resolution.chat,
+        characterIndex: resolution.characterIndex,
+        chatIndex: resolution.chatIndex,
+        messageIndex: resolution.messageIndex,
+        effectIdempotencyKey: effectContext.idempotencyKey,
+      },
+      effectContext,
+    )
     return completedGenerationEffect(undefined)
   })
 
-  const igp = await runLedgeredGenerationEffect(ref, 'igp', 'late_recovery', async () => {
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
+  const igp = await runLedgeredGenerationEffect(ref, 'igp', 'late_recovery', async (effectContext) => {
     const resolution = resolveGeneration(ref)
     const promptTemplate =
       settingsResourceState.status === 'ready' ? String(settingsResourceState.value.igpPrompt ?? '') : ''
     if (!resolution || !promptTemplate.trim()) return skippedGenerationEffect('not_configured')
     const updated = await evaluateIgp({
       promptTemplate,
-      abortSignal: new AbortController().signal,
+      isCurrent: effectContext.isCurrent,
+      abortSignal: effectContext.signal,
       waitForPersistence: true,
       target: {
         characterId: resolution.character.chaId,
@@ -145,57 +176,67 @@ export async function reconcileRecoveredGenerationEffects(
     return updated ? completedGenerationEffect(undefined) : skippedGenerationEffect('target_changed')
   })
 
-  const emotion = await runLedgeredGenerationEffect(ref, 'emotion_image_state', 'late_recovery', async () => {
-    const resolution = resolveGeneration(ref)
-    if (!resolution || resolution.character.inlayViewScreen) {
-      return skippedGenerationEffect('current_state_not_applicable')
-    }
-    if (resolution.character.viewScreen === 'emotion') {
-      const { tempEmotion, charemotions } = loadAndTrimCharEmotion(resolution.character.chaId)
-      if (
-        settingsResourceState.status !== 'error' &&
-        settingsResourceState.groupStatuses.media === 'ready' &&
-        settingsResourceState.value.emotionProcesser === 'embedding'
-      ) {
-        await runEmotionEmbeddingFallback({
-          result: completionText,
-          currentChar: resolution.character,
-          tempEmotion,
-          charemotions,
-        })
-      } else {
-        const generationDatabase = resolveRecoveredGenerationDatabase(resolution)
-        if (!generationDatabase) return skippedGenerationEffect('current_state_not_applicable')
-        await runEmotionLlmFallback({
-          database: generationDatabase,
-          result: completionText,
-          currentChar: resolution.character,
-          abortSignal: new AbortController().signal,
-          throwError: (error) => console.error(error),
-          emotionPrompt2:
-            settingsResourceState.status !== 'error' && settingsResourceState.groupStatuses.advanced === 'ready'
-              ? settingsResourceState.value.emotionPrompt2
-              : undefined,
-          tempEmotion,
-          charemotions,
-        })
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
+  const emotion = await runLedgeredGenerationEffect(
+    ref,
+    'emotion_image_state',
+    'late_recovery',
+    async (effectContext) => {
+      const resolution = resolveGeneration(ref)
+      if (!resolution || resolution.character.inlayViewScreen) {
+        return skippedGenerationEffect('current_state_not_applicable')
       }
-      return completedGenerationEffect(undefined)
-    }
-    if (resolution.character.viewScreen === 'imggen') {
-      await runImggenStableDiff({
-        currentChar: resolution.character,
-        target: stablePostGenerationMessageTarget(
-          resolution.character.chaId,
-          resolution.chat.id,
-          resolution.message.chatId,
-        ),
-      })
-      return completedGenerationEffect(undefined)
-    }
-    return skippedGenerationEffect('current_state_not_applicable')
-  })
+      if (resolution.character.viewScreen === 'emotion') {
+        const { tempEmotion, charemotions } = loadAndTrimCharEmotion(resolution.character.chaId)
+        if (
+          settingsResourceState.status !== 'error' &&
+          settingsResourceState.groupStatuses.media === 'ready' &&
+          settingsResourceState.value.emotionProcesser === 'embedding'
+        ) {
+          await runEmotionEmbeddingFallback({
+            isCurrent: effectContext.isCurrent,
+            result: completionText,
+            currentChar: resolution.character,
+            tempEmotion,
+            charemotions,
+          })
+        } else {
+          const generationDatabase = resolveRecoveredGenerationDatabase(resolution)
+          if (!generationDatabase) return skippedGenerationEffect('current_state_not_applicable')
+          await runEmotionLlmFallback({
+            database: generationDatabase,
+            isCurrent: effectContext.isCurrent,
+            result: completionText,
+            currentChar: resolution.character,
+            abortSignal: effectContext.signal,
+            throwError: (error) => console.error(error),
+            emotionPrompt2:
+              settingsResourceState.status !== 'error' && settingsResourceState.groupStatuses.advanced === 'ready'
+                ? settingsResourceState.value.emotionPrompt2
+                : undefined,
+            tempEmotion,
+            charemotions,
+          })
+        }
+        return completedGenerationEffect(undefined)
+      }
+      if (resolution.character.viewScreen === 'imggen') {
+        await runImggenStableDiff({
+          currentChar: resolution.character,
+          abortSignal: effectContext.signal,
+          target: stablePostGenerationMessageTarget(
+            resolution.character.chaId,
+            resolution.chat.id,
+            resolution.message.chatId,
+          ),
+        })
+        return completedGenerationEffect(undefined)
+      }
+      return skippedGenerationEffect('current_state_not_applicable')
+    },
+  )
 
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
   return {
     durableEffectsReconciled: terminalReceipt(plugin.status) && terminalReceipt(igp.status),
     allEffectsReconciled: [...ephemeral, plugin, igp, emotion].every((effect) => terminalReceipt(effect.status)),

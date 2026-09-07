@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { InputHook } from '../storage/database.svelte'
 
@@ -36,12 +42,61 @@ function requestMessages(): OpenAIChat[] {
 
 describe('runInputHook', () => {
   beforeEach(() => {
+    resetClientSessionForTests()
     testState.encodeWithTokenizer.mockReset()
     testState.encodeWithTokenizer.mockImplementation(async (text: string) => new Array(text.length).fill(0))
     testState.parseChatML.mockReset()
     testState.parseChatML.mockReturnValue(null)
     testState.requestChatData.mockReset()
     testState.requestChatData.mockResolvedValue({ type: 'success', result: '  hook result  ' })
+  })
+
+  it('rejects Reader hooks before parsing, tokenization, or provider calls', async () => {
+    setManagedReaderForTest()
+    await expect(runInputHook(hook('hello'), { content: 'text', draft: '' })).rejects.toThrow(
+      'client_write_access_required',
+    )
+    expect(testState.parseChatML).not.toHaveBeenCalled()
+    expect(testState.encodeWithTokenizer).not.toHaveBeenCalled()
+    expect(testState.requestChatData).not.toHaveBeenCalled()
+  })
+
+  it('does not submit a provider request after delayed history tokenization crosses re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (value: number[]) => void
+    testState.encodeWithTokenizer.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = runInputHook(hook('{{slot::history::1}}'), { content: 'text', draft: '' }, null, {
+      messages: [{ role: 'user', data: 'history' }],
+      greeting: { source: '' },
+      messageIndex: 1,
+      maxTokens: 1000,
+    })
+    await vi.waitFor(() => expect(testState.encodeWithTokenizer).toHaveBeenCalled())
+    demoteAndRepromoteForTest()
+    release([1])
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
+    expect(testState.requestChatData).not.toHaveBeenCalled()
+  })
+
+  it('aborts a pending hook request and rejects its old result after re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (value: unknown) => void
+    testState.requestChatData.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = runInputHook(hook('rewrite'), { content: 'text', draft: '' })
+    const requestSignal = testState.requestChatData.mock.calls[0][2] as AbortSignal
+    expect(requestSignal.aborted).toBe(false)
+    demoteAndRepromoteForTest()
+    expect(requestSignal.aborted).toBe(true)
+    release({ type: 'success', result: 'stale text' })
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
   })
 
   it('substitutes both literal slots and uses the single-user fallback', async () => {

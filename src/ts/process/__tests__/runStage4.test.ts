@@ -1,3 +1,6 @@
+import { recordStartupMilestone, settleStartupPluginRuntimeReadiness } from '../../startupReadiness'
+import { resetClientSessionForTests } from '../../clientSession'
+import { setManagedWriterForTest, demoteAndRepromoteForTest } from '../../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock all seven stage-4 delegates. The fakes record their calls and let
@@ -184,6 +187,7 @@ function baseArgs(over: Partial<Parameters<typeof runStage4>[0]> = {}) {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   fakes.notification.calls = []
   fakes.notification.pending = undefined
   fakes.applyEmotion.next = false
@@ -527,4 +531,25 @@ describe('runStage4 - stable finalization target', () => {
     expect(getDatabase().characters[0].chaId).toBe('cha-2')
     expect(getDatabase().characters[0].chats[0].message[0].generationInfo?.model).toBe('other-before')
   })
+})
+
+it('does not resume emotion work or finalization after a delayed notification loses writer access', async () => {
+  seedDb({ notification: true })
+  setManagedWriterForTest()
+  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+    recordStartupMilestone(milestone)
+  settleStartupPluginRuntimeReadiness(true)
+  let release!: () => void
+  fakes.notification.pending = new Promise((resolve) => {
+    release = resolve
+  })
+  const { args } = baseArgs({ currentChar: makeChar({ viewScreen: 'emotion' }) })
+  const pending = runStage4(args)
+  await vi.waitFor(() => expect(fakes.notification.calls).toHaveLength(1))
+  demoteAndRepromoteForTest()
+  release()
+  await pending
+  expect(fakes.embedding.calls).toBe(0)
+  expect(fakes.llm.calls).toBe(0)
+  expect(fakes.finalize.calls).toEqual([])
 })

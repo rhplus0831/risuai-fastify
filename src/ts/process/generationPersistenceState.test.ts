@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import type { Message } from '../storage/database.svelte'
@@ -68,6 +74,7 @@ function currentMessages(): Message[] {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   registerGenerationOperationsRuntime({
     applyGenerationOperationBootstrap: persistenceStateMocks.applyGenerationOperationBootstrap,
   } as never)
@@ -439,5 +446,39 @@ describe('generation finalization persistence projection', () => {
     expect(get(generationFinalizationPersistences)).toEqual([
       expect.objectContaining({ generationId: 'generation-b', state: 'terminal' }),
     ])
+  })
+})
+
+describe('finalization refresh writer lifecycle', () => {
+  const entry = { chatId: 'chat-a', messageId: 'generation-a', generationId: 'generation-a', state: 'queued' as const }
+  it('does not schedule recovered effects from Reader finalization projections', async () => {
+    setManagedReaderForTest()
+    setGenerationFinalizationPersistences([entry])
+    startGenerationFinalizationPersistenceRefresh()
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(persistenceStateMocks.fetchBootstrap).not.toHaveBeenCalled()
+    expect(persistenceStateMocks.reconcilePendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+    expect(get(generationFinalizationPersistences)).toEqual([entry])
+  })
+
+  it('does not apply a held bootstrap or start recovered effects after loss and re-promotion', async () => {
+    setManagedWriterForTest()
+    setGenerationFinalizationPersistences([entry])
+    let release!: (value: unknown) => void
+    persistenceStateMocks.fetchBootstrap.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    startGenerationFinalizationPersistenceRefresh()
+    await vi.advanceTimersByTimeAsync(5000)
+    expect(persistenceStateMocks.fetchBootstrap).toHaveBeenCalledOnce()
+    demoteAndRepromoteForTest()
+    release({ status: 'ok', bootstrap: { generationFinalizations: [], pendingGenerationEffects: [] } })
+    await vi.advanceTimersByTimeAsync(15000)
+    expect(get(generationFinalizationPersistences)).toEqual([entry])
+    expect(persistenceStateMocks.applyGenerationOperationBootstrap).not.toHaveBeenCalled()
+    expect(persistenceStateMocks.reconcilePendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+    expect(persistenceStateMocks.fetchBootstrap).toHaveBeenCalledOnce()
   })
 })

@@ -1,8 +1,11 @@
+import { captureClientSessionGeneration } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 import type { character } from '../../storage/database.svelte'
 import { HypaProcesser } from '../memory/hypamemory'
 import { pushCharEmotionEntry, type CharEmotionEntry, type CharEmotionMap } from './charEmotionStore'
 
 export interface RunEmotionEmbeddingFallbackOptions {
+  isCurrent?: () => boolean
   result: string
   currentChar: character
   tempEmotion: CharEmotionEntry[]
@@ -10,12 +13,19 @@ export interface RunEmotionEmbeddingFallbackOptions {
 }
 
 export async function runEmotionEmbeddingFallback(opts: RunEmotionEmbeddingFallbackOptions): Promise<void> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = opts.isCurrent ?? (() => isClientWriteOperationCurrent(sourceGeneration))
+  if (!isCurrent()) return
+
   const currentEmotion = opts.currentChar.emotionImages
   const emotionList = currentEmotion.map((a) => a[0])
 
   const hypaProcesser = new HypaProcesser()
   await hypaProcesser.addText(emotionList.map((v) => 'emotion:' + v))
-  const searched = (await hypaProcesser.similaritySearchScored(opts.result)).map((v) => {
+  if (!isCurrent()) return
+  const similarities = await hypaProcesser.similaritySearchScored(opts.result)
+  if (!isCurrent()) return
+  const searched = similarities.map((v) => {
     v[0] = v[0].replace('emotion:', '')
     return v
   })

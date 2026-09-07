@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../../../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
@@ -156,6 +162,7 @@ describe('server chat SSE taxonomy', () => {
 })
 
 beforeEach(() => {
+  resetClientSessionForTests()
   resetServerChatState()
   clearActiveGenerationJobProjection()
   resetAutomaticTranslationEligibilityForTests()
@@ -2683,5 +2690,52 @@ describe('requestServerChatGeneration reattach mode', () => {
       reattachOutcome: 'retryable_transport_failure',
     })
     expect(calls).toEqual([{ url: '/api/v1/generate/chat/job-offline/stream', method: 'GET' }])
+  })
+})
+
+describe('generation transport writer lifecycle', () => {
+  it('denies Reader submission and cancellation while allowing a GET viewer to detach without cancelling its job', async () => {
+    setManagedReaderForTest()
+    const controlled = controlledGenerationStream()
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => controlled.response)
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(requestServerChatGeneration(baseInput, null)).resolves.toMatchObject({ status: 'error' })
+    await expect(cancelServerChatGeneration('reader-job')).resolves.toMatchObject({ status: 'failed' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    const controller = new AbortController()
+    const pending = requestServerChatGeneration(baseInput, controller.signal, 'reader-job')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    sendGenerationReadyFrames(controlled, 'reader-job')
+    const opened = await pending
+    expect(opened.status).toBe('ok')
+    if (opened.status !== 'ok') throw new Error('Reader GET should remain available')
+    controller.abort()
+    await expect(opened.terminal).resolves.toMatchObject({ reattachOutcome: 'observer_superseded' })
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/generate/chat/reader-job/stream',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    const init = fetchMock.mock.calls[0]?.[1] as RequestInit | undefined
+    expect(new Headers(init?.headers).has('risu-writer-session')).toBe(false)
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(generationOperationMocks.stopOperation).not.toHaveBeenCalled()
+  })
+
+  it('detaches an old writer viewer on loss and never cancels the provider job after re-promotion', async () => {
+    setManagedWriterForTest()
+    const controlled = controlledGenerationStream()
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => controlled.response)
+    vi.stubGlobal('fetch', fetchMock)
+    const controller = new AbortController()
+    const pending = requestServerChatGeneration(baseInput, controller.signal, 'writer-job')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    sendGenerationReadyFrames(controlled, 'writer-job')
+    const opened = await pending
+    if (opened.status !== 'ok') throw new Error('Expected active writer viewer')
+    demoteAndRepromoteForTest()
+    controller.abort()
+    await expect(opened.terminal).resolves.toMatchObject({ reattachOutcome: 'observer_superseded' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(generationOperationMocks.stopOperation).not.toHaveBeenCalled()
   })
 })

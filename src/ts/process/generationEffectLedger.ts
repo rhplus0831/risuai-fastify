@@ -1,3 +1,11 @@
+import { pluginsReady } from '../startupReadiness'
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  isClientSessionManaged,
+  clientSessionStore,
+} from '../clientSession'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import type { Message } from '../storage/database.svelte'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../server/activeWriterSession'
@@ -29,6 +37,9 @@ export interface GenerationEffectExecutionContext {
   /** Stable across an expired-lease reclaim; callbacks can use it as their idempotency key. */
   idempotencyKey: string
   reclaimed: boolean
+  /** Old claims cannot resume callbacks after writer loss or a later promotion. */
+  isCurrent(): boolean
+  signal: AbortSignal
 }
 
 interface ClaimedEffectResponse {
@@ -139,6 +150,23 @@ export function generationEffectRefFromMessage(message: Message): ServerGenerati
   return { version: 1, databaseLineage, keyType, keyId, generationId, characterId, chatId, messageId }
 }
 
+function effectAccessIsCurrent(generation: number): boolean {
+  return (
+    isClientSessionGenerationCurrent(generation) &&
+    canUseClientWriteAccess() &&
+    (!isClientSessionManaged() || pluginsReady())
+  )
+}
+
+function executionContext(generation: number, idempotencyKey: string, reclaimed: boolean) {
+  const controller = new AbortController()
+  const isCurrent = () => effectAccessIsCurrent(generation)
+  const unsubscribe = clientSessionStore.subscribe(() => {
+    if (!isCurrent()) controller.abort()
+  })
+  return { context: { idempotencyKey, reclaimed, isCurrent, signal: controller.signal }, unsubscribe }
+}
+
 /**
  * Obtain the server's one-shot dispatch authority before running an effect,
  * then persist its terminal receipt. With no additive ledger reference (older
@@ -152,28 +180,38 @@ export function runLedgeredGenerationEffect<T>(
     context: GenerationEffectExecutionContext,
   ) => Promise<GenerationEffectExecution<T>> | GenerationEffectExecution<T>,
 ): Promise<RunGenerationEffectResult<T>> {
+  const sourceGeneration = captureClientSessionGeneration()
+  if (!effectAccessIsCurrent(sourceGeneration)) return Promise.resolve({ executed: false, status: 'unavailable' })
   const measuredEffect = (context: GenerationEffectExecutionContext) =>
     runMeasuredGenerationEffect(kind, delivery, context, effect)
   if (!ref) {
     if (delivery === 'late_recovery') return Promise.resolve({ executed: false, status: 'unavailable' })
-    return Promise.resolve()
-      .then(() => measuredEffect({ idempotencyKey: `legacy-live-generation-effect:${kind}`, reclaimed: false }))
-      .then((result) => ({
-        executed: true,
-        value: result.value,
-        status: result.status,
-      }))
+    return Promise.resolve().then(async () => {
+      if (!effectAccessIsCurrent(sourceGeneration)) return { executed: false, status: 'unavailable' as const }
+      const lease = executionContext(sourceGeneration, `legacy-live-generation-effect:${kind}`, false)
+      try {
+        const result = await measuredEffect(lease.context)
+        return {
+          executed: true,
+          value: result.value,
+          status: lease.context.isCurrent() ? result.status : ('unavailable' as const),
+        }
+      } finally {
+        lease.unsubscribe()
+      }
+    })
   }
 
-  const key = `${ref.databaseLineage}:${ref.generationId}:${kind}`
+  const key = `${sourceGeneration}:${ref.databaseLineage}:${ref.generationId}:${kind}`
   const existing = inFlightEffects.get(key)
   if (existing) return existing as Promise<RunGenerationEffectResult<T>>
 
-  const running = runClaimedGenerationEffect(ref, kind, delivery, measuredEffect)
+  const running = runClaimedGenerationEffect(ref, kind, delivery, measuredEffect, sourceGeneration)
   inFlightEffects.set(key, running as Promise<RunGenerationEffectResult<unknown>>)
-  void running.finally(() => {
+  const cleanup = () => {
     if (inFlightEffects.get(key) === running) inFlightEffects.delete(key)
-  })
+  }
+  void running.then(cleanup, cleanup)
   return running
 }
 
@@ -184,8 +222,9 @@ async function runClaimedGenerationEffect<T>(
   effect: (
     context: GenerationEffectExecutionContext,
   ) => Promise<GenerationEffectExecution<T>> | GenerationEffectExecution<T>,
+  sourceGeneration: number,
 ): Promise<RunGenerationEffectResult<T>> {
-  const claim = await claimEffect(ref, kind, delivery)
+  const claim = await claimEffect(ref, kind, delivery, sourceGeneration)
   if (!claim) return { executed: false, status: 'unavailable' }
   if (claim.status !== 'claimed' || typeof claim.claimId !== 'string') {
     return {
@@ -198,26 +237,41 @@ async function runClaimedGenerationEffect<T>(
     }
   }
 
-  const stopLeaseRenewal = startEffectLeaseRenewal(ref, kind, claim)
+  if (!effectAccessIsCurrent(sourceGeneration)) return { executed: false, status: 'unavailable' }
+  const lease = executionContext(sourceGeneration, claim.idempotencyKey, claim.reclaimed)
+  const stopLeaseRenewal = startEffectLeaseRenewal(ref, kind, claim, sourceGeneration, lease.context.signal)
   try {
-    const result = await effect({ idempotencyKey: claim.idempotencyKey, reclaimed: claim.reclaimed })
-    const receipted = await settleEffect(ref, kind, claim.claimId, {
-      status: result.status,
-      ...(result.status === 'skipped' ? { reason: result.reason } : {}),
-    })
+    const result = await effect(lease.context)
+    const receipted = await settleEffect(
+      ref,
+      kind,
+      claim.claimId,
+      {
+        status: result.status,
+        ...(result.status === 'skipped' ? { reason: result.reason } : {}),
+      },
+      sourceGeneration,
+    )
     return {
       executed: true,
       value: result.value,
       status: receipted ? result.status : 'unavailable',
     }
   } catch (error) {
-    await settleEffect(ref, kind, claim.claimId, {
-      status: 'failed',
-      lastError: error instanceof Error ? error.message : String(error),
-    })
+    await settleEffect(
+      ref,
+      kind,
+      claim.claimId,
+      {
+        status: 'failed',
+        lastError: error instanceof Error ? error.message : String(error),
+      },
+      sourceGeneration,
+    )
     throw error
   } finally {
     stopLeaseRenewal()
+    lease.unsubscribe()
   }
 }
 
@@ -225,8 +279,11 @@ async function claimEffect(
   ref: ServerGenerationEffectLedgerRef,
   kind: GenerationEffectKind,
   delivery: GenerationEffectDelivery,
+  sourceGeneration: number,
 ): Promise<ClaimedEffectResponse | NotClaimedEffectResponse | null> {
+  if (!effectAccessIsCurrent(sourceGeneration)) return null
   const auth = await getNodeServerProxyAuth()
+  if (!effectAccessIsCurrent(sourceGeneration)) return null
   let response: Response
   try {
     response = await fetch(
@@ -246,7 +303,8 @@ async function claimEffect(
     return null
   }
   const body = await readJson(response)
-  if (handleActiveWriterStaleResponse(response, body)) return null
+  if (handleActiveWriterStaleResponse(response, body, sourceGeneration)) return null
+  if (!effectAccessIsCurrent(sourceGeneration)) return null
   if (!response.ok || !body || typeof body !== 'object' || Array.isArray(body)) return null
   const record = body as Record<string, unknown>
   if (record.status === 'claimed' && typeof record.claimId === 'string') {
@@ -269,23 +327,36 @@ function startEffectLeaseRenewal(
   ref: ServerGenerationEffectLedgerRef,
   kind: GenerationEffectKind,
   claim: ClaimedEffectResponse,
+  sourceGeneration: number,
+  signal: AbortSignal,
 ): () => void {
   if (!claim.leaseExpiresAt) return () => {}
   const remainingMs = Date.parse(claim.leaseExpiresAt) - Date.now()
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) return () => {}
   const interval = setInterval(
-    () => void renewEffectLease(ref, kind, claim.claimId),
+    () => {
+      if (!effectAccessIsCurrent(sourceGeneration)) clearInterval(interval)
+      else void renewEffectLease(ref, kind, claim.claimId, sourceGeneration)
+    },
     Math.max(1_000, Math.min(30_000, Math.floor(remainingMs / 3))),
   )
-  return () => clearInterval(interval)
+  const stop = () => clearInterval(interval)
+  signal.addEventListener('abort', stop, { once: true })
+  return () => {
+    stop()
+    signal.removeEventListener('abort', stop)
+  }
 }
 
 async function renewEffectLease(
   ref: ServerGenerationEffectLedgerRef,
   kind: GenerationEffectKind,
   claimId: string,
+  sourceGeneration: number,
 ): Promise<void> {
+  if (!effectAccessIsCurrent(sourceGeneration)) return
   const auth = await getNodeServerProxyAuth()
+  if (!effectAccessIsCurrent(sourceGeneration)) return
   try {
     const response = await fetch(
       `/api/v1/generation-effects/${encodeURIComponent(ref.generationId)}/${encodeURIComponent(kind)}/lease`,
@@ -301,7 +372,7 @@ async function renewEffectLease(
       },
     )
     const body = await readJson(response)
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, sourceGeneration)
   } catch {
     // Expiry makes a lost renewal recoverable; the callback keeps its stable
     // idempotency key in case another writer has to reclaim it.
@@ -317,8 +388,11 @@ async function settleEffect(
   kind: GenerationEffectKind,
   claimId: string,
   receipt: { status: 'completed' | 'skipped' | 'failed'; reason?: string; lastError?: string },
+  sourceGeneration: number,
 ): Promise<boolean> {
+  if (!effectAccessIsCurrent(sourceGeneration)) return false
   const auth = await getNodeServerProxyAuth()
+  if (!effectAccessIsCurrent(sourceGeneration)) return false
   let response: Response
   try {
     response = await fetch(
@@ -338,7 +412,7 @@ async function settleEffect(
     return false
   }
   const body = await readJson(response)
-  if (handleActiveWriterStaleResponse(response, body)) return false
+  if (handleActiveWriterStaleResponse(response, body, sourceGeneration)) return false
   return response.ok
 }
 

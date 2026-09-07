@@ -1,5 +1,16 @@
+import { resetClientSessionForTests } from '../../../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
+const toolDiscovery = vi.hoisted(() => vi.fn(async (): Promise<any[]> => []))
+vi.mock('../../mcp/mcp', async (importActual) => ({
+  ...(await importActual<typeof import('../../mcp/mcp')>()),
+  getTools: toolDiscovery,
+}))
 vi.mock('../serverCompletion', async (importActual) => {
   const actual = await importActual<typeof import('../serverCompletion')>()
   return {
@@ -59,6 +70,11 @@ function seedDb(overrides: Partial<Database> = {}): void {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
+  toolDiscovery.mockReset()
+  toolDiscovery.mockResolvedValue([])
+  pluginV2.replacerbeforeRequest.clear()
+  pluginV2.replacerafterRequest.clear()
   _setPluginRuntimePhaseForTesting('ready')
   pluginV2.providers.clear()
   pluginV2.providerOptions.clear()
@@ -176,5 +192,89 @@ describe('V3 plugin provider response model ids', () => {
 
     expect(result).toEqual({ type: 'fail', result: 'plugin failed', model: pluginModelId })
     expect(provider).toHaveBeenCalledOnce()
+  })
+})
+
+describe('request coordinator writer lifecycle', () => {
+  it('does not execute a plugin provider after held tool discovery crosses re-promotion', async () => {
+    setManagedWriterForTest()
+    _setPluginRuntimePhaseForTesting('ready')
+    const provider = vi.fn(async () => ({ success: true, content: 'must not run' }))
+    pluginV2.providers.set('provider-a', provider)
+    let release!: (tools: any[]) => void
+    toolDiscovery.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = requestChatDataMain({ formated: [{ role: 'user', content: 'hello' }], bias: {} }, 'model')
+    await vi.waitFor(() => expect(toolDiscovery).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    _setPluginRuntimePhaseForTesting('ready')
+    pluginV2.providers.set('provider-a', provider)
+    release([])
+    await expect(pending).resolves.toEqual({ type: 'fail', result: 'Aborted' })
+    expect(provider).not.toHaveBeenCalled()
+  })
+
+  it('does not resume provider dispatch after an old before-request plugin callback', async () => {
+    setManagedWriterForTest()
+    _setPluginRuntimePhaseForTesting('ready')
+    const provider = vi.fn(async () => ({ success: true, content: 'must not run' }))
+    pluginV2.providers.set('provider-a', provider)
+    let release!: (messages: any[]) => void
+    const replacer = vi.fn(
+      () =>
+        new Promise<any[]>((resolve) => {
+          release = resolve
+        }),
+    )
+    pluginV2.replacerbeforeRequest.add(replacer)
+    const pending = requestChatData({ formated: [{ role: 'user', content: 'hello' }], bias: {} }, 'model')
+    await vi.waitFor(() => expect(replacer).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    _setPluginRuntimePhaseForTesting('ready')
+    pluginV2.providers.set('provider-a', provider)
+    release([{ role: 'user', content: 'old plugin output' }])
+    await expect(pending).resolves.toEqual({ type: 'fail', result: 'Aborted' })
+    expect(toolDiscovery).not.toHaveBeenCalled()
+    expect(provider).not.toHaveBeenCalled()
+  })
+
+  it('preserves already-aborted request semantics without tool or plugin work', async () => {
+    setManagedWriterForTest()
+    _setPluginRuntimePhaseForTesting('ready')
+    const provider = vi.fn()
+    const replacer = vi.fn()
+    pluginV2.providers.set('provider-a', provider)
+    pluginV2.replacerbeforeRequest.add(replacer)
+    const controller = new AbortController()
+    controller.abort()
+    const request = { formated: [{ role: 'user' as const, content: 'hello' }], bias: {} }
+    await expect(requestChatData(request, 'model', controller.signal)).resolves.toEqual({
+      type: 'fail',
+      result: 'Aborted',
+    })
+    await expect(requestChatDataMain(request, 'model', controller.signal)).resolves.toEqual({
+      type: 'fail',
+      result: 'Aborted',
+    })
+    expect(toolDiscovery).not.toHaveBeenCalled()
+    expect(provider).not.toHaveBeenCalled()
+    expect(replacer).not.toHaveBeenCalled()
+  })
+
+  it('rejects Reader request coordinators before provider work', async () => {
+    setManagedReaderForTest()
+    const request = { formated: [{ role: 'user' as const, content: 'hello' }], bias: {} }
+    await expect(requestChatData(request, 'model')).resolves.toMatchObject({
+      type: 'fail',
+      result: 'client_write_access_required',
+    })
+    await expect(requestChatDataMain(request, 'model')).resolves.toMatchObject({
+      type: 'fail',
+      result: 'client_write_access_required',
+    })
+    expect(toolDiscovery).not.toHaveBeenCalled()
   })
 })

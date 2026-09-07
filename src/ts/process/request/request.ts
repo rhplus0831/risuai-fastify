@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration, clientSessionStore, isClientSessionManaged } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 import { Ollama } from 'ollama/dist/browser.mjs'
 import { language } from '../../../lang'
 import { fetchNative, globalFetch } from '../../globalApi.svelte'
@@ -652,167 +654,188 @@ export async function requestChatData(
   model: ModelModeExtended,
   abortSignal: AbortSignal = null,
 ): Promise<requestDataResponse> {
-  const db = requestSettingsOwner(arg.database)
-  if (!db) {
-    return {
-      type: 'fail',
-      result: 'Request settings are not ready.',
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration) && !abortSignal?.aborted
+  if (abortSignal?.aborted) return { type: 'fail', result: 'Aborted' }
+  if (!isCurrent()) return { type: 'fail', result: 'client_write_access_required', noRetry: true }
+  const controller = isClientSessionManaged() ? new AbortController() : undefined
+  if (controller) abortSignal = abortSignal ? AbortSignal.any([abortSignal, controller.signal]) : controller.signal
+  const stopWatching = controller
+    ? clientSessionStore.subscribe(() => {
+        if (!isClientWriteOperationCurrent(sourceGeneration)) controller.abort()
+      })
+    : () => {}
+  try {
+    const db = requestSettingsOwner(arg.database)
+    if (!db) {
+      return {
+        type: 'fail',
+        result: 'Request settings are not ready.',
+      }
     }
-  }
-  const resolvedProfile = resolveModelProfile({ database: db, role: model })
-  const overrideProfile = arg.profileIdOverride
-    ? resolveModelProfileByProfileId({ database: db, role: model, profileId: arg.profileIdOverride })
-    : null
-  if (arg.profileIdOverride && arg.strictProfileIdOverride && !overrideProfile) {
-    return {
-      type: 'fail',
-      result: `Model profile not found or unavailable: ${arg.profileIdOverride}`,
+    const resolvedProfile = resolveModelProfile({ database: db, role: model })
+    const overrideProfile = arg.profileIdOverride
+      ? resolveModelProfileByProfileId({ database: db, role: model, profileId: arg.profileIdOverride })
+      : null
+    if (arg.profileIdOverride && arg.strictProfileIdOverride && !overrideProfile) {
+      return {
+        type: 'fail',
+        result: `Model profile not found or unavailable: ${arg.profileIdOverride}`,
+      }
     }
-  }
-  const fallbackAttempts: RequestFallbackAttempt[] = overrideProfile
-    ? [{ staticModel: '', fallbackProfileId: arg.profileIdOverride, modelId: overrideProfile.modelId }]
-    : [...resolveRequestFallbackAttempts(db, model, resolvedProfile.fallbacks), { staticModel: '' }]
-  let da: requestDataResponse
+    const fallbackAttempts: RequestFallbackAttempt[] = overrideProfile
+      ? [{ staticModel: '', fallbackProfileId: arg.profileIdOverride, modelId: overrideProfile.modelId }]
+      : [...resolveRequestFallbackAttempts(db, model, resolvedProfile.fallbacks), { staticModel: '' }]
+    let da: requestDataResponse
 
-  if (arg.escape) {
-    arg.useStreaming = false
-    console.warn('Escape is enabled, disabling streaming')
-  }
-
-  const originalFormated = safeStructuredClone(arg.formated).map((m) => {
-    m.content = risuUnescape(m.content)
-    return m
-  })
-
-  for (let fallbackIndex = 0; fallbackIndex < fallbackAttempts.length; fallbackIndex++) {
-    const attempt = fallbackAttempts[fallbackIndex]
-    let trys = 0
-    arg.formated = safeStructuredClone(originalFormated)
-
-    if (fallbackIndex !== fallbackAttempts.length - 1 && !attempt.staticModel && !attempt.fallbackProfileId) {
-      continue
+    if (arg.escape) {
+      arg.useStreaming = false
+      console.warn('Escape is enabled, disabling streaming')
     }
 
-    while (true) {
-      if (abortSignal?.aborted) {
-        return {
-          type: 'fail',
-          result: 'Aborted',
-        }
+    const originalFormated = safeStructuredClone(arg.formated).map((m) => {
+      m.content = risuUnescape(m.content)
+      return m
+    })
+
+    for (let fallbackIndex = 0; fallbackIndex < fallbackAttempts.length; fallbackIndex++) {
+      const attempt = fallbackAttempts[fallbackIndex]
+      let trys = 0
+      arg.formated = safeStructuredClone(originalFormated)
+
+      if (fallbackIndex !== fallbackAttempts.length - 1 && !attempt.staticModel && !attempt.fallbackProfileId) {
+        continue
       }
 
-      if (isPluginRuntimeReady() && pluginV2.replacerbeforeRequest.size > 0) {
-        for (const replacer of pluginV2.replacerbeforeRequest) {
-          arg.formated = await replacer(arg.formated, model)
+      while (true) {
+        if (!isCurrent()) {
+          return {
+            type: 'fail',
+            result: 'Aborted',
+          }
         }
-      }
 
-      try {
-        const currentChar = arg.currentChar
-        if (currentChar) {
-          const perf = performance.now()
-          const d = await runTrigger(currentChar, 'request', {
-            chat: requestCurrentChat(arg),
-            displayMode: true,
-            displayData: JSON.stringify(arg.formated),
+        if (isPluginRuntimeReady() && pluginV2.replacerbeforeRequest.size > 0) {
+          for (const replacer of pluginV2.replacerbeforeRequest) {
+            arg.formated = await replacer(arg.formated, model)
+            if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
+          }
+        }
+
+        try {
+          const currentChar = arg.currentChar
+          if (currentChar) {
+            const perf = performance.now()
+            const d = await runTrigger(currentChar, 'request', {
+              chat: requestCurrentChat(arg),
+              displayMode: true,
+              displayData: JSON.stringify(arg.formated),
+            })
+
+            if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
+            const got = JSON.parse(d.displayData)
+            if (!got || !Array.isArray(got)) {
+              throw new Error('Invalid return')
+            }
+            arg.formated = got
+            console.log('Trigger time', performance.now() - perf)
+          }
+        } catch (e) {
+          console.error(e)
+        }
+
+        if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
+        da = await requestChatDataMain(
+          {
+            ...arg,
+            database: db,
+            staticModel: attempt.staticModel,
+            fallbackProfileId: attempt.fallbackProfileId,
+          },
+          model,
+          abortSignal,
+          sourceGeneration,
+        )
+
+        if (!isCurrent()) {
+          return {
+            type: 'fail',
+            result: 'Aborted',
+          }
+        }
+
+        if (da.type === 'success' && arg.escape) {
+          da.result = risuEscape(da.result)
+        }
+
+        if (da.type === 'success' && isPluginRuntimeReady() && pluginV2.replacerafterRequest.size > 0) {
+          for (const replacer of pluginV2.replacerafterRequest) {
+            da.result = await replacer(da.result, model)
+            if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
+          }
+        }
+
+        if (da.type === 'success' && db.banCharacterset?.length > 0) {
+          const responseText = da.result
+          const responseModel = da.model
+          const bannedCharacterSet = db.banCharacterset.find((set) => {
+            const checkRegex = new RegExp(`\\p{Script=${set}}`, 'gu')
+            return checkRegex.test(responseText)
           })
 
-          const got = JSON.parse(d.displayData)
-          if (!got || !Array.isArray(got)) {
-            throw new Error('Invalid return')
-          }
-          arg.formated = got
-          console.log('Trigger time', performance.now() - perf)
-        }
-      } catch (e) {
-        console.error(e)
-      }
-
-      da = await requestChatDataMain(
-        {
-          ...arg,
-          database: db,
-          staticModel: attempt.staticModel,
-          fallbackProfileId: attempt.fallbackProfileId,
-        },
-        model,
-        abortSignal,
-      )
-
-      if (abortSignal?.aborted) {
-        return {
-          type: 'fail',
-          result: 'Aborted',
-        }
-      }
-
-      if (da.type === 'success' && arg.escape) {
-        da.result = risuEscape(da.result)
-      }
-
-      if (da.type === 'success' && isPluginRuntimeReady() && pluginV2.replacerafterRequest.size > 0) {
-        for (const replacer of pluginV2.replacerafterRequest) {
-          da.result = await replacer(da.result, model)
-        }
-      }
-
-      if (da.type === 'success' && db.banCharacterset?.length > 0) {
-        const responseText = da.result
-        const responseModel = da.model
-        const bannedCharacterSet = db.banCharacterset.find((set) => {
-          const checkRegex = new RegExp(`\\p{Script=${set}}`, 'gu')
-          return checkRegex.test(responseText)
-        })
-
-        if (bannedCharacterSet !== undefined) {
-          da = {
-            type: 'fail',
-            result: language.errors.bannedCharacterSet(bannedCharacterSet),
-            ...(responseModel === undefined ? {} : { model: responseModel }),
+          if (bannedCharacterSet !== undefined) {
+            da = {
+              type: 'fail',
+              result: language.errors.bannedCharacterSet(bannedCharacterSet),
+              ...(responseModel === undefined ? {} : { model: responseModel }),
+            }
           }
         }
-      }
 
-      if (da.type === 'success' && fallbackIndex !== fallbackAttempts.length - 1 && db.fallbackWhenBlankResponse) {
-        if (da.result.trim() === '' && !da.toolCalls?.length) {
+        if (da.type === 'success' && fallbackIndex !== fallbackAttempts.length - 1 && db.fallbackWhenBlankResponse) {
+          if (da.result.trim() === '' && !da.toolCalls?.length) {
+            break
+          }
+        }
+
+        if (da.type !== 'fail' || da.noRetry) {
+          const usedModel = attempt.modelId || attempt.staticModel || da.model
+          return usedModel
+            ? {
+                ...da,
+                model: usedModel,
+              }
+            : da
+        }
+
+        if (da.failByServerError) {
+          await sleep(1000)
+          if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
+          if (db.antiServerOverloads) {
+            trys -= 0.5 // reduce trys by 0.5, so that it will retry twice as much
+          }
+        }
+
+        trys += 1
+        if (trys > db.requestRetrys) {
+          const isPluginModel = da.model === 'custom' || da.model?.startsWith('pluginmodel:::')
+          if (fallbackIndex === fallbackAttempts.length - 1 || isPluginModel) {
+            return da
+          }
           break
         }
       }
-
-      if (da.type !== 'fail' || da.noRetry) {
-        const usedModel = attempt.modelId || attempt.staticModel || da.model
-        return usedModel
-          ? {
-              ...da,
-              model: usedModel,
-            }
-          : da
-      }
-
-      if (da.failByServerError) {
-        await sleep(1000)
-        if (db.antiServerOverloads) {
-          trys -= 0.5 // reduce trys by 0.5, so that it will retry twice as much
-        }
-      }
-
-      trys += 1
-      if (trys > db.requestRetrys) {
-        const isPluginModel = da.model === 'custom' || da.model?.startsWith('pluginmodel:::')
-        if (fallbackIndex === fallbackAttempts.length - 1 || isPluginModel) {
-          return da
-        }
-        break
-      }
     }
+
+    return (
+      da ?? {
+        type: 'fail',
+        result: 'All models failed',
+      }
+    )
+  } finally {
+    stopWatching()
   }
-
-  return (
-    da ?? {
-      type: 'fail',
-      result: 'All models failed',
-    }
-  )
 }
 
 function resolveRequestFallbackAttempts(
@@ -920,7 +943,11 @@ export async function requestChatDataMain(
   arg: requestDataArgument,
   model: ModelModeExtended,
   abortSignal: AbortSignal = null,
+  sourceGeneration = captureClientSessionGeneration(),
 ): Promise<requestDataResponse> {
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration) && !abortSignal?.aborted
+  if (abortSignal?.aborted) return { type: 'fail', result: 'Aborted' }
+  if (!isCurrent()) return { type: 'fail', result: 'client_write_access_required', noRetry: true }
   const db = requestSettingsOwner(arg.database)
   if (!db) {
     return {
@@ -994,6 +1021,7 @@ export async function requestChatDataMain(
   let forceLocalOllamaToolDispatch = false
   if (shouldProbeOllamaTools) {
     targ.tools = arg.tools ?? (await getTools())
+    if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
     forceLocalOllamaToolDispatch = targ.tools.length > 0
   }
 
@@ -1010,6 +1038,7 @@ export async function requestChatDataMain(
   }
 
   targ.tools = targ.tools ?? (await getTools())
+  if (!isCurrent()) return { type: 'fail', result: 'Aborted' }
 
   const format = targ.modelInfo.format
 

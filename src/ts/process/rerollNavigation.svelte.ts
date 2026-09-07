@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { get } from 'svelte/store'
 import { SvelteMap } from 'svelte/reactivity'
 import { selectedCharID } from '../stores.svelte'
@@ -53,6 +55,7 @@ export interface RerollCandidate {
 }
 
 type RerollOperation = {
+  sourceGeneration: number
   token: ReturnType<typeof rerollOperationGuard.issue>
   target: ActiveChatTarget
 }
@@ -83,17 +86,24 @@ function currentRerollScopeTarget(): string | null {
 }
 
 function beginRerollOperation(): RerollOperation | null {
+  if (!canUseClientWriteAccess()) return null
+  const sourceGeneration = captureClientSessionGeneration()
   const target = currentRerollTarget()
   const targetKey = rerollTargetKey(target)
   if (!target || !targetKey) return null
   return {
+    sourceGeneration,
     token: rerollOperationGuard.issue(targetKey),
     target,
   }
 }
 
 function isCurrentRerollOperation(operation: RerollOperation): boolean {
-  return rerollOperationGuard.isLatest(operation.token) && currentRerollScopeTarget() === operation.token.target
+  return (
+    isClientWriteOperationCurrent(operation.sourceGeneration) &&
+    rerollOperationGuard.isLatest(operation.token) &&
+    currentRerollScopeTarget() === operation.token.target
+  )
 }
 
 function rerollState(target: ActiveChatTarget | null | undefined): RerollState {
@@ -143,12 +153,14 @@ export function resetRerollOnCharChange(target: ActiveChatTarget | null = curren
 
 /** Drop the swipe history — the send/continue confirm boundary. */
 export function clearRerollBuffer(target: ActiveChatTarget | null = currentRerollTarget()): void {
+  if (!canUseClientWriteAccess()) return
   if (!target) return
   setRerollState(target, { rerolls: [], rerollid: -1 })
 }
 
 /** Record the just-generated tail as the newest swipe candidate (post-send). */
 export function recordGeneratedReroll(previousLength: number, target: ActiveChatTarget): void {
+  if (!canUseClientWriteAccess()) return
   const message = locateRerollTarget(target)?.messages
   if (!message) return
   if (previousLength < message.length) {
@@ -253,7 +265,8 @@ async function regenerateFromCurrentTail(deps: RerollDeps, operation: RerollOper
     }
   }
   const generated = await deps.sendChatMain(false, regenerateMessageId)
-  if (generated) recordGeneratedReroll(cha.length, operation.target)
+  if (generated && isClientWriteOperationCurrent(operation.sourceGeneration))
+    recordGeneratedReroll(cha.length, operation.target)
 }
 
 function applyNextPrefetchedReroll(operation: RerollOperation): boolean {

@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Prove the extracted swipe machine mutates the explicit chat-message owner
@@ -31,6 +37,9 @@ import { testDatabaseState } from '../__tests__/resourceDatabaseState'
 import { charactersResourceState } from '../server/resourceState.svelte'
 import {
   getRerollId,
+  getRerollBuffer,
+  newReroll,
+  selectRerollCandidate,
   reroll,
   resetRerollNavigation,
   seedRerollBufferFromAlternates,
@@ -43,6 +52,7 @@ function tailUid(): string {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   resetRerollNavigation()
   vi.clearAllMocks()
   testDatabaseState.db = {
@@ -97,6 +107,48 @@ describe('reroll swipe through the chat message owner', () => {
       { role: 'char', data: 'c1', chatId: 'g1' },
     ])
   }
+
+  it('denies Reader swipe and generation entry points without changing the buffer', async () => {
+    seedActiveTranscript()
+    const before = structuredClone(getRerollBuffer())
+    setManagedReaderForTest()
+    const sendChatMain = vi.fn()
+    const closeMenu = vi.fn()
+    await unReroll()
+    await selectRerollCandidate(0)
+    await reroll({ sendChatMain, closeMenu })
+    await newReroll({ sendChatMain, closeMenu })
+    expect(tailUid()).toBe('g3')
+    expect(getRerollBuffer()).toEqual(before)
+    expect(sendChatMain).not.toHaveBeenCalled()
+    expect(closeMenu).not.toHaveBeenCalled()
+    expect(commandSpies.dispatchReplaceTailMessagesScoped).not.toHaveBeenCalled()
+  })
+
+  it('does not record an old regenerate result into the new writer buffer', async () => {
+    seedActiveTranscript()
+    setManagedWriterForTest()
+    const before = structuredClone(getRerollBuffer())
+    let release!: (generated: boolean) => void
+    const sendChatMain = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          release = resolve
+        }),
+    )
+    const pending = reroll({ sendChatMain, closeMenu: vi.fn() })
+    await vi.waitFor(() => expect(sendChatMain).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    testDatabaseState.db.characters[0].chats[0].message.push({
+      role: 'char',
+      data: 'new owner text',
+      chatId: 'new-message',
+    })
+    release(true)
+    await pending
+    expect(getRerollBuffer()).toEqual(before)
+    expect(tailUid()).toBe('new-message')
+  })
 
   it('unReroll swaps the active owner tail', async () => {
     seedActiveTranscript()

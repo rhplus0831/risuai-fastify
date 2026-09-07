@@ -1,3 +1,5 @@
+import { resetClientSessionForTests } from '../../clientSession'
+import { setManagedWriterForTest, demoteAndRepromoteForTest } from '../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { requestChatDataSpy, tokenizeNumSpy } = vi.hoisted(() => ({
@@ -40,6 +42,7 @@ describe('runEmotionLlmFallback', () => {
   let mathRandomSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    resetClientSessionForTests()
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(1000))
     CharEmotion.set({})
@@ -56,6 +59,29 @@ describe('runEmotionLlmFallback', () => {
   afterEach(() => {
     vi.useRealTimers()
     mathRandomSpy.mockRestore()
+  })
+
+  it('does not start an emotion provider request after delayed tokenization loses writer access', async () => {
+    setManagedWriterForTest()
+    let release!: (value: number[]) => void
+    tokenizeNumSpy.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = runEmotionLlmFallback({
+      result: 'r',
+      currentChar: makeChar([['happy', 'h.png']]),
+      abortSignal: new AbortController().signal,
+      throwError: throwErrorSpy,
+      ...freshState(),
+    })
+    demoteAndRepromoteForTest()
+    release([1])
+    await pending
+    expect(requestChatDataSpy).not.toHaveBeenCalled()
+    expect(get(CharEmotion)).toEqual({})
+    expect(throwErrorSpy).not.toHaveBeenCalled()
   })
 
   it('calls requestChatData with mode emotion, the shuffled emotion list, the one-shot example, and the assistant result', async () => {

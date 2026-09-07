@@ -1,3 +1,9 @@
+import { captureClientSessionGeneration, resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ActiveChatTarget, ChatMutationFinalOutcome } from '../chatCommands'
@@ -101,6 +107,7 @@ function target(): ActiveChatTarget {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.clearAllMocks()
   coordinatorMocks.controller = new AbortController()
   coordinatorMocks.createController.mockReturnValue(coordinatorMocks.controller)
@@ -522,4 +529,190 @@ describe('accepted send coordinator', () => {
       },
     )
   })
+})
+
+describe('accepted send coordinator writer lifecycle', () => {
+  it('rejects Reader atomic sends and retries before callbacks or preparation', async () => {
+    setManagedReaderForTest()
+    const onAppendAccepted = vi.fn()
+    const onAppendFailed = vi.fn()
+    await expect(
+      coordinateAcceptedChatSend({ target: target(), message: 'Reader text', onAppendAccepted, onAppendFailed }),
+    ).resolves.toEqual({ status: 'append_failed' })
+    await expect(retryAcceptedChatSend('missing')).resolves.toBe(false)
+    expect(coordinatorMocks.waitForPendingCharacterScriptDefinitionSave).not.toHaveBeenCalled()
+    expect(coordinatorMocks.stageAcceptedSendGenerationOperation).not.toHaveBeenCalled()
+    expect(onAppendAccepted).not.toHaveBeenCalled()
+    expect(onAppendFailed).not.toHaveBeenCalled()
+  })
+
+  it('does not stage after preflight resumes under a newer writer session', async () => {
+    setManagedWriterForTest()
+    const scripts = deferred<'idle'>()
+    coordinatorMocks.waitForPendingCharacterScriptDefinitionSave.mockReturnValueOnce(scripts.promise)
+    const onAppendFailed = vi.fn()
+    const pending = coordinateAcceptedChatSend({ target: target(), message: 'held preflight', onAppendFailed })
+    await vi.waitFor(() => expect(coordinatorMocks.waitForPendingCharacterScriptDefinitionSave).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    scripts.resolve('idle')
+    await expect(pending).resolves.toMatchObject({ status: 'generation_failed' })
+    expect(coordinatorMocks.stageAcceptedSendGenerationOperation).not.toHaveBeenCalled()
+    expect(onAppendFailed).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge or generate from an old queued append settlement', async () => {
+    setManagedWriterForTest()
+    const settlement = deferred<ChatMutationFinalOutcome>()
+    const onAppendAccepted = vi.fn()
+    const onAppendFailed = vi.fn()
+    const pending = coordinateAcceptedChatSend({
+      target: target(),
+      append: { status: 'queued', messageId: 'held-message', settlement: settlement.promise },
+      onAppendAccepted,
+      onAppendFailed,
+    })
+    demoteAndRepromoteForTest()
+    settlement.resolve({ status: 'accepted' })
+    await expect(pending).resolves.toMatchObject({ status: 'generation_failed' })
+    expect(onAppendAccepted).not.toHaveBeenCalled()
+    expect(onAppendFailed).not.toHaveBeenCalled()
+    expect(coordinatorMocks.sendChat).not.toHaveBeenCalled()
+    expect(get(acceptedSendRecoveries)).toEqual([])
+  })
+
+  it('does not notify append acceptance or open a stream from a held accepted operation', async () => {
+    setManagedWriterForTest()
+    coordinatorMocks.stageAcceptedSendGenerationOperation.mockResolvedValueOnce({
+      request: { acceptedMessageId: 'old-message' },
+      target: target(),
+      handle: {},
+      intent: {},
+      rollbackOptimisticAppend: vi.fn(),
+    })
+    const submitted = deferred<unknown>()
+    coordinatorMocks.submitStagedAcceptedSendOperation.mockReturnValueOnce(submitted.promise)
+    const onAppendAccepted = vi.fn()
+    const pending = coordinateAcceptedChatSend({ target: target(), message: 'held acceptance', onAppendAccepted })
+    await vi.waitFor(() => expect(coordinatorMocks.submitStagedAcceptedSendOperation).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    submitted.resolve({
+      status: 'accepted',
+      response: {
+        operation: { operationId: 'held-op', acceptedMessageId: 'old-message', state: 'completed' },
+        append: { disposition: 'accepted' },
+      },
+    })
+    await expect(pending).resolves.toMatchObject({ status: 'generation_failed' })
+    expect(onAppendAccepted).not.toHaveBeenCalled()
+    expect(coordinatorMocks.readGenerationOperationStatus).not.toHaveBeenCalled()
+    expect(coordinatorMocks.sendChat).not.toHaveBeenCalled()
+  })
+
+  it('does not retry an operation after its confirmation crosses writer re-promotion', async () => {
+    setManagedWriterForTest()
+    acceptedSendRecoveries.set([
+      {
+        id: 'held-retry',
+        operationId: 'held-retry',
+        target: target(),
+        messageId: 'm',
+        syntheticSayNothing: false,
+        cause: 'generation_failed',
+        phase: 'retryable',
+        providerMayHaveRun: true,
+        retrying: false,
+        unrelatedSameChatJob: false,
+        stateVersion: 4,
+      },
+    ])
+    const confirmation = deferred<boolean>()
+    coordinatorMocks.alertConfirm.mockReturnValueOnce(confirmation.promise)
+    const pending = retryAcceptedChatSend('held-retry')
+    await vi.waitFor(() => expect(coordinatorMocks.alertConfirm).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    confirmation.resolve(true)
+    await expect(pending).resolves.toBe(false)
+    expect(coordinatorMocks.retryGenerationOperation).not.toHaveBeenCalled()
+    expect(get(acceptedSendRecoveries)[0].retrying).toBe(false)
+  })
+})
+
+it('preserves exact accepted append identity when an old caller hands off after re-promotion', async () => {
+  setManagedWriterForTest()
+  const clientGeneration = captureClientSessionGeneration()
+  demoteAndRepromoteForTest()
+  const onAppendAccepted = vi.fn()
+  const onAppendFailed = vi.fn()
+  const input = {
+    clientGeneration,
+    target: target(),
+    append: { status: 'ok' as const, messageId: 'old-accepted' },
+    onAppendAccepted,
+    onAppendFailed,
+  }
+  await expect(coordinateAcceptedChatSend(input)).resolves.toMatchObject({
+    status: 'generation_failed',
+    acceptedMessageId: 'old-accepted',
+  })
+  await expect(coordinateAcceptedChatSend({ ...input, clientGeneration: undefined })).resolves.toMatchObject({
+    status: 'generation_failed',
+    acceptedMessageId: 'old-accepted',
+  })
+  expect(coordinatorMocks.sendChat).not.toHaveBeenCalled()
+  expect(onAppendAccepted).not.toHaveBeenCalled()
+  expect(onAppendFailed).not.toHaveBeenCalled()
+})
+
+it('observes an old caller queued settlement after re-promotion without starting generation', async () => {
+  setManagedWriterForTest()
+  const clientGeneration = captureClientSessionGeneration()
+  demoteAndRepromoteForTest()
+  const settlement = deferred<ChatMutationFinalOutcome>()
+  const onAppendAccepted = vi.fn()
+  const pending = coordinateAcceptedChatSend({
+    clientGeneration,
+    target: target(),
+    append: { status: 'queued', messageId: 'old-queued', settlement: settlement.promise },
+    onAppendAccepted,
+  })
+  settlement.resolve({ status: 'accepted' })
+  await expect(pending).resolves.toMatchObject({ status: 'generation_failed', acceptedMessageId: 'old-queued' })
+  expect(coordinatorMocks.sendChat).not.toHaveBeenCalled()
+  expect(onAppendAccepted).not.toHaveBeenCalled()
+})
+
+it('releases a retired retry indicator without allowing its old cleanup to clear a newer retry', async () => {
+  setManagedWriterForTest()
+  acceptedSendRecoveries.set([
+    {
+      id: 'retry-scope',
+      operationId: 'retry-scope',
+      target: target(),
+      messageId: 'm',
+      syntheticSayNothing: false,
+      cause: 'generation_failed',
+      phase: 'retryable',
+      providerMayHaveRun: false,
+      unrelatedSameChatJob: false,
+      retrying: false,
+      stateVersion: 4,
+    },
+  ])
+  const oldResult = deferred<unknown>()
+  const newResult = deferred<unknown>()
+  coordinatorMocks.retryGenerationOperation
+    .mockReturnValueOnce(oldResult.promise)
+    .mockReturnValueOnce(newResult.promise)
+  const oldRetry = retryAcceptedChatSend('retry-scope')
+  expect(get(acceptedSendRecoveries)[0].retrying).toBe(true)
+  demoteAndRepromoteForTest()
+  expect(get(acceptedSendRecoveries)[0].retrying).toBe(false)
+  const newRetry = retryAcceptedChatSend('retry-scope')
+  expect(get(acceptedSendRecoveries)[0].retrying).toBe(true)
+  oldResult.resolve({ status: 'retained' })
+  await expect(oldRetry).resolves.toBe(false)
+  expect(get(acceptedSendRecoveries)[0].retrying).toBe(true)
+  newResult.resolve({ status: 'retained' })
+  await expect(newRetry).resolves.toBe(false)
+  expect(get(acceptedSendRecoveries)[0].retrying).toBe(false)
 })

@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 import type { BardWikiJobSummary } from '@risuai/protocol'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../../server/activeWriterSession'
 import { getNodeServerProxyAuth } from '../../storage/fastifyStorage'
@@ -20,13 +22,17 @@ async function mutateBardWikiJob(
   method: 'POST' | 'DELETE',
   signal?: AbortSignal | null,
 ): Promise<ServerBardWikiJobResult> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
+  const sourceGeneration = captureClientSessionGeneration()
   let response: Response
   try {
+    const auth = await getNodeServerProxyAuth()
+    if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'unavailable' }
     response = await fetch(path, {
       method,
       signal: signal ?? undefined,
       headers: {
-        'risu-auth': await getNodeServerProxyAuth(),
+        'risu-auth': auth,
         ...activeWriterSessionHeader(),
       },
     })
@@ -40,7 +46,7 @@ async function mutateBardWikiJob(
     // Reduced to the status below.
   }
   if (!response.ok) {
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, sourceGeneration)
     return { status: 'error', error: readError(body, `HTTP ${response.status}`) }
   }
   if (!isRecord(body) || !isBardWikiJobSummary(body.job)) {

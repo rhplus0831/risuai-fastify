@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 import { cloneJsonValue, dispatchUpdateMessageScoped, type ChatScopedSnapshot } from '../../chatCommands'
 import { parseChatML } from '../../parser/chatML'
 import { requestChatData } from '../request/request'
@@ -13,6 +15,7 @@ export interface IgpMessageTarget {
 }
 
 export interface EvaluateIgpOptions {
+  isCurrent?: () => boolean
   promptTemplate: string
   abortSignal: AbortSignal
   /** A ledger receipt is terminal only after the durable message command settles. */
@@ -61,10 +64,15 @@ function captureIgpTargetSnapshot(target: IgpMessageTarget): ChatScopedSnapshot 
 }
 
 export async function evaluateIgp(opts: EvaluateIgpOptions): Promise<boolean> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = opts.isCurrent ?? (() => isClientWriteOperationCurrent(sourceGeneration))
+  if (!isCurrent()) return false
+
   const parsed = risuChatParser(opts.promptTemplate ?? '')
   if (!parsed) return false
   const formated = parseChatML(parsed)
   const rq = await requestChatData({ formated, bias: {} }, 'emotion', opts.abortSignal)
+  if (!isCurrent() || opts.abortSignal.aborted) return false
   const appended = formatIgpAppendPayload(rq)
   const previous = captureIgpTargetSnapshot(opts.target)
   if (!previous) return false
