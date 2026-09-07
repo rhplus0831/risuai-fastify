@@ -1751,7 +1751,7 @@ proof is complete; the repeated Phase 3 full gate still owns phase acceptance.
 
 Phase 4's first full gate adds **BSE-008** (S51 warm-cache setup) and **BSE-009**
 (S81 changed writer-startup target). Their [failure and repair record](status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
-retains the failed source and current verification work. BSE-008 now has its qualified cache-write fault, finite-delay comparison and restored controls below. BSE-009 still needs qualified browser/restored proof; repeated final gates and combined closeout remain pending.
+retains the failed source and current verification work. BSE-008 now has its qualified cache-write fault, finite-delay comparison and restored controls below. BSE-009 now has its qualified native-ordering fault, restored cohort and actual compiled-FALSE controls below. Repeated final gates and combined closeout remain pending.
 
 | Finding / scope                                                  | Final disposition and evidence                                                                                                                                                                                                                                                                                                                                                             | Remaining limit or revisit condition                                                                                                                                                                                                                                                                |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1763,7 +1763,7 @@ retains the failed source and current verification work. BSE-008 now has its qua
 | BSE-006 — initial route versus newer writer URL                  | Production repair. New semantic writer navigation supersedes stale retained Reader intent; effect lifetime fences old completions. Mounted red/green tests and S92's actual held handler, qualifying priority fault and restored visible Settings control pass.                                                                                                                            | The browser's two post-delivery paint frames do not prove exact callback settlement; the mounted held-promise case owns that assertion. Settings retains mutation access while correctly clearing chat-generation readiness.                                                                        |
 | BSE-007 — native selection versus fixture configuration          | Repaired. The shared lifecycle setup requires ready route, local and persisted selected identity, and completed selection intent before its direct configuration write. All eleven original journeys pass before/after the qualified server persistence omission; that fault yields a successful selection response and local target while SQL remains old, and the new guard stops setup. | This proves the selected-owner prerequisite. The original failure happened before restart, with no generation POST; it is not classified as a production wrong-target send or restart defect.                                                                                                       |
 | BSE-008 — warm cache prerequisite                                | Repaired and verified. Passive zero-pending-write setup preserves cold measurement and all warm assertions. Two stalled native-write negatives, two fixed finite-delay positives, two old-test delayed failures and exact restored positives are recorded below.                                                                                                                           | Warm-cache setup waits for admitted optional writes; application readiness and immediate reload remain independent. Cache counters do not certify arbitrary payload content.                                                                                                                        |
-| BSE-009 — changed writer startup target                          | Production repair with four deterministic focused regressions and 217 passing bootstrap tests. The retained target is reevaluated across hydration without hiding unchanged failures or crossing session ownership.                                                                                                                                                                        | Qualified browser scheduling/fault controls, affected Reader revalidation and final-source gates are pending.                                                                                                                                                                                       |
+| BSE-009 — changed writer startup target                          | Production repair with four deterministic focused regressions and 217 passing bootstrap tests. The retained target is reevaluated across hydration without hiding unchanged failures or crossing session ownership.                                                                                                                                                                        | Qualified native-ordering negatives, both eighteen-case normal cohorts and actual compiled-FALSE controls pass below. Final aggregate/full-suite gates remain pending.                                                                                                                              |
 | S38/S57 evidence labels                                          | Reclassified. Titles now describe 60 registered lazy entries and read normalization during startup. Assertions are unchanged and their focused/final runs pass.                                                                                                                                                                                                                            | No universal lazy-boundary completeness or persisted SQL repair is inferred. No production fault experiment is claimed for a title-only correction.                                                                                                                                                 |
 | Final aggregate — memory-worker fixture                          | Repaired a deterministic timestamp-tie reproduction: SQLite creation timestamps bypass JS fake timers and ties sort by ID, so the old unpadded fixture could put job-9 last. Explicit equal timestamps and padded IDs preserve all original productive-batch/timer/drain assertions; all 24 worker tests pass.                                                                             | Unit-fixture correction only, with red/green proof in status. No queue behavior or browser contract changes, and no browser mutation campaign is claimed.                                                                                                                                           |
 | Remaining unchanged scenarios/support                            | Retained or strengthened with the complete Phase 3 action/oracle/control map and final discovery; no pending or partial owner remains. All new Reader journeys have their separate accepted phase evidence.                                                                                                                                                                                | Direct-link requirements share the production manifest; cache totals are metrics; simulated clipboard/viewport/legacy geometry retain their explicit limits. These narrower contracts are accepted scope, not deferred required repairs.                                                            |
@@ -1902,3 +1902,189 @@ assertions. Its affected final-source browser/full gates remain separate in
 jobs before the warm fixture; the unchanged warm-hit oracle still detects
 missing/dropped/corrupt reusable cache state. It does not convert best-effort
 cache persistence into an application startup barrier.
+
+## BSE-009: Writer Startup Must Follow the Current Hydration Target
+
+**Disposition:** verified production repair and strengthened S81 ordering proof.
+The first Phase 4 full gate at `6ee9bf1b7` finds A's second in-place promotion
+holding writer epoch three and the correct persisted A selection, while its
+original generation-readiness assertion stays false for 30 seconds. The existing
+journey has already retained A's unsent draft and rejected its stale write.
+No wrong-target generation, lost SQLite selection or page error is inferred.
+
+The source defect is in `ensureStartupChatReadiness()` and its promotion caller.
+Writer recovery first installs the server's persisted B selection; App restores
+this Reader's retained A route asynchronously. If B's active-chat hydration
+finishes after that selection changes, `hydrateActiveChatWindow()` correctly
+returns false for the old active ID. The old promotion path records failure,
+then installs selection synchronization with A already selected, losing the
+transition that should cause A's readiness evaluation.
+
+`f87624888` captures the semantic route/character/chat/prompt target and reevaluates
+it when pending dependency work settles for a changed target. It preserves a
+real failure for an unchanged target and checks session/write authority after
+awaits. Readiness and reattachment are published only for a stable current
+target. Four controlled lower-layer regressions cover the false B result after
+A restoration, a successful old prompt result while a newer prompt is still
+pending, unchanged failure without automatic retry, and superseded ownership
+without another target evaluation. Both relevant pre-fix red results are
+retained; the complete bootstrap suite passes 217 tests.
+
+`7aad1bb37` adds passive per-evaluation metadata and makes the existing S81
+browser journey establish the relevant native order. Each evaluation has a
+unique ID, captured session generation, semantic target and current awaited
+phase; the owner advances its metadata and clears it in `finally`. The smoke
+getter returns clones and cannot advance readiness or resolve work. Focused
+checks include independent overlapping evaluations and cleanup after supersession;
+217 bootstrap plus 14 readiness tests pass. These lower-layer controls do not
+substitute for the real-browser proof below.
+
+### Native Scheduling and Qualified Fault
+
+The existing A → B → A journey retains every original control and assertion.
+Before A's second promotion, S81 holds actual A-character-detail and B-message
+GET responses. Fastify still executes both reads and supplies their complete
+native responses. A B GET can also arise from eager hydration, so the test
+additionally requires the real current-generation startup evaluation to be
+awaiting B in `chat-and-prompt` before it releases A's detail response.
+
+The actual retained A route then renders its seed transcript and persists A's
+selection through the real command owner. SQLite independently records A's
+writer session at epoch three and the `character.selected` event at revision
+three. The same B evaluation remains pending, while A's generation capability
+is false only for chat dependencies. The test then releases B and runs the
+original promotion, draft recovery, stale-client denial, visible committed
+messages, ownership, selection and no-reload oracles. Neither selected state,
+SQLite, readiness nor the returned HTTP body is assigned by the test.
+
+Freeze a disposable checkout at `985da9bc8ce92c4162943196cde9fbcd179d3c3d`, including
+its test and diagnostic code. Use the existing installed dependencies, Node
+24.19.0, pnpm 11.23.0, one Chromium worker, trace on and two declared repetitions.
+The normal build has no observer, compiled-fallback or artifact-requirement
+process override. The cache finding above explains the dependency-verification
+flag used only for disposable shared-dependency checkouts.
+
+```sh
+VITE_FASTIFY_BROWSER_SMOKE=TRUE pnpm --config.verify-deps-before-run=false build:smoke
+VITE_FASTIFY_BROWSER_SMOKE=TRUE pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/connectedWriterSwitching.spec.ts \
+  --grep 'Use this device switches A' --repeat-each=2 --workers=1 --trace=on \
+  --output=/tmp/writer-target-stage-results
+```
+
+For the qualified fault, remove only these two lines from
+`src/ts/bootstrap.ts`'s `ensureStartupChatReadiness`. Keep the earlier resource/
+character guards, evaluation phase markers, loop, session checks and `finally`
+cleanup intact. The test has already established the B await before A is
+released, so these omissions reproduce the old false-result escape.
+
+```diff
+         ])
+         assertCurrent()
+-        if (target !== currentStartupChatReadinessTarget()) continue
+         if (!chatHydrated) {
+           throw new StartupChatDependencyError('selected-chat-hydration-failed', 'Selected chat hydration failed')
+@@
+       } catch (error) {
+         assertCurrent()
+-        if (target !== currentStartupChatReadinessTarget()) continue
+         throw error
+```
+
+For the normal baseline and restored controls, use the same flags with these
+six specs and title selector instead of the single-spec selection above. List
+mode confirms nine selected cases per repetition; it is not execution evidence.
+
+```sh
+VITE_FASTIFY_BROWSER_SMOKE=TRUE pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/acceptedSendProtocol.spec.ts \
+  server/fastify/browser-smoke/connectedReaderRollout.spec.ts \
+  server/fastify/browser-smoke/connectedWriterSwitching.spec.ts \
+  server/fastify/browser-smoke/selectedLocaleRuntime.spec.ts \
+  server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts \
+  server/fastify/browser-smoke/visibleStateRecovery.spec.ts \
+  --grep 'Use this device switches A|an accepted server generation keeps|an empty server without Web Locks|startup matrix keeps|default connected Reader reconnects|conservative fallback reload|new writer navigation reaches Settings|connected-default import recovery|send -> mid-stream and completed reloads' \
+  --repeat-each=2 --workers=1 --trace=on --output=/tmp/writer-target-cohort-results
+```
+
+Restore the two removed lines and rebuild before the restored cohort. Then build
+with `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` and select only the existing fallback
+case with its dedicated fixture flag:
+
+```sh
+VITE_FASTIFY_BROWSER_SMOKE=TRUE VITE_FAST_BOOTSTRAP_OBSERVER=FALSE \
+  pnpm --config.verify-deps-before-run=false build:smoke
+VITE_FASTIFY_BROWSER_SMOKE=TRUE VITE_FAST_BOOTSTRAP_OBSERVER=FALSE \
+  RISU_READER_ROLLOUT_COMPILED_FALLBACK=TRUE \
+  pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/connectedReaderRollout.spec.ts \
+  --grep 'conservative fallback reload' --repeat-each=2 --workers=1 --trace=on \
+  --output=/tmp/writer-target-false-results
+```
+
+### Results and Source Limits
+
+| Stage                          | Result                                                                                                                                                                                                                                                                                                                     |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Normal frozen baseline         | 18/18 pass in 50.7s: S01, S51, all three writer-switching cases and S89–S92 each run twice.                                                                                                                                                                                                                                |
+| Two target retries omitted     | Both unchanged S81 cases fail at the original 30s `canGenerate` assertion; 67.86s process wall time. Every native scheduling prerequisite passes. A remains mutation-capable with a ready A route, authoritative selection and writer epoch three, but reports `selected-chat-hydration-failed`; there are no page errors. |
+| Exact restored normal source   | 18/18 pass in 57.0s, including every original S81 oracle and both unchanged writer siblings.                                                                                                                                                                                                                               |
+| Actual compiled-FALSE fallback | 2/2 pass in 9.1s. The native retained UI command replays once and the newer local draft survives under the actual disabled default.                                                                                                                                                                                        |
+
+The negative traces establish the order independently of helper flags. In the
+first repetition, B evaluation two/generation three is observed at 4,753.727ms;
+current A's response completes at 4,767.422ms and its revision-three selection
+command completes HTTP 200 at 4,809.055ms. The same B await and visible A route
+remain at 4,885.066ms; B's actual fulfilled browser response completes HTTP 200
+at 4,896.811ms. A's last readiness sample remains false at 33,765.496ms. The
+second repetition supplies the same order at 38,062.059, 38,077.173, 38,115.799,
+38,194.877, 38,202.954 and 67,037.005ms respectively. Both original 30s bounded
+assertions fail after the real transition, not at suite timeout or test admission.
+
+The helper's `delivered`/`nativeResponsesDelivered` fields mean successful
+`route.fulfill` calls, not a guarantee about an already-cancelled request. One
+older A read is cancelled when its Reader generation is superseded; the current
+A and B browser responses above complete with 200 and establish the claimed
+transition. Fulfilled response bytes remain the real Fastify payload. The
+metadata is supporting observation, while native HTTP, visible route and SQL
+selection provide the independent path evidence.
+
+Both compiled-FALSE repetitions preserve one real IndexedDB row with a 12-byte
+IV and 220-byte ciphertext. The original and replayed UI message patch carry
+the same mutation ID, with base revision one then two and HTTP 200 responses.
+SQLite retains one edited message/event, one acknowledged receipt and one ACK;
+the newer composer draft remains scoped at sequence two and absent from SQLite.
+The runtime override is null after fallback, and forbidden Reader requests are
+empty. The existing fixture's initial enabled overrides only establish the
+pre-fallback Reader state; the full reload removes them and executes the actual
+compiled-FALSE branch. This supplements normal-default restart/import/switching
+controls and does not infer physical-device or live-provider behavior.
+
+The writer spec remains byte-identical through all stages:
+`45b26c6cbc7d7fd70ac4180f7da928461b8394a2772c245ec9f1dcf0247b1fcb`.
+The bootstrap owner hashes are normal/restored/FALSE
+`1d2051157338a8604bd40a139a04aa9f6091d94ae79ccc3d5db210d2609a1874`
+and the precise fault
+`79d1a42ae764031c512e0de707224f404bbd65af74a37d59f243ca9ddffdabef`.
+All 3,621 tracked inputs restore exactly. All 503 restored assets match baseline;
+the canonical sorted path/hash catalog digests are normal/restored
+`71ddc84ff59021dfba7c6f589216c8735314d6959baa78cb6206a2e0c9c638ee`,
+fault
+`99c4d885e665868496afff0f58bf9d6fa5f7bb523dcfe3f596be450ef7e20f9b`,
+and compiled FALSE
+`b0c3e43f7f6026afb3eb5264c865f5ed5fa38c0c69c46e75fac33c695845133d`.
+Across all 40 executions there are 10,646 successful script URL receipts and
+zero page errors. These are successful browser URL receipts, excluding
+`route.fetch` API copies, not downloaded-byte hash claims or cross-checkout
+asset equality. The complete local record is
+`/tmp/smoke-phase4-writer-target-056e0v0x/campaign-summary.json`; the checked-in
+source, literal fault and commands above preserve reproducibility without it.
+
+The deterministic control protects reevaluation when the old dependency settles
+after the retained route changes; it does not claim cancellation of arbitrary
+permanently hung reads. The accepted browser/provider/device envelope remains
+unchanged. No required repair or affected focused Reader check remains pending;
+final aggregate/full-suite evidence and archive are still owned by [status](status.md).

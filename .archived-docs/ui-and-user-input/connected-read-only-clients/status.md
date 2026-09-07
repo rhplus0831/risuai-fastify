@@ -4,22 +4,25 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: all reader Phases 0–5 accepted at the recorded source; the smoke
-  closeout now revalidates a subsequently exposed writer-startup race.
+- State: all reader Phases 0–5 accepted at the recorded source; focused smoke
+  closeout revalidation of the writer-startup repair is complete. Combined final
+  gates remain pending.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Accepted implementation: production through `a703b9d4b`, browser repairs through
   `60ac61bde`, with final agent/full gates at clean `eb9673942`.
 - Rollout: normal builds enable connected readers. Exact build-time
   `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the verified conservative fallback,
   preserving originating-client drafts and pending intent.
-- Final evidence: all 92 browser cases and all 13 full-suite lanes pass; normal/
+- Phase 5 evidence: all 92 browser cases and all 13 full-suite lanes pass; normal/
   FALSE builds, named production faults and restored controls are recorded below.
 - Archive: this intact bundle is preserved under UI/user input. Continue the
-  [smoke workstream](../../../docs/plan/browser-smoke-effectiveness/status.md) at Stage 3.
+  [smoke workstream](../../../docs/plan/browser-smoke-effectiveness/status.md) at its final Phase 4 gates.
 - Follow-up: [BSE-009](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
   changes writer startup when the retained route supersedes pending hydration.
-  Focused red/green proof passes; affected browser/fault and final-source full
-  verification remain pending before combined completion. Original product
+  Focused red/green, two qualified browser negatives, both 18-case normal
+  cohorts and two actual compiled-FALSE controls pass at `985da9bc8` as recorded
+  in the [follow-up evidence](../../../docs/plan/browser-smoke-effectiveness/status.md#bse-009-writer-startup-and-reader-revalidation).
+  Final-source full verification remains pending before combined completion. Original product
   follow-up scope and browser/provider/device limits remain explicit below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,

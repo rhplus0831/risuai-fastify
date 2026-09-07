@@ -8,17 +8,20 @@ Updated: 2026-09-08
   verification and closeout are active.
 - Accepted implementation: production through `a703b9d4b`, browser through
   `ee04eacba`; final Phase 3 full gate passes at clean `d5b5e5ed7`.
+- Final candidate: writer-startup repair `f87624888`, passive diagnostics and
+  native S81 control `7aad1bb37`, reviewed fixture inventory `985da9bc8`.
+  Focused normal/fault/restored/compiled-FALSE evidence applies at `985da9bc8`.
 - Review universe: all 92 cases/22 specs, twelve support files and four PNGs have
   complete scenario/control dispositions; no pending or partial review owner.
-- Confirmed gaps: BSE-001–007 have verified named controls. Earlier failed runs
+- Confirmed gaps: BSE-001–009 have verified named controls. Earlier failed runs
   and unqualified candidate faults retain their explicit source limits.
-- Next action: verify the S51 warm-cache prerequisite and S81 writer-startup
-  repair exposed by Phase 4's first full gate, reconcile their evidence, then
-  repeat final `test:agent` and `test:all` before acceptance and archive.
-- Verification pending: BSE-008/009 below. Earlier
+- Next action: run final `test:agent` and `test:all` at the reconciled clean
+  candidate, then record acceptance and archive.
+- Verification pending: final aggregate/full-suite gates. BSE-008/009's focused
+  browser/fault/restored controls are complete. Earlier
   [reader acceptance](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
-  retains its source limits; the writer-startup change needs affected Reader
-  revalidation before combined completion.
+  retains its source limits; the affected Reader cohort and actual compiled
+  fallback are revalidated below, with combined full verification still pending.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
@@ -677,3 +680,60 @@ stages, 3,910 successful script URL receipts and zero page errors are recorded.
 This closes the cache prerequisite repair and retains the matrix's original
 measurement limits. The writer-startup control, affected Reader verification
 and repeated final gates remain pending; no full phase acceptance is inferred.
+
+### BSE-009 Writer Startup and Reader Revalidation
+
+The [qualified writer-startup campaign](findings.md#bse-009-writer-startup-must-follow-the-current-hydration-target)
+at frozen `985da9bc8` passes **18/18 baseline** cases in 50.7s and **18/18 exact
+restored** cases in 57.0s: two declared repetitions of S01, S51, S81–S83 and
+S89–S92, with one worker and trace on. All three writer-switching consumers,
+normal send/completed reload, native Reader restart, default/fallback drafts and
+outbox, delayed initial route, cache populations and connected import recovery
+are included. No old browser body or assertion was removed.
+
+S81 now proves that the actual current-generation startup evaluation is awaiting
+B's native chat response before it releases A's native character response.
+The real retained A route then becomes visible and its SQLite selection is
+accepted at revision three under A's writer epoch three, while that same B
+evaluation remains pending and generation stays gated. Releasing B lets the
+fixed startup reevaluate A and complete every original draft, writer, durable
+message and no-reload oracle.
+
+Removing only the post-chat/prompt and catch target-change retry guards causes
+**both unchanged S81 repetitions to fail** at the original 30s generation-readiness
+assertion. Native current A/B responses complete with HTTP 200; A retains its
+ready route and SQLite ownership/selection, but reports only `chat-dependencies`
+with `selected-chat-hydration-failed`. This recreates the lost update and is not
+a generic suite timeout or a failed fixture admission. Passive per-evaluation
+metadata remains identical under the fault and clears in `finally`.
+
+An actual `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` build with the existing dedicated
+fallback fixture also passes **2/2** in 9.1s. Each real encrypted outbox row has a
+12-byte IV and 220-byte ciphertext. The same mutation ID replays once after the
+UI edit's accepted response is lost; original/replay base revisions are one/two,
+with one durable edit, one acknowledged receipt and one ACK. The newer scoped
+composer draft remains at sequence two and absent from SQLite, with no runtime
+observer override after fallback and no forbidden Reader request.
+
+All 3,621 tracked lab inputs restore exactly; every one of the 503 restored
+normal assets matches baseline. The compiled-FALSE catalog is distinct.
+The four stages record 10,646 successful script URL receipts and zero page
+errors. Route helper `delivered` flags denote successful `route.fulfill` calls;
+raw traces independently prove current A/B HTTP completion. An older A read
+cancels during promotion, as expected for a superseded Reader generation.
+
+The four production regressions and metadata/overlap checks pass in 217
+bootstrap plus 14 readiness tests. Final full `check:server` passes after root
+review identifies exactly two new test-only `getDatabase` fixture reads:
+bootstrap count 194→196 and matching inventory total 4,274→4,276. `985da9bc8`
+changes only those two counts under the existing policy; no production consumer,
+owner, dependency, seam or permission is broadened. The initial inventory-gate
+failures remain in their logs and do not accept an incomplete typecheck.
+
+Final discovery matches **92/92 inventory identities in 22 specs**, twelve local
+TypeScript support files, four PNGs and twenty-four direct/alias hook owners.
+All new passive observations and both native response controls are classified;
+all scenario titles remain unchanged. Current guides now state the stable-target
+startup contract and the separate warm-cache prerequisite. The next required
+work is final clean-source `pnpm test:agent`, then `pnpm test:all`; no focused
+repair or supplemental Reader browser work remains pending.

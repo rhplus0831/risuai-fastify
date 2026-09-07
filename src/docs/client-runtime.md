@@ -132,7 +132,10 @@ fallback through `src/ts/observerShellFlag.ts`.
 11. Reconcile recovered generation effects, then hydrate the selected character
     detail, active chat, and selected prompt owner declared by the chat-generation
     runtime surface. Publish `chat-ready`; `canGenerate` becomes true only when
-    these dependencies and plugins are coherent. A localized generation-recovery
+    these dependencies and plugins are coherent. If retained-route restoration
+    changes the character, chat or prompt owner while hydration is pending,
+    reevaluate that target before granting readiness. Unchanged-target failures
+    stay gated, and superseded sessions stop evaluating. A localized generation-recovery
     failure keeps the shell available and exposes app-level actions to retry only
     the failed recovery step or permanently skip its remaining client effects so
     generation can continue. Skipping does not remove the persisted reply or

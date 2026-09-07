@@ -98,6 +98,9 @@ capabilities consumed by the shell and protocol adapters:
   compatibility projection. Once character detail identifies the owners, chat
   window and prompt-template bodies load concurrently, including during selected
   chat readiness. Both must settle successfully before readiness is granted.
+  Startup reevaluates a target changed by retained-route restoration while these
+  reads are pending; an old completion cannot certify the newer target or leave
+  its selection change unobserved. Unchanged-target failures remain explicit.
   Requirement reads are deduplicated,
   minimum-revision fenced, and
   aborted when superseded by newer navigation. A route-local failure leaves the
