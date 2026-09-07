@@ -1,6 +1,6 @@
 # Connected Read-Only Clients Status
 
-Updated: 2026-09-06
+Updated: 2026-09-07
 
 ## Execution Cursor
 
@@ -29,6 +29,11 @@ active [phase](phases/README.md) for detailed execution instructions.
 | [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.          |
 
 ## Verification Ledger
+
+2026-09-07 coordination-policy update: shared documentation checks passed as
+recorded in the [smoke verification ledger](../browser-smoke-effectiveness/status.md#verification-ledger).
+This validates the policy edit only; no implementation phase ended and
+`pnpm test:all` was not run for this edit.
 
 | Scope                         | Source/date                                     | Result                                                                                                                                                                                   | Limit                                                                                                      |
 | ----------------------------- | ----------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
@@ -61,6 +66,15 @@ cursor at the top; do not duplicate it in the plan or phase files.
   follow-up work.
 - 2026-09-06: This task prepares the documents. Implementation begins in a
   subsequent task at Phase 0; all implementation phases remain pending.
+- 2026-09-07: The user confirmed the rollout default: keep the public feature
+  disabled during implementation, then enable connected readers by default
+  after all required feature evidence passes. Phase 5 verifies the final default
+  and conservative-writer fallback, preserving drafts and pending intent.
+- 2026-09-07: The user explicitly requires the implementing agent to run
+  `pnpm test:all` at the end of every phase without additional user consent,
+  before acceptance or handoff. This supersedes the earlier user/CI-only command
+  ownership for this workstream. Record final-source results and keep failed or
+  unavailable required checks pending. All implementation phases remain pending.
 
 Record future scope or sequencing changes here with rationale, affected phase,
 dependency, evidence, and remaining consequence. Update the plan and affected
@@ -76,4 +90,5 @@ product questions requiring another approval round.
 3. Observer-safe runtime set, including plugin/display and operational routes.
 4. How retained drafts/intent are separated from authoritative reader content;
    which current editors need additional demotion preservation.
-5. Rollout flag ownership and old-client/protocol compatibility.
+5. Rollout flag ownership and old-client/protocol compatibility under the agreed
+   disabled-during-implementation, enabled-after-verification default policy.

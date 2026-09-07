@@ -194,8 +194,18 @@ Follow the current [test workflow](../../tests/README.md#running-the-suite).
 During implementation use `pnpm test -- <one-test-or-source-file>` for a concrete
 diagnostic; exact browser specs build and run the selected spec. Once an
 implementation batch is complete, run `pnpm test:agent`. Documentation changes
-also require `pnpm check:docs`. User/CI retain `pnpm test:all` and full
-compatibility lanes; do not silently change that ownership.
+also require `pnpm check:docs`.
+
+By explicit user instruction dated 2026-09-07, at the end of every phase
+(Phases 0–4), the implementing agent must run `pnpm test:all` without requesting
+additional user consent. Run it after phase work and self-review, before phase
+acceptance or handoff, and record the tested source, command, result, and
+exclusions in status. Repair failures and establish a passing result at the
+phase's final source; missing required evidence leaves the phase pending. This
+overrides the default user/CI-only ownership for this workstream. The command
+includes full browser execution and current compatibility; additional pinned
+compatibility lanes retain their existing user/CI ownership. See the
+[coordination policy](../browser-smoke-and-connected-readers.md#verification-and-completion).
 
 The default documentation validator excludes active plans. Explicitly validate
 this plan bundle and its active index with `validateCurrentDocumentation` from
@@ -214,8 +224,8 @@ Closeout requires:
   prerequisite prevents proof, keep that phase and full closeout incomplete.
 - Passing focused evidence for changed browser contracts and affected helper
   consumers, final agent aggregate evidence, and full browser-suite evidence at
-  the final source from its user/CI owner. Without that full browser result,
-  label the state implementation-complete/verification-pending.
+  the final source from the agent's required `pnpm test:all` run. Without that
+  full browser result, label the state implementation-complete/verification-pending.
 - Current guidance accurately describes what tests execute and prove. Archive
   the complete workstream and repair its links/index only after these conditions
   are satisfied.

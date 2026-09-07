@@ -23,5 +23,8 @@ bounded handoff; do not pre-create empty execution logs or duplicate the phase
 acceptance table. Keep incomplete behavior behind the rollout boundary.
 
 Tests are part of every phase. Apply the current aggregate/docs workflow after
-the implementation batch is complete. Phase 5 combines the feature's contracts
-and records release evidence; it is not the first correctness check.
+the implementation batch is complete. At the end of every phase, run
+`pnpm test:all` without additional user consent before phase acceptance or
+handoff, and record its final-source evidence in status as required by the
+[plan](../PLAN.md#verification-and-completion). Phase 5 combines the feature's
+contracts and records release evidence; it is not the first correctness check.

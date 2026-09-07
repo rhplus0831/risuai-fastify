@@ -4,9 +4,9 @@ Dependency: Phases 0–4 accepted. Progress belongs in [status](../status.md).
 
 ## Outcome
 
-Accept the combined behavior at a recorded source, make an evidence-based
-rollout decision, and update the architecture guides. Earlier phase evidence
-must still apply to the candidate implementation.
+Accept the combined behavior at a recorded source, apply the agreed rollout
+default after required verification, and update the architecture guides. Earlier
+phase evidence must still apply to the candidate implementation.
 
 ## Combined Acceptance Matrix
 
@@ -38,9 +38,11 @@ ordering separately from domain command revisions.
   browser conditions are simulated and which mobile/browser variants were
   exercised; desktop viewport size alone is not real-device lifecycle evidence.
 - Once implementation is complete, run `pnpm test:agent` and record its source
-  and results. It builds smoke assets but does not execute Playwright. Track
-  user/CI full-suite and compatibility evidence separately; unexecuted lanes
-  remain explicitly pending, without invented passes or new approval gates.
+  and results. It builds smoke assets but does not execute Playwright. At the
+  end of Phase 5, run `pnpm test:all` without additional user consent before
+  acceptance, following the [per-phase policy](../PLAN.md#verification-and-completion).
+  Record its final-source results, including full-browser and current
+  compatibility evidence. Unexecuted required checks remain explicitly pending.
 - Check bounded reader work: subscriptions, generation viewers, hydrated
   resources, and retry timers should track active reader needs and be released
   on teardown. Use deterministic counts and existing fixtures; investigate
@@ -48,10 +50,13 @@ ordering separately from domain command revisions.
 
 ## Rollout, Documentation, and Closeout
 
-- Decide the final rollout-flag/default behavior after all required feature
-  evidence passes. Preserve a documented fallback to the conservative writer
-  flow for partial rollout failures without deleting drafts or pending intent.
-  Do not accumulate overlapping permanent observer flags or unowned old paths.
+- Apply the user-confirmed policy: keep the public feature disabled during
+  implementation, then enable connected readers by default after all required
+  feature evidence passes. Verify the resulting default and a documented
+  fallback to the conservative writer flow without deleting drafts or pending
+  intent; run the phase-ending `pnpm test:all` at that final configuration before
+  acceptance. Record the flag's final disposition. Do not accumulate overlapping
+  permanent observer flags or unowned old paths.
 - Exercise the plan's mixed-version policy with a retained conservative client
   path or a legacy-handshake fixture, recording which was used. Old clients may
   still prompt/freeze and initiate their existing acquisition flow; verify new

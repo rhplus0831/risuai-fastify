@@ -1,6 +1,6 @@
 # Browser Smoke Effectiveness Status
 
-Updated: 2026-09-06
+Updated: 2026-09-07
 
 ## Execution Cursor
 
@@ -29,6 +29,12 @@ for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Verification Ledger
 
+2026-09-07 coordination-policy update: `pnpm check:docs` passed for 49 current
+documents; explicit validation passed for all 22 coordination, plan-bundle, and
+active-index documents. Changed Markdown passed Prettier with the ignore
+override and whitespace checks. This validates documentation only; no
+implementation phase ended and `pnpm test:all` was not run for this policy edit.
+
 | Scope                    | Source/date                                     | Result                                                                                                                                                                                             | Limit                                                                               |
 | ------------------------ | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
 | Planning discovery       | Planning source, 2026-09-06                     | Playwright list mode found 69 default cases in 16 files; no collection errors                                                                                                                      | Discovery only; no browser tests executed                                           |
@@ -42,8 +48,10 @@ For each execution slice append its source anchor, finding IDs, acceptance
 summary, linked fault evidence, aggregate results, and residual limit. Detailed
 fixtures, fault diffs, and per-experiment commands/results belong to the finding.
 Never carry an earlier pass forward to a later changed implementation. The
-implementing agent owns recording phase acceptance and following up on the
-final Quality `smoke` result or user-run equivalent described in Phase 4.
+implementing agent owns recording phase acceptance and executing `pnpm test:all`
+at every phase end without additional user consent. Record final full-browser
+evidence from that run as described in Phase 4; link matching CI evidence when
+available.
 
 ## Decisions and Scope Changes
 
@@ -57,6 +65,11 @@ final Quality `smoke` result or user-run equivalent described in Phase 4.
 - 2026-09-06: Use the current Chromium lane and deterministic external boundaries.
   New browser engines, real devices, live services, and broad mutation tooling
   are outside the initial scope.
+- 2026-09-07: The user explicitly requires the implementing agent to run
+  `pnpm test:all` at the end of every phase without additional user consent,
+  before acceptance or handoff. This supersedes the earlier user/CI-only command
+  ownership for this workstream. Record final-source results and keep failed or
+  unavailable required checks pending. All implementation phases remain pending.
 
 Record future changes here with the affected contract, evidence, owner,
 dependency, and revisit condition. Update stable scope in the plan when needed.

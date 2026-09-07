@@ -206,7 +206,13 @@ dependencies pass. Phase 0 determines whether the existing observer flag can
 own the complete new behavior or requires a clearly scoped successor. Enabling
 the current flag alone is not this feature. Earlier phases may be independently
 merged with the public behavior disabled; release acceptance includes Phase 4.
-Record rollback behavior and the flag's final disposition in Phase 5.
+The user confirmed the final default policy on 2026-09-07: keep the public
+feature disabled during implementation, then enable connected readers by default
+after all required feature evidence passes. Phase 5 applies this policy, verifies
+the resulting default and conservative-writer fallback, and records rollback
+behavior and the flag's final disposition. Its phase-ending `pnpm test:all` must
+cover the final default configuration. Falling back must preserve drafts and
+pending intent.
 
 Mixed-version policy: unchanged older clients retain their existing writer-first
 startup, takeover confirmation, and frozen-page behavior. They do not acquire
@@ -228,9 +234,20 @@ Assert both visible behavior and server state/command counts where relevant.
 
 After the implementation batch is complete, run `pnpm test:agent`. It includes
 the smoke build, not Playwright execution. Run the exact required browser cases
-separately. The user/CI retain `pnpm test:all` and compatibility lanes; record
-their results or pending evidence honestly at the candidate source. Do not
-claim that a planning check or an earlier passing commit proves later behavior.
+separately.
+
+By explicit user instruction dated 2026-09-07, at the end of every phase
+(Phases 0–5), the implementing agent must run `pnpm test:all` without requesting
+additional user consent. Run it after phase work and self-review, before phase
+acceptance or handoff, and record the tested source, command, result, and
+exclusions in status. Repair failures and establish a passing result at the
+phase's final source; missing required evidence leaves the phase pending. This
+overrides the default user/CI-only ownership for this workstream. The command
+includes full browser execution and current compatibility; additional pinned
+compatibility lanes retain their existing user/CI ownership. See the
+[coordination policy](../browser-smoke-and-connected-readers.md#verification-and-completion).
+Do not claim that a planning check or an earlier passing commit proves later
+behavior.
 
 Documentation changes require `pnpm check:docs` plus explicit validation of this
 active plan, which is outside the default current-document set. Use

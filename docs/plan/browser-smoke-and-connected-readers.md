@@ -71,11 +71,31 @@ checks and record the result in the owning statuses before combined completion.
 
 ## Verification and Completion
 
-Follow each plan's validation rules and the current project test workflow.
-The agent aggregate builds smoke assets but does not execute Playwright.
-Keep full-browser and compatibility evidence with their existing user/CI
-owners; missing required evidence leaves the relevant stage and overall goal
-incomplete. Creating this coordination document accepts no implementation phase.
+User instruction, confirmed 2026-09-07: **At the end of every phase, the
+implementing agent must run `pnpm test:all` without requesting additional user
+consent.** This applies to smoke Phases 0–4 and reader Phases 0–5, including
+inventory and verification phases. This standing authorization overrides the
+default user/CI-only ownership of that command for these workstreams.
+
+Run it after the phase's work and self-review are complete, before accepting
+the phase or advancing to dependent work. Record the command, tested source,
+result, and exclusions in the owning status. Repair failures and establish
+passing evidence at the phase's final source; an unavailable or failing required
+check leaves the phase pending. Continue focused checks and the plans' required
+`pnpm test:agent` checks. The latter builds smoke assets but does not execute
+Playwright; `pnpm test:all` executes the full browser suite and current
+compatibility lane. Additional pinned compatibility lanes retain their existing
+user/CI ownership. CI evidence can supplement the phase run but does not replace
+the required agent execution. Creating or updating this coordination document
+accepts no implementation phase.
+
+Reader rollout policy, confirmed 2026-09-07: keep the public feature disabled
+during implementation and enable connected readers by default after all required
+feature evidence passes. Verify the resulting default and the documented
+conservative-writer fallback before accepting reader Phase 5, including its
+phase-ending `pnpm test:all`. Preserve drafts and pending intent when falling
+back. Phase 0 chooses the flag implementation; Phase 5 applies this agreed
+default policy and records the final flag disposition.
 
 The combined goal is complete only when both plans satisfy their completion
 criteria, required evidence applies to the final implementation, current guides

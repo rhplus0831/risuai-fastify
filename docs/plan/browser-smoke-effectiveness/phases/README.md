@@ -17,3 +17,7 @@ repairs one cohesive boundary, and ends with focused proof and a finding
 disposition. Keep implementation edits sequential for shared owners. Create
 additional slice files only when needed for independent review; do not duplicate
 the status cursor, finding register, or execution command inventory.
+
+At the end of every phase, run `pnpm test:all` without additional user consent
+before phase acceptance or handoff, and record its final-source evidence in
+status as required by the [plan](../PLAN.md#validation-and-completion).

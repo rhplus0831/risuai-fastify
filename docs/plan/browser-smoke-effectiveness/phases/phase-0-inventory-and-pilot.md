@@ -53,8 +53,9 @@ pnpm test -- server/fastify/browser-smoke/chatHistoryScroll.spec.ts
 ```
 
 Select the recovery pilot through its exact spec path as well. Do not run the
-full suite just to obtain an opening green count; user/CI suite results can be
-recorded separately when they match the source.
+full suite just to obtain an opening green count. At the end of Phase 0, run
+`pnpm test:all` without additional user consent before accepting the phase, as
+required by the [plan](../PLAN.md#validation-and-completion).
 
 Exit requires a complete discovery/control map, three documented pilot reviews
 with relevant fault-detection evidence, explicit evidence limits, confirmed

@@ -20,15 +20,15 @@ proves.
    Recheck independence or repeat a scheduling-sensitive scenario only when
    changes, failures, or unresolved ordering concerns justify it. Use declared
    observation conditions; do not retry until one green run appears.
-4. When implementation is complete, run `pnpm test:agent`. Record separately the
-   final full browser result from its user/CI owner. The implementing agent owns
-   collecting and validating the `smoke` job in the Quality workflow defined by
-   `.github/workflows/quality.yml` for the final PR/main source. Record its run
-   URL, tested source identity, result, and exclusions. If no matching CI run is
-   available, leave a concrete handoff in status for the user to run
-   `pnpm smoke:fastify-browser` at that source and supply its result. Do not
-   treat evidence from a different implementation as equivalent.
-   `pnpm test:all` remains user/CI owned.
+4. When implementation is complete, run `pnpm test:agent`. At the end of Phase 4,
+   the implementing agent must also run `pnpm test:all` without additional user
+   consent, following the [per-phase policy](../PLAN.md#validation-and-completion).
+   Record the tested source, command, result, exclusions, and full-browser lane
+   outcome from that run. Collect matching Quality `smoke` evidence from
+   `.github/workflows/quality.yml` when available, including its run URL and
+   source identity. CI evidence supplements the required phase execution; its
+   absence does not transfer execution back to the user. Do not treat evidence
+   from a different implementation as equivalent.
 5. Validate changed current documentation with `pnpm check:docs`, explicitly
    validate all active-plan links/paths as described in the plan, format changed
    Markdown with the ignore override, and check whitespace.
@@ -45,13 +45,14 @@ proves.
 | Shared repair is safe       | Reviewed consumers and their focused browser results                                                                      |
 | Critical journeys protected | Four Phase 2 contracts have browser-specific fault detection and no open high-risk gap                                    |
 | Agent checks passed         | Final `pnpm test:agent` result with its actual lane limits                                                                |
-| Browser suite passed        | Full browser execution from user/CI at the final implementation source                                                    |
+| Full phase checks passed    | Agent-run `pnpm test:all`, including full browser execution, at the final implementation source                           |
 | Evidence remains usable     | Checked-in fault/reproduction details and accurate current guides                                                         |
 
 If full browser verification is unavailable, record
 implementation-complete/verification-pending and the exact missing evidence.
-Keep the implementing agent as the follow-up owner and name the required user
-or CI action in status; do not leave a generic unowned verification blocker.
+Keep the implementing agent as the follow-up owner and name the concrete
+prerequisite or repair needed in status; do not leave a generic unowned
+verification blocker or request routine consent to run the authorized command.
 Do not mark the workstream complete or archive it on the strength of a smoke
 build or an earlier source's passing browser run.
 

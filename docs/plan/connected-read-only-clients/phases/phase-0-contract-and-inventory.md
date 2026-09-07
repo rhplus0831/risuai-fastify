@@ -75,5 +75,7 @@ listed in inventory B01–B13 as needed for each boundary.
   behavior and unexecuted test coverage. Phase 1 has a bounded starting slice.
 
 Run narrowly focused baseline tests only for concrete uncertainty, record their
-limits, and validate changed documents. No production-server access or data is
-needed for this phase.
+limits, and validate changed documents. At the end of Phase 0, run
+`pnpm test:all` without additional user consent before accepting the phase, as
+required by the [plan](../PLAN.md#verification-and-completion). No
+production-server access or data is needed for this phase.
