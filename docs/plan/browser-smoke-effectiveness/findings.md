@@ -716,3 +716,118 @@ The spec keeps trace off. The final manifest confirms the disposable checkout
 is clean, all three relevant source files match `9387d1464974` and main, and no
 owned build/browser job remains active. The dependency-verification override
 applies only to the lab's shared `node_modules` link.
+
+## Reader Phase 3 Production-Fault Evidence
+
+Source: `7c3da2160cbd1f8456ce3d8bc03727d6916b8de0`, production through
+`783d48469`. The new S81–S83 boundaries and test controls are in the
+[inventory](inventory.md#reader-phase-3-smoke-reconciliation). The final emitted
+baseline passed 3/3 in 9.9s. An earlier terminal-attempt pointer correction is
+retained in reader status and is excluded from production defect evidence.
+
+All experiments ran in `/tmp/risu-writer-switching-fault`, a detached disposable
+checkout with the existing dependency installation. Each exact hunk was
+reviewed and declared before execution, applied alone and restored before the
+next candidate. The same test and harness bytes were used throughout. No
+assertion, fixture, selector, workload, hook response or durable row was changed.
+
+Frozen SHA-256 identities:
+
+- `connectedWriterSwitching.spec.ts`:
+  `372287496b4c3ce42acd2c7d1d7ae9e1eecc916c6b9930472d4e5cddd03138a9`.
+- `fastBootstrapHarness.ts`:
+  `f09ca94035bea32b6401fed55d684c78517c4a0ca2f45532b30a5ab1a49dd978`.
+- `src/ts/bootstrap.ts`:
+  `674e180a1bda61f35d65e166033f58b4c84e52de75df17f02cbab3d637862629`.
+- `server/fastify/src/streamJobs.ts`:
+  `f51c3e08e7225afc69da51feeb7c1ce4b57cc90d231d3da74e672e1a26dc35d5`.
+
+Before each negative and final restored run, the command
+`pnpm --config.verify-deps-before-run=false run build:smoke` passed. Browser
+commands used `pnpm --config.verify-deps-before-run=false exec playwright test
+-c playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/connectedWriterSwitching.spec.ts --workers=1`,
+adding `--grep` with the corresponding exact full title from S81, S82 or S83
+in the inventory. One deterministic negative was declared per case. The final
+restored command omits `--grep` and runs all three. Traces were retained on
+failure; there was no profiling or concurrent test/build workload.
+
+### R3-F1: explicit promotion recovery
+
+In `src/ts/bootstrap.ts`, only the explicit promotion branch after acquisition:
+
+```diff
+-    await recoverConnectedWriter(acquired.bootstrap, operation)
++    Reflect.apply(console.warn, console, ['[fault-explicit-writer-recovery-omitted]'])
+```
+
+S81 **fails in 31.6s** at line 317's writer-capability assertion: mutation and
+generation stay disabled. Initial A writer/B reader startup, B's local route,
+actual Use this device/confirmation and SQL B/epoch 2 all passed first. The
+confirmed bootstrap was HTTP 200 with expected epoch 1 and matching lineage.
+B logged the branch marker and received `/assets/bootstrap-CnGy9LCZ.js` with
+HTTP 200, SHA-256
+`8d53a38093672ed6f8021f4c668dc15ddb6ce8de63322b12d281f9a4da6b18df`.
+This is an exact post-acquisition readiness failure, not failed startup.
+
+### R3-F2: durable job cancelled by viewer detach
+
+In `server/fastify/src/streamJobs.ts`, immediately after `job.clients.delete(client)`:
+
+```diff
++    if (job.operationId && !job.done && !job.abortController.signal.aborted) {
++      console.warn('[fault-durable-viewer-detach-abort]', job.operationId, job.id)
++      job.abortController.abort(new Error('Durable job incorrectly cancelled when its viewer detached'))
++    }
+```
+
+S82 **fails in 2.8s** at line 816's post-transfer durable-operation assertion.
+The provider was held with the exact operation `owned_by_job`, current attempt
+1 and a matching running attempt/job before actual UI takeover. B completed
+promotion and SQL reached its session/epoch 2. The same operation then became
+`retryable`, lost its current-attempt pointer and had no result. The server
+marker names that exact operation/job; before any release or context cleanup,
+the provider snapshot reports one invocation and one abort. No cancellation
+request occurred. This is the intended production detach defect, not a teardown
+abort or a fabricated provider response.
+
+### R3-F3: accepted explicit setup decision dropped
+
+In `src/ts/bootstrap.ts`, only the final decision of the existing setup dialog:
+
+```diff
+-    return selection === '0' && !controller.signal.aborted && isClientSessionOperationCurrent(operation)
++    const confirmed = selection === '0' && !controller.signal.aborted && isClientSessionOperationCurrent(operation)
++    if (confirmed) Reflect.apply(console.warn, console, ['[fault-explicit-setup-consent-dropped]'])
++    return false
+```
+
+S83 **fails in 31.1s** at line 1058's `settingsIsObject` initialization poll.
+Before the real setup click, SQL proved null owner, writer epoch/revision/
+projection epoch zero, absent settings and zero rows across 43 durable tables.
+The Web Locks override, fresh identity and preserved previous-session metadata
+were established. The accepted-decision marker proves the actual button reached
+the guarded true result. Afterwards SQL remained unchanged with no writer or
+initialization request. The browser received `/assets/bootstrap-jiyYAg0x.js`
+with HTTP 200, SHA-256
+`79fb326118288d838da5cff3d2910e00768da3714818c18c857269a164621f87`.
+
+### Restoration and source limits
+
+Each negative met its declared preconditions and failed its intended oracle;
+all page-error arrays are empty. The lab's tracked source is clean, and every
+frozen file matches the commit and main worktree. A clean restored build and the
+unchanged three cases **pass 3/3 in 10.0s** (3.7s, 3.7s, 977ms). Their received
+restored bootstrap chunk is `/assets/bootstrap-D1RXEDTQ.js`, SHA-256
+`54abbda8001966d7a8df168dc85ef826b00e240b3472d94b8f6f3ad3fe19079a`.
+The restored generation has one provider call/zero aborts; setup has one
+initialization event, epoch 1 and unchanged ownership after the expected foreign
+409; switching ends at A/epoch 3 with only the two original document requests.
+
+The manifest, exact commands, source hunks, chunk receipts, traces, SQL/provider
+snapshots and restored proof are under
+`/tmp/reader-phase3-writer-switching-fault-evidence`. These results establish
+explicit recovery composition, durable job survival and consent-driven first
+initialization. Live reader partial output, observer effects and final default
+rollout remain later reader phases. Phase-ending aggregate acceptance belongs
+in reader status; no smoke Phase 3/4 acceptance is implied.

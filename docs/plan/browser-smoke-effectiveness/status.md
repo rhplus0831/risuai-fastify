@@ -284,3 +284,18 @@ cache-owner fault twice and passes both restored controls; BSE-005 is verified.
 Unmanifested height/anchor candidates remain unqualified and the original P0-T
 proof retains its earlier source limit. Reader Phase 3 continues the feature
 work before this smoke audit resumes.
+
+Reader Phase 3 adds S81–S83 at `7c3da2160`, bringing discovery to 83 cases in
+20 specs. The actual UI switching/draft, held-generation survival and truly
+empty unsupported-identity setup baseline passes. Three independent exact
+production faults fail their intended post-action oracles; restoration and the
+same clean-build controls pass 3/3. Their
+[inventory](inventory.md#reader-phase-3-smoke-reconciliation) and
+[findings](findings.md#reader-phase-3-production-fault-evidence) retain controls,
+provenance and limits. Reader Phase 3 aggregate gates are recorded by its
+status; smoke Phases 3–4 remain pending through the reader handoff.
+
+Reader Phase 3 is accepted: `pnpm test:agent` passed in 2m 31.9s and all 13
+`pnpm test:all` lanes passed in 5m 54.3s at `7c3da2160` plus its evidence docs,
+including all 83 browser cases. The public flag remains disabled. Phase 4 now
+adds live viewing; the smoke workstream continues to wait for reader Phase 5.

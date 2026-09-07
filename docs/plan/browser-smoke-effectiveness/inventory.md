@@ -3,12 +3,13 @@
 Initial execution inventory: 2026-09-07 at `711b1d583` (clean worktree).
 Phase 2 discovery: `6f39fb8f0` plus the real-operation Realm browser spec.
 
-Reader Phase 2 discovery contains 80 registered cases in 19 specs, plus ten local
+Reader Phase 3 discovery at `7c3da2160` contains 83 registered cases in 20 specs, plus ten local
 TypeScript support owners and four screenshot baselines. The planning snapshot
 was extended by eight viewport/entry/height cases in `chatEntryLayout.spec.ts`
 and two real-operation Realm confirmation cases added during smoke Phase 2.
 Reader Phase 2 adds one real multi-session connected browsing scenario (S80);
-S32/S60 retain their identities with updated mixed-client behavior.
+S32/S60 retain their identities with updated mixed-client behavior. Reader Phase 3
+adds S81–S83 for explicit switching, durable generation survival and empty-server setup.
 Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
@@ -24,6 +25,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Pending                                               |
 | `chatStartupRendering.spec.ts`             |             3 | 2: transcript/startup                     | Pending                                               |
 | `connectedReaderBrowsing.spec.ts`          |             1 | Reader 2; Stage 3 reconciliation          | Added; final verification recorded in reader status   |
+| `connectedWriterSwitching.spec.ts`         |             3 | Reader 3; Stage 3 reconciliation          | Added; final verification recorded in reader status   |
 | `debugEchoLayoutStability.spec.ts`         |             1 | 2: generation/layout                      | Pending                                               |
 | `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Pending                                               |
 | `fastifyBrowserSmoke.spec.ts`              |            10 | 2: critical slices; 3: remaining journeys | Pending                                               |
@@ -37,7 +39,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Pending                                               |
 | `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Pending                                               |
 | `visibleStateRecovery.spec.ts`             |             3 | 2: visible/durable recovery               | Pending                                               |
-| **Total**                                  |        **80** |                                           | **Pilot evidence recorded; remaining review pending** |
+| **Total**                                  |        **83** |                                           | **Pilot evidence recorded; remaining review pending** |
 
 This file-level table is the current universe. The scenario records below are
 keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
@@ -173,6 +175,9 @@ row unless the detailed review states a narrower boundary.
 | S78 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles YES                            | Strengthened; BSE-002                |
 | S79 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles NO                             | Strengthened; BSE-002                |
 | S80 | `connectedReaderBrowsing.spec.ts:208`          | a mobile connected Reader follows committed updates and browses locally without taking write access                   | Added; Reader Phase 2 reconciliation |
+| S81 | `connectedWriterSwitching.spec.ts:580`         | Use this device switches A to B to A in place while preserving reader routes and the originating draft                | Added; Reader Phase 3 reconciliation |
+| S82 | `connectedWriterSwitching.spec.ts:745`         | an accepted server generation keeps its job and durable reply when Use this device transfers the writer               | Added; Reader Phase 3 reconciliation |
+| S83 | `connectedWriterSwitching.spec.ts:953`         | an empty server without Web Locks initializes only after the explicit setup action with a fresh writer identity       | Added; Reader Phase 3 reconciliation |
 
 ## Conditional and Expanded Execution
 
@@ -498,3 +503,25 @@ baseline, separately declared cache-owner fault and restored controls. This adds
 an explicit remount check to S22 without changing the 80-case/19-spec discovery
 universe. The original P0-T evidence keeps its earlier source limit; the new
 fault proves cache handoff on remount, with geometry still checked by S22.
+
+## Reader Phase 3 Smoke Reconciliation
+
+Source: `7c3da2160`; three new cases extend discovery to 83 cases in 20 specs.
+The public flag remains disabled. The complete three-case baseline passed in
+9.9s; production-fault and restored controls are recorded in
+[findings](findings.md#reader-phase-3-production-fault-evidence), with aggregate
+acceptance in [reader status](../connected-read-only-clients/status.md).
+No existing case or integration artifact identity is removed or renamed.
+
+| Scenario/control             | Real boundary and independent oracle                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                | Scope and limits                                                                                                                                                                                                                                                                                                                      |
+| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S81: A → B → A               | Separate browser contexts use actual **Use this device** and confirmation controls. SQL owner/epoch, stale 423 responses and accepted current-writer commands establish authority. Reader updates and local routes stay usable; time origin and document requests prove no reload. A types an unsent composer draft, sees it in Saved local edits after demotion, and restores it on return; B cannot see it.                                                                                                                       | Draft/route/ownership UI composition. Held uncertain intent, late receipt cleanup, retained unreadable work and superseded recovery use the focused real-outbox/coordinator companions.                                                                                                                                               |
+| S82: held durable generation | Actual composer/send UI starts one deterministic local provider invocation and a real durable operation/attempt/job. After actual B takeover, SQL still names the same running job and attempt. Release creates one completed attempt and exact canonical result on both clients, with no cancellation request or provider abort.                                                                                                                                                                                                   | The `generationChat` dependency controls only external provider execution. It does not seed operation rows or forge stream/completion responses. This proves durable survival; live reader partial/effect behavior remains Phase 4. Terminal completion correctly clears `current_attempt_no` while preserving the completed attempt. |
+| S83: empty first run         | `databaseSeedMode: empty` performs no import and creates no `db.json`. SQL checks absent settings, zero domain rows, revision/projection epoch zero and null owner. With Web Locks absent, a copied previous ID stays metadata and a fresh identity is installed. No acquisition/initialize request occurs before the actual setup click; afterwards one initialization event/settings object, writer epoch one and HTTP 200 writer stream establish startup. A foreign deny-only bootstrap returns 409 without changing ownership. | Browser API override supplies the unsupported Web Locks environment. Actual pre-shell UI, conditional acquisition, initialization and SQL are production paths. The initialization event can have null origin because persistence precedes writer-origin assignment; header and owner assertions independently prove the actor.       |
+| Shared harness additions     | Optional typed `generationChat` forwards a controlled provider; empty seed mode omits fixture import and checks empty durable state. Existing default initialized fixture behavior is unchanged.                                                                                                                                                                                                                                                                                                                                    | Harness audit is scoped to these options. They do not pre-complete the action under test or bypass server writer guards.                                                                                                                                                                                                              |
+| Observation and artifacts    | Context-level request/response logs, browser errors, SQLite snapshots and provider state are saved before teardown, including on failure. Console/source-chunk evidence distinguishes executed production faults.                                                                                                                                                                                                                                                                                                                   | Read-only smoke snapshots observe capabilities and scoped drafts; UI drives role changes, sending and setup. Chromium single-worker controls use the emitted build.                                                                                                                                                                   |
+
+All three exact production faults fail after their named startup/action
+preconditions. The unchanged final clean-build controls pass 3/3 in 10.0s.
+Stage 3 must reconcile these additions with subsequent reader viewer/rollout
+changes; this record does not accept the remaining smoke Phase 3 scenarios.
