@@ -32,6 +32,7 @@
   import Sidebar from './lib/SideBars/Sidebar.svelte'
   import ChatScreen from './lib/ChatScreens/ChatScreen.svelte'
   import ObserverShell from './lib/ObserverShell.svelte'
+  import WriterDraftRecovery from './lib/WriterDraftRecovery.svelte'
   import { showRealmInfoStore } from './ts/realmInfoStore'
   import {
     charactersResourceState,
@@ -716,5 +717,8 @@
         onDismiss={() => (customSideBarConfigDialogStore.open = false)}
         testId="custom-sidebar-config" />
     {/if}
+  {/if}
+  {#if $startupCoordinatorStore.capabilities.canRenderShell}
+    <WriterDraftRecovery />
   {/if}
 </main>
