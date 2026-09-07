@@ -174,8 +174,18 @@ test('writer transfers during streaming and stopping preserve one cancelled part
     )
     expect(cancellations).toMatchObject([{ client: 'B', canMutate: true, writerSession: pair.b.sessionId }])
     expect(cancellations).toHaveLength(1)
-    expect(pair.fetches.filter((record) => record.client === 'A' && record.revoked === true).length).toBeGreaterThan(0)
-    expect(pair.fetches.filter((record) => record.client === 'B' && record.revoked === true).length).toBeGreaterThan(0)
+    expect(
+      pair.fetches.filter(
+        (record) =>
+          record.client === 'A' && record.session?.lifecycle === 'reading' && record.session.writer?.epoch === 2,
+      ).length,
+    ).toBeGreaterThan(0)
+    expect(
+      pair.fetches.filter(
+        (record) =>
+          record.client === 'B' && record.session?.lifecycle === 'reading' && record.session.writer?.epoch === 3,
+      ).length,
+    ).toBeGreaterThan(0)
     expectNoReaderControl(pair)
     expect(pair.errors).toEqual([])
   } finally {
@@ -240,7 +250,12 @@ test('writer transfer while a real finalization journal is queued commits one re
     expect(
       pair.fetches.filter((record) => record.method === 'POST' && record.path === '/api/v1/generation-operations'),
     ).toHaveLength(1)
-    expect(pair.fetches.filter((record) => record.client === 'A' && record.revoked === true).length).toBeGreaterThan(0)
+    expect(
+      pair.fetches.filter(
+        (record) =>
+          record.client === 'A' && record.session?.lifecycle === 'reading' && record.session.writer?.epoch === 2,
+      ).length,
+    ).toBeGreaterThan(0)
     expectNoReaderControl(pair)
     expect(pair.errors).toEqual([])
     pair.evidence.receipts = receipts

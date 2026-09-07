@@ -619,7 +619,7 @@ export async function promoteGenerationWriter(
   await expect
     .poll(() => acquisitions().map(({ transfer, status }) => ({ transfer, status })))
     .toEqual([
-      { transfer: false, status: 423 },
+      { transfer: false, status: 409 },
       { transfer: true, status: 200 },
     ])
   for (const request of acquisitions())
