@@ -358,3 +358,10 @@ that preserves its original fourteen pauses and exact geometry/remount oracles.
 The [repair record](findings.md#reader-phase-5-final-gate-repairs) retains the
 failure and pending combined controls. Reader Phase 5 remains active; no Smoke
 Phase 3/4 handoff or archive is accepted by these focused fixes.
+
+At `60ac61bde`, the bounded repair campaign passes all seventeen positive browser
+executions and qualifies all three expected negatives, with exact restored source
+and normal emission. Actual compiled-FALSE replay/draft protection also passes.
+[Renewed proof](findings.md#renewed-combined-controls-and-fallback) and
+92-case/22-spec discovery reconcile the current reader additions. Reader Phase 5
+now repeats its final aggregate gates; Smoke Phase 3/4 acceptance is still pending.

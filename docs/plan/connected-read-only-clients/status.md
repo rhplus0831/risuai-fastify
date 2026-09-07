@@ -14,14 +14,15 @@ Updated: 2026-09-08
   restored controls passed. The authorized default is enabled in `70a8b18e1`;
   normal and actual FALSE builds also pass at their recorded source. The first
   phase-ending full run exposed S47 startup navigation and recurring S22 pause
-  coverage failures. Their committed repairs and new S92 companion now require
-  combined browser/fault controls, renewed fallback proof and final gates.
+  coverage failures. Their committed repairs and S92 now pass combined browser,
+  qualified fault/restored and renewed compiled-FALSE controls. Only repeated
+  final aggregate gates and acceptance/archive remain pending.
 - Production behavior: normal builds enable connected readers. Exact build-time
   `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the conservative writer fallback.
   Drafts and pending intent keep their originating local scope.
-- Blockers: no external dependency. Phase 5 acceptance remains pending while
-  the S47 route repair and reopened BSE-005 sampling repair are verified. Prior
-  phase acceptance and fault evidence retain their original source limits.
+- Blockers: no external dependency. The bounded S47 route/BSE-005 sampling
+  repairs and renewed rollout controls pass. Phase 5 awaits repeated final
+  aggregates; earlier acceptance and faults retain their original source limits.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -1189,3 +1190,32 @@ regression. `60ac61bde` asserts that exact Settings capability state both before
 and after release, plus retained writer authority; initial chat generation
 readiness and all navigation/visibility oracles stay intact. No S22 or negatives
 ran from the failed baseline. The campaign restarts from a fresh frozen source.
+
+### Final-Gate Repair Controls and Renewed Fallback
+
+At frozen `60ac61bde`, all eleven navigation/recovery/switching cases pass,
+followed by two S22 baselines (50.7s, 45.5s). The retained parser-owner fault
+qualifies twice at direct row-298 remount; the narrow App intent-priority fault
+qualifies once at visible Settings before the held handler is released. Exact
+restoration and a fresh normal build pass S22 twice (44.9s, 44.3s) and S92 once
+(1.4s). All original fourteen pauses and the prepared thirty-frame pause remain;
+its geometric sample-zero identity stays readable at zero drift with 31 maximum
+residents. The failure does not depend on later survivor selection or relaxed
+bounds. BSE-006's browser priority fault retains App's completion cleanup.
+
+The actual compiled-FALSE S90 passes after removing the writer override before
+real reload: same session/lineage/epoch one, native encrypted intent replay with
+same ID/semantic patch, one ACK/edit event/receipt, and the newer sequence-two
+draft restored locally and absent from SQL. The Reader remains live in its
+original document with zero forbidden requests. Final normal restoration matches
+every one of the 503 baseline output files. Across the completed campaign,
+17 positive executions pass, three expected negatives qualify, 3,028 successful
+script URLs map to their catalog, and zero page errors occur. All 2,473 lab inputs
+remain frozen and both production faults are restored byte-for-byte.
+
+The [renewed proof](../browser-smoke-effectiveness/findings.md#renewed-combined-controls-and-fallback)
+records exact commands, hashes, timing, assertion ordering and scope limits.
+Discovery at `593b01eae` confirms all 92 cases/22 specs, twelve local support
+files and four PNGs; current anchors and the full hook map are reconciled.
+Both final aggregate gates are now repeated at unchanged production/test source
+plus these evidence records; no source work remains pending those checks.

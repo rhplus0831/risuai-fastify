@@ -496,3 +496,11 @@ S92 holds the real emitted character-handler response and requires visible
 Settings before release. The S22 coverage repair and these route changes await
 combined browser/fault/fallback controls and repeated final aggregate acceptance
 in [status](status.md#final-full-suite-failures-and-bounded-repairs).
+
+Renewed combined controls at `60ac61bde` now pass: all eleven route/recovery/
+switching cases, four positive S22 repetitions, restored S92 and actual compiled-
+FALSE S90. The retained parser-owner fault qualifies twice and the App priority
+fault once, with exact source restoration. All 503 normal output files match
+before/after; the actual fallback preserves native intent, one ACK and the newer
+draft under unchanged authority. Final phase aggregates remain in
+[status](status.md#final-gate-repair-controls-and-renewed-fallback).

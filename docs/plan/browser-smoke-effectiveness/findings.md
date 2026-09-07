@@ -1348,7 +1348,7 @@ retain the causal boundaries independently of those temporary artifacts.
 ### BSE-006: Retained Reader route suppresses newer writer navigation
 
 Classification: reproduced production route bug, repaired in `a703b9d4b`;
-built-browser negative/restored acceptance pending. Risk: an authorized writer
+built-browser negative/restored proof is completed below. Risk: an authorized writer
 navigates to Settings during initial route loading but remains on the character
 view. Original S47 reaches `background-ready`, calls the real router, and never
 requests Settings/Language assets. Its character-handler request spans
@@ -1392,7 +1392,7 @@ matrix is introduced. The retained parser-owner fault still targets the earlier
 direct row-298 remount text assertion, before this new pause; it cannot certify
 new geometry-fault detection.
 
-### Frozen combined verification protocol — pending
+### Initial frozen combined verification protocol
 
 The detached lab freezes all 2,473 production/test/configuration inputs at
 `678876571`, digest
@@ -1472,3 +1472,117 @@ readiness and the held-handler navigation oracle are unchanged. All 2,473 inputs
 remain frozen and 1,750 successful script URLs map to the 503-file catalog, with
 no page errors or markers. No S22 or negative stage ran. Preserve this failure
 and restart the declared campaign from the corrected test source.
+
+### Renewed Combined Controls and Fallback
+
+At corrected source `60ac61bde`, the fresh lab freezes 2,473 inputs, digest
+`97ce3a01c4b89f4e1b130c0429e5b77fa79e094ea527dca94544a41774c2db03`.
+Only the new S92 expectation changed from the failed `678876571` baseline; its
+spec SHA256 is now
+`117839a6164f8c276c485325178227785b1a7916a4360dc97dc158893be220ad`.
+Both literal production faults and their source/fault hashes remain exactly as
+predeclared above. Tests, helpers, fixtures and configuration remain frozen
+through the campaign. Main receives documentation changes only.
+
+| Stage                       | Fresh build process | Browser result                                                                                | Successful script URL receipts |
+| --------------------------- | ------------------: | --------------------------------------------------------------------------------------------- | -----------------------------: |
+| Normal baseline, flag unset |              13.13s | All eleven navigation/recovery/switching cases pass (29.5s); S22 passes twice (50.7s, 45.5s). |                          1,982 |
+| F1, parser-owner fault      |              13.38s | Both S22 cases fail the intended direct remount text assertion (20.0s, 19.5s).                |                            232 |
+| F2, retained route priority |              13.10s | S92 fails visible Language selector before handler release (6.7s).                            |                            116 |
+| Restored normal control     |              14.35s | S22 passes twice (44.9s, 44.3s), then S92 passes (1.4s).                                      |                            355 |
+| Actual compiled `FALSE`     |              15.33s | S90 fallback variant passes (3.0s case; 4.6s Playwright).                                     |                            343 |
+| Final normal restoration    |              13.45s | No additional browser run; all 503 emitted files match baseline.                              |                              — |
+
+There are **17 passing browser executions and three qualified expected negative
+executions across two faults**, with zero page errors. All 3,028 successful script
+URLs map to their preserved emitted catalogs; network response bodies were not
+independently hashed. Both source faults are restored byte-for-byte, every lab
+input matches its frozen source and the lab is clean. The completed compact
+manifest is `/tmp/reader-phase5-combined-repair-ykatvwo7/campaign-summary.json`.
+
+All four passing S22 executions retain fourteen original pauses of thirty
+samples, plus the separate prepared thirty-frame pause. Each captures geometric
+row 297 in its first preparation snapshot before further sampling; every measured
+frame keeps that identity visible/readable at zero top drift. Maximum residency,
+including preparation, is 31 against the unchanged 76-row bound. Original rapid
+sample-zero anchors number 2/2 in the baseline and 3/1 after restoration. The
+added pause therefore provides explicit measured coverage without replacing any
+original observation or retrospectively selecting a survivor.
+
+F1 reaches the direct row-298 text assertion at spec line 161 after initial thirty
+readable bodies, the first seven gestures, actual unmount and both fixed native
+return inputs. Both bodies remain whitespace. Each run records the exact
+row-298 owner-mismatch marker and HTTP 200 for `/assets/Chat-DMwQseV9.js`, SHA256
+`d7fea58d32a7042e6b25848dd3612c135fca47eec20719400374cd5a9ca23df9`.
+Both have five older-page requests and no page errors. The new prepared pause is
+not reached; this remains direct remount-readability fault detection.
+
+F2 first establishes managed writing/live authority, mutation/generation readiness
+and the actual held character-handler request. Production navigation changes the
+URL to Settings; the runtime marker reports old character and new `settings:10:`
+keys, but its Language selector is absent. The exact assertion fails at
+8,294.524ms; handler continuation begins only at 8,295.292ms and the HTTP 200
+response completes at 8,300.239ms during cleanup. Root independently checks this
+ordering in the raw trace. The served marker chunk is
+`/assets/appStartup-N4Rmfhw5.js`, SHA256
+`0fc1aeb260f6e0f45d2796e94a06df698d54c7c38a870316733cd19b51437cd0`.
+The restored S92 reaches visible/ready Settings while the handler remains held,
+then retains the same document/writer and mutation-ready, generation-disabled
+Settings state after actual delivery. Effect-cleanup fault coverage remains the
+separate mounted held-promise test's scope.
+
+The renewed FALSE variant removes the writer override before actual reload. It
+becomes unmanaged with the same session, lineage and writer epoch one. A native
+encrypted retained row (12-byte IV, 220-byte ciphertext) replays the same mutation
+ID and semantic patch; only baseRevision rebases from one to two. Exactly one
+HTTP 200 ACK settles that receipt; SQL has one edit event and one receipt, with
+only acknowledgement changed. The newer sequence-two composer draft remains
+visible/local and absent from durable messages; native/in-memory queues drain.
+The Reader keeps its document, live reading and an empty queue, with zero
+forbidden requests. This renews default/fallback composition after the App repair.
+
+Baseline, restored control and final normal catalogs have identical 503-file
+digest `bf124d52003221a23cf50f94f917ac7b2a9a8a3b4c776299a63ff554da66f8d0`.
+FALSE differs at
+`0743ef9726d05ee818ce5641fc553110268d3726e2f0e2bbcff6072150a38b5e`.
+The following exact selections supplement the environments/stage ordering above;
+build freshly after each fault or restoration, use distinct output directories,
+and retain the same source/test/config hashes.
+
+```sh
+pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/selectedLocaleRuntime.spec.ts \
+  server/fastify/browser-smoke/visibleStateRecovery.spec.ts \
+  server/fastify/browser-smoke/connectedWriterSwitching.spec.ts \
+  --workers=1 --trace=on
+
+pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/chatHistoryScroll.spec.ts \
+  --grep 'rapid reversals and pauses among tall messages' \
+  --repeat-each=2 --workers=1 --trace=off
+
+pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/selectedLocaleRuntime.spec.ts \
+  --grep 'new writer navigation reaches Settings while the initial character route handler is delayed' \
+  --workers=1 --trace=on
+
+VITE_FAST_BOOTSTRAP_OBSERVER=FALSE \
+  pnpm --config.verify-deps-before-run=false build:smoke
+VITE_FAST_BOOTSTRAP_OBSERVER=FALSE RISU_READER_ROLLOUT_COMPILED_FALLBACK=TRUE \
+  pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/connectedReaderRollout.spec.ts \
+  --grep 'conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft' \
+  --workers=1 --trace=on
+```
+
+Final discovery at main `593b01eae` confirms **92 cases in 22 specs**, twelve
+TypeScript support files and four PNG baselines, with no collection error. All
+92 identities and current source anchors match the inventory. Its hook map now
+includes all direct/local-alias references in specs and the two new support
+helpers. Discovery and these qualified controls do not replace the still-required
+final `test:agent` and phase-ending `test:all`; earlier failed gates remain
+recorded. No additional production fault matrix is introduced.
