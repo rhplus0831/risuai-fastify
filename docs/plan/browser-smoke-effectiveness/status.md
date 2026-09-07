@@ -579,3 +579,31 @@ so no additional scheduling or mutation campaign is justified. The required fina
 Collect matching Quality `smoke` CI when available; its absence does not replace
 or transfer these implementing-agent gates. Final acceptance/archive remain
 pending until both gates pass and the completed records are validated.
+
+### Phase 4 Agent-Gate Fixture Repair
+
+The first final `pnpm test:agent` at `72a181f5d` exits 1 in **2m 20.4s**.
+All other agent lanes pass, including 9,083 frontend tests, types, topology,
+current docs, Svelte zero errors/warnings and smoke build. The server lane is
+4,227 passed/one failed/two existing skips: `memoryWorker.test.ts`'s productive
+multi-batch case expects `job-33` in its second batch but receives `job-9`.
+The failed gate remains `/tmp/smoke-phase4-final-test-agent.log`; it does not
+accept the final phase.
+
+This is a separate unit-fixture ordering defect. SQLite supplies `created_at`
+with its native clock (`db.ts:822`), independent of JavaScript fake timers;
+`claimNextMemoryJob` sorts by `created_at, id`. Unpadded numeric IDs therefore
+have a different order when inserts share a timestamp. Forcing equal timestamps
+with the original IDs deterministically reproduces the exact `job-9` versus
+`job-33` failure. The repair uses padded ordinal IDs and retains those explicit
+timestamp ties. Every original batch-size, last-job, zero-delay productive tick,
+idle timer, drained-backlog and stop assertion remains unchanged.
+
+The focused full worker suite passes **24/24** after the repair; Prettier and
+whitespace checks pass. Red/green logs are
+`/tmp/smoke-phase4-memory-batch-tie-red.log` and
+`/tmp/smoke-phase4-memory-batch-tie-green.log`. This changes only unit-test fixture
+input, so browser/Reader behavior and the 92-case discovery remain unchanged.
+No browser production-fault campaign is claimed or required for this separate
+clock/ID fixture correction. Repeat final `test:agent`, then the required full
+phase gate at the corrected final source.
