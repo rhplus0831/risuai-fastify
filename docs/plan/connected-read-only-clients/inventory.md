@@ -2,9 +2,12 @@
 
 Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 
-This is a seed map from source inspection, not an exhaustive audit or completed
-mutation-guard inventory. Phase 0 expands it by actual caller and runtime.
-Execution and verification results belong in [status](status.md).
+Phase 0 source confirmation: `058e2ca2e`, 2026-09-07. The production source is
+unchanged from the Stage 1 entry; the intervening commits strengthen smoke
+tests and evidence. The boundary map below is expanded by actual caller and
+runtime in the following sections. Dispositions describe the implementation
+contract, not guards already proven to exist. Execution, acceptance and
+verification results belong in [status](status.md).
 
 ## Boundary Map
 
@@ -75,3 +78,250 @@ Use the [browser recovery](../../tests/browser-state-sync-and-recovery.md),
 additional owners. Add a focused connected-reader browser spec if extending the
 existing startup matrix would mix unrelated contracts. Record its real path
 when created; no hypothetical test file counts as verification.
+
+## Source-Confirmed Transition Contract
+
+Current source separates neither live role from startup history nor observer
+subscription from writer recovery: `bootstrap.ts:332` always follows the optional
+observer step with `loadWebInitialDatabase`; `bootstrap.ts:775` adopts pending
+ownership before writer bootstrap; `bootstrap.ts:985` publishes `writer-ready`
+after subscription success; and `activeWriterSession.ts:193` stops the shared
+read runtimes during writer loss. Current guides accurately describe the partial
+shell, including the continued acquisition and refresh/freeze fallback. The
+following table is the new contract to implement, not existing browser proof.
+
+| Transition                      | Authoritative signal and proposed lifecycle                                                                                                                                      | Read/runtime policy                                                                                                                                     | Ordinary write admission and delayed-work fence                                                                                                                                                 | Phase/test owners                                                              |
+| ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Cold initialized startup        | Authenticated bootstrap supplies lineage and an explicit current-writer snapshot; start `resolving`. Missing, malformed or failed metadata is unknown ownership, never no owner. | Hydrate coherent shell and supported read routes; subscribe without writer intent.                                                                      | Closed until the same-owner or explicit no-owner branch completes recovery. Snapshot/acquisition must use an ownership precondition so a delayed read cannot steal a newer disconnected writer. | 1–2; client/server bootstrap and active-writer tests; startup browser journey. |
+| Same-tab writer resume          | Exclusive local ownership of the retained session identity plus authoritative matching durable owner; `recovering-writer`.                                                       | Read coherent content while preparing the existing lineage/session outbox, settling receipts and replaying eligible work; then post-recovery hydration. | Open only after current ownership, coherent projection and current subscription are established. Recheck lifecycle generation after every await.                                                | 1–3; active-writer-session, outbox/replay and bootstrap tests.                 |
+| Foreign-owner startup           | Explicit snapshot owner differs, including a disconnected durable owner; `reading`.                                                                                              | Shell, local route hydration, command/operational event consumption, bounded reconnect.                                                                 | No adoption, acquisition, replay, receipt writes or effect claims. A successful event connection never promotes.                                                                                | 2; bootstrap/events tests and two-session browser.                             |
+| No registered owner             | Valid snapshot explicitly reports null owner; `resolving` then `recovering-writer` after conditional registration.                                                               | Read state or first-run loading while acquiring.                                                                                                        | Registration compares observed ownership; another client's intervening win returns this client to reading.                                                                                      | 2; bootstrap/initialization race tests.                                        |
+| First-run initialization        | Bootstrap classifier says uninitialized; existing transaction rechecks genuinely empty state.                                                                                    | Do not publish an empty uninitialized database as a usable reader projection.                                                                           | Only the acquired writer may use initialization transport. Losing the initialization/acquisition race rereads; it cannot overwrite existing state.                                              | 1–2; server initialization/bootstrap and startup tests.                        |
+| Explicit Use this device        | One user action creates a `promoting` operation; successful guarded bootstrap enters `recovering-writer`.                                                                        | Keep current conversation and synchronization usable. One promise per local promotion.                                                                  | Reuse disconnect confirmation handshake; recovery-only transport is distinct from ordinary writes. Superseded operations cannot publish writing. No reconnect retry of takeover.                | 3; bootstrap, receipt/replay and UI A → B → A proof.                           |
+| Writer demotion                 | Foreign writer frame with current/newer epoch, or validated stale-writer rejection; synchronously enter `reading` and invalidate authority generation.                           | Capture draft owners before unmount; stop authority-bearing work; restart/retain read services and apply committed projections.                         | Cancel future queue/debounce/keepalive dispatch; park intent and overlays separately. Late accepted responses settle only their exact identity, with server receipt writes deferred.            | 1, 3; queue/owner/draft tests, delayed-response browser proof.                 |
+| Reader interruption/resume      | SSE error/EOF/watchdog, browser lifecycle wake, then current authenticated read subscription; role stays `reading`.                                                              | Keep last usable content with interrupted status; reconnect from applied cursor. Snapshot/replay gaps trigger fenced read refresh.                      | Always closed; focus/pageshow/online never acquire or replay.                                                                                                                                   | 2, 5; events, lifecycle and browser reconnect tests.                           |
+| Writer interruption/resume      | Transport interruption revokes live dispatch; authenticated ownership revalidation chooses `recovering-writer` or `reading`.                                                     | Preserve scoped drafts/intent and coherent last view.                                                                                                   | No transport resumes on connectivity alone; revalidate and recover first. Already-sent work remains uncertain until receipts/state settle it.                                                   | 1, 3, 5; command and reconnect tests.                                          |
+| Authentication loss             | Existing authenticated-read failure/reset boundary; `auth-required`.                                                                                                             | Stop subscriptions/viewers; invalidate async work; clear authenticated projections, route selection and disposable cache; show authentication UI.       | Closed. Late requests cannot refill cleared data or restore a previous role. Retained recovery data remains subject to its established auth/scope policy.                                       | 2–5; auth/projection lifecycle and browser recovery tests.                     |
+| Database replacement            | Read-only metadata establishes different lineage, or state replacement event requires fresh metadata; resolving/coherent read recovery.                                          | Clear stale selected identities, read caches, hydration and job consumers; fetch authoritative replacement.                                             | Old-lineage intent follows existing disposal rules. Observer refresh cannot prepare/adopt write scope. A writer-epoch change alone must not trigger destructive lineage disposal.               | 2–5; replacement ownership, outbox and browser old-lineage tests.              |
+| New/older client changes writer | Existing server single-writer registration and guard remain authoritative.                                                                                                       | New reader consumes the resulting writer frame passively.                                                                                               | Upgraded client only acquires through the permitted initial/explicit branch; older client retains its existing prompt/freeze/acquisition behavior.                                              | 3, 5; server handshake fixture plus default/fallback browser runs.             |
+
+### Live role and selector ownership
+
+Add one browser-only `clientSession` owner with the finite states `resolving`,
+`reading`, `promoting`, `recovering-writer`, `writing`, and `auth-required`.
+Track `connecting`, `live`, and `interrupted` connectivity separately, together
+with authenticated lineage/current writer metadata, a projection-ready bit and
+an incrementing lifecycle generation. Every asynchronous role operation captures
+that generation; auth loss, demotion and superseding promotion invalidate it.
+No resource/event completion is an authority-granting transition.
+
+Keep `startupReadiness.ts`'s monotonic milestone/telemetry history. Its public
+selectors consume live state when the rollout is enabled: shell and supported
+route rendering need authenticated coherent data; ordinary mutation needs live
+`writing` authority in addition to existing readiness; generation also requires
+plugin, selected-chat and recovery readiness. Recovery transports explicitly
+require current `recovering-writer` ownership. `reading` and `promoting` never
+receive that exception. Test all six states under all three connection states,
+then prove queue and delayed-response denial through real callers.
+
+### Local selection and read runtime
+
+Use stable character/chat IDs from the route as reader selection. Keep them in
+one local selection owner, project indices only for existing read renderers,
+and reapply those IDs after shared resource refresh. Do not mutate authoritative
+`selectedCharacter` or `chatPage` fields to implement reader navigation. Preserve
+reader IDs through promotion if they still exist; any required persisted
+selection follows accepted write readiness. Deletion selects a safe local
+fallback and announces it; an optional read error retains the current route.
+
+The observer surface owns home, character/chat lists and conversation reading.
+Character authoring, settings/persona/lorebook/module/provider/editor routes,
+Playground and other operation-launching screens show a localized write-access
+gate. A supported read route never calls writer route handlers as a shortcut.
+Ordinary writer screens retain their existing route handlers after promotion.
+
+Read services include authenticated shell/detail/transcript/display-source and
+immutable asset reads, ordered command reconciliation, memory/BardWiki job
+snapshots/live projections, existing-result translation refresh and (in Phase 4)
+selected-chat generation observation. Share cache/revision/freshness owners;
+split subscription teardown from owner flush/replay teardown. Reader resource
+refresh uses no optimistic merge hooks and no outbox blocking/adoption. Keep
+operational stream/version cursors independent from domain revisions. UI for
+starting/retrying/cancelling those jobs is gated.
+
+Allow sanitized markup, immutable media, built-in display formatting and the
+server display-source contract. Do not start the entire plugin/userscript or
+completion runtime to render a reader. Any display callback with mutation or
+provider capability must be guarded or excluded with an explicit affordance;
+existing committed display output remains readable. Phase 1 must prove the
+chosen dependencies before Phase 2 mounts them.
+
+### Rollout and wire compatibility decision
+
+Reuse the existing `observerShellFlag.ts` rollout owner and
+`VITE_FAST_BOOTSTRAP_OBSERVER` setting for the complete connected-reader behavior;
+do not add a second permanent observer flag. Preserve its normal disabled
+default through Phases 1–4 and use its existing smoke-only override for explicit
+feature cases. Phase 5 changes the normal default to enabled and documents
+`FALSE` as the conservative-writer fallback, testing both configurations without
+clearing draft/outbox stores. Rename comments/exports where useful when the
+complete contract replaces the partial shell; retain only one setting and one
+fallback policy.
+
+Add `writer: { sessionId: string | null, epoch: number }` to the existing
+authenticated bootstrap response and an optional expected-epoch acquisition
+header checked before registration. The field is additive for old clients but
+required for the new automatic acquisition branch. No database migration or
+new server role is required. Older clients ignore additive fields and keep their existing
+headers and takeover guard. New clients treat missing ownership support as an
+unavailable discovery/promotion boundary, never as permission to take over.
+Preserve generation/display protocol version negotiation independently. Final
+compatibility proof must include the legacy handshake and stale API rejection;
+it must not claim old bundles gain the new UI.
+
+### Tab identity and adoption decision
+
+`server/bootstrap.ts:293` currently allocates the writer identity even for an
+observer-header read. `activeWriterSession.ts:35` trusts copied session storage,
+and `bootstrap.ts:780` can adopt the sole origin-wide pending owner before any
+server ownership read. These are three distinct boundaries, not evidence that
+an authenticated reader owns pending work.
+
+Before connected startup uses a stored candidate session, obtain an exclusive
+origin-wide Web Lock for that identity for the page lifetime. A competing live
+tab forces a fresh ID; a legitimate same-tab reload can reuse the released
+identity. Release on page teardown and reacquire/revalidate on persisted-page
+resume. A missing/failed lock facility uses a fresh identity and conservative
+reader discovery; it must not silently reuse a copied candidate. Preserve the
+previous originating draft scope as recovery data in that fallback, and require
+explicit promotion before recovering its work. This chooses fail-closed identity
+over a time-based BroadcastChannel claim whose absent answer could represent a
+suspended live tab. Prove a real duplicated-session-storage tab and a legitimate
+reload, plus injected unsupported/failed lock behavior.
+
+Use this deduplicated session identity in existing observer/stream headers;
+those authenticated reads do not register it as writer. Connected reader startup
+never adopts an arbitrary origin-wide outbox owner. Same-tab matching identity
+may recover its own pending scope only after authoritative ownership validation;
+explicit promotion owns any supported recovery adoption. Same-lineage foreign
+records remain dormant. The conservative fallback retains the established owner
+adoption path and must be tested with existing pending work.
+
+Read-only bootstrap currently lacks the durable session ID, whereas the initial
+SSE frame has it (`routes/events.ts:191`). The additive bootstrap snapshot makes
+discovery bounded before startup services are chosen. The expected-epoch header
+closes the read/acquire race that the connected-writer confirmation alone does
+not cover: another writer may become registered but disconnected between those
+requests. Epoch mismatch returns a conflict and reader recovery, with no implicit
+second acquisition. Subsequent writer frames only update metadata/demote; they
+never promote a reader, even when the frame names that reader's ID.
+
+## Bounded Entry-Point Dispositions
+
+Review bound: the dedicated reader shell and its future transcript, all routes
+reachable by URL/history/hotkey/notification from that shell, all mutation or
+external-effect APIs reachable from its display dependencies, and callbacks,
+owners or mounted editor drafts surviving writer demotion. The rows are entry
+**families**, with concrete callable owners; they are not counts of every
+command route or control. Ordinary command descendants share E07/E08 transport
+protection but still require entry denial before optimistic projection/effects.
+Unreachable authoring screens are explicitly gated, not silently omitted.
+
+`Read` means admitted authenticated reading/local navigation, `Guard` means
+writer-only admission and execution, and `Gate` means unavailable in the initial
+reader UI with a write-access affordance plus guards for old callbacks. All
+entries are proposed implementation dispositions; the final column names proof
+to add/extend, not passing feature evidence.
+
+| ID  | Trigger / actual owner                                                                              | Projection or effect                                                            | Reader disposition and demotion requirement                                                                                                                                                                                              | Phase / behavioral test owner                                                                        |
+| --- | --------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| E01 | `fetchServerBootstrapReadOnly`, `loadPreWriterObserverShell`, `subscribeServerCommandEvents`        | Authenticated runtime/shell/event reads                                         | Read; discover without intent; no writer-ready publication or takeover from subscription.                                                                                                                                                | 1–2; bootstrap/events client and server tests, real reader startup.                                  |
+| E02 | `navigate`, `applyRouteToStores`, `applyCharacterRoute`, `applySettingsRoute`                       | URL plus currently persisted selection/persona                                  | Read only through a dedicated local route branch; gate authoring handlers. Fence late route hydration and history callbacks.                                                                                                             | 1–2; router, route-handler, App route-effect tests.                                                  |
+| E03 | `changeChar` (`characters.ts:1386`), `changeChatTo` (`globalApi.svelte.ts:2292`), sidebar selection | Character/chat selection, last interaction and optional default-chat creation   | Reader uses stable route IDs; guard persisted helpers and local shared-owner fallbacks. Keep writer selection independent.                                                                                                               | 1–2; `characters.changeChar.test.ts`, chat commands and sidebar tests, independent browsing browser. |
+| E04 | `hotkey.ts`, notification routing in `router.ts`, App drag/drop (`App.svelte:303`)                  | Navigation, send/delete/editor/import actions                                   | Read navigation only; guard mutation hotkeys and drop before hydration/import/effects.                                                                                                                                                   | 1–2; hotkey/App/sidebar keyboard tests and browser keyboard/drop checks.                             |
+| E05 | `hydrateCharacterShell`, chat full/tail/range hydration, `resourceReads`, `resourceCache`           | Canonical lazy projection and cache                                             | Read; preserve auth/lineage/revision/target fences; local selection survives refresh/deletion; no cold-storage recovery command.                                                                                                         | 2; shell/chat hydration/cache tests and history browser.                                             |
+| E06 | `processServerCommandEvents`, `forceServerResourceRefresh`, `adoptReplacementDatabaseOwnership`     | Ordered canonical updates; currently also optimistic reapply/outbox preparation | Read reconciliation without optimistic hooks or writer adoption. Same-lineage epoch change parks intent; lineage replacement follows disposal boundary.                                                                                  | 2–3; invalidation/refresh/replacement tests, gap/replacement browser.                                |
+| E07 | `runServerCommand`, `runServerCommandSequence`, `runExternalServerRevisionOperation`                | Ordinary revisioned writes across all command domains                           | Guard before queue admission and immediately before each transport; deny local success and avoid invoking factories after demotion. Display read batching needs its own read lane.                                                       | 1; `commands.test.ts` queue hold + stale server guard tests.                                         |
+| E08 | `dispatchDurableMutation`, `replayPendingMutations`, receipt acknowledgement                        | Staged/sent/accepted-unacknowledged intent and server receipt writes            | Guard network/replay; preserve exact staged record and local accepted settlement. Defer writer-protected acknowledgement; do not expose inactive overlays as committed reader content.                                                   | 1, 3; durable dispatch/outbox/replay/cross-tab tests with acceptance/cleanup holds.                  |
+| E09 | `startOwnerMutationLifecycleFlush`, registered owner flushers/resetters                             | Pagehide/visibility keepalive and delayed autosave                              | Guard at flusher and execution; capture drafts without dispatch. Stop timers without using destructive database-reset callbacks for ordinary demotion.                                                                                   | 1, 3; owner lifecycle/registry and debounce tests.                                                   |
+| E10 | `setSettingValue`, `setDeferredSettingValue` (`setting/utils.ts:205`), settings/preset mirrors      | Local owner update and `item.onChange` before command availability check        | Guard before local update/runtime callback; preserve current dirty draft separately.                                                                                                                                                     | 1; setting utils/settings-owner/prompt-toggle tests.                                                 |
+| E11 | `createCharacterOwnerDraft`, `characterCommands`, character avatar/emotion helpers                  | Character fields and uploaded assets                                            | Gate editor; guard helpers, capture dirty fields/scripts before teardown, fence late uploads.                                                                                                                                            | 1, 3; character draft/commands, CharConfig and asset tests.                                          |
+| E12 | `SideChatList` structural/name/folder actions, `chatCommands`, chat import                          | Chat/folder create/delete/reorder/fork/reset and command-unavailable fallback   | Gate structural controls; guard before shared projection or file import; capture unsubmitted names.                                                                                                                                      | 1, 3; SideChatList/chat commands/import tests.                                                       |
+| E13 | Composer send/reroll/continue/hooks, `Chat` message actions, `PartialEditController`                | Message edits, generation intent, translations, branches, script-state changes  | Gate composer/actions; retain local text and attachment identity before unmount; plain text selection/copy remains allowed.                                                                                                              | 1, 3–4; composer, Chat, partial-edit and accepted-send tests.                                        |
+| E14 | Prompt-template mutations, preset/model/profile/credential/runtime controls                         | Persisted model/prompt/settings changes and local forms                         | Gate screens and programmatic entry; retain dirty forms by stable owner, keeping credential drafts in protected recovery storage or page memory.                                                                                         | 1, 3; prompt/preset/model controls and owner tests.                                                  |
+| E15 | Persona, loadout, agent/agent-preset commands and helpers                                           | Collection changes, selected persona/loadout application                        | Gate authoring; guard helper fallback before any optimistic apply or `accepted` return. Capture pending editor forms.                                                                                                                    | 1, 3; persona/loadout/agent-preset tests.                                                            |
+| E16 | `lorebookOwner`, `scriptDefinitionOwner`, global/character/chat/module editor watchers              | Lore/script/trigger edits and module-owned debounce                             | Gate screens; guard both watcher admission and timer execution; retain draft/rebase inputs without flushing on demotion.                                                                                                                 | 1, 3; lorebook/script owner and mounted editor tests.                                                |
+| E17 | `saveGlobalModuleDraft`, module menu/settings/import                                                | Module drafts, collection writes and command-unavailable local acceptance       | Gate surface; guard before fallback; reuse encrypted module recovery and preserve newer generations.                                                                                                                                     | 1, 3; module commands/settings/menu/draft-store tests.                                               |
+| E18 | Plugin V2 `setChar`, `setArg`, `setDatabase[Lite]`, storage proxy/setters                           | Commands or direct local owner changes (`plugins.svelte.ts:930,1335`)           | Guard before optimistic/fallback mutation; lifecycle-current alone is insufficient. Late callbacks fail after role-generation change.                                                                                                    | 1; `plugins.test.ts`, plugin commands tests.                                                         |
+| E19 | Plugin V3 setters/storage/fetch/provider APIs; hook/provider/replacer registration                  | Local/durable mutation or external work through retained plugin callbacks       | Guard entry/continuation and retire writer runtime on demotion; reader does not boot it merely for display.                                                                                                                              | 1, 4; V3/plugin runtime tests with callbacks held across loss.                                       |
+| E20 | `ParseMarkdown`, `requestServerDisplaySource`, `processScriptFull(editdisplay)`                     | Display transform; server isolated read versus browser script fallback          | Read sanitized/isolated display; split display request from writer command lane. Reader fallback must not execute general script/plugin/provider paths; show source plus limited-display notice if unsafe transformation is unavailable. | 1–2, 4; parser/display-source/script tests with forced fallback.                                     |
+| E21 | `maybeReattachOpenChatGeneration`, `reattachGenerationJob`, operation status/exact stream           | Viewer projection currently entering `sendChat`                                 | Read through observation-only lifecycle in Phase 4; no submit/cancel/retry/effect path. Fence chat/attempt/lineage/role; detach only on reader teardown.                                                                                 | 4; reattach, operation, stream and multi-session browser tests.                                      |
+| E22 | Operation submit/cancel/retry, compatibility job cancel, persistence refresh/retry                  | Provider execution, durable control/finalization                                | Guard all writer transports and late callbacks; observation and server job execution continue independently.                                                                                                                             | 1, 3–4; generation operation/server route and durable generation tests.                              |
+| E23 | `runLedgeredGenerationEffect`, recovered effects, post-generation completion                        | Claims/leases/receipts, plugin output/IGP/TTS/notification/audio/emotion/image  | Guard before claim and callback, recheck lifecycle after awaits; keep idempotency/ephemeral skip policy. Reader never claims/settles writer effects.                                                                                     | 1, 4; effect ledger/recovery/server effect tests and browser effect counts.                          |
+| E24 | `sayTTS`, synthesis, image generation, transcription, embeddings, translator provider calls         | Auth-only provider work, uploads, playback or generated assets                  | Gate starting work, including direct adapters and completion callbacks; allow existing immutable media/results. Abort stale local playback/application on demotion without cancelling unrelated durable jobs.                            | 1, 4; TTS/image/transcription/embedding/translator tests.                                            |
+| E25 | Provider operations, `globalFetch`, `pluginFetchNative`, proxy stream create/delete                 | Auth-only catalog/provider/network operations and data egress                   | Gate from reader display/runtime. Current reader surface requires no provider catalog probe; auth alone is not admission.                                                                                                                | 1; provider/global fetch/proxy request tests.                                                        |
+| E26 | Message/greeting translation refresh, `applyServerMemoryEvent`/snapshot, BardWiki event publishers  | Existing result/job projections                                                 | Read only; callbacks may refresh scoped canonical data but never start retry/rebuild/cancel/provider work. Operational versions do not advance command cursor.                                                                           | 2, 4–5; translation/memory/BardWiki event and reconnect tests.                                       |
+| E27 | Memory summaries/jobs and BardWiki workspace actions                                                | Summary/document/settings edits, confirm, rebuild/import/retry/cancel           | Gate operation UI and guard commands/direct adapters; capture local summary/document/forms before teardown.                                                                                                                              | 1, 3; memory reliability/summary/BardWiki workspace and server protection tests.                     |
+| E28 | `saveAsset` / `saveAssets`, asset/bulk and inlay registration/upload/delete                         | Content-addressed bytes, catalog commands                                       | Guard before upload and after file/transform awaits; immutable GET/HEAD and local copy/download stay read.                                                                                                                               | 1; asset/inlay/global save tests.                                                                    |
+| E29 | Realm/CharX/local character/chat/module import, App drop, bundle import                             | Streamed external operation plus durable imported state                         | Gate; invalidate old operation tokens on demotion and stop continuation before confirmation/import writes. Preserve already accepted import outcome by authoritative refresh.                                                            | 1, 3; Realm progress/confirmation, import guard and server import tests.                             |
+| E30 | Backup create/restore/delete, reset-all, legacy storage write/remove                                | Authenticated server files or replacement database                              | Gate and guard before direct transport; retain existing replacement/receipt invariants. `canUseServerBackups` currently always true.                                                                                                     | 1, 3; backup/storage/reset and server protection tests.                                              |
+| E31 | Chat/dataset/bundle/local-backup export, immutable asset downloads                                  | Authenticated read and local output                                             | Read semantics; whole-library export UI remains gated initially. No shared selection or hydration overwrite during export; retain all-chats stable-ID fence.                                                                             | 1–2; chat/export/storage backup tests.                                                               |
+| E32 | Push coordinator and notification setting callbacks                                                 | Auth-only device subscription and permission request                            | Gate automatic/user subscription changes in readers; existing notification clicks may navigate locally. Demotion stops late enablement.                                                                                                  | 1; push/notification-toggle tests.                                                                   |
+| E33 | Startup telemetry, diagnostic publisher, request-history list/detail/delete                         | Best-effort diagnostics, reads, or history deletion                             | Read telemetry is allowed as a bounded operational exception; gate history deletion and authoring settings. Diagnostic delivery grants no authority.                                                                                     | 1–2; telemetry/diagnostics/request-history tests.                                                    |
+| E34 | Fullscreen, local collapse/unread presentation, text copy and ordinary safe links                   | Device-local presentation only                                                  | Read; maintain keyboard/pointer/mobile access. Do not use a global CSS freeze as the guard.                                                                                                                                              | 1–2, 5; observer/navigation/clipboard/layout browser checks.                                         |
+
+Phase 0 classification total: **34 entry families reviewed, 34 dispositions,
+0 unclassified**. Implementation acceptance is **0/34** at this inventory phase.
+Phase 1 must record guard/read/gate proof for all families before Phase 2 exposes
+the connected surface. Newly discovered reachable callers join the owning family
+or a new row, with a test; the total is a bounded source review, not a static
+repository-wide API claim.
+
+## Draft and Intent Preservation Map
+
+Do not equate flushing with preservation: a demoted owner cannot dispatch just
+to save its editor. Add a synchronous capture registry before role publication
+can unmount writer screens. Captures retain stable owner IDs, lineage/originating
+session, baseline/revision and dirty value/generation; they remain outside
+canonical resource owners. Existing scoped stores keep their current persistence
+format. Missing owners use a bounded local recovery store and recovery/copy UI;
+credential fields remain protected and are cleared on explicit cancel or exact
+accepted save. No automatic cross-device transfer or unconditional overwrite on
+promotion is allowed. Keep the recovery record if persistence fails, report that
+failure, and do not erase the mounted draft merely to finish demotion.
+
+| Family / current owner                                                                                                            | Current source evidence                                                                                                                                 | Demotion / return disposition and proof                                                                                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Composer (`DefaultChatScreen.composerDrafts.ts`, `DefaultChatScreen.svelte`)                                                      | Scoped session-storage snapshots; exact generation cleanup; message/translated/draft/BTW text and attachment state are separate.                        | Capture synchronously before unmount and keep the same lineage/originating session on epoch change. Restore only exact target with newer-edit protection; composer tests plus A → B → A browser.                                              |
+| Module editor (`moduleEditorDraftStore.ts`, module settings)                                                                      | Existing encrypted bounded IndexedDB recovery with rebase/copy/discard.                                                                                 | Reuse owner and retain newer draft generations; do not invoke discard/reset on ordinary role change. Module draft-store and mounted module tests.                                                                                             |
+| Settings and prompt owners (`settingsOwner.svelte.ts`, `setting/utils.ts`, prompt-template owners)                                | Stage intent before debounce; draft state and optimistic owners differ. `item.onChange` can run before command availability.                            | Capture dirty drafts, stop timers/flush, retain staged row and detach optimistic overlays. Restore/rebase by baseline; settings/prompt/debounce tests.                                                                                        |
+| Character fields and scripts (`characterDraft.svelte.ts:94`, `SideBars/CharConfig.svelte:259`)                                    | Dirty character fields have a staged owner; script/trigger arrays are component-local. Teardown at line 280 flushes scripts, not every character draft. | Register capture for both field/script owners before teardown; suppression must prevent teardown from sending. Character owner/CharConfig/script tests.                                                                                       |
+| Lorebook/global scripts/persona/author note                                                                                       | Existing owner watchers, field/row fences and some component teardown flushes protect admitted changes; not a blanket unsaved-form store.               | Preserve pending dirty child fields with owner IDs before resetting hydration; no demotion flush or reapply into reader state. Mounted owner and newer-edit tests.                                                                            |
+| Sidebar chat/folder names and toggles (`SideChatList.svelte:161`, `Toggles.svelte:71`)                                            | Local name/baseline maps and focused toggle text; teardown cleans sortable state only.                                                                  | Capture dirty maps/focused values; safe rebase/copy on return. Sidebar and toggle tests with demotion before blur.                                                                                                                            |
+| Inline message and partial edits (`Chat.svelte:179`, `PartialEditController.svelte`)                                              | Local edit text; `Chat.customHtml.test.ts:2679` currently asserts ordinary remount cancels inline edits.                                                | Add demotion-specific retention without converting an ordinary user cancel into save. Restore/copy exact message draft after canonical refresh; test demotion distinctly from ordinary cancel/remount.                                        |
+| Model/preset/provider/runtime forms (`ModelProfileEditorDrawer.svelte:78`, `ProviderCredentialEditor.svelte:55`, preset controls) | Local name/provider/options/header/parameter/credential drafts, not all staged until Save.                                                              | Capture the complete dirty form, including currently collapsed fields. Keep secrets out of ordinary plaintext draft persistence and diagnostic output. Restore/copy only with current target/baseline; model/preset/credential mounted tests. |
+| Agents/agent presets, translator presets/loadouts and local authoring dialogs                                                     | Local forms plus command bridge optimistic owners.                                                                                                      | Register per-form capture; exact accepted save clears only its generation. Guard late save/import callbacks after unmount. Agent/preset/translator/loadout tests.                                                                             |
+| Memory summary (`Others/HypaV3Modal.svelte`, summary child editors)                                                               | Dirty summaries can use direct PATCH without generic durable editor recovery.                                                                           | Capture unsent summary/tag/category edits and fence late PATCH rollback; memory reliability/summary tests.                                                                                                                                    |
+| BardWiki (`BardWikiWorkspace.svelte:85`)                                                                                          | Local document/settings overrides; save captures a payload while subsequent typing may continue.                                                        | Capture current dirty generation, including newer text during save; queued command is not the entire draft. Restore/rebase/copy; workspace save/demotion tests.                                                                               |
+| Transient operation forms and upload/import prompts                                                                               | File/confirmation operations have their own latest-operation/target guards; their pending input is not a committed resource.                            | Capture user-entered form values needed for recovery; invalidate continuation tokens and suppress late shared effects. Existing import/alert/stale-state tests plus reader denial.                                                            |
+
+Intent lifecycle remains separate:
+
+| State at loss                      | Retention and projection rule                                                                                           | Later authorized action                                                                    |
+| ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
+| Unsaved local edit                 | Capture without sending; reader shows canonical data and an available local recovery record.                            | Restore/rebase/copy on originating client; explicit cancel discards only that draft.       |
+| Staged, not dispatched             | Keep encrypted command identity/dependencies; stop queue/debounce transport; remove its overlay from reader projection. | Current owner/lineage recovery checks receipts and predecessor order before replay.        |
+| Dispatched, no response            | Retain uncertain intent; never infer rejection from disconnection.                                                      | Settle via exact receipt or replay idempotency; do not duplicate the mutation.             |
+| Accepted, response/cleanup delayed | Allow exact local settlement under its identity fence; no old rollback over refreshed state.                            | Defer protected server acknowledgement until authorized; preserve newer draft generations. |
+| Retained retryable/unreadable      | Dormant same-lineage work must not block reader hydration; failed promotion remains readable.                           | Show recoverable status; do not delete records to force writing.                           |
+| Terminal rejection                 | Retire only that intent according to existing dependency policy; keep unrelated/newer drafts.                           | Current-authority refresh/rebase; no blind optimistic replay.                              |
+| Different lineage                  | Existing lineage-disposal boundary, independent from ordinary writer epoch.                                             | Start a fresh scope only from authenticated replacement metadata.                          |
+
+The source cross-check corrected three stale research paths before recording
+owners: character configuration is under `SideBars`, memory modal under `Others`,
+and the memory adapter under `process/request`. The implementation must inspect
+real owners rather than treating worker summaries as verification. Also confirmed
+`reattach.ts:687` consumes a presented job before the missing stream-descriptor
+return at line 694; Phase 4 owns a focused reproduction and recovery fix if that
+branch strands observation. No defect reproduction is claimed by this source
+review.

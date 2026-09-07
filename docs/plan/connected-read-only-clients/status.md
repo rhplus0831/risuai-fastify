@@ -4,15 +4,16 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite accepted; reader Phase 0 is next.
+- State: Stage 1 smoke prerequisite and reader Phase 0 accepted; Phase 1 is next.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Current task scope: implement the coordinated connected-reader plan after the
-  accepted smoke prerequisite. Reader phase acceptance has not started.
-- Next implementation slice: [Phase 0](phases/phase-0-contract-and-inventory.md),
-  confirm source and complete the mutation/runtime inventory and transition map.
+  accepted smoke prerequisite. Reader Phase 0 is accepted.
+- Next slice: [Phase 1](phases/phase-1-capabilities-and-mutation-protection.md),
+  implement live capability ownership and guarded command/receipt/lifecycle
+  admission against the accepted Phase 0 contract.
 - Production behavior: unchanged; the new connected-reader contract is proposed.
-- Blockers: none. Phase 0 must resolve the implementation choices below before
-  dependent feature edits begin.
+- Blockers: none. Phase 0 implementation choices and its required baseline gate
+  are accepted below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -20,14 +21,14 @@ active [phase](phases/README.md) for detailed execution instructions.
 
 ## Phase Router
 
-| Phase                                                                                             | State   | Next evidence required                                                                  |
-| ------------------------------------------------------------------------------------------------- | ------- | --------------------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Pending | Current boundary map, role transitions, draft preservation coverage, rollout choice.    |
-| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Pending | Read capability independent of write authority; mutation denial at actual entry points. |
-| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending | Two sessions browse independently and converge on committed data without reader writes. |
-| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.       |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending | Streaming continuity; observers execute no writer-only actions or effects.              |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.          |
+| Phase                                                                                             | State    | Next evidence required                                                                  |
+| ------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.       |
+| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Pending  | Read capability independent of write authority; mutation denial at actual entry points. |
+| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending  | Two sessions browse independently and converge on committed data without reader writes. |
+| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending  | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.       |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending  | Streaming continuity; observers execute no writer-only actions or effects.              |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.          |
 
 ## Verification Ledger
 
@@ -65,8 +66,8 @@ cursor at the top; do not duplicate it in the plan or phase files.
 - 2026-09-06: Named-device lists, remote assignment, automatic navigation
   following, collaborative editing, and authoritative offline storage are
   follow-up work.
-- 2026-09-06: This task prepares the documents. Implementation begins in a
-  subsequent task at Phase 0; all implementation phases remain pending.
+- 2026-09-06 planning baseline prepared the documents only. The coordinated
+  implementation task began Phase 0 on 2026-09-07 after Stage 1 acceptance.
 - 2026-09-07: The user confirmed the rollout default: keep the public feature
   disabled during implementation, then enable connected readers by default
   after all required feature evidence passes. Phase 5 verifies the final default
@@ -110,3 +111,88 @@ Maintain affected smoke tests as behavior changes; replace obsolete old-writer
 freeze expectations while retaining ownership, draft, durability and exactly-once
 protections. The smoke workstream resumes with Stage 3 reconciliation and its
 remaining Phases 3–4 after reader completion.
+
+## Phase 0 Contract Review — 2026-09-07
+
+Source: `058e2ca2e`; production behavior unchanged. Read the active plan,
+phase, boundary owners and current startup/resources/recovery guides. Five
+independent read-only Luna reviews covered wire/identity, mutations, navigation
+and events, drafts, and runtime effects. Parent review checked cited source,
+corrected three stale paths, and resolved the identity recommendation: exclusive
+page-lifetime Web Locks with a fail-closed unsupported path are stronger than a
+BroadcastChannel timeout that could mistake a suspended tab for no live owner.
+These are source findings, not production reproductions or feature passes.
+
+The [expanded inventory](inventory.md#source-confirmed-transition-contract)
+records all named lifecycle transitions and their read/write/runtime policy,
+**34 reviewed entry families, 34 dispositions and 0 unclassified**, a mounted
+editor/draft map, intent lifecycle policy, and test owners. All 34 implementation
+proofs remain pending. The source checks found command-unavailable local writes,
+provider operations that are auth-only, display fallback into general scripts,
+and component-local drafts that existing outbox retention does not cover.
+
+Concrete Phase 0 decisions:
+
+1. Add a live `clientSession` state owner with six lifecycle states, independent
+   connection health and an async generation fence. Existing startup milestones
+   remain monotonic history; selectors consume current authority.
+2. Use local stable route IDs for reader selection. Gate authoring routes;
+   render supported conversation/history/copy through audited read dependencies.
+   Preserve reader IDs through refresh and promotion without reader selection
+   commands.
+3. Separate canonical event/resource/job observation from replay, flush,
+   optimistic merge hooks, plugin execution and completion effects. In readers,
+   allow server-isolated display processing and safe markup; unsafe client
+   fallbacks show readable source with a localized explanation.
+4. Capture mounted drafts synchronously before demotion teardown. Retain scope,
+   baseline and generation outside authoritative projection; protect credential
+   drafts. Preserve exact staged/in-flight/accepted identities and defer
+   writer-protected receipt writes; dormant intent must not block reading.
+5. Reuse `VITE_FAST_BOOTSTRAP_OBSERVER` as the one rollout switch, disabled
+   through Phase 4 and enabled by default in Phase 5 with explicit `FALSE`
+   conservative fallback. Add a compatible bootstrap writer snapshot and
+   expected-epoch acquisition precondition; preserve legacy handshake/guards.
+   Deduplicate copied session IDs before discovery and prohibit arbitrary
+   outbox-owner adoption in reader startup.
+
+First Phase 1 slice after this gate: implement the live capability/authority
+owner and selectors, then guard ordinary/recovery command admission, queued
+execution and lifecycle flush. Owners: `startupReadiness.ts`,
+`activeWriterSession.ts`, `commands.ts`, `ownerMutationLifecycle.ts`, and the new
+browser role owner. Exit: reader/recovery states never enable ordinary writes;
+a queued command and lifecycle callback held before dispatch stay unsent after
+synchronous demotion; already-sent acceptance retains exact settlement. Keep the
+feature disabled. Subsequent Phase 1 commits close plugin/direct-operation,
+local-fallback, display and draft/UI dispositions before Phase 2 exposure.
+
+Planned browser proof (not yet created/executed): a focused connected-reader
+spec will use a disposable server and separate authenticated browser sessions,
+with a writer fixture performing real commands. Phase 2 opens/reloads/focuses B
+as a reader and navigates independent conversations while A commits; inspect
+rendered transcript, durable writer metadata and B's forbidden-request count.
+Exercise history/copy, foreign selection, deletion, replay gaps and mobile-sized
+layout. Phase 3 drives **Use this device** for A → B → A, holding queued commands,
+accepted responses/receipt cleanup, replay and hydration across transitions.
+Phase 4 adds a held streaming provider, exact operation/message/effect identities
+and reader close/reconnect/chat-switch cases. Phase 5 runs one writer plus two
+readers, default/fallback and legacy-handshake evidence. Fixture helpers may seed
+unrelated state but cannot substitute store assignments for the transition under
+claim. Each materially new/repaired browser contract receives the coordinated
+smoke fault-detection evidence.
+
+Phase 0 accepted after final review and verification:
+
+- `pnpm check:docs`: 49 current documents passed. Explicit
+  `validateCurrentDocumentation` with both bundles, coordination file and active
+  index: 22 documents passed with empty index specs/exemptions.
+- Changed Markdown formatted with the ignore override; whitespace check passed.
+- Agent-executed `pnpm test:all` at `058e2ca2e` plus these documentation-only
+  changes: **all 13 lanes passed in 5m 50.9s; 79/79 browser cases passed** (browser
+  lane including build 3m 5.3s). Frontend 8,113 and server 4,164 tests passed;
+  five existing ordinary-suite skips remain. The selected scale gate keeps its
+  existing title exclusions. Current compatibility executed; additional pinned
+  comparison and opt-in cost lanes were not executed.
+
+This accepts the executable boundary contract and current-source baseline only.
+No connected-reader implementation or feature behavior is certified yet.
+Phases 1–5 retain their required focused, browser and aggregate proof.
