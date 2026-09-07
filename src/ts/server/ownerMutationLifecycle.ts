@@ -1,7 +1,9 @@
 import type { ServerCommandTransportOptions } from './commands'
 import { flushRegisteredPendingOwnerMutations } from './pendingOwnerMutationRegistry'
+import { canUseClientWriteAccess } from '../clientSession'
 
 export function flushPendingOwnerMutationsForLifecycle(options: ServerCommandTransportOptions = {}): void {
+  if (!canUseClientWriteAccess()) return
   flushRegisteredPendingOwnerMutations(options)
 }
 

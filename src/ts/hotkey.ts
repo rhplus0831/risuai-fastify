@@ -1,4 +1,5 @@
 import { get } from 'svelte/store'
+import { isClientReadOnly } from './clientSession'
 import {
   alertMd,
   alertError,
@@ -41,7 +42,7 @@ import {
   saveActiveChatGenerationSettingsSelectionWithOutcome,
 } from './activeChatGenerationSettings'
 import { captureActiveChatTarget, isActiveChatTargetFresh } from './chatCommands'
-import { closeSettingsRoute, navigate, openSettingsRoute } from './router'
+import { characterRoutePath, closeSettingsRoute, currentRoute, navigate, openSettingsRoute } from './router'
 import { findChatGenerationActivity } from './process/generationActivity.svelte'
 import { requestActiveModuleEditorLeave } from './moduleEditorLeaveGuard'
 import { changeChar } from './characters'
@@ -51,6 +52,8 @@ import {
   getCharacterResourceOwner,
   settingsResourceState,
 } from './server/resourceState.svelte'
+
+const READER_HOTKEYS = new Set(['copy', 'home', 'settings', 'toggleCSS', 'prevChar', 'nextChar', 'scrollToActiveChar'])
 
 export function initHotkey() {
   const handleHotkeyKeydown = async (ev: KeyboardEvent): Promise<void> => {
@@ -138,6 +141,11 @@ export function initHotkey() {
 
       if (!hotkeyMatches(hotkey, ev)) {
         continue
+      }
+      if (isClientReadOnly() && !READER_HOTKEYS.has(hotkey.action)) {
+        ev.preventDefault()
+        ev.stopPropagation()
+        return
       }
       switch (hotkey.action) {
         case 'reroll': {
@@ -278,6 +286,10 @@ export function initHotkey() {
       return
     }
 
+    if (isClientReadOnly() && ev.ctrlKey && /^[1-9]$/.test(ev.key)) {
+      ev.preventDefault()
+      return
+    }
     if (ev.ctrlKey) {
       switch (ev.key) {
         case '1': {
@@ -394,6 +406,7 @@ export function initHotkey() {
 }
 
 async function quickMenu() {
+  if (isClientReadOnly()) return
   const selStr = await alertSelect([language.presets, language.persona, language.hotkeyDesc.loadout])
   if (selStr === null) return
   const sel = Number(selStr)
@@ -470,6 +483,24 @@ function adjacentCharacterCandidateIndex(
 }
 
 export async function changeToAdjacentCharacter(direction: 'previous' | 'next'): Promise<boolean> {
+  if (isClientReadOnly()) {
+    const route = get(currentRoute)
+    if (route.kind !== 'character') return false
+    const rows = charactersResourceState.characters
+    const selectedIndex = rows.findIndex((candidate) => candidate.chaId === route.chaId)
+    const candidates = rows.flatMap((candidate, index) =>
+      stableOwnerId(candidate.chaId) &&
+      !candidate.trashTime &&
+      candidate.chaId !== '§temp' &&
+      rows.filter((row) => row.chaId === candidate.chaId).length === 1
+        ? [{ name: candidate.name ?? '', index }]
+        : [],
+    )
+    const next = adjacentCharacterCandidateIndex(candidates, selectedIndex, direction)
+    if (next === null) return false
+    navigate(characterRoutePath(rows[next].chaId))
+    return true
+  }
   const status = charactersResourceState.status
   let targetIndex: number | null
   if (status === 'ready') {
@@ -634,6 +665,7 @@ export function initMobileGesture() {
 }
 
 export function changeToPreset(num: number): boolean {
+  if (isClientReadOnly()) return false
   if (!doingAlert()) {
     const pres =
       collectionsResourceState.statuses.modelPresets === 'ready' &&

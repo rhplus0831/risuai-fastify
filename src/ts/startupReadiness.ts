@@ -13,6 +13,15 @@ import {
   type StartupTelemetryFailureCode,
   type StartupTelemetryMilestone,
 } from '@risuai/protocol/startup-telemetry'
+import {
+  canRenderClientReadView,
+  canUseClientWriteAccess,
+  clientSessionStore,
+  demoteClientSession,
+  isClientReadOnly,
+  isClientSessionManaged,
+  resetClientSessionForTests,
+} from './clientSession'
 
 export const STARTUP_MILESTONES = STARTUP_TELEMETRY_MILESTONES
 
@@ -157,6 +166,7 @@ export function backgroundReady(): boolean {
 }
 
 export function canRenderShell(): boolean {
+  if (isClientSessionManaged()) return canRenderClientReadView()
   return hasTransitioned('writer-ready') || (observerShellEnabled && hasTransitioned('observer-ready'))
 }
 
@@ -169,11 +179,12 @@ export function configureStartupObserverShell(enabled: boolean): void {
 }
 
 export function canApplyRoutes(): boolean {
+  if (isClientSessionManaged()) return canRenderClientReadView()
   return hasTransitioned('writer-ready') && !writerCapabilitiesRevoked
 }
 
 export function canMutate(): boolean {
-  return hasTransitioned('writer-ready') && !writerCapabilitiesRevoked
+  return hasTransitioned('writer-ready') && !writerCapabilitiesRevoked && canUseClientWriteAccess()
 }
 
 export function pluginsReady(): boolean {
@@ -194,7 +205,8 @@ export function canGenerate(): boolean {
     pluginsReady() &&
     generationRecoveryReady &&
     chatGenerationReady &&
-    !writerCapabilitiesRevoked
+    !writerCapabilitiesRevoked &&
+    canUseClientWriteAccess()
   )
 }
 
@@ -205,7 +217,7 @@ export function getGenerationReadinessDiagnostic(): GenerationReadinessDiagnosti
   if (!pluginsReady()) blockers.push('plugin-runtime')
   if (!generationRecoveryReady) blockers.push('generation-recovery')
   if (!hasTransitioned('chat-ready') || !chatGenerationReady) blockers.push('chat-dependencies')
-  if (writerCapabilitiesRevoked) blockers.push('writer-capabilities-revoked')
+  if (writerCapabilitiesRevoked || isClientReadOnly()) blockers.push('writer-capabilities-revoked')
 
   const failure = capabilityFailures.get('canGenerate') ?? capabilityFailures.get('pluginsReady')
   return {
@@ -245,6 +257,7 @@ export function settleStartupChatReadiness(ready: boolean): void {
  * startup is responsible for establishing a new writer session.
  */
 export function revokeStartupWriterCapabilities(): void {
+  demoteClientSession()
   if (writerCapabilitiesRevoked) return
   writerCapabilitiesRevoked = true
   notifyReadinessListeners()
@@ -252,6 +265,7 @@ export function revokeStartupWriterCapabilities(): void {
 
 /** Re-open writer capabilities only after an in-place recovery reinstalls every writer fence. */
 export function restoreStartupWriterCapabilities(): void {
+  if (!canUseClientWriteAccess()) return
   if (!writerCapabilitiesRevoked || !hasTransitioned('writer-ready')) return
   writerCapabilitiesRevoked = false
   clearReadyCapabilityFailures()
@@ -508,6 +522,11 @@ export const startupCoordinatorStore: StartupCoordinatorReadable = {
   },
 }
 
+clientSessionStore.subscribe(() => {
+  clearReadyCapabilityFailures()
+  notifyReadinessListeners()
+})
+
 export function getStartupReadinessSnapshot(): StartupReadinessSnapshot {
   const timestamps = Object.fromEntries(transitionTimes) as Partial<Record<StartupMilestone, number>>
   const entryAtMs = timestamps.entry
@@ -558,6 +577,7 @@ export function resetStartupReadinessForTests(): void {
   chatGenerationReady = false
   generationRecoveryReady = false
   pluginRuntimeCoherent = true
+  resetClientSessionForTests()
 
   const perf = globalThis.performance
   for (const milestone of STARTUP_MILESTONES) {

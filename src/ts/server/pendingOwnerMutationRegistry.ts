@@ -1,4 +1,5 @@
 import type { ServerCommandTransportOptions } from './commands'
+import { canUseClientWriteAccess } from '../clientSession'
 
 type PendingOwnerMutationFlusher = (options: ServerCommandTransportOptions) => void
 type PendingOwnerResetter = () => void
@@ -15,11 +16,13 @@ export function registerPendingOwnerMutationFlusher(id: string, flusher: Pending
 }
 
 export function flushRegisteredPendingOwnerMutations(options: ServerCommandTransportOptions): void {
+  if (!canUseClientWriteAccess()) return
   for (const flusher of pendingOwnerMutationFlushers.values()) flusher(options)
 }
 
 /** Flush one owner before a structural action changes the projection it watches. */
 export function flushRegisteredPendingOwnerMutation(id: string, options: ServerCommandTransportOptions): boolean {
+  if (!canUseClientWriteAccess()) return false
   const flusher = pendingOwnerMutationFlushers.get(id)
   if (!flusher) return false
   flusher(options)

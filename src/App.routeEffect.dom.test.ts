@@ -1,4 +1,10 @@
 import { mount, tick, unmount } from 'svelte'
+import {
+  beginClientSession,
+  settleClientReader,
+  setClientProjectionReady,
+  setClientConnectionState,
+} from './ts/clientSession'
 import { get, writable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initialPushNotificationCoordinatorState, pushNotificationStateWriter } from './ts/server/pushNotificationState'
@@ -847,6 +853,24 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     expect(target.querySelector('[role="status"]')).toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).not.toBeNull()
+    expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
+  })
+
+  it('keeps managed read-route capability out of writer handlers and authoring overlays', async () => {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    appRouteDomMocks.state.applyRouteCalls = 0
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    openPresetList.set(true)
+    await mountApp()
+    expect(target.querySelector('[data-testid="observer-shell-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
+    expect(target.querySelector('[data-testid="preset-list"]')).toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
   })
 

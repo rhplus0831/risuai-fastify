@@ -7,6 +7,7 @@
   import { isServerCharacterShell } from '../ts/storage/database.svelte'
   import { characterRoutePath, currentRoute, navigate } from '../ts/router'
   import { recordObserverRouteIntent } from '../ts/observerRouteIntent'
+  import { clientSessionStore } from '../ts/clientSession'
 
   let characters = $derived(charactersResourceState.status === 'ready' ? charactersResourceState.characters : [])
   let routeCharacterId = $derived($currentRoute.kind === 'character' ? $currentRoute.chaId : null)
@@ -29,7 +30,11 @@
   )
   let retryWriterButton: HTMLButtonElement | undefined = $state()
   let writerRetryAvailable = $derived(
-    ['takeover-denied', 'unavailable', 'writer-lost', 'offline'].includes($observerShellLifecycleStore.mode),
+    !$clientSessionStore.managed &&
+      ['takeover-denied', 'unavailable', 'writer-lost', 'offline'].includes($observerShellLifecycleStore.mode),
+  )
+  let authoringRouteBlocked = $derived(
+    $clientSessionStore.managed && !['home', 'grid', 'character'].includes($currentRoute.kind),
   )
 
   $effect(() => {
@@ -53,6 +58,13 @@
   }
 
   function lifecycleStatus(mode: ObserverShellLifecycleMode): string {
+    if ($clientSessionStore.managed) {
+      if ($clientSessionStore.connection === 'interrupted') return language.connectedReaders.interrupted
+      if ($clientSessionStore.connection === 'connecting') return language.connectedReaders.connecting
+      if (['promoting', 'recovering-writer'].includes($clientSessionStore.lifecycle))
+        return language.connectedReaders.switching
+      return language.connectedReaders.connected
+    }
     switch (mode) {
       case 'retrying':
         return language.observerShell.statusRetrying
@@ -91,7 +103,9 @@
       aria-live="polite"
       data-observer-read-only-status>
       <div>
-        <h1 class="text-lg font-semibold">{language.observerShell.title}</h1>
+        <h1 class="text-lg font-semibold">
+          {$clientSessionStore.managed ? language.connectedReaders.title : language.observerShell.title}
+        </h1>
         <p class="text-sm text-textcolor2" data-observer-lifecycle-status>
           {lifecycleStatus($observerShellLifecycleStore.mode)}
         </p>
@@ -164,7 +178,11 @@
     </nav>
 
     <section class="min-h-0 overflow-y-auto p-5 sm:p-8" aria-labelledby="observer-detail-heading">
-      {#if selectedCharacter}
+      {#if authoringRouteBlocked}
+        <p id="observer-detail-heading" role="status" data-reader-authoring-gate>
+          {language.connectedReaders.writeAccessRequired}
+        </p>
+      {:else if selectedCharacter}
         <div class="mx-auto flex max-w-2xl flex-col gap-5">
           <div>
             <p class="mb-1 text-sm text-textcolor2">

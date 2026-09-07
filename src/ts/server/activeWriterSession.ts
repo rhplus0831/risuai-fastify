@@ -2,6 +2,13 @@ import { getChatHydrationRuntime } from '../process/generationRuntimeBridge'
 import { setObserverShellLifecycleMode } from '../observerShellLifecycle.svelte'
 import { revokeStartupWriterCapabilities } from '../startupReadiness'
 import { invalidateResourceCacheWork } from './resourceCache'
+import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientReadOnly,
+  isClientSessionGenerationCurrent,
+  isClientSessionManaged,
+} from '../clientSession'
 
 export const ACTIVE_WRITER_SESSION_HEADER = 'risu-writer-session'
 
@@ -76,12 +83,14 @@ export function enterWriterTakeoverFlow(): void {
   invalidateResourceCacheWork()
   revokeStartupWriterCapabilities()
   setObserverShellLifecycleMode('writer-lost')
+  if (isClientSessionManaged()) return
   setWriterTakeoverInteractionBlocked(true)
   void runWriterTakeoverFlow()
 }
 
 /** Temporarily admit bootstrap/replay transports while ordinary UI mutation remains revoked. */
 export function beginWriterAccessRecovery(): boolean {
+  if (!canUseClientRecoveryAccess()) return false
   if (!writerAccessLost) return false
   invalidateResourceCacheWork()
   writerAccessLost = false
@@ -91,6 +100,7 @@ export function beginWriterAccessRecovery(): boolean {
 
 /** Settle an in-place takeover retry after bootstrap either reinstalls every fence or fails. */
 export function completeWriterAccessRecovery(success: boolean): void {
+  if (success && !canUseClientRecoveryAccess()) return
   if (success) {
     writerAccessLost = false
     writerAccessLostMutationReported = false
@@ -108,12 +118,20 @@ export function completeWriterAccessRecovery(success: boolean): void {
 export function isActiveWriterStaleErrorBody(body: unknown): boolean {
   if (!body || typeof body !== 'object' || Array.isArray(body)) return false
   const record = body as Record<string, unknown>
-  return Object.keys(record).length === 1 && record.error === 'active_writer_stale'
+  return (
+    record.error === 'active_writer_stale' &&
+    Object.keys(record).every((key) => key === 'error' || key === 'reason') &&
+    (record.reason === undefined || typeof record.reason === 'string')
+  )
 }
 
-export function handleActiveWriterStaleResponse(response: Response, body: unknown): boolean {
+export function handleActiveWriterStaleResponse(
+  response: Response,
+  body: unknown,
+  sourceGeneration = captureClientSessionGeneration(),
+): boolean {
   if (response.status !== 423 || !isActiveWriterStaleErrorBody(body)) return false
-  enterWriterTakeoverFlow()
+  if (isClientSessionGenerationCurrent(sourceGeneration)) enterWriterTakeoverFlow()
   return true
 }
 
@@ -123,6 +141,7 @@ export function handleActiveWriterStaleResponse(response: Response, body: unknow
  * dialog settles.
  */
 export function reportWriterAccessLostMutation(): boolean {
+  if (isClientReadOnly()) return true
   if (!writerAccessLost) return false
   if (!writerAccessLostMutationReported) {
     writerAccessLostMutationReported = true

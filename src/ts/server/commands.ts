@@ -1,4 +1,10 @@
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
+import {
+  canUseClientRecoveryAccess,
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { Sha256 } from '@aws-crypto/sha256-js'
 import { sha256Hex as sharedSha256Hex } from '../sha256Fallback'
 import {
@@ -41,6 +47,7 @@ import {
 import {
   activeWriterSessionHeader,
   handleActiveWriterStaleResponse,
+  isActiveWriterStaleErrorBody,
   isWriterAccessLost,
   scheduleServerOwnershipReload,
 } from './activeWriterSession'
@@ -49,7 +56,7 @@ import { SERVER_SETTINGS_GROUP_BY_KEY, type SettingsGroup, type SettingsGroupPro
 import {
   captureDestructiveRefreshEpoch,
   hasDestructiveRefreshEpochChanged,
-  runRollbackUnlessDestructiveRefreshChanged,
+  runRollbackUnlessDestructiveRefreshChanged as runProjectionRollback,
 } from './staleStateGuards'
 import {
   notifyServerCommandLocalEffectApplied,
@@ -1947,6 +1954,7 @@ type ServerCommandSuccessReconciler = (
 type ServerCommandConflictGapHandler = (currentRevision: number, appliedRevision: number) => void
 
 interface ServerCommandReconciliationBatch {
+  sessionGeneration: number
   pendingEvents: Map<number, CommandEvent>
   pendingLocalEffects: Map<number, ServerCommandLocalEffect>
   completion: Promise<void>
@@ -1956,6 +1964,7 @@ interface ServerCommandReconciliationBatch {
 }
 
 interface DirectServerCommandReconciliation {
+  sessionGeneration: number
   matches: (event: CommandEvent) => boolean
   pendingEvents: Map<number, CommandEvent>
 }
@@ -1974,6 +1983,7 @@ const directServerCommandReconciliations = new Set<DirectServerCommandReconcilia
 // scope for every transport that the queued factory starts, so its eventual
 // local effect fails closed and triggers an authoritative reread.
 let activeQueuedCommandDestructiveRefreshEpoch: number | null = null
+let activeQueuedClientSessionGeneration: number | null = null
 let activeQueuedCommandMutation: { id: string; databaseLineage: string; requestIndex: number } | null = null
 
 /**
@@ -2000,7 +2010,10 @@ async function withQueuedCommandExecutionContext<T>(
   mutationId: string | undefined,
   databaseLineage: string | undefined,
   task: () => Promise<T>,
+  sessionGeneration = captureClientSessionGeneration(),
 ): Promise<T> {
+  const previousSessionGeneration = activeQueuedClientSessionGeneration
+  activeQueuedClientSessionGeneration = sessionGeneration
   const previousEpoch = activeQueuedCommandDestructiveRefreshEpoch
   const previousMutation = activeQueuedCommandMutation
   activeQueuedCommandDestructiveRefreshEpoch = epoch
@@ -2016,6 +2029,7 @@ async function withQueuedCommandExecutionContext<T>(
   } finally {
     activeQueuedCommandDestructiveRefreshEpoch = previousEpoch
     activeQueuedCommandMutation = previousMutation
+    activeQueuedClientSessionGeneration = previousSessionGeneration
   }
 }
 
@@ -2122,6 +2136,7 @@ function getOrCreateServerCommandReconciliationBatch(): ServerCommandReconciliat
     resolveCompletion = resolve
   })
   activeServerCommandReconciliationBatch = {
+    sessionGeneration: captureClientSessionGeneration(),
     pendingEvents: new Map(),
     pendingLocalEffects: new Map(),
     completion,
@@ -2158,9 +2173,21 @@ async function flushServerCommandReconciliationBatch(batch: ServerCommandReconci
     return
   }
 
+  if (!isClientSessionGenerationCurrent(batch.sessionGeneration)) {
+    batch.pendingEvents.clear()
+    batch.pendingLocalEffects.clear()
+    completeServerCommandReconciliationBatch(batch)
+    return
+  }
   batch.flushing = true
   try {
     while (activeServerCommandReconciliationBatch === batch && queuedServerCommandExecutionCount === 0) {
+      if (!isClientSessionGenerationCurrent(batch.sessionGeneration)) {
+        batch.pendingEvents.clear()
+        batch.pendingLocalEffects.clear()
+        completeServerCommandReconciliationBatch(batch)
+        return
+      }
       const coalescedEvents = Array.from(batch.pendingEvents.values()).sort(
         (left, right) => left.revision - right.revision,
       )
@@ -2220,15 +2247,16 @@ export function deferOwnServerCommandReconciliation(
   event: CommandEvent,
   localEffect?: ServerCommandLocalEffect,
 ): boolean {
+  if (!canUseClientWriteAccess()) return false
   const batch = activeServerCommandReconciliationBatch
-  if (batch) {
+  if (batch && isClientSessionGenerationCurrent(batch.sessionGeneration)) {
     recordDeferredServerCommandSuccessEvent(batch, event, localEffect)
     return true
   }
 
   let deferred = false
   for (const direct of directServerCommandReconciliations) {
-    if (!direct.matches(event)) continue
+    if (!isClientSessionGenerationCurrent(direct.sessionGeneration) || !direct.matches(event)) continue
     direct.pendingEvents.set(event.revision, event)
     deferred = true
   }
@@ -2238,7 +2266,11 @@ export function deferOwnServerCommandReconciliation(
 function beginDirectServerCommandReconciliation(
   matches: (event: CommandEvent) => boolean,
 ): DirectServerCommandReconciliation {
-  const direct = { matches, pendingEvents: new Map<number, CommandEvent>() }
+  const direct = {
+    matches,
+    sessionGeneration: captureClientSessionGeneration(),
+    pendingEvents: new Map<number, CommandEvent>(),
+  }
   directServerCommandReconciliations.add(direct)
   return direct
 }
@@ -2258,6 +2290,10 @@ async function releaseDirectServerCommandEvents(
   reactivate = false,
   beforeConfirmedOnly = false,
 ): Promise<void> {
+  if (!isClientSessionGenerationCurrent(direct.sessionGeneration)) {
+    direct.pendingEvents.clear()
+    return
+  }
   const pendingEvents = Array.from(direct.pendingEvents.values())
     .filter(
       (event) =>
@@ -2296,12 +2332,14 @@ export async function withDirectServerCommandEventReconciliation<T>(
   let confirmedEvent: CommandEvent | null = null
   try {
     return await operation(async (event, localEffect) => {
+      if (!isClientSessionGenerationCurrent(direct.sessionGeneration)) return
       confirmedEvent = event
       // The Realm transport cannot know its new character id before parsing
       // the response, so its provisional matcher is intentionally broader.
       // Drain any unmatched earlier events first to preserve revision order.
       directServerCommandReconciliations.delete(direct)
       await releaseDirectServerCommandEvents(direct, confirmedEvent, true, true)
+      if (!isClientSessionGenerationCurrent(direct.sessionGeneration)) return
       await notifyServerCommandSuccessReconciler(event, true, localEffect)
     })
   } finally {
@@ -2314,7 +2352,25 @@ export function canUseServerCommands(): boolean {
 }
 
 function canUseServerCommandAccess(access: ServerCommandAccess): boolean {
-  return !isWriterAccessLost() && (access !== 'ordinary' || canMutate())
+  return (
+    !isWriterAccessLost() &&
+    (access === 'ordinary' ? canMutate() && canUseClientWriteAccess() : canUseClientRecoveryAccess())
+  )
+}
+
+function queuedClientSessionIsCurrent(): boolean {
+  return (
+    activeQueuedClientSessionGeneration === null ||
+    isClientSessionGenerationCurrent(activeQueuedClientSessionGeneration)
+  )
+}
+
+function canExecuteServerCommandAccess(access: ServerCommandAccess): boolean {
+  return canUseServerCommandAccess(access) && queuedClientSessionIsCurrent()
+}
+
+function runRollbackUnlessDestructiveRefreshChanged(rollback: (() => void) | null | undefined, epoch: number): boolean {
+  return queuedClientSessionIsCurrent() && runProjectionRollback(rollback, epoch)
 }
 
 /**
@@ -2328,8 +2384,10 @@ export function runExternalServerRevisionOperation<T>(
   operation: () => Promise<T>,
 ): Promise<ExternalServerRevisionOperationResult<T>> {
   if (!canUseServerCommands()) return Promise.resolve({ status: 'unavailable' })
+  const sessionGeneration = captureClientSessionGeneration()
   return enqueueServerRevisionExecution(async () => {
-    if (!canUseServerCommands()) return { status: 'unavailable' }
+    if (!canUseServerCommands() || !isClientSessionGenerationCurrent(sessionGeneration))
+      return { status: 'unavailable' }
     return { status: 'executed', value: await operation() }
   })
 }
@@ -2399,10 +2457,12 @@ async function getServerCommandBaseRevisionForAccess(
   signal?: AbortSignal | null,
   keepalive = false,
 ): Promise<number | null> {
-  if (!canUseServerCommandAccess(access)) return null
+  if (!canExecuteServerCommandAccess(access)) return null
+  const sessionGeneration = captureClientSessionGeneration()
   if (cachedServerCommandRevision !== null) return cachedServerCommandRevision
 
   const auth = await getNodeServerProxyAuth()
+  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration)) return null
   let response: Response
   try {
     const init: RequestInit = {
@@ -2418,10 +2478,12 @@ async function getServerCommandBaseRevisionForAccess(
     return null
   }
 
-  if (!canUseServerCommandAccess(access) || !response.ok) return null
+  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration) || !response.ok)
+    return null
 
   try {
     const body = (await response.json()) as { revision?: unknown }
+    if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration)) return null
     if (Number.isInteger(body.revision) && (body.revision as number) >= 0) {
       cachedServerCommandRevision = body.revision as number
       return cachedServerCommandRevision
@@ -2551,38 +2613,45 @@ export async function patchServerBackedSettings(input: PatchServerBackedSettings
   if (grouped.length === 0) return { status: 'unavailable' }
 
   const rollbackEpoch = captureDestructiveRefreshEpoch()
+  const sessionGeneration = captureClientSessionGeneration()
   return enqueueServerCommandExecution(() =>
-    withQueuedCommandExecutionContext(rollbackEpoch, input.mutationId, input.databaseLineage, async () => {
-      if (!canUseServerCommands() && !input.executionWrapper) {
-        runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
-        return { status: 'unavailable' }
-      }
-      const deferredRollback = input.failureRollbackDisposition ? input.rollback : undefined
-      const executionInput = input.failureRollbackDisposition ? { ...input, rollback: undefined } : input
-      const execute = () =>
-        canUseServerCommands()
-          ? executeServerBackedSettingsPatch(executionInput, grouped, rollbackEpoch)
-          : Promise.resolve({ status: 'unavailable' as const })
-      let result: ServerCommandResult
-      try {
-        result = input.executionWrapper ? await input.executionWrapper(execute) : await execute()
-      } catch (error) {
+    withQueuedCommandExecutionContext(
+      rollbackEpoch,
+      input.mutationId,
+      input.databaseLineage,
+      async () => {
+        if (!canExecuteServerCommandAccess('ordinary') && !input.executionWrapper) {
+          runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
+          return { status: 'unavailable' }
+        }
+        const deferredRollback = input.failureRollbackDisposition ? input.rollback : undefined
+        const executionInput = input.failureRollbackDisposition ? { ...input, rollback: undefined } : input
+        const execute = () =>
+          canExecuteServerCommandAccess('ordinary')
+            ? executeServerBackedSettingsPatch(executionInput, grouped, rollbackEpoch)
+            : Promise.resolve({ status: 'unavailable' as const })
+        let result: ServerCommandResult
+        try {
+          result = input.executionWrapper ? await input.executionWrapper(execute) : await execute()
+        } catch (error) {
+          if (
+            input.failureRollbackDisposition &&
+            input.failureRollbackDisposition({ status: 'unavailable' }) !== 'retain'
+          ) {
+            runRollbackUnlessDestructiveRefreshChanged(deferredRollback, rollbackEpoch)
+          }
+          throw error
+        }
         if (
-          input.failureRollbackDisposition &&
-          input.failureRollbackDisposition({ status: 'unavailable' }) !== 'retain'
+          result.status !== 'ok' &&
+          (!input.failureRollbackDisposition || input.failureRollbackDisposition(result) === 'rollback')
         ) {
           runRollbackUnlessDestructiveRefreshChanged(deferredRollback, rollbackEpoch)
         }
-        throw error
-      }
-      if (
-        result.status !== 'ok' &&
-        (!input.failureRollbackDisposition || input.failureRollbackDisposition(result) === 'rollback')
-      ) {
-        runRollbackUnlessDestructiveRefreshChanged(deferredRollback, rollbackEpoch)
-      }
-      return result
-    }),
+        return result
+      },
+      sessionGeneration,
+    ),
   )
 }
 
@@ -6010,48 +6079,55 @@ export async function runServerCommand<T extends Record<string, unknown> = {}>(
   if (!canUseServerCommands()) return { status: 'unavailable' }
 
   const rollbackEpoch = captureDestructiveRefreshEpoch()
+  const sessionGeneration = captureClientSessionGeneration()
   return enqueueServerCommandExecution(() =>
-    withQueuedCommandExecutionContext(rollbackEpoch, input.mutationId, input.databaseLineage, async () => {
-      if (!canUseServerCommands() && !input.executionWrapper) {
-        runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
-        return { status: 'unavailable' }
-      }
-      let executionStarted = false
-      const deferredRollback = input.failureRollbackDisposition ? input.rollback : undefined
-      const executionInput = input.failureRollbackDisposition ? { ...input, rollback: undefined } : input
-      const execute = () => {
-        if (!canUseServerCommands()) return Promise.resolve({ status: 'unavailable' as const })
-        executionStarted = true
-        return executeServerCommand(executionInput, rollbackEpoch)
-      }
-      let result: ServerCommandResult<T>
-      try {
-        result = input.executionWrapper ? await input.executionWrapper(execute) : await execute()
-      } catch (error) {
-        if (
-          (input.failureRollbackDisposition &&
-            input.failureRollbackDisposition({ status: 'unavailable' }) !== 'retain') ||
-          (!input.failureRollbackDisposition && !executionStarted)
-        ) {
-          runRollbackUnlessDestructiveRefreshChanged(deferredRollback ?? input.rollback, rollbackEpoch)
+    withQueuedCommandExecutionContext(
+      rollbackEpoch,
+      input.mutationId,
+      input.databaseLineage,
+      async () => {
+        if (!canExecuteServerCommandAccess('ordinary') && !input.executionWrapper) {
+          runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
+          return { status: 'unavailable' }
         }
-        throw error
-      }
-      if (
-        result.status !== 'ok' &&
-        input.failureRollbackDisposition &&
-        input.failureRollbackDisposition(result) === 'rollback'
-      ) {
-        runRollbackUnlessDestructiveRefreshChanged(deferredRollback, rollbackEpoch)
-      } else if (!executionStarted && result.status !== 'ok' && !input.failureRollbackDisposition) {
-        // Durable dependency wrappers can retain a successor without sending
-        // it when an older owner mutation is still transiently blocked. The
-        // normal executor did not run in that branch, so restore the optimistic
-        // projection here instead of leaving a UI value that was never sent.
-        runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
-      }
-      return result
-    }),
+        let executionStarted = false
+        const deferredRollback = input.failureRollbackDisposition ? input.rollback : undefined
+        const executionInput = input.failureRollbackDisposition ? { ...input, rollback: undefined } : input
+        const execute = () => {
+          if (!canExecuteServerCommandAccess('ordinary')) return Promise.resolve({ status: 'unavailable' as const })
+          executionStarted = true
+          return executeServerCommand(executionInput, rollbackEpoch)
+        }
+        let result: ServerCommandResult<T>
+        try {
+          result = input.executionWrapper ? await input.executionWrapper(execute) : await execute()
+        } catch (error) {
+          if (
+            (input.failureRollbackDisposition &&
+              input.failureRollbackDisposition({ status: 'unavailable' }) !== 'retain') ||
+            (!input.failureRollbackDisposition && !executionStarted)
+          ) {
+            runRollbackUnlessDestructiveRefreshChanged(deferredRollback ?? input.rollback, rollbackEpoch)
+          }
+          throw error
+        }
+        if (
+          result.status !== 'ok' &&
+          input.failureRollbackDisposition &&
+          input.failureRollbackDisposition(result) === 'rollback'
+        ) {
+          runRollbackUnlessDestructiveRefreshChanged(deferredRollback, rollbackEpoch)
+        } else if (!executionStarted && result.status !== 'ok' && !input.failureRollbackDisposition) {
+          // Durable dependency wrappers can retain a successor without sending
+          // it when an older owner mutation is still transiently blocked. The
+          // normal executor did not run in that branch, so restore the optimistic
+          // projection here instead of leaving a UI value that was never sent.
+          runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
+        }
+        return result
+      },
+      sessionGeneration,
+    ),
   )
 }
 
@@ -6072,7 +6148,8 @@ export async function runServerCommandSequence(
   rollback?: (isCurrent: () => boolean) => void | Promise<void>,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult | null> {
-  if (!canUseServerCommands() || commands.length === 0) return null
+  if (commands.length === 0) return null
+  if (!canUseServerCommands()) return { status: 'unavailable' }
 
   return runServerCommandSequenceWithAccess('ordinary', commands, rollback, options)
 }
@@ -6083,14 +6160,22 @@ function runServerCommandSequenceWithAccess(
   rollback?: (isCurrent: () => boolean) => void | Promise<void>,
   options: ServerCommandTransportOptions = {},
 ): Promise<ServerCommandResult | null> {
-  if (!canUseServerCommandAccess(access) || commands.length === 0) return Promise.resolve(null)
+  if (commands.length === 0) return Promise.resolve(null)
+  if (!canUseServerCommandAccess(access)) return Promise.resolve({ status: 'unavailable' })
 
   const rollbackEpoch = captureDestructiveRefreshEpoch()
+  const sessionGeneration = captureClientSessionGeneration()
   return enqueueServerCommandExecution((batch) =>
-    withQueuedCommandExecutionContext(rollbackEpoch, options.mutationId, options.databaseLineage, async () => {
-      if (!canUseServerCommandAccess(access)) return null
-      return executeServerCommandSequence(commands, rollback, rollbackEpoch, batch, access)
-    }),
+    withQueuedCommandExecutionContext(
+      rollbackEpoch,
+      options.mutationId,
+      options.databaseLineage,
+      async () => {
+        if (!canExecuteServerCommandAccess(access)) return { status: 'unavailable' }
+        return executeServerCommandSequence(commands, rollback, rollbackEpoch, batch, access)
+      },
+      sessionGeneration,
+    ),
   )
 }
 
@@ -6112,6 +6197,7 @@ export async function replayDurableMutationRequests(
 ): Promise<DurableMutationReplayResult> {
   if (requests.length === 0) return { status: 'ok' }
   if (!canUseServerCommandAccess('pending-replay')) return { status: 'unavailable' }
+  const sessionGeneration = captureClientSessionGeneration()
   const factories = requests.map(
     (request): ServerCommandFactory =>
       (baseRevision) =>
@@ -6129,6 +6215,7 @@ export async function replayDurableMutationRequests(
   // A different live writer may have advanced the revision while this tab was
   // gone. The 409 response advances the cached cursor; replay the same stable
   // receipt ids once so already-accepted prefix requests dedupe transactionally.
+  if (!isClientSessionGenerationCurrent(sessionGeneration)) return { status: 'unavailable' }
   if (failed?.status === 'conflict') {
     failed = await runServerCommandSequenceWithAccess('pending-replay', factories, undefined, options)
   }
@@ -6196,6 +6283,8 @@ export async function acknowledgeServerMutationReceipts(
   requestCount: number,
   databaseLineage: string,
 ): Promise<boolean> {
+  if (!canUseClientRecoveryAccess() || isWriterAccessLost()) return false
+  const sessionGeneration = captureClientSessionGeneration()
   const normalizedMutationId = normalizeMutationId(mutationId)
   const normalizedDatabaseLineage = normalizeDatabaseLineage(databaseLineage)
   if (!Number.isInteger(requestCount) || requestCount < 1 || requestCount > 100) {
@@ -6203,6 +6292,8 @@ export async function acknowledgeServerMutationReceipts(
   }
   try {
     const auth = await getNodeServerProxyAuth()
+    if (!canUseClientRecoveryAccess() || isWriterAccessLost() || !isClientSessionGenerationCurrent(sessionGeneration))
+      return false
     const response = await fetch(MUTATION_RECEIPT_ACK_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -6232,7 +6323,7 @@ async function executeServerCommandSequence(
 ): Promise<ServerCommandResult | null> {
   const acceptedRevisions: number[] = []
   for (const entry of commands) {
-    if (!canUseServerCommandAccess(access)) return { status: 'unavailable' }
+    if (!canExecuteServerCommandAccess(access)) return { status: 'unavailable' }
     // The sequence owns rollback so it runs exactly once for the first failed
     // step. executeServerCommand still normalizes thrown factories to an error
     // result and defers every accepted event into this sequence's active batch.
@@ -6259,7 +6350,7 @@ async function executeServerCommandSequence(
     for (const revision of acceptedRevisions) {
       reconciliationBatch.pendingLocalEffects.delete(revision)
     }
-    const rollbackIsCurrent = () => !hasDestructiveRefreshEpochChanged(rollbackEpoch)
+    const rollbackIsCurrent = () => queuedClientSessionIsCurrent() && !hasDestructiveRefreshEpochChanged(rollbackEpoch)
     if (rollback && rollbackIsCurrent()) {
       await rollback(rollbackIsCurrent)
     }
@@ -6273,7 +6364,7 @@ async function executeServerCommand<T extends Record<string, unknown>>(
   rollbackEpoch: number,
   access: ServerCommandAccess = 'ordinary',
 ): Promise<ServerCommandResult<T>> {
-  if (!canUseServerCommandAccess(access)) {
+  if (!canExecuteServerCommandAccess(access)) {
     runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
     return { status: 'unavailable' }
   }
@@ -6285,6 +6376,7 @@ async function executeServerCommand<T extends Record<string, unknown>>(
       return { status: 'error', error: 'Unable to read server command revision' }
     }
 
+    if (!canExecuteServerCommandAccess(access)) return { status: 'unavailable' }
     result = await input.command(baseRevision)
   } catch (error) {
     // A command-factory rejection must roll back and surface as an error result.
@@ -6299,7 +6391,7 @@ async function executeServerCommand<T extends Record<string, unknown>>(
 
   if (result.status !== 'ok') {
     runRollbackUnlessDestructiveRefreshChanged(input.rollback, rollbackEpoch)
-  } else {
+  } else if (queuedClientSessionIsCurrent()) {
     // requestCommandJson already advances this cursor, but custom command
     // factories are also supported. Trust their accepted revision so the next
     // queued factory does not reuse a stale baseRevision.
@@ -6335,11 +6427,14 @@ async function requestCommandJson<T extends Record<string, unknown> = {}>(
   },
   access: ServerCommandAccess = 'ordinary',
 ): Promise<ServerCommandResult<T>> {
+  const sessionGeneration = captureClientSessionGeneration()
   const destructiveRefreshEpoch = activeQueuedCommandDestructiveRefreshEpoch ?? captureDestructiveRefreshEpoch()
-  if (!canUseServerCommandAccess(access)) return { status: 'unavailable' }
+  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration))
+    return { status: 'unavailable' }
 
   const auth = await getNodeServerProxyAuth()
-  if (!canUseServerCommandAccess(access)) return { status: 'unavailable' }
+  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration))
+    return { status: 'unavailable' }
   const mutation = nextQueuedCommandMutationRequest()
   const directReconciliation = init.deferOwnEventUntilResponse
     ? beginDirectServerCommandReconciliation(init.deferOwnEventUntilResponse)
@@ -6379,7 +6474,7 @@ async function requestCommandJson<T extends Record<string, unknown> = {}>(
     }
 
     if (response.status === 409 && isDatabaseLineageConflict(body)) {
-      scheduleServerOwnershipReload()
+      if (isClientSessionGenerationCurrent(sessionGeneration)) scheduleServerOwnershipReload()
       return {
         status: 'error',
         error: errorMessageFromBody(body, 'HTTP 409'),
@@ -6405,7 +6500,7 @@ async function requestCommandJson<T extends Record<string, unknown> = {}>(
 
     if (response.status === 409) {
       const currentRevision = readCurrentRevision(body)
-      if (currentRevision !== null) {
+      if (currentRevision !== null && isClientSessionGenerationCurrent(sessionGeneration)) {
         const appliedRevision = peekAppliedServerResourceRevision()
         setCachedServerCommandRevision(currentRevision)
         if (appliedRevision !== null && currentRevision > appliedRevision) {
@@ -6417,7 +6512,8 @@ async function requestCommandJson<T extends Record<string, unknown> = {}>(
         : { status: 'conflict', currentRevision }
     }
 
-    if (handleActiveWriterStaleResponse(response, body)) {
+    if (response.status === 423 && isActiveWriterStaleErrorBody(body)) {
+      if (isClientSessionGenerationCurrent(sessionGeneration)) handleActiveWriterStaleResponse(response, body)
       return { status: 'error', error: errorMessageFromBody(body, 'HTTP 423'), reason: 'stale-writer' }
     }
 
@@ -6457,6 +6553,9 @@ async function requestCommandJson<T extends Record<string, unknown> = {}>(
       return { status: 'error', error: 'Invalid command response' }
     }
 
+    if (!isClientSessionGenerationCurrent(sessionGeneration) || !queuedClientSessionIsCurrent()) {
+      return { status: 'ok', ...(body as { revision: number; event: CommandEvent } & T) }
+    }
     setCachedServerCommandRevision(receipt.revision)
     if (receipt.event) {
       const parsedLocalEffect = init.readLocalEffect?.(body, receipt.event)

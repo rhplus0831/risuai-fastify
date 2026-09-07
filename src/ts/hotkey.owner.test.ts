@@ -1,5 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { testDatabaseState } from './__tests__/resourceDatabaseState'
+import {
+  beginClientSession,
+  resetClientSessionForTests,
+  setClientConnectionState,
+  setClientProjectionReady,
+  settleClientReader,
+} from './clientSession'
+import { currentRoute, navigate } from './router'
+import { get } from 'svelte/store'
 
 // Regression coverage: ordinary keydown matching must not mutate
 // `testDatabaseState.db.hotkeys`, and hotkey settings edits must route through a
@@ -163,6 +172,7 @@ function seedReadyCharacterOwners(
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   changeCharMock.mockClear()
   for (const spy of Object.values(alertSpies)) spy.mockReset()
   platformState.isFastifyServer = true
@@ -173,10 +183,32 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   vi.unstubAllGlobals()
 })
 
 describe('hotkey handling through explicit resource owners', () => {
+  it('uses the reader URL for adjacent navigation without persisting selection or presets', async () => {
+    seedReadyCharacterOwners(
+      [
+        { name: 'Alpha', chaId: 'char-a' },
+        { name: 'Bravo', chaId: 'char-b' },
+        { name: 'Charlie', chaId: 'char-c' },
+      ],
+      ['char-a', 'char-b', 'char-c'],
+      2,
+    )
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    navigate('/character/char-a')
+    await expect(changeToAdjacentCharacter('next')).resolves.toBe(true)
+    expect(get(currentRoute)).toMatchObject({ kind: 'character', chaId: 'char-b' })
+    expect(charactersResourceState.currentChar).toBe(2)
+    expect(changeCharMock).not.toHaveBeenCalled()
+    expect(changeToPreset(0)).toBe(false)
+  })
   it('finds adjacent characters at both ends of the alphabetized list', () => {
     const characters = [{ name: 'Charlie' }, { name: 'Alpha' }, { name: 'Bravo' }] as any
 

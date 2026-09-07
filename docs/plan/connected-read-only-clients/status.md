@@ -230,3 +230,37 @@ This implements the wire prerequisite for E01 and startup/switching. It does
 not certify a new reader startup or explicit UI promotion; those remain later
 phase evidence. Live capability/entry/draft protection is still in progress, and
 Phase 1 is not accepted.
+
+### Live capability, queue and shell protection
+
+Source: `36ee0e33c` plus this capability/queue/UI slice. `clientSession.ts` owns
+six live states, connection health, authenticated ownership and opaque operation
+identities. Only a current startup/promotion/revalidated-resume operation can
+finish writer recovery. Reader frames and read readiness cannot grant writing.
+Startup milestones stay monotonic; managed read-route capability is independent
+from the app's writer route handlers and editor overlays. Managed activation is
+reserved for the Phase 2 coordinator; the public default remains conservative.
+
+Command admission, execution factories, revision/auth awaits, replay and
+receipt acknowledgement now consume that live authority. A captured queue
+generation remains invalid after demotion and a later promotion; denied
+sequences return `unavailable` rather than the `null` success sentinel. Valid
+late acceptance can settle its exact receipt while old local effects, rollbacks,
+revision updates and reconciliation continuations cannot overwrite a newer
+role. Real stale-writer bodies may include the server's `reason`; originating
+generations fence their effect on current authority. Direct adapters are being
+updated to supply that origin as part of the parallel operation slices.
+
+Synchronous writer-loss hooks run after dispatch closes and before subscribers
+can unmount an editor. Lifecycle and registered-owner flushes deny reader work.
+The managed shell gates authoring routes, while Home/Settings route navigation,
+text-copy shortcuts and local adjacent-character URLs remain usable. It does
+not use global CSS freezing for this protection.
+
+Focused proof: 11 core/command/lifecycle/mounted-shell/hotkey suites passed
+**277 tests**; the final two hotkey suites passed **34 tests** after adding the
+reader shortcut/local-selection cases. These include held auth, queued replay,
+accepted response, direct-event draining and batch-flush races, A → B → A
+capability changes, and actual mounted UI/keydown checks. The wider operation,
+plugin, local-owner and draft integration work and phase-ending aggregate/browser
+gates are still pending. No Phase 1 acceptance is implied by this slice.

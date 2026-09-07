@@ -64,6 +64,11 @@
   import { alertError } from './ts/alert'
   import { hasDragType, RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes'
   import { consumeObserverRouteIntent, peekObserverRouteIntent } from './ts/observerRouteIntent'
+  import {
+    clientSessionStore,
+    captureClientSessionGeneration,
+    isClientSessionGenerationCurrent,
+  } from './ts/clientSession'
   import { loadGrid, loadSettings } from './ts/routeComponentPreload'
   import { pushNotificationCoordinatorState } from './ts/server/pushNotificationState'
   import { pushNotificationWarningDismissed } from './ts/gui/pushNotificationWarningPreference'
@@ -95,16 +100,17 @@
   let keepingSessionAlive = $state(false)
   let retryingPluginRuntime = $state(false)
   let generationRecoveryAction = $state<'idle' | 'retrying' | 'discarding'>('idle')
-  let canApplyRoutes = $derived($startupCoordinatorStore.capabilities.canApplyRoutes)
+  let connectedReaderView = $derived($clientSessionStore.managed && $clientSessionStore.lifecycle !== 'writing')
+  let canApplyWriterRoutes = $derived($startupCoordinatorStore.capabilities.canApplyRoutes && !connectedReaderView)
   let pluginStartupFailed = $derived($startupCoordinatorStore.failures.pluginsReady !== undefined)
   let pluginRuntimeFailed = $derived($pluginRuntimeStateStore.phase === 'error')
   let generationRecoveryStartupFailed = $derived(
     $startupCoordinatorStore.failures.canGenerate?.failureCode === 'generation-recovery-failed',
   )
   let preWriterObserverMode = $derived(
-    $startupCoordinatorStore.observerShellEnabled &&
-      $startupCoordinatorStore.capabilities.canRenderShell &&
-      !$startupCoordinatorStore.capabilities.canApplyRoutes,
+    $startupCoordinatorStore.capabilities.canRenderShell &&
+      (connectedReaderView ||
+        ($startupCoordinatorStore.observerShellEnabled && !$startupCoordinatorStore.capabilities.canApplyRoutes)),
   )
   let renderedRoute = $state($currentRoute)
   let routeLoadingVisible = $state(false)
@@ -241,16 +247,17 @@
   let routeChatIsOpen = $derived($currentRoute.kind === 'character' && typeof $currentRoute.chatId === 'string')
 
   $effect(() => {
-    if (!canApplyRoutes) return
+    if (!canApplyWriterRoutes) return
     const observerIntent = peekObserverRouteIntent()
     const route = observerIntent?.route ?? $currentRoute
     if (consumeStateDrivenRouteUpdate()) {
       renderedRoute = route
       return
     }
+    const sessionGeneration = captureClientSessionGeneration()
     untrack(() => {
       void applyRouteToStores(route).then((applied) => {
-        if (!applied) return
+        if (!applied || !canApplyWriterRoutes || !isClientSessionGenerationCurrent(sessionGeneration)) return
         renderedRoute = route
         if (observerIntent) consumeObserverRouteIntent(observerIntent.sequence)
       })
@@ -258,7 +265,7 @@
   })
 
   $effect(() => {
-    if (!canApplyRoutes) return
+    if (!canApplyWriterRoutes) return
 
     // Read every state value that can drive the URL before checking the route
     // application guard. Route application writes these stores while the guard
@@ -429,7 +436,7 @@
       </div>
     {/if}
   </div>
-  {#if aprilFools && $startupCoordinatorStore.capabilities.canApplyRoutes}
+  {#if aprilFools && canApplyWriterRoutes}
     <div class="bg-[#212121] w-full h-screen min-h-screen text-black flex relative">
       <div class="w-full max-w-3xl mx-auto py-8 px-4 flex justify-center items-center">
         <div class="flex flex-col w-full items-center text-[#bbbbbb]">
@@ -619,7 +626,7 @@
   {#if $alertStore.type !== 'none'}
     <LazyComponent loader={loadAlert} modal testId="alert" />
   {/if}
-  {#if $startupCoordinatorStore.capabilities.canApplyRoutes}
+  {#if canApplyWriterRoutes}
     {#if $showRealmInfoStore}
       <LazyComponent
         loader={loadRealmPopup}

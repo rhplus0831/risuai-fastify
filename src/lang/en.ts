@@ -2123,6 +2123,15 @@ export const languageEnglish = {
     chooseCharacter: 'Choose a character',
     chooseCharacterHelp: 'Character summaries remain available while this tab waits for write access.',
   },
+  connectedReaders: {
+    title: 'Conversations',
+    connected: 'Read only. Updates from the writer appear here.',
+    connecting: 'Connecting to updates…',
+    interrupted: 'Connection interrupted. Showing the last received content.',
+    switching: 'Preparing write access. You can keep reading.',
+    writeAccessRequired: 'You need write access to edit this page.',
+    limitedDisplay: 'Some custom display features are unavailable in read-only mode. The original text is shown.',
+  },
   writerConnectConflictTitle: 'Another client is connected',
   writerConnectConflictBody:
     'Another client is still connected to this server. Do you want to disconnect it and continue on this client?',

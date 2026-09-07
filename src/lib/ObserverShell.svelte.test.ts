@@ -1,4 +1,12 @@
 import { IDBFactory } from 'fake-indexeddb'
+import {
+  beginClientSession,
+  settleClientReader,
+  setClientProjectionReady,
+  setClientConnectionState,
+  resetClientSessionForTests,
+} from '../ts/clientSession'
+import { language } from '../lang'
 import { mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -131,7 +139,38 @@ async function mountObserverShell(): Promise<void> {
 }
 
 describe('pre-writer ObserverShell', () => {
+  it('gates an authoring URL while keeping keyboard-focusable reader navigation and honest connection status', async () => {
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    const router = await createRouterMock()
+    router.navigate('/settings/persona')
+    await mountObserverShell()
+    expect(target.querySelector('[data-reader-authoring-gate]')?.textContent).toBe(
+      language.connectedReaders.writeAccessRequired,
+    )
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.connected,
+    )
+    expect(target.querySelector('input, textarea, [contenteditable="true"]')).toBeNull()
+    const home = target.querySelector<HTMLButtonElement>('nav button')!
+    home.focus()
+    expect(document.activeElement).toBe(home)
+    home.click()
+    await tick()
+    expect(get(router.currentRoute).kind).toBe('home')
+    expect(target.querySelector('[data-reader-authoring-gate]')).toBeNull()
+    setClientConnectionState('interrupted')
+    await tick()
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.interrupted,
+    )
+    expect(observerShellMocks.retryObserverWriterPromotion).not.toHaveBeenCalled()
+  })
+
   beforeEach(async () => {
+    resetClientSessionForTests()
     vi.stubGlobal('indexedDB', new IDBFactory())
     vi.stubGlobal('fetch', vi.fn())
     resetPendingMutationOutboxForTests()
@@ -156,6 +195,7 @@ describe('pre-writer ObserverShell', () => {
   })
 
   afterEach(async () => {
+    resetClientSessionForTests()
     if (component) {
       unmount(component)
       component = undefined
