@@ -9,7 +9,7 @@ For coordinated execution of the two plans below, start with the
 [Browser Smoke and Connected Readers Coordination Plan](browser-smoke-and-connected-readers.md).
 It owns the execution order and handoffs; each plan's status file owns progress.
 
-| Plan                        | State                                           | Entry point                                                                                            |
-| --------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Browser smoke effectiveness | Phases 0–2 accepted; awaiting reader completion | [Plan](browser-smoke-effectiveness/PLAN.md), [execution status](browser-smoke-effectiveness/status.md) |
-| Connected read-only clients | Phases 0–4 accepted; Phase 5 in progress        | [Plan](connected-read-only-clients/PLAN.md), [execution status](connected-read-only-clients/status.md) |
+| Plan                        | State                                    | Entry point                                                                                            |
+| --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| Browser smoke effectiveness | Phases 0–2 accepted; Phase 3 in progress | [Plan](browser-smoke-effectiveness/PLAN.md), [execution status](browser-smoke-effectiveness/status.md) |
+| Connected read-only clients | Complete; accepted and ready to archive  | [Plan](connected-read-only-clients/PLAN.md), [execution status](connected-read-only-clients/status.md) |

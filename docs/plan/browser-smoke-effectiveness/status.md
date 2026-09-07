@@ -1,35 +1,36 @@
 # Browser Smoke Effectiveness Status
 
-Updated: 2026-09-07
+Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: Phases 0–2 accepted; Stage 2 connected-reader implementation is active.
-- Execution source: `6f39fb8f0` plus the new Realm browser regression and
-  final Phase 2 evidence/guidance records.
-- Current scope: Stage 1 prerequisite accepted. Smoke Phases 3–4 intentionally
-  remain unfinished while the connected-reader plan executes.
-- Next action: continue the [reader workstream](../connected-read-only-clients/status.md) through its Phase 5 acceptance.
-  Resume this workstream at Stage 3 reconciliation after reader Phase 5 is accepted.
-- Confirmed required gaps: BSE-001–005 are verified repairs. No open high-risk
-  gap remains in the four critical contracts at the Stage 1 source. Reader
-  Phase 2 validation repaired BSE-005 at `9387d1464974`; its fault controls and
-  final agent/full-suite gates passed in reader status.
-- Blockers: none. The receiving [reader status](../connected-read-only-clients/status.md)
-  owns the next execution cursor; smoke Phases 3–4 remain pending.
+- State: Smoke Phases 0–2 and all reader Phases 0–5 accepted; Stage 3 smoke
+  reconciliation and the remaining scenario review are active.
+- Current implementation: production through `a703b9d4b`, browser through
+  `60ac61bde`; reader final gates pass at clean `eb9673942` with 92/92 cases.
+- Current scope: complete Phase 3's remaining scenario/support review, correct
+  S38/S57's scope labels and rerun affected critical browser evidence.
+- Next action: finish Phase 3 and its required full gate, then execute Phase 4
+  verification, final findings and closeout.
+- Confirmed gaps: BSE-001–006 have their named repaired/strengthened controls;
+  renewed BSE-005/BSE-006 and all reader gates pass. Earlier fault demonstrations
+  retain their exact source/oracle limits.
+- Blockers: none. Reader default/FALSE rollout and archive are owned by the
+  [accepted reader handoff](../connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08).
+  Smoke Phase 3/4 acceptance remains separate.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State    | Next evidence required                                              |
-| --------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                  |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted | Shared controls, repair faults, agent and full-suite evidence below |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted | Four contract faults, restored browsers and phase gates below       |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending  | Complete review dispositions and repaired confirmed gaps            |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending  | Final discovery, focused/aggregate/full-browser evidence, residuals |
+| Phase                                                                       | State       | Next evidence required                                                                         |
+| --------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------- |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted    | Evidence below; proceed to Phase 1                                                             |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted    | Shared controls, repair faults, agent and full-suite evidence below                            |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted    | Four contract faults, restored browsers and phase gates below                                  |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | In progress | Final scenario/control dispositions, focused critical browser evidence and required full gate. |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending     | Final discovery, focused/aggregate/full-browser evidence, residuals                            |
 
 ## Verification Ledger
 
@@ -365,3 +366,21 @@ and normal emission. Actual compiled-FALSE replay/draft protection also passes.
 [Renewed proof](findings.md#renewed-combined-controls-and-fallback) and
 92-case/22-spec discovery reconcile the current reader additions. Reader Phase 5
 now repeats its final aggregate gates; Smoke Phase 3/4 acceptance is still pending.
+
+## Stage 3 Reader Completion Handoff — 2026-09-08
+
+Received [accepted reader Phases 0–5](../connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08)
+at `eb9673942`: final `test:agent` passes in 2m 21.3s and all thirteen required
+`test:all` lanes pass in 7m 16.0s, including 92/92 browser cases. Normal connected
+startup and actual compiled-FALSE intent/draft recovery pass; named faults and
+restored controls apply to the final changed boundaries. S22's measured pause
+and S92's held initial-handler navigation pass the full browser lane. No required
+reader gap is deferred.
+
+Resume Smoke Phase 3 with the prepared complete source review, current discovery
+and all conditional/support owners. Only S38's universal lazy claim and S57's
+persisted/pre-bootstrap repair claim require title corrections; assertions stay
+unchanged. Reassess the four critical contracts with their final source and
+limits, run the focused affected cohort, then the phase-ending full gate before
+accepting Phase 3. The reader's passing full run is the prerequisite, not the
+remaining smoke phases' required evidence.

@@ -4,25 +4,19 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite and reader Phases 0–4 accepted; Phase 5 combined verification and rollout are in progress.
+- State: all reader Phases 0–5 accepted; the connected-reader workstream is complete.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
-- Current task scope: implement the coordinated connected-reader plan after the
-  accepted smoke prerequisite. Reader Phases 0–4 are accepted.
-- Current slice: [Phase 5](phases/phase-5-verification-and-rollout.md),
-  final combined acceptance, default activation, conservative fallback and guides.
-  The corrected 91-case enabled baseline, five isolated production faults and
-  restored controls passed. The authorized default is enabled in `70a8b18e1`;
-  normal and actual FALSE builds also pass at their recorded source. The first
-  phase-ending full run exposed S47 startup navigation and recurring S22 pause
-  coverage failures. Their committed repairs and S92 now pass combined browser,
-  qualified fault/restored and renewed compiled-FALSE controls. Only repeated
-  final aggregate gates and acceptance/archive remain pending.
-- Production behavior: normal builds enable connected readers. Exact build-time
-  `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the conservative writer fallback.
-  Drafts and pending intent keep their originating local scope.
-- Blockers: no external dependency. The bounded S47 route/BSE-005 sampling
-  repairs and renewed rollout controls pass. Phase 5 awaits repeated final
-  aggregates; earlier acceptance and faults retain their original source limits.
+- Accepted implementation: production through `a703b9d4b`, browser repairs through
+  `60ac61bde`, with final agent/full gates at clean `eb9673942`.
+- Rollout: normal builds enable connected readers. Exact build-time
+  `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the verified conservative fallback,
+  preserving originating-client drafts and pending intent.
+- Final evidence: all 92 browser cases and all 13 full-suite lanes pass; normal/
+  FALSE builds, named production faults and restored controls are recorded below.
+- Next action: archive this intact bundle under UI/user input and continue the
+  [smoke workstream](../browser-smoke-effectiveness/status.md) at Stage 3.
+- Blockers and undisposed in-scope surfaces: none. Original follow-up product
+  scope and browser/provider/device limits remain explicit below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -30,14 +24,14 @@ active [phase](phases/README.md) for detailed execution instructions.
 
 ## Phase Router
 
-| Phase                                                                                             | State       | Next evidence required                                                                               |
-| ------------------------------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted    | Source/transition/draft contract, 34 dispositions and required full suite passed.                    |
-| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted    | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.               |
-| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Accepted    | Reader/browser/fault controls, final test:agent and all 13 test:all lanes passed.                    |
-| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Accepted    | Projection review, UI switching/setup/durable-generation browser faults and both phase gates passed. |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Accepted    | Five browser journeys, six qualified faults/restored controls and both final phase gates passed.     |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | In progress | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.                       |
+| Phase                                                                                             | State    | Next evidence required                                                                               |
+| ------------------------------------------------------------------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.                    |
+| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.               |
+| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Accepted | Reader/browser/fault controls, final test:agent and all 13 test:all lanes passed.                    |
+| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Accepted | Projection review, UI switching/setup/durable-generation browser faults and both phase gates passed. |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Accepted | Five browser journeys, six qualified faults/restored controls and both final phase gates passed.     |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Accepted | Combined/default/FALSE proof, final agent and all 13 full-suite lanes passed; guides complete.       |
 
 ## Verification Ledger
 
@@ -1219,3 +1213,51 @@ Discovery at `593b01eae` confirms all 92 cases/22 specs, twelve local support
 files and four PNGs; current anchors and the full hook map are reconciled.
 Both final aggregate gates are now repeated at unchanged production/test source
 plus these evidence records; no source work remains pending those checks.
+
+## Phase 5 Acceptance and Stage 3 Handoff — 2026-09-08
+
+**All reader phases and in-scope completion criteria are accepted.** Final source
+`eb9673942` is clean, with production through `a703b9d4b` and browser tests through
+`60ac61bde`. Both required aggregates run at that identical source, with rollout,
+fallback-variant and worker environment overrides unset.
+
+| Final gate                   | Result and actual scope                                                                                                                                                                                                                                                                                                                                                                          |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `pnpm test:agent`            | PASS, 2m 21.3s: all seven lanes; 712 frontend files/9,083 passing tests plus three existing skips, 224 server files/4,228 passing tests plus two existing skips; Svelte zero errors/warnings, protocol/shared-core/Fastify/browser types, topology, 49 current docs and normal smoke build. This command does not run Playwright.                                                                |
+| Phase-ending `pnpm test:all` | PASS, 7m 16.0s: all thirteen lanes, including **92/92 browser cases**, 8,842 ordinary frontend tests, 241 UI coverage tests, 4,228 server tests, 18 current compatibility cases, one selected Realm scale case, six performance cases, types, topology, docs and formatting. Three ordinary frontend and two server skips remain; the scale selection intentionally excludes its other 29 cases. |
+
+The browser lane takes 4m 34.3s including its build. S22 passes in 45.2s;
+S47's original locale race passes in 2.1s and new S92 in 1.9s. Required integration
+artifact merging passes with the complete current-run cohort. The two earlier
+failed final gates and first S92 test-contract failure remain recorded; their
+passing replacements do not erase those observations. Logs are
+`/tmp/reader-phase5-final-test-agent-round3.log` and
+`/tmp/reader-phase5-final-test-all-round3.log`; source/environment metadata is
+`/tmp/reader-phase5-final-gates-round3-source.json`.
+
+All 34 E01–E34 surface families have implemented dispositions and proof.
+Accepted browser/focused contracts cover independent Readers, explicit transfer,
+retained local work, generation observation/effects, operational events, bounded
+lifecycle recovery, replacement/authentication and stale-write rejection.
+Normal default and actual compiled-FALSE behavior pass at the repaired App source;
+clean restoration matches all 503 output files. The shipped/test guides describe
+these boundaries, including semantic route supersession, shell-only initial
+preview, acknowledged startup retry, writer reroll hydration and atomic IGP
+receipts. Current docs (49), explicit plan/index docs (24), formatting and
+whitespace validation pass for the acceptance records.
+
+No required feature is deferred. Named-device discovery, remote assignment,
+automatic following, cross-device draft transfer, collaborative editing and a
+full offline database remain the original product follow-up scope; the future
+owner of that requested work must define its authority/storage model before
+expanding this release. Browser proof uses built Chromium, explicit mobile and
+network/lifecycle emulation, real disposable Fastify/SQLite and controlled local
+providers. Physical-device/alternate-engine/provider availability, production
+worker timing and additional pinned compatibility lanes retain their exclusions.
+
+Archive this intact reader bundle under
+`.archived-docs/ui-and-user-input/connected-read-only-clients`, preserving all
+historical faults and source limits. The receiving smoke status resumes Stage 3:
+reconcile remaining scenario/support dispositions, the two source-backed title
+corrections, affected critical browser evidence and its own required phase gates.
+Reader acceptance does not accept those unfinished smoke phases.

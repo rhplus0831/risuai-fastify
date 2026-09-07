@@ -3,23 +3,16 @@
 Initial execution inventory: 2026-09-07 at `711b1d583` (clean worktree).
 Phase 2 discovery: `6f39fb8f0` plus the real-operation Realm browser spec.
 
-The Reader Phase 5 source universe at `678876571` contains 92 cases in 22 specs, plus twelve local
-TypeScript support owners and four screenshot baselines. The planning snapshot
-was extended by eight viewport/entry/height cases in `chatEntryLayout.spec.ts`
-and two real-operation Realm confirmation cases added during smoke Phase 2.
-Reader Phase 2 adds one real multi-session connected browsing scenario (S80);
-S32/S60 retain their identities with updated mixed-client behavior. Reader Phase 3
-adds S81–S83 for explicit switching, durable generation survival and empty-server setup.
-Reader Phase 4 adds S84–S88 for live viewing, detach, Stop, queued finalization
-and atomic IGP receipt recovery; their final baseline, all six production faults and restored controls pass.
-Reader Phase 5 adds S89/S90 for restart and fallback, strengthens S80 for two
-simultaneous Readers, and adds S91 alongside the retained conservative S77
-lineage-recovery case. The initial full TRUE cohort was 80/90; the corrected
-cohort passes 91/91 with five qualified faults and restored controls. Normal/FALSE
-rollout builds also pass at their recorded source. The phase-ending run at
-`90069ac9c` passes 89/91 and exposes S47's lost startup navigation and recurring
-S22 sampling coverage. Their repairs add S92's delayed initial-handler race;
-combined browser/fault/fallback evidence and repeated final gates are pending.
+The accepted Reader handoff at `eb9673942` contains **92 registered cases in
+22 specs**, twelve local TypeScript support owners and four screenshot baselines.
+The original universe grew through eight chat-entry cases, two actual Realm
+confirmation decisions, S80 connected browsing, S81–S83 switching/setup,
+S84–S88 live generation, S89/S90 restart/fallback, S91 connected import recovery
+and S92 delayed initial-handler navigation. S32/S60 retain mixed-client behavior;
+S44/S77 retain explicit conservative contracts. All 92 final reader browser cases
+and all thirteen full-suite lanes pass, with normal/FALSE and named fault/restored
+proof recorded in findings. The remaining Smoke Phase 3 scenario dispositions
+and its phase gate remain separate.
 Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
@@ -643,3 +636,9 @@ retains the original failed baseline, prepared-pause and completion-ordering
 limits. Final discovery confirms 92/22 identities, twelve supports and four PNGs;
 every source anchor and hook caller is reconciled. Reader final aggregate gates
 and the remaining Stage 3 review are still pending.
+
+Reader Phase 5 is accepted at `eb9673942`: all 92 browser cases and all thirteen
+full-suite lanes pass. The [Stage 3 handoff](status.md#stage-3-reader-completion-handoff-2026-09-08)
+receives the current discovered universe and qualified controls. Historical
+pending reader verification entries above are superseded by that accepted
+source; remaining Smoke Phase 3 reviews still require their explicit dispositions.
