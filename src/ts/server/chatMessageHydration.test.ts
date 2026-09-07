@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
-import { demoteClientSession, requireClientAuthentication, resetClientSessionForTests } from '../clientSession'
+import {
+  beginClientPromotion,
+  demoteClientSession,
+  requireClientAuthentication,
+  resetClientSessionForTests,
+} from '../clientSession'
 import { setManagedWriterForTest } from '../__tests__/managedClientSession'
 import { testDatabaseState } from '../__tests__/resourceDatabaseState'
 
@@ -293,6 +298,27 @@ describe('chat message hydration owner', () => {
     warn.mockRestore()
     requireClientAuthentication()
     expect(getReaderChatMessageOwnerState('chat-1')).toBeUndefined()
+  })
+
+  it('rejects a retained-body reader response after promotion starts without a hydration reset', async () => {
+    setManagedWriterForTest()
+    seedTwoStubChats()
+    const committed = { role: 'user', data: 'Last committed content', chatId: 'committed' }
+    applyServerChatMessagesResource('chat-1', [committed], undefined, [])
+    demoteClientSession()
+    expect(getReaderChatMessageOwnerState('chat-1')?.resourceLoaded).toBe(false)
+    const held = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchChat.mockReturnValueOnce(held.promise)
+    const reading = hydrateReaderChatMessageWindow('chat-1', 2)
+    const retainedReaderState = getReaderChatMessageOwnerState('chat-1')
+    expect(beginClientPromotion()).not.toBeNull()
+    // The same retained snapshot remains current:false on both sides of the
+    // operation boundary. Content equality alone cannot fence this response.
+    expect(getReaderChatMessageOwnerState('chat-1')).toEqual(retainedReaderState)
+    held.resolve(okResult('chat-1', [{ role: 'user', data: 'Obsolete reader response', chatId: 'old-response' }]))
+    await expect(reading).resolves.toBe(false)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([committed])
+    expect(db().characters[0].chats[0].message).toEqual([committed])
   })
 
   it('drops a held reader body from a deleted incarnation even when both old and new stubs are empty', async () => {

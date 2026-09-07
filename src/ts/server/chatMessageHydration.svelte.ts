@@ -1,5 +1,6 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { ActiveChatTarget } from '../chatCommands'
+import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
 import {
   hydrateServerCharacterLorebook,
   hydrateServerChatMessages,
@@ -83,6 +84,7 @@ interface ChatHydrationFreshnessToken {
   expectedRerollState: string | null
   trackRerollState: boolean
   reader: boolean
+  readerSessionGeneration: number | null
 }
 
 // Targeted message projections are authoritative writes and invalidate every
@@ -313,6 +315,7 @@ function beginChatHydrationFreshness(
     expectedRerollState: trackRerollState ? rerollStateSnapshot(chatId) : null,
     trackRerollState,
     reader: options.reader ?? false,
+    readerSessionGeneration: options.reader ? captureClientSessionGeneration() : null,
   }
   const pending = pendingChatHydrationFreshness.get(chatId) ?? new Set<ChatHydrationFreshnessToken>()
   pending.add(token)
@@ -325,6 +328,12 @@ function endChatHydrationFreshness(chatId: string, token: ChatHydrationFreshness
   if (!pending) return
   pending.delete(token)
   if (pending.size === 0) pendingChatHydrationFreshness.delete(chatId)
+}
+
+function readerHydrationSessionChanged(token: ChatHydrationFreshnessToken): boolean {
+  // Retained content can remain current:false across several role transitions;
+  // its serialized projection is not a substitute for the request's generation.
+  return token.readerSessionGeneration !== null && !isClientSessionGenerationCurrent(token.readerSessionGeneration)
 }
 
 function chatHydrationStaleReason(chatId: string, token: ChatHydrationFreshnessToken): string | null {
@@ -512,9 +521,12 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         shouldMarkAttempted = false
         return false
       }
-      if (generation !== chatHydrationGeneration) {
+      if (generation !== chatHydrationGeneration || readerHydrationSessionChanged(freshness)) {
         shouldMarkAttempted = false
-        recordHydrationStaleDrop('chat', 'generation-reset')
+        recordHydrationStaleDrop(
+          'chat',
+          generation !== chatHydrationGeneration ? 'generation-reset' : 'reader-session-changed',
+        )
         return false
       }
       if (result.status !== 'ok') {
@@ -584,9 +596,12 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         shouldMarkAttempted = false
         return false
       }
-      if (generation !== chatHydrationGeneration) {
+      if (generation !== chatHydrationGeneration || readerHydrationSessionChanged(freshness)) {
         shouldMarkAttempted = false
-        recordHydrationStaleDrop('chat', 'generation-reset')
+        recordHydrationStaleDrop(
+          'chat',
+          generation !== chatHydrationGeneration ? 'generation-reset' : 'reader-session-changed',
+        )
         return false
       }
       failedChatIds.add(chatId)
