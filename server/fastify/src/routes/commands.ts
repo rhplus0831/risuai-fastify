@@ -33,6 +33,7 @@ import {
   type CommandMutationReceiptKey,
 } from '../commandMutationReceipts.js'
 import { DATABASE_LINEAGE_HEADER, DatabaseLineageConflictError } from '../databaseLineage.js'
+import { completeClaimedIgpEffectInTransaction } from '../generationEffects.js'
 import { InitializeConflictError } from '../databaseInitialization.js'
 import { MAX_REQUEST_HISTORY_LIMIT, pruneRequestHistory } from '../requestHistory.js'
 import { maskProviderSecrets, resolveMaskedProviderSecretPlaceholders } from '../providerSecrets.js'
@@ -1528,7 +1529,20 @@ interface MessageCommandBody {
   expectedData?: unknown
   expectedChatId?: unknown
   expectedGenerationId?: unknown
+  igpEffect?: unknown
   jobId?: unknown
+}
+
+function readIgpMessageEffect(value: unknown): { generationId: string; claimId: string } | undefined {
+  if (value === undefined) return undefined
+  const effect = readJsonObject(value, 'igpEffect')
+  if (Object.keys(effect).some((key) => key !== 'generationId' && key !== 'claimId')) {
+    throw new ValidationError('igpEffect supports only generationId and claimId')
+  }
+  return {
+    generationId: readMessageId(effect.generationId, 'igpEffect.generationId'),
+    claimId: readMessageId(effect.claimId, 'igpEffect.claimId'),
+  }
 }
 
 function readOptionalMessageTranslationJobId(value: unknown): string | undefined {
@@ -7350,6 +7364,19 @@ export function registerCommandRoutes(
       const expectedData = readOptionalMessageCondition(body.expectedData, 'expectedData', true)
       const expectedChatId = readOptionalMessageCondition(body.expectedChatId, 'expectedChatId')
       const expectedGenerationId = readOptionalMessageCondition(body.expectedGenerationId, 'expectedGenerationId')
+      const igpEffect = readIgpMessageEffect(body.igpEffect)
+      const igpLineage = igpEffect
+        ? readDatabaseLineage(req.headers[DATABASE_LINEAGE_HEADER], DATABASE_LINEAGE_HEADER)
+        : undefined
+      if (
+        igpEffect &&
+        (Object.keys(patch).length !== 1 ||
+          typeof patch.data !== 'string' ||
+          expectedData === undefined ||
+          expectedChatId === undefined)
+      ) {
+        throw new ValidationError('IGP commits require a data-only patch, expectedData and expectedChatId')
+      }
       const result = applyTargetedCommandMutation<{ chatId: string; messageId: string }>({
         db,
         dataDir,
@@ -7369,7 +7396,7 @@ export function registerCommandRoutes(
             throw new EntityNotFoundError(`Message not found: ${messageId}`)
           }
           const { location } = resolved
-          requireOrdinaryChatLocation(characters, location.chatId, targetDb)
+          const { character } = requireOrdinaryChatLocation(characters, location.chatId, targetDb)
           readStrictStoredMessageRecord(location.message, messageId)
           const liveGenerationInfo = location.message.generationInfo
           const liveGenerationId =
@@ -7382,6 +7409,20 @@ export function registerCommandRoutes(
             (expectedGenerationId !== undefined && liveGenerationId !== expectedGenerationId)
           ) {
             throw new ValidationError('message finalization precondition no longer matches')
+          }
+          if (
+            igpEffect &&
+            !completeClaimedIgpEffectInTransaction(targetDb, {
+              ...igpEffect,
+              databaseLineage: igpLineage!,
+              characterId: character.chaId,
+              chatId: location.chatId,
+              messageId,
+              message: location.message,
+              expectedGenerationId,
+            })
+          ) {
+            throw new ValidationError('IGP effect claim or message identity no longer matches')
           }
           const updated = updateActiveMessageById(targetDb, messageId, patch)
           if (updated.ok === false) {

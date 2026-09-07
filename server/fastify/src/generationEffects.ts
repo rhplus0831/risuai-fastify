@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
-import { getDatabaseLineage } from './databaseLineage.js'
+import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
+import { recordTableWrite } from './protocolMetrics.js'
 
 export const GENERATION_EFFECT_LEDGER_VERSION = 1
 export const GENERATION_EFFECT_CLAIM_LEASE_MS = 5 * 60_000
@@ -457,8 +458,92 @@ export function settleGenerationEffect(
       input.kind,
       input.claimId,
     )
-  if (result.changes !== 1) return undefined
+  if (result.changes !== 1) {
+    // An IGP message command can complete this exact receipt atomically with
+    // its text write. The callback's later receipt is an acknowledgement of
+    // that commit, including after its original HTTP response was lost.
+    if (input.kind !== 'igp' || input.status !== 'completed') return undefined
+    const existing = selectGenerationEffectRows(
+      db,
+      "WHERE database_lineage = ? AND generation_id = ? AND effect_kind = 'igp' AND status = 'completed' AND claim_id = ?",
+      [input.databaseLineage, input.generationId, input.claimId],
+    )[0]
+    return existing ? projectionFromRow(existing) : undefined
+  }
   return projectionFromRow(requireGenerationEffectRow(db, input.databaseLineage, input.generationId, input.kind))
+}
+
+/**
+ * Complete IGP inside the message command's existing transaction. The caller
+ * must roll back both this receipt and its text write if either fails; a
+ * command mutation receipt handles a replay of the entire accepted command.
+ */
+export function completeClaimedIgpEffectInTransaction(
+  db: DatabaseSync,
+  input: {
+    databaseLineage: string
+    generationId: string
+    claimId: string
+    characterId: string
+    chatId: string
+    messageId: string
+    message: Record<string, unknown>
+    expectedGenerationId?: string
+  },
+): boolean {
+  if (!db.isTransaction) throw new Error('IGP completion requires the message command transaction')
+  assertDatabaseLineage(db, input.databaseLineage)
+  const effect = selectGenerationEffectRows(
+    db,
+    "WHERE database_lineage = ? AND generation_id = ? AND effect_kind = 'igp'",
+    [input.databaseLineage, input.generationId],
+  )[0]
+  const now = normalizeTimestamp()
+  if (
+    !effect ||
+    effect.status !== 'claimed' ||
+    effect.claim_id !== input.claimId ||
+    effect.lease_expires_at === null ||
+    effect.lease_expires_at <= now ||
+    effect.character_id !== input.characterId ||
+    effect.chat_id !== input.chatId ||
+    effect.message_id !== input.messageId ||
+    input.message.role !== 'char'
+  )
+    return false
+
+  const info = input.message.generationInfo
+  if (info !== undefined) {
+    if (!info || typeof info !== 'object' || Array.isArray(info)) return false
+    const metadata = info as Record<string, unknown>
+    const expected = {
+      generationId: input.generationId,
+      databaseLineage: input.databaseLineage,
+      operationId: effect.operation_id,
+      jobId: input.generationId,
+      effectLedgerKeyType: effect.key_type,
+      effectLedgerKeyId: effect.key_id,
+      effectLedgerCharacterId: input.characterId,
+      effectLedgerChatId: input.chatId,
+    }
+    for (const [key, value] of Object.entries(expected)) {
+      if (key in metadata && metadata[key] !== value) return false
+    }
+    // Legacy ledger rows can predate message generation metadata. Modern rows
+    // require the same generation precondition as the ordinary text command.
+    if (metadata.generationId !== undefined && input.expectedGenerationId !== input.generationId) return false
+  }
+  const completed = settleGenerationEffect(db, {
+    databaseLineage: input.databaseLineage,
+    generationId: input.generationId,
+    claimId: input.claimId,
+    kind: 'igp',
+    status: 'completed',
+    settledAt: now,
+  })
+  if (!completed) return false
+  recordTableWrite('generation_effects')
+  return true
 }
 
 /**
