@@ -426,6 +426,8 @@ export async function dispatchOwnedDurableBatch(
 ): Promise<CharacterOwnedDurableBatchResult> {
   if (!canUseClientWriteAccess()) return { status: 'failure', acceptedCount: 0, failure: { status: 'unavailable' } }
   if (steps.length === 0 || !canUseServerCommands()) return { status: 'ok', acceptedCount: 0 }
+  const sessionGeneration = captureClientSessionGeneration()
+  const canProject = () => canUseClientWriteAccess() && isClientSessionGenerationCurrent(sessionGeneration)
 
   const definitions = steps.map((step) => {
     const body = step.bodyIsOwned
@@ -436,7 +438,19 @@ export async function dispatchOwnedDurableBatch(
       requests: [{ method: step.method, path: step.path, body }],
       ...(step.dependencyKeys?.length ? { dependencyKeys: cloneJsonValue(step.dependencyKeys) } : {}),
     }
-    return { ...step, body, intent }
+    return {
+      ...step,
+      body,
+      intent,
+      rollback: () => {
+        if (canProject()) step.rollback()
+      },
+      reapply: step.reapply
+        ? (isProjectionTargetCurrent: (target: string) => boolean) => {
+            if (canProject()) step.reapply?.((target) => canProject() && isProjectionTargetCurrent(target))
+          }
+        : undefined,
+    }
   })
   const oversized = definitions.some(
     ({ intent }) => pendingMutationIntentPayloadByteLength(intent) > MAX_DURABLE_MUTATION_PAYLOAD_BYTES,
@@ -830,6 +844,7 @@ export interface ChatScopedSnapshot {
 }
 
 interface PendingChatMetadataAttempt {
+  sessionGeneration: number
   sequence: number
   chatId: string
   rollback: ChatRowMetadataSnapshot
@@ -837,6 +852,7 @@ interface PendingChatMetadataAttempt {
 }
 
 interface PendingChatFolderMetadataAttempt {
+  sessionGeneration: number
   sequence: number
   folderId: string
   rollback: ChatFolderRowMetadataSnapshot
@@ -844,6 +860,7 @@ interface PendingChatFolderMetadataAttempt {
 }
 
 interface PendingScopedTranscriptAttempt {
+  sessionGeneration: number
   sequence: number
   chatKey: string
   previous: ChatScopedSnapshot
@@ -876,8 +893,13 @@ let nextChatFolderMetadataAttemptSequence = 0
 const pendingScopedTranscriptAttempts = new Map<string, PendingScopedTranscriptAttempt[]>()
 let nextScopedTranscriptAttemptSequence = 0
 
+function canProjectChatAttempt(attempt: { sessionGeneration: number }): boolean {
+  return canUseClientWriteAccess() && isClientSessionGenerationCurrent(attempt.sessionGeneration)
+}
+
 function bindDurableChatProjectionAttempt(
   attempt: {
+    sessionGeneration: number
     retainedProjection?: PendingRetainedChatProjection
     durability?: PendingDurableChatProjection
   },
@@ -920,7 +942,7 @@ function bindDurableChatProjectionAttempt(
       return
     }
     onDiscarded()
-    alertError(language.retainedChatMutationFailed)
+    if (canProjectChatAttempt(attempt)) alertError(language.retainedChatMutationFailed)
   })
 }
 
@@ -3513,6 +3535,7 @@ export function dispatchUpdateChatScopedWithOutcome(
 
 function registerChatMetadataAttempt(chatId: string, rollback: ChatRowMetadataSnapshot): PendingChatMetadataAttempt {
   const attempt = {
+    sessionGeneration: captureClientSessionGeneration(),
     sequence: ++nextChatMetadataAttemptSequence,
     chatId,
     rollback,
@@ -3528,13 +3551,17 @@ function rollbackChatMetadataAttempt(
   rollbackRowMetadata: ChatRowMetadataRollback,
 ): void {
   releaseChatProjectionAttempt(attempt)
+  if (!canProjectChatAttempt(attempt)) {
+    clearChatMetadataAttempt(attempt)
+    return
+  }
   rollbackRowMetadata(attempt.rollback)
 
   const failedAttempted = attempt.rollback.attempted
   if (failedAttempted) {
     const rebasedKeys = new Set<string>()
     for (const later of pendingChatMetadataAttempts.get(attempt.chatId) ?? []) {
-      if (later.sequence <= attempt.sequence || !later.rollback.attempted) continue
+      if (later.sequence <= attempt.sequence || !later.rollback.attempted || !canProjectChatAttempt(later)) continue
       for (const key of CHAT_PATCH_ALLOWED_KEYS) {
         if (rebasedKeys.has(key)) continue
         if (!Object.prototype.hasOwnProperty.call(failedAttempted, key)) continue
@@ -3585,6 +3612,7 @@ function bindChatMetadataAttemptDurability(
 }
 
 function reapplyChatMetadataAttempt(attempt: PendingChatMetadataAttempt): void {
+  if (!canProjectChatAttempt(attempt)) return
   const attempted = attempt.rollback.attempted
   if (!attempted || !attempt.rollback.characterId) return
   applyChatMetadataOwnerPatch(attempt.rollback.characterId, attempt.chatId, attempted)
@@ -5243,6 +5271,7 @@ function registerChatFolderMetadataAttempt(
   rollback: ChatFolderRowMetadataSnapshot,
 ): PendingChatFolderMetadataAttempt {
   const attempt = {
+    sessionGeneration: captureClientSessionGeneration(),
     sequence: ++nextChatFolderMetadataAttemptSequence,
     folderId,
     rollback,
@@ -5258,13 +5287,17 @@ function rollbackChatFolderMetadataAttempt(
   rollbackFolderMetadata: ChatFolderRowMetadataRollback,
 ): void {
   releaseChatProjectionAttempt(attempt)
+  if (!canProjectChatAttempt(attempt)) {
+    clearChatFolderMetadataAttempt(attempt)
+    return
+  }
   rollbackFolderMetadata(attempt.rollback)
 
   const failedAttempted = attempt.rollback.attempted
   if (failedAttempted) {
     const rebasedKeys = new Set<string>()
     for (const later of pendingChatFolderMetadataAttempts.get(attempt.folderId) ?? []) {
-      if (later.sequence <= attempt.sequence || !later.rollback.attempted) continue
+      if (later.sequence <= attempt.sequence || !later.rollback.attempted || !canProjectChatAttempt(later)) continue
       for (const key of CHAT_FOLDER_PATCH_ALLOWED_KEYS) {
         if (rebasedKeys.has(key)) continue
         if (!Object.prototype.hasOwnProperty.call(failedAttempted, key)) continue
@@ -5315,6 +5348,7 @@ function bindChatFolderMetadataAttemptDurability(
 }
 
 function reapplyChatFolderMetadataAttempt(attempt: PendingChatFolderMetadataAttempt): void {
+  if (!canProjectChatAttempt(attempt)) return
   const attempted = attempt.rollback.attempted
   if (!attempted || !attempt.rollback.characterId) return
   applyChatFolderMetadataOwnerPatch(attempt.rollback.characterId, attempt.folderId, attempted)
@@ -5925,6 +5959,7 @@ function registerScopedTranscriptAttempt(
   if (!previous.chat || !attemptedMessages) return null
   const chatKey = previous.chatId ?? `${previous.characterId ?? previous.selectedCharID}:active`
   const attempt: PendingScopedTranscriptAttempt = {
+    sessionGeneration: captureClientSessionGeneration(),
     sequence: ++nextScopedTranscriptAttemptSequence,
     chatKey,
     previous,
@@ -5947,6 +5982,10 @@ function registerScopedTranscriptAttempt(
 
 function rollbackScopedTranscriptAttempt(attempt: PendingScopedTranscriptAttempt): void {
   releaseChatProjectionAttempt(attempt)
+  if (!canProjectChatAttempt(attempt)) {
+    clearScopedTranscriptAttempt(attempt)
+    return
+  }
   const liveChatBeforeRollback = locateChatScopedSnapshot(attempt.previous)
   const liveMessagesBeforeRollback = liveChatBeforeRollback
     ? cloneJsonValue(liveChatBeforeRollback.message ?? [])
@@ -5965,7 +6004,7 @@ function rollbackScopedTranscriptAttempt(attempt: PendingScopedTranscriptAttempt
   let previousBeforeFailedAttempt = cloneJsonValue(attempt.previous.chat?.message ?? [])
   let oldAttemptedMessages = attempt.attemptedMessages
   for (const later of pendingScopedTranscriptAttempts.get(attempt.chatKey) ?? []) {
-    if (later.sequence <= attempt.sequence || !later.previous.chat) continue
+    if (later.sequence <= attempt.sequence || !later.previous.chat || !canProjectChatAttempt(later)) continue
     if (snapshotJson(later.previous.chat.message ?? []) !== snapshotJson(oldAttemptedMessages)) break
 
     const rebasedAttemptedMessages = later.reapply(previousBeforeFailedAttempt)
@@ -6023,6 +6062,7 @@ function bindScopedTranscriptAttemptDurability(
 }
 
 function reapplyScopedTranscriptAttempt(attempt: PendingScopedTranscriptAttempt): void {
+  if (!canProjectChatAttempt(attempt)) return
   withChatOwnerProjectionWrite(() => {
     const chat = locateChatScopedSnapshot(attempt.previous)
     if (!chat) return

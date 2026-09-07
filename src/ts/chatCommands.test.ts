@@ -35,6 +35,8 @@ import {
 } from './server/commands'
 import { SERVER_UNLOADED_CHAT_MESSAGE_MARKER } from './server/chatMessagePlaceholders'
 import { resetWriterAccessLostForTests } from './server/activeWriterSession'
+import { demoteClientSession, resetClientSessionForTests } from './clientSession'
+import { enterClientWriter, repromoteClientWriter } from './__tests__/clientSession'
 import { createDestructiveRefreshToken } from './server/staleStateGuards'
 
 import { setChatVar } from './parser/chatVar.svelte'
@@ -164,7 +166,10 @@ import { replayPendingMutations } from './server/pendingMutationReplay'
 import { dispatchDurableMutation } from './server/durableMutationDispatch'
 import { registerPendingOwnerMutationFlusher } from './server/pendingOwnerMutationRegistry'
 import { PERSONA_SELECTION_MUTATION_KEY } from './server/personaMutationKeys'
-import { reapplyRetainedChatBodyProjections } from './server/chatRetainedProjection'
+import {
+  reapplyRetainedCharacterProjections,
+  reapplyRetainedChatBodyProjections,
+} from './server/chatRetainedProjection'
 import { acknowledgeCreatedChatTranscriptLocalEffect, resetChatHydration } from './server/chatMessageHydration.svelte'
 import { language } from '../lang'
 import { getResourceDatabase as getDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
@@ -682,6 +687,7 @@ function seedReadyActiveChatGenerationSettings(): void {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   resetWriterAccessLostForTests()
   writerAccessMocks.lost = false
   writerAccessMocks.report.mockClear()
@@ -716,6 +722,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   clearAppliedServerResourceRevision()
   setServerCommandSuccessReconciler(null)
   vi.unstubAllGlobals()
@@ -7833,6 +7840,227 @@ describe('durable chat and folder structure dispatch', () => {
       await clearDurableOutbox()
     }
   })
+
+  it.each(['chat', 'folder', 'message'] as const)(
+    'keeps a retained %s result dormant after demotion and repromotion',
+    async (kind) => {
+      await prepareDurableOutbox(`role-cycle-result-${kind}`)
+      enterClientWriter()
+      const response = createDeferred<Response>()
+      const fetchCommand = vi.fn(async () => response.promise)
+      vi.stubGlobal('fetch', fetchCommand)
+      const chat = () => getDatabase().characters[0].chats[0]
+      const folder = () => getDatabase().characters[0].chatFolders[0]
+      withTestDatabaseWrite(() => {
+        chat().message = [{ role: 'char', data: 'persisted', chatId: 'message-a' }]
+      })
+
+      try {
+        let mutation: Promise<unknown> | null | undefined
+        if (kind === 'chat') {
+          const previous = captureChatMetadataPatch('chat-a', { name: 'Old intent' }, 'char-a')!
+          applyChatMetadataOwnerPatch('char-a', 'chat-a', previous.attempted)
+          mutation = dispatchChatMetadataPatchWithOutcome(previous)
+        } else if (kind === 'folder') {
+          const previous = captureChatFolderMetadataPatch('folder-a', { name: 'Old intent' }, 'char-a')!
+          applyChatFolderMetadataOwnerPatch('char-a', 'folder-a', previous.attempted)
+          mutation = dispatchChatFolderMetadataPatchWithOutcome(previous)
+        } else {
+          mutation = dispatchUpdateMessageScoped('message-a', { data: 'Old intent' }, currentChatScopedSnapshot())
+        }
+        await vi.waitFor(() => expect(fetchCommand).toHaveBeenCalledOnce())
+        demoteClientSession()
+        withTestDatabaseWrite(() => {
+          chat().name = 'Current canonical chat'
+          folder().name = 'Current canonical folder'
+          chat().message[0].data = 'Current canonical message'
+        })
+        reapplyRetainedCharacterProjections('char-a')
+        reapplyRetainedChatBodyProjections('chat-a')
+        expect(chat().name).toBe('Current canonical chat')
+        expect(folder().name).toBe('Current canonical folder')
+        expect(chat().message[0].data).toBe('Current canonical message')
+        repromoteClientWriter()
+        response.resolve(jsonResponse({ error: 'temporarily unavailable' }, 503))
+        await expect(mutation).resolves.toMatchObject({ status: 'queued' })
+        expect(chat().name).toBe('Current canonical chat')
+        expect(folder().name).toBe('Current canonical folder')
+        expect(chat().message[0].data).toBe('Current canonical message')
+
+        // Authoritative refreshes service the same retained callbacks later.
+        reapplyRetainedCharacterProjections('char-a')
+        reapplyRetainedChatBodyProjections('chat-a')
+        expect(chat().name).toBe('Current canonical chat')
+        expect(folder().name).toBe('Current canonical folder')
+        expect(chat().message[0].data).toBe('Current canonical message')
+        const pending = await listPendingMutations()
+        expect(pending).toHaveLength(1)
+        expect(JSON.stringify(pending[0].intent)).toContain('Old intent')
+      } finally {
+        response.resolve(jsonResponse({ error: 'cleanup' }, 503))
+        await clearDurableOutbox()
+      }
+    },
+  )
+
+  it.each(['chat', 'folder'] as const)(
+    'does not rebase a newer %s rename when an old generation is discarded',
+    async (kind) => {
+      await prepareDurableOutbox(`role-cycle-metadata-rebase-${kind}`)
+      enterClientWriter()
+      let discard: 'none' | 'older' | 'both' = 'none'
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+          const body = typeof init.body === 'string' ? JSON.parse(init.body) : {}
+          const terminal = discard === 'both' || (discard === 'older' && body.patch?.name === 'Old intent')
+          return jsonResponse({ error: terminal ? 'invalid rename' : 'temporarily unavailable' }, terminal ? 400 : 503)
+        }),
+      )
+      const currentName = () =>
+        kind === 'chat' ? getDatabase().characters[0].chats[0].name : getDatabase().characters[0].chatFolders[0].name
+      const rename = (name: string) => {
+        if (kind === 'chat') {
+          const previous = captureChatMetadataPatch('chat-a', { name }, 'char-a')!
+          applyChatMetadataOwnerPatch('char-a', 'chat-a', previous.attempted)
+          return dispatchChatMetadataPatchWithOutcome(previous)
+        }
+        const previous = captureChatFolderMetadataPatch('folder-a', { name }, 'char-a')!
+        applyChatFolderMetadataOwnerPatch('char-a', 'folder-a', previous.attempted)
+        return dispatchChatFolderMetadataPatchWithOutcome(previous)
+      }
+      try {
+        const older = await rename('Old intent')
+        if (older?.status !== 'queued') throw new Error('Expected an older queued mutation')
+        demoteClientSession()
+        repromoteClientWriter()
+        const newer = await rename('Current writer name')
+        if (newer?.status !== 'queued') throw new Error('Expected a newer queued mutation')
+        discard = 'older'
+        await expect(replayPendingMutations()).resolves.toMatchObject({ discarded: 1, retained: 1 })
+        await expect(older.settlement).resolves.toMatchObject({ status: 'failed' })
+        expect(currentName()).toBe('Current writer name')
+        discard = 'both'
+        await expect(replayPendingMutations()).resolves.toMatchObject({ discarded: 1, retained: 0 })
+        await expect(newer.settlement).resolves.toMatchObject({ status: 'failed' })
+        expect(currentName()).toBe('Old intent')
+      } finally {
+        await clearDurableOutbox()
+      }
+    },
+  )
+
+  it('does not rebase a newer transcript attempt when an old generation is discarded', async () => {
+    await prepareDurableOutbox('role-cycle-transcript-rebase')
+    enterClientWriter()
+    let discard: 'none' | 'older' | 'both' = 'none'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+        const body = typeof init.body === 'string' ? JSON.parse(init.body) : {}
+        const terminal = discard === 'both' || (discard === 'older' && body.patch?.data === 'Old intent')
+        return jsonResponse({ error: terminal ? 'invalid edit' : 'temporarily unavailable' }, terminal ? 400 : 503)
+      }),
+    )
+    const chat = () => getDatabase().characters[0].chats[0]
+    withTestDatabaseWrite(() => {
+      chat().message = [{ role: 'char', data: 'persisted', chatId: 'message-a' }]
+    })
+    try {
+      const older = await dispatchUpdateMessageScoped('message-a', { data: 'Old intent' }, currentChatScopedSnapshot())
+      expect(older?.status).toBe('queued')
+      if (older?.status !== 'queued') throw new Error('Expected an older queued mutation')
+      demoteClientSession()
+      repromoteClientWriter()
+      // The authoritative value may happen to equal the old optimistic text.
+      withTestDatabaseWrite(() => {
+        chat().message = [{ role: 'char', data: 'Old intent', chatId: 'message-a' }]
+      })
+      const newer = await dispatchUpdateMessageScoped(
+        'message-a',
+        { translation: 'Current writer translation' },
+        currentChatScopedSnapshot(),
+      )
+      expect(newer?.status).toBe('queued')
+      if (newer?.status !== 'queued') throw new Error('Expected a newer queued mutation')
+      const pending = await listPendingMutations()
+      const newerHandle = pending.find(({ handle }) => newer.mutationIds.includes(handle.mutationId))!.handle
+      discard = 'older'
+      await expect(replayPendingMutations()).resolves.toMatchObject({ discarded: 1, retained: 1 })
+      await expect(older.settlement).resolves.toMatchObject({ status: 'failed' })
+      expect(chat().message[0]).toMatchObject({ data: 'Old intent', translation: 'Current writer translation' })
+      expect((await listPendingMutations()).map(({ handle }) => handle.mutationId)).toEqual([newerHandle.mutationId])
+      discard = 'both'
+      await expect(replayPendingMutations()).resolves.toMatchObject({ discarded: 1, retained: 0 })
+      await expect(newer.settlement).resolves.toMatchObject({ status: 'failed' })
+      expect(chat().message[0].data).toBe('Old intent')
+      expect(chat().message[0].translation).toBeUndefined()
+      expect(await listPendingMutations()).toEqual([])
+    } finally {
+      await clearDurableOutbox()
+    }
+  })
+
+  it.each(['accepted', 'failed'] as const)(
+    'settles an old retained batch as %s without reviving its projection or rollback',
+    async (finalStatus) => {
+      await prepareDurableOutbox(`role-cycle-batch-${finalStatus}`)
+      enterClientWriter()
+      const response = createDeferred<ServerCommandResult>()
+      const command = vi.fn(() => response.promise)
+      const rollback = vi.fn(() => applyChatMetadataOwnerPatch('char-a', 'chat-a', { name: 'Chat A' }))
+      const reapply = vi.fn(() => applyChatMetadataOwnerPatch('char-a', 'chat-a', { name: 'Old batch intent' }))
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL) => {
+          if (String(input) === '/api/v1/commands/mutation-receipts/ack') return jsonResponse({ acknowledged: true })
+          return finalStatus === 'failed'
+            ? jsonResponse({ error: 'invalid batch edit' }, 400)
+            : jsonResponse({
+                revision: 11,
+                event: { type: 'chat.updated', revision: 11, resource: 'chat', id: 'chat-a', parentId: 'char-a' },
+              })
+        }),
+      )
+      try {
+        applyChatMetadataOwnerPatch('char-a', 'chat-a', { name: 'Old batch intent' })
+        const batch = dispatchCharacterOwnedDurableBatch('char-a', [
+          {
+            method: 'PATCH',
+            path: '/chats/chat-a',
+            body: { patch: { name: 'Old batch intent' }, select: false },
+            command,
+            rollback,
+            reapply,
+          },
+        ])
+        await vi.waitFor(() => expect(command).toHaveBeenCalledOnce())
+        demoteClientSession()
+        withTestDatabaseWrite(() => {
+          getDatabase().characters[0].chats[0].name = 'Current canonical chat'
+        })
+        repromoteClientWriter()
+        response.resolve({ status: 'unavailable' })
+        const retained = await batch
+        if (retained.status !== 'retained' || !retained.settlement) throw new Error('Expected a retained batch')
+        expect(getDatabase().characters[0].chats[0].name).toBe('Current canonical chat')
+        expect(reapply).not.toHaveBeenCalled()
+        expect(await listPendingMutations()).toHaveLength(1)
+        await expect(replayPendingMutations()).resolves.toMatchObject({
+          succeeded: finalStatus === 'accepted' ? 1 : 0,
+          discarded: finalStatus === 'failed' ? 1 : 0,
+          retained: 0,
+        })
+        await expect(retained.settlement).resolves.toMatchObject({ status: finalStatus })
+        expect(rollback).not.toHaveBeenCalled()
+        expect(getDatabase().characters[0].chats[0].name).toBe('Current canonical chat')
+        expect(await listPendingMutations()).toEqual([])
+      } finally {
+        response.resolve({ status: 'unavailable' })
+        await clearDurableOutbox()
+      }
+    },
+  )
 
   it('reapplies retained message edits in owner order after transcript hydration', async () => {
     await prepareDurableOutbox('message-patch-refresh')
