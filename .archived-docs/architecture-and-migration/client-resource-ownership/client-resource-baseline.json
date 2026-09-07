@@ -99,7 +99,7 @@
         },
         {
           "file": "src/ts/bootstrap.test.ts",
-          "count": 197
+          "count": 194
         },
         {
           "file": "src/ts/storage/database.svelte.test.ts",
@@ -1147,7 +1147,7 @@
         },
         {
           "file": "src/ts/server/resourceInvalidation.test.ts",
-          "count": 44
+          "count": 53
         },
         {
           "file": "src/ts/server/resourceRefresh.test.ts",
@@ -1159,7 +1159,7 @@
         },
         {
           "file": "src/ts/setting/utils.test.ts",
-          "count": 60
+          "count": 66
         },
         {
           "file": "src/ts/storage/database.resourceState.test.ts",
