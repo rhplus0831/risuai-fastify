@@ -10,6 +10,13 @@ import { isStartupTelemetryConfiguration, type StartupTelemetryConfiguration } f
 const BOOTSTRAP_ENDPOINT = '/api/v1/bootstrap'
 const WRITER_OBSERVER_SESSION_HEADER = 'risu-writer-observer-session'
 export const DISCONNECT_EXISTING_WRITER_HEADER = 'risu-disconnect-existing-writer'
+export const EXPECTED_WRITER_EPOCH_HEADER = 'risu-expected-writer-epoch'
+export const EXPECTED_DATABASE_LINEAGE_HEADER = 'risu-expected-database-lineage'
+
+export interface BootstrapWriter {
+  sessionId: string | null
+  epoch: number
+}
 
 export interface ActiveGenerationJob {
   chatId: string
@@ -209,6 +216,8 @@ export interface ServerBootstrapRuntime {
   databaseLineage?: string
   /** Persistent ownership generation, incremented whenever the writer changes. */
   writerEpoch?: number
+  /** Explicit current ownership. Missing on legacy servers means unknown, not no owner. */
+  writer?: BootstrapWriter
   generationOperationProtocol?: { version: number }
   displaySourceProtocol?: { version: number }
   generationOperationProjectionEpoch?: number
@@ -248,13 +257,14 @@ export function canUseServerBootstrap(): boolean {
 
 export async function fetchServerBootstrap(
   signal?: AbortSignal | null,
-  options: { disconnectExistingWriter?: boolean } = {},
+  options: { disconnectExistingWriter?: boolean; expectedWriter?: { epoch: number; databaseLineage: string } } = {},
 ): Promise<ServerBootstrapResult> {
   return fetchServerBootstrapWithMode({
     signal,
     registerActiveWriter: true,
     cacheRevision: true,
     disconnectExistingWriter: options.disconnectExistingWriter === true,
+    expectedWriter: options.expectedWriter,
   })
 }
 
@@ -283,6 +293,7 @@ async function fetchServerBootstrapWithMode(input: {
   registerActiveWriter: boolean
   cacheRevision: boolean
   disconnectExistingWriter: boolean
+  expectedWriter?: { epoch: number; databaseLineage: string }
 }): Promise<ServerBootstrapResult> {
   if (!canUseServerBootstrap()) return { status: 'unavailable' }
 
@@ -298,6 +309,12 @@ async function fetchServerBootstrapWithMode(input: {
           ? {
               ...activeWriterSessionHeader(),
               ...(input.disconnectExistingWriter ? { [DISCONNECT_EXISTING_WRITER_HEADER]: 'true' } : {}),
+              ...(input.expectedWriter
+                ? {
+                    [EXPECTED_WRITER_EPOCH_HEADER]: String(input.expectedWriter.epoch),
+                    [EXPECTED_DATABASE_LINEAGE_HEADER]: input.expectedWriter.databaseLineage,
+                  }
+                : {}),
             }
           : { [WRITER_OBSERVER_SESSION_HEADER]: activeWriterSessionHeader()['risu-writer-session'] }),
       },
@@ -350,6 +367,11 @@ async function fetchServerBootstrapWithMode(input: {
     return { status: 'error', error: 'Invalid bootstrap revision' }
   }
 
+  const writer = Object.hasOwn(record, 'writer') ? parseBootstrapWriter(record.writer) : undefined
+  if (writer === null || (writer && record.writerEpoch !== undefined && record.writerEpoch !== writer.epoch)) {
+    return { status: 'error', error: 'Invalid bootstrap writer metadata', ...(requestUid ? { requestUid } : {}) }
+  }
+
   if (input.cacheRevision) {
     setCachedServerCommandRevision(revision as number)
   }
@@ -363,6 +385,7 @@ async function fetchServerBootstrapWithMode(input: {
       typeof record.requestedWriterWasActive === 'boolean' ? record.requestedWriterWasActive : undefined,
     databaseLineage: typeof record.databaseLineage === 'string' ? record.databaseLineage : undefined,
     writerEpoch: Number.isSafeInteger(record.writerEpoch) ? (record.writerEpoch as number) : undefined,
+    ...(writer ? { writer } : {}),
     generationOperationProtocol: parseGenerationOperationProtocol(record.generationOperationProtocol),
     displaySourceProtocol: parseGenerationOperationProtocol(record.displaySourceProtocol),
     ...(isStartupTelemetryConfiguration(record.startupTelemetry) ? { startupTelemetry: record.startupTelemetry } : {}),
@@ -388,6 +411,21 @@ async function fetchServerBootstrapWithMode(input: {
     bootstrap,
     ...(requestUid ? { requestUid } : {}),
   }
+}
+
+function parseBootstrapWriter(value: unknown): BootstrapWriter | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const { sessionId, epoch } = value as Record<string, unknown>
+  if (!isNonNegativeSafeInteger(epoch)) return null
+  if (sessionId === null) return { sessionId: null, epoch }
+  if (
+    typeof sessionId !== 'string' ||
+    sessionId.length === 0 ||
+    sessionId.length > 128 ||
+    sessionId.trim() !== sessionId
+  )
+    return null
+  return { sessionId, epoch }
 }
 
 function parsePendingGenerationEffects(value: unknown): PendingGenerationEffect[] {

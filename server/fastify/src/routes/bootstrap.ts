@@ -37,6 +37,24 @@ import { DIAGNOSTICS_VERSION } from '@risuai/protocol/diagnostics'
 
 export const ASSET_BASE_URL = '/api/v1/assets'
 export const WRITER_OBSERVER_SESSION_HEADER = 'risu-writer-observer-session'
+export const EXPECTED_WRITER_EPOCH_HEADER = 'risu-expected-writer-epoch'
+export const EXPECTED_DATABASE_LINEAGE_HEADER = 'risu-expected-database-lineage'
+
+function readExpectedWriter(req: FastifyRequest): { epoch: number; databaseLineage: string } | null | undefined {
+  const epoch = req.headers[EXPECTED_WRITER_EPOCH_HEADER]
+  const databaseLineage = req.headers[EXPECTED_DATABASE_LINEAGE_HEADER]
+  if (epoch === undefined && databaseLineage === undefined) return undefined
+  if (
+    readActiveWriterSessionId(req) === null ||
+    typeof epoch !== 'string' ||
+    !/^(0|[1-9]\d*)$/u.test(epoch) ||
+    !Number.isSafeInteger(Number(epoch)) ||
+    typeof databaseLineage !== 'string' ||
+    !/^[A-Za-z0-9._:-]{1,128}$/u.test(databaseLineage)
+  )
+    return null
+  return { epoch: Number(epoch), databaseLineage }
+}
 
 function readWriterObserverSessionId(req: FastifyRequest): string | null {
   const raw = req.headers[WRITER_OBSERVER_SESSION_HEADER]
@@ -60,6 +78,27 @@ export function registerBootstrapRoutes(
   app.get('/api/v1/bootstrap', { exposeHeadRoute: false }, async (req, reply) => {
     const metricStartedAt = protocolMetricsEnabled() ? protocolNowMs() : 0
     if (!(await requireAuth(authState, req, reply))) return
+    const expectedWriter = readExpectedWriter(req)
+    if (expectedWriter === null || (expectedWriter !== undefined && !activeWriterState)) {
+      return reply.code(400).send({
+        error: 'invalid_expected_writer',
+        reason:
+          'Conditional acquisition requires a writer session, a non-negative integer epoch, and a database lineage.',
+      })
+    }
+    // No await separates this check, takeover confirmation, and registration.
+    // A competing request cannot acquire between discovery validation and registration.
+    if (
+      expectedWriter !== undefined &&
+      (expectedWriter.epoch !== getDatabaseWriterMetadata(db).epoch ||
+        expectedWriter.databaseLineage !== getDatabaseLineage(db))
+    ) {
+      return reply.code(409).send({
+        error: 'active_writer_changed',
+        reason:
+          'Writer ownership or the database changed after discovery. Read current ownership before acquiring write access.',
+      })
+    }
     if (
       activeWriterState &&
       writerTakeoverRequiresConfirmation(activeWriterState, req) &&
@@ -85,6 +124,7 @@ export function registerBootstrapRoutes(
     const { version, revision } = getSchemaState(db)
     const generationOperationProjectionEpoch = getGenerationOperationProjectionEpoch(db)
     const generationOperations = listGenerationOperationProjections(db)
+    const writer = getDatabaseWriterMetadata(db)
     const response = {
       // A damaged database with durable user data must never invite the client
       // to run first-use initialization. The initialize command uses this same
@@ -93,7 +133,8 @@ export function registerBootstrapRoutes(
       revision,
       schemaVersion: version,
       databaseLineage: getDatabaseLineage(db),
-      writerEpoch: activeWriterState?.epoch ?? getDatabaseWriterMetadata(db).epoch,
+      writerEpoch: writer.epoch,
+      writer,
       ...(wasRequestedWriterActive === undefined ? {} : { requestedWriterWasActive: wasRequestedWriterActive }),
       assetBaseUrl: ASSET_BASE_URL,
       generationOperationProtocol: { version: GENERATION_OPERATION_PROTOCOL_VERSION },

@@ -4,14 +4,18 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite and reader Phase 0 accepted; Phase 1 is next.
+- State: Stage 1 smoke prerequisite and reader Phase 0 accepted; Phase 1 is in progress.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Current task scope: implement the coordinated connected-reader plan after the
   accepted smoke prerequisite. Reader Phase 0 is accepted.
-- Next slice: [Phase 1](phases/phase-1-capabilities-and-mutation-protection.md),
-  implement live capability ownership and guarded command/receipt/lifecycle
-  admission against the accepted Phase 0 contract.
-- Production behavior: unchanged; the new connected-reader contract is proposed.
+- Current slice: [Phase 1](phases/phase-1-capabilities-and-mutation-protection.md),
+  live capability ownership and guarded command/receipt/lifecycle admission,
+  direct operations, plugin/display boundaries and draft/UI protection. The
+  compatible bootstrap wire prerequisite is implemented; reader startup is not
+  exposed and the public rollout default remains disabled.
+- Production behavior: conservative writer flow remains the default. Additive
+  ownership metadata/preconditions are available; connected readers are not
+  publicly enabled.
 - Blockers: none. Phase 0 implementation choices and its required baseline gate
   are accepted below.
 
@@ -21,14 +25,14 @@ active [phase](phases/README.md) for detailed execution instructions.
 
 ## Phase Router
 
-| Phase                                                                                             | State    | Next evidence required                                                                  |
-| ------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.       |
-| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Pending  | Read capability independent of write authority; mutation denial at actual entry points. |
-| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending  | Two sessions browse independently and converge on committed data without reader writes. |
-| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending  | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.       |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending  | Streaming continuity; observers execute no writer-only actions or effects.              |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.          |
+| Phase                                                                                             | State       | Next evidence required                                                                  |
+| ------------------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted    | Source/transition/draft contract, 34 dispositions and required full suite passed.       |
+| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | In progress | Guard/read/gate implementation and focused proof for all 34 families, then phase gates. |
+| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending     | Two sessions browse independently and converge on committed data without reader writes. |
+| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending     | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.       |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending     | Streaming continuity; observers execute no writer-only actions or effects.              |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending     | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.          |
 
 ## Verification Ledger
 
@@ -196,3 +200,33 @@ Phase 0 accepted after final review and verification:
 This accepts the executable boundary contract and current-source baseline only.
 No connected-reader implementation or feature behavior is certified yet.
 Phases 1–5 retain their required focused, browser and aggregate proof.
+
+## Phase 1 Implementation Evidence
+
+### Compatible ownership discovery and conditional acquisition
+
+Source: `faeb5ee1d` plus this bounded wire/test slice. Bootstrap now exposes
+`writer: { sessionId, epoch }` from durable metadata. Optional
+`risu-expected-writer-epoch` and `risu-expected-database-lineage` acquisition
+headers are checked together before registration; mismatch returns
+`409 active_writer_changed`, with no implicit retry or writer registration.
+The lineage precondition also prevents a replaced database with the same epoch
+from accepting a stale acquisition. Missing headers preserve legacy acquisition
+and its connected-writer confirmation handshake. Missing response metadata stays
+unknown for old server responses; malformed supplied metadata fails parsing
+before caching a command revision.
+
+Focused proof: server active-writer **27/27**, bootstrap **7/7**, existing server
+events **25/25**, and client bootstrap **28/28** pass. Real route tests cover
+simultaneous no-owner acquisition (one success/one conflict), disconnected and
+connected owners, explicit disconnect confirmation, zero-write readonly reads,
+and actual replacement followed by matching SQLite metadata, initial SSE frame
+and stale/current mutation guard responses. Parent rechecked the client parser
+narrowing and bounded the lineage header grammar; the affected active-writer and
+client-bootstrap suites passed again. Server and browser-smoke typechecks passed
+for the agent slice; broader Phase 1 validation remains pending after all work.
+
+This implements the wire prerequisite for E01 and startup/switching. It does
+not certify a new reader startup or explicit UI promotion; those remain later
+phase evidence. Live capability/entry/draft protection is still in progress, and
+Phase 1 is not accepted.

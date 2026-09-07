@@ -4,7 +4,13 @@ vi.mock('../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'bootstrap-auth-token',
 }))
 
-import { DISCONNECT_EXISTING_WRITER_HEADER, fetchServerBootstrap, fetchServerBootstrapReadOnly } from './bootstrap'
+import {
+  DISCONNECT_EXISTING_WRITER_HEADER,
+  EXPECTED_DATABASE_LINEAGE_HEADER,
+  EXPECTED_WRITER_EPOCH_HEADER,
+  fetchServerBootstrap,
+  fetchServerBootstrapReadOnly,
+} from './bootstrap'
 import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
 import { clearCachedServerCommandRevision, peekCachedServerCommandRevision } from './commands'
 
@@ -15,6 +21,8 @@ interface CapturedFetch {
   writerSessionHeader: string | null
   observerSessionHeader: string | null
   disconnectExistingWriterHeader: string | null
+  expectedWriterEpochHeader: string | null
+  expectedDatabaseLineageHeader: string | null
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -37,6 +45,8 @@ function stubBootstrapFetch(body: unknown | (() => unknown)): CapturedFetch[] {
         writerSessionHeader: headers?.[ACTIVE_WRITER_SESSION_HEADER] ?? null,
         observerSessionHeader: headers?.['risu-writer-observer-session'] ?? null,
         disconnectExistingWriterHeader: headers?.[DISCONNECT_EXISTING_WRITER_HEADER] ?? null,
+        expectedWriterEpochHeader: headers?.[EXPECTED_WRITER_EPOCH_HEADER] ?? null,
+        expectedDatabaseLineageHeader: headers?.[EXPECTED_DATABASE_LINEAGE_HEADER] ?? null,
       })
       const value = typeof body === 'function' ? body() : body
       return value instanceof Response ? value : jsonResponse(value)
@@ -54,6 +64,124 @@ afterEach(() => {
 })
 
 describe('server runtime bootstrap helper', () => {
+  it.each([
+    { sessionId: null, epoch: 0 },
+    { sessionId: 'writer-a', epoch: 3 },
+    { sessionId: 'writer-b', epoch: 4 },
+  ])('reads explicit ownership $sessionId at epoch $epoch without writer intent', async (writer) => {
+    const calls = stubBootstrapFetch({
+      initialized: true,
+      revision: 12,
+      writerEpoch: writer.epoch,
+      writer,
+      databaseLineage: 'database-a',
+    })
+    await expect(fetchServerBootstrapReadOnly(null, { cacheRevision: false })).resolves.toMatchObject({
+      status: 'ok',
+      bootstrap: { writer },
+    })
+    expect(calls[0]).toMatchObject({
+      writerSessionHeader: null,
+      disconnectExistingWriterHeader: null,
+      expectedWriterEpochHeader: null,
+      expectedDatabaseLineageHeader: null,
+    })
+    expect(peekCachedServerCommandRevision()).toBeNull()
+  })
+
+  it('keeps missing legacy ownership metadata unknown', async () => {
+    stubBootstrapFetch({ initialized: true, revision: 4, writerEpoch: 0 })
+    const result = await fetchServerBootstrapReadOnly()
+    expect(result.status).toBe('ok')
+    if (result.status !== 'ok') throw new Error('Expected compatible legacy bootstrap')
+    expect(result.bootstrap).not.toHaveProperty('writer')
+  })
+
+  it('sends both conditional acquisition headers and retains the explicit disconnect handshake', async () => {
+    const calls = stubBootstrapFetch({
+      initialized: true,
+      revision: 9,
+      writer: { sessionId: 'writer-new', epoch: 5 },
+      writerEpoch: 5,
+    })
+    await expect(
+      fetchServerBootstrap(null, {
+        expectedWriter: { epoch: 4, databaseLineage: 'database-a' },
+        disconnectExistingWriter: true,
+      }),
+    ).resolves.toMatchObject({ status: 'ok', bootstrap: { writer: { sessionId: 'writer-new', epoch: 5 } } })
+    expect(calls[0]).toMatchObject({
+      expectedWriterEpochHeader: '4',
+      expectedDatabaseLineageHeader: 'database-a',
+      disconnectExistingWriterHeader: 'true',
+      observerSessionHeader: null,
+    })
+    expect(calls[0].writerSessionHeader).toEqual(expect.any(String))
+    await fetchServerBootstrap()
+    expect(calls[1]).toMatchObject({
+      expectedWriterEpochHeader: null,
+      expectedDatabaseLineageHeader: null,
+      disconnectExistingWriterHeader: null,
+    })
+  })
+
+  it('serializes the no-owner epoch as zero for initial conditional acquisition', async () => {
+    const calls = stubBootstrapFetch({ initialized: false, revision: 0, writer: { sessionId: 'writer-new', epoch: 1 } })
+    await fetchServerBootstrap(null, { expectedWriter: { epoch: 0, databaseLineage: 'database-a' } })
+    expect(calls[0].expectedWriterEpochHeader).toBe('0')
+    expect(calls[0].expectedDatabaseLineageHeader).toBe('database-a')
+  })
+
+  it('distinguishes a lost acquisition race from connected-writer confirmation without caching its revision', async () => {
+    stubBootstrapFetch({ initialized: true, revision: 8 })
+    await fetchServerBootstrapReadOnly()
+    stubBootstrapFetch(
+      new Response(JSON.stringify({ error: 'active_writer_changed', revision: 99 }), {
+        status: 409,
+        headers: { 'content-type': 'application/json', 'X-Request-UID': 'changed-request' },
+      }),
+    )
+    await expect(
+      fetchServerBootstrap(null, { expectedWriter: { epoch: 1, databaseLineage: 'database-a' } }),
+    ).resolves.toEqual({ status: 'error', error: 'active_writer_changed', requestUid: 'changed-request' })
+    expect(peekCachedServerCommandRevision()).toBe(8)
+  })
+
+  it.each([
+    null,
+    [],
+    {},
+    { epoch: 1 },
+    { sessionId: null },
+    { sessionId: '', epoch: 1 },
+    { sessionId: ' writer-a ', epoch: 1 },
+    { sessionId: 'a'.repeat(129), epoch: 1 },
+    { sessionId: 12, epoch: 1 },
+    { sessionId: 'writer-a', epoch: -1 },
+    { sessionId: 'writer-a', epoch: 1.5 },
+    { sessionId: 'writer-a', epoch: '1' },
+    { sessionId: 'writer-a', epoch: null },
+    { sessionId: 'writer-a', epoch: Number.MAX_SAFE_INTEGER + 1 },
+  ])('rejects malformed present writer metadata without caching: %j', async (writer) => {
+    stubBootstrapFetch({ initialized: true, revision: 99, writer })
+    await expect(fetchServerBootstrapReadOnly()).resolves.toEqual({
+      status: 'error',
+      error: 'Invalid bootstrap writer metadata',
+    })
+    expect(peekCachedServerCommandRevision()).toBeNull()
+  })
+
+  it('rejects contradictory writer epochs before updating a cached revision', async () => {
+    stubBootstrapFetch({ initialized: true, revision: 8 })
+    await fetchServerBootstrapReadOnly()
+    stubBootstrapFetch({ initialized: true, revision: 99, writerEpoch: 5, writer: { sessionId: 'writer-a', epoch: 4 } })
+    await expect(fetchServerBootstrap()).resolves.toEqual({
+      status: 'error',
+      error: 'Invalid bootstrap writer metadata',
+    })
+    expect(peekCachedServerCommandRevision()).toBe(8)
+  })
+
   it('fetches runtime metadata with auth, registers the writer, and caches revision', async () => {
     const calls = stubBootstrapFetch({
       initialized: true,
@@ -229,6 +357,8 @@ describe('server runtime bootstrap helper', () => {
         writerSessionHeader: expect.any(String),
         observerSessionHeader: null,
         disconnectExistingWriterHeader: null,
+        expectedWriterEpochHeader: null,
+        expectedDatabaseLineageHeader: null,
       },
     ])
   })
