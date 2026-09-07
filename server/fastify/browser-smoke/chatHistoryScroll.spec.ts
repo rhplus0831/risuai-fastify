@@ -71,6 +71,11 @@ for (const { pageDelay, assets, reverse, label } of [
     const consoleDiagnostics: { type: string; text: string }[] = []
     const samples: Awaited<ReturnType<typeof historyViewport>>[] = []
     const pauses: { delta: number; samples: Awaited<ReturnType<typeof historyViewport>>[] }[] = []
+    const remountPause = {
+      delta: -600,
+      preparation: [] as Awaited<ReturnType<typeof historyViewport>>[],
+      samples: [] as Awaited<ReturnType<typeof historyViewport>>[],
+    }
     let olderPageRequests = 0
     page.on('pageerror', (error) => errors.push(error.message))
     if (reverse) {
@@ -141,7 +146,15 @@ for (const { pageDelay, assets, reverse, label } of [
             speed: 1_000_000,
             gestureSourceType: 'mouse',
           })
-          await page.mouse.wheel(0, -600)
+          // Await completion of the same fixed upward input before measuring a pause.
+          await cdp.send('Input.synthesizeScrollGesture', {
+            x: bounds.x + bounds.width / 2,
+            y: bounds.y + bounds.height / 2,
+            yDistance: 600,
+            speed: 100_000,
+            gestureSourceType: 'mouse',
+            preventFling: true,
+          })
           await expect(
             remountedMessage.locator('.chat-message-body'),
             'ordinary row is readable after remount',
@@ -153,6 +166,38 @@ for (const { pageDelay, assets, reverse, label } of [
               { message: 'ordinary row is visible after remount' },
             )
             .toBe(true)
+          // This measured pause starts only after the existing real remount input
+          // and an explicit first-geometric-row readiness precondition. Keep the
+          // successful frame as sample zero; later samples cannot replace its ID.
+          await expect
+            .poll(
+              async () => {
+                const sample = await historyViewport(page)
+                remountPause.preparation.push(sample)
+                if (!sample.visible[0]?.readable) return false
+                remountPause.samples.push(sample)
+                return true
+              },
+              { message: 'first geometric row is readable before the remount pause', timeout: 5_000, intervals: [32] },
+            )
+            .toBe(true)
+          const remountAnchor = remountPause.samples[0].visible[0]
+          for (let frame = 1; frame < 30; frame++) {
+            await page.waitForTimeout(32)
+            remountPause.samples.push(await historyViewport(page))
+          }
+          const remountPositions = remountPause.samples.map((sample) =>
+            sample.visible.find((row) => row.id === remountAnchor.id),
+          )
+          expect(
+            remountPositions.every((row) => row?.readable),
+            `message ${remountAnchor.index} stays visible during remount pause`,
+          ).toBe(true)
+          expect(
+            Math.max(...remountPositions.map((row) => Math.abs(row!.top - remountAnchor.top))),
+            `message ${remountAnchor.index} stays anchored during remount pause`,
+          ).toBeLessThanOrEqual(1)
+          anchoredPauses++
         }
         for (const delta of [-85_000, 35_000, -40_000, 25_000, -35_000, 30_000, -35_000]) {
           await cdp.send('Input.synthesizeScrollGesture', {
@@ -250,7 +295,14 @@ for (const { pageDelay, assets, reverse, label } of [
       ).toBe(true)
       expect(settled.windowRows).toBe(MESSAGE_COUNT)
       expect(
-        Math.max(...[...samples, ...pauses.flatMap((pause) => pause.samples)].map((sample) => sample.residentRows)),
+        Math.max(
+          ...[
+            ...samples,
+            ...pauses.flatMap((pause) => pause.samples),
+            ...remountPause.preparation,
+            ...remountPause.samples,
+          ].map((sample) => sample.residentRows),
+        ),
       ).toBeLessThanOrEqual(76)
       expect(errors).toEqual([])
       if (reverse) expect(anchoredPauses, 'readable rows exercised across pauses').toBeGreaterThan(0)
@@ -265,7 +317,7 @@ for (const { pageDelay, assets, reverse, label } of [
           errors,
           pauses,
           samples,
-          ...(reverse ? { scriptAssetPaths, scriptAssetResponses, consoleDiagnostics } : {}),
+          ...(reverse ? { remountPause, scriptAssetPaths, scriptAssetResponses, consoleDiagnostics } : {}),
         }),
       )
       await testInfo.attach('history-scroll-observations', {
