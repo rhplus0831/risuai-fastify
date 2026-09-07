@@ -1,5 +1,11 @@
 import { selectedCharID } from '../stores.svelte'
 import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  isClientSessionManaged,
+} from '../clientSession'
+import {
   mergePendingAgentPresetCharactersResource,
   mergePendingAgentPresetLoadoutsResource,
   mergePendingAgentPresetSettingsResource,
@@ -61,6 +67,7 @@ export type ServerResourceRefreshResult =
   | { status: 'unavailable' }
 
 let serverResourceRefreshPromise: Promise<ServerResourceRefreshResult> | null = null
+let serverResourceRefreshGeneration = -1
 let serverResourceRefreshPending = false
 let serverDatabaseReplacementRefreshPending = false
 let serverDatabaseReplacementDiscardPromise: Promise<void> | null = null
@@ -99,17 +106,21 @@ export async function forceServerResourceRefresh(
   reason: string,
   options: { resource?: string } = {},
 ): Promise<ServerResourceRefreshResult> {
+  if (!canUseClientRecoveryAccess()) return { status: 'unavailable' }
+  const generation = captureClientSessionGeneration()
   recordFullResourceRefresh(reason, options.resource)
-  if (serverResourceRefreshPromise) {
+  if (serverResourceRefreshPromise && serverResourceRefreshGeneration === generation) {
     serverResourceRefreshPending = true
     return serverResourceRefreshPromise
   }
 
-  serverResourceRefreshPromise = runServerResourceRefresh()
+  serverResourceRefreshGeneration = generation
+  const running = runServerResourceRefresh(generation)
+  serverResourceRefreshPromise = running
   try {
-    return await serverResourceRefreshPromise
+    return await running
   } finally {
-    serverResourceRefreshPromise = null
+    if (serverResourceRefreshPromise === running) serverResourceRefreshPromise = null
   }
 }
 
@@ -118,9 +129,14 @@ export function forceServerDatabaseReplacementRefresh(
   reason: string,
   options: { resource?: string } = {},
 ): Promise<ServerResourceRefreshResult> {
+  if (!canUseClientRecoveryAccess()) return Promise.resolve({ status: 'unavailable' })
+  const generation = captureClientSessionGeneration()
   serverDatabaseReplacementRefreshPending = true
   serverDatabaseReplacementDiscardPromise ??= import('../observerProjectionLifecycle').then(
-    ({ discardObserverProjectionState }) => discardObserverProjectionState('database-replacement'),
+    ({ discardObserverProjectionState }) => {
+      if (isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess())
+        return discardObserverProjectionState('database-replacement')
+    },
   )
   clearCachedServerCommandRevision()
   clearAppliedServerResourceRevision()
@@ -142,6 +158,9 @@ export async function refreshServerRealmImportResources(input: {
   event: CommandEvent
   characterId: string
 }): Promise<ServerResourceRefreshResult> {
+  const generation = captureClientSessionGeneration()
+  if (!canUseClientRecoveryAccess()) return { status: 'unavailable' }
+  const isCurrent = () => isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess()
   const appliedRevision = peekAppliedServerResourceRevision()
   if (!isMatchingRealmCharacterCreatedEvent(input) || appliedRevision === null) {
     return forceServerResourceRefresh('realm-import', { resource: input.event.resource })
@@ -155,7 +174,9 @@ export async function refreshServerRealmImportResources(input: {
     const result = await refreshInvalidatedServerResources(input.event, {
       appliedRevision,
       hooks: serverResourceInvalidationHooks,
+      ...(isClientSessionManaged() ? { isCurrent } : {}),
     })
+    if (!isCurrent()) return { status: 'unavailable' }
     if (result.status !== 'ok') return result
 
     if (result.scope === 'full') {
@@ -163,7 +184,7 @@ export async function refreshServerRealmImportResources(input: {
       // event, but retain full-refresh hydration semantics if the invalidation
       // planner broadens the event in the future.
       recordFullResourceRefresh('realm-import', input.event.resource)
-      return completeFullServerResourceRefresh(result.revision, selectionTracker.snapshot())
+      return completeFullServerResourceRefresh(result.revision, selectionTracker.snapshot(), generation)
     }
 
     if (result.scope === 'targeted') {
@@ -180,10 +201,12 @@ export async function refreshServerRealmImportResources(input: {
   }
 }
 
-async function runServerResourceRefresh(): Promise<ServerResourceRefreshResult> {
+async function runServerResourceRefresh(generation: number): Promise<ServerResourceRefreshResult> {
   let latestResult: ServerResourceRefreshResult | null = null
+  const isCurrent = () => isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess()
 
   do {
+    if (!isCurrent()) return { status: 'unavailable' }
     serverResourceRefreshPending = false
     if (serverDatabaseReplacementRefreshPending) {
       serverDatabaseReplacementRefreshPending = false
@@ -197,6 +220,7 @@ async function runServerResourceRefresh(): Promise<ServerResourceRefreshResult> 
           }
         }
       }
+      if (!isCurrent()) return { status: 'unavailable' }
       // A replacement request can join an older full refresh that was already
       // reading the previous database. Reset again after that iteration drains
       // so its higher revision cannot fence out the replacement snapshot.
@@ -206,13 +230,17 @@ async function runServerResourceRefresh(): Promise<ServerResourceRefreshResult> 
     }
     const selectionTracker = trackSelectedCharacterDuringRefresh()
     try {
-      const result = await refreshAllServerResources({ hooks: serverResourceInvalidationHooks })
+      const result = await refreshAllServerResources({
+        hooks: serverResourceInvalidationHooks,
+        ...(isClientSessionManaged() ? { isCurrent } : {}),
+      })
+      if (!isCurrent()) return { status: 'unavailable' }
       if (result.status !== 'ok') {
         latestResult = result
         continue
       }
 
-      latestResult = await completeFullServerResourceRefresh(result.revision, selectionTracker.snapshot())
+      latestResult = await completeFullServerResourceRefresh(result.revision, selectionTracker.snapshot(), generation)
     } finally {
       selectionTracker.stop()
     }
@@ -224,7 +252,10 @@ async function runServerResourceRefresh(): Promise<ServerResourceRefreshResult> 
 async function completeFullServerResourceRefresh(
   revision: number,
   selection: SelectedCharacterRefreshSnapshot,
+  generation: number,
 ): Promise<ServerResourceRefreshResult> {
+  const isCurrent = () => isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess()
+  if (!isCurrent()) return { status: 'unavailable' }
   syncSelectedCharacterAfterRefresh(selection)
 
   // Full character reads intentionally carry message-free chat rows. Reset
@@ -240,12 +271,14 @@ async function completeFullServerResourceRefresh(
   if (!(await ensurePromptTemplateHydrated({ force: true, minimumRevision: revision }))) {
     return { status: 'error', error: 'Selected prompt-template owner hydration failed' }
   }
+  if (!isCurrent()) return { status: 'unavailable' }
   reapplyPendingPresetProjections()
   reapplyPendingPromptTemplateStructuralProjections()
   setCachedServerCommandRevision(revision)
   setAppliedServerResourceRevision(revision)
   void hydrateSelectedCharacterShell({ supersede: true })
-  await refreshRuntimeJobs()
+  await refreshRuntimeJobs(generation)
+  if (!isCurrent()) return { status: 'unavailable' }
   triggerOpenChatGenerationReattach()
   return { status: 'ok', revision }
 }
@@ -270,8 +303,9 @@ function syncSelectedCharacterAfterRefresh(selection: SelectedCharacterRefreshSn
   selectedCharID.set(resolveSelectedCharacterIndexAfterRefresh(selection.target))
 }
 
-async function refreshRuntimeJobs(): Promise<void> {
+async function refreshRuntimeJobs(generation: number): Promise<void> {
   const runtime = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
+  if (!isClientSessionGenerationCurrent(generation) || !canUseClientRecoveryAccess()) return
   if (runtime.status !== 'ok') return
   applyGenerationOperationBootstrap(runtime.bootstrap, 'full_resource_refresh')
   setActiveMessageTranslations(runtime.bootstrap.activeMessageTranslations ?? [])

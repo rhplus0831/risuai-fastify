@@ -103,6 +103,8 @@ import { charactersResourceState, replaceResourceDatabase, resetServerResourceSt
 
 import { selectedCharID } from '../stores.svelte'
 import { getResourceDatabase } from 'src/ts/__tests__/resourceDatabaseState'
+import { enterClientWriter } from '../__tests__/clientSession'
+import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
 
 function database(characters: Array<{ chaId: string; name: string }>, currentChar = 0) {
   return {
@@ -121,6 +123,7 @@ function database(characters: Array<{ chaId: string; name: string }>, currentCha
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.clearAllMocks()
   resetServerResourceState()
   replaceResourceDatabase(
@@ -149,6 +152,50 @@ beforeEach(() => {
       ],
     },
   })
+})
+
+it('does not complete a held writer refresh over a newer reader projection', async () => {
+  enterClientWriter()
+  let release!: (value: { status: 'ok'; revision: number; scope: 'full' }) => void
+  refreshApi.refreshAll.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve
+      }),
+  )
+  const pending = forceServerResourceRefresh('held-writer-refresh')
+  await vi.waitFor(() => expect(refreshApi.refreshAll).toHaveBeenCalledOnce())
+  demoteClientSession()
+  selectedCharID.set(-1)
+  setCachedServerCommandRevision(12)
+  setAppliedServerResourceRevision(12)
+  release({ status: 'ok', revision: 5, scope: 'full' })
+  await expect(pending).resolves.toEqual({ status: 'unavailable' })
+  expect(get(selectedCharID)).toBe(-1)
+  expect(peekAppliedServerResourceRevision()).toBe(12)
+  expect(sideEffects.resetChatHydration).not.toHaveBeenCalled()
+  expect(sideEffects.hydratePromptTemplate).not.toHaveBeenCalled()
+  expect(bootstrapApi.fetchReadOnly).not.toHaveBeenCalled()
+  expect(sideEffects.triggerReattach).not.toHaveBeenCalled()
+})
+
+it('ignores late runtime bootstrap after writer loss during full refresh completion', async () => {
+  enterClientWriter()
+  let release!: (value: unknown) => void
+  bootstrapApi.fetchReadOnly.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve
+      }),
+  )
+  const pending = forceServerResourceRefresh('held-runtime-refresh')
+  await vi.waitFor(() => expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce())
+  demoteClientSession()
+  release({ status: 'ok', bootstrap: { activeGenerationJobs: [{ jobId: 'old-job', chatId: 'chat-a' }] } })
+  await expect(pending).resolves.toEqual({ status: 'unavailable' })
+  expect(sideEffects.applyGenerationBootstrap).not.toHaveBeenCalled()
+  expect(sideEffects.setTranslations).not.toHaveBeenCalled()
+  expect(sideEffects.triggerReattach).not.toHaveBeenCalled()
 })
 
 it.each(['idle', 'loading', 'error'] as const)(
