@@ -1103,3 +1103,25 @@ Implementation, guide review, fault controls, normal rollout and conservative
 fallback are complete. The final `pnpm test:agent` and phase-ending
 `pnpm test:all` now own the remaining acceptance evidence. No required phase
 check has been transferred to the user.
+
+### Final Aggregate Inventory Reconciliation
+
+The first final `pnpm test:agent` at `b02341258` exits 1 in 2m 23.0s because
+the architecture inventory detects two stale rollout-marker entries. Other
+executed lanes pass: 712 frontend files (9,080 tests, three existing skips),
+224 server files (4,228 tests, two existing skips), Svelte check with zero errors
+or warnings, topology, current docs and the normal smoke build. The failed
+server-check stops at inventory before Fastify/browser typechecking; neither the
+build nor those passing lanes accept the failed aggregate.
+
+A complete observation comparison identifies only two required baseline edits:
+`src/ts/observerShellFlag.test.ts` now contains eight build-flag references rather
+than five, and `262385732` removed the inline smoke storage marker from
+`fastifyBrowserSmoke.spec.ts` when it reused the existing guarded helper. Updating
+that count and deleting the obsolete row makes the comparison exact. The live
+machine baseline retains 4,274 fixture references, 30 consumer groups, zero
+bridge families and all existing owner/policy metadata; reviewed seam rows change
+from 22 to 21. No production aggregate access or new exception is admitted.
+The focused `pnpm check:server` now passes, including protocol/shared-core,
+architecture, Fastify and browser types. Repeated final aggregate gates remain
+pending.

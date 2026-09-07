@@ -341,3 +341,11 @@ file hashes. [Profile proof](findings.md#reader-phase-5-default-and-fallback-bui
 records the environments and limits. Reader Phase 5 now has only its final
 aggregate checks and acceptance/archive outstanding; this smoke workstream still
 resumes Phase 3 after that accepted handoff.
+
+Reader Phase 5's first final agent aggregate finds two stale inventory marker
+entries after the expanded flag tests and guarded legacy setup helper. All
+frontend/server tests, Svelte check, topology, docs and smoke build pass, but the
+aggregate remains failed until the reviewed count/removal reconciliation and
+final checks pass. This changes no browser assertion, production owner or rollout
+behavior; [reader status](../connected-read-only-clients/status.md#final-aggregate-inventory-reconciliation)
+retains the precise source, result and remaining gates.

@@ -1374,19 +1374,9 @@
     },
     {
       "id": "observer-shell-rollout",
-      "file": "server/fastify/browser-smoke/fastifyBrowserSmoke.spec.ts",
-      "marker": "risu:fast-bootstrap-observer-shell",
-      "count": 1,
-      "owner": "deployment-owned pre-writer observer-shell rollout",
-      "disposition": "retained operational rollout control; production ignores the smoke-only session override",
-      "migrationPhase": "Workstream 3 Phase 7 retained-seam decision",
-      "removalTrigger": "Remove after deployment telemetry satisfies the documented observer-shell safety and latency thresholds."
-    },
-    {
-      "id": "observer-shell-rollout",
       "file": "src/ts/observerShellFlag.test.ts",
       "marker": "VITE_FAST_BOOTSTRAP_OBSERVER",
-      "count": 5,
+      "count": 8,
       "owner": "deployment-owned pre-writer observer-shell rollout",
       "disposition": "retained operational rollout control; production ignores the smoke-only session override",
       "migrationPhase": "Workstream 3 Phase 7 retained-seam decision",
