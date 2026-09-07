@@ -1,7 +1,7 @@
 # Phase 0: Inventory and Pilot
 
 Dependency: current source confirmation. Progress belongs in
-[status](../status.md); this phase is pending.
+[status](../status.md).
 
 ## Outcome
 

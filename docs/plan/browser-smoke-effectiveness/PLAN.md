@@ -2,8 +2,8 @@
 
 Date: 2026-09-06
 
-Planning prepared. Audit and remediation have not started. Read
-[status.md](status.md) for the execution cursor and verification history.
+Execution is in progress. Read [status.md](status.md) for the execution cursor
+and verification history.
 
 ## Objective and Authority
 

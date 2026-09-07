@@ -1,38 +1,41 @@
 # Browser Smoke Review Inventory
 
-Planning snapshot: 2026-09-06 at
-`ac5a1cec1dc2e74354001fe7f86b372048e691fd`.
+Execution inventory: 2026-09-07 at
+`711b1d583` (clean initial worktree).
 
-All rows are pending. Counts came from Playwright discovery, not browser
-execution. Reconcile this snapshot against the execution source in Phase 0.
+Current discovery contains 77 registered cases in 17 specs, plus ten local
+TypeScript support owners and four screenshot baselines. The eight additions
+since planning are the viewport/entry/height cases in `chatEntryLayout.spec.ts`.
+Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
 ## Default Registered Cases
 
 All spec names below resolve under `server/fastify/browser-smoke`.
 
-| Spec                                       | Default cases | Primary review phase                      | Review state                     |
-| ------------------------------------------ | ------------: | ----------------------------------------- | -------------------------------- |
-| `acceptedSendProtocol.spec.ts`             |            11 | 2: generation/recovery                    | Pending                          |
-| `bardWikiLifecycle.spec.ts`                |             1 | 3: memory lifecycle                       | Pending                          |
-| `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Pending                          |
-| `chatStartupRendering.spec.ts`             |             3 | 2: transcript/startup                     | Pending                          |
-| `debugEchoLayoutStability.spec.ts`         |             1 | 2: generation/layout                      | Pending                          |
-| `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Pending                          |
-| `fastifyBrowserSmoke.spec.ts`              |            10 | 2: critical slices; 3: remaining journeys | Pending                          |
-| `lazyFirstOpen.spec.ts`                    |             8 | 3: navigation/first open                  | Pending                          |
-| `rerollSwipePersistence.spec.ts`           |             1 | 2: generation durability                  | Pending                          |
-| `selectedLocaleRuntime.spec.ts`            |             3 | 3: locale transitions                     | Pending                          |
-| `selectedLocaleStartup.spec.ts`            |             1 | 3: locale startup                         | Pending                          |
-| `startupCachePopulationMatrix.spec.ts`     |             1 | 3: startup/cache                          | Pending                          |
-| `startupDirectLinks.spec.ts`               |             4 | 3: route matrix                           | Pending                          |
-| `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Pending                          |
-| `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Pending                          |
-| `visibleStateRecovery.spec.ts`             |             3 | 2: visible/durable recovery               | Pending                          |
-| **Total**                                  |        **69** |                                           | **No scenario review completed** |
+| Spec                                       | Default cases | Primary review phase                      | Review state                                          |
+| ------------------------------------------ | ------------: | ----------------------------------------- | ----------------------------------------------------- |
+| `acceptedSendProtocol.spec.ts`             |            11 | 2: generation/recovery                    | Pending                                               |
+| `bardWikiLifecycle.spec.ts`                |             1 | 3: memory lifecycle                       | Pending                                               |
+| `chatEntryLayout.spec.ts`                  |             8 | 2: transcript/entry; 3: final review      | Pending                                               |
+| `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Pending                                               |
+| `chatStartupRendering.spec.ts`             |             3 | 2: transcript/startup                     | Pending                                               |
+| `debugEchoLayoutStability.spec.ts`         |             1 | 2: generation/layout                      | Pending                                               |
+| `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Pending                                               |
+| `fastifyBrowserSmoke.spec.ts`              |            10 | 2: critical slices; 3: remaining journeys | Pending                                               |
+| `lazyFirstOpen.spec.ts`                    |             8 | 3: navigation/first open                  | Pending                                               |
+| `rerollSwipePersistence.spec.ts`           |             1 | 2: generation durability                  | Pending                                               |
+| `selectedLocaleRuntime.spec.ts`            |             3 | 3: locale transitions                     | Pending                                               |
+| `selectedLocaleStartup.spec.ts`            |             1 | 3: locale startup                         | Pending                                               |
+| `startupCachePopulationMatrix.spec.ts`     |             1 | 3: startup/cache                          | Pending                                               |
+| `startupDirectLinks.spec.ts`               |             4 | 3: route matrix                           | Pending                                               |
+| `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Pending                                               |
+| `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Pending                                               |
+| `visibleStateRecovery.spec.ts`             |             3 | 2: visible/durable recovery               | Pending                                               |
+| **Total**                                  |        **77** |                                           | **Pilot evidence recorded; remaining review pending** |
 
-This file-level table is the starting universe. Phase 0 adds records keyed by
-spec plus full test title and meaningful subjourney/parameter labels. A whole
+This file-level table is the current universe. The scenario records below are
+keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
 file cannot be marked reviewed after sampling a few of its scenarios. Keep
 opt-in workload expansion, conditional skips, desktop/mobile profiles, and
 manifest-generated route coverage explicit without inflating default counts.
@@ -51,7 +54,8 @@ manifest-generated route coverage explicit without inflating default counts.
 | `playwright.fastify-smoke.config.ts`, `util/focused-test.ts`, `util/browser-smoke-workers.ts`, `util/test-all.ts`, `.github/workflows/quality.yml` | What is discovered, skipped, isolated, built, executed, or required by each lane?                              | Pending |
 | Browser API overrides, request controls, and assertion helpers within every spec                                                                   | Does the control preserve the failing transition and does the assertion independently observe its consequence? | Pending |
 
-The local support baseline is ten TypeScript files, 952 lines. Follow imports
+The current local support set contains ten TypeScript files (952 lines at the
+planning anchor); source line counts are not an execution metric. Follow imports
 when they reveal additional shared owners; add only dependencies relevant to a
 named test claim. Existing screenshot assets remain companion artifacts of
 their scenario, not independent passing tests.
@@ -72,3 +76,221 @@ Each reviewed record must contain:
 Dispositions: pending, partial, retained, strengthened, reclassified, or removed
 with replacement evidence. Missing critical journeys receive their own records
 and findings instead of being omitted because no test title exists yet.
+
+## Current Scenario Identities
+
+The stable `S` IDs below identify registered cases at the execution anchor.
+Full titles include parameters; each direct-link batch expands to eleven
+manifest route journeys, without multiplying the registered count. Phase 0
+reviews the named pilots; remaining path/oracle dispositions are completed in
+their assigned phases. Per-spec contexts and control roles below apply to every
+row unless the detailed review states a narrower boundary.
+
+| ID  | Spec and source line                           | Full registered title                                                                                                 | Disposition              |
+| --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| S01 | `acceptedSendProtocol.spec.ts:353`             | send -> reload mid-generation reattaches and commits one reply                                                        | Pending                  |
+| S02 | `acceptedSendProtocol.spec.ts:374`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Pending                  |
+| S03 | `acceptedSendProtocol.spec.ts:410`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Pending                  |
+| S04 | `acceptedSendProtocol.spec.ts:453`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Pending                  |
+| S05 | `acceptedSendProtocol.spec.ts:481`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Pending                  |
+| S06 | `acceptedSendProtocol.spec.ts:518`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Pending                  |
+| S07 | `acceptedSendProtocol.spec.ts:547`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Pending                  |
+| S08 | `acceptedSendProtocol.spec.ts:584`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Pending                  |
+| S09 | `acceptedSendProtocol.spec.ts:603`             | preserved runtime reconciles completion after its observer and replay job expire                                      | Pending                  |
+| S10 | `acceptedSendProtocol.spec.ts:633`             | two concurrent chats keep stable-target UI, recovery, and jobs isolated                                               | Pending                  |
+| S11 | `acceptedSendProtocol.spec.ts:670`             | queued finalization keeps a provisional row through reload and later settles                                          | Pending                  |
+| S12 | `bardWikiLifecycle.spec.ts:39`                 | BardWiki settings, manual document, confirmation status, and lifecycle tools are visible end to end                   | Pending                  |
+| S13 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a short last message without a transient jump                                              | Pending                  |
+| S14 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a tall last message without a transient jump                                               | Pending                  |
+| S15 | `chatEntryLayout.spec.ts:26`                   | 390px chat-list entry reveals a short last message without a transient jump                                           | Pending                  |
+| S16 | `chatEntryLayout.spec.ts:26`                   | 390px chat-list entry reveals a tall last message without a transient jump                                            | Pending                  |
+| S17 | `chatEntryLayout.spec.ts:26`                   | 1280px direct entry reveals a short last message without a transient jump                                             | Pending                  |
+| S18 | `chatEntryLayout.spec.ts:26`                   | 1280px direct entry reveals a tall last message without a transient jump                                              | Pending                  |
+| S19 | `chatEntryLayout.spec.ts:26`                   | 1280px chat-list entry reveals a short last message without a transient jump                                          | Pending                  |
+| S20 | `chatEntryLayout.spec.ts:26`                   | 1280px chat-list entry reveals a tall last message without a transient jump                                           | Pending                  |
+| S21 | `chatHistoryScroll.spec.ts:55`                 | 300-message history stays readable with continuous upward wheel input                                                 | Pilot reviewed; see P0-T |
+| S22 | `chatHistoryScroll.spec.ts:55`                 | 300-message history stays readable with rapid reversals and pauses among tall messages                                | Pilot reviewed; see P0-T |
+| S23 | `chatStartupRendering.spec.ts:9`               | direct chat startup waits for display dependencies and preserves the first processed body through background startup  | Pending                  |
+| S24 | `chatStartupRendering.spec.ts:9`               | refresh chat startup waits for display dependencies and preserves the first processed body through background startup | Pending                  |
+| S25 | `chatStartupRendering.spec.ts:112`             | direct chat startup releases the newest rows before older display work and preserves their scroll anchor              | Pending                  |
+| S26 | `debugEchoLayoutStability.spec.ts:61`          | debug echo send stays visually stable through the first-token wait and foreground recovery                            | Pending                  |
+| S27 | `displayPaintCache.spec.ts:34`                 | warm reload keeps appearance stable before the bundle, shell, and Display response arrive                             | Pending                  |
+| S28 | `fastifyBrowserSmoke.spec.ts:128`              | Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command                           | Pending                  |
+| S29 | `fastifyBrowserSmoke.spec.ts:345`              | authored settings survive local backup restore and a full reload                                                      | Pending                  |
+| S30 | `fastifyBrowserSmoke.spec.ts:420`              | authored character identity fields survive command acceptance and a full reload                                       | Pending                  |
+| S31 | `fastifyBrowserSmoke.spec.ts:487`              | translator preset bindings persist independently across chats                                                         | Pending                  |
+| S32 | `fastifyBrowserSmoke.spec.ts:566`              | flagged observer shell survives denial and cross-tab writer takeover without mutation                                 | Pending                  |
+| S33 | `fastifyBrowserSmoke.spec.ts:647`              | core chat controls and blocking alerts remain accessible across responsive viewports                                  | Pending                  |
+| S34 | `fastifyBrowserSmoke.spec.ts:728`              | latest-message start alignment never mutates spacer geometry during free scrolling                                    | Pending                  |
+| S35 | `fastifyBrowserSmoke.spec.ts:833`              | mobile in-flow composer opens from a button above the stable keyboard viewport                                        | Pending                  |
+| S36 | `fastifyBrowserSmoke.spec.ts:1165`             | prompt presets and model profiles reorder from an immediate mobile touch drag                                         | Pending                  |
+| S37 | `fastifyBrowserSmoke.spec.ts:1209`             | global lorebook page owner hydrates once, selects by stable id, and survives reload                                   | Pending                  |
+| S38 | `lazyFirstOpen.spec.ts:281`                    | smoke manifest accounts for every lazy boundary                                                                       | Pending                  |
+| S39 | `lazyFirstOpen.spec.ts:306`                    | every Settings and Playground route opens its real first-use chunk                                                    | Pending                  |
+| S40 | `lazyFirstOpen.spec.ts:340`                    | grid, route handlers, Sidebar panels, and chat dialogs open only on first use                                         | Pending                  |
+| S41 | `lazyFirstOpen.spec.ts:416`                    | a delayed emitted stylesheet keeps the previous route mounted until the new route is ready                            | Pending                  |
+| S42 | `lazyFirstOpen.spec.ts:444`                    | a delayed modal chunk preserves focus through loading, CSS, and close                                                 | Pending                  |
+| S43 | `lazyFirstOpen.spec.ts:486`                    | preset and persona lazy dialogs stay within the viewport after first-open loading                                     | Pending                  |
+| S44 | `lazyFirstOpen.spec.ts:523`                    | an offline first open shows local Retry and succeeds when connectivity returns                                        | Pending                  |
+| S45 | `lazyFirstOpen.spec.ts:551`                    | a stale emitted stylesheet shows local recovery and reloads the current route                                         | Pending                  |
+| S46 | `rerollSwipePersistence.spec.ts:32`            | rerolled candidates survive a reload and stay swipe-recoverable                                                       | Pending                  |
+| S47 | `selectedLocaleRuntime.spec.ts:21`             | a delayed locale cannot overwrite a newer selection and is reused on the next switch                                  | Pending                  |
+| S48 | `selectedLocaleRuntime.spec.ts:71`             | a failed locale chunk leaves the current UI usable and a later selection retries it                                   | Pending                  |
+| S49 | `selectedLocaleRuntime.spec.ts:106`            | cold selected-locale failure retries before exposing its first composer                                               | Pending                  |
+| S50 | `selectedLocaleStartup.spec.ts:15`             | selected locale is usable on cold startup and refresh                                                                 | Pending                  |
+| S51 | `startupCachePopulationMatrix.spec.ts:78`      | startup matrix keeps cold and warm small/large populations separate                                                   | Pending                  |
+| S52 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 1/4 hydrates 11 empty-cache routes                                          | Pending                  |
+| S53 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 2/4 hydrates 11 empty-cache routes                                          | Pending                  |
+| S54 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 3/4 hydrates 11 empty-cache routes                                          | Pending                  |
+| S55 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 4/4 hydrates 11 empty-cache routes                                          | Pending                  |
+| S56 | `startupRecoveryIntegrationMatrix.spec.ts:41`  | startup rollout matrix proves flag-off and flag-on boundaries on small and large fixtures                             | Pending                  |
+| S57 | `startupRecoveryIntegrationMatrix.spec.ts:61`  | legacy and null shell state is repaired before built-browser bootstrap                                                | Pending                  |
+| S58 | `startupRecoveryIntegrationMatrix.spec.ts:114` | durable recovery replays offline work and committed work whose response was lost                                      | Pending                  |
+| S59 | `startupRecoveryIntegrationMatrix.spec.ts:218` | event-gap recovery performs an authoritative refresh before reconnecting                                              | Pending                  |
+| S60 | `startupRecoveryIntegrationMatrix.spec.ts:345` | multi-tab journey denies observer mutation, then safely promotes a takeover writer                                    | Pending                  |
+| S61 | `startupRecoveryIntegrationMatrix.spec.ts:432` | background runtimes cannot delay or fail shell, mutation, and chat readiness                                          | Pending                  |
+| S62 | `startupRecoveryIntegrationMatrix.spec.ts:508` | inlay runtime stays route-local when slow or failed and recovers through Retry                                        | Pending                  |
+| S63 | `transcriptResidency.spec.ts:89`               | transcript residency desktop 30 rows repetition 0                                                                     | Pending                  |
+| S64 | `transcriptResidency.spec.ts:89`               | transcript residency mobile 30 rows repetition 0                                                                      | Pending                  |
+| S65 | `transcriptResidency.spec.ts:331`              | transcript residency screenshot is temporary full materialization                                                     | Pending                  |
+| S66 | `transcriptResidency.spec.ts:397`              | transcript residency preserves editing, selection and copy desktop                                                    | Pending                  |
+| S67 | `transcriptResidency.spec.ts:397`              | transcript residency preserves editing, selection and copy mobile                                                     | Pending                  |
+| S68 | `transcriptResidency.spec.ts:555`              | transcript residency restores ordinary rows after screenshot failure                                                  | Pending                  |
+| S69 | `transcriptResidency.spec.ts:555`              | transcript residency restores ordinary rows after screenshot cancellation                                             | Pending                  |
+| S70 | `transcriptResidency.spec.ts:610`              | transcript residency bounds eight editors through page reset and keyboard gap navigation                              | Pending                  |
+| S71 | `transcriptResidency.spec.ts:793`              | transcript residency cancels a pending jump when its route is hidden and reopened                                     | Pending                  |
+| S72 | `transcriptResidency.spec.ts:906`              | transcript legacy paging rollback traverses 180 mounted rows without spacers                                          | Pending                  |
+| S73 | `transcriptResidency.spec.ts:953`              | transcript residency promotes readable visible messages during rapid movement and settles                             | Pending                  |
+| S74 | `transcriptResidency.spec.ts:1040`             | transcript residency expands its working window to fill a compact message viewport                                    | Pending                  |
+| S75 | `visibleStateRecovery.spec.ts:58`              | switching chats repaints the active-chat generation picker                                                            | Pending                  |
+| S76 | `visibleStateRecovery.spec.ts:93`              | a sidebar toggle flip survives the command + resource refresh                                                         | Pending                  |
+| S77 | `visibleStateRecovery.spec.ts:133`             | the same-character sidebar view survives old-lineage recovery after import                                            | Pilot reviewed; see P0-R |
+
+## Conditional and Expanded Execution
+
+- Default Chromium is headless desktop. Explicit Pixel contexts in accepted
+  send and mobile/touch transcript contexts exercise browser emulation, not
+  physical devices. Chat entry uses 390×844 and 1280×800 viewports; history uses
+  1721×1271. DOM tracing is disabled by the history, residency, and entry specs
+  because snapshots change their scheduling.
+- `RISU_TRANSCRIPT_COSTS=1` expands the residency size/profile matrix from
+  desktop/mobile × 30 rows to desktop/mobile/mobile-cpu4x × 30/180/600 rows.
+  `RISU_TRANSCRIPT_REPETITIONS` admits 1–5 repeats. Cost mode skips independent
+  interaction cases; it measures costs without imposing latency gates.
+  `RISU_TRANSCRIPT_LEGACY_PAGING=1` skips incompatible resident-mode cases;
+  `RISU_TRANSCRIPT_CPU_PROFILE`, `RISU_TRANSCRIPT_PROFILE_CASE`, and
+  `RISU_TRANSCRIPT_DIAGNOSTICS` produce explicitly separate diagnostics.
+- The direct-link manifest currently expands four registered batches into 44
+  unique route cases. Lazy first-open loops additionally exercise settings and
+  Playground route inventories; their title count is not a route count.
+- Default runs use up to four local workers, one on CI; explicit
+  `RISU_BROWSER_SMOKE_WORKERS` overrides the bounded default. Stateful cases
+  remain ordered inside their spec; independent harnesses bind random ports
+  and own temporary SQLite/data directories. Direct-link batches explicitly
+  permit parallel execution.
+
+## Common Fixture and Control Boundaries
+
+The shared harness starts the real Fastify app, authenticates through the smoke
+password flow, registers a temporary import writer, and imports handcrafted
+RisuSave data through the real import route into disposable SQLite. It serves
+`dist` over a random loopback port and closes/removes the owned data afterward.
+Fixtures create preconditions; they do not prove UI authoring or original-app
+serialization. Provider controls substitute deterministic external generation
+responses while retaining the application coordinator, event stream, and storage.
+
+Smoke-specific differences at this anchor: hook installation in
+`src/appStartup.ts`; automatic fixed-password input in
+`src/ts/storage/fastifyStorage.ts`; a smoke session-storage observer-shell
+flag override in `src/ts/observerShellFlag.ts`; 100ms rather than 5s finalization
+refresh in `src/ts/process/generationPersistenceState.ts`; disabled asset GC and
+memory worker in the shared harness. Embedded harness exclusions need per-owner
+review. These tests do not establish normal password prompts, worker timing, or
+production refresh latency.
+
+Hook classification is per caller:
+
+| Control                                                                                                                                                                                                         | Role and limit                                                                                                                                                |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `getDatabaseSnapshot`, `getLifecycleSnapshot`, `getAppliedServerResourceRevision`, `getStartupSnapshot`, `getStartupCoordinatorSnapshot`, `getCurrentRoute`, `getRouteResourceLoadState`, `getRerollCandidates` | Observation of actual client projections; requires a DOM or authoritative API oracle for claims of visible/durable truth.                                     |
+| `isLoaded`, `waitForLoaded`, `waitForStartupMilestone`                                                                                                                                                          | Readiness observation; `isLoaded` means background-ready, not evidence of a user action.                                                                      |
+| `activeWriterHeaders`                                                                                                                                                                                           | Authentication/session setup for real route calls; does not prove the corresponding UI entry path.                                                            |
+| `patchRuntimeSettings`                                                                                                                                                                                          | Real durable outbox action in command/recovery scenarios; unrelated setup when selecting display/test options. Does not prove a settings control was clicked. |
+| `selectCharacter`                                                                                                                                                                                               | Direct local store setup; does not prove sidebar selection or durable navigation.                                                                             |
+| `navigateTo`                                                                                                                                                                                                    | Real router action/setup; does not prove the navigation control was clicked.                                                                                  |
+| `showAlert`                                                                                                                                                                                                     | Alert presentation action; does not prove progress-to-confirmation admission from an operation.                                                               |
+| `setQuickSettingsOpen`                                                                                                                                                                                          | Direct UI-state setup; does not prove clicking the opener.                                                                                                    |
+| `swipeRerollBack`                                                                                                                                                                                               | Production reroll action; does not prove a visible swipe/button entry.                                                                                        |
+| `clearResourceCache`                                                                                                                                                                                            | Cold-cache setup; does not prove eviction behavior or durable persistence.                                                                                    |
+
+The concrete caller map below captures all hook member references in specs at
+this source. Source lines identify setup versus action call sites for Phase 1;
+assertion contracts remain owned by the scenario records. Hooks imported only
+through a local alias are included during the independent control cross-check.
+
+| Spec                                       | Hook references (member: source lines)                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `acceptedSendProtocol.spec.ts`             | `activeWriterHeaders`: 729, 1086; `getDatabaseSnapshot`: 766, 1063; `getLifecycleSnapshot`: 1058; `isLoaded`: 705                                                                                                                                                                                                                                                                                                                                                        |
+| `bardWikiLifecycle.spec.ts`                | `waitForLoaded`: 102                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
+| `chatEntryLayout.spec.ts`                  | `isLoaded`: 92; `selectCharacter`: 94                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `chatHistoryScroll.spec.ts`                | `isLoaded`: 85; `waitForStartupMilestone`: 93                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `chatStartupRendering.spec.ts`             | `waitForStartupMilestone`: 51, 97, 159                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `debugEchoLayoutStability.spec.ts`         | `activeWriterHeaders`: 193; `getDatabaseSnapshot`: 230, 241; `isLoaded`: 187                                                                                                                                                                                                                                                                                                                                                                                             |
+| `displayPaintCache.spec.ts`                | `getDatabaseSnapshot`: 153, 164; `waitForStartupMilestone`: 80, 159                                                                                                                                                                                                                                                                                                                                                                                                      |
+| `fastifyBrowserSmoke.spec.ts`              | `activeWriterHeaders`: 240; `getDatabaseSnapshot`: 226, 311, 408, 459, 483, 519, 520, 555, 608, 633; `getStartupCoordinatorSnapshot`: 628; `patchRuntimeSettings`: 230; `selectCharacter`: 660, 750, 878; `showAlert`: 706; `waitForLoaded`: 196, 659, 1241                                                                                                                                                                                                              |
+| `lazyFirstOpen.spec.ts`                    | `navigateTo`: 425, 532, 574, 645; `setQuickSettingsOpen`: 384, 388; `showAlert`: 459; `waitForLoaded`: 656                                                                                                                                                                                                                                                                                                                                                               |
+| `rerollSwipePersistence.spec.ts`           | `activeWriterHeaders`: 191; `getDatabaseSnapshot`: 64, 98, 140, 154; `getRerollCandidates`: 131, 135; `selectCharacter`: 170; `swipeRerollBack`: 149; `waitForLoaded`: 50                                                                                                                                                                                                                                                                                                |
+| `selectedLocaleRuntime.spec.ts`            | `getDatabaseSnapshot`: 47, 57; `navigateTo`: 15, 60, 97; `waitForStartupMilestone`: 14, 139                                                                                                                                                                                                                                                                                                                                                                              |
+| `selectedLocaleStartup.spec.ts`            | `getStartupSnapshot`: 44; `waitForStartupMilestone`: 41                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `startupCachePopulationMatrix.spec.ts`     | `getStartupCoordinatorSnapshot`: 193; `getStartupSnapshot`: 201; `waitForStartupMilestone`: 189                                                                                                                                                                                                                                                                                                                                                                          |
+| `startupDirectLinks.spec.ts`               | `clearResourceCache`: 69; `getCurrentRoute`: 87; `getRouteResourceLoadState`: 79; `waitForStartupMilestone`: 85                                                                                                                                                                                                                                                                                                                                                          |
+| `startupRecoveryIntegrationMatrix.spec.ts` | `activeWriterHeaders`: 258; `getAppliedServerResourceRevision`: 143, 185, 256, 309; `getDatabaseSnapshot`: 96, 182, 285, 310, 475; `getLifecycleSnapshot`: 165, 179; `getRouteResourceLoadState`: 548, 557, 564; `getStartupCoordinatorSnapshot`: 317, 384, 400, 467, 488, 542, 567, 613, 644; `getStartupSnapshot`: 479, 643; `navigateTo`: 539; `patchRuntimeSettings`: 162, 373, 408, 414, 471; `waitForStartupMilestone`: 93, 140, 176, 253, 366, 392, 485, 520, 632 |
+| `transcriptResidency.spec.ts`              | `activeWriterHeaders`: 826, 1772; `getDatabaseSnapshot`: 722, 1802; `isLoaded`: 1304; `navigateTo`: 585, 590, 871, 876; `patchRuntimeSettings`: 417, 636, 717, 760                                                                                                                                                                                                                                                                                                       |
+| `visibleStateRecovery.spec.ts`             | `activeWriterHeaders`: 380; `getAppliedServerResourceRevision`: 370; `getDatabaseSnapshot`: 85, 125, 213; `patchRuntimeSettings`: 169; `selectCharacter`: 248; `waitForLoaded`: 244                                                                                                                                                                                                                                                                                      |
+
+## Per-Spec Discovery Boundaries
+
+These are source-reviewed maps, cross-checked by independent read-only workers;
+only the pilot rows have focused fault execution so far. A listed action is
+what runs, not an assertion that every feature reachable from it is covered.
+All browser commands use `pnpm test -- server/fastify/browser-smoke/<spec>` or,
+after a matching smoke build, explicit Playwright selection in the same config.
+
+| Scenario family                  | Fixture; actual action; independent oracle; remaining limit                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| -------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Accepted send (S01–S11)          | Inline RisuSave fixture and controlled provider; visible composer/Stop/Retry/reload, dropped POST and viewer streams, job expiry/restart/finalization holds; DOM rows plus authoritative message/bootstrap APIs, operation IDs and provider counts. Tests reload while pending; Phase 2 must add a completed-reply reload before claiming that complete journey.                                                                                                                                                                                                                                                                                                             |
+| BardWiki (S12)                   | Small imported fixture with two seeded turns; settings/workspace, document creation, confirmation, lifecycle tools and reload; request responses plus visible document/status. Does not prove generating the seeded turns or provider-backed memory.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Chat entry (S13–S20)             | Twelve imported rows, short/tall final body, held display-source request; direct URL or actual chat-row/recent-chat button (character selection is setup); skeleton then at least 30 readable frame samples and ≤1px start displacement. Does not prove mutation/durability.                                                                                                                                                                                                                                                                                                                                                                                                 |
+| History (S21–S22)                | Imported 300-row transcript with wrapping text, static rich content and tall rows; real CDP gestures/wheel overlapping real page requests and queued parsing; nonempty readable pauses, stable IDs/positions, first row reached/remains, logical/resident bounds. See P0-T; simulated Chromium input only.                                                                                                                                                                                                                                                                                                                                                                   |
+| Startup rendering (S23–S25)      | Small fixture with display plugin or twelve messages; real startup/reload with held dependency/display requests; skeleton, processed body, newest-before-older rendering and geometry. Deterministic plugin/data preparation is not plugin authoring.                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Debug Echo (S26)                 | Imported echo profile plus direct generation-settings setup; actual composer send and lifecycle event dispatch; waiting/provisional DOM, final server messages and nonempty frame samples of control identity/focus/geometry. Fixed provider delay is a controlled precondition.                                                                                                                                                                                                                                                                                                                                                                                             |
+| Paint cache (S27)                | Imported custom display settings; warm reload with entry/shell/Display held independently; pre-bundle computed appearance and final hydrated values, sampled mismatches/errors. One appearance preset; cache is non-authoritative.                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| Mixed smoke (S28–S37)            | Fresh embedded harness per test. S28 uses real API actions and durable settings hook, storage interception observes writes. S29–S31 drive backup/settings/character/translator UI and accepted responses/reloads. S32 uses two contexts for denial/takeover. S33 tests direct alert presentation and keyboard focus/screenshots. S34 assigns scroll/style as geometry setup. S35 mocks visualViewport and tests composer transitions/draft. S36 drives touch reorder with real requests. S37 opens/selects/reloads lorebook with request-count and stable-ID checks. S33 does not cover an operation reaching confirmation; full disposition stays partial until Phases 2/3. |
+| Lazy boundaries (S38–S45)        | Imported personas/chats and emitted asset manifest; actual route/dialog controls plus hook-driven router/modal setup; chunk/CSS requests, visible ready/loading/recovery/focus/viewport checks. Includes 23 Settings and 15 Playground routes; proves loader boundaries rather than every route's domain behavior.                                                                                                                                                                                                                                                                                                                                                           |
+| Reroll (S46)                     | Imported old reply/echo provider; UI reroll with operation POST and no truncation, reload then direct production reroll-back hook; authoritative persisted tail and client candidates/DOM. Retain as candidate reconstruction/navigation evidence; pointer swipe remains unproved.                                                                                                                                                                                                                                                                                                                                                                                           |
+| Locale runtime/startup (S47–S50) | Small imported en/ko fixture and emitted locale lookup; language select, held/failed Korean asset, cold/reload startup; visible locale/composer label, no stale overwrite, retry and asset reuse. Startup loops en/ko × three repetitions × cold/warm; other language packs are not covered by this matrix.                                                                                                                                                                                                                                                                                                                                                                  |
+| Cache population (S51)           | Small and generated large corpus; cold cache then warm reload; cache/protocol/request timing, payload differences and early mutation/generation counts. Four scenarios, no device/network diversity claim.                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| Direct links (S52–S55)           | Small imported fixture, observer shell disabled, cleared browser/resource caches; direct URLs for 44 manifest routes; current-route/resource-ready state and required/non-eager requests. No route-specific DOM oracle: classify as hydration routing, with visible route proof in lazy first-open companions.                                                                                                                                                                                                                                                                                                                                                               |
+| Recovery integration (S56–S62)   | Small/large fixtures; startup flag matrix, sparse legacy SQLite setup, offline/drop-response durable commands, event-row deletion and SSE hold, two-context takeover, slow/failed background/inlay requests; readiness/telemetry, outbox identity/receipt/revision, refresh order, writer denial and localized Retry. Browser faults preserve real command/storage processing; direct SQLite corruption is controlled setup, not a production incident.                                                                                                                                                                                                                      |
+| Residency (S63–S74)              | Transcript fixture and gated provider; initial/page/jump/stream/reload, screenshots, edits/selection/copy, failed/cancelled screenshots, editor limit/page reset, hidden-route jump cancellation, legacy paging and compact viewport. Uses real DOM/content with some direct scroll-position controls; those cases retain algorithm/interaction value and do not replace P0-T's continuous-input contract. Detailed scenario dispositions remain pending.                                                                                                                                                                                                                    |
+| Visible recovery (S75–S77)       | Imported two-chat/preset/toggle fixture; real chat rows, toggle and character sidebar clicks; visible selection/settings through accepted resource refresh, then held durable settings request and imported lineage/reload; request lineage/revision, new document identity and retained DOM/sidebar. S77 is P0-R; settings hook is the durable action, not settings-UI evidence.                                                                                                                                                                                                                                                                                            |
+
+## Phase 0 Calibration and Remaining Slices
+
+P0-C (Realm queue), P0-T (transcript), and P0-R (old-lineage recovery) are recorded
+in [findings](findings.md#phase-0-calibration). The selected recovery case is the
+plan's explicit `visibleStateRecovery.spec.ts` alternative: its delayed real
+command response proves lineage handling and same-entry recovery, not generation
+acceptance. The independent worker's accepted-send suggestion remains a Phase 2
+candidate; it is not substituted for executed evidence.
+
+The three pilots required separate build/fault/restoration runs; a history
+reversal takes about 37s and its isolated two-repeat check about 80s. Shared
+artifact integrity is one bounded Phase 1 repair; hook/fixture classifications
+need consumer cross-checks, not wholesale fixture rewrites. Phase 2 proceeds as
+four independent contract slices, starting with send/completed reload and stale
+recovery. Confirmation requires a new real-operation browser journey. Phase 3
+can group remaining work by locale/lazy startup, memory/settings/navigation, and
+residency interactions. The initial 4–8 engineer-day estimate remains a sizing
+range, with full-suite execution at every phase adding explicit fixed cost;
+no estimate waives evidence or allows acceptance from discovery alone.

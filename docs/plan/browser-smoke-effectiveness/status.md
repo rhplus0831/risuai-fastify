@@ -4,28 +4,27 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Planning prepared; audit and remediation not started.
-- Planning source: `ac5a1cec1dc2e74354001fe7f86b372048e691fd`.
-- Current scope: plan documents only. No production or test implementation is
-  included in this planning task.
-- Next implementation slice: [Phase 0](phases/phase-0-inventory-and-pilot.md),
-  confirm current source/discovery and begin the three-scenario pilot.
-- Confirmed new findings: none. Opening review leads are not demonstrated bugs.
-- Blockers: none known for planning. Implementation prerequisites must be
-  established during Phase 0.
+- State: Phase 0 accepted; Phase 1 is the next implementation slice.
+- Execution source: `711b1d583`; initial worktree clean, now inventory/evidence edits.
+- Current scope: complete discovery/control map and three calibration pilots.
+- Next action: repair BSE-001 artifact completeness/provenance, finish the shared
+  control dispositions, and validate every affected artifact consumer in Phase 1.
+- Confirmed gaps: BSE-001 (artifact completeness, Phase 1), BSE-002 (browser
+  operation confirmation, Phase 2a), BSE-003 (completed normal-send reload, Phase 2c).
+- Blockers: none. Reader implementation and smoke Phases 1–4 remain pending.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State   | Next evidence required                                              |
-| --------------------------------------------------------------------------- | ------- | ------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Pending | Current discovery, scenario/control map, pilot fault demonstrations |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Pending | Per-caller control classification and focused consumer proof        |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Pending | Four critical contracts with relevant fault detection               |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending | Complete review dispositions and repaired confirmed gaps            |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending | Final discovery, focused/aggregate/full-browser evidence, residuals |
+| Phase                                                                       | State    | Next evidence required                                              |
+| --------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------- |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                  |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Pending  | Per-caller control classification and focused consumer proof        |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Pending  | Four critical contracts with relevant fault detection               |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending  | Complete review dispositions and repaired confirmed gaps            |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending  | Final discovery, focused/aggregate/full-browser evidence, residuals |
 
 ## Verification Ledger
 
@@ -73,3 +72,49 @@ available.
 
 Record future changes here with the affected contract, evidence, owner,
 dependency, and revisit condition. Update stable scope in the plan when needed.
+
+## Phase 0 Execution — 2026-09-07
+
+Source `711b1d583` with documentation-only audit records. Node v24.19.0, pnpm
+11.23.0, Playwright 1.62.1 and installed Chromium 151.0.7922.34. Disposable
+loopback Fastify/SQLite harnesses and emitted smoke assets are available; no
+application development server was needed. All pilot harnesses close themselves.
+
+- Discovery command: `pnpm exec playwright test --config
+playwright.fastify-smoke.config.ts --list` found **77 cases in 17 specs**,
+  including eight new chat-entry cases. The inventory records full titles,
+  meaningful matrices, ten local support owners, production hooks and per-caller
+  roles. No runtime skip or test success is inferred from list mode.
+- Independent parallel Luna reviews of scenario ownership, controls and pilot
+  faults were reconciled against source. Worker proposals are source evidence;
+  only the separately executed results below count as fault proof.
+- [P0-C](findings.md#p0-c-realm-progress-to-confirmation-queue): real alert queue
+  baseline/restoration **20/20 pass**; deleting the historical overlay-clear
+  transition makes all four selected confirmation cases fail at the intended
+  ask-presentation assertion.
+- [P0-T](findings.md#p0-t-returning-transcript-rows-during-continuous-input):
+  continuous/reversal baselines pass; cached-height fault fails readable/anchor
+  assertions in both isolated repetitions; both clean-build restored repetitions
+  pass (36.6s/30.6s, 1.2m overall).
+- [P0-R](findings.md#p0-r-delayed-old-lineage-command-and-recovery-reload): all
+  three visible-recovery baselines/restorations pass; omitting sidebar restore
+  fails the final visible-state assertion after conflict/new-document/revision
+  proof. Restored spec: **3/3 pass** in 6.6s.
+- Documentation: `pnpm check:docs` **49 pass**; explicit
+  `validateCurrentDocumentation` over coordination, active index and both bundles
+  **22 pass**, with empty index specs/path exemptions; explicit Prettier ignore
+  override and `git diff --check` pass. Recheck after final status edits.
+
+The [inventory calibration](inventory.md#phase-0-calibration-and-remaining-slices)
+sets bounded remaining slices and cost limits. No high-risk critical gap has
+been waived; BSE-002/003 remain required Phase 2 work. Required phase-ending
+`pnpm test:all` **passed all 13 lanes in 5m 59.3s**, including **77/77 browser
+cases** (2.9m browser execution), current compatibility (18 checks), frontend
+(8,113 plus 235 UI-coverage tests), server (4,100 tests), Realm scale, and
+performance gates. Five existing ordinary-suite skips remain; the isolated
+scale selector excludes its 29 unrelated cases by design. Opt-in transcript
+cost/profile expansions and the separate pinned baseline differential were not
+run. This verifies the final implementation source `711b1d583`; accompanying
+audit documentation was revalidated after recording results. **Phase 0 accepted.** This phase contains no production/test implementation
+change; the plan's implementation-batch `pnpm test:agent` applies when Phase 1
+repairs land, while Phase 0 still requires the explicitly authorized full suite.
