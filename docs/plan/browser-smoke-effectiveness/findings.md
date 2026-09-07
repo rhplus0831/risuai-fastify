@@ -1751,9 +1751,7 @@ proof is complete; the repeated Phase 3 full gate still owns phase acceptance.
 
 Phase 4's first full gate adds **BSE-008** (S51 warm-cache setup) and **BSE-009**
 (S81 changed writer-startup target). Their [failure and repair record](status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
-retains the failed source and current verification work. These follow-ups remain
-pending qualified browser/restored controls and repeated final gates; the earlier
-dispositions below do not accept those new boundaries or combined closeout.
+retains the failed source and current verification work. BSE-008 now has its qualified cache-write fault, finite-delay comparison and restored controls below. BSE-009 still needs qualified browser/restored proof; repeated final gates and combined closeout remain pending.
 
 | Finding / scope                                                  | Final disposition and evidence                                                                                                                                                                                                                                                                                                                                                             | Remaining limit or revisit condition                                                                                                                                                                                                                                                                |
 | ---------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1764,6 +1762,8 @@ dispositions below do not accept those new boundaries or combined closeout.
 | BSE-005 — readable-pause coverage                                | Repaired after the recurring full-suite failure. Both fixed reversal passes remain; a bounded first-geometric readable preparation at the real remount return supplies sample zero for all 30 exact measurements. Final baseline/restored repetitions and full gates pass. The retained parser-owner fault fails the direct ordinary-row remount twice.                                    | The remount negative fails before the new prepared pause and proves readability, not a new geometry fault. Earlier unmanifested height/anchor candidates remain unqualified. Immediate post-gesture bodies can still be transiently unreadable; no new production delay regression was established. |
 | BSE-006 — initial route versus newer writer URL                  | Production repair. New semantic writer navigation supersedes stale retained Reader intent; effect lifetime fences old completions. Mounted red/green tests and S92's actual held handler, qualifying priority fault and restored visible Settings control pass.                                                                                                                            | The browser's two post-delivery paint frames do not prove exact callback settlement; the mounted held-promise case owns that assertion. Settings retains mutation access while correctly clearing chat-generation readiness.                                                                        |
 | BSE-007 — native selection versus fixture configuration          | Repaired. The shared lifecycle setup requires ready route, local and persisted selected identity, and completed selection intent before its direct configuration write. All eleven original journeys pass before/after the qualified server persistence omission; that fault yields a successful selection response and local target while SQL remains old, and the new guard stops setup. | This proves the selected-owner prerequisite. The original failure happened before restart, with no generation POST; it is not classified as a production wrong-target send or restart defect.                                                                                                       |
+| BSE-008 — warm cache prerequisite                                | Repaired and verified. Passive zero-pending-write setup preserves cold measurement and all warm assertions. Two stalled native-write negatives, two fixed finite-delay positives, two old-test delayed failures and exact restored positives are recorded below.                                                                                                                           | Warm-cache setup waits for admitted optional writes; application readiness and immediate reload remain independent. Cache counters do not certify arbitrary payload content.                                                                                                                        |
+| BSE-009 — changed writer startup target                          | Production repair with four deterministic focused regressions and 217 passing bootstrap tests. The retained target is reevaluated across hydration without hiding unchanged failures or crossing session ownership.                                                                                                                                                                        | Qualified browser scheduling/fault controls, affected Reader revalidation and final-source gates are pending.                                                                                                                                                                                       |
 | S38/S57 evidence labels                                          | Reclassified. Titles now describe 60 registered lazy entries and read normalization during startup. Assertions are unchanged and their focused/final runs pass.                                                                                                                                                                                                                            | No universal lazy-boundary completeness or persisted SQL repair is inferred. No production fault experiment is claimed for a title-only correction.                                                                                                                                                 |
 | Final aggregate — memory-worker fixture                          | Repaired a deterministic timestamp-tie reproduction: SQLite creation timestamps bypass JS fake timers and ties sort by ID, so the old unpadded fixture could put job-9 last. Explicit equal timestamps and padded IDs preserve all original productive-batch/timer/drain assertions; all 24 worker tests pass.                                                                             | Unit-fixture correction only, with red/green proof in status. No queue behavior or browser contract changes, and no browser mutation campaign is claimed.                                                                                                                                           |
 | Remaining unchanged scenarios/support                            | Retained or strengthened with the complete Phase 3 action/oracle/control map and final discovery; no pending or partial owner remains. All new Reader journeys have their separate accepted phase evidence.                                                                                                                                                                                | Direct-link requirements share the production manifest; cache totals are metrics; simulated clipboard/viewport/legacy geometry retain their explicit limits. These narrower contracts are accepted scope, not deferred required repairs.                                                            |
@@ -1798,3 +1798,107 @@ The first Phase 4 agent aggregate's memory-worker fixture failure and its
 [deterministic repair](status.md#phase-4-agent-gate-fixture-repair) remain part of
 closeout evidence. Required final aggregates are repeated after that test-only
 change; the earlier agent failure is not accepted as a passing gate.
+
+## BSE-008: Warm Cache Requires Completed Optional Writes
+
+**Disposition:** verified test-prerequisite repair. S51 remains a cache/telemetry
+measurement; it does not certify arbitrary cached content or immediate-reload
+completeness. The original Phase 4 failure at `6ee9bf1b7` reports six large-warm
+personas misses. Native cold and warm POST bodies both advertise an empty
+personas hash list; the cold response actually contains all six values. The
+reload begins immediately after the recorded background-ready sample. The
+resource owner intentionally delivers validated data before optional persistence
+finishes (`resourceReads.ts` → `persistResourceCache`), so readiness alone is an
+insufficient warm-cache precondition.
+
+`955eff041` exposes the real pending-write count through a read-only smoke hook;
+`bb61dc8b3` polls it to zero between cold measurement and warm reload. No cache
+flush, fixed sleep, forced resource fetch or fabricated cache value is added.
+All original four-population, hit/miss, payload-order, readiness and early-request
+assertions are unchanged. The existing 23-case cache-delivery suite passes with
+added observation of positive pending work while native pruning is held and zero
+pending work after completion. This keeps application readiness independent of
+the optional cache lane.
+
+### Frozen Reproduction and Independent Controls
+
+Use a disposable checkout at `bb61dc8b368f1b2970dd8752d0e2c551ddec5332` with the
+same installed dependencies. Every stage builds from its own source and uses
+Node 24.19.0, pnpm 11.23.0, one Chromium worker, trace on and two declared
+repetitions of the same existing test. Do not set observer/fallback/artifact
+requirement overrides. The normal connected-reader default remains active.
+The dependency-verification override below prevents pnpm from trying to replace
+a shared dependency symlink; it changes no build/test configuration. A first
+lab preflight without it was rejected before compilation, and is not browser
+or fault evidence.
+
+```sh
+VITE_FASTIFY_BROWSER_SMOKE=TRUE pnpm --config.verify-deps-before-run=false build:smoke
+VITE_FASTIFY_BROWSER_SMOKE=TRUE pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts \
+  --repeat-each=2 --workers=1 --trace=on --output=/tmp/cache-stage-results
+```
+
+For the qualified fault, insert the following inside
+`src/ts/server/resourceCache.ts`'s `persistResourceCacheInternal`, immediately
+before its native entries/manifests read-write transaction. The actual response
+has already been validated and the real cache job admitted. Keep the pending-job
+counter, read-only getter, test, fixture, network and startup code unchanged.
+
+```ts
+if (preparedUpdates.some((update) => update.key === 'collection:personas')) await new Promise<void>(() => {})
+```
+
+For a separate finite scheduling control, replace only that inserted await with
+`await new Promise<void>((resolve) => setTimeout(resolve, 250))`. This delays
+optional work without preventing it. Run the fixed test, then compare the exact
+same delayed application with only S51's new comment/poll block removed. Restore
+both files to `bb61dc8b3`, rebuild and repeat the fixed test. Each stage uses the
+same command above with a distinct output directory. The old-test comparison
+is evidence of a false warm precondition under permissible delayed persistence;
+it is separate from the qualified permanently stalled production-write fault.
+
+| Stage                                    | Actual result and independent path                                                                                                                                                                                                                                       |
+| ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Fixed normal baseline                    | 2/2 pass, 14.99s process wall time. Small/large cold misses 15/42; warm hits 15/42 and zero misses.                                                                                                                                                                      |
+| Actual admitted write never completes    | 2/2 fail, 15.18s. Both native cold startup samples are background-ready, the actual personas POST returns 200 with a full value, every pending-write observation is one, and the new 5s prerequisite fails before either warm reload. There is no generic suite timeout. |
+| Fixed test, 250ms write delay            | 2/2 pass, 10.19s. Each cold readiness sample precedes observations of pending count one, then zero; all four measured populations retain their original assertions.                                                                                                      |
+| Old test, same 250ms delayed application | 2/2 fail, 8.84s, at the original `warm.server.cacheMisses === 0` assertion. Both artifacts contain small warm hits 14/misses one and large warm hits 36/misses six; every readiness and early-request sample still passes.                                               |
+| Exact restored normal application/test   | 2/2 pass, 8.47s, with small/large warm hits 15/42 and zero misses in both repetitions.                                                                                                                                                                                   |
+
+No early mutation/generation is observed in any completed matrix. The stalled
+runs have one actual cold navigation each and zero reloads; every complete run
+has both fixtures and both reloads. All five stages retain 3,910 successful
+script URL receipts and zero page errors. Receipts attribute successful paths
+to emitted assets; this is not a downloaded-response byte-hash claim.
+
+The frozen spec SHA-256 is
+`39eb82806f445472a531397835e01e57aa340821b9530e45fd89fcec9bdd1e6c`;
+only the explicit old-test comparison uses
+`74114120fb1002c93ada1924c40d1c82e6fa2f9f0708ee88d609245e67207a16`.
+The cache owner hashes are normal
+`49fa3c7eddf61ccda32d1b37cf1ddf085f4d9c815e8d73d95457fb34a5255cc4`,
+stalled
+`8444b401a1580deb88d05e19898b3387132f39ce974a86f9dcc08669c15d1156`,
+and delayed
+`aefcb11c4d7e4d289d7af5d74991ad4b965ad6dec29a81f27efecaae87dbad8f`.
+All 3,621 tracked files restore exactly. All 503 restored emitted files match
+baseline byte-for-byte; the fixed/old delayed applications likewise match all
+503 files. The canonical sorted path/hash catalog digests are normal/restored
+`8448145b3c562863a95636e2f87fe1199d81ab4e49a3d1f6cbdfac377353a3a2`,
+stalled
+`9ce2f4cd0bb311bb885a05c04dbfc87d2339e55fb9cfed83c62f6e1928c78eda`,
+and both delayed applications
+`0460bc3586dfeffbc8d4789c90234ffefc8f81c824f41bd6423bc8caad7c389d`.
+The complete local record is
+`/tmp/smoke-phase4-cache-precondition-64b3jseq/campaign-summary.json`; the source,
+literal control hunks and commands above retain reproducibility independently
+of that temporary directory.
+
+Later writer-startup work does not change this cache owner, hook count or S51
+assertions. Its affected final-source browser/full gates remain separate in
+[status](status.md). The passive wait certifies completion of admitted cache
+jobs before the warm fixture; the unchanged warm-hit oracle still detects
+missing/dropped/corrupt reusable cache state. It does not convert best-effort
+cache persistence into an application startup barrier.

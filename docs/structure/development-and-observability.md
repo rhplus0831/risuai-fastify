@@ -265,6 +265,11 @@ diagnostics and remove previous final outputs; focused partial execution cannot
 certify a complete matrix. Independent startup-matrix and locale artifacts keep
 their own producer-invocation ownership.
 
+The cache-population matrix records cold startup metrics before waiting for the
+optional cache write lane to become idle. Only then does it measure the warm
+reload. This passive fixture prerequisite does not make IndexedDB persistence
+part of startup readiness or prove immediate-reload cache completeness.
+
 Generated files are local evidence and are ignored by Git:
 
 | Files under `fast-bootstrap-results/`      | Contents                                                                                                                            |

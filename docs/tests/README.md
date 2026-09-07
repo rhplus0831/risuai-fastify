@@ -156,6 +156,9 @@ Vitest configuration.
 
 `startupCachePopulationMatrix.spec.ts` keeps small/large and cold/warm startup populations
 separate and writes `fast-bootstrap-results/startup-matrix.{json,txt}`.
+It captures cold readiness metrics, then observes zero pending optional cache
+writes before the warm reload. Startup readiness itself does not wait for those
+writes; the test does not flush them or change the measured readiness boundary.
 `startupDirectLinks.spec.ts` runs every production route-manifest direct-link
 family in four independently isolated batches. `startupRecoveryIntegrationMatrix.spec.ts`
 runs flag-off/on startup, offline and response-loss replay, a real

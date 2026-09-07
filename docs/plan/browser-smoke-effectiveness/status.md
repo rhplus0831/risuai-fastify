@@ -658,3 +658,22 @@ run. There is no supplemental CI URL; required execution stays with the agent.
 The final-source/finding reconciliation above is superseded only for these new
 follow-ups. Both controls, final discovery, repeated required gates and archival
 actions remain pending.
+
+### BSE-008 Warm-Cache Prerequisite Verified
+
+The [frozen cache campaign](findings.md#bse-008-warm-cache-requires-completed-optional-writes)
+at `bb61dc8b3` passes both declared baseline repetitions and both exact restored
+repetitions. Holding the actual admitted personas cache write indefinitely makes
+both unchanged tests fail at the new bounded prerequisite: native background
+readiness has completed, one real write remains pending, and no warm reload
+occurs. With a finite 250ms delay, both fixed runs pass; removing only the wait
+under the byte-identical delayed application makes both old tests fail their
+original zero-warm-miss assertion. Small/large warm misses are one/six in both
+old-test comparisons and zero in every fixed complete run.
+
+All 3,621 tracked inputs restore exactly; all 503 restored assets match baseline,
+and the two delayed applications match each other exactly. Across all five
+stages, 3,910 successful script URL receipts and zero page errors are recorded.
+This closes the cache prerequisite repair and retains the matrix's original
+measurement limits. The writer-startup control, affected Reader verification
+and repeated final gates remain pending; no full phase acceptance is inferred.
