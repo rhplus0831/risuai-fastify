@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beginClientSession, settleClientReader, resetClientSessionForTests } from '../clientSession'
+import { hydrateActiveChat, hydrateActiveCharacterLorebook } from './chatMessageHydration.svelte'
 import { testDatabaseState } from '../__tests__/resourceDatabaseState'
+import { charactersResourceState } from './resourceState.svelte'
 
 const projectionState = vi.hoisted(() => ({
   fetchResource: vi.fn(),
@@ -73,6 +76,9 @@ function hydratedCharacter(name = 'Hydrated') {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
+  vi.mocked(hydrateActiveChat).mockClear()
+  vi.mocked(hydrateActiveCharacterLorebook).mockClear()
   clearCachedServerCommandRevision()
   resetCharacterShellHydrationStateForTests()
   selectedCharID.set(0)
@@ -87,6 +93,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetCharacterShellHydrationStateForTests()
+  resetClientSessionForTests()
   const database = JSON.parse(JSON.stringify(testDatabaseState.db))
   testDatabaseState.db = database
 })
@@ -108,6 +115,24 @@ describe('character shell hydration', () => {
     expect(isServerCharacterShell(testDatabaseState.db.characters[0])).toBe(false)
     expect(testDatabaseState.db.characters[0].name).toBe('Hydrated')
     expect(peekCachedServerCommandRevision()).toBe(5)
+  })
+
+  it('hydrates an explicit reader character without starting canonical chat or lorebook reads', async () => {
+    const session = beginClientSession('reader')
+    settleClientReader(session, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 1 } })
+    projectionState.fetchResource.mockResolvedValue({
+      status: 'ok',
+      revision: 5,
+      mode: 'character-row',
+      characterId: 'char-1',
+      character: hydratedCharacter(),
+    })
+    await expect(hydrateCharacterShell('char-1')).resolves.toBe(true)
+    expect(testDatabaseState.db.characters[0].name).toBe('Hydrated')
+    expect(charactersResourceState.currentChar).toBe(0)
+    expect(testDatabaseState.db.characters[0].chatPage).toBe(0)
+    expect(hydrateActiveChat).not.toHaveBeenCalled()
+    expect(hydrateActiveCharacterLorebook).not.toHaveBeenCalled()
   })
 
   it('accepts a character row response after an unrelated projection advances the known revision', async () => {

@@ -1,4 +1,6 @@
 import { get } from 'svelte/store'
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { selectedCharID } from '../stores.svelte'
 import { isServerCharacterShell } from '../storage/database.svelte'
 import { hydrateActiveCharacterLorebook, hydrateActiveChat } from './chatMessageHydration.svelte'
@@ -106,6 +108,7 @@ export async function hydrateCharacterShell(
   }
 
   const generation = shellHydrationGeneration
+  const writerGeneration = canUseClientWriteAccess() ? captureClientSessionGeneration() : null
   const targetShell = existing
   const controller = new AbortController()
   const shared: InFlightCharacterHydration = {
@@ -173,8 +176,10 @@ export async function hydrateCharacterShell(
       return false
     }
     setCharacterShellHydrationState(characterId, 'ready', null)
-    void hydrateActiveChat()
-    void hydrateActiveCharacterLorebook()
+    if (writerGeneration !== null && isClientWriteOperationCurrent(writerGeneration)) {
+      void hydrateActiveChat()
+      void hydrateActiveCharacterLorebook()
+    }
     return true
   })().finally(() => {
     shared.settled = true

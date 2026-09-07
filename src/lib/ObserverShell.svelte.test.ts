@@ -23,7 +23,7 @@ const observerShellMocks = vi.hoisted(() => ({
     | {
         characterRoutePath: (characterId: string, chatId?: string) => string
         currentRoute: import('svelte/store').Writable<AppRoute>
-        navigate: (path: string) => void
+        navigate: (path: string, options?: { replace?: boolean }) => void
       }
     | undefined,
 }))
@@ -38,8 +38,11 @@ async function createRouterMock() {
     observerShellMocks.routerExports = {
       characterRoutePath,
       currentRoute,
-      navigate: (path: string) => {
-        observerShellMocks.navigate(path)
+      navigate: (path: string, options?: { replace?: boolean }) => {
+        if (options) observerShellMocks.navigate(path, options)
+        else observerShellMocks.navigate(path)
+        if (options?.replace) window.history.replaceState(null, '', path)
+        else window.history.pushState(null, '', path)
         currentRoute.set(parseRoute(path))
       },
     }
@@ -48,6 +51,9 @@ async function createRouterMock() {
 }
 
 vi.mock('../ts/router', createRouterMock)
+vi.mock('./ReaderTranscript.svelte', async () => ({
+  default: (await import('./ReaderTranscript.testStub.svelte')).default,
+}))
 vi.mock('../ts/server/characterShellHydration.svelte', () => ({
   characterShellHydrationState: observerShellMocks.hydrationState,
   hydrateCharacterShell: observerShellMocks.hydrateCharacterShell,
@@ -62,7 +68,8 @@ import {
   preparePendingMutationOutbox,
   resetPendingMutationOutboxForTests,
 } from '../ts/server/pendingMutationOutbox'
-import { replaceResourceDatabase } from '../ts/server/resourceState.svelte'
+import { charactersResourceState, replaceResourceDatabase } from '../ts/server/resourceState.svelte'
+import { withTestDatabaseWrite } from '../ts/__tests__/resourceDatabaseState'
 import { peekObserverRouteIntent, resetObserverRouteIntentForTests } from '../ts/observerRouteIntent'
 import { resetObserverShellLifecycleForTests, setObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
 import { selectedCharID } from '../ts/stores.svelte'
@@ -134,6 +141,7 @@ function seedShellDatabase(): void {
 }
 
 async function mountObserverShell(): Promise<void> {
+  if (component) await unmount(component)
   component = mount(ObserverShell, { target })
   await tick()
 }
@@ -281,5 +289,109 @@ describe('pre-writer ObserverShell', () => {
 
     expect(document.activeElement).toBe(retry)
     expect(target.querySelector('[data-observer-shell]')).not.toBeNull()
+  })
+  it('browses a reader chat independently of canonical selection and follows local history routes', async () => {
+    const writer = makeDetailedCharacter()
+    writer.chaId = 'writer-character'
+    writer.name = 'Writer character'
+    writer.displayName = 'Writer character'
+    writer.chats[0].id = 'writer-chat'
+    const reader = makeDetailedCharacter()
+    reader.chats.push({ ...reader.chats[0], id: 'chat-b', name: 'Second reader chat', message: [] })
+    replaceResourceDatabase({ characters: [writer, reader], currentChar: 0 } as unknown as Database)
+    selectedCharID.set(0)
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    await tick()
+    const router = await createRouterMock()
+    target.querySelector<HTMLButtonElement>('button[aria-label="Open Character A"]')!.click()
+    await tick()
+    target.querySelector<HTMLButtonElement>('button[aria-label="Open chat Second reader chat"]')!.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-b'),
+    )
+    expect(get(selectedCharID)).toBe(0)
+    expect(charactersResourceState.currentChar).toBe(0)
+    expect(charactersResourceState.characters[1].chatPage).toBe(0)
+    // Browser/notification navigation delivers a route, never writer selection.
+    router.currentRoute.set({ kind: 'character', path: '/character/char-a/chat-a', chaId: 'char-a', chatId: 'chat-a' })
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-a'),
+    )
+    router.currentRoute.set({ kind: 'character', path: '/character/char-a/chat-b', chaId: 'char-a', chatId: 'chat-b' })
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-b'),
+    )
+    expect(get(selectedCharID)).toBe(0)
+    expect(await countPendingMutationRecords()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('replaces only the local URL when the selected chat or character is authoritatively deleted', async () => {
+    const reader = makeDetailedCharacter()
+    reader.chats.push({ ...reader.chats[0], id: 'chat-b', name: 'Surviving chat', message: [] })
+    replaceResourceDatabase({ characters: [reader], currentChar: -1 } as unknown as Database)
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    const router = await createRouterMock()
+    router.navigate('/character/char-a/chat-a')
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-test-transcript]'), target.innerHTML).not.toBeNull(),
+    )
+    withTestDatabaseWrite(() => {
+      charactersResourceState.characters[0].chats.splice(0, 1)
+    })
+    await vi.waitFor(() => expect(get(router.currentRoute).path).toBe('/character/char-a/chat-b'))
+    await tick()
+    expect(observerShellMocks.navigate).toHaveBeenLastCalledWith('/character/char-a/chat-b', { replace: true })
+    expect(target.querySelector('[data-reader-route-notice]')?.textContent).toBe(
+      language.connectedReaders.chatUnavailable,
+    )
+    withTestDatabaseWrite(() => {
+      charactersResourceState.characters = []
+    })
+    await vi.waitFor(() => expect(get(router.currentRoute).path).toBe('/'))
+    await tick()
+    expect(observerShellMocks.navigate).toHaveBeenLastCalledWith('/', { replace: true })
+    expect(target.querySelector('[data-reader-route-notice]')?.textContent).toBe(
+      language.connectedReaders.characterUnavailable,
+    )
+    expect(get(selectedCharID)).toBe(-1)
+    expect(await countPendingMutationRecords()).toBe(0)
+  })
+
+  it('does not replace the route for failed reads and rejects duplicate IDs without mounting a transcript', async () => {
+    const reader = makeDetailedCharacter()
+    replaceResourceDatabase({ characters: [reader], currentChar: -1 } as unknown as Database)
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    const router = await createRouterMock()
+    router.navigate('/character/char-a/chat-a')
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-test-transcript]'), target.innerHTML).not.toBeNull(),
+    )
+    withTestDatabaseWrite(() => {
+      charactersResourceState.status = 'error'
+    })
+    await tick()
+    expect(get(router.currentRoute).path).toBe('/character/char-a/chat-a')
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-resource-read-failed]')?.textContent).toBe(
+      language.connectedReaders.readFailed,
+    )
+    withTestDatabaseWrite(() => {
+      charactersResourceState.status = 'ready'
+      charactersResourceState.characters.push({ ...reader, chaId: 'duplicate-chat-owner' })
+    })
+    await tick()
+    expect(target.querySelector('[data-reader-ambiguous-target]')?.textContent).toBe(
+      language.connectedReaders.ambiguousConversation,
+    )
+    expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
+    expect(get(router.currentRoute).path).toBe('/character/char-a/chat-a')
   })
 })
