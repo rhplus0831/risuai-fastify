@@ -101,6 +101,9 @@
     regexDisplayReloadTokenForContext,
   } from '../../ts/process/regexDisplayReload'
   import { onDestroy, tick, untrack } from 'svelte'
+  import { canUseClientWriteAccess, captureClientSessionGeneration } from 'src/ts/clientSession'
+  import { isClientWriteOperationCurrent } from 'src/ts/clientWriteOperation'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
   import Chat from './Chat.svelte'
   import {
     getCharacterByIndex,
@@ -300,6 +303,7 @@
 
   type PostChatFileResults = NonNullable<Awaited<ReturnType<typeof postChatFile>>>
   type ComposerFileOperation = {
+    clientGeneration: number
     token: ReturnType<typeof composerFileOperationGuard.issue>
     targetIdentity: string
     invalidationVersion: number
@@ -308,6 +312,7 @@
   type ComposerDraftField = 'message' | 'translation' | 'files' | 'draft' | 'btw'
   type ComposerTextField = 'message' | 'translation'
   type ComposerOperation = {
+    clientGeneration: number
     token: ReturnType<typeof composerOperationGuard.issue>
     kind: ComposerOperationKind
     targetIdentity: string
@@ -320,6 +325,7 @@
     draftGeneration: DefaultChatComposerDraftGeneration | null
   }
   type AutoTranslateOperation = {
+    clientGeneration: number
     sourceField: ComposerTextField
     targetField: ComposerTextField
     sourceText: string
@@ -430,6 +436,7 @@
       acceptedComposerClear?: 'message' | 'all'
     }
     if (
+      !canUseClientWriteAccess() ||
       composerComponentDestroyed ||
       getActiveTranscriptWindowIdentity() !== generation.transcriptIdentity ||
       !isDefaultChatComposerDraftGenerationCurrent(generation)
@@ -447,6 +454,29 @@
     composerMutationVersion += 1
     updateInputSizeAll()
   })
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const identity = activeTranscriptWindowIdentity
+      if (!identity || (!messageInput && !messageInputTranslate && !draftText && !btwText && fileInput.length === 0))
+        return null
+      storeComposerDraft(identity)
+      const fields = [
+        { label: language.connectedReaders.messageDraft, value: messageInput },
+        { label: language.editTranslation, value: messageInputTranslate },
+        { label: language.connectedReaders.draftInput, value: draftText },
+        { label: language.connectedReaders.btwInput, value: btwText },
+        { label: language.connectedReaders.attachments, value: fileInput.join('\n') },
+      ].filter((field) => field.value.length > 0)
+      return {
+        key: `composer:${identity}`,
+        label: language.connectedReaders.composerDraft,
+        route: globalThis.location?.pathname,
+        fields,
+        data: { messageInput, messageInputTranslate, draftText, btwText, fileInput: [...fileInput] },
+      }
+    }),
+  )
 
   onDestroy(() => {
     scrollToMessageRunId += 1
@@ -803,6 +833,7 @@
   }
 
   async function runReattachRecoveryAction(jobId: string, action: 'retry' | 'refresh' | 'stop'): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (reattachRecoveryAction) return
     reattachRecoveryAction = { jobId, action }
     try {
@@ -1159,10 +1190,12 @@
   }
 
   function beginComposerFileOperation(): ComposerFileOperation | null {
+    if (!canUseClientWriteAccess()) return null
     const targetIdentity = getActiveTranscriptWindowIdentity()
     if (!targetIdentity) return null
 
     return {
+      clientGeneration: captureClientSessionGeneration(),
       token: composerFileOperationGuard.issue(targetIdentity),
       targetIdentity,
       invalidationVersion: composerFileInvalidationVersion,
@@ -1171,6 +1204,7 @@
 
   function isCurrentComposerFileOperation(operation: ComposerFileOperation): boolean {
     return (
+      isClientWriteOperationCurrent(operation.clientGeneration) &&
       composerFileOperationGuard.isLatest(operation.token) &&
       getActiveTranscriptWindowIdentity() === operation.targetIdentity &&
       composerFileInvalidationVersion === operation.invalidationVersion
@@ -1178,11 +1212,13 @@
   }
 
   function beginComposerOperation(kind: ComposerOperationKind): ComposerOperation | null {
+    if (!canUseClientWriteAccess()) return null
     const targetIdentity = getActiveTranscriptWindowIdentity()
     if (!targetIdentity) return null
 
     const draftGeneration = storeComposerDraft(targetIdentity)
     return {
+      clientGeneration: captureClientSessionGeneration(),
       token: composerOperationGuard.issue(targetIdentity),
       kind,
       targetIdentity,
@@ -1198,6 +1234,7 @@
 
   function isCurrentComposerOperation(operation: ComposerOperation): boolean {
     return (
+      isClientWriteOperationCurrent(operation.clientGeneration) &&
       !composerComponentDestroyed &&
       composerOperationGuard.isLatest(operation.token) &&
       getActiveTranscriptWindowIdentity() === operation.targetIdentity &&
@@ -1207,6 +1244,7 @@
 
   function isCapturedComposerSurfaceCurrent(operation: ComposerOperation): boolean {
     return (
+      isClientWriteOperationCurrent(operation.clientGeneration) &&
       !composerComponentDestroyed &&
       getActiveTranscriptWindowIdentity() === operation.targetIdentity &&
       composerMutationVersion === operation.composerVersion
@@ -1327,6 +1365,7 @@
         }
       },
       onAppendFailed: (failure) => {
+        if (!isClientWriteOperationCurrent(input.composerOperation.clientGeneration)) return
         const detail =
           failure.kind === 'known' ? language.composerDraftRecovery.sendFailureDetails[failure.reason] : failure.message
         reportComposerDraftPersistenceError(language.composerDraftRecovery.sendFailed(detail))
@@ -1334,7 +1373,8 @@
     })
 
     void generation.then((result) => {
-      if (result.status !== 'generated') return
+      if (result.status !== 'generated' || !isClientWriteOperationCurrent(input.composerOperation.clientGeneration))
+        return
       applySuccessfulSendChatEffects(
         { sendSucceeded: true, previousLength, confirmBoundary: input.confirmBoundary },
         {
@@ -1465,6 +1505,7 @@
   }
 
   async function toggleCurrentChatPin(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (pinMutationPending || !currentChatId) return
     pinMutationPending = true
     const outcomePromise = setCurrentChatPinnedWithOutcome(currentChatMetadata.pinned !== true)
@@ -1797,12 +1838,14 @@
     hook: InputHook,
     target: ActiveChatTarget,
   ): Promise<InputHookHistoryContext | undefined | null> {
+    if (!canUseClientWriteAccess()) return null
+    const clientGeneration = captureClientSessionGeneration()
     const requiredRows = maximumHistorySlotCount(hook.prompt)
     if (requiredRows === 0) return undefined
 
     let requestedTail = Math.max(loadPages, requiredRows)
     while (true) {
-      if (!isActiveChatTargetFresh(target)) return null
+      if (!isClientWriteOperationCurrent(clientGeneration) || !isActiveChatTargetFresh(target)) return null
       const chat = targetChatWithTranscript(target)?.chat
       if (!chat || chat.id !== target.chatId) return null
 
@@ -1812,7 +1855,7 @@
       }
 
       const hydrated = await hydrateActiveChatWindow(requestedTail)
-      if (!isActiveChatTargetFresh(target)) return null
+      if (!isClientWriteOperationCurrent(clientGeneration) || !isActiveChatTargetFresh(target)) return null
       if (!hydrated) throw new Error(language.chatDataLoadFailed)
 
       const hydratedChat = targetChatWithTranscript(target)?.chat
@@ -1832,6 +1875,7 @@
     composerOperation: ComposerOperation
     activeTarget: ActiveChatTarget
   }): Promise<void> {
+    if (!isClientWriteOperationCurrent(input.composerOperation.clientGeneration)) return
     const hookActivity = beginInputHookActivity({
       target: input.activeTarget,
       stage: CHAT_GENERATION_INPUT_HOOK_STAGE,
@@ -1844,7 +1888,7 @@
     if (!hookActivity) return
     try {
       const historyContext = await prepareInputHookHistoryContext(input.hook, input.activeTarget)
-      if (historyContext === null) return
+      if (historyContext === null || !isClientWriteOperationCurrent(input.composerOperation.clientGeneration)) return
       const result = await runInputHook(
         input.hook,
         { content: input.composerOperation.messageInput, draft: input.composerOperation.draftText },
@@ -1909,7 +1953,7 @@
     }
     try {
       const historyContext = await prepareInputHookHistoryContext(hook, activeTarget)
-      if (historyContext === null) return
+      if (historyContext === null || !isClientWriteOperationCurrent(composerOperation.clientGeneration)) return
       const result = await runInputHook(
         hook,
         { content: composerOperation.messageInput, draft: composerOperation.draftText },
@@ -1961,6 +2005,7 @@
       resetRerollOnCharChange(activeTarget)
       await hydrateActiveChatFully()
       if (
+        !isClientWriteOperationCurrent(composerOperation.clientGeneration) ||
         composerOperation.targetIdentity !== getActiveTranscriptWindowIdentity() ||
         !isActiveChatTargetFresh(activeTarget)
       ) {
@@ -1979,6 +2024,7 @@
 
       if (composerBeforeSend.startsWith('/')) {
         const commandProcessed = await processMultiCommand(composerBeforeSend)
+        if (!isClientWriteOperationCurrent(composerOperation.clientGeneration)) return
         if (commandProcessed !== false) {
           if (clearMessageInputForCurrentOperation(composerOperation)) {
             updateInputSizeAll()
@@ -2194,6 +2240,8 @@
   }
 
   async function runRerollPreflight(action: (target: ActiveChatTarget) => Promise<void>) {
+    if (!canUseClientWriteAccess()) return
+    const clientGeneration = captureClientSessionGeneration()
     if (currentChatOwnsGeneration || currentChatPreparingSend) return
     const targetIdentity = getActiveTranscriptWindowIdentity()
     const target = captureActiveChatTarget()
@@ -2204,6 +2252,7 @@
       await hydrateActiveChatFully()
       if (
         currentChatOwnsGeneration ||
+        !isClientWriteOperationCurrent(clientGeneration) ||
         !preparingSendTargetKeys.has(preparingTargetKey) ||
         getActiveTranscriptWindowIdentity() !== targetIdentity ||
         !isActiveChatTargetFresh(target)
@@ -2252,6 +2301,9 @@
     expectedTarget?: ActiveChatTarget | null,
     syntheticSayNothing: boolean = false,
   ): Promise<boolean> {
+    if (!canUseClientWriteAccess()) return false
+    const clientGeneration = composerOperation?.clientGeneration ?? captureClientSessionGeneration()
+    if (!isClientWriteOperationCurrent(clientGeneration)) return false
     const generationTarget = expectedTarget === undefined ? captureActiveChatTarget() : expectedTarget
     if (!generationTarget || !isActiveChatTargetFresh(generationTarget)) {
       return false
@@ -2273,7 +2325,7 @@
         expectedTarget: generationTarget,
         syntheticSayNothing,
       })
-      if (!ok) return false
+      if (!ok || !isClientWriteOperationCurrent(clientGeneration)) return false
       if (
         !applySuccessfulSendChatEffects(
           { sendSucceeded: true, previousLength, confirmBoundary },
@@ -2297,10 +2349,12 @@
   }
 
   function abortChat() {
+    if (!canUseClientWriteAccess()) return
     abortActiveGeneration()
   }
 
   function retryGenerationStop() {
+    if (!canUseClientWriteAccess()) return
     if (currentChatGenerationOperationId) void stopGenerationOperation(currentChatGenerationOperationId)
   }
 
@@ -2396,6 +2450,7 @@
 
   function isCurrentAutoTranslateOperation(operation: AutoTranslateOperation): boolean {
     return (
+      isClientWriteOperationCurrent(operation.clientGeneration) &&
       getActiveTranscriptWindowIdentity() === operation.targetIdentity &&
       getComposerTextFieldValue(operation.sourceField) === operation.sourceText &&
       getComposerTextFieldVersion(operation.targetField) === operation.targetVersion
@@ -2418,7 +2473,9 @@
   async function translateComposerInputForCurrentFields(reverse: boolean, delayMs = 0) {
     const sourceField: ComposerTextField = reverse ? 'translation' : 'message'
     const targetField: ComposerTextField = reverse ? 'message' : 'translation'
+    if (!canUseClientWriteAccess()) return
     const operation: AutoTranslateOperation = {
+      clientGeneration: captureClientSessionGeneration(),
       sourceField,
       targetField,
       sourceText: getComposerTextFieldValue(sourceField),

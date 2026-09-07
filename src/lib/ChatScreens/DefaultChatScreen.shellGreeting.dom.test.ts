@@ -14,6 +14,9 @@ interface TestStore<T> {
 
 const shellMocks = vi.hoisted(() => ({
   abortActiveGeneration: vi.fn(),
+  captureActiveChatTarget: vi.fn(
+    () => null as { selectedCharID: number; chatPage: number; characterId: string; chatId: string } | null,
+  ),
   activeChatGenerations: undefined as TestStore<Array<Record<string, unknown>>> | undefined,
   activeGenerationJobs: undefined as TestStore<Array<Record<string, unknown>>> | undefined,
   activeGenerationTarget: undefined as TestStore<Record<string, unknown> | null> | undefined,
@@ -70,7 +73,21 @@ vi.mock('./Suggestion.svelte', async () => {
 })
 
 vi.mock('../../lang', () => ({
-  language: new Proxy({}, { get: (_t, property) => String(property) }),
+  language: new Proxy(
+    {},
+    {
+      get: (_t, property) =>
+        property === 'connectedReaders'
+          ? {
+              messageDraft: 'Message draft',
+              draftInput: 'Draft',
+              btwInput: 'BTW',
+              attachments: 'Attachments',
+              composerDraft: 'Composer draft',
+            }
+          : String(property),
+    },
+  ),
 }))
 
 vi.mock('../../ts/characters', () => ({ getCharImage: shellMocks.getCharImage }))
@@ -181,7 +198,8 @@ vi.mock('src/ts/process/tts', () => ({ stopTTS: vi.fn() }))
 vi.mock('src/ts/chatCommands', () => ({
   appendCurrentChatEmptyCharMessage: shellMocks.appendCurrentChatEmptyCharMessage,
   appendCurrentChatUserMessageForSend: shellMocks.appendCurrentChatUserMessageForSend,
-  captureActiveChatTarget: vi.fn(() => null),
+  captureActiveChatTarget: shellMocks.captureActiveChatTarget,
+  isActiveChatTargetFresh: (target: unknown) => target === shellMocks.captureActiveChatTarget(),
   cloneJsonValue: <T>(value: T) => JSON.parse(JSON.stringify(value)) as T,
   currentChatScopedSnapshot: vi.fn(() => ({ before: 'chat-scoped' })),
   currentChatStateSnapshot: vi.fn(() => ({ before: 'chat-state' })),
@@ -228,6 +246,14 @@ vi.mock('src/ts/globalApi.svelte', () => ({
 
 vi.mock('html-to-image', () => ({ toCanvas: shellMocks.toCanvas }))
 
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
+import { repromoteClientWriter } from 'src/ts/__tests__/clientSession'
+import { clearDefaultChatComposerDrafts } from './DefaultChatScreen.composerDrafts'
 import DefaultChatScreen from './DefaultChatScreen.svelte'
 import { PlaygroundStore, ScrollToMessageStore, selectedCharID } from 'src/ts/stores.svelte'
 import { charactersResourceState, replaceResourceDatabase } from 'src/ts/server/resourceState.svelte'
@@ -366,6 +392,7 @@ function greetingBubble(): HTMLElement | null {
 
 beforeEach(() => {
   _setPluginRuntimePhaseForTesting('ready')
+  shellMocks.captureActiveChatTarget.mockReturnValue(null)
   shellMocks.hydrateActiveChat.mockClear()
   shellMocks.hydrationFailed = false
   shellMocks.hydrationPending = false
@@ -377,13 +404,15 @@ beforeEach(() => {
   document.body.appendChild(target)
 })
 
-afterEach(() => {
+afterEach(async () => {
   if (component) {
     try {
       unmount(component)
     } catch {}
     component = undefined
   }
+  await endWriterDraftCaptureTest()
+  clearDefaultChatComposerDrafts()
   target.remove()
   document.body.innerHTML = ''
   selectedCharID.set(-1)
@@ -572,5 +601,50 @@ describe('generation control ownership', () => {
     await tick()
 
     expect(target.querySelector<HTMLButtonElement>('[data-testid="default-chat-send-button"]')?.disabled).toBe(false)
+  })
+})
+
+describe('composer writer loss', () => {
+  it('retains text typed immediately before demotion and prevents an old hydration preflight from sending after promotion', async () => {
+    await beginWriterDraftCaptureTest()
+    seedDatabase(makeHydratedCharacter())
+    expect(tryMount()).toBeNull()
+    await tick()
+    const input = target.querySelector<HTMLTextAreaElement>('[data-testid="default-chat-composer"]')!
+    expect(input).not.toBeNull()
+    input.value = 'message waiting for hydration'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    shellMocks.captureActiveChatTarget.mockReturnValue({
+      selectedCharID: 0,
+      chatPage: 0,
+      characterId: 'character-0',
+      chatId: 'chat-0',
+    })
+    const hydration = deferred<void>()
+    shellMocks.hydrateActiveChatFully.mockImplementationOnce(() => hydration.promise)
+    shellMocks.appendCurrentChatUserMessageForSend.mockClear()
+    shellMocks.sendChat.mockClear()
+    target.querySelector<HTMLButtonElement>('[data-testid="default-chat-send-button"]')!.click()
+    expect(shellMocks.hydrateActiveChatFully).toHaveBeenCalled()
+    input.value = 'newer unsent text before demotion'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        fields: [expect.objectContaining({ value: 'newer unsent text before demotion' })],
+        data: expect.objectContaining({ messageInput: 'newer unsent text before demotion' }),
+      }),
+    ])
+    repromoteClientWriter()
+    hydration.resolve()
+    await tick()
+    await tick()
+    expect(shellMocks.appendCurrentChatUserMessageForSend).not.toHaveBeenCalled()
+    expect(shellMocks.sendChat).not.toHaveBeenCalled()
+    expect(input.value).toBe('newer unsent text before demotion')
+    unmount(component!)
+    component = undefined
+    expect(capturedWriterDrafts()[0].fields[0].value).toBe('newer unsent text before demotion')
   })
 })

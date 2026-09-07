@@ -189,6 +189,12 @@
 <script lang="ts">
   import { CheckIcon, XIcon } from '@lucide/svelte'
   import { createEventDispatcher, getContext, onDestroy, untrack } from 'svelte'
+  import {
+    canUseClientWriteAccess,
+    captureClientSessionGeneration,
+    isClientSessionGenerationCurrent,
+  } from 'src/ts/clientSession'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
   import { language } from 'src/lang'
   import { alertNormal } from 'src/ts/alert'
   import {
@@ -311,8 +317,33 @@
     return value && value.length > 0 ? value : undefined
   }
 
+  let operationGeneration = captureClientSessionGeneration()
+  function canContinueEdit(): boolean {
+    return canUseClientWriteAccess() && isClientSessionGenerationCurrent(operationGeneration)
+  }
+
   let matchingState = $state<MatchingState>(createEmptyMatchingState())
   let activeOperation = $state<CapturedPartialEditOperation | null>(null)
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      if (
+        !isEditing ||
+        !activeOperation ||
+        editText ===
+          activeOperation.sourceData.slice(activeOperation.sourceRange.start, activeOperation.sourceRange.end)
+      )
+        return null
+      return {
+        key: `partial-edit:${chatId}:${messageId ?? chatIndex}:${activeOperation.layer}`,
+        label: activeOperation.layer === 'translation' ? language.editTranslation : language.partialEdit.editModalTitle,
+        route: globalThis.location?.pathname,
+        fields: [{ label: language.partialEdit.editModalTitle, value: editText }],
+        data: { operation: $state.snapshot(activeOperation), text: editText },
+        baseline: { source: activeOperation.sourceData },
+      }
+    }),
+  )
+
   let editModalTitle = $derived(
     activeOperation?.layer === 'translation' ? language.editTranslation : language.partialEdit.editModalTitle,
   )
@@ -507,6 +538,7 @@
   }
 
   function showBlockButton(block: HTMLElement, options: { focusEdit?: boolean } = {}) {
+    if (!canUseClientWriteAccess()) return
     if (currentHoveredBlock === block && blockButtonWrapper?.style.display === 'flex') {
       if (options.focusEdit) blockButtonWrapper.querySelector<HTMLButtonElement>('.partial-edit-btn-edit')?.focus()
       return
@@ -550,6 +582,7 @@
   }
 
   function showDragButton(rect: DOMRect) {
+    if (!canUseClientWriteAccess()) return
     if (!dragButtonWrapper) {
       dragButtonWrapper = createButton(
         'partial-edit-btn-wrapper partial-edit-drag-btn-wrapper',
@@ -587,6 +620,8 @@
     elementOrText: HTMLElement | string,
     proceedCallback: (match: RangeResultWithContext) => void,
   ) {
+    if (!canUseClientWriteAccess()) return
+    operationGeneration = captureClientSessionGeneration()
     const sourceData = layerSourceData(layer)
     if (!elementOrText || !sourceData) return
     if (!interactionReservation) {
@@ -658,6 +693,7 @@
   }
 
   function proceedWithEdit(match: RangeResultWithContext) {
+    if (!canContinueEdit()) return
     clearEditSetupTimers()
     const operation = captureOperation('edit', match)
     matchingState.mode = null
@@ -695,6 +731,7 @@
   }
 
   function selectMatchAtIndex(index: number) {
+    if (!canContinueEdit()) return
     const match = matchingState.foundMatches[index]
     if (!match) return
 
@@ -721,7 +758,7 @@
   }
 
   function handleSave() {
-    if (!activeOperation) return
+    if (!activeOperation || !canContinueEdit()) return
 
     const newData = replaceRange(activeOperation.sourceData, activeOperation.sourceRange, editText)
     dispatch('save', {
@@ -749,13 +786,14 @@
   }
 
   function proceedWithDelete(match: RangeResultWithContext) {
+    if (!canContinueEdit()) return
     captureOperation('delete', match)
     matchingState.mode = null
     isConfirmingDelete = true
   }
 
   function handleConfirmDelete() {
-    if (!activeOperation) return
+    if (!activeOperation || !canContinueEdit()) return
 
     let newData = replaceRange(activeOperation.sourceData, activeOperation.sourceRange, '')
     newData = newData.replace(/\n{3,}/g, '\n\n').trim()

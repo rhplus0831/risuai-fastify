@@ -15,6 +15,13 @@ vi.mock('src/ts/server/resourceState.svelte', () => ({
   settingsResourceState: partialEditSettingsMocks.settingsResourceState,
 }))
 
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
+import { demoteClientSession } from 'src/ts/clientSession'
+import { repromoteClientWriter } from 'src/ts/__tests__/clientSession'
 import PartialEditController from './PartialEditController.svelte'
 import type { PartialEditSaveDetail } from './partialEditFreshness'
 import { TRANSCRIPT_INTERACTION_CONTEXT, type TranscriptInteractionProvider } from './transcriptInteraction'
@@ -233,10 +240,11 @@ beforeEach(() => {
   rafHarness = stubAnimationFrame()
 })
 
-afterEach(() => {
+afterEach(async () => {
   while (mountedComponents.length > 0) {
     unmount(mountedComponents.pop()!)
   }
+  await endWriterDraftCaptureTest()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   document.body.innerHTML = ''
@@ -717,5 +725,60 @@ describe('PartialEditController modal accessibility', () => {
     await settleEffects()
     expect(document.querySelector('.partial-match-failed-modal')).toBeNull()
     expect(document.activeElement).toBe(failureEditAction)
+  })
+})
+
+describe('partial edit writer loss', () => {
+  it('captures the exact unsaved range before unmount and blocks a retained save after promotion', async () => {
+    await beginWriterDraftCaptureTest()
+    const fixture = createHoverFixture({ text: 'editable block', left: 20, top: 80, width: 180, height: 48 })
+    stubElementFromPoint([fixture])
+    const save = vi.fn()
+    const component = mountController(fixture.bodyRoot, {
+      messageData: 'alpha editable block omega',
+      chatId: 'chat-a',
+      messageId: 'message-a',
+      events: { save },
+    })
+    await settleEffects()
+    movePointer(40, 90)
+    await flushHoverFrame()
+    getFloatingAction('edit').click()
+    await settleEffects()
+    const textarea = document.querySelector<HTMLTextAreaElement>('.partial-edit-textarea')!
+    expect(textarea).not.toBeNull()
+    textarea.value = 'local replacement before writer loss'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([
+      expect.objectContaining({
+        key: 'partial-edit:chat-a:message-a:original',
+        fields: [expect.objectContaining({ value: 'local replacement before writer loss' })],
+        baseline: { source: 'alpha editable block omega' },
+      }),
+    ])
+    repromoteClientWriter()
+    pressKey(textarea, 'Enter', { ctrlKey: true })
+    expect(save).not.toHaveBeenCalled()
+    unmountController(component)
+    expect(capturedWriterDrafts()[0].fields[0].value).toBe('local replacement before writer loss')
+  })
+
+  it('does not turn an explicitly cancelled partial edit into a recovery draft', async () => {
+    await beginWriterDraftCaptureTest()
+    const fixture = createHoverFixture({ text: 'cancelled block', left: 20, top: 80, width: 180, height: 48 })
+    stubElementFromPoint([fixture])
+    mountController(fixture.bodyRoot, { messageData: 'cancelled block', chatId: 'chat-a', messageId: 'message-a' })
+    await settleEffects()
+    movePointer(40, 90)
+    await flushHoverFrame()
+    getFloatingAction('edit').click()
+    await settleEffects()
+    const textarea = document.querySelector<HTMLTextAreaElement>('.partial-edit-textarea')!
+    textarea.value = 'cancelled local text'
+    textarea.dispatchEvent(new Event('input', { bubbles: true }))
+    pressKey(textarea, 'Escape')
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([])
   })
 })
