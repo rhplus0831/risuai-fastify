@@ -876,6 +876,16 @@ function stageManagedSend() {
   })
 }
 
+function settleCurrentGenerationReadiness(): void {
+  settleStartupGenerationRecoveryReadiness(true)
+  settleStartupChatReadiness(true)
+}
+
+function setReadyManagedWriter(): void {
+  setManagedWriterForTest()
+  settleCurrentGenerationReadiness()
+}
+
 describe('generation operation writer lifecycle', () => {
   it('rejects Reader staging and cancellation before local staging or transport', async () => {
     setManagedReaderForTest()
@@ -890,7 +900,7 @@ describe('generation operation writer lifecycle', () => {
   })
 
   it('cannot submit a stage created before writer loss and re-promotion', async () => {
-    setManagedWriterForTest()
+    setReadyManagedWriter()
     const staged = await stageManagedSend()
     if ('status' in staged) throw new Error(staged.error)
     const fetchMock = vi.fn()
@@ -899,14 +909,14 @@ describe('generation operation writer lifecycle', () => {
     await expect(dispatchGenerationOperationPendingReplay(staged.handle, staged.intent)).resolves.toMatchObject({
       disposition: 'retained',
     })
-    setManagedWriterForTest()
+    setReadyManagedWriter()
     await expect(submitStagedAcceptedSendOperation(staged)).resolves.toMatchObject({ status: 'retained' })
     expect(fetchMock).not.toHaveBeenCalled()
     expect(operationMocks.discard).not.toHaveBeenCalled()
   })
 
   it('settles an exact accepted response without projecting it into the newer writer session', async () => {
-    setManagedWriterForTest()
+    setReadyManagedWriter()
     const staged = await stageManagedSend()
     if ('status' in staged) throw new Error(staged.error)
     let release!: (response: Response) => void
@@ -922,6 +932,7 @@ describe('generation operation writer lifecycle', () => {
     operationMocks.setRevision.mockClear()
     operationMocks.applyAcceptedOperation.mockClear()
     demoteAndRepromoteForTest()
+    settleCurrentGenerationReadiness()
     release(new Response(JSON.stringify(responseBody()), { status: 200 }))
     await expect(pending).resolves.toMatchObject({ status: 'accepted' })
     expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
@@ -931,7 +942,7 @@ describe('generation operation writer lifecycle', () => {
   })
 
   it('does not apply a held cancellation acknowledgement after writer loss and re-promotion', async () => {
-    setManagedWriterForTest()
+    setReadyManagedWriter()
     let release!: (response: Response) => void
     const fetchMock = vi.fn(
       () =>
@@ -944,6 +955,7 @@ describe('generation operation writer lifecycle', () => {
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
     const before = get(generationOperationCancellations)
     demoteAndRepromoteForTest()
+    settleCurrentGenerationReadiness()
     release(
       new Response(
         JSON.stringify({
