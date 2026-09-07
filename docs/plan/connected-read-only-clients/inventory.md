@@ -486,3 +486,13 @@ probe timer per Reader, finite retries/deadlines, and teardown on hidden/offline
 pagehide/role change. Command subscriptions own their own generation, cursor and
 reconnect timer. These are deterministic focused/browser assertions, not a new
 performance benchmark or real-device memory measurement.
+
+The final full gate at `90069ac9c` exposes an additional route-owner boundary:
+`background-ready` can precede completion of the initial writer route handler.
+`a703b9d4b` lets a newer semantic writer URL supersede only the old retained
+Reader intent sequence, retaining equivalent aliases/retry and fencing stale
+completion by effect lifetime. App/router/intent focused tests pass 72 cases;
+S92 holds the real emitted character-handler response and requires visible
+Settings before release. The S22 coverage repair and these route changes await
+combined browser/fault/fallback controls and repeated final aggregate acceptance
+in [status](status.md#final-full-suite-failures-and-bounded-repairs).

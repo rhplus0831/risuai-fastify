@@ -3,7 +3,7 @@
 Initial execution inventory: 2026-09-07 at `711b1d583` (clean worktree).
 Phase 2 discovery: `6f39fb8f0` plus the real-operation Realm browser spec.
 
-The Reader Phase 5 universe at `22da08cd1` contains 91 registered cases in 22 specs, plus twelve local
+The Reader Phase 5 source universe at `678876571` contains 92 cases in 22 specs, plus twelve local
 TypeScript support owners and four screenshot baselines. The planning snapshot
 was extended by eight viewport/entry/height cases in `chatEntryLayout.spec.ts`
 and two real-operation Realm confirmation cases added during smoke Phase 2.
@@ -16,7 +16,10 @@ Reader Phase 5 adds S89/S90 for restart and fallback, strengthens S80 for two
 simultaneous Readers, and adds S91 alongside the retained conservative S77
 lineage-recovery case. The initial full TRUE cohort was 80/90; the corrected
 cohort passes 91/91 with five qualified faults and restored controls. Normal/FALSE
-rollout builds and final reader aggregate gates remain pending.
+rollout builds also pass at their recorded source. The phase-ending run at
+`90069ac9c` passes 89/91 and exposes S47's lost startup navigation and recurring
+S22 sampling coverage. Their repairs add S92's delayed initial-handler race;
+combined browser/fault/fallback evidence and repeated final gates are pending.
 Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
@@ -41,14 +44,14 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `lazyFirstOpen.spec.ts`                    |             8 | 3: navigation/first open                  | Pending                                               |
 | `realmProgressConfirmation.spec.ts`        |             2 | 2: confirmation                           | Strengthened; BSE-002                                 |
 | `rerollSwipePersistence.spec.ts`           |             1 | 2: generation durability                  | Pending                                               |
-| `selectedLocaleRuntime.spec.ts`            |             3 | 3: locale transitions                     | Pending                                               |
+| `selectedLocaleRuntime.spec.ts`            |             4 | 3: locale transitions                     | Pending                                               |
 | `selectedLocaleStartup.spec.ts`            |             1 | 3: locale startup                         | Pending                                               |
 | `startupCachePopulationMatrix.spec.ts`     |             1 | 3: startup/cache                          | Pending                                               |
 | `startupDirectLinks.spec.ts`               |             4 | 3: route matrix                           | Pending                                               |
 | `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Pending                                               |
 | `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Pending                                               |
 | `visibleStateRecovery.spec.ts`             |             4 | 2: visible/durable recovery               | Pending                                               |
-| **Total**                                  |        **91** |                                           | **Pilot evidence recorded; remaining review pending** |
+| **Total**                                  |        **92** |                                           | **Pilot evidence recorded; remaining review pending** |
 
 This file-level table is the current universe. The scenario records below are
 keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
@@ -103,99 +106,100 @@ reviews the named pilots; remaining path/oracle dispositions are completed in
 their assigned phases. Per-spec contexts and control roles below apply to every
 row unless the detailed review states a narrower boundary.
 
-| ID  | Spec and source line                           | Full registered title                                                                                                 | Disposition                                 |
-| --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------------------------------- |
-| S01 | `acceptedSendProtocol.spec.ts:354`             | send -> mid-stream and completed reloads retain one exact reply                                                       | Strengthened; BSE-003                       |
-| S02 | `acceptedSendProtocol.spec.ts:413`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Retained; 2c/2d review                      |
-| S03 | `acceptedSendProtocol.spec.ts:449`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Retained; 2c/2d review                      |
-| S04 | `acceptedSendProtocol.spec.ts:492`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Retained; 2c/2d review                      |
-| S05 | `acceptedSendProtocol.spec.ts:520`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Retained; 2c/2d review                      |
-| S06 | `acceptedSendProtocol.spec.ts:557`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Retained; 2c/2d review                      |
-| S07 | `acceptedSendProtocol.spec.ts:586`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Retained; 2c/2d review                      |
-| S08 | `acceptedSendProtocol.spec.ts:623`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Retained; 2c/2d review                      |
-| S09 | `acceptedSendProtocol.spec.ts:642`             | preserved runtime reconciles completion after its observer and replay job expire                                      | Retained; 2c/2d review                      |
-| S10 | `acceptedSendProtocol.spec.ts:672`             | two concurrent chats keep stable-target UI, recovery, and jobs isolated                                               | Retained; 2c/2d review                      |
-| S11 | `acceptedSendProtocol.spec.ts:709`             | queued finalization keeps a provisional row through reload and later settles                                          | Retained; 2c/2d review                      |
-| S12 | `bardWikiLifecycle.spec.ts:39`                 | BardWiki settings, manual document, confirmation status, and lifecycle tools are visible end to end                   | Pending                                     |
-| S13 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a short last message without a transient jump                                              | Retained; 2b review                         |
-| S14 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a tall last message without a transient jump                                               | Retained; 2b review                         |
-| S15 | `chatEntryLayout.spec.ts:26`                   | 390px chat-list entry reveals a short last message without a transient jump                                           | Retained; 2b review                         |
-| S16 | `chatEntryLayout.spec.ts:26`                   | 390px chat-list entry reveals a tall last message without a transient jump                                            | Retained; 2b review                         |
-| S17 | `chatEntryLayout.spec.ts:26`                   | 1280px direct entry reveals a short last message without a transient jump                                             | Retained; 2b review                         |
-| S18 | `chatEntryLayout.spec.ts:26`                   | 1280px direct entry reveals a tall last message without a transient jump                                              | Retained; 2b review                         |
-| S19 | `chatEntryLayout.spec.ts:26`                   | 1280px chat-list entry reveals a short last message without a transient jump                                          | Retained; 2b review                         |
-| S20 | `chatEntryLayout.spec.ts:26`                   | 1280px chat-list entry reveals a tall last message without a transient jump                                           | Retained; 2b review                         |
-| S21 | `chatHistoryScroll.spec.ts:55`                 | 300-message history stays readable with continuous upward wheel input                                                 | Retained; P0-T and 2b                       |
-| S22 | `chatHistoryScroll.spec.ts:55`                 | 300-message history stays readable with rapid reversals and pauses among tall messages                                | Strengthened; BSE-005 verified              |
-| S23 | `chatStartupRendering.spec.ts:9`               | direct chat startup waits for display dependencies and preserves the first processed body through background startup  | Retained; 2b review                         |
-| S24 | `chatStartupRendering.spec.ts:9`               | refresh chat startup waits for display dependencies and preserves the first processed body through background startup | Retained; 2b review                         |
-| S25 | `chatStartupRendering.spec.ts:112`             | direct chat startup releases the newest rows before older display work and preserves their scroll anchor              | Retained; 2b review                         |
-| S26 | `debugEchoLayoutStability.spec.ts:61`          | debug echo send stays visually stable through the first-token wait and foreground recovery                            | Retained visual contract; 2c                |
-| S27 | `displayPaintCache.spec.ts:34`                 | warm reload keeps appearance stable before the bundle, shell, and Display response arrive                             | Strengthened; BSE-004 verified              |
-| S28 | `fastifyBrowserSmoke.spec.ts:128`              | Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command                           | Pending                                     |
-| S29 | `fastifyBrowserSmoke.spec.ts:345`              | authored settings survive local backup restore and a full reload                                                      | Pending                                     |
-| S30 | `fastifyBrowserSmoke.spec.ts:420`              | authored character identity fields survive command acceptance and a full reload                                       | Pending                                     |
-| S31 | `fastifyBrowserSmoke.spec.ts:487`              | translator preset bindings persist independently across chats                                                         | Pending                                     |
-| S32 | `fastifyBrowserSmoke.spec.ts:566`              | a connected reader keeps receiving updates through a legacy writer takeover                                           | Retained; 2c/2d review                      |
-| S33 | `fastifyBrowserSmoke.spec.ts:639`              | core chat controls and blocking alerts remain accessible across responsive viewports                                  | Pending                                     |
-| S34 | `fastifyBrowserSmoke.spec.ts:720`              | latest-message start alignment never mutates spacer geometry during free scrolling                                    | Retained; 2b review                         |
-| S35 | `fastifyBrowserSmoke.spec.ts:825`              | mobile in-flow composer opens from a button above the stable keyboard viewport                                        | Pending                                     |
-| S36 | `fastifyBrowserSmoke.spec.ts:1157`             | prompt presets and model profiles reorder from an immediate mobile touch drag                                         | Pending                                     |
-| S37 | `fastifyBrowserSmoke.spec.ts:1201`             | global lorebook page owner hydrates once, selects by stable id, and survives reload                                   | Pending                                     |
-| S38 | `lazyFirstOpen.spec.ts:281`                    | smoke manifest accounts for every lazy boundary                                                                       | Pending                                     |
-| S39 | `lazyFirstOpen.spec.ts:306`                    | every Settings and Playground route opens its real first-use chunk                                                    | Pending                                     |
-| S40 | `lazyFirstOpen.spec.ts:340`                    | grid, route handlers, Sidebar panels, and chat dialogs open only on first use                                         | Pending                                     |
-| S41 | `lazyFirstOpen.spec.ts:416`                    | a delayed emitted stylesheet keeps the previous route mounted until the new route is ready                            | Pending                                     |
-| S42 | `lazyFirstOpen.spec.ts:444`                    | a delayed modal chunk preserves focus through loading, CSS, and close                                                 | Pending                                     |
-| S43 | `lazyFirstOpen.spec.ts:486`                    | preset and persona lazy dialogs stay within the viewport after first-open loading                                     | Pending                                     |
-| S44 | `lazyFirstOpen.spec.ts:523`                    | conservative writer offline first open shows local Retry and succeeds when connectivity returns                       | Retained conservative route-loader contract |
-| S45 | `lazyFirstOpen.spec.ts:557`                    | a stale emitted stylesheet shows local recovery and reloads the current route                                         | Pending                                     |
-| S46 | `rerollSwipePersistence.spec.ts:32`            | rerolled candidates survive a reload and stay swipe-recoverable                                                       | Retained reconstruction; 2c                 |
-| S47 | `selectedLocaleRuntime.spec.ts:21`             | a delayed locale cannot overwrite a newer selection and is reused on the next switch                                  | Pending                                     |
-| S48 | `selectedLocaleRuntime.spec.ts:71`             | a failed locale chunk leaves the current UI usable and a later selection retries it                                   | Pending                                     |
-| S49 | `selectedLocaleRuntime.spec.ts:106`            | cold selected-locale failure retries before exposing its first composer                                               | Pending                                     |
-| S50 | `selectedLocaleStartup.spec.ts:15`             | selected locale is usable on cold startup and refresh                                                                 | Pending                                     |
-| S51 | `startupCachePopulationMatrix.spec.ts:78`      | startup matrix keeps cold and warm small/large populations separate                                                   | Pending                                     |
-| S52 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 1/4 hydrates 11 empty-cache routes                                          | Pending                                     |
-| S53 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 2/4 hydrates 11 empty-cache routes                                          | Pending                                     |
-| S54 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 3/4 hydrates 11 empty-cache routes                                          | Pending                                     |
-| S55 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 4/4 hydrates 11 empty-cache routes                                          | Pending                                     |
-| S56 | `startupRecoveryIntegrationMatrix.spec.ts:41`  | startup rollout matrix proves flag-off and flag-on boundaries on small and large fixtures                             | Pending                                     |
-| S57 | `startupRecoveryIntegrationMatrix.spec.ts:61`  | legacy and null shell state is repaired before built-browser bootstrap                                                | Pending                                     |
-| S58 | `startupRecoveryIntegrationMatrix.spec.ts:114` | durable recovery replays offline work and committed work whose response was lost                                      | Retained; 2c/2d review                      |
-| S59 | `startupRecoveryIntegrationMatrix.spec.ts:218` | event-gap recovery performs an authoritative refresh before reconnecting                                              | Retained; 2c/2d review                      |
-| S60 | `startupRecoveryIntegrationMatrix.spec.ts:345` | mixed-client journey denies pre-authority mutation and keeps the old writer connected after legacy takeover           | Retained; 2c/2d review                      |
-| S61 | `startupRecoveryIntegrationMatrix.spec.ts:427` | background runtimes cannot delay or fail shell, mutation, and chat readiness                                          | Pending                                     |
-| S62 | `startupRecoveryIntegrationMatrix.spec.ts:503` | inlay runtime stays route-local when slow or failed and recovers through Retry                                        | Pending                                     |
-| S63 | `transcriptResidency.spec.ts:89`               | transcript residency desktop 30 rows repetition 0                                                                     | Retained; 2b review                         |
-| S64 | `transcriptResidency.spec.ts:89`               | transcript residency mobile 30 rows repetition 0                                                                      | Retained; 2b review                         |
-| S65 | `transcriptResidency.spec.ts:331`              | transcript residency screenshot is temporary full materialization                                                     | Pending                                     |
-| S66 | `transcriptResidency.spec.ts:397`              | transcript residency preserves editing, selection and copy desktop                                                    | Pending                                     |
-| S67 | `transcriptResidency.spec.ts:397`              | transcript residency preserves editing, selection and copy mobile                                                     | Pending                                     |
-| S68 | `transcriptResidency.spec.ts:555`              | transcript residency restores ordinary rows after screenshot failure                                                  | Pending                                     |
-| S69 | `transcriptResidency.spec.ts:555`              | transcript residency restores ordinary rows after screenshot cancellation                                             | Pending                                     |
-| S70 | `transcriptResidency.spec.ts:610`              | transcript residency bounds eight editors through page reset and keyboard gap navigation                              | Pending                                     |
-| S71 | `transcriptResidency.spec.ts:793`              | transcript residency cancels a pending jump when its route is hidden and reopened                                     | Pending                                     |
-| S72 | `transcriptResidency.spec.ts:906`              | transcript legacy paging rollback traverses 180 mounted rows without spacers                                          | Pending                                     |
-| S73 | `transcriptResidency.spec.ts:953`              | transcript residency promotes readable visible messages during rapid movement and settles                             | Retained; 2b review                         |
-| S74 | `transcriptResidency.spec.ts:1040`             | transcript residency expands its working window to fill a compact message viewport                                    | Retained; 2b review                         |
-| S75 | `visibleStateRecovery.spec.ts:72`              | switching chats repaints the active-chat generation picker                                                            | Retained; 2c/2d review                      |
-| S76 | `visibleStateRecovery.spec.ts:107`             | a sidebar toggle flip survives the command + resource refresh                                                         | Retained; 2c/2d review                      |
-| S77 | `visibleStateRecovery.spec.ts:147`             | conservative startup preserves the same-character sidebar view through old-lineage recovery reload                    | Retained conservative contract; Reader 5    |
-| S78 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles YES                            | Strengthened; BSE-002                       |
-| S79 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles NO                             | Strengthened; BSE-002                       |
-| S80 | `connectedReaderBrowsing.spec.ts:210`          | a mobile connected Reader follows committed updates and browses locally without taking write access                   | Strengthened; Reader Phase 5 fault verified |
-| S81 | `connectedWriterSwitching.spec.ts:580`         | Use this device switches A to B to A in place while preserving reader routes and the originating draft                | Added; Reader Phase 3 reconciliation        |
-| S82 | `connectedWriterSwitching.spec.ts:745`         | an accepted server generation keeps its job and durable reply when Use this device transfers the writer               | Added; Reader Phase 3 reconciliation        |
-| S83 | `connectedWriterSwitching.spec.ts:955`         | an empty server without Web Locks initializes only after the explicit setup action with a fresh writer identity       | Added; Reader Phase 3 reconciliation        |
-| S84 | `connectedReaderGeneration.spec.ts:28`         | a connected Reader sees one live partial and the exact persisted reply without control or effect requests             | Added; Reader Phase 4 verified              |
-| S85 | `connectedReaderGeneration.spec.ts:62`         | Reader chat switching and close/reopen detach viewers while the same provider job keeps running                       | Added; Reader Phase 4 verified              |
-| S86 | `connectedReaderGeneration.spec.ts:122`        | writer transfers during streaming and stopping preserve one cancelled partial without completion effects              | Added; Reader Phase 4 verified              |
-| S87 | `connectedReaderGeneration.spec.ts:201`        | writer transfer while a real finalization journal is queued commits one result and settles one effect ledger          | Added; Reader Phase 4 verified              |
-| S88 | `connectedReaderGeneration.spec.ts:363`        | an accepted IGP append is already receipted when its writer loses ownership before the PATCH response                 | Added; Reader Phase 4 verified              |
-| S89 | `connectedReaderRollout.spec.ts:102`           | default connected Reader reconnects after an actual server restart without page reload or write takeover              | Added; Reader Phase 5 fault verified        |
-| S90 | `connectedReaderRollout.spec.ts:223`           | conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft               | Added; Reader Phase 5 fault verified        |
-| S91 | `visibleStateRecovery.spec.ts:229`             | connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery           | Added; Reader Phase 5 fault verified        |
+| ID  | Spec and source line                           | Full registered title                                                                                                 | Disposition                                         |
+| --- | ---------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| S01 | `acceptedSendProtocol.spec.ts:354`             | send -> mid-stream and completed reloads retain one exact reply                                                       | Strengthened; BSE-003                               |
+| S02 | `acceptedSendProtocol.spec.ts:413`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Retained; 2c/2d review                              |
+| S03 | `acceptedSendProtocol.spec.ts:449`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Retained; 2c/2d review                              |
+| S04 | `acceptedSendProtocol.spec.ts:492`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Retained; 2c/2d review                              |
+| S05 | `acceptedSendProtocol.spec.ts:520`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Retained; 2c/2d review                              |
+| S06 | `acceptedSendProtocol.spec.ts:557`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Retained; 2c/2d review                              |
+| S07 | `acceptedSendProtocol.spec.ts:586`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Retained; 2c/2d review                              |
+| S08 | `acceptedSendProtocol.spec.ts:623`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Retained; 2c/2d review                              |
+| S09 | `acceptedSendProtocol.spec.ts:642`             | preserved runtime reconciles completion after its observer and replay job expire                                      | Retained; 2c/2d review                              |
+| S10 | `acceptedSendProtocol.spec.ts:672`             | two concurrent chats keep stable-target UI, recovery, and jobs isolated                                               | Retained; 2c/2d review                              |
+| S11 | `acceptedSendProtocol.spec.ts:709`             | queued finalization keeps a provisional row through reload and later settles                                          | Retained; 2c/2d review                              |
+| S12 | `bardWikiLifecycle.spec.ts:39`                 | BardWiki settings, manual document, confirmation status, and lifecycle tools are visible end to end                   | Pending                                             |
+| S13 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a short last message without a transient jump                                              | Retained; 2b review                                 |
+| S14 | `chatEntryLayout.spec.ts:26`                   | 390px direct entry reveals a tall last message without a transient jump                                               | Retained; 2b review                                 |
+| S15 | `chatEntryLayout.spec.ts:26`                   | 390px chat-list entry reveals a short last message without a transient jump                                           | Retained; 2b review                                 |
+| S16 | `chatEntryLayout.spec.ts:26`                   | 390px chat-list entry reveals a tall last message without a transient jump                                            | Retained; 2b review                                 |
+| S17 | `chatEntryLayout.spec.ts:26`                   | 1280px direct entry reveals a short last message without a transient jump                                             | Retained; 2b review                                 |
+| S18 | `chatEntryLayout.spec.ts:26`                   | 1280px direct entry reveals a tall last message without a transient jump                                              | Retained; 2b review                                 |
+| S19 | `chatEntryLayout.spec.ts:26`                   | 1280px chat-list entry reveals a short last message without a transient jump                                          | Retained; 2b review                                 |
+| S20 | `chatEntryLayout.spec.ts:26`                   | 1280px chat-list entry reveals a tall last message without a transient jump                                           | Retained; 2b review                                 |
+| S21 | `chatHistoryScroll.spec.ts:55`                 | 300-message history stays readable with continuous upward wheel input                                                 | Retained; P0-T and 2b                               |
+| S22 | `chatHistoryScroll.spec.ts:55`                 | 300-message history stays readable with rapid reversals and pauses among tall messages                                | Strengthened; BSE-005 renewed proof pending         |
+| S23 | `chatStartupRendering.spec.ts:9`               | direct chat startup waits for display dependencies and preserves the first processed body through background startup  | Retained; 2b review                                 |
+| S24 | `chatStartupRendering.spec.ts:9`               | refresh chat startup waits for display dependencies and preserves the first processed body through background startup | Retained; 2b review                                 |
+| S25 | `chatStartupRendering.spec.ts:112`             | direct chat startup releases the newest rows before older display work and preserves their scroll anchor              | Retained; 2b review                                 |
+| S26 | `debugEchoLayoutStability.spec.ts:61`          | debug echo send stays visually stable through the first-token wait and foreground recovery                            | Retained visual contract; 2c                        |
+| S27 | `displayPaintCache.spec.ts:34`                 | warm reload keeps appearance stable before the bundle, shell, and Display response arrive                             | Strengthened; BSE-004 verified                      |
+| S28 | `fastifyBrowserSmoke.spec.ts:128`              | Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command                           | Pending                                             |
+| S29 | `fastifyBrowserSmoke.spec.ts:345`              | authored settings survive local backup restore and a full reload                                                      | Pending                                             |
+| S30 | `fastifyBrowserSmoke.spec.ts:420`              | authored character identity fields survive command acceptance and a full reload                                       | Pending                                             |
+| S31 | `fastifyBrowserSmoke.spec.ts:487`              | translator preset bindings persist independently across chats                                                         | Pending                                             |
+| S32 | `fastifyBrowserSmoke.spec.ts:566`              | a connected reader keeps receiving updates through a legacy writer takeover                                           | Retained; 2c/2d review                              |
+| S33 | `fastifyBrowserSmoke.spec.ts:639`              | core chat controls and blocking alerts remain accessible across responsive viewports                                  | Pending                                             |
+| S34 | `fastifyBrowserSmoke.spec.ts:720`              | latest-message start alignment never mutates spacer geometry during free scrolling                                    | Retained; 2b review                                 |
+| S35 | `fastifyBrowserSmoke.spec.ts:825`              | mobile in-flow composer opens from a button above the stable keyboard viewport                                        | Pending                                             |
+| S36 | `fastifyBrowserSmoke.spec.ts:1157`             | prompt presets and model profiles reorder from an immediate mobile touch drag                                         | Pending                                             |
+| S37 | `fastifyBrowserSmoke.spec.ts:1201`             | global lorebook page owner hydrates once, selects by stable id, and survives reload                                   | Pending                                             |
+| S38 | `lazyFirstOpen.spec.ts:281`                    | smoke manifest accounts for every lazy boundary                                                                       | Pending                                             |
+| S39 | `lazyFirstOpen.spec.ts:306`                    | every Settings and Playground route opens its real first-use chunk                                                    | Pending                                             |
+| S40 | `lazyFirstOpen.spec.ts:340`                    | grid, route handlers, Sidebar panels, and chat dialogs open only on first use                                         | Pending                                             |
+| S41 | `lazyFirstOpen.spec.ts:416`                    | a delayed emitted stylesheet keeps the previous route mounted until the new route is ready                            | Pending                                             |
+| S42 | `lazyFirstOpen.spec.ts:444`                    | a delayed modal chunk preserves focus through loading, CSS, and close                                                 | Pending                                             |
+| S43 | `lazyFirstOpen.spec.ts:486`                    | preset and persona lazy dialogs stay within the viewport after first-open loading                                     | Pending                                             |
+| S44 | `lazyFirstOpen.spec.ts:523`                    | conservative writer offline first open shows local Retry and succeeds when connectivity returns                       | Retained conservative route-loader contract         |
+| S45 | `lazyFirstOpen.spec.ts:557`                    | a stale emitted stylesheet shows local recovery and reloads the current route                                         | Pending                                             |
+| S46 | `rerollSwipePersistence.spec.ts:32`            | rerolled candidates survive a reload and stay swipe-recoverable                                                       | Retained reconstruction; 2c                         |
+| S47 | `selectedLocaleRuntime.spec.ts:23`             | a delayed locale cannot overwrite a newer selection and is reused on the next switch                                  | Pending                                             |
+| S48 | `selectedLocaleRuntime.spec.ts:73`             | a failed locale chunk leaves the current UI usable and a later selection retries it                                   | Pending                                             |
+| S49 | `selectedLocaleRuntime.spec.ts:108`            | cold selected-locale failure retries before exposing its first composer                                               | Pending                                             |
+| S50 | `selectedLocaleStartup.spec.ts:15`             | selected locale is usable on cold startup and refresh                                                                 | Pending                                             |
+| S51 | `startupCachePopulationMatrix.spec.ts:78`      | startup matrix keeps cold and warm small/large populations separate                                                   | Pending                                             |
+| S52 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 1/4 hydrates 11 empty-cache routes                                          | Pending                                             |
+| S53 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 2/4 hydrates 11 empty-cache routes                                          | Pending                                             |
+| S54 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 3/4 hydrates 11 empty-cache routes                                          | Pending                                             |
+| S55 | `startupDirectLinks.spec.ts:31`                | Fast-bootstrap direct-link matrix › batch 4/4 hydrates 11 empty-cache routes                                          | Pending                                             |
+| S56 | `startupRecoveryIntegrationMatrix.spec.ts:41`  | startup rollout matrix proves flag-off and flag-on boundaries on small and large fixtures                             | Pending                                             |
+| S57 | `startupRecoveryIntegrationMatrix.spec.ts:61`  | legacy and null shell state is repaired before built-browser bootstrap                                                | Pending                                             |
+| S58 | `startupRecoveryIntegrationMatrix.spec.ts:114` | durable recovery replays offline work and committed work whose response was lost                                      | Retained; 2c/2d review                              |
+| S59 | `startupRecoveryIntegrationMatrix.spec.ts:218` | event-gap recovery performs an authoritative refresh before reconnecting                                              | Retained; 2c/2d review                              |
+| S60 | `startupRecoveryIntegrationMatrix.spec.ts:345` | mixed-client journey denies pre-authority mutation and keeps the old writer connected after legacy takeover           | Retained; 2c/2d review                              |
+| S61 | `startupRecoveryIntegrationMatrix.spec.ts:427` | background runtimes cannot delay or fail shell, mutation, and chat readiness                                          | Pending                                             |
+| S62 | `startupRecoveryIntegrationMatrix.spec.ts:503` | inlay runtime stays route-local when slow or failed and recovers through Retry                                        | Pending                                             |
+| S63 | `transcriptResidency.spec.ts:89`               | transcript residency desktop 30 rows repetition 0                                                                     | Retained; 2b review                                 |
+| S64 | `transcriptResidency.spec.ts:89`               | transcript residency mobile 30 rows repetition 0                                                                      | Retained; 2b review                                 |
+| S65 | `transcriptResidency.spec.ts:331`              | transcript residency screenshot is temporary full materialization                                                     | Pending                                             |
+| S66 | `transcriptResidency.spec.ts:397`              | transcript residency preserves editing, selection and copy desktop                                                    | Pending                                             |
+| S67 | `transcriptResidency.spec.ts:397`              | transcript residency preserves editing, selection and copy mobile                                                     | Pending                                             |
+| S68 | `transcriptResidency.spec.ts:555`              | transcript residency restores ordinary rows after screenshot failure                                                  | Pending                                             |
+| S69 | `transcriptResidency.spec.ts:555`              | transcript residency restores ordinary rows after screenshot cancellation                                             | Pending                                             |
+| S70 | `transcriptResidency.spec.ts:610`              | transcript residency bounds eight editors through page reset and keyboard gap navigation                              | Pending                                             |
+| S71 | `transcriptResidency.spec.ts:793`              | transcript residency cancels a pending jump when its route is hidden and reopened                                     | Pending                                             |
+| S72 | `transcriptResidency.spec.ts:906`              | transcript legacy paging rollback traverses 180 mounted rows without spacers                                          | Pending                                             |
+| S73 | `transcriptResidency.spec.ts:953`              | transcript residency promotes readable visible messages during rapid movement and settles                             | Retained; 2b review                                 |
+| S74 | `transcriptResidency.spec.ts:1040`             | transcript residency expands its working window to fill a compact message viewport                                    | Retained; 2b review                                 |
+| S75 | `visibleStateRecovery.spec.ts:72`              | switching chats repaints the active-chat generation picker                                                            | Retained; 2c/2d review                              |
+| S76 | `visibleStateRecovery.spec.ts:107`             | a sidebar toggle flip survives the command + resource refresh                                                         | Retained; 2c/2d review                              |
+| S77 | `visibleStateRecovery.spec.ts:147`             | conservative startup preserves the same-character sidebar view through old-lineage recovery reload                    | Retained conservative contract; Reader 5            |
+| S78 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles YES                            | Strengthened; BSE-002                               |
+| S79 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles NO                             | Strengthened; BSE-002                               |
+| S80 | `connectedReaderBrowsing.spec.ts:210`          | a mobile connected Reader follows committed updates and browses locally without taking write access                   | Strengthened; Reader Phase 5 fault verified         |
+| S81 | `connectedWriterSwitching.spec.ts:580`         | Use this device switches A to B to A in place while preserving reader routes and the originating draft                | Added; Reader Phase 3 reconciliation                |
+| S82 | `connectedWriterSwitching.spec.ts:745`         | an accepted server generation keeps its job and durable reply when Use this device transfers the writer               | Added; Reader Phase 3 reconciliation                |
+| S83 | `connectedWriterSwitching.spec.ts:955`         | an empty server without Web Locks initializes only after the explicit setup action with a fresh writer identity       | Added; Reader Phase 3 reconciliation                |
+| S84 | `connectedReaderGeneration.spec.ts:28`         | a connected Reader sees one live partial and the exact persisted reply without control or effect requests             | Added; Reader Phase 4 verified                      |
+| S85 | `connectedReaderGeneration.spec.ts:62`         | Reader chat switching and close/reopen detach viewers while the same provider job keeps running                       | Added; Reader Phase 4 verified                      |
+| S86 | `connectedReaderGeneration.spec.ts:122`        | writer transfers during streaming and stopping preserve one cancelled partial without completion effects              | Added; Reader Phase 4 verified                      |
+| S87 | `connectedReaderGeneration.spec.ts:201`        | writer transfer while a real finalization journal is queued commits one result and settles one effect ledger          | Added; Reader Phase 4 verified                      |
+| S88 | `connectedReaderGeneration.spec.ts:363`        | an accepted IGP append is already receipted when its writer loses ownership before the PATCH response                 | Added; Reader Phase 4 verified                      |
+| S89 | `connectedReaderRollout.spec.ts:102`           | default connected Reader reconnects after an actual server restart without page reload or write takeover              | Added; Reader Phase 5 fault verified                |
+| S90 | `connectedReaderRollout.spec.ts:223`           | conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft               | Added; Reader Phase 5 fault verified                |
+| S91 | `visibleStateRecovery.spec.ts:229`             | connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery           | Added; Reader Phase 5 fault verified                |
+| S92 | `selectedLocaleRuntime.spec.ts:151`            | new writer navigation reaches Settings while the initial character route handler is delayed                           | Added; final-gate route repair verification pending |
 
 ## Conditional and Expanded Execution
 
@@ -615,3 +619,12 @@ receipt and newer-draft behavior. The restored normal emission matches all 503
 original files. [Build proof](findings.md#reader-phase-5-default-and-fallback-build-proof)
 retains the command/environment and fixture limits. Final reader aggregate gates
 and the subsequent Stage 3 scenario review remain pending.
+
+The required reader Phase 5 full gate at `90069ac9c` is **89/91**, with all
+other twelve lanes passing. S47's actual route race has a production App repair
+and the new S92 held-asset browser companion; S22 retains its full workload and
+adds a prepared measured pause at the existing proven remount boundary. The
+[final-gate repair record](findings.md#reader-phase-5-final-gate-repairs) reopens
+BSE-005's sampling acceptance and records BSE-006's startup route cause. Prior
+faults remain qualified only for their named source and oracle; renewed combined
+controls and final aggregate gates are still pending.

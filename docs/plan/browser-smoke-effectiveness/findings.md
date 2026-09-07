@@ -717,6 +717,16 @@ is clean, all three relevant source files match `9387d1464974` and main, and no
 owned build/browser job remains active. The dependency-verification override
 applies only to the lab's shared `node_modules` link.
 
+### BSE-005 recurrence during Reader Phase 5
+
+The Phase 2 acceptance above is historical and retains its exact source and
+remount-fault scope. At `90069ac9c`, the required full suite again reaches all
+independent traversal/remount oracles but has zero readable sample-zero anchors
+across its fourteen pauses. BSE-005's sampling acceptance is reopened. The
+[final-gate repair record](#reader-phase-5-final-gate-repairs) describes the
+bounded preparation correction and renewed proof; no later-readable survivor
+selection or newly reproduced production geometry defect is implied.
+
 ## Reader Phase 3 Production-Fault Evidence
 
 Source: `7c3da2160cbd1f8456ce3d8bc03727d6916b8de0`, production through
@@ -1326,3 +1336,139 @@ complete emitted file hash mapping with the first build. The final phase's
 aggregate checks separately build and execute the normal full suite. The
 mixed-client policy still relies on the retained conservative-handshake path,
 not an unchanged historical bundle gaining the new Reader interface.
+
+## Reader Phase 5 Final-Gate Repairs
+
+Source: failed full gate `90069ac9c`; combined repairs `678876571`. The full run
+passes 89/91 browser cases and all twelve other lanes. Its S47 trace and S22
+structured samples are preserved in `/tmp/reader-phase5-final-all-failures` and
+`/tmp/reader-phase5-s22-pause-audit-f95utidf`; the checked-in descriptions below
+retain the causal boundaries independently of those temporary artifacts.
+
+### BSE-006: Retained Reader route suppresses newer writer navigation
+
+Classification: reproduced production route bug, repaired in `a703b9d4b`;
+built-browser negative/restored acceptance pending. Risk: an authorized writer
+navigates to Settings during initial route loading but remains on the character
+view. Original S47 reaches `background-ready`, calls the real router, and never
+requests Settings/Language assets. Its character-handler request spans
+61,763.591–61,773.876ms; the startup milestone completes at 61,766.637ms and newer
+navigation spans 61,772.157–61,786.596ms. The resulting URL loses its chat suffix.
+Source and mounted pre-fix failures separately identify retained-intent priority
+and obsolete completion as the route ownership defects.
+
+The repair compares the actual URL's semantic route key with the retained intent,
+consumes only the mismatched exact sequence and fences completion by effect
+lifetime. Equivalent aliases and matching failed retries are preserved. All 72
+App/router/intent focused tests pass. S92, added by `678876571`, holds the actual
+manifest-resolved character-handler response, proves writing/canMutate/canGenerate
+and initial `route.loading`, invokes production navigation and requires a visible
+Language selector with Settings ready while that older response is still held.
+After actual HTTP 200 delivery it retains Settings, capabilities and the same
+document across two paint frames. That final observation does not claim exact
+callback settlement; the mounted test's held promise proves the completion fence.
+
+### BSE-005: Prepared readable pause at the real remount return
+
+The failed run's fourteen sample-zero anchors are unreadable; seven pauses gain
+readable rows later. Pause 11's message 241 is readable at zero drift from sample
+1 through 29, but retrospective selection cannot count as a passing oracle.
+Four source files match the earlier accepted BSE-005 bytes: the test, parse memo,
+ChatBody and display scheduler. Earlier passing controls had only 1/2/3/1 initial
+readable anchors and four to seven wholly unreadable pauses. These observations
+establish recurring sampling coverage, not a newly regressed production delay or
+geometry defect; no pause geometry assertion ran in this failed full run.
+
+`d72f12a01` keeps both fixed seven-gesture passes, all fourteen original pause
+arrays and continuous/traversal/direct remount oracles. At the existing return
+after proven row-298 unmount, the final native input completes through CDP. A
+five-second, 32ms bounded preparation captures the first geometric visible row
+as soon as it is readable; that exact snapshot becomes sample zero before the
+next 29 measured frames. Every measured frame requires the same identity,
+visibility/readability and at most one-pixel drift. The preparation and measured
+samples also retain the existing 76-resident-row bound. No later surviving-row
+filter, per-gesture hydration wait, relaxed threshold or additional workload
+matrix is introduced. The retained parser-owner fault still targets the earlier
+direct row-298 remount text assertion, before this new pause; it cannot certify
+new geometry-fault detection.
+
+### Frozen combined verification protocol — pending
+
+The detached lab freezes all 2,473 production/test/configuration inputs at
+`678876571`, digest
+`3dae9bcfac1f9f1fb5608bf32aa94d567f613df78ee3e474643b64c47c4bbaa7`.
+The S22 test SHA256 is
+`03b1bad019e31f0150254ef7cf92be5fe92a47a014447ad7053cd9902f7f269a`;
+the locale/S92 spec SHA256 is
+`f8353dec1e6e5853cbc6e2310b1ab979dcdeed4cd876310a6451136e2377d8cc`.
+No test, helper, fixture or configuration changes between baseline, negatives
+and restored controls. Root independently checks the literal faults and hashes.
+
+Normal stages unset `VITE_FAST_BOOTSTRAP_OBSERVER`,
+`RISU_READER_ROLLOUT_COMPILED_FALLBACK`, `RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED`
+and `RISU_BROWSER_SMOKE_WORKERS`, with `VITE_FASTIFY_BROWSER_SMOKE=TRUE`.
+Build using `pnpm --config.verify-deps-before-run=false build:smoke`; invoke
+Playwright with the existing smoke config, one worker, and separate output
+directories. Baseline runs all four selected-locale, four visible-recovery and
+three switching cases with trace on, then S22 twice with trace off. The latter
+retains structured viewport, runtime and successful script URL observations.
+
+F1 applies exactly the earlier BSE-005 parser-owner hunk, source SHA256
+`678627abd356b1f4846b93ebb768340935ca1cd7e076d6f874fcc7e2da2626c0`
+to fault SHA256
+`333fe90628be830cbb7ecb27f927961f5c1b905973807d5bf5c5ba0ee26f4ba3`.
+After a fresh build, both S22 repetitions must reach initial thirty readable
+rows, seven gestures, actual row-298 unmount and fixed return, then fail its
+ordinary remount text assertion. Both require the exact row-298 runtime marker
+and a successful response for the preserved emitted fault chunk. Preparation-
+only or unrelated failures cannot qualify. Restore exact source before F2.
+
+F2 changes only App's semantic mismatch branch, retaining effect cleanup:
+
+```diff
+     if (observerIntent && routeKey(observerIntent.route) !== routeKey(currentWriterRoute)) {
+-      consumeObserverRouteIntent(observerIntent.sequence)
+-      observerIntent = null
++      Reflect.apply(console.warn, console, [
++        '[reader-phase5-s92-retained-route-priority]',
++        routeKey(observerIntent.route),
++        routeKey(currentWriterRoute),
++      ])
+     }
+```
+
+App SHA256 changes from
+`964fb7fb1d4af84216a3cc14dbaa201b95144f2f1bc621c280996b95b63839d4`
+to `45b47bfce575b12be524d2a1d1d13a7e101dcf14ef63538f146471b8c5d31d08`.
+Fresh-build S92 must establish healthy writer/held initial handler, navigate to
+the actual Settings URL and execute the marker with old character and new
+`settings:10:` semantic keys. Its intended failure is the visible Language
+selector before the handler is released. Trace ordering must distinguish cleanup
+release from the failed assertion; a final `handlerReleased=true` alone cannot
+qualify the fault. Require the successful served marker-chunk response. This
+fault detects intent priority; it does not separately detect effect cleanup.
+
+After restoring all source, a fresh normal build must match the entire baseline
+emitted catalog; run S22 twice and S92 once unchanged. Build with exact
+`VITE_FAST_BOOTSTRAP_OBSERVER=FALSE`, then run S90 once with
+`RISU_READER_ROLLOUT_COMPILED_FALLBACK=TRUE`: remove the writer override before
+real reload and require unmanaged fallback, same native encrypted command/
+semantic body, one ACK and restored newer draft, with a clean Reader. A final
+normal rebuild must match every baseline emitted file. Previous five feature
+faults and Phase 4 controls retain their recorded scope. This bounded campaign
+renews the changed App/S22 and default/fallback composition only; final agent
+and required phase-ending full gates still own acceptance. Artifacts and exact
+argv/environment manifests: `/tmp/reader-phase5-combined-repair-stieh7rl`.
+
+The first combined baseline at `678876571` stops at **10/11 (29.0s)** after a
+12.15s normal build. S92 passes Settings visibility/readiness with the handler
+held, real response delivery, retained Settings and same-document checks, then
+fails its incorrect final `canGenerate=true`. The held snapshot already shows
+`canGenerate=false`: Settings sets `selectedCharID=-1`; the selected-target
+subscription clears startup chat readiness. Mutation access and the same writer
+remain usable. `60ac61bde` corrects the new case to require that Settings state
+before and after release and retain the same writer authority. Initial chat
+readiness and the held-handler navigation oracle are unchanged. All 2,473 inputs
+remain frozen and 1,750 successful script URLs map to the 503-file catalog, with
+no page errors or markers. No S22 or negative stage ran. Preserve this failure
+and restart the declared campaign from the corrected test source.

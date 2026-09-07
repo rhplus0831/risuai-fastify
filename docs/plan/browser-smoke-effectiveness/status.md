@@ -349,3 +349,12 @@ aggregate remains failed until the reviewed count/removal reconciliation and
 final checks pass. This changes no browser assertion, production owner or rollout
 behavior; [reader status](../connected-read-only-clients/status.md#final-aggregate-inventory-reconciliation)
 retains the precise source, result and remaining gates.
+
+Reader Phase 5's repeated agent aggregate passes at `90069ac9c`, but its required
+full run is **89/91 browser cases** with all other twelve lanes passing. The
+S47 startup route race has a committed App repair and new S92 browser companion;
+S22's recurring readable-pause coverage gap has a bounded preparation repair
+that preserves its original fourteen pauses and exact geometry/remount oracles.
+The [repair record](findings.md#reader-phase-5-final-gate-repairs) retains the
+failure and pending combined controls. Reader Phase 5 remains active; no Smoke
+Phase 3/4 handoff or archive is accepted by these focused fixes.

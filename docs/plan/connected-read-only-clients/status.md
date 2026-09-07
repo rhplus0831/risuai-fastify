@@ -12,13 +12,16 @@ Updated: 2026-09-08
   final combined acceptance, default activation, conservative fallback and guides.
   The corrected 91-case enabled baseline, five isolated production faults and
   restored controls passed. The authorized default is enabled in `70a8b18e1`;
-  normal and actual FALSE builds also pass. Only final aggregate gates and
-  phase acceptance/archive remain pending.
+  normal and actual FALSE builds also pass at their recorded source. The first
+  phase-ending full run exposed S47 startup navigation and recurring S22 pause
+  coverage failures. Their committed repairs and new S92 companion now require
+  combined browser/fault controls, renewed fallback proof and final gates.
 - Production behavior: normal builds enable connected readers. Exact build-time
   `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the conservative writer fallback.
   Drafts and pending intent keep their originating local scope.
-- Blockers: none. The Phase 2 full-suite S22 coverage failure is repaired and
-  verified as BSE-005, with its original failure and source limits retained below.
+- Blockers: no external dependency. Phase 5 acceptance remains pending while
+  the S47 route repair and reopened BSE-005 sampling repair are verified. Prior
+  phase acceptance and fault evidence retain their original source limits.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -1125,3 +1128,64 @@ from 22 to 21. No production aggregate access or new exception is admitted.
 The focused `pnpm check:server` now passes, including protocol/shared-core,
 architecture, Fastify and browser types. Repeated final aggregate gates remain
 pending.
+
+### Final Full-Suite Failures and Bounded Repairs
+
+The repeated `pnpm test:agent` at `90069ac9c` passes in **2m 24.2s**.
+The required `pnpm test:all` at that same clean source exits 1 in **6m 20.0s**:
+**89/91 browser cases pass**; S47 never reaches its language selector and S22
+has zero readable sample-zero pause anchors. All twelve other lanes pass,
+including 8,839 ordinary frontend tests, 241 UI tests, 4,228 server tests,
+18 current compatibility cases, the Realm scale case and six performance cases.
+There are three existing frontend and two existing server skips. The passing
+agent aggregate and other lanes do not accept the failed phase-ending run.
+Logs are `/tmp/reader-phase5-final-test-agent-restored.log` and
+`/tmp/reader-phase5-final-test-all.log`.
+
+S47's trace shows its actual character-handler chunk completing across newer
+Settings navigation; `background-ready` had already completed. App still gave
+the retained initial Reader intent priority over the newer writer URL, so no
+Settings or Language chunk was requested. `a703b9d4b` compares semantic route
+keys, discards only the superseded exact intent sequence and fences callbacks by
+the route effect's lifetime. Matching aliases and failed matching retries remain
+valid. Three mounted pre-fix regressions fail; the final App/router/intent suites
+pass **28/40/4 tests**. `678876571` adds S92: hold the real emitted initial
+character-handler request, establish writer capabilities, navigate through the
+production router, and require visible Settings before releasing that handler.
+The original three locale cases are unchanged. Its post-release two paint frames
+are an observation; the mounted held-promise case owns exact completion fencing.
+
+S22's fourteen pauses all lacked a readable first sample, so no pause geometry
+assertion ran. Seven became readable later; pause 11's message 241 stayed readable
+at zero drift through samples 1–29. This is diagnostic evidence, not a replacement
+passing oracle. Prior accepted controls also contained four to seven wholly
+unreadable pauses; the parser, scheduler and test bytes matched the earlier
+BSE-005 source. No new production geometry or parse-delay regression is proven.
+`d72f12a01` adds one bounded prepared pause at the existing real ordinary-row
+remount return. Its first geometric readable snapshot becomes sample zero before
+29 further fixed-cadence samples; identity, every-frame readability and the
+one-pixel bound remain exact. Both original seven-gesture passes and all original
+oracles are unchanged; all preparation/measured frames retain the 76-row bound.
+
+At combined `678876571`, Svelte checking has zero errors/warnings and server,
+browser, protocol and shared-core types pass. Architecture remains 4,274 fixture
+references, 30 groups, zero bridge families and 21 reviewed seams. The frozen
+normal-build campaign is pending: eleven navigation/recovery/switching cases and
+two S22 controls, the retained parser-owner fault twice, the narrow S92 retained-
+intent fault once, restored S22/S92 controls, actual compiled-FALSE S90, and a
+byte-identical normal rebuild. No unrelated fault matrix is added. Final agent
+and full phase-ending gates must run again after the production App change.
+The [smoke findings](../browser-smoke-effectiveness/findings.md#reader-phase-5-final-gate-repairs)
+own the reproducible campaign and its remaining source limits.
+
+The first frozen combined baseline at `678876571` passes **10/11 in 29.0s**
+after a 12.15s normal build. New S92 passes its held-handler visible Settings,
+ready route, actual response and same-document assertions, then fails an
+incorrect final `canGenerate=true` expectation. Both held and final snapshots
+already show `canMutate=true`, writing/live authority and `canGenerate=false`:
+Settings clears `selectedCharID`, so chat readiness is correctly revoked before
+the older handler is released. This is a new test-contract error, not a product
+regression. `60ac61bde` asserts that exact Settings capability state both before
+and after release, plus retained writer authority; initial chat generation
+readiness and all navigation/visibility oracles stay intact. No S22 or negatives
+ran from the failed baseline. The campaign restarts from a fresh frozen source.
