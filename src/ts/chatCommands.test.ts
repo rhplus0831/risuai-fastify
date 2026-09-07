@@ -7432,13 +7432,13 @@ describe('setCurrentChat scoped snapshot', () => {
 })
 
 describe('durable chat and folder structure dispatch', () => {
-  async function prepareDurableOutbox(suffix: string): Promise<void> {
+  async function prepareDurableOutbox(suffix: string, managed = false): Promise<void> {
     vi.stubGlobal('indexedDB', new IDBFactory())
     resetPendingMutationOutboxForTests()
     await preparePendingMutationOutbox({
-      writerSessionId: `writer-chat-structure-${suffix}`,
-      writerEpoch: 51,
-      databaseLineage: `lineage-chat-structure-${suffix}`,
+      writerSessionId: managed ? 'draft-test-session' : `writer-chat-structure-${suffix}`,
+      writerEpoch: managed ? 1 : 51,
+      databaseLineage: managed ? 'draft-test-lineage' : `lineage-chat-structure-${suffix}`,
       requestedWriterWasActive: true,
     })
     setCachedServerCommandRevision(10)
@@ -7844,7 +7844,7 @@ describe('durable chat and folder structure dispatch', () => {
   it.each(['chat', 'folder', 'message'] as const)(
     'keeps a retained %s result dormant after demotion and repromotion',
     async (kind) => {
-      await prepareDurableOutbox(`role-cycle-result-${kind}`)
+      await prepareDurableOutbox(`role-cycle-result-${kind}`, true)
       enterClientWriter()
       const response = createDeferred<Response>()
       const fetchCommand = vi.fn(async () => response.promise)
@@ -7906,7 +7906,7 @@ describe('durable chat and folder structure dispatch', () => {
   it.each(['chat', 'folder'] as const)(
     'does not rebase a newer %s rename when an old generation is discarded',
     async (kind) => {
-      await prepareDurableOutbox(`role-cycle-metadata-rebase-${kind}`)
+      await prepareDurableOutbox(`role-cycle-metadata-rebase-${kind}`, true)
       enterClientWriter()
       let discard: 'none' | 'older' | 'both' = 'none'
       vi.stubGlobal(
@@ -7951,7 +7951,7 @@ describe('durable chat and folder structure dispatch', () => {
   )
 
   it('does not rebase a newer transcript attempt when an old generation is discarded', async () => {
-    await prepareDurableOutbox('role-cycle-transcript-rebase')
+    await prepareDurableOutbox('role-cycle-transcript-rebase', true)
     enterClientWriter()
     let discard: 'none' | 'older' | 'both' = 'none'
     vi.stubGlobal(
@@ -7978,7 +7978,7 @@ describe('durable chat and folder structure dispatch', () => {
       })
       const newer = await dispatchUpdateMessageScoped(
         'message-a',
-        { translation: 'Current writer translation' },
+        { name: 'Current writer message name' },
         currentChatScopedSnapshot(),
       )
       expect(newer?.status).toBe('queued')
@@ -7988,13 +7988,13 @@ describe('durable chat and folder structure dispatch', () => {
       discard = 'older'
       await expect(replayPendingMutations()).resolves.toMatchObject({ discarded: 1, retained: 1 })
       await expect(older.settlement).resolves.toMatchObject({ status: 'failed' })
-      expect(chat().message[0]).toMatchObject({ data: 'Old intent', translation: 'Current writer translation' })
+      expect(chat().message[0]).toMatchObject({ data: 'Old intent', name: 'Current writer message name' })
       expect((await listPendingMutations()).map(({ handle }) => handle.mutationId)).toEqual([newerHandle.mutationId])
       discard = 'both'
       await expect(replayPendingMutations()).resolves.toMatchObject({ discarded: 1, retained: 0 })
       await expect(newer.settlement).resolves.toMatchObject({ status: 'failed' })
       expect(chat().message[0].data).toBe('Old intent')
-      expect(chat().message[0].translation).toBeUndefined()
+      expect(chat().message[0].name).toBeUndefined()
       expect(await listPendingMutations()).toEqual([])
     } finally {
       await clearDurableOutbox()
@@ -8004,7 +8004,7 @@ describe('durable chat and folder structure dispatch', () => {
   it.each(['accepted', 'failed'] as const)(
     'settles an old retained batch as %s without reviving its projection or rollback',
     async (finalStatus) => {
-      await prepareDurableOutbox(`role-cycle-batch-${finalStatus}`)
+      await prepareDurableOutbox(`role-cycle-batch-${finalStatus}`, true)
       enterClientWriter()
       const response = createDeferred<ServerCommandResult>()
       const command = vi.fn(() => response.promise)

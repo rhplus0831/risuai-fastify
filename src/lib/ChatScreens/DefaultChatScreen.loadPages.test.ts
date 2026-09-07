@@ -1,4 +1,6 @@
 import { mount, tick, unmount } from 'svelte'
+import { demoteClientSession, resetClientSessionForTests } from 'src/ts/clientSession'
+import { enterClientWriter, repromoteClientWriter } from 'src/ts/__tests__/clientSession'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ActiveChatTarget, AppendCurrentChatUserMessageResult } from 'src/ts/chatCommands'
@@ -861,6 +863,7 @@ afterEach(() => {
     unmount(component)
     component = undefined
   }
+  resetClientSessionForTests()
   vi.unstubAllGlobals()
   Element.prototype.scrollIntoView = originalScrollIntoView as Element['scrollIntoView']
   vi.restoreAllMocks()
@@ -1004,6 +1007,33 @@ describe('DefaultChatScreen initial display readiness', () => {
       expect(target.querySelector('[data-testid="chat-display-dependency-error"]')).toBeNull()
     },
   )
+
+  it('does not resume a display plugin retry in a newer writer session after the loader import', async () => {
+    const pluginRuntime = await import('src/ts/plugins/plugins.svelte')
+    const resourceLoader = await import('src/ts/server/routeResourceLoader')
+    const retryPlugin = vi.spyOn(pluginRuntime, 'retryPluginRuntime').mockResolvedValue(true)
+    vi.spyOn(resourceLoader, 'ensureResourceSurfaces').mockResolvedValue(undefined)
+    seedDatabase([1])
+    enterClientWriter()
+    _setPluginRuntimePhaseForTesting('error')
+    mountScreen()
+    await settle()
+    const retry = target.querySelector<HTMLButtonElement>('[data-testid="chat-display-dependency-error"] button')
+    expect(retry).toBeTruthy()
+
+    // Import resolution yields even for an already-loaded module. Revoke the
+    // originating writer before that microtask resumes, then restore the same target.
+    retry!.click()
+    demoteClientSession()
+    repromoteClientWriter()
+    _setPluginRuntimePhaseForTesting('error')
+    await settle()
+    expect(retryPlugin).not.toHaveBeenCalled()
+
+    // A new, explicit Retry belongs to the restored writer and still works.
+    target.querySelector<HTMLButtonElement>('[data-testid="chat-display-dependency-error"] button')!.click()
+    await waitFor(() => expect(retryPlugin).toHaveBeenCalledOnce())
+  })
 
   it('shows the message skeleton until the newest two cold row parses settle', async () => {
     defaultChatScreenTestChatController.hold()

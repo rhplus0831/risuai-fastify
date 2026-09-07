@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { get } from 'svelte/store'
+import { IDBFactory } from 'fake-indexeddb'
 
 // Regression coverage: slash-command handlers (`/send`, `/setvar`, `/cut`, ...)
 // apply an optimistic local update before dispatching a command. That update
@@ -52,9 +54,19 @@ import { safeStructuredClone } from '../../polyfill'
 import { testDatabaseState } from '../../__tests__/resourceDatabaseState'
 import { processMultiCommand } from '../command'
 import { clearCachedServerCommandRevision } from '../../server/commands'
+import { captureClientSessionGeneration, demoteClientSession, resetClientSessionForTests } from '../../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../../__tests__/clientSession'
+import { resolveAlertInput, resolveAlertSelection } from '../../alert'
 
-import { selectedCharID } from '../../stores.svelte'
+import { alertStore, selectedCharID } from '../../stores.svelte'
 import { withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
+import {
+  clearPendingMutationOutbox,
+  listPendingMutations,
+  preparePendingMutationOutbox,
+  resetPendingMutationOutboxForTests,
+} from '../../server/pendingMutationOutbox'
+import { replayPendingMutations } from '../../server/pendingMutationReplay'
 
 interface CapturedFetch {
   url: string
@@ -329,6 +341,7 @@ function seedLargeSiblingDatabase(): void {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   ;(globalThis as Record<string, unknown>).safeStructuredClone = safeStructuredClone
   clearCachedServerCommandRevision()
   seedDatabase()
@@ -337,10 +350,58 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
+  const alert = get(alertStore)
+  if (alert.type === 'input') resolveAlertInput(alert.dialogOwner, null)
+  if (alert.type === 'select') resolveAlertSelection(alert.dialogOwner, null)
   vi.unstubAllGlobals()
 })
 
 describe('slash-command durable owner writes', () => {
+  it.each(['/input Message', '/buttons labels=["Message"]'])(
+    'stops the next pipeline write after %s crosses demotion and repromotion',
+    async (firstCommand) => {
+      enterClientWriter()
+      const calls = stubCommandFetch()
+      const pipeline = processMultiCommand(`${firstCommand}|/send {{pipe}}|/setvar key=stale yes`)
+      const alert = get(alertStore)
+      expect(alert.dialogOwner).toBeDefined()
+      demoteClientSession()
+      repromoteClientWriter()
+      if (firstCommand.startsWith('/input')) expect(resolveAlertInput(alert.dialogOwner, 'Old dialog text')).toBe(true)
+      else expect(resolveAlertSelection(alert.dialogOwner, 0)).toBe(true)
+      const result = await pipeline
+      expect(testDatabaseState.db.characters[0].chats[0].message).toEqual([])
+      expect(testDatabaseState.db.characters[0].chats[0].scriptstate).toEqual({})
+      expect(calls).toEqual([])
+      expect(result).toBe(false)
+    },
+  )
+
+  it('rejects a command pipeline entered by a reader before showing a dialog or changing scriptstate', async () => {
+    enterClientWriter()
+    demoteClientSession()
+    const calls = stubCommandFetch()
+    const alert = get(alertStore)
+    await expect(processMultiCommand('/setvar key=reader yes|/send reader text')).resolves.toBe(false)
+    await expect(processMultiCommand('/input Reader dialog')).resolves.toBe(false)
+    expect(testDatabaseState.db.characters[0].chats[0].scriptstate).toEqual({})
+    expect(testDatabaseState.db.characters[0].chats[0].message).toEqual([])
+    expect(get(alertStore)).toBe(alert)
+    expect(calls).toEqual([])
+  })
+
+  it('continues an admitted writer pipeline after its input dialog resolves', async () => {
+    enterClientWriter()
+    const calls = stubCommandFetch()
+    const pipeline = processMultiCommand('/input Message|/send {{pipe}}')
+    expect(resolveAlertInput(get(alertStore).dialogOwner, 'Current writer text')).toBe(true)
+    await expect(pipeline).resolves.toBe('Current writer text')
+    const command = await waitForCommand(calls, (call) => call.method === 'POST')
+    expect(command.body.message).toMatchObject({ role: 'user', data: 'Current writer text' })
+    expect(testDatabaseState.db.characters[0].chats[0].message.at(-1)?.data).toBe('Current writer text')
+  })
+
   it('/send appends a user message without setDatabase or whole-db clone churn', async () => {
     seedLargeSiblingDatabase()
     const wholeCharactersSize = JSON.stringify(testDatabaseState.db.characters).length
@@ -513,41 +574,142 @@ describe('slash-command durable owner writes', () => {
     expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(2)
     expect(coordinateAcceptedChatSendMock).toHaveBeenNthCalledWith(1, {
       target: expect.objectContaining({ characterId: 'char-a', chatId: 'chat-1' }),
+      clientGeneration: expect.any(Number),
       append: expect.objectContaining({ status: 'ok', messageId: expect.any(String) }),
     })
     expect(coordinateAcceptedChatSendMock).toHaveBeenNthCalledWith(2, {
       target: expect.objectContaining({ characterId: 'char-a', chatId: 'chat-1' }),
+      clientGeneration: expect.any(Number),
       append: expect.objectContaining({ status: 'ok', messageId: expect.any(String) }),
     })
     expect(setDatabaseSpy.count).toBe(0)
   })
 
-  it('awaits each coordinated /multisend result before appending the next segment', async () => {
-    seedDatabase([{ role: 'char', data: 'base', chatId: 'm-base' }])
-    const calls = stubCommandFetch()
-    const firstGeneration = deferred<{ status: 'generated' }>()
-    coordinateAcceptedChatSendMock.mockReturnValueOnce(firstGeneration.promise)
-    const command = processMultiCommand('/multisend first|||second')
-    await waitForMatchingCalls(
-      calls,
-      (call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'POST',
-      1,
-    )
-    await new Promise((resolve) => setTimeout(resolve, 0))
+  it.each(['accepted', 'queued'] as const)(
+    'settles a %s compatibility append across a role cycle without starting generation or the next segment',
+    async (initialStatus) => {
+      const { coordinateAcceptedChatSend } = await vi.importActual<typeof import('../acceptedSendCoordinator.svelte')>(
+        '../acceptedSendCoordinator.svelte',
+      )
+      let coordination: ReturnType<typeof coordinateAcceptedChatSend> | undefined
+      coordinateAcceptedChatSendMock.mockImplementationOnce((input) => {
+        coordination = coordinateAcceptedChatSend(input)
+        return coordination
+      })
+      vi.stubGlobal('indexedDB', new IDBFactory())
+      resetPendingMutationOutboxForTests()
+      await preparePendingMutationOutbox({
+        writerSessionId: 'draft-test-session',
+        writerEpoch: 1,
+        databaseLineage: 'draft-test-lineage',
+        requestedWriterWasActive: true,
+      })
+      enterClientWriter()
+      const clientGeneration = captureClientSessionGeneration()
+      const response = deferred<Response>()
+      const calls: CapturedFetch[] = []
+      const acceptedResponse = (messageId: string) =>
+        jsonResponse({
+          revision: 11,
+          chatId: 'chat-1',
+          messageId,
+          event: { type: 'message.appended', revision: 11, resource: 'message', id: messageId, parentId: 'chat-1' },
+        })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+          const url = String(input)
+          const body = typeof init.body === 'string' ? JSON.parse(init.body) : null
+          calls.push({ url, method: init.method ?? 'GET', body })
+          if (url === '/api/v1/bootstrap') return jsonResponse({ revision: 10 })
+          if (url === '/api/v1/commands/mutation-receipts/ack') return jsonResponse({ acknowledged: true })
+          if (url === '/api/v1/commands/chats/chat-1/messages' && init.method === 'POST') {
+            return calls.filter((call) => call.url === url && call.method === 'POST').length === 1
+              ? response.promise
+              : acceptedResponse(body.message.chatId)
+          }
+          return jsonResponse({ error: `unexpected ${url}` }, 404)
+        }),
+      )
+      try {
+        let finished = false
+        const pipeline = processMultiCommand('/multisend first|||do not append').finally(() => {
+          finished = true
+        })
+        const append = await waitForCommand(calls, (call) => call.method === 'POST')
+        const messageId = append.body.message.chatId as string
+        demoteClientSession()
+        repromoteClientWriter()
+        response.resolve(
+          initialStatus === 'queued'
+            ? jsonResponse({ error: 'temporarily unavailable' }, 503)
+            : acceptedResponse(messageId),
+        )
+        await vi.waitFor(() => expect(coordinateAcceptedChatSendMock).toHaveBeenCalledOnce())
+        expect(coordinateAcceptedChatSendMock).toHaveBeenCalledWith(
+          expect.objectContaining({
+            clientGeneration,
+            append: expect.objectContaining({ status: initialStatus === 'queued' ? 'queued' : 'ok', messageId }),
+          }),
+        )
+        if (initialStatus === 'queued') {
+          expect(finished).toBe(false)
+          expect(await listPendingMutations()).toHaveLength(1)
+          await expect(replayPendingMutations()).resolves.toMatchObject({ succeeded: 1, retained: 0 })
+        }
+        await expect(coordination).resolves.toMatchObject({ status: 'generation_failed', acceptedMessageId: messageId })
+        await expect(pipeline).resolves.toBe(false)
+        expect(coordinateAcceptedChatSendMock).toHaveBeenCalledOnce()
+        expect(calls.filter((call) => call.url.endsWith('/messages') && call.method === 'POST')).toHaveLength(
+          initialStatus === 'queued' ? 2 : 1,
+        )
+        expect(
+          calls.some((call) => call.url.includes('generation-operations') || call.url.includes('/chat/completions')),
+        ).toBe(false)
+        expect(testDatabaseState.db.characters[0].chats[0].message.map((message) => message.data)).toEqual(['first'])
+        expect(await listPendingMutations()).toEqual([])
+      } finally {
+        response.resolve(jsonResponse({ error: 'cleanup' }, 503))
+        await clearPendingMutationOutbox()
+        resetPendingMutationOutboxForTests()
+      }
+    },
+  )
 
-    expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(1)
-    expect(
-      calls.filter((call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'POST'),
-    ).toHaveLength(1)
+  it.each([false, true])(
+    'rechecks the writer after each coordinated /multisend result (role cycle: %s)',
+    async (roleCycle) => {
+      enterClientWriter()
+      seedDatabase([{ role: 'char', data: 'base', chatId: 'm-base' }])
+      const calls = stubCommandFetch()
+      const firstGeneration = deferred<{ status: 'generated' }>()
+      coordinateAcceptedChatSendMock.mockReturnValueOnce(firstGeneration.promise)
+      const command = processMultiCommand('/multisend first|||second')
+      await waitForMatchingCalls(
+        calls,
+        (call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'POST',
+        1,
+      )
+      await new Promise((resolve) => setTimeout(resolve, 0))
 
-    firstGeneration.resolve({ status: 'generated' })
-    await expect(command).resolves.toBe('')
+      expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(1)
+      expect(
+        calls.filter((call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'POST'),
+      ).toHaveLength(1)
 
-    expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(2)
-    expect(
-      calls.filter((call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'POST'),
-    ).toHaveLength(2)
-  })
+      if (roleCycle) {
+        demoteClientSession()
+        repromoteClientWriter()
+      }
+      firstGeneration.resolve({ status: 'generated' })
+      await expect(command).resolves.toBe(roleCycle ? false : '')
+
+      expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(roleCycle ? 1 : 2)
+      expect(
+        calls.filter((call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'POST'),
+      ).toHaveLength(roleCycle ? 1 : 2)
+    },
+  )
 
   it('stops /multisend after an accepted item reaches coordinator recovery', async () => {
     seedDatabase([{ role: 'char', data: 'base', chatId: 'm-base' }])
@@ -597,6 +759,7 @@ describe('slash-command durable owner writes', () => {
     expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(1)
     expect(coordinateAcceptedChatSendMock).toHaveBeenCalledWith({
       target: expect.objectContaining({ characterId: 'char-a', chatId: 'chat-1' }),
+      clientGeneration: expect.any(Number),
       append: expect.objectContaining({ status: 'ok', messageId: expect.any(String) }),
     })
     expect(setDatabaseSpy.count).toBe(0)
@@ -634,52 +797,60 @@ describe('slash-command durable owner writes', () => {
     expect(setDatabaseSpy.count).toBe(0)
   })
 
-  it('does not append or generate until /multisend clear is durably accepted', async () => {
-    const calls: CapturedFetch[] = []
-    const clearResponse = deferred<Response>()
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-        const url = String(input)
-        calls.push({
-          url,
-          method: init.method ?? 'GET',
-          body: typeof init.body === 'string' ? JSON.parse(init.body) : null,
-        })
-        if (url === '/api/v1/bootstrap') return jsonResponse({ revision: 10 })
-        if (url === '/api/v1/commands/chats/chat-1/messages' && init.method === 'PUT') {
-          return clearResponse.promise
-        }
-        if (url === '/api/v1/commands/chats/chat-1/messages' && init.method === 'POST') {
-          return jsonResponse({
-            revision: 12,
-            event: { type: 'message.appended', revision: 12, resource: 'message', parentId: 'chat-1' },
+  it.each([false, true])(
+    'rechecks the writer after /multisend clear is accepted (role cycle: %s)',
+    async (roleCycle) => {
+      enterClientWriter()
+      const calls: CapturedFetch[] = []
+      const clearResponse = deferred<Response>()
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+          const url = String(input)
+          calls.push({
+            url,
+            method: init.method ?? 'GET',
+            body: typeof init.body === 'string' ? JSON.parse(init.body) : null,
           })
-        }
-        return jsonResponse({ error: `unexpected ${url}` }, 404)
-      }) as unknown as typeof fetch,
-    )
-    seedDatabase([{ role: 'char', data: 'base', chatId: 'm-base' }])
-    const command = processMultiCommand('/multisend clear|||first')
-    await waitForCommand(
-      calls,
-      (call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'PUT',
-    )
+          if (url === '/api/v1/bootstrap') return jsonResponse({ revision: 10 })
+          if (url === '/api/v1/commands/chats/chat-1/messages' && init.method === 'PUT') {
+            return clearResponse.promise
+          }
+          if (url === '/api/v1/commands/chats/chat-1/messages' && init.method === 'POST') {
+            return jsonResponse({
+              revision: 12,
+              event: { type: 'message.appended', revision: 12, resource: 'message', parentId: 'chat-1' },
+            })
+          }
+          return jsonResponse({ error: `unexpected ${url}` }, 404)
+        }) as unknown as typeof fetch,
+      )
+      seedDatabase([{ role: 'char', data: 'base', chatId: 'm-base' }])
+      const command = processMultiCommand('/multisend clear|||first')
+      await waitForCommand(
+        calls,
+        (call) => call.url === '/api/v1/commands/chats/chat-1/messages' && call.method === 'PUT',
+      )
 
-    expect(calls.some((call) => call.method === 'POST')).toBe(false)
-    expect(coordinateAcceptedChatSendMock).not.toHaveBeenCalled()
+      expect(calls.some((call) => call.method === 'POST')).toBe(false)
+      expect(coordinateAcceptedChatSendMock).not.toHaveBeenCalled()
+      if (roleCycle) {
+        demoteClientSession()
+        repromoteClientWriter()
+      }
 
-    clearResponse.resolve(
-      jsonResponse({
-        revision: 11,
-        event: { type: 'messages.replaced', revision: 11, resource: 'message', parentId: 'chat-1' },
-      }),
-    )
-    await expect(command).resolves.toBe('')
+      clearResponse.resolve(
+        jsonResponse({
+          revision: 11,
+          event: { type: 'messages.replaced', revision: 11, resource: 'message', parentId: 'chat-1' },
+        }),
+      )
+      await expect(command).resolves.toBe(roleCycle ? false : '')
 
-    expect(calls.map((call) => call.method)).toEqual(['GET', 'PUT', 'POST'])
-    expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(1)
-  })
+      expect(calls.map((call) => call.method)).toEqual(roleCycle ? ['GET', 'PUT'] : ['GET', 'PUT', 'POST'])
+      expect(coordinateAcceptedChatSendMock).toHaveBeenCalledTimes(roleCycle ? 0 : 1)
+    },
+  )
 
   it('forced message-command failure restores only the active chat', async () => {
     const calls: CapturedFetch[] = []

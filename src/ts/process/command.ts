@@ -27,6 +27,8 @@ import {
 } from '../server/resourceState.svelte'
 import { getChatMessageOwnerState } from '../server/chatMessageHydration.svelte'
 import { safeStructuredClone } from '../polyfill'
+import { captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 
 interface CommandChatOwner {
   selectedIndex: number
@@ -36,7 +38,8 @@ interface CommandChatOwner {
   chatId: string
 }
 
-export async function processMultiCommand(command: string) {
+export async function processMultiCommand(command: string, clientGeneration = captureClientSessionGeneration()) {
+  if (!isClientWriteOperationCurrent(clientGeneration)) return false
   let pipe = ''
   const splited: string[] = []
   let lastIndex = 0
@@ -52,7 +55,8 @@ export async function processMultiCommand(command: string) {
   }
   splited.push(command.slice(lastIndex))
   for (let i = 0; i < splited.length; i++) {
-    const result = await processCommand(splited[i].trim(), pipe)
+    const result = await processCommand(splited[i].trim(), pipe, clientGeneration)
+    if (!isClientWriteOperationCurrent(clientGeneration)) return false
     if (result === false) {
       return false
     } else {
@@ -62,7 +66,9 @@ export async function processMultiCommand(command: string) {
   return pipe
 }
 
-async function processCommand(command: string, pipe: string): Promise<false | string> {
+async function processCommand(command: string, pipe: string, clientGeneration: number): Promise<false | string> {
+  const isCurrent = () => isClientWriteOperationCurrent(clientGeneration)
+  if (!isCurrent()) return false
   const owner = selectedCommandChatOwner()
   const currentChar = owner?.character
   let { commandName, arg, namedArg } = commandParser(command, pipe)
@@ -81,11 +87,13 @@ async function processCommand(command: string, pipe: string): Promise<false | st
       chara: currentChar?.type === 'character' ? currentChar : null,
     })
   }
+  if (!isCurrent()) return false
 
   switch (commandName) {
     //STScript compatibility commands
     case 'input': {
       pipe = await alertInput(arg)
+      if (!isCurrent()) return false
       return pipe
     }
     case 'echo':
@@ -103,6 +111,7 @@ async function processCommand(command: string, pipe: string): Promise<false | st
           const JSONLabels = JSON.parse(namedArg.labels)
           if (Array.isArray(JSONLabels)) {
             const selection = await alertSelect(JSONLabels)
+            if (!isCurrent()) return false
             if (selection !== null) pipe = selection
           }
         } catch (error) {}
@@ -116,6 +125,7 @@ async function processCommand(command: string, pipe: string): Promise<false | st
     case 'speak': {
       if (currentChar?.type === 'character') {
         await sayTTS(currentChar, arg)
+        if (!isCurrent()) return false
       }
       return pipe
     }
@@ -197,19 +207,24 @@ async function processCommand(command: string, pipe: string): Promise<false | st
         return ''
       }
       for (const e of splited) {
+        if (!isCurrent()) return false
         if (!isActiveChatTargetFresh(activeTarget)) {
           break
         }
         if (clearMode && !(await clearCurrentChatMessagesBeforeSend(activeTarget))) {
           break
         }
+        if (!isCurrent()) return false
         const outcome = canUseGenerationOperationProtocol()
-          ? await coordinateAcceptedChatSend({ target: activeTarget, message: e })
+          ? await coordinateAcceptedChatSend({ target: activeTarget, message: e, clientGeneration })
           : await (async () => {
               const appended = await appendCurrentChatUserMessageForSend(e, { expectedTarget: activeTarget })
               if (appended.status === 'error') return { status: 'append_failed' as const }
-              return coordinateAcceptedChatSend({ target: activeTarget, append: appended })
+              // The coordinator still observes exact append settlement after
+              // writer loss, using this pipeline's original generation.
+              return coordinateAcceptedChatSend({ target: activeTarget, append: appended, clientGeneration })
             })()
+        if (!isCurrent()) return false
         if (outcome.status !== 'generated') break
         if (!isActiveChatTargetFresh(activeTarget)) {
           break
@@ -248,6 +263,7 @@ async function processCommand(command: string, pipe: string): Promise<false | st
     }
     case 'test_lorebook': {
       const p = await loadLoreBookV3Prompt()
+      if (!isCurrent()) return false
       alertNormal(p.actives.map((e) => e.prompt).join('§'))
       return JSON.stringify(p)
     }
@@ -266,6 +282,7 @@ async function processCommand(command: string, pipe: string): Promise<false | st
           manualName: arg,
           signal: triggerController.signal,
         })
+        if (!isCurrent()) return false
 
         const freshOwner = selectedCommandChatOwner()
         if (

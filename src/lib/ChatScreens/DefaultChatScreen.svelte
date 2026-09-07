@@ -799,15 +799,19 @@
   })
 
   async function retryChatDisplayDependencies(): Promise<void> {
-    if (retryingDisplayDependencies) return
+    if (!canUseClientWriteAccess() || retryingDisplayDependencies) return
+    const clientGeneration = captureClientSessionGeneration()
     retryingDisplayDependencies = true
     try {
       const { ensureResourceSurfaces } = await import('src/ts/server/routeResourceLoader')
+      if (!isClientWriteOperationCurrent(clientGeneration)) return
       await Promise.all([
         ensureResourceSurfaces(['runtime:chat-display']),
         $pluginRuntimeStateStore.phase === 'error' || $startupCoordinatorStore.failures.pluginsReady
           ? $startupCoordinatorStore.failures.pluginsReady
-            ? import('src/ts/bootstrap').then(({ retryPluginStartup }) => retryPluginStartup())
+            ? import('src/ts/bootstrap').then(({ retryPluginStartup }) => {
+                if (isClientWriteOperationCurrent(clientGeneration)) return retryPluginStartup()
+              })
             : retryPluginRuntime()
           : Promise.resolve(),
       ])
@@ -1343,6 +1347,7 @@
   }): void {
     const previousLength = chatForTarget(input.target)?.message.length ?? 0
     const generation = coordinateAcceptedChatSend({
+      clientGeneration: input.composerOperation.clientGeneration,
       target: input.target,
       ...(input.append ? { append: input.append } : {}),
       ...(input.message ? { message: input.message } : {}),
