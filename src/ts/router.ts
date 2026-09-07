@@ -15,6 +15,11 @@ import { failActiveRouteLoad, finishRouteResources, prepareRouteResources } from
 import { charactersResourceState } from './server/resourceState.svelte'
 import { preloadRouteComponents } from './routeComponentPreload'
 import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from './clientSession'
+import {
   characterRoutePath,
   normalizePath,
   parseRoute,
@@ -273,8 +278,13 @@ export function setCharacterSidebarViewMode(view: 'chat' | 'character'): void {
 }
 
 export async function applyRouteToStores(route: AppRoute): Promise<boolean> {
+  if (!canUseClientWriteAccess()) return false
+  const sessionGeneration = captureClientSessionGeneration()
   const applicationEpoch = ++routeApplicationEpoch
-  const isFreshRouteApplication = () => applicationEpoch === routeApplicationEpoch
+  const isFreshRouteApplication = () =>
+    applicationEpoch === routeApplicationEpoch &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    canUseClientWriteAccess()
   applyingRoute = true
   try {
     let componentLoadError: unknown
@@ -355,7 +365,7 @@ export async function applyRouteToStores(route: AppRoute): Promise<boolean> {
     return finishRouteResources(route)
   } finally {
     queueMicrotask(() => {
-      if (!isFreshRouteApplication()) return
+      if (applicationEpoch !== routeApplicationEpoch) return
       if (pendingChatMessageJump && pendingChatMessageJump.routeKey !== routeKey(get(currentRoute))) {
         pendingChatMessageJump = null
       }

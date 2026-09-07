@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
+const readerApi = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), retry: vi.fn() }))
+
 const bootstrapApi = vi.hoisted(() => ({
   fetch: vi.fn(),
   fetchReadOnly: vi.fn(),
@@ -167,6 +169,16 @@ interface TestWriterEvent {
 vi.mock('./observerProjectionLifecycle', () => ({
   discardObserverProjectionState: projectionLifecycleApi.discard,
 }))
+
+vi.mock('./server/connectedTabIdentity', () => ({
+  resolveConnectedTabIdentity: async () => ({
+    sessionId: getActiveWriterSessionId(),
+    exclusive: true,
+    previousSessionId: null,
+  }),
+  releaseConnectedTabIdentity: vi.fn(),
+}))
+vi.mock('./server/connectedReaderSync', () => ({ startConnectedReaderSync: readerApi.start }))
 
 vi.mock('./server/bootstrap', () => ({
   fetchServerBootstrap: bootstrapApi.fetch,
@@ -350,8 +362,10 @@ import {
   retryObserverWriterPromotion,
   retryPluginStartup,
   stopDeferredStartupRuntimes,
+  stopConnectedClientServices,
   stopServerResourceEvents,
 } from './bootstrap'
+import { getClientSessionSnapshot, setClientConnectionState } from './clientSession'
 import { loadPlugins, startPluginRuntimeSync } from './plugins/plugins.svelte'
 import { alertError, alertRequiredSelect, waitAlert } from './alert'
 import { language } from 'src/lang'
@@ -421,6 +435,7 @@ function runtimeBootstrap(overrides: Record<string, unknown> = {}) {
       databaseLineage: 'database-a',
       requestedWriterWasActive: true,
       writerEpoch: 1,
+      writer: { sessionId: getActiveWriterSessionId(), epoch: 1 },
       activeGenerationJobs: [{ chatId: 'chat-a', jobId: 'job-a' }],
       generationFinalizations: [
         {
@@ -496,6 +511,7 @@ function seedResourceDatabase() {
 }
 
 beforeEach(() => {
+  stopConnectedClientServices()
   __observerShellFlagTestHooks.setOverride(false)
   resetObserverShellLifecycleForTests()
   resetStartupReadinessForTests()
@@ -511,6 +527,10 @@ beforeEach(() => {
   clearAppliedServerResourceRevision()
 
   vi.clearAllMocks()
+  readerApi.start.mockImplementation(() => {
+    setClientConnectionState('live')
+    return { stop: readerApi.stop, retry: readerApi.retry, ready: Promise.resolve() }
+  })
   recoveredGenerationApi.discardPendingRecoveredGenerationEffects.mockReset().mockResolvedValue(undefined)
   recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects.mockReset().mockResolvedValue(undefined)
   recoveredGenerationApi.setPendingRecoveredGenerationEffects.mockReset()
@@ -567,6 +587,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  stopConnectedClientServices()
   __observerShellFlagTestHooks.setOverride(null)
   resetObserverShellLifecycleForTests()
   stopDeferredStartupRuntimes()
@@ -639,46 +660,42 @@ describe('API-backed client bootstrap', () => {
     })
   })
 
-  it('renders a coherent observer shell before delayed writer recovery without enabling writes', async () => {
+  it('starts a permanent reader without writer recovery, plugins, effects, or canonical selection', async () => {
     __observerShellFlagTestHooks.setOverride(true)
-    let releaseWriter!: (value: ReturnType<typeof runtimeBootstrap>) => void
-    bootstrapApi.fetch.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          releaseWriter = resolve
-        }),
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writer: { sessionId: 'foreign-writer', epoch: 1 } }),
     )
-
-    const loading = loadData()
-
-    await vi.waitFor(() => expect(resourceApi.loadInitial).toHaveBeenCalledOnce())
-    expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledWith(null, { cacheRevision: false })
-    expect(resourceApi.loadInitial).toHaveBeenNthCalledWith(1)
-    expect(getStartupCoordinatorSnapshot()).toMatchObject({
-      observerShellEnabled: true,
-      capabilities: {
-        canRenderShell: true,
-        canApplyRoutes: false,
-        canMutate: false,
-        canGenerate: false,
-      },
+    selectedCharID.set(1)
+    await loadData()
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'reading',
+      connection: 'live',
+      projectionReady: true,
     })
-    expect(peekAppliedServerResourceRevision()).toBe(5)
-    expect(eventApi.subscribe).not.toHaveBeenCalled()
-
-    releaseWriter(runtimeBootstrap())
-    await loading
-
-    expect(resourceApi.loadInitial).toHaveBeenCalledTimes(2)
-    expect(resourceApi.loadInitial).toHaveBeenNthCalledWith(2, { hooks: resourceApi.hooks })
     expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({
       canRenderShell: true,
       canApplyRoutes: true,
-      canMutate: true,
+      canMutate: false,
+      canGenerate: false,
     })
+    expect(get(selectedCharID)).toBe(1)
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(pendingMutationApi.readOwner).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+    expect(pendingMutationApi.flushAcknowledgements).not.toHaveBeenCalled()
+    expect(eventApi.subscribe).not.toHaveBeenCalled()
+    expect(loadPlugins).not.toHaveBeenCalled()
+    expect(recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+    expect(pushApi.initialize).not.toHaveBeenCalled()
+    expect(readerApi.start).toHaveBeenCalledOnce()
+    expect(peekAppliedServerResourceRevision()).toBe(5)
+    expect(backgroundReady()).toBe(true)
+    await expect(retryObserverWriterPromotion()).resolves.toBe(false)
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
   })
 
-  it('keeps writer capability closed until the post-replay projection and event cursor are installed', async () => {
+  it('keeps commands blocked until the owning session finishes recovery, coherent hydration, and subscription', async () => {
     __observerShellFlagTestHooks.setOverride(true)
     let releaseEvents!: (value: { status: 'ok'; unsubscribe: typeof eventApi.unsubscribe }) => void
     eventApi.subscribe.mockImplementationOnce((input) => {
@@ -687,148 +704,159 @@ describe('API-backed client bootstrap', () => {
         releaseEvents = resolve
       })
     })
-    resourceApi.loadInitial
-      .mockImplementationOnce(async () => {
-        replaceResourceDatabase(
-          {
-            characters: [
-              {
-                __serverCharacterShell: true,
-                chaId: 'observer-char',
-                name: 'Observer summary',
-                creatorNotes: 'stale observer detail',
-              },
-            ],
-            characterOrder: ['observer-char'],
-            currentChar: 0,
-          } as never,
-          5,
-        )
-        return { status: 'ok', revision: 5, scope: 'shell' }
-      })
-      .mockImplementationOnce(async () => {
-        replaceResourceDatabase(
-          {
-            characters: [
-              { chaId: 'char-a', name: 'Authoritative Ada', chatPage: 0, chats: [{ id: 'chat-a', message: [] }] },
-              { chaId: 'char-b', name: 'Authoritative Bea', chatPage: 0, chats: [{ id: 'chat-b', message: [] }] },
-            ],
-            characterOrder: ['char-a', 'char-b'],
-            currentChar: 1,
-          } as never,
-          8,
-        )
-        return { status: 'ok', revision: 8, scope: 'shell' }
-      })
-
+    resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 8, scope: 'shell' })
     const loading = loadData()
-
     await vi.waitFor(() => expect(eventApi.subscribe).toHaveBeenCalledOnce())
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'recovering-writer',
+      projectionReady: true,
+      recoveryAuthorized: true,
+    })
     expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({
       canRenderShell: true,
-      canApplyRoutes: false,
+      canApplyRoutes: true,
       canMutate: false,
     })
-    expect(getDatabase().characters.map((character) => character.chaId)).toEqual(['char-a', 'char-b'])
-    expect(getDatabase().characters[0]?.name).toBe('Authoritative Ada')
-    expect(getDatabase().characters.some((character) => character.chaId === 'observer-char')).toBe(false)
-    expect(get(selectedCharID)).toBe(1)
-    expect(peekCachedServerCommandRevision()).toBe(8)
+    expect(pendingMutationApi.readOwner).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetch).toHaveBeenCalledExactlyOnceWith(null, {
+      expectedWriter: { epoch: 1, databaseLineage: 'database-a' },
+    })
     expect(peekAppliedServerResourceRevision()).toBe(8)
-    expect(commandApi.reconciler).not.toBeNull()
     expect(eventApi.subscriptions[0]?.sinceRevision).toBe(8)
-
     releaseEvents({ status: 'ok', unsubscribe: eventApi.unsubscribe })
     await loading
-
-    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({
-      canRenderShell: true,
-      canApplyRoutes: true,
-      canMutate: true,
-    })
-  })
-
-  it('shares a targeted observer promotion retry without duplicating replay or event subscription', async () => {
-    __observerShellFlagTestHooks.setOverride(true)
-    let releaseRetryEvents!: (value: { status: 'ok'; unsubscribe: typeof eventApi.unsubscribe }) => void
-    eventApi.subscribe.mockImplementation(async (input) => {
-      eventApi.subscriptions.push(input)
-      if (eventApi.subscriptions.length === 1) {
-        return { status: 'error', error: 'event stream unavailable' }
-      }
-      return new Promise((resolve) => {
-        releaseRetryEvents = resolve
-      })
-    })
-    pendingMutationApi.replay
-      .mockResolvedValueOnce({ attempted: 1, discarded: 0, retained: 0, succeeded: 1 })
-      .mockResolvedValueOnce({ attempted: 0, discarded: 0, retained: 0, succeeded: 0 })
-
-    await loadData()
-
-    expect(getStartupCoordinatorSnapshot().capabilities.canMutate).toBe(false)
-    expect(get(observerShellLifecycleStore).mode).toBe('unavailable')
-
-    const firstRetry = retryObserverWriterPromotion()
-    const secondRetry = retryObserverWriterPromotion()
-
-    expect(secondRetry).toBe(firstRetry)
-    await vi.waitFor(() => expect(eventApi.subscribe).toHaveBeenCalledTimes(2))
-    expect(get(observerShellLifecycleStore).mode).toBe('retrying')
-    expect(bootstrapApi.fetch).toHaveBeenCalledTimes(2)
-    expect(pendingMutationApi.replay).toHaveBeenCalledTimes(2)
-    expect(resourceApi.loadInitial).toHaveBeenCalledTimes(3)
-    expect(eventApi.unsubscribe).not.toHaveBeenCalled()
-
-    releaseRetryEvents({ status: 'ok', unsubscribe: eventApi.unsubscribe })
-    await expect(Promise.all([firstRetry, secondRetry])).resolves.toEqual([true, true])
-
-    expect(eventApi.subscribe).toHaveBeenCalledTimes(2)
-    expect(pendingMutationApi.replay).toHaveBeenCalledTimes(2)
-    expect(get(observerShellLifecycleStore).mode).toBe('promoted')
+    expect(getClientSessionSnapshot().lifecycle).toBe('writing')
     expect(getStartupCoordinatorSnapshot().capabilities.canMutate).toBe(true)
+    expect(readerApi.start).not.toHaveBeenCalled()
   })
 
-  it('returns a failed promotion to a stable observer and stops partially restarted writer runtimes', async () => {
+  it('parks retained pending intent and opens a reader projection when writer recovery cannot finish', async () => {
     __observerShellFlagTestHooks.setOverride(true)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
-    eventApi.subscribe.mockImplementation(async (input) => {
-      eventApi.subscriptions.push(input)
-      return { status: 'error', error: 'event stream unavailable' }
-    })
-
+    pendingMutationApi.replay.mockResolvedValue({ attempted: 1, discarded: 0, retained: 1, succeeded: 0 })
     await loadData()
-    expect(get(observerShellLifecycleStore).mode).toBe('unavailable')
-
-    await expect(retryObserverWriterPromotion()).resolves.toBe(false)
-
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
     expect(getStartupCoordinatorSnapshot().capabilities.canMutate).toBe(false)
-    expect(get(observerShellLifecycleStore).mode).toBe('unavailable')
-    expect(eventApi.subscribe).toHaveBeenCalledTimes(2)
-    expect(runtimeApi.stopActiveMessageTranslationRefresh).toHaveBeenCalledOnce()
-    expect(runtimeApi.stopActiveGreetingTranslationRefresh).toHaveBeenCalledOnce()
-    expect(runtimeApi.stopActiveGenerationReattach).toHaveBeenCalledOnce()
-    expect(runtimeApi.stopGenerationFinalizationPersistenceRefresh).toHaveBeenCalledOnce()
-    expect(hydrationApi.stopChatMessageHydration).toHaveBeenCalledOnce()
-  })
-
-  it('falls back to writer-first startup when the optional observer read fails', async () => {
-    __observerShellFlagTestHooks.setOverride(true)
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    resourceApi.loadInitial
-      .mockResolvedValueOnce({ status: 'error', error: 'observer shell unavailable' })
-      .mockResolvedValueOnce({ status: 'ok', revision: 6, scope: 'shell' })
-
-    await loadData()
-
+    expect(readerApi.start).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
     expect(resourceApi.loadInitial).toHaveBeenCalledTimes(2)
-    expect(consoleWarn).toHaveBeenCalledWith('Observer shell load failed: observer shell unavailable')
-    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({
-      canRenderShell: true,
-      canApplyRoutes: true,
-      canMutate: true,
-    })
+    expect(loadPlugins).not.toHaveBeenCalled()
   })
+
+  it('passively becomes a reader after a foreign writer frame and never asks for the legacy offline choice', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    await loadData()
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: 'new-writer', epoch: 2 } }),
+    )
+    eventApi.subscriptions[0]!.onWriterEvent!({ sessionId: 'new-writer', epoch: 2 })
+    expect(getStartupCoordinatorSnapshot().capabilities.canMutate).toBe(false)
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledOnce())
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'reading',
+      writer: { sessionId: 'new-writer', epoch: 2 },
+    })
+    expect(eventApi.unsubscribe).toHaveBeenCalledOnce()
+    expect(alertRequiredSelect).not.toHaveBeenCalled()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+  })
+
+  it('retries a failed demotion read without acquiring, replaying, or claiming a live connection', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await loadData()
+    bootstrapApi.fetchReadOnly
+      .mockResolvedValueOnce({ status: 'error', error: 'temporary network failure' })
+      .mockResolvedValue(runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: 'new-writer', epoch: 2 } }))
+    eventApi.subscriptions[0]!.onWriterEvent!({ sessionId: 'new-writer', epoch: 2 })
+    await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('interrupted'))
+    expect(readerApi.start).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledOnce(), { timeout: 3000 })
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' })
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+  })
+
+  it('retries a replacement reader read in the new lineage without adopting writer or pending scope', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writer: { sessionId: 'foreign-writer', epoch: 1 } }),
+    )
+    await loadData()
+    const callbacks = readerApi.start.mock.calls[0]![0]
+    const replacement = { databaseLineage: 'database-b', writer: { sessionId: 'replacement-writer', epoch: 0 } }
+    projectionLifecycleApi.discard.mockImplementationOnce(async () => {
+      clearCachedServerCommandRevision()
+      clearAppliedServerResourceRevision()
+    })
+    bootstrapApi.fetchReadOnly
+      .mockResolvedValueOnce({ status: 'error', error: 'temporary replacement read failure' })
+      .mockResolvedValue(runtimeBootstrap({ ...replacement, writerEpoch: 0, revision: 1 }))
+    resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 1, scope: 'shell' })
+    await callbacks.onLineageChange(replacement)
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'reading',
+      databaseLineage: 'database-b',
+      connection: 'interrupted',
+    })
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledTimes(2), { timeout: 3000 })
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'reading',
+      databaseLineage: 'database-b',
+      projectionReady: true,
+      connection: 'live',
+    })
+    expect(peekAppliedServerResourceRevision()).toBe(1)
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+    expect(pendingMutationApi.flushAcknowledgements).not.toHaveBeenCalled()
+    expect(projectionLifecycleApi.discard).toHaveBeenCalledExactlyOnceWith('lineage-change')
+  })
+
+  it.each(['plugin', 'generation', 'chat'] as const)(
+    'ignores old %s startup completion after a newer writer recovery finishes',
+    async (heldStep) => {
+      __observerShellFlagTestHooks.setOverride(true)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      let release!: () => void
+      const held = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const step =
+        heldStep === 'plugin'
+          ? vi.mocked(loadPlugins)
+          : heldStep === 'generation'
+            ? recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects
+            : hydrationApi.hydrateActiveChat
+      if (heldStep === 'chat')
+        hydrationApi.hydrateActiveChat.mockImplementationOnce(async () => {
+          await held
+          return true
+        })
+      else
+        step.mockImplementationOnce(async () => {
+          await held
+        })
+      const oldStartup = loadData()
+      await vi.waitFor(() => expect(step).toHaveBeenCalledOnce())
+      eventApi.subscriptions[0]!.onClose!()
+      await vi.waitFor(() => expect(eventApi.subscriptions).toHaveLength(2), { timeout: 3000 })
+      await vi.waitFor(() => expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true))
+      const currentGeneration = getClientSessionSnapshot().generation
+      release()
+      await oldStartup
+      expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'writing', generation: currentGeneration })
+      expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
+      expect(readerApi.start).not.toHaveBeenCalled()
+      expect(backgroundReady()).toBe(true)
+    },
+  )
 
   it('retries startup after the user acknowledges a transient bootstrap failure', async () => {
     bootstrapApi.fetch.mockResolvedValueOnce({ status: 'unavailable' }).mockResolvedValueOnce(runtimeBootstrap())
@@ -849,62 +877,6 @@ describe('API-backed client bootstrap', () => {
         { attemptId: 2, completedAtMs: expect.any(Number) },
       ],
     })
-  })
-
-  it('settles into a useful observer after writer bootstrap failure and retries only on request', async () => {
-    __observerShellFlagTestHooks.setOverride(true)
-    const consoleWarn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    bootstrapApi.fetch.mockResolvedValueOnce({ status: 'unavailable' }).mockResolvedValueOnce(runtimeBootstrap())
-
-    await loadData()
-
-    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
-    expect(alertError).not.toHaveBeenCalled()
-    expect(waitAlert).not.toHaveBeenCalled()
-    expect(backgroundReady()).toBe(false)
-    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({
-      canRenderShell: true,
-      canApplyRoutes: false,
-      canMutate: false,
-    })
-    expect(get(observerShellLifecycleStore).mode).toBe('unavailable')
-    expect(consoleWarn).toHaveBeenCalledWith(
-      'Writer startup deferred while the observer shell remains available:',
-      expect.any(Error),
-    )
-
-    await expect(retryObserverWriterPromotion()).resolves.toBe(true)
-
-    expect(bootstrapApi.fetch).toHaveBeenCalledTimes(2)
-    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
-    expect(eventApi.subscribe).toHaveBeenCalledOnce()
-    expect(backgroundReady()).toBe(true)
-    expect(get(observerShellLifecycleStore).mode).toBe('promoted')
-  })
-
-  it('keeps the observer shell after explicit takeover denial and permits a later targeted retry', async () => {
-    __observerShellFlagTestHooks.setOverride(true)
-    vi.spyOn(console, 'warn').mockImplementation(() => {})
-    bootstrapApi.fetch
-      .mockResolvedValueOnce({ status: 'active-writer-connected', error: 'active_writer_connected' })
-      .mockResolvedValueOnce(runtimeBootstrap())
-    vi.mocked(alertRequiredSelect).mockResolvedValueOnce('1')
-
-    await loadData()
-
-    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({
-      canRenderShell: true,
-      canApplyRoutes: false,
-      canMutate: false,
-    })
-    expect(get(observerShellLifecycleStore).mode).toBe('takeover-denied')
-    expect(resourceApi.loadInitial).toHaveBeenCalledOnce()
-    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
-
-    await expect(retryObserverWriterPromotion()).resolves.toBe(true)
-
-    expect(bootstrapApi.fetch).toHaveBeenCalledTimes(2)
-    expect(get(observerShellLifecycleStore).mode).toBe('promoted')
   })
 
   it('starts plugin runtime synchronization after the initial plugin load', async () => {

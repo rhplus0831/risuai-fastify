@@ -101,9 +101,22 @@
   let aprilFools = $state(new Date().getMonth() === 3 && new Date().getDate() === 1)
   let aprilFoolsPage = $state(0)
   let keepingSessionAlive = $state(false)
+  let signingInReader = $state(false)
   let retryingPluginRuntime = $state(false)
   let generationRecoveryAction = $state<'idle' | 'retrying' | 'discarding'>('idle')
   let connectedReaderView = $derived($clientSessionStore.managed && $clientSessionStore.lifecycle !== 'writing')
+  async function signInReader(): Promise<void> {
+    if (signingInReader || $clientSessionStore.lifecycle !== 'auth-required') return
+    signingInReader = true
+    try {
+      const { retryConnectedAuthentication } = await import('./ts/bootstrap')
+      await retryConnectedAuthentication()
+    } catch (error) {
+      alertError(error)
+    } finally {
+      signingInReader = false
+    }
+  }
   let canApplyWriterRoutes = $derived($startupCoordinatorStore.capabilities.canApplyRoutes && !connectedReaderView)
   let pluginStartupFailed = $derived($startupCoordinatorStore.failures.pluginsReady !== undefined)
   let pluginRuntimeFailed = $derived($pluginRuntimeStateStore.phase === 'error')
@@ -261,9 +274,12 @@
 
   $effect(() => {
     if (!canApplyWriterRoutes) return
+    // Keep the live URL subscription even while a nonreactive reader intent
+    // supplies the first route after promotion.
+    const currentWriterRoute = $currentRoute
     const observerIntent = peekObserverRouteIntent()
-    const route = observerIntent?.route ?? $currentRoute
-    if (consumeStateDrivenRouteUpdate()) {
+    const route = observerIntent?.route ?? currentWriterRoute
+    if (consumeStateDrivenRouteUpdate() && !observerIntent) {
       renderedRoute = route
       return
     }
@@ -525,6 +541,19 @@
         </div>
       </div>
       <span class="absolute top-4 left-4 font-bold text-[#bbbbbb] text-md md:text-lg">RisyGTP 9+ Mytho Ultra Free</span>
+    </div>
+  {:else if $clientSessionStore.managed && $clientSessionStore.lifecycle === 'auth-required'}
+    <div
+      class="flex h-full w-full flex-col items-center justify-center gap-4 bg-bgcolor p-6 text-textcolor"
+      data-reader-auth-required>
+      <p role="status">{language.connectedReaders.authenticationRequired}</p>
+      <button
+        type="button"
+        class="rounded-md border border-textcolor/30 px-4 py-2 disabled:opacity-60"
+        disabled={signingInReader}
+        onclick={() => void signInReader()}>
+        {language.connectedReaders.signIn}
+      </button>
     </div>
   {:else if !$startupCoordinatorStore.capabilities.canRenderShell}
     <div

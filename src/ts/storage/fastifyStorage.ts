@@ -338,6 +338,12 @@ export async function getNodeServerProxyAuth() {
   return await sharedStorage.getProxyAuth()
 }
 
+/** Explicit reauthentication after authenticated reader resources were cleared. */
+export function invalidateNodeServerProxyAuth(): void {
+  sharedStorage.authChecked = false
+  clearSessionAuth()
+}
+
 async function readPasswordAuthResponse(
   response: Response,
   fallbackMessage: string,

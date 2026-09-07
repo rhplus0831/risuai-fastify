@@ -109,6 +109,31 @@ afterEach(async () => {
 })
 
 describe('router initial application', () => {
+  it('does not apply a retired writer route after reader navigation while its chunk is loading', async () => {
+    const router = await importRouterAt('/')
+    const { enterClientWriter } = await import('./__tests__/clientSession')
+    const { demoteClientSession } = await import('./clientSession')
+    enterClientWriter()
+    const stores = await import('./stores.svelte')
+    const chunk = deferred()
+    routerMocks.preloadRouteComponents.mockReturnValueOnce(chunk.promise)
+    const applying = router.applyRouteToStores({
+      kind: 'settings',
+      path: '/settings/display',
+      section: 'display',
+      index: 3,
+    })
+    await vi.waitFor(() => expect(routerMocks.preloadRouteComponents).toHaveBeenCalledOnce())
+    demoteClientSession()
+    router.navigate('/character/reader/reader-chat')
+    chunk.resolve()
+    await expect(applying).resolves.toBe(false)
+    expect(get(stores.settingsOpen)).toBe(false)
+    expect(window.location.pathname).toBe('/character/reader/reader-chat')
+    expect(routerMocks.finishRouteResources).not.toHaveBeenCalled()
+    expect(routerMocks.changeChar).not.toHaveBeenCalled()
+  })
+
   it('keeps route stores unchanged until the target component chunks are ready', async () => {
     const router = await importRouterAt('/')
     const stores = await import('./stores.svelte')

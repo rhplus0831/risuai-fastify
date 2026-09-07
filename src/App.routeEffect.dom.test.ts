@@ -2,6 +2,7 @@ import { mount, tick, unmount } from 'svelte'
 import {
   beginClientSession,
   demoteClientSession,
+  requireClientAuthentication,
   settleClientReader,
   setClientProjectionReady,
   setClientConnectionState,
@@ -72,6 +73,7 @@ const appRouteDomMocks = vi.hoisted(() => {
     openGridRoute: vi.fn(),
     discardGenerationRecoveryStartup: vi.fn(async () => true),
     retryGenerationRecoveryStartup: vi.fn(async () => true),
+    retryConnectedAuthentication: vi.fn(async () => {}),
     state,
   }
 })
@@ -131,6 +133,7 @@ vi.mock('./lang', () => ({
     home: 'Home',
     menu: 'Menu',
     loading: 'Loading',
+    connectedReaders: { authenticationRequired: 'Sign in again to reconnect.', signIn: 'Sign in' },
     pushNotifications: {
       needsAttention: 'Notifications need attention on this browser',
       preferenceEnabled: 'Your notification setting is still on.',
@@ -168,6 +171,7 @@ vi.mock('src/lang', () => ({
     home: 'Home',
     menu: 'Menu',
     loading: 'Loading',
+    connectedReaders: { authenticationRequired: 'Sign in again to reconnect.', signIn: 'Sign in' },
     pushNotifications: {
       needsAttention: 'Notifications need attention on this browser',
       preferenceEnabled: 'Your notification setting is still on.',
@@ -214,6 +218,7 @@ vi.mock('src/ts/alert', () => ({
 vi.mock('./ts/bootstrap', () => ({
   discardGenerationRecoveryStartup: appRouteDomMocks.discardGenerationRecoveryStartup,
   retryGenerationRecoveryStartup: appRouteDomMocks.retryGenerationRecoveryStartup,
+  retryConnectedAuthentication: appRouteDomMocks.retryConnectedAuthentication,
 }))
 
 vi.mock('./ts/characterCards', () => ({
@@ -876,6 +881,27 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
   })
 
+  it('replaces authenticated reader content with the existing sign-in entry after auth loss', async () => {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    await mountApp()
+    expect(target.querySelector('[data-testid="observer-shell-marker"]')).not.toBeNull()
+    requireClientAuthentication()
+    await tick()
+    expect(target.querySelector('[data-testid="observer-shell-marker"]')).toBeNull()
+    expect(target.querySelector('[data-reader-auth-required]')?.textContent).toContain('Sign in again')
+    const button = target.querySelector('[data-reader-auth-required] button') as HTMLButtonElement
+    button.click()
+    button.click()
+    await vi.waitFor(() => expect(appRouteDomMocks.retryConnectedAuthentication).toHaveBeenCalledOnce())
+  })
+
   it('renders the dedicated observer view without applying persistence-capable routes', async () => {
     if (component) {
       unmount(component)
@@ -922,6 +948,19 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenCalledOnce()
     expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenCalledWith(latestRoute)
     await vi.waitFor(() => expect(peekObserverRouteIntent()).toBeNull())
+
+    // Consuming a nonreactive reader intent must not remove the effect's live
+    // URL dependency; the next ordinary writer navigation still applies.
+    const nextRoute: AppRoute = {
+      kind: 'character',
+      path: '/character/char-b/chat-b',
+      chaId: 'char-b',
+      chatId: 'chat-b',
+    }
+    appRouteDomMocks.state.exports?.currentRoute.set(nextRoute)
+    await vi.waitFor(() =>
+      expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenLastCalledWith(nextRoute),
+    )
   })
 
   it('returns immediately to the authenticated observer shell after writer capability is revoked', async () => {

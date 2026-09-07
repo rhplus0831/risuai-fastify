@@ -1,9 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../platform', () => ({ isFastifyServer: true }))
+const authApi = vi.hoisted(() => ({ get: vi.fn(async () => 'events-auth-token') }))
 
 vi.mock('../storage/fastifyStorage', () => ({
-  getNodeServerProxyAuth: async () => 'events-auth-token',
+  getNodeServerProxyAuth: authApi.get,
 }))
 
 import { subscribeServerCommandEvents } from './events'
@@ -11,10 +12,12 @@ import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
 import * as activeWriterSession from './activeWriterSession'
 import {
   beginClientSession,
+  demoteClientSession,
   requireClientAuthentication,
   resetClientSessionForTests,
   settleClientReader,
 } from '../clientSession'
+import { enterClientWriter } from '../__tests__/clientSession'
 import type { CommandEvent } from './commands'
 import type { ServerMemoryEvent, ServerMemoryJobSnapshot, ServerWriterEvent } from './events'
 import type { ServerBardWikiJobEvent } from './bardWikiJobEvents'
@@ -72,8 +75,37 @@ afterEach(() => {
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
+beforeEach(() => {
+  authApi.get.mockReset().mockResolvedValue('events-auth-token')
+})
 
 describe('server command event subscription helper', () => {
+  it('cannot open a writer stream after losing its session during authentication', async () => {
+    enterClientWriter()
+    let release!: (value: string) => void
+    authApi.get.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const calls = stubEventsFetch(': connected\n\n')
+    const subscription = subscribeServerCommandEvents({ onCommandEvent: vi.fn() })
+    demoteClientSession()
+    release('late-auth-token')
+    await expect(subscription).resolves.toEqual({ status: 'unavailable' })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('reports authentication loss directly for a managed writer stream', async () => {
+    enterClientWriter()
+    stubEventsFetch('{"error":"missing_auth"}', 401)
+    await expect(subscribeServerCommandEvents({ onCommandEvent: vi.fn() })).resolves.toEqual({
+      status: 'error',
+      error: 'HTTP 401',
+      httpStatus: 401,
+    })
+  })
   it('keeps reader transport available after writer loss and omits the writer registration header', async () => {
     vi.spyOn(activeWriterSession, 'isWriterAccessLost').mockReturnValue(true)
     const operation = beginClientSession('reader-a')

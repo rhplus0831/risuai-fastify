@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { enterClientWriter, repromoteClientWriter } from './__tests__/clientSession'
+import { demoteClientSession } from './clientSession'
 import {
   backgroundReady,
   beginStartupAttempt,
@@ -34,6 +36,22 @@ afterEach(() => {
 })
 
 describe('startup readiness instrumentation', () => {
+  it('requires current generation recovery and chat readiness after managed writer promotion', () => {
+    enterClientWriter()
+    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+      recordStartupMilestone(milestone)
+    settleStartupChatReadiness(true)
+    settleStartupGenerationRecoveryReadiness(true)
+    expect(canGenerate()).toBe(true)
+    demoteClientSession()
+    repromoteClientWriter()
+    expect(canMutate()).toBe(true)
+    expect(canGenerate()).toBe(false)
+    settleStartupGenerationRecoveryReadiness(true)
+    expect(canGenerate()).toBe(false)
+    settleStartupChatReadiness(true)
+    expect(canGenerate()).toBe(true)
+  })
   it('publishes ordered, monotonic transitions when signals arrive out of order', () => {
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 5)

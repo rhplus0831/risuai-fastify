@@ -16,10 +16,12 @@ import {
 import {
   canRenderClientReadView,
   canUseClientWriteAccess,
+  captureClientSessionGeneration,
   clientSessionStore,
   demoteClientSession,
   isClientReadOnly,
   isClientSessionManaged,
+  isClientSessionGenerationCurrent,
   resetClientSessionForTests,
 } from './clientSession'
 
@@ -461,15 +463,20 @@ export function runStartupStep<T>(step: StartupStep, operation: () => Promise<T>
   const existing = inFlightStartupSteps.get(step)
   if (existing) return existing as Promise<T>
 
+  const generation = captureClientSessionGeneration()
   const running = Promise.resolve()
-    .then(operation)
+    .then(() => {
+      if (!isClientSessionGenerationCurrent(generation)) throw new Error('Startup step was superseded')
+      return operation()
+    })
     .then((value) => {
+      if (!isClientSessionGenerationCurrent(generation)) throw new Error('Startup step was superseded')
       completedStartupSteps.set(step, value)
       notifyReadinessListeners()
       return value
     })
     .finally(() => {
-      inFlightStartupSteps.delete(step)
+      if (inFlightStartupSteps.get(step) === running) inFlightStartupSteps.delete(step)
     })
   inFlightStartupSteps.set(step, running)
   return running
@@ -522,7 +529,18 @@ export const startupCoordinatorStore: StartupCoordinatorReadable = {
   },
 }
 
-clientSessionStore.subscribe(() => {
+let startupSessionGeneration = captureClientSessionGeneration()
+clientSessionStore.subscribe((state) => {
+  if (state.managed && state.generation !== startupSessionGeneration) {
+    // Milestones retain diagnostic history; page-owned services must be installed
+    // again after a role transition, and old promises cannot certify that work.
+    completedStartupSteps.clear()
+    inFlightStartupSteps.clear()
+    inFlightCapabilityRetries.clear()
+    generationRecoveryReady = false
+    chatGenerationReady = false
+  }
+  startupSessionGeneration = state.generation
   clearReadyCapabilityFailures()
   notifyReadinessListeners()
 })
