@@ -1,3 +1,13 @@
+import {
+  beginClientSession,
+  settleClientReader,
+  authorizeClientWriterRecovery,
+  setClientConnectionState,
+  setClientProjectionReady,
+  completeClientWriterRecovery,
+  demoteClientSession,
+  resetClientSessionForTests,
+} from '../clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
@@ -39,12 +49,14 @@ function characterWithTriggers(triggerscript: unknown[]): character {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   ;(globalThis as Record<string, unknown>).safeStructuredClone = safeStructuredClone
   CurrentTriggerIdStore.set(null)
   seedDb()
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   CurrentTriggerIdStore.set(null)
   selectedCharID.set(-1)
 })
@@ -197,5 +209,47 @@ describe('client trigger execution budget', () => {
     expect(result?.triggerStoppedReason).toBeUndefined()
     expect(result?.chat.scriptstate?.$ran).toBe('yes')
     expect(get(CurrentTriggerIdStore)).toBe('button-42')
+  })
+})
+
+function enterScriptWriter(epoch = 1): void {
+  const operation = beginClientSession('script-writer')
+  authorizeClientWriterRecovery(operation, {
+    databaseLineage: 'lineage',
+    writer: { sessionId: 'script-writer', epoch },
+  })
+  setClientConnectionState('live')
+  setClientProjectionReady(true)
+  completeClientWriterRecovery(operation)
+}
+
+describe('connected trigger continuation authority', () => {
+  it('rejects reader entry before changing current trigger or variables', async () => {
+    const char = characterWithTriggers([])
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    await expect(runTrigger(char, 'manual', { chat: char.chats[0], triggerId: 'must-not-set' })).rejects.toThrow(
+      'client_write_access_required',
+    )
+    expect(get(CurrentTriggerIdStore)).toBe(null)
+  })
+  it('does not execute the next trigger effect after a wait spans demotion and reacquisition', async () => {
+    enterScriptWriter()
+    const char = characterWithTriggers([
+      {
+        comment: 'wait',
+        type: 'manual',
+        conditions: [],
+        effect: [
+          { type: 'v2Wait', valueType: 'value', value: '0.01', indent: 0 },
+          { type: 'v2SetVar', var: 'late', operator: '=', valueType: 'value', value: 'changed', indent: 0 },
+        ],
+      },
+    ])
+    const run = runTrigger(char, 'manual', { chat: char.chats[0], manualName: 'wait' })
+    demoteClientSession()
+    enterScriptWriter(2)
+    await expect(run).rejects.toThrow('client_write_operation_stale')
+    expect(char.chats[0].scriptstate).not.toHaveProperty('$late')
   })
 })

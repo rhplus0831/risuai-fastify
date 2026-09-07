@@ -1,3 +1,13 @@
+import {
+  beginClientSession,
+  settleClientReader,
+  setClientConnectionState,
+  setClientProjectionReady,
+  authorizeClientWriterRecovery,
+  completeClientWriterRecovery,
+  demoteClientSession,
+  resetClientSessionForTests,
+} from '../clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushSync } from 'svelte'
 import { get } from 'svelte/store'
@@ -393,6 +403,7 @@ function withPluginStorageCloneStats<T>(fn: () => T): PluginStorageCloneStats<T>
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   clearCachedServerCommandRevision()
   vi.unstubAllGlobals()
   pluginImportMocks.alertConfirm.mockReset()
@@ -419,6 +430,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   stopPluginRuntimeSync()
   setServerCommandSuccessReconciler(null)
 })
@@ -2494,4 +2506,106 @@ describe('plugin database command bridge', () => {
     expect(() => apis.safeIdbFactory.open('device')).not.toThrow()
     expect(open).toHaveBeenCalledWith('safe_plugin_device', undefined)
   })
+})
+
+describe('connected reader plugin compatibility boundary', () => {
+  it('blocks setters and storage proxies before command-unavailable local fallbacks', async () => {
+    const calls = stubCommandFetch()
+    const apis = getV2PluginAPIs()
+    const proxy = apis.getDatabase()
+    const localStorageSet = apis.safeLocalStorage.setItem
+    const before = JSON.stringify(getDatabase())
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    clearCachedServerCommandRevision()
+    for (const mutate of [
+      () => apis.setChar({ chaId: 'char-a', name: 'changed' }),
+      () => apis.setArg('plugin-a::arg', 'changed'),
+      () => apis.setDatabaseLite({ aiModel: 'changed', pluginCustomStorage: { key: 'changed' } }),
+      () => apis.pluginStorage.setItem('key', 'changed'),
+      () => apis.pluginStorage.removeItem('key'),
+      () => apis.pluginStorage.clear(),
+      () => localStorageSet('key', 'changed'),
+      () => {
+        proxy.customKey = 'changed'
+      },
+    ])
+      expect(mutate).toThrow('client_write_access_required')
+    await expect(apis.setDatabase({ aiModel: 'changed' })).rejects.toThrow('client_write_access_required')
+    await loadPlugins()
+    expect(JSON.stringify(getDatabase())).toBe(before)
+    expect(calls).toHaveLength(0)
+    expect(loadV3Plugins).not.toHaveBeenCalled()
+  })
+
+  it('fences retained provider, hook and timer callbacks across writer loss and reacquisition', async () => {
+    const operation = beginClientSession('writer')
+    authorizeClientWriterRecovery(operation, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 1 } })
+    setClientConnectionState('live')
+    setClientProjectionReady(true)
+    completeClientWriterRecovery(operation)
+    const apis = getV2PluginAPIs()
+    const effect = vi.fn(async () => ({ success: true, content: 'changed' }))
+    apis.addProvider('reader-test-provider', effect)
+    const retained = pluginV2.providers.get('reader-test-provider')!
+    const hook = vi.fn(() => 'changed')
+    apis.addRisuScriptHandler('display', hook)
+    const retainedHook = [...pluginV2.editdisplay].at(-1)!
+    const timer = vi.fn()
+    apis.getSafeGlobalThis().setTimeout(timer, 0)
+    demoteClientSession()
+    expect(() => retained({} as any)).toThrow('client_write_access_required')
+    expect(() => retainedHook('source')).toThrow('client_write_access_required')
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(timer).not.toHaveBeenCalled()
+    expect(effect).not.toHaveBeenCalled()
+    expect(hook).not.toHaveBeenCalled()
+    const renewed = beginClientSession('writer')
+    authorizeClientWriterRecovery(renewed, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 2 } })
+    setClientConnectionState('live')
+    setClientProjectionReady(true)
+    completeClientWriterRecovery(renewed)
+    expect(() => retained({} as any)).toThrow('Plugin client session is no longer active')
+    pluginV2.providers.delete('reader-test-provider')
+    pluginV2.editdisplay.delete(retainedHook)
+  })
+})
+
+it('does not dispatch plugin fetch after permission returns to a demoted writer', async () => {
+  const operation = beginClientSession('writer')
+  authorizeClientWriterRecovery(operation, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 1 } })
+  setClientConnectionState('live')
+  setClientProjectionReady(true)
+  completeClientWriterRecovery(operation)
+  const permission = createDeferred<boolean>()
+  pluginPermissionMocks.getPluginPermission.mockReturnValueOnce(permission.promise)
+  const fetchMock = vi.fn()
+  vi.stubGlobal('fetch', fetchMock)
+  const apis = getV2PluginAPIs(seedPlugin('plugin-a'))
+  const request = apis.nativeFetch('https://example.com')
+  await vi.waitFor(() => expect(pluginPermissionMocks.getPluginPermission).toHaveBeenCalled())
+  demoteClientSession()
+  permission.resolve(true)
+  await expect(request).rejects.toThrow('client_write_access_required')
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it('fences a provider result that completes after writer loss', async () => {
+  const operation = beginClientSession('writer')
+  authorizeClientWriterRecovery(operation, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 1 } })
+  setClientConnectionState('live')
+  setClientProjectionReady(true)
+  completeClientWriterRecovery(operation)
+  const result = createDeferred<{ success: boolean; content: string }>()
+  let cleanup = () => {}
+  const apis = getV2PluginAPIs(undefined, undefined, (dispose) => {
+    cleanup = dispose
+  })
+  apis.addProvider('late-provider', () => result.promise)
+  const request = pluginV2.providers.get('late-provider')!({} as any)
+  demoteClientSession()
+  result.resolve({ success: true, content: 'obsolete' })
+  await expect(request).rejects.toThrow('client_write_access_required')
+  cleanup()
+  expect(pluginV2.providers.has('late-provider')).toBe(false)
 })

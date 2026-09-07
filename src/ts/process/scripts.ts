@@ -1,3 +1,8 @@
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  awaitClientWriteOperation,
+} from '../clientWriteOperation'
 import { get } from 'svelte/store'
 import { CharEmotion, selectedCharID, VariableReloadGUIPointer } from '../stores.svelte'
 import type { character, customscript, Database, Chat } from '../storage/database.svelte'
@@ -427,23 +432,29 @@ export async function processScriptFull(
   chatID = -1,
   cbsConditions: CbsConditions = {},
 ) {
+  const clientOperation = captureClientWriteOperation()
+
   const db = scriptSettings()
   let emoChanged = false
   const activeCharacter = char.type === 'character' ? char : getSelectedCharacterOwner()
   const currentChat = activeCharacter?.chats?.[activeCharacter.chatPage]
-  data = await runLuaEditTrigger(char, mode, data, { index: chatID })
+  data = await awaitClientWriteOperation(clientOperation, runLuaEditTrigger(char, mode, data, { index: chatID }))
 
   if (mode === 'editdisplay') {
     if (activeCharacter && currentChat) {
       try {
-        const d = await runTrigger(activeCharacter, 'display', {
-          chat: currentChat,
-          displayMode: true,
-          displayData: data,
-        })
+        const d = await awaitClientWriteOperation(
+          clientOperation,
+          runTrigger(activeCharacter, 'display', {
+            chat: currentChat,
+            displayMode: true,
+            displayData: data,
+          }),
+        )
 
         data = d?.displayData ?? data
       } catch (e) {
+        assertClientWriteOperation(clientOperation)
         console.error(e)
       }
     }
@@ -451,7 +462,7 @@ export async function processScriptFull(
 
   if (pluginV2[mode].size > 0) {
     for (const plugin of pluginV2[mode]) {
-      const res = await plugin(data)
+      const res = await awaitClientWriteOperation(clientOperation, plugin(data))
       if (res !== null && res !== undefined) {
         data = res
       }
@@ -538,7 +549,7 @@ export async function processScriptFull(
       if (outScript.startsWith('@@') || pscript.actions.length > 0) {
         let matched = false
         if (outScript.startsWith('@@emo ')) {
-          matched = await testClientRegex(input, flag, data, regexTimeout)
+          matched = await awaitClientWriteOperation(clientOperation, testClientRegex(input, flag, data, regexTimeout))
           if (matched) {
             const emoName = script.out.substring(6).trim()
             let charemotions = get(CharEmotion)
@@ -563,7 +574,10 @@ export async function processScriptFull(
             }
           }
         } else if (outScript.startsWith('@@inject') || pscript.actions.includes('inject')) {
-          const replaced = await testReplaceClientRegex(input, flag, data, '', regexTimeout, regexSizeLimit)
+          const replaced = await awaitClientWriteOperation(
+            clientOperation,
+            testReplaceClientRegex(input, flag, data, '', regexTimeout, regexSizeLimit),
+          )
           matched = replaced.matched
           if (matched) {
             applyInjectMutation(data, mode, chatID, currentChat)
@@ -576,19 +590,25 @@ export async function processScriptFull(
             pscript.actions.includes('move_top') ||
             pscript.actions.includes('move_bottom')
           if (isMove) {
-            const moved = await testMoveClientRegex(
-              input,
-              flag,
-              data,
-              outScript,
-              outScript.startsWith('@@move_top') || pscript.actions.includes('move_top'),
-              regexTimeout,
-              regexSizeLimit,
+            const moved = await awaitClientWriteOperation(
+              clientOperation,
+              testMoveClientRegex(
+                input,
+                flag,
+                data,
+                outScript,
+                outScript.startsWith('@@move_top') || pscript.actions.includes('move_top'),
+                regexTimeout,
+                regexSizeLimit,
+              ),
             )
             matched = moved.matched
             if (matched) data = moved.result
           } else {
-            const replaced = await testReplaceClientRegex(input, flag, data, outScript, regexTimeout, regexSizeLimit)
+            const replaced = await awaitClientWriteOperation(
+              clientOperation,
+              testReplaceClientRegex(input, flag, data, outScript, regexTimeout, regexSizeLimit),
+            )
             matched = replaced.matched
             if (matched) {
               data = risuChatParser(replaced.result, { chatID: chatID, cbsConditions })
@@ -615,7 +635,10 @@ export async function processScriptFull(
             pointer--
           }
 
-          const repeatMatch = await matchFirstClientRegex(input, flag, lastChat, regexTimeout)
+          const repeatMatch = await awaitClientWriteOperation(
+            clientOperation,
+            matchFirstClientRegex(input, flag, lastChat, regexTimeout),
+          )
           if (!repeatMatch) return
           switch (v) {
             case 'start':
@@ -632,7 +655,10 @@ export async function processScriptFull(
           }
         }
       } else {
-        const replaced = await replaceClientRegex(input, flag, data, outScript, regexTimeout, regexSizeLimit)
+        const replaced = await awaitClientWriteOperation(
+          clientOperation,
+          replaceClientRegex(input, flag, data, outScript, regexTimeout, regexSizeLimit),
+        )
         data = risuChatParser(replaced, { chatID: chatID, cbsConditions })
       }
     }
@@ -678,8 +704,9 @@ export async function processScriptFull(
   }
   for (const script of parsedScripts) {
     try {
-      await executeScript(script)
+      await awaitClientWriteOperation(clientOperation, executeScript(script))
     } catch (error) {
+      assertClientWriteOperation(clientOperation)
       console.error(error)
     }
   }
@@ -704,7 +731,7 @@ export async function processScriptFull(
     }
 
     const processer = new HypaProcesser()
-    await processer.addText(assetNames)
+    await awaitClientWriteOperation(clientOperation, processer.addText(assetNames))
     const matches = data.matchAll(assetRegex)
 
     for (const match of matches) {
@@ -716,7 +743,7 @@ export async function processScriptFull(
         if (cachedBestMatch !== undefined) {
           data = data.replaceAll(match[0], `{{${type}::${cachedBestMatch}}}`)
         } else if (!assetNames.includes(assetName)) {
-          const searched = await processer.similaritySearch(assetName)
+          const searched = await awaitClientWriteOperation(clientOperation, processer.similaritySearch(assetName))
           const bestMatch = searched[0]
           if (bestMatch) {
             data = data.replaceAll(match[0], `{{${type}::${bestMatch}}}`)

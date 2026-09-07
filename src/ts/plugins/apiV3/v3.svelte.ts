@@ -1,4 +1,12 @@
 import {
+  assertClientWriteAccess,
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  clientSessionStore,
+  isClientSessionGenerationCurrent,
+  isClientReadOnly,
+} from '../../clientSession'
+import {
   allowedDbKeys,
   customProviderStore,
   getV2PluginAPIs,
@@ -681,6 +689,7 @@ type V3PluginInstance = {
   host?: SandboxHost
   lifecycle: PluginLifecycleCleanup
   generation: number
+  sessionGeneration: number
   active: boolean
 }
 
@@ -710,10 +719,16 @@ function beginV3Generation() {
 }
 
 function isV3InstanceCurrent(instance: V3PluginInstance) {
-  return instance.active && instance.generation === activeV3Generation
+  return (
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(instance.sessionGeneration) &&
+    instance.active &&
+    instance.generation === activeV3Generation
+  )
 }
 
 function assertV3InstanceCurrent(instance: V3PluginInstance) {
+  assertClientWriteAccess()
   if (!isV3InstanceCurrent(instance)) {
     throw new Error(`[RisuAI Plugin: ${instance.name}] Plugin instance is no longer active.`)
   }
@@ -969,6 +984,31 @@ function registerV3Provider(registration: V3ProviderRegistration) {
 const authorizationHeaders = ['x-api-key', 'authorization', 'proxy-authorization']
 
 const guardV3Api = (api: Record<string, unknown>, instance: V3PluginInstance): Record<string, unknown> => {
+  const callbacks = new WeakMap<Function, Function>()
+  const unloadCallbacks = new WeakMap<Function, Function>()
+  const guardCallback = (callback: Function, onUnload: boolean): Function => {
+    const callbackMap = onUnload ? unloadCallbacks : callbacks
+    let guarded = callbackMap.get(callback)
+    if (!guarded) {
+      guarded = (...args: unknown[]) => {
+        // Ordinary unload callbacks may run after the instance is retired, but
+        // no guest callback may run after the connected writer loses authority.
+        if (onUnload) {
+          if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(instance.sessionGeneration)) return
+        } else assertV3InstanceCurrent(instance)
+        const result = callback(...args)
+        if (!onUnload && result instanceof Promise) {
+          return result.then((value) => {
+            assertV3InstanceCurrent(instance)
+            return value
+          })
+        }
+        return result
+      }
+      callbackMap.set(callback, guarded)
+    }
+    return guarded
+  }
   return new Proxy(api, {
     get(target, prop, receiver) {
       const value = Reflect.get(target, prop, receiver)
@@ -977,7 +1017,10 @@ const guardV3Api = (api: Record<string, unknown>, instance: V3PluginInstance): R
       }
       return (...args: unknown[]) => {
         assertV3InstanceCurrent(instance)
-        return value.apply(target, args)
+        return value.apply(
+          target,
+          args.map((arg) => (typeof arg === 'function' ? guardCallback(arg, prop === 'onUnload') : arg)),
+        )
       }
     },
   })
@@ -989,7 +1032,11 @@ const makeRisuaiAPIV3 = (
   lifecycle: PluginLifecycleCleanup,
   instance: V3PluginInstance,
 ) => {
-  const oldApis = getV2PluginAPIs(plugin, () => assertV3InstanceCurrent(instance))
+  const oldApis = getV2PluginAPIs(
+    plugin,
+    () => assertV3InstanceCurrent(instance),
+    (cleanup) => lifecycle.track(cleanup),
+  )
   const setCurrentCharacter = async (char: any): Promise<void> => {
     const charIndex = get(selectedCharID)
     const previousCharacter = currentPluginCharacterSnapshot(charIndex)
@@ -1739,7 +1786,18 @@ const makeRisuaiAPIV3 = (
     },
     getLocalPluginStorage: () => {
       assertDeviceLocalPluginStorageEnabled()
-      return new SafeLocalPluginStorage()
+      const storage = new SafeLocalPluginStorage()
+      return new Proxy(storage, {
+        get(target, key) {
+          const value = Reflect.get(target, key, target)
+          return typeof value === 'function'
+            ? (...args: unknown[]) => {
+                assertV3InstanceCurrent(instance)
+                return value.apply(target, args)
+              }
+            : value
+        },
+      })
     },
     checkCharOrder: checkCharOrder,
     requestPluginPermission: (permission: string) => {
@@ -1933,6 +1991,8 @@ const makeRisuaiAPIV3 = (
 }
 
 export async function loadV3Plugins(plugins: RisuPlugin[]) {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   const generation = beginV3Generation()
   await Promise.all(
     [...v3PluginInstances].map(async (instance) => {
@@ -1940,7 +2000,11 @@ export async function loadV3Plugins(plugins: RisuPlugin[]) {
     }),
   )
 
-  if (generation !== activeV3Generation) {
+  if (
+    generation !== activeV3Generation ||
+    !canUseClientWriteAccess() ||
+    !isClientSessionGenerationCurrent(sessionGeneration)
+  ) {
     return
   }
 
@@ -1959,6 +2023,8 @@ export async function loadV3Plugins(plugins: RisuPlugin[]) {
 }
 
 export async function executePluginV3(plugin: RisuPlugin, generation = ensureV3Generation()) {
+  if (!canUseClientWriteAccess()) return
+  const sessionGeneration = captureClientSessionGeneration()
   if (generation !== activeV3Generation) {
     return
   }
@@ -1972,9 +2038,16 @@ export async function executePluginV3(plugin: RisuPlugin, generation = ensureV3G
   }
 
   const runtimeAllowed = await getPluginPermission(plugin.name, 'v3Runtime', false, plugin.script, () => {
-    if (generation !== activeV3Generation) throw new Error('V3 plugin generation is no longer active.')
+    assertClientWriteAccess()
+    if (generation !== activeV3Generation || !isClientSessionGenerationCurrent(sessionGeneration))
+      throw new Error('V3 plugin generation is no longer active.')
   })
-  if (generation !== activeV3Generation) return
+  if (
+    generation !== activeV3Generation ||
+    !canUseClientWriteAccess() ||
+    !isClientSessionGenerationCurrent(sessionGeneration)
+  )
+    return
   if (!runtimeAllowed) {
     console.warn(`[RisuAI Plugin: ${plugin.name}] Skipped because trusted V3 browser runtime access was denied.`)
     return
@@ -1988,6 +2061,7 @@ export async function executePluginV3(plugin: RisuPlugin, generation = ensureV3G
     name: plugin.name,
     lifecycle,
     generation,
+    sessionGeneration,
     active: true,
   }
   const host = new SandboxHost(makeRisuaiAPIV3(iframe, plugin, lifecycle, instance))
@@ -2049,6 +2123,7 @@ export const __v3PluginLifecycleTestHooks = {
       name: plugin.name,
       lifecycle,
       generation: ensureV3Generation(),
+      sessionGeneration: captureClientSessionGeneration(),
       active: true,
     }
     return makeRisuaiAPIV3(iframe, plugin, lifecycle, instance) as Record<string, unknown>
@@ -2060,6 +2135,7 @@ export const __v3PluginLifecycleTestHooks = {
       name: plugin.name,
       lifecycle,
       generation: ensureV3Generation(),
+      sessionGeneration: captureClientSessionGeneration(),
       active: true,
     }
     const api = makeRisuaiAPIV3(iframe, plugin, lifecycle, instance) as Record<string, unknown>
@@ -2131,3 +2207,13 @@ globalThis.__debugV3Plugin = (code: string | Function, pluginName: string = '') 
   }
   return instance.host.executeInIframe(code)
 }
+
+clientSessionStore.subscribe(() => {
+  if (!isClientReadOnly() || v3PluginInstances.length === 0) return
+  beginV3Generation()
+  for (const instance of [...v3PluginInstances]) {
+    // Terminate guest execution synchronously; host cleanup remains idempotent.
+    instance.host?.terminate()
+    void unloadV3PluginInstance(instance)
+  }
+})

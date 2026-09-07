@@ -1,3 +1,12 @@
+import { readonly, writable } from 'svelte/store'
+import {
+  canUseClientReadServices,
+  clientSessionStore,
+  captureClientSessionGeneration,
+  isClientReadOnly,
+  isClientSessionGenerationCurrent,
+  isClientSessionManaged,
+} from '../clientSession'
 import { sha256Hex } from '../sha256Fallback'
 import { isPluginRuntimeReady, pluginV2 } from '../plugins/plugins.svelte'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
@@ -47,6 +56,9 @@ interface PendingDisplaySource {
   priority: DisplaySourcePriority
   target: DisplaySourceTarget
   expectedContextFingerprint: string
+  clientGeneration: number
+  sessionGeneration: number
+  reader: boolean
   resolve: (result: ServerDisplaySourceResult) => void
 }
 
@@ -57,6 +69,15 @@ interface ActiveDisplaySourceFetch {
 
 interface CompletedDisplaySource {
   result: Extract<ServerDisplaySourceResult, { status: 'ok' }>
+}
+
+const readerDisplayLimitedWritable = writable(false)
+/** Sticky within the visible chat/namespace: one successful row cannot hide another fallback. */
+export const readerDisplayLimitedStore = readonly(readerDisplayLimitedWritable)
+export function markReaderDisplayLimited(chatId?: string, sessionGeneration = captureClientSessionGeneration()): void {
+  if (!isClientReadOnly() || !isClientSessionGenerationCurrent(sessionGeneration)) return
+  if (chatId && activeDisplaySourceChatId !== null && chatId !== activeDisplaySourceChatId) return
+  readerDisplayLimitedWritable.set(true)
 }
 
 const MAX_COMPLETED_DISPLAY_SOURCES = 512
@@ -115,7 +136,7 @@ export function canUseDisplaySourceProtocol(): boolean {
     protocolVersion === DISPLAY_SOURCE_PROTOCOL_VERSION &&
     databaseLineage !== null &&
     activeWriterEpoch !== null &&
-    !isWriterAccessLost()
+    (isClientSessionManaged() ? canUseClientReadServices() : !isWriterAccessLost())
   )
 }
 
@@ -144,6 +165,7 @@ export function resetDisplaySourceClientForTests(): void {
 export function activateDisplaySourceChat(chatId: string | null): void {
   if (activeDisplaySourceChatId === chatId) return
   activeDisplaySourceChatId = chatId
+  readerDisplayLimitedWritable.set(false)
 
   for (const [batchKey, pending] of pendingByBatch) {
     const retained: PendingDisplaySource[] = []
@@ -164,7 +186,7 @@ export function releaseDisplaySourceChat(chatId: string | null): void {
 }
 
 export async function requestServerDisplaySource(input: ServerDisplaySourceInput): Promise<ServerDisplaySourceResult> {
-  if (isPluginRuntimeReady() && pluginV2.editdisplay.size > 0) {
+  if (!isClientReadOnly() && isPluginRuntimeReady() && pluginV2.editdisplay.size > 0) {
     return { status: 'fallback', reason: 'browser_editdisplay_plugin' }
   }
   if (!canUseDisplaySourceProtocol()) return { status: 'fallback', reason: 'protocol_unavailable' }
@@ -183,11 +205,15 @@ export async function requestServerDisplaySource(input: ServerDisplaySourceInput
   const context: DisplayRequestContext = { pageSessionId, ...readBrowserClientContext() }
   const configuredLineage = databaseLineage!
   const configuredWriterEpoch = activeWriterEpoch!
+  const sessionGeneration = captureClientSessionGeneration()
+  const reader = isClientReadOnly()
   const batchKey = stableDisplayDependencyJson({
     chatId: input.chatId,
     context,
     configuredLineage,
     configuredWriterEpoch,
+    sessionGeneration,
+    reader,
   })
   const preparationGeneration = displaySourceClientGeneration
   beginDisplaySourceBatchPreparation(batchKey)
@@ -203,7 +229,10 @@ export async function requestServerDisplaySource(input: ServerDisplaySourceInput
         }),
       ),
     ])
-    if (preparationGeneration !== displaySourceClientGeneration) {
+    if (
+      preparationGeneration !== displaySourceClientGeneration ||
+      !isClientSessionGenerationCurrent(sessionGeneration)
+    ) {
       return { status: 'fallback', reason: 'display_namespace_changed' }
     }
     const dedupeKey = input.streaming
@@ -250,6 +279,9 @@ export async function requestServerDisplaySource(input: ServerDisplaySourceInput
       priority,
       target,
       expectedContextFingerprint,
+      clientGeneration: preparationGeneration,
+      sessionGeneration,
+      reader,
       batchKey,
     })
 
@@ -298,6 +330,9 @@ function enqueueDisplaySourceRequest(input: {
   priority: DisplaySourcePriority
   target: DisplaySourceTarget
   expectedContextFingerprint: string
+  clientGeneration: number
+  sessionGeneration: number
+  reader: boolean
   batchKey: string
 }): Promise<ServerDisplaySourceResult> {
   return new Promise<ServerDisplaySourceResult>((resolve) => {
@@ -325,6 +360,9 @@ function enqueueDisplaySourceRequest(input: {
       priority: input.priority,
       target: input.target,
       expectedContextFingerprint: input.expectedContextFingerprint,
+      clientGeneration: input.clientGeneration,
+      sessionGeneration: input.sessionGeneration,
+      reader: input.reader,
       resolve,
     })
     pendingByBatch.set(input.batchKey, pending)
@@ -361,6 +399,8 @@ function displaySourceDedupeKey(input: {
   return stableDisplayDependencyJson({
     namespace: {
       protocolVersion,
+      sessionGeneration: captureClientSessionGeneration(),
+      reader: isClientReadOnly(),
       databaseLineage,
       activeWriterEpoch,
       baseRevision: input.baseRevision,
@@ -396,6 +436,7 @@ function rememberCompletedDisplaySource(
 }
 
 function clearDisplaySourceDedupeCache(): void {
+  readerDisplayLimitedWritable.set(false)
   displaySourceClientGeneration += 1
   inFlightDisplaySources.clear()
   completedDisplaySources.clear()
@@ -448,7 +489,7 @@ async function flushDisplaySourceBatch(
   )
   let executed = false
   try {
-    const execution = await runExternalServerRevisionOperation(async () => {
+    const execute = async () => {
       for (let offset = 0; offset < ordered.length; offset += DISPLAY_SOURCE_LIMITS.maxTargets) {
         await flushDisplaySourceChunk(
           chatId,
@@ -457,8 +498,14 @@ async function flushDisplaySourceBatch(
           ordered.slice(offset, offset + DISPLAY_SOURCE_LIMITS.maxTargets),
         )
       }
-    })
-    executed = execution.status === 'executed'
+    }
+    if (ordered[0].reader) {
+      await execute()
+      executed = true
+    } else {
+      const execution = await runExternalServerRevisionOperation(execute)
+      executed = execution.status === 'executed'
+    }
   } catch {
     for (const item of ordered) item.resolve({ status: 'fallback', reason: 'network_error' })
     return
@@ -481,7 +528,15 @@ async function flushDisplaySourceChunk(
     fallbackAll('display_scope_changed')
     return
   }
-  if (!canUseDisplaySourceProtocol() || databaseLineage !== configuredLineage) {
+  const isCurrent = () =>
+    canUseDisplaySourceProtocol() &&
+    databaseLineage === configuredLineage &&
+    pending.every(
+      (item) =>
+        item.clientGeneration === displaySourceClientGeneration &&
+        isClientSessionGenerationCurrent(item.sessionGeneration),
+    )
+  if (!isCurrent()) {
     fallbackAll('display_namespace_changed')
     return
   }
@@ -494,6 +549,10 @@ async function flushDisplaySourceChunk(
     return
   }
 
+  if (!isCurrent()) {
+    fallbackAll('display_namespace_changed')
+    return
+  }
   const baseRevision = peekCachedServerCommandRevision()
   if (baseRevision === null) {
     fallbackAll('revision_unavailable')
@@ -540,8 +599,16 @@ async function flushDisplaySourceChunk(
   } catch {
     body = null
   }
+  if (!isCurrent()) {
+    fallbackAll('display_namespace_changed')
+    return
+  }
+  if (pending.some((item) => item.priority !== 'normal') && activeDisplaySourceChatId !== chatId) {
+    fallbackAll('display_scope_changed')
+    return
+  }
   if (!response.ok) {
-    handleActiveWriterStaleResponse(response, body)
+    if (!pending[0].reader) handleActiveWriterStaleResponse(response, body, pending[0].sessionGeneration)
     if (
       response.status === 409 &&
       body &&
@@ -555,6 +622,15 @@ async function flushDisplaySourceChunk(
   }
   if (!isDisplaySourceResponse(body)) {
     fallbackAll('invalid_response')
+    return
+  }
+  if (body.revision < baseRevision || body.revision < (peekCachedServerCommandRevision() ?? 0)) {
+    fallbackAll('stale_response')
+    return
+  }
+  // A namespace mismatch must never advance even the shared read revision fence.
+  if (pending.some((item) => body.contextFingerprint !== item.expectedContextFingerprint)) {
+    fallbackAll('stale_response')
     return
   }
   setCachedServerCommandRevision(body.revision)
@@ -606,3 +682,10 @@ function isDisplaySourceResponse(value: unknown): value is DisplaySourceResponse
           typeof row.reason === 'string'
   })
 }
+
+let observedSessionGeneration = captureClientSessionGeneration()
+clientSessionStore.subscribe((session) => {
+  if (session.generation === observedSessionGeneration) return
+  observedSessionGeneration = session.generation
+  clearDisplaySourceDedupeCache()
+})

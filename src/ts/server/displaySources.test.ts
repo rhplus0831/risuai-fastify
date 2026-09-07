@@ -1,3 +1,14 @@
+import { get } from 'svelte/store'
+import {
+  beginClientSession,
+  settleClientReader,
+  setClientConnectionState,
+  setClientProjectionReady,
+  authorizeClientWriterRecovery,
+  completeClientWriterRecovery,
+  demoteClientSession,
+  resetClientSessionForTests,
+} from '../clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { sha256Hex } from '../sha256Fallback'
 import { pluginV2 } from '../plugins/plugins.svelte'
@@ -5,6 +16,7 @@ import {
   clearCachedServerCommandRevision,
   peekCachedServerCommandRevision,
   runServerCommand,
+  runExternalServerRevisionOperation,
   selectCharacterCommand,
   setCachedServerCommandRevision,
 } from './commands'
@@ -14,6 +26,8 @@ import { reloadRegexDisplay, resetRegexDisplayReloadForTests } from '../process/
 import { charactersResourceState, resetServerResourceState } from './resourceState.svelte'
 import {
   activateDisplaySourceChat,
+  markReaderDisplayLimited,
+  readerDisplayLimitedStore,
   configureDisplaySourceProtocol,
   requestServerDisplaySource,
   resetDisplaySourceClientForTests,
@@ -73,6 +87,7 @@ async function successfulDisplayResponse(body: DisplayRequestBody, revision: num
 
 describe('browser display source batching client', () => {
   beforeEach(() => {
+    resetClientSessionForTests()
     pluginRuntime.ready = true
     resetServerResourceState()
     resetWriterAccessLostForTests()
@@ -85,6 +100,7 @@ describe('browser display source batching client', () => {
   })
 
   afterEach(() => {
+    resetClientSessionForTests()
     vi.unstubAllGlobals()
     pluginV2.editdisplay.clear()
     resetDisplaySourceClientForTests()
@@ -451,5 +467,93 @@ describe('browser display source batching client', () => {
       }),
     ).resolves.toMatchObject({ status: 'ok', displaySource: 'BODY' })
     expect(fetchSpy).toHaveBeenCalledOnce()
+  })
+})
+
+describe('connected reader isolated display', () => {
+  beforeEach(() => {
+    resetClientSessionForTests()
+    resetDisplaySourceClientForTests()
+    resetWriterAccessLostForTests()
+    setCachedServerCommandRevision(7)
+    configureDisplaySourceProtocol({ version: 1 }, 'lineage-a', 3)
+  })
+  afterEach(() => {
+    resetClientSessionForTests()
+    resetDisplaySourceClientForTests()
+    vi.unstubAllGlobals()
+  })
+  const target = {
+    chatId: 'chat-a',
+    character: { chaId: 'char-a' },
+    index: 0,
+    role: 'char',
+    firstMessage: false,
+    layer: 'original' as const,
+    source: 'readable',
+  }
+  function enterReader() {
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage-a', writer: { sessionId: 'other', epoch: 3 } })
+  }
+  it('runs an authenticated display POST while the ordinary writer queue is occupied', async () => {
+    const held = createDeferred<void>()
+    const entered = createDeferred<void>()
+    const writerQueue = runExternalServerRevisionOperation(async () => {
+      entered.resolve()
+      await held.promise
+    })
+    await entered.promise
+    enterReader()
+    pluginRuntime.ready = false
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      expect(new Headers(init?.headers).get('risu-auth')).toBe('display-auth')
+      expect(new Headers(init?.headers).get('risu-database-lineage')).toBe('lineage-a')
+      return successfulDisplayResponse(JSON.parse(String(init?.body)), 7)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await expect(requestServerDisplaySource(target)).resolves.toMatchObject({
+        status: 'ok',
+        displaySource: 'READABLE',
+      })
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+    } finally {
+      held.resolve()
+      await writerQueue
+    }
+  })
+  it('rejects responses after an auth/session or namespace change without advancing revision', async () => {
+    enterReader()
+    const response = createDeferred<Response>()
+    let body: DisplayRequestBody | undefined
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body))
+      return response.promise
+    })
+    const request = requestServerDisplaySource(target)
+    await vi.waitFor(() => expect(body).toBeDefined())
+    beginClientSession('new-reader')
+    response.resolve(await successfulDisplayResponse(body!, 99))
+    await expect(request).resolves.toEqual({ status: 'fallback', reason: 'display_namespace_changed' })
+    expect(peekCachedServerCommandRevision()).toBe(7)
+  })
+  it('rejects changed source fingerprints and keeps the limited-display notice within its chat', async () => {
+    enterReader()
+    activateDisplaySourceChat('chat-a')
+    markReaderDisplayLimited()
+    expect(get(readerDisplayLimitedStore)).toBe(true)
+    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body))
+      body.targets[0].sourceHash = 'stale'
+      return successfulDisplayResponse(body, 7)
+    })
+    await expect(requestServerDisplaySource(target)).resolves.toEqual({ status: 'fallback', reason: 'stale_response' })
+    expect(get(readerDisplayLimitedStore)).toBe(true)
+    activateDisplaySourceChat('chat-b')
+    expect(get(readerDisplayLimitedStore)).toBe(false)
+    markReaderDisplayLimited()
+    configureDisplaySourceProtocol({ version: 1 }, 'lineage-b', 4)
+    expect(get(readerDisplayLimitedStore)).toBe(false)
   })
 })

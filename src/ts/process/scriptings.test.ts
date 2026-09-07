@@ -1,3 +1,13 @@
+import {
+  beginClientSession,
+  settleClientReader,
+  authorizeClientWriterRecovery,
+  setClientConnectionState,
+  setClientProjectionReady,
+  completeClientWriterRecovery,
+  demoteClientSession,
+  resetClientSessionForTests,
+} from '../clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Chat, character } from '../storage/database.svelte'
 import type { PyWorkerRequest, PyWorkerResponse } from './pyworker'
@@ -445,6 +455,7 @@ async function waitForCommandFetches(calls: CapturedCommandFetch[], expected: nu
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   resetScriptingEngineCacheForTests()
   luaMock.reset()
   mediaMock.fetchNative.mockReset()
@@ -465,6 +476,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   resetScriptingEngineCacheForTests()
   vi.useRealTimers()
   vi.restoreAllMocks()
@@ -1331,4 +1343,101 @@ describe('client Python worker protocol', () => {
     ).resolves.toEqual(expect.objectContaining({ res: 'recovered' }))
     expect(FakePythonWorker.instances).toHaveLength(2)
   })
+})
+
+function enterScriptWriter(epoch = 1): void {
+  const operation = beginClientSession('script-writer')
+  authorizeClientWriterRecovery(operation, {
+    databaseLineage: 'lineage',
+    writer: { sessionId: 'script-writer', epoch },
+  })
+  setClientConnectionState('live')
+  setClientProjectionReady(true)
+  completeClientWriterRecovery(operation)
+}
+
+describe('connected Lua/Python host authority', () => {
+  it('does not create a scripting engine for a reader', async () => {
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    await expect(runScripted('source', { char: makeCharacter(makeChat()), mode: 'editDisplay' })).rejects.toThrow(
+      'client_write_access_required',
+    )
+    expect(luaMock.createEngine).not.toHaveBeenCalled()
+  })
+  it('blocks a held Lua host setter after demotion and reacquisition', async () => {
+    enterScriptWriter()
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let entered = false
+    const setVar = vi.fn()
+    luaMock.setCallListenAction(async (engine, key) => {
+      entered = true
+      await held
+      engine.hostFns.get('setChatVar')(key, 'late', 'changed')
+    })
+    const chat = makeChat()
+    const run = runScripted('source', { char: makeCharacter(chat), chat, setVar, mode: 'editDisplay' })
+    await vi.waitFor(() => expect(entered).toBe(true))
+    demoteClientSession()
+    enterScriptWriter(2)
+    release()
+    await expect(run).rejects.toThrow('client_write_operation_stale')
+    expect(setVar).not.toHaveBeenCalled()
+  })
+  it('stops an awaited image-generation API before an inlay write after role loss', async () => {
+    enterScriptWriter()
+    let release!: (value: string) => void
+    mediaMock.generateAIImage.mockReturnValueOnce(
+      new Promise<string>((resolve) => {
+        release = resolve
+      }),
+    )
+    luaMock.setDispatchArgs('generateImage', ['prompt', 'negative'])
+    const chat = makeChat()
+    const run = runScripted('source', { char: makeCharacter(chat), chat, mode: 'generateImage', lowLevelAccess: true })
+    await vi.waitFor(() => expect(mediaMock.generateAIImage).toHaveBeenCalled())
+    demoteClientSession()
+    enterScriptWriter(2)
+    release('data:image/png;base64,AA==')
+    await expect(run).rejects.toThrow('client_write_operation_stale')
+    expect(mediaMock.writeInlayImage).not.toHaveBeenCalled()
+  })
+  it('lets a fresh writer reuse a cached engine with a fresh host operation', async () => {
+    enterScriptWriter()
+    const setVar = vi.fn()
+    luaMock.setCallListenAction((engine, key) => {
+      engine.hostFns.get('setChatVar')(key, 'current', 'ok')
+    })
+    const chat = makeChat()
+    const args = { char: makeCharacter(chat), chat, setVar, mode: 'editDisplay' }
+    await runScripted('reusable source', args)
+    demoteClientSession()
+    enterScriptWriter(2)
+    await runScripted('reusable source', args)
+    expect(setVar).toHaveBeenCalledTimes(2)
+    expect(luaMock.createEngine).toHaveBeenCalledTimes(1)
+  })
+})
+
+it('terminates a running Python worker when its writer loses access', async () => {
+  enterScriptWriter()
+  FakePythonWorker.reset()
+  vi.stubGlobal('Worker', FakePythonWorker)
+  FakePythonWorker.onPostMessage = (worker, message) => {
+    if (message.type === 'init') worker.respond({ type: 'result', id: message.id, result: null })
+  }
+  const run = runScripted('def pendingRun(*args): return None', {
+    char: makeCharacter(makeChat()),
+    mode: 'pendingRun',
+    type: 'py',
+  })
+  const rejected = expect(run).rejects.toThrow('client_write_access_required')
+  const worker = await waitForFakePythonWorker()
+  await waitForPythonRequest(worker, 'python')
+  demoteClientSession()
+  expect(worker.terminate).toHaveBeenCalledOnce()
+  await rejected
 })

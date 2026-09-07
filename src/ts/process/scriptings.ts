@@ -1,3 +1,10 @@
+import { clientSessionStore, isClientReadOnly, isClientSessionManaged } from '../clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+  awaitClientWriteOperation,
+} from '../clientWriteOperation'
 import { asBuffer } from 'src/ts/util'
 import { sha256Hex } from '../sha256Fallback'
 import { getChatVar, getGlobalChatVar, setChatVar } from '../parser/chatVar.svelte'
@@ -80,6 +87,7 @@ interface BasicScriptingEngineState {
   cacheKey?: string
   cacheBucket?: string
   activeRuns?: number
+  clientOperation?: number
   mutex: Mutex
   chat?: Chat
   setVar?: (key: string, value: string) => boolean | void
@@ -89,6 +97,15 @@ interface BasicScriptingEngineState {
     char?: character | simpleCharacterArgument
     stopChat: () => void
   }
+}
+
+function currentScriptingClientOperation(state: BasicScriptingEngineState): number {
+  if (state.clientOperation === undefined) {
+    if (!isClientSessionManaged()) return captureClientWriteOperation()
+    throw new Error('Script execution is no longer active.')
+  }
+  assertClientWriteOperation(state.clientOperation)
+  return state.clientOperation
 }
 
 interface LuaScriptingEngineState extends BasicScriptingEngineState {
@@ -132,6 +149,8 @@ export async function runScripted(
     scriptModelOverrides?: ScriptModelOverrides
   },
 ) {
+  const clientOperation = captureClientWriteOperation()
+
   const type: 'lua' | 'py' = arg.type ?? 'lua'
   const char = arg.char ?? getSelectedCharacterOwner()
   if (!char) {
@@ -158,13 +177,17 @@ export async function runScripted(
   let lowLevelAccess = arg.lowLevelAccess ?? false
 
   if (type === 'lua') {
-    await ensureLuaFactory()
+    await awaitClientWriteOperation(clientOperation, ensureLuaFactory())
   }
-  const codeHash = type === 'lua' ? await hashScriptingCode(code) : undefined
-  let ScriptingEngineState = await getOrCreateEngineState(mode, type, codeHash)
+  const codeHash =
+    type === 'lua' ? await awaitClientWriteOperation(clientOperation, hashScriptingCode(code)) : undefined
+  let ScriptingEngineState = await awaitClientWriteOperation(
+    clientOperation,
+    getOrCreateEngineState(mode, type, codeHash),
+  )
   ScriptingEngineState.activeRuns = (ScriptingEngineState.activeRuns ?? 0) + 1
 
-  const runResult = ScriptingEngineState.mutex.runExclusive(async () => {
+  const execute = async () => {
     ScriptingEngineState.chat = chat
     ScriptingEngineState.setVar = setVar
     ScriptingEngineState.getVar = getVar
@@ -193,10 +216,13 @@ export async function runScripted(
         ScriptingEngineState.code = undefined
         ScriptingEngineState.execTimeoutMs = luaExecTimeoutMs
         try {
-          ScriptingEngineState.engine = await luaFactory.createEngine({
-            injectObjects: true,
-            functionTimeout: luaExecTimeoutMs,
-          })
+          ScriptingEngineState.engine = await awaitClientWriteOperation(
+            clientOperation,
+            luaFactory.createEngine({
+              injectObjects: true,
+              functionTimeout: luaExecTimeoutMs,
+            }),
+          )
         } catch (error) {
           evictScriptingEngineState(ScriptingEngineState)
           throw error
@@ -217,15 +243,21 @@ export async function runScripted(
         }
       }
       declareAPI('getChatVar', (id: string, key: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         return ScriptingEngineState.getVar(key)
       })
       declareAPI('setChatVar', (id: string, key: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id) && !ScriptingEditDisplayIds.has(id)) {
           return
         }
         ScriptingEngineState.setVar(key, value)
       })
       declareAPI('setChatVarChanged', (id: string, key: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id) && !ScriptingEditDisplayIds.has(id)) {
           return
         }
@@ -234,39 +266,53 @@ export async function runScripted(
         }
       })
       declareAPI('getGlobalVar', (id: string, key: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         return getGlobalChatVar(key)
       })
       declareAPI('stopChat', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         ScriptingEngineState.currentRun?.stopChat()
       })
       declareAPI('alertError', (id: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         alertError(value)
       })
       declareAPI('alertNormal', (id: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         alertNormal(value)
       })
       declareAPI('alertInput', (id: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         return alertInput(value)
       })
       declareAPI('alertSelect', (id: string, value: string[]) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         return alertSelect(value)
       })
       declareAPI('alertConfirm', (id: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -274,6 +320,8 @@ export async function runScripted(
       })
 
       declareAPI('getChatMain', (id: string, index: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat.message.at(index)
         if (!chat) {
           return JSON.stringify(null)
@@ -287,16 +335,22 @@ export async function runScripted(
       })
 
       declareAPI('getChatData', (id: string, index: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat.message.at(index)
         return chat?.data ?? ''
       })
 
       declareAPI('getChatRole', (id: string, index: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat.message.at(index)
         return chat?.role ?? ''
       })
 
       declareAPI('getRecentChatsMain', (id: string, count: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chats = ScriptingEngineState.chat.message
         const safeCount = Math.max(0, Math.floor(count || 0))
         const start = Math.max(0, chats.length - safeCount)
@@ -310,6 +364,8 @@ export async function runScripted(
       })
 
       declareAPI('setChat', (id: string, index: number, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -319,6 +375,8 @@ export async function runScripted(
         }
       })
       declareAPI('setChatRole', (id: string, index: number, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -328,18 +386,24 @@ export async function runScripted(
         }
       })
       declareAPI('cutChat', (id: string, start: number, end: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         ScriptingEngineState.chat.message = ScriptingEngineState.chat.message.slice(start, end)
       })
       declareAPI('removeChat', (id: string, index: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
         ScriptingEngineState.chat.message.splice(index, 1)
       })
       declareAPI('addChat', (id: string, role: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -347,6 +411,8 @@ export async function runScripted(
         ScriptingEngineState.chat.message.push({ role: roleData, data: value ?? '' })
       })
       declareAPI('insertChat', (id: string, index: number, role: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -355,17 +421,23 @@ export async function runScripted(
       })
 
       declareAPI('getTokens', async (id: string, value: string) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
-        return await tokenize(value)
+        return await awaitClientWriteOperation(clientOperation, tokenize(value))
       })
 
       declareAPI('getChatLength', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         return ScriptingEngineState.chat.message.length
       })
 
       declareAPI('getFullChatMain', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const data = JSON.stringify(
           ScriptingEngineState.chat.message.map((v) => {
             return {
@@ -379,6 +451,8 @@ export async function runScripted(
       })
 
       declareAPI('sleep', (id: string, time: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -390,11 +464,15 @@ export async function runScripted(
       })
 
       declareAPI('cbs', (value) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const currentCharacter = ScriptingEngineState.currentRun?.char
         return risuChatParser(value, { chara: currentCharacter?.type === 'character' ? currentCharacter : undefined })
       })
 
       declareAPI('setFullChatMain', (id: string, value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -409,10 +487,14 @@ export async function runScripted(
       })
 
       declareAPI('logMain', (value: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         console.log(JSON.parse(value))
       })
 
       declareAPI('reloadDisplay', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -420,6 +502,8 @@ export async function runScripted(
       })
 
       declareAPI('reloadChat', (id: string, index: number) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -428,15 +512,19 @@ export async function runScripted(
 
       //Low Level Access
       declareAPI('similarity', async (id: string, source: string, value: string[]) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingLowLevelIds.has(id)) {
           return
         }
         const processer = new HypaProcesser()
-        await processer.addText(value)
-        return await processer.similaritySearch(source)
+        await awaitClientWriteOperation(clientOperation, processer.addText(value))
+        return await awaitClientWriteOperation(clientOperation, processer.similaritySearch(source))
       })
 
       declareAPI('request', async (id: string, url: string) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingLowLevelIds.has(id)) {
           return
         }
@@ -483,10 +571,13 @@ export async function runScripted(
           }
 
           //browser fetch
-          const d = await fetchNative(url, {
-            method: 'GET',
-          })
-          const text = await d.text()
+          const d = await awaitClientWriteOperation(
+            clientOperation,
+            fetchNative(url, {
+              method: 'GET',
+            }),
+          )
+          const text = await awaitClientWriteOperation(clientOperation, d.text())
           return JSON.stringify({
             status: d.status,
             data: text,
@@ -500,6 +591,8 @@ export async function runScripted(
       })
 
       declareAPI('generateImage', async (id: string, value: string, negValue: string = '') => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingLowLevelIds.has(id)) {
           return
         }
@@ -507,17 +600,22 @@ export async function runScripted(
         if (!currentCharacter) {
           return
         }
-        const gen = await generateAIImage(value, currentCharacter as character, negValue, 'inlay')
+        const gen = await awaitClientWriteOperation(
+          clientOperation,
+          generateAIImage(value, currentCharacter as character, negValue, 'inlay'),
+        )
         if (!gen) {
           return 'Error: Image generation failed'
         }
         const imgHTML = new Image()
         imgHTML.src = gen
-        const inlay = await writeInlayImage(imgHTML)
+        const inlay = await awaitClientWriteOperation(clientOperation, writeInlayImage(imgHTML))
         return `{{inlay::${inlay}}}`
       })
 
       declareAPI('getCharacterImageMain', async (id: string) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         try {
           const character = ScriptingEngineState.currentRun?.char
 
@@ -525,7 +623,7 @@ export async function runScripted(
             return ''
           }
 
-          const img = await readImage(character.image)
+          const img = await awaitClientWriteOperation(clientOperation, readImage(character.image))
           const imgObj = new Image()
           const extention = character.image.split('.').at(-1)
           const imgURL = URL.createObjectURL(new Blob([asBuffer(img)], { type: `image/${extention}` }))
@@ -533,11 +631,14 @@ export async function runScripted(
           let imgid: string | null = null
           try {
             imgObj.src = imgURL
-            imgid = await writeInlayImage(imgObj, {
-              name: character.image,
-              ext: extention,
-              id: character.image,
-            })
+            imgid = await awaitClientWriteOperation(
+              clientOperation,
+              writeInlayImage(imgObj, {
+                name: character.image,
+                ext: extention,
+                id: character.image,
+              }),
+            )
           } finally {
             URL.revokeObjectURL(imgURL)
           }
@@ -554,6 +655,8 @@ export async function runScripted(
       })
 
       declareAPI('getPersonaImageMain', async (id: string) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         try {
           const icon = getUserIcon()
 
@@ -561,7 +664,7 @@ export async function runScripted(
             return ''
           }
 
-          const img = await readImage(icon)
+          const img = await awaitClientWriteOperation(clientOperation, readImage(icon))
           const imgObj = new Image()
           const extention = icon.split('.').at(-1)
           const imgURL = URL.createObjectURL(new Blob([asBuffer(img)], { type: `image/${extention}` }))
@@ -569,7 +672,10 @@ export async function runScripted(
           let imgid: string | null = null
           try {
             imgObj.src = imgURL
-            imgid = await writeInlayImage(imgObj, { name: icon, ext: extention, id: icon })
+            imgid = await awaitClientWriteOperation(
+              clientOperation,
+              writeInlayImage(imgObj, { name: icon, ext: extention, id: icon }),
+            )
           } finally {
             URL.revokeObjectURL(imgURL)
           }
@@ -587,7 +693,9 @@ export async function runScripted(
       })
 
       declareAPI('hash', async (id: string, value: string) => {
-        return await hasher(new TextEncoder().encode(value))
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
+        return await awaitClientWriteOperation(clientOperation, hasher(new TextEncoder().encode(value)))
       })
 
       const parseLuaOptions = (optionsStr?: string) => {
@@ -603,13 +711,13 @@ export async function runScripted(
         }
       }
 
-      const collectLuaStreamText = async (stream: ReadableStream<StreamResponseChunk>) => {
+      const collectLuaStreamText = async (stream: ReadableStream<StreamResponseChunk>, clientOperation: number) => {
         const reader = stream.getReader()
         let text = ''
 
         try {
           while (true) {
-            const { done, value } = await reader.read()
+            const { done, value } = await awaitClientWriteOperation(clientOperation, reader.read())
             if (done) {
               break
             }
@@ -627,6 +735,8 @@ export async function runScripted(
       declareAPI(
         'LLMMain',
         async (id: string, promptStr: string, useMultimodal: boolean = false, optionsStr: string = '') => {
+          const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
           let prompt: {
             role: string
             content: string
@@ -679,7 +789,7 @@ export async function runScripted(
 
               const multimodals: MultiModal[] = []
               for (const inlay of inlays) {
-                const inlayData = await getInlayAsset(inlay)
+                const inlayData = await awaitClientWriteOperation(clientOperation, getInlayAsset(inlay))
                 multimodals.push({
                   type: inlayData?.type,
                   base64: inlayData?.data,
@@ -693,24 +803,27 @@ export async function runScripted(
           }
 
           const options = parseLuaOptions(optionsStr) as { streaming?: boolean }
-          const result = await requestChatData(
-            {
-              formated: promptbody,
-              bias: {},
-              useStreaming: options.streaming === true,
-              forceStreaming: options.streaming === true,
-              noMultiGen: true,
-              ...(scriptModelOverrideProfileId(ScriptingEngineState.scriptModelOverrides, 'scriptMain')
-                ? {
-                    profileIdOverride: scriptModelOverrideProfileId(
-                      ScriptingEngineState.scriptModelOverrides,
-                      'scriptMain',
-                    ),
-                    strictProfileIdOverride: true,
-                  }
-                : {}),
-            },
-            'scriptMain',
+          const result = await awaitClientWriteOperation(
+            clientOperation,
+            requestChatData(
+              {
+                formated: promptbody,
+                bias: {},
+                useStreaming: options.streaming === true,
+                forceStreaming: options.streaming === true,
+                noMultiGen: true,
+                ...(scriptModelOverrideProfileId(ScriptingEngineState.scriptModelOverrides, 'scriptMain')
+                  ? {
+                      profileIdOverride: scriptModelOverrideProfileId(
+                        ScriptingEngineState.scriptModelOverrides,
+                        'scriptMain',
+                      ),
+                      strictProfileIdOverride: true,
+                    }
+                  : {}),
+              },
+              'scriptMain',
+            ),
           )
 
           if (result.type === 'fail') {
@@ -724,7 +837,10 @@ export async function runScripted(
             try {
               return JSON.stringify({
                 success: true,
-                result: await collectLuaStreamText(result.result),
+                result: await awaitClientWriteOperation(
+                  clientOperation,
+                  collectLuaStreamText(result.result, clientOperation),
+                ),
               })
             } catch (error) {
               return JSON.stringify({
@@ -749,31 +865,36 @@ export async function runScripted(
       )
 
       declareAPI('simpleLLM', async (id: string, prompt: string) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingLowLevelIds.has(id)) {
           return
         }
-        const result = await requestChatData(
-          {
-            formated: [
-              {
-                role: 'user',
-                content: prompt,
-              },
-            ],
-            bias: {},
-            useStreaming: false,
-            noMultiGen: true,
-            ...(scriptModelOverrideProfileId(ScriptingEngineState.scriptModelOverrides, 'scriptMain')
-              ? {
-                  profileIdOverride: scriptModelOverrideProfileId(
-                    ScriptingEngineState.scriptModelOverrides,
-                    'scriptMain',
-                  ),
-                  strictProfileIdOverride: true,
-                }
-              : {}),
-          },
-          'scriptMain',
+        const result = await awaitClientWriteOperation(
+          clientOperation,
+          requestChatData(
+            {
+              formated: [
+                {
+                  role: 'user',
+                  content: prompt,
+                },
+              ],
+              bias: {},
+              useStreaming: false,
+              noMultiGen: true,
+              ...(scriptModelOverrideProfileId(ScriptingEngineState.scriptModelOverrides, 'scriptMain')
+                ? {
+                    profileIdOverride: scriptModelOverrideProfileId(
+                      ScriptingEngineState.scriptModelOverrides,
+                      'scriptMain',
+                    ),
+                    strictProfileIdOverride: true,
+                  }
+                : {}),
+            },
+            'scriptMain',
+          ),
         )
 
         if (result.type === 'fail') {
@@ -797,11 +918,15 @@ export async function runScripted(
       })
 
       declareAPI('getName', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const currentCharacter = ScriptingEngineState.currentRun?.char
         return currentCharacter?.type === 'character' ? currentCharacter.name : ''
       })
 
       declareAPI('setName', (id: string, name: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -814,6 +939,8 @@ export async function runScripted(
       })
 
       declareAPI('getDescription', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -822,6 +949,8 @@ export async function runScripted(
       })
 
       declareAPI('setDescription', (id: string, desc: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -834,11 +963,15 @@ export async function runScripted(
       })
 
       declareAPI('getCharacterFirstMessage', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const currentCharacter = ScriptingEngineState.currentRun?.char
         return currentCharacter?.type === 'character' ? currentCharacter.firstMessage : ''
       })
 
       declareAPI('setCharacterFirstMessage', (id: string, data: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -852,10 +985,14 @@ export async function runScripted(
       })
 
       declareAPI('getPersonaName', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         return getUserName()
       })
 
       declareAPI('getPersonaDescription', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const currentCharacter = ScriptingEngineState.currentRun?.char
         return risuChatParser(getPersonaPrompt(), {
           chara: currentCharacter?.type === 'character' ? currentCharacter : undefined,
@@ -863,10 +1000,14 @@ export async function runScripted(
       })
 
       declareAPI('getAuthorsNote', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         return ScriptingEngineState.chat?.note ?? ''
       })
 
       declareAPI('getBackgroundEmbedding', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -875,6 +1016,8 @@ export async function runScripted(
       })
 
       declareAPI('setBackgroundEmbedding', (id: string, data: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -889,6 +1032,8 @@ export async function runScripted(
 
       // Lore books
       declareAPI('getLoreBooksMain', (id: string, search: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const selectedChar = ScriptingEngineState.currentRun?.char
         if (!selectedChar || selectedChar.type !== 'character') {
           return
@@ -924,6 +1069,8 @@ export async function runScripted(
       }
 
       declareAPI('upsertLocalLoreBook', (id: string, name: string, content: string, options: upsertLoreBookOptions) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingSafeIds.has(id)) {
           return
         }
@@ -953,6 +1100,8 @@ export async function runScripted(
       })
 
       declareAPI('loadLoreBooksMain', async (id: string, reserve: number) => {
+        const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
         if (!ScriptingLowLevelIds.has(id)) {
           return
         }
@@ -973,7 +1122,10 @@ export async function runScripted(
           return
         }
         const fullLoreBooks = (
-          await loadLoreBookV3Prompt({ database: generation.db, character: selectedChar, chat: selectedChat })
+          await awaitClientWriteOperation(
+            clientOperation,
+            loadLoreBookV3Prompt({ database: generation.db, character: selectedChar, chat: selectedChat }),
+          )
         ).actives
         // This is a low-level scripting API, so its budget follows the scriptMain
         // execution role (the same owner as LLM/simpleLLM), not chatMain.
@@ -992,7 +1144,7 @@ export async function runScripted(
             continue
           }
 
-          const tokens = await tokenize(parsed)
+          const tokens = await awaitClientWriteOperation(clientOperation, tokenize(parsed))
 
           if (totalTokens + tokens > maxContext) {
             break
@@ -1010,6 +1162,8 @@ export async function runScripted(
       declareAPI(
         'axLLMMain',
         async (id: string, promptStr: string, useMultimodal: boolean = false, optionsStr: string = '') => {
+          const clientOperation = currentScriptingClientOperation(ScriptingEngineState)
+
           let prompt: {
             role: string
             content: string
@@ -1062,7 +1216,7 @@ export async function runScripted(
 
               const multimodals: MultiModal[] = []
               for (const inlay of inlays) {
-                const inlayData = await getInlayAsset(inlay)
+                const inlayData = await awaitClientWriteOperation(clientOperation, getInlayAsset(inlay))
                 multimodals.push({
                   type: inlayData?.type,
                   base64: inlayData?.data,
@@ -1076,24 +1230,27 @@ export async function runScripted(
           }
 
           const options = parseLuaOptions(optionsStr) as { streaming?: boolean }
-          const result = await requestChatData(
-            {
-              formated: promptbody,
-              bias: {},
-              useStreaming: options.streaming === true,
-              forceStreaming: options.streaming === true,
-              noMultiGen: true,
-              ...(scriptModelOverrideProfileId(ScriptingEngineState.scriptModelOverrides, 'scriptAux')
-                ? {
-                    profileIdOverride: scriptModelOverrideProfileId(
-                      ScriptingEngineState.scriptModelOverrides,
-                      'scriptAux',
-                    ),
-                    strictProfileIdOverride: true,
-                  }
-                : {}),
-            },
-            'scriptAux',
+          const result = await awaitClientWriteOperation(
+            clientOperation,
+            requestChatData(
+              {
+                formated: promptbody,
+                bias: {},
+                useStreaming: options.streaming === true,
+                forceStreaming: options.streaming === true,
+                noMultiGen: true,
+                ...(scriptModelOverrideProfileId(ScriptingEngineState.scriptModelOverrides, 'scriptAux')
+                  ? {
+                      profileIdOverride: scriptModelOverrideProfileId(
+                        ScriptingEngineState.scriptModelOverrides,
+                        'scriptAux',
+                      ),
+                      strictProfileIdOverride: true,
+                    }
+                  : {}),
+              },
+              'scriptAux',
+            ),
           )
 
           if (result.type === 'fail') {
@@ -1107,7 +1264,10 @@ export async function runScripted(
             try {
               return JSON.stringify({
                 success: true,
-                result: await collectLuaStreamText(result.result),
+                result: await awaitClientWriteOperation(
+                  clientOperation,
+                  collectLuaStreamText(result.result, clientOperation),
+                ),
               })
             } catch (error) {
               return JSON.stringify({
@@ -1132,6 +1292,8 @@ export async function runScripted(
       )
 
       declareAPI('getCharacterLastMessage', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat
         if (!chat) {
           return ''
@@ -1152,6 +1314,8 @@ export async function runScripted(
       })
 
       declareAPI('getUserLastMessage', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat
         if (!chat) {
           return ''
@@ -1170,6 +1334,8 @@ export async function runScripted(
       })
 
       declareAPI('getCharacterLastMessage', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat
         if (!chat) {
           return ''
@@ -1190,6 +1356,8 @@ export async function runScripted(
       })
 
       declareAPI('getUserLastMessage', (id: string) => {
+        currentScriptingClientOperation(ScriptingEngineState)
+
         const chat = ScriptingEngineState.chat
         if (!chat) {
           return ''
@@ -1207,7 +1375,10 @@ export async function runScripted(
       })
       if (ScriptingEngineState.type === 'lua') {
         try {
-          await runLuaStringWithTimeout(ScriptingEngineState.engine, luaCodeWrapper(code), luaExecTimeoutMs)
+          await awaitClientWriteOperation(
+            clientOperation,
+            runLuaStringWithTimeout(ScriptingEngineState.engine, luaCodeWrapper(code), luaExecTimeoutMs),
+          )
         } catch (error) {
           evictScriptingEngineState(ScriptingEngineState)
           throw error
@@ -1215,7 +1386,7 @@ export async function runScripted(
       }
       if (ScriptingEngineState.type === 'py') {
         try {
-          await ScriptingEngineState.pyodide?.init(code)
+          await awaitClientWriteOperation(clientOperation, ScriptingEngineState.pyodide?.init(code))
         } catch (error) {
           evictScriptingEngineState(ScriptingEngineState)
           throw error
@@ -1248,28 +1419,28 @@ export async function runScripted(
             case 'input': {
               const func = luaEngine.global.get('onInput')
               if (func) {
-                res = await func(accessKey)
+                res = await awaitClientWriteOperation(clientOperation, func(accessKey))
               }
               break
             }
             case 'output': {
               const func = luaEngine.global.get('onOutput')
               if (func) {
-                res = await func(accessKey)
+                res = await awaitClientWriteOperation(clientOperation, func(accessKey))
               }
               break
             }
             case 'start': {
               const func = luaEngine.global.get('onStart')
               if (func) {
-                res = await func(accessKey)
+                res = await awaitClientWriteOperation(clientOperation, func(accessKey))
               }
               break
             }
             case 'onButtonClick': {
               const func = luaEngine.global.get('onButtonClick')
               if (func) {
-                res = await func(accessKey, data)
+                res = await awaitClientWriteOperation(clientOperation, func(accessKey, data))
               }
               break
             }
@@ -1279,7 +1450,10 @@ export async function runScripted(
             case 'editOutput': {
               const func = luaEngine.global.get('callListenMain')
               if (func) {
-                res = await func(mode, accessKey, JSON.stringify(data), JSON.stringify(meta))
+                res = await awaitClientWriteOperation(
+                  clientOperation,
+                  func(mode, accessKey, JSON.stringify(data), JSON.stringify(meta)),
+                )
                 res = JSON.parse(res)
               }
               break
@@ -1287,7 +1461,7 @@ export async function runScripted(
             default: {
               const func = luaEngine.global.get(mode)
               if (func) {
-                res = await func(accessKey)
+                res = await awaitClientWriteOperation(clientOperation, func(accessKey))
               }
               break
             }
@@ -1306,36 +1480,54 @@ export async function runScripted(
       if (ScriptingEngineState.type === 'py') {
         switch (mode) {
           case 'input': {
-            res = await ScriptingEngineState.pyodide?.python('onInput', [accessKey])
+            res = await awaitClientWriteOperation(
+              clientOperation,
+              ScriptingEngineState.pyodide?.python('onInput', [accessKey]),
+            )
             break
           }
           case 'output': {
-            res = await ScriptingEngineState.pyodide?.python('onOutput', [accessKey])
+            res = await awaitClientWriteOperation(
+              clientOperation,
+              ScriptingEngineState.pyodide?.python('onOutput', [accessKey]),
+            )
             break
           }
           case 'start': {
-            res = await ScriptingEngineState.pyodide?.python('onStart', [accessKey])
+            res = await awaitClientWriteOperation(
+              clientOperation,
+              ScriptingEngineState.pyodide?.python('onStart', [accessKey]),
+            )
             break
           }
           case 'onButtonClick': {
-            res = await ScriptingEngineState.pyodide?.python('onButtonClick', [accessKey, data as string])
+            res = await awaitClientWriteOperation(
+              clientOperation,
+              ScriptingEngineState.pyodide?.python('onButtonClick', [accessKey, data as string]),
+            )
             break
           }
           case 'editRequest':
           case 'editDisplay':
           case 'editInput':
           case 'editOutput': {
-            res = await ScriptingEngineState.pyodide?.python('callListenMain', [
-              mode,
-              accessKey,
-              JSON.stringify(data),
-              JSON.stringify(meta),
-            ])
+            res = await awaitClientWriteOperation(
+              clientOperation,
+              ScriptingEngineState.pyodide?.python('callListenMain', [
+                mode,
+                accessKey,
+                JSON.stringify(data),
+                JSON.stringify(meta),
+              ]),
+            )
             res = JSON.parse(res)
             break
           }
           default: {
-            res = await ScriptingEngineState.pyodide?.python(mode, [accessKey])
+            res = await awaitClientWriteOperation(
+              clientOperation,
+              ScriptingEngineState.pyodide?.python(mode, [accessKey]),
+            )
             break
           }
         }
@@ -1356,11 +1548,23 @@ export async function runScripted(
       chat,
       res,
     }
+  }
+  const runResult = ScriptingEngineState.mutex.runExclusive(async () => {
+    assertClientWriteOperation(clientOperation)
+    ScriptingEngineState.clientOperation = clientOperation
+    try {
+      return await execute()
+    } finally {
+      ScriptingEngineState.clientOperation = undefined
+    }
   })
-  return await runResult.finally(() => {
-    ScriptingEngineState.activeRuns = Math.max(0, (ScriptingEngineState.activeRuns ?? 1) - 1)
-    enforceScriptingEngineCacheLimit(ScriptingEngineState.cacheBucket)
-  })
+  return await awaitClientWriteOperation(
+    clientOperation,
+    runResult.finally(() => {
+      ScriptingEngineState.activeRuns = Math.max(0, (ScriptingEngineState.activeRuns ?? 1) - 1)
+      enforceScriptingEngineCacheLimit(ScriptingEngineState.cacheBucket)
+    }),
+  )
 }
 
 async function makeLuaFactory() {
@@ -1766,6 +1970,8 @@ export async function runLuaEditTrigger<T extends string | OpenAIChat[]>(
   content: T,
   meta?: object,
 ): Promise<T> {
+  const clientOperation = captureClientWriteOperation()
+
   switch (mode) {
     case 'editinput':
       mode = 'editInput'
@@ -1799,24 +2005,28 @@ export async function runLuaEditTrigger<T extends string | OpenAIChat[]>(
     const workingContext = createLuaEditTriggerWorkingContext(char, mode)
 
     for (const effect of luaTriggerEffects) {
-      const runResult = await runScripted(effect.code, {
-        char: workingContext.char,
-        chat: workingContext.chat,
-        setVar: workingContext.chat ? createLuaButtonWorkingSetVar(workingContext.chat) : undefined,
-        getVar: workingContext.chat
-          ? createLuaButtonWorkingGetVar(workingContext.char, workingContext.chat)
-          : undefined,
-        lowLevelAccess: false,
-        mode: mode,
-        data,
-        meta,
-      })
+      const runResult = await awaitClientWriteOperation(
+        clientOperation,
+        runScripted(effect.code, {
+          char: workingContext.char,
+          chat: workingContext.chat,
+          setVar: workingContext.chat ? createLuaButtonWorkingSetVar(workingContext.chat) : undefined,
+          getVar: workingContext.chat
+            ? createLuaButtonWorkingGetVar(workingContext.char, workingContext.chat)
+            : undefined,
+          lowLevelAccess: false,
+          mode: mode,
+          data,
+          meta,
+        }),
+      )
       data = runResult.res ?? data
     }
 
     reconcileLuaEditTriggerWorkingChat(workingContext)
     return data
   } catch (error) {
+    assertClientWriteOperation(clientOperation)
     console.error(`Lua edit trigger failed in ${mode}:`, error)
     return content
   }
@@ -2001,6 +2211,8 @@ export async function runLuaButtonTrigger(
     deferLiveChatSideEffects?: boolean
   },
 ): Promise<any> {
+  const clientOperation = captureClientWriteOperation()
+
   let runResult
   const workingChat =
     options?.chat && options.deferLiveChatSideEffects ? safeStructuredClone(options.chat) : options?.chat
@@ -2008,7 +2220,7 @@ export async function runLuaButtonTrigger(
     workingChat && options?.deferLiveChatSideEffects ? createLuaButtonWorkingGetVar(char, workingChat) : undefined
   const setWorkingVar =
     workingChat && options?.deferLiveChatSideEffects ? createLuaButtonWorkingSetVar(workingChat) : undefined
-  const isFresh = (): boolean => options?.isFresh?.() !== false
+  const isFresh = (): boolean => isClientWriteOperationCurrent(clientOperation) && options?.isFresh?.() !== false
 
   try {
     const ownTriggers = (
@@ -2029,20 +2241,23 @@ export async function runLuaButtonTrigger(
       }
       if (trigger?.effect?.[0]?.type === 'triggerlua') {
         const moduleOwner = getModuleTriggerOwner(trigger)
-        runResult = await runScripted(trigger.effect[0].code, {
-          char: char,
-          chat: workingChat,
-          setVar: setWorkingVar,
-          getVar: getWorkingVar,
-          lowLevelAccess: trigger.lowLevelAccess,
-          scriptModelOverrides: moduleOwner
-            ? moduleOwner.scriptModelOverrides
-            : char.type === 'simple'
-              ? {}
-              : char.scriptModelOverrides,
-          mode: 'onButtonClick',
-          data: data,
-        })
+        runResult = await awaitClientWriteOperation(
+          clientOperation,
+          runScripted(trigger.effect[0].code, {
+            char: char,
+            chat: workingChat,
+            setVar: setWorkingVar,
+            getVar: getWorkingVar,
+            lowLevelAccess: trigger.lowLevelAccess,
+            scriptModelOverrides: moduleOwner
+              ? moduleOwner.scriptModelOverrides
+              : char.type === 'simple'
+                ? {}
+                : char.scriptModelOverrides,
+            mode: 'onButtonClick',
+            data: data,
+          }),
+        )
         if (!isFresh()) {
           return null
         }
@@ -2257,3 +2472,12 @@ class PyodideContext {
     this.terminate(new Error('Python scripting worker is terminated.'))
   }
 }
+
+// Python has a browser worker of its own; close it immediately on authority
+// loss as well as fencing every host callback and awaited engine result.
+clientSessionStore.subscribe(() => {
+  if (!isClientReadOnly()) return
+  for (const state of ScriptingEngines.values()) {
+    if (state.type === 'py') state.pyodide?.close()
+  }
+})

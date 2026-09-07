@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import type { character, Chat } from '../storage/database.svelte'
 import { safeStructuredClone } from '../safeStructuredClone'
 
@@ -34,8 +36,14 @@ export function removeChatOutputListener(mode: string, listener: ChatOutputListe
   chatOutputListeners.delete(listener)
 }
 
-export async function runChatOutputListeners(arg: ChatOutputListenerArg): Promise<void> {
-  if (!runtimeReady() || chatOutputListeners.size === 0) return
+export async function runChatOutputListeners(
+  arg: ChatOutputListenerArg,
+  context: { isCurrent?: () => boolean; signal?: AbortSignal } = {},
+): Promise<void> {
+  const generation = captureClientSessionGeneration()
+  const isCurrent = () =>
+    isClientWriteOperationCurrent(generation) && !context.signal?.aborted && context.isCurrent?.() !== false
+  if (!canUseClientWriteAccess() || !isCurrent() || !runtimeReady() || chatOutputListeners.size === 0) return
 
   const snapshot: ChatOutputListenerArg = {
     char: safeStructuredClone(arg.char),
@@ -46,9 +54,12 @@ export async function runChatOutputListeners(arg: ChatOutputListenerArg): Promis
     ...(arg.effectIdempotencyKey ? { effectIdempotencyKey: arg.effectIdempotencyKey } : {}),
   }
   for (const listener of chatOutputListeners) {
+    if (!isCurrent()) return
     try {
       await listener(snapshot)
+      if (!isCurrent()) return
     } catch (error) {
+      if (!isCurrent()) return
       console.error(error)
     }
   }

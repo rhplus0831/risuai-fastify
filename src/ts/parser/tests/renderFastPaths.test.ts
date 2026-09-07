@@ -1,3 +1,12 @@
+import {
+  beginClientSession,
+  settleClientReader,
+  resetClientSessionForTests,
+  authorizeClientWriterRecovery,
+  setClientConnectionState,
+  setClientProjectionReady,
+  completeClientWriterRecovery,
+} from '../../clientSession'
 import { writable } from 'svelte/store'
 import DOMPurify from 'dompurify'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -11,13 +20,22 @@ import {
 } from '../parser.svelte'
 import { createChatBodyRenderMemo } from '../../../lib/ChatScreens/ChatBodyRenderMemo'
 import { pruneEmptyBilingualPairs } from '../../translator/bilingualInterleave'
-import { settingsResourceState } from '../../server/resourceState.svelte'
+import { charactersResourceState, settingsResourceState } from '../../server/resourceState.svelte'
 
 const mocks = vi.hoisted(() => ({
+  processScriptFull: vi.fn(async (_char, source) => ({ data: 'script: ' + source })),
+  displaySource: vi.fn(async () => ({ status: 'fallback', reason: 'forced_failure' })),
+  limited: vi.fn(),
   db: {
     paragraphBreakBySentences: false,
     paragraphBreakSentenceCount: 3,
   },
+}))
+
+vi.mock('../../process/scripts', () => ({ processScriptFull: mocks.processScriptFull }))
+vi.mock('../../server/displaySources', () => ({
+  requestServerDisplaySource: mocks.displaySource,
+  markReaderDisplayLimited: mocks.limited,
 }))
 
 vi.mock(
@@ -42,6 +60,7 @@ vi.mock(import('../../stores.svelte'), () => {
       selId: 0,
     },
     selectedCharID: writable(0),
+    CurrentTriggerIdStore: writable(null),
   } as typeof import('../../stores.svelte')
 })
 
@@ -54,6 +73,10 @@ const toolCallHtml = (payload: string) =>
   )}</div>\n\n`
 
 beforeEach(() => {
+  resetClientSessionForTests()
+  mocks.processScriptFull.mockClear()
+  mocks.displaySource.mockClear()
+  mocks.limited.mockClear()
   mocks.db.paragraphBreakBySentences = false
   mocks.db.paragraphBreakSentenceCount = 3
   settingsResourceState.value = mocks.db
@@ -63,6 +86,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   vi.restoreAllMocks()
 })
 
@@ -217,5 +241,63 @@ describe('risuChatParser function render path logging', () => {
 
     expect(output).toBe('before Hello Ada after')
     expect(logCalls).toBe(0)
+  })
+})
+
+describe('connected reader ParseMarkdown fallback', () => {
+  const character = {
+    chaId: 'reader-character',
+    name: 'Reader character',
+    type: 'character' as const,
+    chatPage: 0,
+    chats: [{ id: 'reader-chat', message: [] }],
+  }
+  beforeEach(() => {
+    charactersResourceState.characters = [character as any]
+    charactersResourceState.currentChar = 0
+    charactersResourceState.status = 'ready'
+  })
+  it('keeps sanitized source readable on isolated display failure without invoking scripts', async () => {
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    const html = await ParseMarkdown(
+      '**readable** <script>unsafe()</script>',
+      character as any,
+      'normal',
+      0,
+      {},
+      { chatId: 'reader-chat' },
+    )
+    expect(html).toContain('<strong>readable</strong>')
+    expect(html).not.toContain('<script>')
+    expect(mocks.displaySource).toHaveBeenCalledOnce()
+    expect(mocks.processScriptFull).not.toHaveBeenCalled()
+    expect(mocks.limited).toHaveBeenCalledOnce()
+  })
+  it('does not turn a reader parse into general script work if authority changes while awaiting display', async () => {
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    let resolveDisplay!: (result: { status: string; reason: string }) => void
+    mocks.displaySource.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveDisplay = resolve
+      }),
+    )
+    const rendered = ParseMarkdown('readable', character as any, 'normal', 0, {}, { chatId: 'reader-chat' })
+    await vi.waitFor(() => expect(mocks.displaySource).toHaveBeenCalled())
+    const writing = beginClientSession('writer')
+    authorizeClientWriterRecovery(writing, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 2 } })
+    setClientConnectionState('live')
+    setClientProjectionReady(true)
+    completeClientWriterRecovery(writing)
+    resolveDisplay({ status: 'fallback', reason: 'forced_failure' })
+    expect(await rendered).toContain('readable')
+    expect(mocks.processScriptFull).not.toHaveBeenCalled()
+  })
+  it('preserves the normal writer script fallback', async () => {
+    const html = await ParseMarkdown('readable', character as any, 'normal', 0, {}, { chatId: 'reader-chat' })
+    expect(html).toContain('script: readable')
+    expect(mocks.processScriptFull).toHaveBeenCalledOnce()
+    expect(mocks.limited).not.toHaveBeenCalled()
   })
 })

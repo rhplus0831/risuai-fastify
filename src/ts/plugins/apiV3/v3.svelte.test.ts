@@ -1,3 +1,13 @@
+import {
+  beginClientSession,
+  settleClientReader,
+  setClientConnectionState,
+  setClientProjectionReady,
+  authorizeClientWriterRecovery,
+  completeClientWriterRecovery,
+  demoteClientSession,
+  resetClientSessionForTests,
+} from '../../clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
@@ -522,6 +532,7 @@ function capturedSettingsRollback(): () => void {
 }
 
 beforeEach(async () => {
+  resetClientSessionForTests()
   // Happy DOM does not execute the nested guest frame; host handshake behavior
   // is covered by factory.test.ts and the real browser startup regression.
   vi.spyOn(SandboxHost.prototype, 'waitForInitialization').mockResolvedValue(undefined)
@@ -573,6 +584,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  resetClientSessionForTests()
   await __v3PluginLifecycleTestHooks.reset()
   vi.restoreAllMocks()
 })
@@ -2203,13 +2215,70 @@ describe('V3 plugin lifecycle cleanup', () => {
     const listener = vi.fn()
 
     await api.addRisuChatListener('output', listener)
-    expect(chatOutputListeners.has(listener)).toBe(true)
+    const guarded = [...chatOutputListeners][0]
+    guarded({} as any)
+    expect(listener).toHaveBeenCalledOnce()
+    expect(chatOutputListeners.has(guarded)).toBe(true)
 
     api.removeRisuChatListener('output', listener)
-    expect(chatOutputListeners.has(listener)).toBe(false)
+    expect(chatOutputListeners.size).toBe(0)
 
     await api.addRisuChatListener('output', listener)
     await __v3PluginLifecycleTestHooks.unloadInstance(runtime.instance)
-    expect(chatOutputListeners.has(listener)).toBe(false)
+    expect(chatOutputListeners.size).toBe(0)
+  })
+})
+
+describe('connected reader V3 runtime boundary', () => {
+  it('rejects all mutation and operational APIs before local fallback or requests', async () => {
+    const api = __v3PluginLifecycleTestHooks.createApi(seedV3Plugin('plugin-a')) as any
+    const before = JSON.stringify(mockDbState.db)
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    for (const invoke of [
+      () => api.setCharacter({ chaId: 'char-a', name: 'changed' }),
+      () => api.setCharacterToIndex(0, { name: 'changed' }),
+      () => api.setChatToIndex(0, 0, { message: [] }),
+      () => api.setArgument('key', 'changed'),
+      () => api.setDatabaseLite({ aiModel: 'changed' }),
+      () => api._setPluginStorage('key', 'changed'),
+      () => api._setSafeLocalStorage('key', 'changed'),
+      () => api.changeTextTheme('highcontrast'),
+      () => api.nativeFetch('https://example.com'),
+      () => api.runLLMModel({ mode: 'model', messages: [] }),
+      () => api.addProvider('unsafe', vi.fn()),
+      () => api.addTTSPreprocessor(vi.fn()),
+      () => api.registerButton({ name: 'unsafe', icon: '', iconType: 'none' }, vi.fn()),
+    ])
+      expect(invoke).toThrow('client_write_access_required')
+    expect(JSON.stringify(mockDbState.db)).toBe(before)
+    expect(dispatchUpdatePlugin).not.toHaveBeenCalled()
+    expect(prepareCompatibleCharacterUpdateScoped).not.toHaveBeenCalled()
+  })
+
+  it('retires writer instances and fences held host callbacks immediately on role loss', async () => {
+    const operation = beginClientSession('writer')
+    authorizeClientWriterRecovery(operation, { databaseLineage: 'lineage', writer: { sessionId: 'writer', epoch: 1 } })
+    setClientConnectionState('live')
+    setClientProjectionReady(true)
+    completeClientWriterRecovery(operation)
+    const runtime = __v3PluginLifecycleTestHooks.createTrackedApi(seedV3Plugin('plugin-a'))
+    const api = runtime.api as any
+    const buttonEffect = vi.fn()
+    const outputEffect = vi.fn()
+    const unloadEffect = vi.fn()
+    api.registerButton({ name: 'test', icon: '', iconType: 'none' }, buttonEffect)
+    await api.addRisuChatListener('output', outputEffect)
+    api.onUnload(unloadEffect)
+    const button = additionalFloatingActionButtons[0].callback
+    const output = [...chatOutputListeners][0]
+    demoteClientSession()
+    expect(runtime.instance.active).toBe(false)
+    expect(() => button()).toThrow('client_write_access_required')
+    expect(() => output({} as any)).toThrow('client_write_access_required')
+    expect(buttonEffect).not.toHaveBeenCalled()
+    expect(outputEffect).not.toHaveBeenCalled()
+    expect(unloadEffect).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(additionalFloatingActionButtons).toHaveLength(0))
   })
 })

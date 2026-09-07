@@ -1,3 +1,14 @@
+import { pluginV2 } from '../plugins/plugins.svelte'
+import {
+  beginClientSession,
+  settleClientReader,
+  authorizeClientWriterRecovery,
+  setClientConnectionState,
+  setClientProjectionReady,
+  completeClientWriterRecovery,
+  demoteClientSession,
+  resetClientSessionForTests,
+} from '../clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Edit-display script rendering must stay silent on console.log.
@@ -141,6 +152,7 @@ function seedDb(messageChatId: string | null = 'm-0'): character {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   ;(globalThis as Record<string, unknown>).safeStructuredClone = safeStructuredClone
   clearCachedServerCommandRevision()
   resetScriptCache()
@@ -148,6 +160,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   vi.unstubAllGlobals()
   clearCachedServerCommandRevision()
   setClientRegexWorkerFactoryForTesting(null)
@@ -719,5 +732,60 @@ describe('editdisplay render path logging', () => {
     const result = await processScriptFull(char, 'rendered body', 'editdisplay', 0)
 
     expect(result.data).toBe('rendered body')
+  })
+})
+
+function enterScriptWriter(epoch = 1): void {
+  const operation = beginClientSession('script-writer')
+  authorizeClientWriterRecovery(operation, {
+    databaseLineage: 'lineage',
+    writer: { sessionId: 'script-writer', epoch },
+  })
+  setClientConnectionState('live')
+  setClientProjectionReady(true)
+  completeClientWriterRecovery(operation)
+}
+
+describe('connected script display authority', () => {
+  it('rejects reader entry before a general display hook can run', async () => {
+    const char = seedDb()
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    const hook = vi.fn(() => 'changed')
+    pluginV2.editdisplay.add(hook)
+    try {
+      await expect(processScriptFull(char, 'source', 'editdisplay')).rejects.toThrow('client_write_access_required')
+      expect(hook).not.toHaveBeenCalled()
+    } finally {
+      pluginV2.editdisplay.delete(hook)
+    }
+  })
+  it('rejects held display-hook output after demotion and reacquisition before later hooks or regex injection', async () => {
+    const char = seedDb()
+    char.triggerscript = []
+    char.customscript = [{ in: 'source', out: '@@inject', type: 'editdisplay' }] as any
+    enterScriptWriter()
+    let resolveHook!: (value: string) => void
+    const held = new Promise<string>((resolve) => {
+      resolveHook = resolve
+    })
+    const hook = vi.fn(() => held)
+    const later = vi.fn(() => 'late')
+    pluginV2.editdisplay.add(hook)
+    pluginV2.editdisplay.add(later)
+    const before = JSON.stringify(char.chats[0])
+    try {
+      const run = processScriptFull(char, 'source', 'editdisplay', 0)
+      await vi.waitFor(() => expect(hook).toHaveBeenCalled())
+      demoteClientSession()
+      enterScriptWriter(2)
+      resolveHook('source')
+      await expect(run).rejects.toThrow('client_write_operation_stale')
+      expect(later).not.toHaveBeenCalled()
+      expect(JSON.stringify(char.chats[0])).toBe(before)
+    } finally {
+      pluginV2.editdisplay.delete(hook)
+      pluginV2.editdisplay.delete(later)
+    }
   })
 })

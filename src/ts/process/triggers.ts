@@ -1,3 +1,9 @@
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+  awaitClientWriteOperation,
+} from '../clientWriteOperation'
 import { parseChatML } from '../parser/chatML'
 import { risuChatParser } from '../parser/parser.svelte'
 import { type Chat, type character } from '../storage/database.svelte'
@@ -1390,6 +1396,8 @@ export async function runTrigger(
     deferLiveChatSideEffects?: boolean
   },
 ) {
+  const clientOperation = captureClientWriteOperation()
+
   arg.recursiveCount ??= 0
   const triggerBudget = arg.triggerBudget ?? createTriggerExecutionBudget(arg.triggerBudgetOptions)
   let varChanged = false
@@ -1451,7 +1459,7 @@ export async function runTrigger(
   let chat = arg.displayMode ? arg.chat : safeStructuredClone(arg.chat ?? char.chats[char.chatPage])
 
   let tempVars: Record<string, string> = arg.tempVars ?? {}
-  const isFresh = (): boolean => arg.isFresh?.() !== false
+  const isFresh = (): boolean => isClientWriteOperationCurrent(clientOperation) && arg.isFresh?.() !== false
   const shouldApplyLiveChatSideEffects = (): boolean => !arg.deferLiveChatSideEffects && isFresh()
 
   // One scriptstate-scoped rollback for the whole pass, captured lazily on the
@@ -1563,6 +1571,7 @@ export async function runTrigger(
   }
 
   function setVar(key: string, value: string): boolean {
+    assertClientWriteOperation(clientOperation)
     if (arg.displayMode) {
       if (tempVars[key] === value) {
         return false
@@ -1598,15 +1607,16 @@ export async function runTrigger(
   }
 
   const buildResult = async () => {
+    assertClientWriteOperation(clientOperation)
     let caculatedTokens = 0
     if (additonalSysPrompt.start) {
-      caculatedTokens += await tokenize(additonalSysPrompt.start)
+      caculatedTokens += await awaitClientWriteOperation(clientOperation, tokenize(additonalSysPrompt.start))
     }
     if (additonalSysPrompt.historyend) {
-      caculatedTokens += await tokenize(additonalSysPrompt.historyend)
+      caculatedTokens += await awaitClientWriteOperation(clientOperation, tokenize(additonalSysPrompt.historyend))
     }
     if (additonalSysPrompt.promptend) {
-      caculatedTokens += await tokenize(additonalSysPrompt.promptend)
+      caculatedTokens += await awaitClientWriteOperation(clientOperation, tokenize(additonalSysPrompt.promptend))
     }
     if (varChanged) {
       if (isFresh()) {
@@ -1634,10 +1644,10 @@ export async function runTrigger(
     let tempVars: Record<string, number> = {}
 
     if (shouldStopTriggerExecution(triggerBudget, arg.signal, 'before trigger pass')) {
-      return await buildResult()
+      return await awaitClientWriteOperation(clientOperation, buildResult())
     }
     if (!isFresh()) {
-      return await buildResult()
+      return await awaitClientWriteOperation(clientOperation, buildResult())
     }
 
     if (trigger.effect[0]?.type === 'triggercode' || trigger.effect[0]?.type === 'triggerlua') {
@@ -1738,10 +1748,10 @@ export async function runTrigger(
     for (let index = 0; index < trigger.effect.length; index++) {
       const effect = trigger.effect[index]
       if (chargeTriggerEffectStep(triggerBudget, arg.signal, effect.type)) {
-        return await buildResult()
+        return await awaitClientWriteOperation(clientOperation, buildResult())
       }
       if (!isFresh()) {
-        return await buildResult()
+        return await awaitClientWriteOperation(clientOperation, buildResult())
       }
       if (mode === 'display' && !displayAllowList.includes(effect.type)) {
         continue
@@ -1806,7 +1816,7 @@ export async function runTrigger(
         }
         case 'command': {
           const effectValue = risuChatParser(effect.value, { chara: char })
-          await processMultiCommand(effectValue)
+          await awaitClientWriteOperation(clientOperation, processMultiCommand(effectValue))
           break
         }
         case 'stop':
@@ -1817,17 +1827,20 @@ export async function runTrigger(
         case 'runtrigger': {
           if (arg.recursiveCount < triggerBudget.maxRecursionDepth) {
             const recursiveCount = arg.recursiveCount + 1
-            const r = await runTrigger(char, 'manual', {
-              chat,
-              recursiveCount,
-              additonalSysPrompt,
-              stopSending,
-              manualName: effect.value,
-              signal: arg.signal,
-              triggerBudget,
-              isFresh: arg.isFresh,
-              deferLiveChatSideEffects: arg.deferLiveChatSideEffects,
-            })
+            const r = await awaitClientWriteOperation(
+              clientOperation,
+              runTrigger(char, 'manual', {
+                chat,
+                recursiveCount,
+                additonalSysPrompt,
+                stopSending,
+                manualName: effect.value,
+                signal: arg.signal,
+                triggerBudget,
+                isFresh: arg.isFresh,
+                deferLiveChatSideEffects: arg.deferLiveChatSideEffects,
+              }),
+            )
             if (r) {
               additonalSysPrompt = r.additonalSysPrompt
               chat = r.chat
@@ -1874,12 +1887,12 @@ export async function runTrigger(
               break
             }
             case 'input': {
-              const val = await alertInput(effectValue)
+              const val = await awaitClientWriteOperation(clientOperation, alertInput(effectValue))
               setVar(inputVar, val)
               break
             }
             case 'select': {
-              const val = await alertSelect(effectValue.split('§'))
+              const val = await awaitClientWriteOperation(clientOperation, alertSelect(effectValue.split('§')))
               if (val === null) break
               setVar(inputVar, val)
             }
@@ -1905,23 +1918,26 @@ export async function runTrigger(
           if (!promptbody) {
             promptbody = [{ role: 'user', content: effectValue }]
           }
-          const result = await requestChatData(
-            {
-              formated: promptbody,
-              bias: {},
-              useStreaming: false,
-              noMultiGen: true,
-              ...(scriptModelOverrideProfileId(scriptModelOverridesForTrigger(trigger, char), 'scriptMain')
-                ? {
-                    profileIdOverride: scriptModelOverrideProfileId(
-                      scriptModelOverridesForTrigger(trigger, char),
-                      'scriptMain',
-                    ),
-                    strictProfileIdOverride: true,
-                  }
-                : {}),
-            },
-            'scriptMain',
+          const result = await awaitClientWriteOperation(
+            clientOperation,
+            requestChatData(
+              {
+                formated: promptbody,
+                bias: {},
+                useStreaming: false,
+                noMultiGen: true,
+                ...(scriptModelOverrideProfileId(scriptModelOverridesForTrigger(trigger, char), 'scriptMain')
+                  ? {
+                      profileIdOverride: scriptModelOverrideProfileId(
+                        scriptModelOverridesForTrigger(trigger, char),
+                        'scriptMain',
+                      ),
+                      strictProfileIdOverride: true,
+                    }
+                  : {}),
+              },
+              'scriptMain',
+            ),
           )
 
           if (result.type === 'fail' || result.type === 'streaming' || result.type === 'multiline') {
@@ -1941,8 +1957,8 @@ export async function runTrigger(
           const processer = new HypaProcesser()
           const effectValue = risuChatParser(effect.value, { chara: char })
           const source = risuChatParser(effect.source, { chara: char })
-          await processer.addText(effectValue.split('§'))
-          const val = await processer.similaritySearch(source)
+          await awaitClientWriteOperation(clientOperation, processer.addText(effectValue.split('§')))
+          const val = await awaitClientWriteOperation(clientOperation, processer.similaritySearch(source))
           setVar(effect.inputVar, val.join('§'))
           break
         }
@@ -1974,14 +1990,17 @@ export async function runTrigger(
 
           const effectValue = risuChatParser(effect.value, { chara: char })
           const negValue = risuChatParser(effect.negValue, { chara: char })
-          const gen = await generateAIImage(effectValue, char, negValue, 'inlay')
+          const gen = await awaitClientWriteOperation(
+            clientOperation,
+            generateAIImage(effectValue, char, negValue, 'inlay'),
+          )
           if (!gen) {
             setVar(effect.inputVar, 'Error: Image generation failed')
             break
           }
           const imgHTML = new Image()
           imgHTML.src = gen
-          const inlay = await writeInlayImage(imgHTML)
+          const inlay = await awaitClientWriteOperation(clientOperation, writeInlayImage(imgHTML))
           const res = `{{inlay::${inlay}}}`
           setVar(effect.inputVar, res)
           break
@@ -1989,15 +2008,18 @@ export async function runTrigger(
 
         case 'triggerlua': {
           const moduleOwner = getModuleTriggerOwner(trigger)
-          const triggerCodeResult = await runScripted(effect.code, {
-            lowLevelAccess: trigger.lowLevelAccess,
-            mode: mode === 'manual' ? arg.manualName : mode,
-            setVar: setVar,
-            getVar: getVar,
-            char: char,
-            chat: chat,
-            scriptModelOverrides: moduleOwner ? moduleOwner.scriptModelOverrides : char.scriptModelOverrides,
-          })
+          const triggerCodeResult = await awaitClientWriteOperation(
+            clientOperation,
+            runScripted(effect.code, {
+              lowLevelAccess: trigger.lowLevelAccess,
+              mode: mode === 'manual' ? arg.manualName : mode,
+              setVar: setVar,
+              getVar: getVar,
+              char: char,
+              chat: chat,
+              scriptModelOverrides: moduleOwner ? moduleOwner.scriptModelOverrides : char.scriptModelOverrides,
+            }),
+          )
 
           if (triggerCodeResult.stopSending) {
             stopSending = true
@@ -2211,12 +2233,12 @@ export async function runTrigger(
                     index = originalIndex
                   } else {
                     if (chargeTriggerLoopBack(triggerBudget, arg.signal, ef.type)) {
-                      return await buildResult()
+                      return await awaitClientWriteOperation(clientOperation, buildResult())
                     }
                     break
                   }
                 } else if (chargeTriggerLoopBack(triggerBudget, arg.signal, ef.type)) {
-                  return await buildResult()
+                  return await awaitClientWriteOperation(clientOperation, buildResult())
                 }
 
                 break
@@ -2226,10 +2248,10 @@ export async function runTrigger(
             //this is for preventing lagging
             tempVars['loopTimes'] = (tempVars['loopTimes'] ?? 0) + 1
             if (tempVars['loopTimes'] > 100) {
-              await sleepWithAbort(1, arg.signal, triggerBudget)
+              await awaitClientWriteOperation(clientOperation, sleepWithAbort(1, arg.signal, triggerBudget))
               tempVars['loopTimes'] = 0
               if (shouldStopTriggerExecution(triggerBudget, arg.signal, 'after v2 loop yield')) {
-                return await buildResult()
+                return await awaitClientWriteOperation(clientOperation, buildResult())
               }
             }
           }
@@ -2255,17 +2277,20 @@ export async function runTrigger(
         case 'v2RunTrigger': {
           if (arg.recursiveCount < triggerBudget.maxRecursionDepth) {
             const recursiveCount = arg.recursiveCount + 1
-            const r = await runTrigger(char, 'manual', {
-              chat,
-              recursiveCount,
-              additonalSysPrompt,
-              stopSending,
-              manualName: effect.target,
-              signal: arg.signal,
-              triggerBudget,
-              isFresh: arg.isFresh,
-              deferLiveChatSideEffects: arg.deferLiveChatSideEffects,
-            })
+            const r = await awaitClientWriteOperation(
+              clientOperation,
+              runTrigger(char, 'manual', {
+                chat,
+                recursiveCount,
+                additonalSysPrompt,
+                stopSending,
+                manualName: effect.target,
+                signal: arg.signal,
+                triggerBudget,
+                isFresh: arg.isFresh,
+                deferLiveChatSideEffects: arg.deferLiveChatSideEffects,
+              }),
+            )
             if (r) {
               additonalSysPrompt = r.additonalSysPrompt
               chat = r.chat
@@ -2344,7 +2369,7 @@ export async function runTrigger(
             effect.valueType === 'value'
               ? risuChatParser(effect.value, { chara: char })
               : getVar(risuChatParser(effect.value, { chara: char }))
-          await processMultiCommand(value)
+          await awaitClientWriteOperation(clientOperation, processMultiCommand(value))
           break
         }
         case 'v2SendAIprompt': {
@@ -2366,14 +2391,14 @@ export async function runTrigger(
             effect.negValueType === 'value'
               ? risuChatParser(effect.negValue, { chara: char })
               : getVar(risuChatParser(effect.negValue, { chara: char }))
-          let gen = await generateAIImage(value, char, negValue, 'inlay')
+          let gen = await awaitClientWriteOperation(clientOperation, generateAIImage(value, char, negValue, 'inlay'))
           if (!gen) {
             setVar(risuChatParser(effect.outputVar, { chara: char }), 'null')
             break
           }
           let imgHTML = new Image()
           imgHTML.src = gen
-          let inlay = await writeInlayImage(imgHTML)
+          let inlay = await awaitClientWriteOperation(clientOperation, writeInlayImage(imgHTML))
           let res = `{{inlay::${inlay}}}`
           setVar(risuChatParser(effect.outputVar, { chara: char }), res)
           break
@@ -2391,8 +2416,8 @@ export async function runTrigger(
               ? risuChatParser(effect.value, { chara: char })
               : getVar(risuChatParser(effect.value, { chara: char }))
           let processer = new HypaProcesser()
-          await processer.addText(value.split('§'))
-          let val = await processer.similaritySearch(source)
+          await awaitClientWriteOperation(clientOperation, processer.addText(value.split('§')))
+          let val = await awaitClientWriteOperation(clientOperation, processer.similaritySearch(source))
           setVar(risuChatParser(effect.outputVar, { chara: char }), val.join('§'))
           break
         }
@@ -2409,29 +2434,32 @@ export async function runTrigger(
             promptbody = [{ role: 'user', content: value }]
           }
           const modelRole = normalizeTriggerLLMMode(effect.model)
-          let result = await requestChatData(
-            {
-              formated: promptbody,
-              bias: {},
-              useStreaming: effect.streaming ?? false,
-              noMultiGen: true,
-              ...(scriptModelOverrideProfileId(scriptModelOverridesForTrigger(trigger, char), modelRole)
-                ? {
-                    profileIdOverride: scriptModelOverrideProfileId(
-                      scriptModelOverridesForTrigger(trigger, char),
-                      modelRole,
-                    ),
-                    strictProfileIdOverride: true,
-                  }
-                : {}),
-            },
-            modelRole,
+          let result = await awaitClientWriteOperation(
+            clientOperation,
+            requestChatData(
+              {
+                formated: promptbody,
+                bias: {},
+                useStreaming: effect.streaming ?? false,
+                noMultiGen: true,
+                ...(scriptModelOverrideProfileId(scriptModelOverridesForTrigger(trigger, char), modelRole)
+                  ? {
+                      profileIdOverride: scriptModelOverrideProfileId(
+                        scriptModelOverridesForTrigger(trigger, char),
+                        modelRole,
+                      ),
+                      strictProfileIdOverride: true,
+                    }
+                  : {}),
+              },
+              modelRole,
+            ),
           )
 
           if (result.type === 'fail' || result.type === 'multiline') {
             setVar(risuChatParser(effect.outputVar, { chara: char }), 'null')
           } else if (result.type === 'streaming') {
-            const text = await collectStreamingText(result.result)
+            const text = await awaitClientWriteOperation(clientOperation, collectStreamingText(result.result))
             setVar(risuChatParser(effect.outputVar, { chara: char }), text)
           } else {
             setVar(risuChatParser(effect.outputVar, { chara: char }), result.result)
@@ -2959,10 +2987,13 @@ export async function runTrigger(
           if (arg.displayMode) {
             return
           }
-          let value = await alertInput(
-            effect.displayType === 'value'
-              ? risuChatParser(effect.display, { chara: char })
-              : getVar(risuChatParser(effect.display, { chara: char })),
+          let value = await awaitClientWriteOperation(
+            clientOperation,
+            alertInput(
+              effect.displayType === 'value'
+                ? risuChatParser(effect.display, { chara: char })
+                : getVar(risuChatParser(effect.display, { chara: char })),
+            ),
           )
           setVar(risuChatParser(effect.outputVar, { chara: char }), value)
           break
@@ -2980,7 +3011,7 @@ export async function runTrigger(
               ? risuChatParser(effect.value, { chara: char })
               : getVar(risuChatParser(effect.value, { chara: char }))
           const options = value.split('|')
-          const result = await alertSelect(options, display)
+          const result = await awaitClientWriteOperation(clientOperation, alertSelect(options, display))
           if (result === null) break
           setVar(risuChatParser(effect.outputVar, { chara: char }), result)
           break
@@ -3037,7 +3068,7 @@ export async function runTrigger(
             effect.valueType === 'value'
               ? Number(risuChatParser(effect.value, { chara: char }))
               : Number(getVar(risuChatParser(effect.value, { chara: char })))
-          await sleepWithAbort(value * 1000, arg.signal, triggerBudget)
+          await awaitClientWriteOperation(clientOperation, sleepWithAbort(value * 1000, arg.signal, triggerBudget))
           break
         }
         case 'v2GetRequestState': {
@@ -3146,7 +3177,10 @@ export async function runTrigger(
             effect.valueType === 'value'
               ? risuChatParser(effect.value, { chara: char })
               : getVar(risuChatParser(effect.value, { chara: char }))
-          setVar(risuChatParser(effect.outputVar, { chara: char }), (await tokenize(value)).toString())
+          setVar(
+            risuChatParser(effect.outputVar, { chara: char }),
+            (await awaitClientWriteOperation(clientOperation, tokenize(value))).toString(),
+          )
           break
         }
         case 'v2GetAllLorebooks': {
@@ -3589,10 +3623,10 @@ export async function runTrigger(
         }
       }
       if (shouldStopTriggerExecution(triggerBudget, arg.signal, `after effect ${effect.type}`)) {
-        return await buildResult()
+        return await awaitClientWriteOperation(clientOperation, buildResult())
       }
     }
   }
 
-  return await buildResult()
+  return await awaitClientWriteOperation(clientOperation, buildResult())
 }

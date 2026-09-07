@@ -1,3 +1,11 @@
+import {
+  assertClientWriteAccess,
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  clientSessionStore,
+  isClientSessionGenerationCurrent,
+  isClientReadOnly,
+} from '../clientSession'
 import { get, readonly, writable } from 'svelte/store'
 import { language } from '../../lang'
 import type { character } from '../storage/database.svelte'
@@ -116,7 +124,7 @@ export function getPluginRuntimeState(): PluginRuntimeState {
 }
 
 export function isPluginRuntimeReady(): boolean {
-  return pluginRuntimeStateSnapshot.phase === 'ready'
+  return canUseClientWriteAccess() && pluginRuntimeStateSnapshot.phase === 'ready'
 }
 
 export function _setPluginRuntimePhaseForTesting(phase: PluginRuntimePhase): void {
@@ -188,8 +196,16 @@ function isCurrentPluginUpdateTarget(plugin: Pick<RisuPlugin, 'name' | 'script' 
 }
 
 export async function checkPluginUpdate(plugin: RisuPlugin) {
+  assertClientWriteAccess()
+  const sessionGeneration = captureClientSessionGeneration()
   const target = { ...plugin }
-  return checkPluginUpdateRequest(target, () => isCurrentPluginUpdateTarget(target))
+  return checkPluginUpdateRequest(
+    target,
+    () =>
+      canUseClientWriteAccess() &&
+      isClientSessionGenerationCurrent(sessionGeneration) &&
+      isCurrentPluginUpdateTarget(target),
+  )
 }
 
 export type PluginImportResult =
@@ -205,6 +221,12 @@ export type PluginUpdateInstallResult =
   | { status: 'queued'; settlement: Promise<PluginMutationFinalSettlement> }
 
 export async function installPluginUpdate(plugin: RisuPlugin): Promise<PluginUpdateInstallResult> {
+  assertClientWriteAccess()
+  const sessionGeneration = captureClientSessionGeneration()
+  const isCurrent = () =>
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    isCurrentPluginUpdateTarget(plugin)
   let operation: PluginImportOperation | null = null
   try {
     if (!plugin.updateURL) {
@@ -212,9 +234,9 @@ export async function installPluginUpdate(plugin: RisuPlugin): Promise<PluginUpd
     }
 
     operation = beginPluginImport(capturePluginImportTarget(currentPluginImportFreshness()))
-    const download = await downloadPluginUpdate(plugin, () => isCurrentPluginUpdateTarget(plugin))
+    const download = await downloadPluginUpdate(plugin, isCurrent)
     if (download.status !== 'downloaded') return download.status
-    if (!isFreshPluginImport(operation, currentPluginImportFreshness()) || !isCurrentPluginUpdateTarget(plugin)) {
+    if (!isFreshPluginImport(operation, currentPluginImportFreshness()) || !isCurrent()) {
       return 'stale'
     }
     const imported = await importPlugin(download.source, {
@@ -281,12 +303,18 @@ export async function importPlugin(
     operation?: PluginImportOperation
   } = {},
 ): Promise<PluginImportResult> {
+  assertClientWriteAccess()
+  const sessionGeneration = captureClientSessionGeneration()
   let operation: PluginImportOperation | null = argu.operation ?? null
   let releasePluginRuntimeSync: (() => void) | null = null
   const beginImport = () => {
     operation ??= beginPluginImport(capturePluginImportTarget(currentPluginImportFreshness()))
   }
-  const isFreshImport = () => operation !== null && isFreshPluginImport(operation, currentPluginImportFreshness())
+  const isFreshImport = () =>
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    operation !== null &&
+    isFreshPluginImport(operation, currentPluginImportFreshness())
 
   try {
     let jsFile = ''
@@ -602,7 +630,11 @@ export async function importPlugin(
         releasePluginRuntimeSync = null
         const settlement = result.settlement
           .then((finalSettlement) => {
-            if (finalSettlement.status === 'accepted') {
+            if (
+              finalSettlement.status === 'accepted' &&
+              canUseClientWriteAccess() &&
+              isClientSessionGenerationCurrent(sessionGeneration)
+            ) {
               completePluginImport(pluginData.name, apiVersion, argu.isHotReload)
             }
             return finalSettlement
@@ -614,6 +646,7 @@ export async function importPlugin(
       }
     }
 
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(sessionGeneration)) return { status: 'stale' }
     completePluginImport(pluginData.name, apiVersion, argu.isHotReload)
     return { status: 'accepted', pluginName: pluginData.name }
   } catch (error) {
@@ -683,7 +716,7 @@ function deferPluginRuntimeSync(): () => void {
  * the rollback must queue one final load of the restored state.
  */
 export function startPluginRuntimeSync(): void {
-  if (stopPluginRuntimeSyncEffect) return
+  if (!canUseClientWriteAccess() || stopPluginRuntimeSyncEffect) return
   pluginRuntimeSyncState.targetSignature ??= pluginRuntimeSignature(
     acceptedPluginRuntimeProjection(currentPluginCollectionSnapshot()),
   )
@@ -714,7 +747,8 @@ let pluginLoadQueue: Promise<void> | null = null
 let pluginLoadQueued = false
 
 async function runQueuedPluginLoads() {
-  while (pluginLoadQueued) {
+  while (pluginLoadQueued && canUseClientWriteAccess()) {
+    const sessionGeneration = captureClientSessionGeneration()
     pluginLoadQueued = false
     console.log('Loading plugins...')
     const plugins = acceptedPluginRuntimeProjection(currentPluginCollectionSnapshot())
@@ -726,6 +760,11 @@ async function runQueuedPluginLoads() {
       for (const plugin of plugins) assertSupportedPluginApiVersion(plugin)
       await loadV3Plugins(plugins.filter((plugin) => plugin.enabled))
     } catch (error) {
+      if (!canUseClientWriteAccess()) return
+      if (!isClientSessionGenerationCurrent(sessionGeneration)) {
+        if (pluginLoadQueued) continue
+        return
+      }
       const latestSignature = pluginRuntimeSignature(acceptedPluginRuntimeProjection(currentPluginCollectionSnapshot()))
       if (latestSignature !== signature) {
         pluginRuntimeSyncState.targetSignature = latestSignature
@@ -736,6 +775,11 @@ async function runQueuedPluginLoads() {
       throw error
     }
 
+    if (!canUseClientWriteAccess()) return
+    if (!isClientSessionGenerationCurrent(sessionGeneration)) {
+      if (pluginLoadQueued) continue
+      return
+    }
     const latestSignature = pluginRuntimeSignature(acceptedPluginRuntimeProjection(currentPluginCollectionSnapshot()))
     if (latestSignature !== signature) {
       pluginRuntimeSyncState.targetSignature = latestSignature
@@ -749,6 +793,7 @@ async function runQueuedPluginLoads() {
 }
 
 export function loadPlugins(): Promise<void> {
+  if (!canUseClientWriteAccess()) return Promise.resolve()
   pluginRuntimeSyncState.targetSignature = pluginRuntimeSignature(
     acceptedPluginRuntimeProjection(currentPluginCollectionSnapshot()),
   )
@@ -1105,9 +1150,54 @@ class PluginRuntimeLifecycle {
   private readonly intervals = new Set<ReturnType<typeof globalThis.setInterval>>()
   private readonly eventListeners = new Set<TrackedPluginEventListener>()
 
+  private readonly sessionGeneration = captureClientSessionGeneration()
+  private disposed = false
+  private readonly guardedCallbacks = new WeakMap<Function, Function>()
+  private readonly registrationCleanups = new Set<() => void>()
+
   constructor(private readonly assertActive?: () => void) {}
 
+  guardCallback<T extends Function>(callback: T): T {
+    let guarded = this.guardedCallbacks.get(callback)
+    if (!guarded) {
+      guarded = (...args: unknown[]) => {
+        this.assertCurrent()
+        const result = callback(...args)
+        if (result instanceof Promise)
+          return result.then((value) => {
+            this.assertCurrent()
+            return value
+          })
+        return result
+      }
+      this.guardedCallbacks.set(callback, guarded)
+    }
+    return guarded as T
+  }
+
+  trackRegistration(cleanup: () => void): void {
+    this.registrationCleanups.add(cleanup)
+  }
+
+  guardObject<T extends object>(object: T): T {
+    return new Proxy(object, {
+      get: (target, key) => {
+        this.assertCurrent()
+        const value = Reflect.get(target, key, target)
+        return typeof value === 'function'
+          ? (...args: unknown[]) => {
+              this.assertCurrent()
+              return value.apply(target, args)
+            }
+          : value
+      },
+    })
+  }
+
   assertCurrent = (): void => {
+    assertClientWriteAccess()
+    if (this.disposed || !isClientSessionGenerationCurrent(this.sessionGeneration))
+      throw new Error('Plugin client session is no longer active.')
     this.assertActive?.()
   }
 
@@ -1246,6 +1336,9 @@ class PluginRuntimeLifecycle {
   }
 
   dispose = (): void => {
+    this.disposed = true
+    for (const cleanup of this.registrationCleanups) cleanup()
+    this.registrationCleanups.clear()
     for (const handle of this.timeouts) globalThis.clearTimeout(handle)
     for (const handle of this.intervals) globalThis.clearInterval(handle)
     for (const entry of Array.from(this.eventListeners)) this.removeTrackedEventListener(entry)
@@ -1311,7 +1404,7 @@ export const getV2PluginAPIs = (
       nativeFetch: pluginFetchNative,
     },
     undefined,
-    assertActive,
+    lifecycle.assertCurrent,
   )
   const webFetch = createPluginWebFetch(networkAccess)
   let pluginApis: any
@@ -1364,14 +1457,23 @@ export const getV2PluginAPIs = (
       options?: PluginV2ProviderOptions,
     ) => {
       lifecycle.assertCurrent()
-      pluginV2.providers.set(name, func)
+      const guarded = lifecycle.guardCallback(func)
+      pluginV2.providers.set(name, guarded)
+      lifecycle.trackRegistration(() => {
+        if (pluginV2.providers.get(name) !== guarded) return
+        pluginV2.providers.delete(name)
+        pluginV2.providerOptions.delete(name)
+      })
       pluginV2.providerOptions.set(name, options ?? {})
       customProviderStore.set(Array.from(pluginV2.providers.keys()))
     },
     addRisuScriptHandler: (name: ScriptMode, func: EditFunction) => {
       lifecycle.assertCurrent()
       if (pluginV2['edit' + name]) {
-        pluginV2['edit' + name].add(func)
+        const handlers = pluginV2['edit' + name]
+        const guarded = lifecycle.guardCallback(func)
+        handlers.add(guarded)
+        lifecycle.trackRegistration(() => handlers.delete(guarded))
       } else {
         throw `script handler named ${name} not found`
       }
@@ -1379,7 +1481,7 @@ export const getV2PluginAPIs = (
     removeRisuScriptHandler: (name: ScriptMode, func: EditFunction) => {
       lifecycle.assertCurrent()
       if (pluginV2['edit' + name]) {
-        pluginV2['edit' + name].delete(func)
+        pluginV2['edit' + name].delete(lifecycle.guardCallback(func))
       } else {
         throw `script handler named ${name} not found`
       }
@@ -1387,7 +1489,10 @@ export const getV2PluginAPIs = (
     addRisuReplacer: (name: string, func: ReplacerFunction) => {
       lifecycle.assertCurrent()
       if (pluginV2['replacer' + name]) {
-        pluginV2['replacer' + name].add(func)
+        const handlers = pluginV2['replacer' + name]
+        const guarded = lifecycle.guardCallback(func)
+        handlers.add(guarded)
+        lifecycle.trackRegistration(() => handlers.delete(guarded))
       } else {
         throw `replacer handler named ${name} not found`
       }
@@ -1395,22 +1500,26 @@ export const getV2PluginAPIs = (
     removeRisuReplacer: (name: string, func: ReplacerFunction) => {
       lifecycle.assertCurrent()
       if (pluginV2['replacer' + name]) {
-        pluginV2['replacer' + name].delete(func)
+        pluginV2['replacer' + name].delete(lifecycle.guardCallback(func))
       } else {
         throw `replacer handler named ${name} not found`
       }
     },
     addRisuChatListener: (mode: string, func: ChatOutputListener) => {
       lifecycle.assertCurrent()
-      addChatOutputListener(mode, func)
+      const guarded = lifecycle.guardCallback(func)
+      addChatOutputListener(mode, guarded)
+      lifecycle.trackRegistration(() => removeChatOutputListener(mode, guarded))
     },
     removeRisuChatListener: (mode: string, func: ChatOutputListener) => {
       lifecycle.assertCurrent()
-      removeChatOutputListener(mode, func)
+      removeChatOutputListener(mode, lifecycle.guardCallback(func))
     },
     onUnload: (func: () => void | Promise<void>) => {
       lifecycle.assertCurrent()
-      pluginV2.unload.add(func)
+      const guarded = lifecycle.guardCallback(func)
+      pluginV2.unload.add(guarded)
+      lifecycle.trackRegistration(() => pluginV2.unload.delete(guarded))
     },
     setArg: (arg: string, value: string | number) => {
       lifecycle.assertCurrent()
@@ -1493,8 +1602,8 @@ export const getV2PluginAPIs = (
       ) => lifecycle.removeEventListener(window, type, listener, options)
       return safeGlobal
     },
-    safeLocalStorage: new SafeLocalStorage(),
-    safeIdbFactory: SafeIdbFactory,
+    safeLocalStorage: lifecycle.guardObject(new SafeLocalStorage()),
+    safeIdbFactory: lifecycle.guardObject(SafeIdbFactory),
     safeDocument: guardedSafeDocument,
     alertStore: {
       set: (msg: string) => {},
@@ -1723,3 +1832,10 @@ export async function handlePluginInstallViaPlugin(plugins: RisuPlugin[], assert
 
   return trimmedPlugins
 }
+
+// The connected reader never starts or retains the writer plugin runtime.
+clientSessionStore.subscribe(() => {
+  if (!isClientReadOnly()) return
+  pluginLoadQueued = false
+  stopPluginRuntimeSync()
+})

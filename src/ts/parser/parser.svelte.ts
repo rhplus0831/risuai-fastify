@@ -1,3 +1,4 @@
+import { captureClientSessionGeneration, isClientReadOnly, isClientSessionGenerationCurrent } from '../clientSession'
 import DOMPurify from 'dompurify'
 import markdownit from 'markdown-it'
 import { sha256Hex } from '../sha256Fallback'
@@ -15,7 +16,11 @@ import { aiWatermarkingLawApplies, getFileSrc } from '../globalApi.svelte'
 import './chatVar.svelte' // side effect: registers the browser chatVar backend
 import { getChatVar, setChatVar, getGlobalChatVar } from './chatVarBackend'
 import { processScriptFull } from '../process/scripts'
-import { requestServerDisplaySource, type DisplaySourcePriority } from '../server/displaySources'
+import {
+  markReaderDisplayLimited,
+  requestServerDisplaySource,
+  type DisplaySourcePriority,
+} from '../server/displaySources'
 import type { DisplaySourceLayer } from '@risuai/protocol/display-source'
 import { get } from 'svelte/store'
 import css, { type CssAtRuleAST } from '@adobe/css-tools'
@@ -1267,6 +1272,8 @@ export async function ParseMarkdown(
     priority?: DisplaySourcePriority
   } = {},
 ) {
+  const sessionGeneration = captureClientSessionGeneration()
+  const startedReadOnly = isClientReadOnly()
   let firstParsed = ''
   const additionalAssetMode = mode === 'back' ? 'back' : 'normal'
   let char = typeof charArg === 'string' ? parserCharacterOwnerById(charArg) : charArg
@@ -1318,10 +1325,20 @@ export async function ParseMarkdown(
                 : {}),
           })
         : ({ status: 'fallback', reason: 'chat_unavailable' } as const)
-    data =
-      serverDisplaySource.status === 'ok'
-        ? serverDisplaySource.displaySource
-        : (await processScriptFull(char, data, 'editdisplay', chatID, cbsConditions)).data
+    if (serverDisplaySource.status === 'ok') {
+      data = serverDisplaySource.displaySource
+    } else if (startedReadOnly || isClientReadOnly() || !isClientSessionGenerationCurrent(sessionGeneration)) {
+      // Keep source readable without entering general scripts, plugin hooks, or
+      // provider effects when isolated server display is unavailable.
+      if (
+        serverDisplaySource.reason !== 'display_namespace_changed' &&
+        serverDisplaySource.reason !== 'display_scope_changed'
+      ) {
+        markReaderDisplayLimited(currentChat?.id ?? displayTarget.chatId, sessionGeneration)
+      }
+    } else {
+      data = (await processScriptFull(char, data, 'editdisplay', chatID, cbsConditions)).data
+    }
   }
 
   if (firstParsed !== data && char) {
@@ -1343,7 +1360,7 @@ export async function ParseMarkdown(
     data = await renderHighlightableMarkdown(data)
 
     if (mode === 'notrim') {
-      return data
+      return startedReadOnly || isClientReadOnly() ? trimMarkdown(data) : data
     }
   }
   return trimMarkdown(data)
