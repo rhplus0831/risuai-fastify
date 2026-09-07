@@ -123,7 +123,7 @@
         },
         {
           "file": "src/ts/chatCommands.test.ts",
-          "count": 634
+          "count": 642
         },
         {
           "file": "src/ts/process/mcp/risuaccess/tests/characters.setCharacterInfo.test.ts",
@@ -311,7 +311,7 @@
         },
         {
           "file": "src/ts/plugins/plugins.test.ts",
-          "count": 178
+          "count": 180
         },
         {
           "file": "src/ts/process/mcp/risuaccess/tests/modules.optimisticProjection.test.ts",
@@ -355,7 +355,7 @@
       "files": [
         {
           "file": "src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte.test.ts",
-          "count": 205
+          "count": 206
         },
         {
           "file": "src/lib/Setting/Pages/Model/ModelPresetList.svelte.test.ts",
@@ -735,7 +735,7 @@
         },
         {
           "file": "src/lib/Setting/Pages/PersonaSettings.svelte.test.ts",
-          "count": 2
+          "count": 3
         },
         {
           "file": "src/lib/Setting/Pages/PluginSettings.svelte.test.ts",
@@ -1059,7 +1059,7 @@
         },
         {
           "file": "src/ts/server/characterDraft.svelte.test.ts",
-          "count": 7
+          "count": 8
         }
       ]
     },
@@ -1138,6 +1138,10 @@
           "count": 8
         },
         {
+          "file": "src/ts/readerLocalMutations.svelte.test.ts",
+          "count": 14
+        },
+        {
           "file": "src/ts/router.test.ts",
           "count": 9
         },
@@ -1155,7 +1159,7 @@
         },
         {
           "file": "src/ts/setting/utils.test.ts",
-          "count": 58
+          "count": 60
         },
         {
           "file": "src/ts/storage/database.resourceState.test.ts",

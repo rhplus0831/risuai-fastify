@@ -283,7 +283,7 @@
           "path": "src/ts/persona.ts",
           "kind": "identifier",
           "value": "selectedPersonaFieldProjectionValue",
-          "expectedCount": 5
+          "expectedCount": 6
         }
       ]
     },
@@ -320,7 +320,7 @@
           "path": "src/ts/persona.ts",
           "kind": "identifier",
           "value": "selectedPersonaId",
-          "expectedCount": 76
+          "expectedCount": 78
         },
         {
           "path": "server/fastify/src/commands/personas.ts",

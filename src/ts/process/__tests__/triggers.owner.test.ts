@@ -192,6 +192,7 @@ describe('trigger durable writes through explicit owners', () => {
 
     expect(settled).toBe(false)
     expect(coordinateAcceptedChatSendMock).toHaveBeenCalledWith({
+      clientGeneration: expect.any(Number),
       target: expect.objectContaining({ characterId: 'char-a', chatId: 'chat-1' }),
       append: expect.objectContaining({ status: 'ok', messageId: expect.any(String) }),
     })
