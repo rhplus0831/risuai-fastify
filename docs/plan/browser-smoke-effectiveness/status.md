@@ -9,13 +9,14 @@ Updated: 2026-09-08
 - Current implementation: production through `a703b9d4b`, browser through
   `60ac61bde`; reader final gates pass at clean `eb9673942` with 92/92 cases.
 - Current scope: Phase 3 review and the eight-case focused cohort are complete.
-  Its full gate is 91/92 because S05's direct fixture configuration races native
-  chat selection. BSE-007 owns the bounded setup repair and repeated final gate.
+  The S05 fixture race found by its first full gate now has a verified BSE-007
+  repair and all-eleven baseline/restored controls. The repeated required full
+  gate remains before Phase 3 acceptance.
 - Next action: finish Phase 3 and its required full gate, then execute Phase 4
   verification, final findings and closeout.
-- Confirmed gaps: BSE-001–006 retain their verified controls. New BSE-007 is a
-  reproduced fixture ordering defect in accepted-send setup; its repair/control
-  verification is pending. No new production wrong-chat send is established.
+- Confirmed gaps: BSE-001–007 have their named verified repair/control evidence.
+  BSE-007 is a fixture ordering defect; no new production wrong-chat send is
+  established. Final Phase 3 aggregate acceptance remains pending.
 - Blockers: none. Reader default/FALSE rollout and archive are owned by the
   [accepted reader handoff](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08).
   Smoke Phase 3/4 acceptance remains separate.
@@ -506,3 +507,25 @@ write omission and frozen all-eleven baseline/negative/restored protocol are
 recorded in [findings](findings.md#bse-007-implemented-guard-and-declared-verification).
 The isolated campaign uses `6f50eb8e5`; main changes only documentation while it
 runs. Final consumer/control and full-gate verification remain pending.
+
+### BSE-007 Repair Proof and Repeated Phase Gate
+
+At `6f50eb8e5`, the frozen campaign passes all eleven original lifecycle journeys
+in both baseline (38.6s) and exact restored control (33.8s). S05's native selection
+now accepts before direct configuration, with current revision rebasing; initial
+already-selected startup and concurrent A → B → A → B configured shortcuts also
+pass. One actual server selection-owner persistence omission qualifies: the real
+request returns 200 and claims the target, the client remains on that ready/local
+target with no pending selection, but all eighteen SQL observations retain the
+prior target. The new guard fails before any fixture PUT or generation POST.
+This verifies the independent prerequisite, not a production restart defect.
+
+The [complete proof](findings.md#bse-007-qualified-selection-fault-and-restored-consumers)
+records the literal fault, exact source hashes, request ordering, all original
+consumer oracles and remaining scope. All 3,621 tracked lab inputs restore
+exactly; its 503 intentionally fixed client assets remain byte-identical across
+fresh server processes. There are 5,126 successful script URL receipts and zero
+page errors. Current guides describe the read-only native-selection setup guard;
+original tests and configuration retry are unchanged. BSE-007 has no remaining
+focused repair work. The required `pnpm test:all` is repeated at the final test/
+documentation candidate; the failed `f430dc3a1` run remains recorded.

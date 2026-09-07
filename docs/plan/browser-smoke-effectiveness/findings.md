@@ -1698,3 +1698,51 @@ catalog and no runtime marker. Only the server runtime is faulted, so no emitted
 client marker is claimed. The deliberate fixed-client-assets experiment does not
 assume server source is excluded from Tailwind scanning. Any unexpected outcome
 stops for review, and the mandatory Phase 3 full gate remains required afterward.
+
+### BSE-007 Qualified Selection Fault and Restored Consumers
+
+The campaign at `6f50eb8e5` completes with **11/11 baseline and 11/11 restored
+journeys passing**, and its single named negative qualified. It freezes all
+3,621 tracked files, including scan-eligible documentation, digest
+`dab68af776e47fae01889734a1de5da6c6efb5ea0258bae69475a41cd4a191ed`.
+The one fresh normal build takes 13.93s (Vite 13.23s); all 503 fixed client assets
+retain digest `000f060a3c73d3391098678081389d2e78a0c591ed70d11c4ea06841d4b380a1`
+through the three fresh server/test processes. No client rebuild is claimed
+for the deliberate server-only fault.
+
+| Stage                           | Result                             | Independent selected-owner evidence                                                                                                                                                                   |
+| ------------------------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Baseline                        | 11 passed, 38.6s                   | Fourteen successful guard attachments and thirteen real native selection 200 responses. S01's already-selected default requires no PATCH.                                                             |
+| Server selection-write omission | One qualified guard failure, 16.1s | Real select:true PATCH accepts revision two and claims `chat-restart`, with a mutation receipt; eighteen ready/local-target/pending-zero observations still find SQL selecting `chat-reload-desktop`. |
+| Exact restoration               | 11 passed, 33.8s                   | All original send/reload/retry/restart/Stop/effect/concurrency oracles pass again; fourteen guard attachments and thirteen accepted native selections, with no marker.                                |
+
+Both positive runs preserve the actual S04 → S05 setup transition: pre-setup
+character reads show the prior mobile chat selected and target configuration
+false. Baseline native selection completes at 20,926.361ms, accepting revision
+17, before the fixture PUT starts at 20,960.848ms with baseRevision 17. Restoration
+records 15,100.698ms before 15,140.726ms with the same revision ordering. S10's
+real A → B → A → B navigation executes all four guards while issuing only its two
+initial configuration PUTs; its original concurrent active-job/isolation oracles
+remain unchanged and pass. These observations verify the previously racing
+boundary rather than removing the necessary imported-settings setup.
+
+The negative preserves valid `select:true` and receives HTTP 200 with
+`selectedChatId=chat-restart`, revision two and mutation ID
+`3c459a7c-4cd6-478f-9ca4-1e89cc7ac6f1`. Its executed server marker identifies
+`char-lifecycle chat-restart 4`. All eighteen observations retain the requested
+URL, ready route, local target and zero relevant pending selections; only the
+independent SQL-selected ID remains the prior desktop chat. The named guard
+fails solely on that authoritative mismatch, with **zero configuration PUTs and
+zero generation-operation POSTs**. This qualifies durable selection-prerequisite
+detection; restart/send steps are deliberately not reached in this negative.
+
+The exact server SHA is restored, all tracked inputs match the frozen source,
+and both the lab and main application/test/configuration sources are clean and
+coherent with the reviewed candidate. Main's later Markdown edits are separately
+recorded. Across the campaign, 5,126 successful script URLs map to the preserved
+client catalog (2,504 baseline, 117 negative, 2,505 restored), with zero page
+errors and no positive-control server marker. This is URL attribution, not
+independently hashed network response bodies. The compact reproducible manifest
+is `/tmp/smoke-selection-precondition-campaign-heakqkgv/campaign-summary.json`.
+The original failed full gate remains in the record. BSE-007's focused repair
+proof is complete; the repeated Phase 3 full gate still owns phase acceptance.

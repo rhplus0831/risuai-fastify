@@ -20,31 +20,31 @@ The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor
 
 All spec names below resolve under `server/fastify/browser-smoke`.
 
-| Spec                                       | Default cases | Primary review phase                      | Review state                                         |
-| ------------------------------------------ | ------------: | ----------------------------------------- | ---------------------------------------------------- |
-| `acceptedSendProtocol.spec.ts`             |            11 | 2: generation/recovery                    | Reviewed; BSE-007 fixture repair pending             |
-| `bardWikiLifecycle.spec.ts`                |             1 | 3: memory lifecycle                       | Retained/strengthened; complete scenario review      |
-| `chatEntryLayout.spec.ts`                  |             8 | 2: transcript/entry; 3: final review      | Retained/strengthened; complete scenario review      |
-| `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Retained/strengthened; complete scenario review      |
-| `chatStartupRendering.spec.ts`             |             3 | 2: transcript/startup                     | Retained/strengthened; complete scenario review      |
-| `connectedReaderBrowsing.spec.ts`          |             1 | Reader 2; Stage 3 reconciliation          | Retained/strengthened; complete scenario review      |
-| `connectedReaderRollout.spec.ts`           |             2 | Reader 5; Stage 3 reconciliation          | Retained/strengthened; complete scenario review      |
-| `connectedReaderGeneration.spec.ts`        |             5 | Reader 4; Stage 3 reconciliation          | Retained/strengthened; complete scenario review      |
-| `connectedWriterSwitching.spec.ts`         |             3 | Reader 3; Stage 3 reconciliation          | Retained/strengthened; complete scenario review      |
-| `debugEchoLayoutStability.spec.ts`         |             1 | 2: generation/layout                      | Retained/strengthened; complete scenario review      |
-| `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Retained/strengthened; complete scenario review      |
-| `fastifyBrowserSmoke.spec.ts`              |            10 | 2: critical slices; 3: remaining journeys | Retained/strengthened; complete scenario review      |
-| `lazyFirstOpen.spec.ts`                    |             8 | 3: navigation/first open                  | Retained/strengthened; complete scenario review      |
-| `realmProgressConfirmation.spec.ts`        |             2 | 2: confirmation                           | Retained/strengthened; complete scenario review      |
-| `rerollSwipePersistence.spec.ts`           |             1 | 2: generation durability                  | Retained/strengthened; complete scenario review      |
-| `selectedLocaleRuntime.spec.ts`            |             4 | 3: locale transitions                     | Retained/strengthened; complete scenario review      |
-| `selectedLocaleStartup.spec.ts`            |             1 | 3: locale startup                         | Retained/strengthened; complete scenario review      |
-| `startupCachePopulationMatrix.spec.ts`     |             1 | 3: startup/cache                          | Reclassified; complete narrow-scope review           |
-| `startupDirectLinks.spec.ts`               |             4 | 3: route matrix                           | Reclassified; complete narrow-scope review           |
-| `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Retained/strengthened; complete scenario review      |
-| `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Retained/strengthened; complete scenario review      |
-| `visibleStateRecovery.spec.ts`             |             4 | 2: visible/durable recovery               | Retained/strengthened; complete scenario review      |
-| **Total**                                  |        **92** |                                           | **All scenarios reviewed; final phase gate pending** |
+| Spec                                       | Default cases | Primary review phase                      | Review state                                           |
+| ------------------------------------------ | ------------: | ----------------------------------------- | ------------------------------------------------------ |
+| `acceptedSendProtocol.spec.ts`             |            11 | 2: generation/recovery                    | Strengthened; BSE-007 verified, all consumers reviewed |
+| `bardWikiLifecycle.spec.ts`                |             1 | 3: memory lifecycle                       | Retained/strengthened; complete scenario review        |
+| `chatEntryLayout.spec.ts`                  |             8 | 2: transcript/entry; 3: final review      | Retained/strengthened; complete scenario review        |
+| `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Retained/strengthened; complete scenario review        |
+| `chatStartupRendering.spec.ts`             |             3 | 2: transcript/startup                     | Retained/strengthened; complete scenario review        |
+| `connectedReaderBrowsing.spec.ts`          |             1 | Reader 2; Stage 3 reconciliation          | Retained/strengthened; complete scenario review        |
+| `connectedReaderRollout.spec.ts`           |             2 | Reader 5; Stage 3 reconciliation          | Retained/strengthened; complete scenario review        |
+| `connectedReaderGeneration.spec.ts`        |             5 | Reader 4; Stage 3 reconciliation          | Retained/strengthened; complete scenario review        |
+| `connectedWriterSwitching.spec.ts`         |             3 | Reader 3; Stage 3 reconciliation          | Retained/strengthened; complete scenario review        |
+| `debugEchoLayoutStability.spec.ts`         |             1 | 2: generation/layout                      | Retained/strengthened; complete scenario review        |
+| `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Retained/strengthened; complete scenario review        |
+| `fastifyBrowserSmoke.spec.ts`              |            10 | 2: critical slices; 3: remaining journeys | Retained/strengthened; complete scenario review        |
+| `lazyFirstOpen.spec.ts`                    |             8 | 3: navigation/first open                  | Retained/strengthened; complete scenario review        |
+| `realmProgressConfirmation.spec.ts`        |             2 | 2: confirmation                           | Retained/strengthened; complete scenario review        |
+| `rerollSwipePersistence.spec.ts`           |             1 | 2: generation durability                  | Retained/strengthened; complete scenario review        |
+| `selectedLocaleRuntime.spec.ts`            |             4 | 3: locale transitions                     | Retained/strengthened; complete scenario review        |
+| `selectedLocaleStartup.spec.ts`            |             1 | 3: locale startup                         | Retained/strengthened; complete scenario review        |
+| `startupCachePopulationMatrix.spec.ts`     |             1 | 3: startup/cache                          | Reclassified; complete narrow-scope review             |
+| `startupDirectLinks.spec.ts`               |             4 | 3: route matrix                           | Reclassified; complete narrow-scope review             |
+| `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Retained/strengthened; complete scenario review        |
+| `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Retained/strengthened; complete scenario review        |
+| `visibleStateRecovery.spec.ts`             |             4 | 2: visible/durable recovery               | Retained/strengthened; complete scenario review        |
+| **Total**                                  |        **92** |                                           | **All scenarios reviewed; final phase gate pending**   |
 
 This file-level table is the current universe. The scenario records below are
 keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
@@ -106,7 +106,7 @@ row unless the detailed review states a narrower boundary.
 | S02 | `acceptedSendProtocol.spec.ts:413`             | accepted send recovers when the operation response is lost before identity reaches the browser                        | Retained; 2c/2d review                          |
 | S03 | `acceptedSendProtocol.spec.ts:449`             | provider failure before tokens exposes an exact Retry that succeeds without duplicating the user row                  | Retained; 2c/2d review                          |
 | S04 | `acceptedSendProtocol.spec.ts:492`             | Pixel reload plus visibility/pageshow reattaches and commits one reply                                                | Retained; 2c/2d review                          |
-| S05 | `acceptedSendProtocol.spec.ts:520`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | BSE-007 fixture ordering repair pending         |
+| S05 | `acceptedSendProtocol.spec.ts:520`             | server restart projects a billing-aware abandoned recovery and exact retry                                            | Strengthened; BSE-007 verified                  |
 | S06 | `acceptedSendProtocol.spec.ts:557`             | Stop acknowledges Stopping, persists a stopped partial, and runs no success effects                                   | Retained; 2c/2d review                          |
 | S07 | `acceptedSendProtocol.spec.ts:586`             | Pixel visibility/pageshow Stop remains exact and persists one stopped partial                                         | Retained; 2c/2d review                          |
 | S08 | `acceptedSendProtocol.spec.ts:623`             | viewer transport loss reconnects boundedly and terminal snapshot stays canonical                                      | Retained; 2c/2d review                          |
@@ -266,7 +266,7 @@ through a local alias are included during the independent control cross-check.
 
 | Source owner                               | Hook references (member: source lines)                                                                                                                                                                                                                                                                                                                                                                                                                                   |
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `acceptedSendProtocol.spec.ts`             | `activeWriterHeaders`: 791, 833, 1190; `getClientSessionSnapshot`: 745, 761, 773, 785; `getDatabaseSnapshot`: 870, 1167; `getLifecycleSnapshot`: 1162; `isLoaded`: 756, 809                                                                                                                                                                                                                                                                                              |
+| `acceptedSendProtocol.spec.ts`             | `activeWriterHeaders`: 791, 834, 1262; `getClientSessionSnapshot`: 745, 761, 773, 785; `getCurrentRoute`: 906; `getDatabaseSnapshot`: 871, 902, 1239; `getLifecycleSnapshot`: 901, 1234; `getRouteResourceLoadState`: 907; `isLoaded`: 756, 809                                                                                                                                                                                                                          |
 | `bardWikiLifecycle.spec.ts`                | `waitForLoaded`: 102                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | `chatEntryLayout.spec.ts`                  | `isLoaded`: 92; `selectCharacter`: 94                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | `chatHistoryScroll.spec.ts`                | `isLoaded`: 112; `waitForStartupMilestone`: 120                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -736,3 +736,10 @@ restart. [BSE-007](findings.md#bse-007-generation-settings-fixture-races-native-
 reopens that shared setup boundary; other reviewed dispositions remain valid.
 Its bounded actual-selection precondition repair, consumer/fault/restored proof
 and repeated full gate are pending. No wrong-target production send is claimed.
+
+BSE-007's [focused repair proof](findings.md#bse-007-qualified-selection-fault-and-restored-consumers)
+now passes all eleven original consumers before and after the qualified server
+selection-owner fault. The fault leaves ready/local target and successful native
+selection response intact while SQL remains old; the new guard independently
+stops setup. All current scenario/control owners are reviewed and repaired or
+accurately reclassified. The repeated final Phase 3 full gate remains separate.
