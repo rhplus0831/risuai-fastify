@@ -16,6 +16,7 @@ import {
   expectReaderPartial,
   expectTerminalGeneration,
   finishGenerationPair,
+  generationMessageBody,
   openGenerationReader,
   promoteGenerationWriter,
   readGenerationTruth,
@@ -251,7 +252,7 @@ test('writer transfer while a real finalization journal is queued commits one re
     // The real journal and completed UI transfer are now independently proven.
     // Removing the failure lets the ordinary server retry worker commit it.
     setAssistantInsertFailure(pair.harness.dataDir, false)
-    const receipts = await expectEffectReceipts(pair, operation.operation_id, 'late_recovery', true)
+    const receipts = await expectEffectReceipts(pair, operation.operation_id, 'late_recovery', { enabledIgp: true })
     const terminal = await expectTerminalGeneration(
       pair,
       'completed',
@@ -330,6 +331,258 @@ test('writer transfer while a real finalization journal is queued commits one re
     expect(pair.errors).toEqual([])
     pair.evidence.receipts = receipts
   } finally {
+    await finishGenerationPair(pair, testInfo)
+  }
+})
+
+test('an accepted IGP append is already receipted when its writer loses ownership before the PATCH response', async ({
+  browser,
+}, testInfo) => {
+  test.setTimeout(120_000)
+  const pair = await createGenerationPair(browser, { enabledIgp: true })
+  let releaseResponse!: () => void
+  const heldResponse = new Promise<void>((resolve) => {
+    releaseResponse = resolve
+  })
+  const gate = {
+    releaseRequested: false,
+    releasedResponses: 0,
+    errors: [] as string[],
+    responses: [] as Array<{
+      status: number
+      mutationId: string | null
+      request: Record<string, unknown>
+      response: Record<string, unknown>
+      truth: ReturnType<typeof readGenerationTruth>
+    }>,
+  }
+  pair.evidence.igpPatchResponseGate = gate
+  await pair.a.page.route('**/api/v1/commands/messages/*', async (route) => {
+    const request = route.request()
+    const body = request.postDataJSON() as Record<string, unknown> | null
+    if (request.method() !== 'PATCH' || body?.expectedChatId !== CHAT || body?.expectedData !== REPLY) {
+      await route.continue()
+      return
+    }
+    try {
+      // Execute the original request against the real server. Only delivery of
+      // its unchanged response is held; no message or effect state is injected.
+      const response = await route.fetch()
+      gate.responses.push({
+        status: response.status(),
+        mutationId: request.headers()['risu-mutation-id'] ?? null,
+        request: body,
+        response: (await response.json()) as Record<string, unknown>,
+        truth: readGenerationTruth(pair.harness.dataDir),
+      })
+      if (gate.responses.length === 1) await heldResponse
+      await route.fulfill({ response })
+      gate.releasedResponses += 1
+    } catch (error) {
+      gate.errors.push(error instanceof Error ? error.message : String(error))
+      await route.abort('failed').catch(() => undefined)
+    }
+  })
+  try {
+    await bootGenerationPair(pair)
+    const { operation, attempt } = await startHeldGeneration(pair)
+    pair.provider.release()
+    await expect.poll(() => gate.responses.length, { timeout: 30_000 }).toBe(1)
+    const accepted = gate.responses[0]!
+    expect(accepted.status).toBe(200)
+    expect(gate.releasedResponses).toBe(0)
+    const resultId = accepted.truth.operations[0]!.result_message_id!
+    const acceptedIgp = accepted.truth.effects.find((effect) => effect.effect_kind === 'igp')!
+    expect(accepted.truth.ownership).toMatchObject({
+      active_writer_session_id: pair.a.sessionId,
+      writer_epoch: 1,
+    })
+    expect(accepted.truth.operations).toMatchObject([
+      { operation_id: operation.operation_id, state: 'completed', result_message_id: resultId },
+    ])
+    expect(accepted.truth.messages.filter((message) => message.uid === resultId)).toMatchObject([
+      { role: 'char', data: IGP_REPLY },
+    ])
+    expect(accepted.truth.messageUpdateEvents).toMatchObject([
+      { type: 'message.updated', id: resultId, parent_id: CHAT, origin_writer_session_id: pair.a.sessionId },
+    ])
+    expect(accepted.truth.messageUpdateEvents).toHaveLength(1)
+    // Server terminal reconciliation settles plugin output before index.svelte
+    // invokes IGP. Stage-four effects have not started while this PATCH waits.
+    expect(
+      accepted.truth.effects.map(({ effect_kind, status, delivery, reason }) => ({
+        effect_kind,
+        status,
+        delivery,
+        reason,
+      })),
+    ).toEqual([
+      { effect_kind: 'completion_sound', status: 'pending', delivery: null, reason: null },
+      { effect_kind: 'emotion_image_state', status: 'pending', delivery: null, reason: null },
+      { effect_kind: 'generated_translation', status: 'skipped', delivery: 'server', reason: 'not_applicable' },
+      { effect_kind: 'igp', status: 'completed', delivery: 'live_terminal', reason: null },
+      { effect_kind: 'notification', status: 'pending', delivery: null, reason: null },
+      { effect_kind: 'plugin_output', status: 'skipped', delivery: 'live_terminal', reason: 'not_configured' },
+      { effect_kind: 'tts', status: 'pending', delivery: null, reason: null },
+    ])
+    const terminalAtHold = accepted.truth.effects.filter((effect) => effect.status !== 'pending')
+    for (const effect of accepted.truth.effects.filter((effect) => effect.status === 'pending')) {
+      expect(effect).toMatchObject({ claim_id: null, claimed_at: null, settled_at: null, lease_expires_at: null })
+    }
+    for (const effect of terminalAtHold) {
+      expect(effect.claim_id).toMatch(/\S/u)
+      expect(effect.claimed_at).toMatch(/\S/u)
+      expect(effect.settled_at).toMatch(/\S/u)
+    }
+    // This is the atomicity oracle: a successful PATCH cannot leave a reclaimable
+    // IGP lease after its append has committed, even before the browser responds.
+    expect(acceptedIgp).toMatchObject({
+      status: 'completed',
+      delivery: 'live_terminal',
+      generation_id: attempt.job_id,
+      operation_id: operation.operation_id,
+      message_id: resultId,
+      reason: null,
+    })
+    expect(acceptedIgp.claim_id).toMatch(/\S/u)
+    expect(acceptedIgp.settled_at).toMatch(/\S/u)
+    expect(accepted.request).toMatchObject({
+      patch: { data: IGP_REPLY },
+      expectedData: REPLY,
+      expectedChatId: CHAT,
+      expectedGenerationId: attempt.job_id,
+      igpEffect: { generationId: attempt.job_id, claimId: acceptedIgp.claim_id },
+    })
+    expect(accepted.mutationId).toMatch(/\S/u)
+    const commandReceipt = accepted.truth.mutationReceipts.filter(
+      (receipt) => receipt.mutation_id === accepted.mutationId,
+    )
+    expect(commandReceipt).toMatchObject([
+      { database_lineage: accepted.truth.ownership.lineage, creator_writer_session_id: pair.a.sessionId },
+    ])
+    expect(commandReceipt).toHaveLength(1)
+    const receiptResult = JSON.parse(commandReceipt[0]!.response_json) as {
+      revision: number
+      event: Record<string, unknown>
+    }
+    expect(accepted.response).toMatchObject({ revision: receiptResult.revision, event: receiptResult.event })
+    const semanticBody = (body: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(body).filter(([key]) => key !== 'baseRevision'))
+    pair.authorizedRecoveryReplays.push({
+      mutationId: accepted.mutationId!,
+      path: `/api/v1/commands/messages/${resultId}`,
+      semanticBody: semanticBody(accepted.request),
+    })
+    const patches = () =>
+      pair.fetches.filter(
+        (record) => record.method === 'PATCH' && record.path === `/api/v1/commands/messages/${resultId}`,
+      )
+    const receiptPuts = () =>
+      pair.fetches.filter(
+        (record) =>
+          record.method === 'PUT' && record.path === `/api/v1/generation-effects/${attempt.job_id}/igp/receipt`,
+      )
+    await expect.poll(() => patches().length).toBe(1)
+    expect(patches()[0]).toMatchObject({
+      client: 'A',
+      canMutate: true,
+      mutationId: accepted.mutationId,
+      session: { lifecycle: 'writing', sessionId: pair.a.sessionId, writer: { sessionId: pair.a.sessionId, epoch: 1 } },
+    })
+    expect(patches()[0]!.status).toBeUndefined()
+    expect(receiptPuts()).toEqual([])
+    await expect(generationMessageBody(pair.b.page, resultId)).toContainText(IGP_REPLY, { timeout: 30_000 })
+
+    await promoteGenerationWriter(pair, pair.b, pair.a, 2)
+    expect(gate.releasedResponses).toBe(0)
+    expect(patches()[0]!.status).toBeUndefined()
+    const transferred = readGenerationTruth(pair.harness.dataDir)
+    expect(
+      transferred.effects.filter((effect) => terminalAtHold.some((held) => held.effect_kind === effect.effect_kind)),
+    ).toEqual(terminalAtHold)
+    expect(transferred.effects.find((effect) => effect.effect_kind === 'igp')).toEqual(acceptedIgp)
+    expect(transferred.messageUpdateEvents).toEqual(accepted.truth.messageUpdateEvents)
+    pair.evidence.igpCommittedBeforeLateResponse = transferred
+
+    gate.releaseRequested = true
+    releaseResponse()
+    await expect.poll(() => gate.releasedResponses).toBeGreaterThan(0)
+    await expect.poll(() => patches()[0]?.status).toBe(200)
+    const receipts = await expectEffectReceipts(pair, operation.operation_id, 'late_recovery', {
+      enabledIgp: true,
+      liveIgpPatchAccepted: true,
+    })
+    await expectTerminalGeneration(pair, 'completed', IGP_REPLY, operation.operation_id, attempt.job_id)
+    expect(receiptPuts()).toEqual([])
+
+    await promoteGenerationWriter(pair, pair.a, pair.b, 3)
+    await pair.b.page.locator('[data-reader-refresh]').click()
+    await expectGenerationReader(pair.b)
+    const terminal = await expectTerminalGeneration(
+      pair,
+      'completed',
+      IGP_REPLY,
+      operation.operation_id,
+      attempt.job_id,
+    )
+    expect(terminal.effects).toEqual(receipts)
+    expect(
+      terminal.effects.filter((effect) => terminalAtHold.some((held) => held.effect_kind === effect.effect_kind)),
+    ).toEqual(terminalAtHold)
+    expect(terminal.effects.find((effect) => effect.effect_kind === 'igp')).toEqual(acceptedIgp)
+    expect(terminal.messageUpdateEvents).toEqual(accepted.truth.messageUpdateEvents)
+    expect(terminal.mutationReceipts.filter((receipt) => receipt.mutation_id === accepted.mutationId)).toEqual(
+      commandReceipt,
+    )
+    expect(terminal.messages.find((message) => message.uid === resultId)!.data.split(IGP_SUFFIX)).toHaveLength(2)
+    const completion = pair.fetches.filter(
+      (record) => record.method === 'POST' && record.path === '/api/v1/generate/completion',
+    )
+    expect(completion).toMatchObject([{ client: 'A', canMutate: true, status: 200, body: { mode: 'emotion' } }])
+    expect(completion).toHaveLength(1)
+    const grantedClaims = pair.fetches.filter(
+      (record) =>
+        record.method === 'POST' &&
+        record.path === `/api/v1/generation-effects/${attempt.job_id}/igp/claims` &&
+        record.status === 201,
+    )
+    expect(grantedClaims).toMatchObject([
+      {
+        client: 'A',
+        canMutate: true,
+        writerSession: pair.a.sessionId,
+        body: { delivery: 'live_terminal', messageId: resultId },
+      },
+    ])
+    expect(grantedClaims).toHaveLength(1)
+    expect(receiptPuts()).toEqual([])
+    // A retained outbox may replay the same logical command on promotion back.
+    // Such transport must preserve its mutation ID, semantic body and receipt;
+    // a second provider execution or a new message revision is never allowed.
+    expect(gate.responses).toHaveLength(patches().length)
+    for (const patch of patches()) {
+      expect(patch.client).toBe('A')
+      expect(patch.mutationId).toBe(accepted.mutationId)
+      expect(patch.status).toBe(200)
+      expect(semanticBody(patch.body!)).toEqual(semanticBody(accepted.request))
+    }
+    for (const response of gate.responses) {
+      expect(response.mutationId).toBe(accepted.mutationId)
+      expect(response.status).toBe(200)
+      expect(response.response).toMatchObject({ revision: receiptResult.revision, event: receiptResult.event })
+      expect(response.truth.messageUpdateEvents).toEqual(accepted.truth.messageUpdateEvents)
+      expect(response.truth.effects.find((effect) => effect.effect_kind === 'igp')).toEqual(acceptedIgp)
+    }
+    pair.evidence.igpPatchTransportCount = patches().length
+    pair.evidence.igpClaimProbeCount = pair.fetches.filter(
+      (record) => record.method === 'POST' && record.path === `/api/v1/generation-effects/${attempt.job_id}/igp/claims`,
+    ).length
+    expect(gate.errors).toEqual([])
+    expectNoReaderControl(pair)
+    expect(pair.errors).toEqual([])
+  } finally {
+    releaseResponse()
+    await pair.a.page.unrouteAll({ behavior: 'wait' })
     await finishGenerationPair(pair, testInfo)
   }
 })

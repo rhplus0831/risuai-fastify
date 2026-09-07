@@ -2,6 +2,7 @@ import { expect, type Browser, type BrowserContext, type Page, type TestInfo } f
 import { writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { isDeepStrictEqual } from 'node:util'
 import type {
   ChatProviderDispatchContext,
   ChatProviderDispatcher,
@@ -192,6 +193,17 @@ export function readGenerationTruth(dataDir: string) {
           "SELECT revision, type, id, parent_id, origin_writer_session_id FROM command_events WHERE type = 'message.updated' ORDER BY revision",
         )
         .all(),
+      mutationReceipts: db
+        .prepare(
+          'SELECT mutation_id, database_lineage, creator_writer_session_id, request_fingerprint, response_json FROM command_mutation_receipts ORDER BY mutation_id',
+        )
+        .all() as Array<{
+        mutation_id: string
+        database_lineage: string
+        creator_writer_session_id: string
+        request_fingerprint: string
+        response_json: string
+      }>,
     }
   } finally {
     db.close()
@@ -293,6 +305,7 @@ interface FetchRecord {
   path: string
   query: string
   writerSession: string | null
+  mutationId: string | null
   observerSession: string | null
   transfer: boolean
   expectedWriterEpoch: string | null
@@ -322,6 +335,11 @@ export interface GenerationPair {
   errors: Array<{ client: string; message: string }>
   evidence: Record<string, unknown>
   ownerships: ReturnType<typeof readGenerationTruth>['ownership'][]
+  authorizedRecoveryReplays: Array<{
+    mutationId: string
+    path: string
+    semanticBody: Record<string, unknown>
+  }>
   finalizationFailureInstalled?: boolean
 }
 
@@ -350,6 +368,7 @@ export async function createGenerationPair(
     errors: [],
     evidence: {},
     ownerships: [],
+    authorizedRecoveryReplays: [],
   } as unknown as GenerationPair
   try {
     if (options.finalizationFailure) {
@@ -416,6 +435,7 @@ export async function addGenerationClient(
         path: url.pathname,
         query: url.search,
         writerSession: headers.get('risu-writer-session'),
+        mutationId: headers.get('risu-mutation-id'),
         observerSession: headers.get('risu-writer-observer-session'),
         transfer: headers.get('risu-disconnect-existing-writer') === 'true',
         expectedWriterEpoch: headers.get('risu-expected-writer-epoch'),
@@ -754,10 +774,25 @@ export function expectNoReaderControl(pair: GenerationPair): void {
       writer_epoch: session.writer!.epoch,
     })
     if (record.writerSession !== null) expect(record.writerSession).toBe(session.sessionId)
-    // This fixture has no undispatched outbox intent. Recovery may read status,
-    // subscribe as writer, and acknowledge a retained command receipt only.
+    // The response-loss case may replay its independently proven accepted IGP
+    // command. Match the exact mutation identity and frozen semantic body; no
+    // new effect execution or arbitrary recovery mutation is authorized here.
+    const acceptedReplay =
+      record.method === 'PATCH' &&
+      pair.authorizedRecoveryReplays.some(
+        (accepted) =>
+          record.mutationId === accepted.mutationId &&
+          record.path === accepted.path &&
+          record.body !== null &&
+          isDeepStrictEqual(
+            Object.fromEntries(Object.entries(record.body).filter(([key]) => key !== 'baseRevision')),
+            accepted.semanticBody,
+          ),
+      )
     expect(
-      isPureRead(record) || (record.method === 'POST' && record.path === '/api/v1/commands/mutation-receipts/ack'),
+      isPureRead(record) ||
+        (record.method === 'POST' && record.path === '/api/v1/commands/mutation-receipts/ack') ||
+        acceptedReplay,
       `Unexpected authority-bearing recovery call: ${JSON.stringify(record)}`,
     ).toBe(true)
   }
@@ -785,6 +820,7 @@ export function expectNoReaderControl(pair: GenerationPair): void {
   pair.evidence.readerCalls = readerCalls
   pair.evidence.authorizedRecoveryCalls = recoveries
   pair.evidence.ownerships = pair.ownerships
+  pair.evidence.authorizedRecoveryReplays = pair.authorizedRecoveryReplays
   pair.evidence.forbiddenReaderCalls = forbidden
   expect(
     forbidden,
@@ -865,7 +901,7 @@ export async function expectEffectReceipts(
   pair: GenerationPair,
   operationId: string,
   delivery: 'live_terminal' | 'late_recovery',
-  enabledIgp = false,
+  options: { enabledIgp?: boolean; liveIgpPatchAccepted?: boolean } = {},
 ): Promise<EffectRow[]> {
   // All seven rows are mandatory even with disabled features. In particular,
   // asserting only no duplicate keys on an empty ledger would be vacuous.
@@ -880,9 +916,14 @@ export async function expectEffectReceipts(
   ].map(([effect_kind, effect_class, reason]) => ({
     effect_kind,
     effect_class,
-    status: effect_kind === 'igp' && enabledIgp ? 'completed' : 'skipped',
-    reason: effect_kind === 'igp' && enabledIgp ? null : reason,
-    delivery: effect_kind === 'generated_translation' ? 'server' : delivery,
+    status: effect_kind === 'igp' && options.enabledIgp ? 'completed' : 'skipped',
+    reason: effect_kind === 'igp' && options.enabledIgp ? null : reason,
+    delivery:
+      effect_kind === 'generated_translation'
+        ? 'server'
+        : options.liveIgpPatchAccepted && (effect_kind === 'igp' || effect_kind === 'plugin_output')
+          ? 'live_terminal'
+          : delivery,
   }))
   await expect
     .poll(
