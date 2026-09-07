@@ -67,6 +67,13 @@ within one pixel. Preparation and measured frames both count toward the existing
 surviving row; it does not make all immediate post-gesture samples readable.
 The cached-parser-owner fault protects direct remount readability separately.
 
+The lazy-manifest case checks the 60 registered boundaries; separate first-open
+journeys exercise their named route/dialog entries and visible loading/recovery.
+The 44 direct-link rows verify manifest-declared resource hydration and routing.
+Their expected resources share the production manifest, so a joint omission is
+not independent completeness evidence; route-specific domain UI remains in its
+owning tests.
+
 ## Routing, history, hotkeys, and shell ownership
 
 | Relevant locations and included cases                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Behavior and scenarios verified                                                                                                                                | Importance                                                                                                                                            | Effectiveness and regression value                                                                                                                                                                                                                |

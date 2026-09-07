@@ -8,8 +8,9 @@ Updated: 2026-09-08
   reconciliation and the remaining scenario review are active.
 - Current implementation: production through `a703b9d4b`, browser through
   `60ac61bde`; reader final gates pass at clean `eb9673942` with 92/92 cases.
-- Current scope: complete Phase 3's remaining scenario/support review, correct
-  S38/S57's scope labels and rerun affected critical browser evidence.
+- Current scope: Phase 3 scenario/support review and S38/S57 scope corrections
+  are complete; focused critical browser evidence and its required full gate
+  remain pending.
 - Next action: finish Phase 3 and its required full gate, then execute Phase 4
   verification, final findings and closeout.
 - Confirmed gaps: BSE-001–006 have their named repaired/strengthened controls;
@@ -384,3 +385,33 @@ unchanged. Reassess the four critical contracts with their final source and
 limits, run the focused affected cohort, then the phase-ending full gate before
 accepting Phase 3. The reader's passing full run is the prerequisite, not the
 remaining smoke phases' required evidence.
+
+## Phase 3 Review and Critical Reconciliation
+
+At `f4dd0e236` plus this slice, every remaining registered scenario, meaningful
+subjourney, conditional matrix and support owner has a retained, strengthened or
+reclassified disposition in the [complete review](inventory.md#phase-3-complete-scenario-and-control-review).
+Three read-only worker results and two manually completed timeout scopes were
+checked against source; the mistaken S31 SPA-only interpretation is rejected
+because `openChat` actually performs full `page.goto` navigation. No required
+product defect is deferred.
+
+Only two test titles change: S38 describes the 60 registered lazy boundaries;
+S57 describes read normalization during built startup. Their assertions and
+fixtures are byte-for-byte unchanged. Current browser guides receive the same
+limits for registered lazy entries, manifest-derived direct links, cache metrics
+and nonrepairing shell reads. Existing lower-risk scenarios retain their actual
+UI/API/provider/browser-control boundaries rather than acquiring unrelated
+mutation campaigns. The final hook map and twelve support/four screenshot owners
+are reconciled with the 92-case universe.
+
+The affected critical cohort is S01 normal send/completed reload, S22 continuous
+reversal/readable pause, S77 conservative lineage recovery, S91 connected import
+recovery, both Realm decisions, and the two renamed S38/S57 cases. Reuse the
+passing Reader final normal build because production inputs are unchanged; keep
+one worker and each spec's existing trace configuration. The original P0-T
+geometry fault retains its source limit; the changed remount/route/Reader
+transitions have the renewed BSE-005/BSE-006 and Reader Phase 5 fault/restored
+proof. No production-fault repair is claimed for either title-only correction.
+Focused execution, fresh discovery and the required Phase 3 full gate remain
+pending before phase acceptance.

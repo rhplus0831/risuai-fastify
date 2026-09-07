@@ -87,6 +87,14 @@ Browser fixtures that own Playwright's page context close that context before
 closing their Fastify harness. Closing only the page can leave an idle pooled
 HTTP socket delaying server shutdown after all product assertions have passed.
 
+The startup cache matrix measures small/large cold/warm counters, bytes and
+timing; those aggregates do not independently verify each hydrated value.
+Direct-link expectations share the production resource manifest and establish
+its declared routing/hydration contract. The legacy/null shell browser case
+supplies persisted malformed values after harness startup and observes normalized
+values during browser startup. The read path clones nonrepairing settings reads;
+the case does not assert a repair write to SQLite or repair before bootstrap.
+
 ## Test groups
 
 | Logical group                                               | Relevant test locations and included cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Behavior and regression importance                                                                                                                                                                                 | Effectiveness and value                                                                                                                                                                                                                                                                                                                                 |
