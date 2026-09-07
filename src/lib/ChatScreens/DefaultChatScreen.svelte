@@ -384,6 +384,7 @@
   let showNewMessageButton = $state(false)
   let showFloatingInputButton = $state(false)
   let floatingInputOpen = $state(false)
+  let floatingInputFlowHeight = $state(0)
   let floatingDraftShowsOriginal = $state(false)
   let floatingInputButton: HTMLButtonElement | null = $state(null)
   let chatScreenRoot: HTMLDivElement | null = $state(null)
@@ -980,6 +981,10 @@
 
     const scrollContainer = chatScrollContainer
     const preservedScrollTop = scrollContainer?.scrollTop
+    // Keep the composer's space in reverse flow while its surface is fixed;
+    // otherwise transcript anchoring shifts history when the card opens/closes.
+    floatingInputFlowHeight =
+      scrollContainer?.querySelector('[data-default-chat-composer-flow]')?.getBoundingClientRect().height ?? 0
     refreshChatContentGeometry()
     floatingInputOpen = true
     showFloatingInputButton = false
@@ -3232,6 +3237,9 @@
         }}>
         {#if !fixedChatTextarea}
           {@render composerSurface(false)}
+          {#if floatingInputOpen}
+            <div aria-hidden="true" class="shrink-0" style:height={`${floatingInputFlowHeight}px`}></div>
+          {/if}
         {/if}
 
         {#if $pluginRuntimeStateStore.phase === 'ready' && chatPanelStore.length > 0}

@@ -1071,7 +1071,7 @@ test('mobile in-flow composer opens from a button above the stable keyboard view
   await expect
     .poll(() =>
       transcript.evaluate((node) => {
-        node.scrollTop = -Math.min(240, Math.max(0, node.scrollHeight - node.clientHeight))
+        node.scrollTop = -Math.min(1_200, Math.max(0, node.scrollHeight - node.clientHeight))
         node.dispatchEvent(new Event('scroll'))
         return node.scrollTop
       }),
@@ -1081,6 +1081,23 @@ test('mobile in-flow composer opens from a button above the stable keyboard view
   const floatingButton = page.getByTestId('floating-chat-input-button')
   await expect(floatingCard).toHaveCount(0)
   await expect(floatingButton).toBeVisible()
+
+  // Keep enough history above the composer to remain away from the bottom
+  // when hiding it releases the keyboard's reduced viewport.
+  const historyAnchor = await transcript.evaluate((node) => {
+    const viewport = node.getBoundingClientRect()
+    const row = Array.from(node.querySelectorAll<HTMLElement>('[data-transcript-row-id]'))
+      .filter(
+        (row) => row.getBoundingClientRect().bottom > viewport.top && row.getBoundingClientRect().top < viewport.bottom,
+      )
+      .sort((left, right) => left.getBoundingClientRect().top - right.getBoundingClientRect().top)[0]!
+    return { id: row.dataset.transcriptRowId!, top: row.getBoundingClientRect().top - viewport.top }
+  })
+  const historyOffset = () =>
+    page.locator(`[data-transcript-row-id="${historyAnchor.id}"]`).evaluate((node) => {
+      const transcriptElement = document.querySelector('[data-default-chat-transcript]')!
+      return node.getBoundingClientRect().top - transcriptElement.getBoundingClientRect().top
+    })
 
   await floatingButton.click()
   await expect(floatingCard).toBeVisible()
@@ -1109,13 +1126,13 @@ test('mobile in-flow composer opens from a button above the stable keyboard view
   await expect(page.getByTestId('floating-chat-input-go-to-bottom')).toBeVisible()
   await expect(page.getByTestId('floating-chat-input-hide')).toBeVisible()
   await expect(page.getByTestId('default-chat-overflow-menu')).toHaveClass(/chat-overflow-menu-fixed/)
-  const preservedScrollTop = await transcript.evaluate((node) => node.scrollTop)
   await page.getByTestId('floating-chat-input-hide').click()
 
   await expect(floatingCard).toHaveCount(0)
   await expect(floatingButton).toBeVisible()
   await expect(floatingButton).toBeFocused()
-  expect(await transcript.evaluate((node) => node.scrollTop)).toBe(preservedScrollTop)
+  await expect(page.locator('html')).not.toHaveAttribute('data-risu-visual-viewport-active')
+  await expect.poll(async () => Math.abs((await historyOffset()) - historyAnchor.top)).toBeLessThanOrEqual(1)
   const floatingButtonGeometry = await floatingButton.evaluate((button) => {
     const shell = document.querySelector<HTMLElement>('[data-risu-visual-viewport-shell]')
     if (!shell) return null
@@ -1131,7 +1148,8 @@ test('mobile in-flow composer opens from a button above the stable keyboard view
   await expect(floatingCard).toBeVisible()
   await expect(composer).toBeFocused()
   await expect(composer).toHaveValue('Floating keyboard draft')
-  expect(await transcript.evaluate((node) => node.scrollTop)).toBe(preservedScrollTop)
+  await expect(page.locator('html')).toHaveAttribute('data-risu-visual-viewport-active', 'true')
+  await expect.poll(async () => Math.abs((await historyOffset()) - historyAnchor.top)).toBeLessThanOrEqual(1)
 
   await page.getByTestId('default-chat-menu-button').click()
   await page.getByTestId('floating-chat-input-go-to-bottom').click()
