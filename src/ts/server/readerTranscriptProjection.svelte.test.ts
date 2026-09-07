@@ -7,11 +7,20 @@ import {
   applyCharacterResource,
   applyCharactersResource,
   applyChatGenerationSettingsLocalEffect,
+  applyPersonaPatchLocalEffect,
+  replaceResourceDatabase,
+  updatePersonaOwnerState,
+  collectionsResourceState,
+  settingsResourceState,
   charactersResourceState,
   resetServerResourceState,
 } from './resourceState.svelte'
 import { clearRetainedChatProjections, registerRetainedChatProjection } from './chatRetainedProjection'
-import { getReaderTranscriptCharacters } from './readerTranscriptProjection.svelte'
+import {
+  getReaderTranscriptCharacters,
+  getReaderTranscriptPersona,
+  isReaderPersonaReadRequired,
+} from './readerTranscriptProjection.svelte'
 
 function characterRow(): character {
   return {
@@ -129,5 +138,72 @@ describe('authoritative reader display metadata', () => {
     expect(getReaderTranscriptCharacters()).toBe(committed)
     requireClientAuthentication()
     expect(getReaderTranscriptCharacters()).toEqual([])
+  })
+  it('applies only receipt-certified persona fields while preserving newer pending owner fields', () => {
+    replaceResourceDatabase(
+      {
+        characters: [],
+        personas: [
+          {
+            id: 'persona-a',
+            name: 'Before',
+            displayName: 'Certified display name',
+            icon: 'before.png',
+            personaPrompt: '',
+            note: '',
+          },
+        ],
+        selectedPersonaId: 'persona-a',
+        selectedPersona: 0,
+        username: 'Before',
+        userIcon: 'before.png',
+        personaPrompt: '',
+        userNote: '',
+      } as never,
+      1,
+    )
+    updatePersonaOwnerState((draft) => {
+      draft.personas[0].name = 'Newer pending name'
+      draft.personas[0].displayName = 'Newer pending display name'
+      draft.personas[0].icon = 'pending.png'
+      draft.username = 'Newer pending name'
+      draft.userIcon = 'pending.png'
+    })
+    expect(
+      applyPersonaPatchLocalEffect({
+        revision: 2,
+        personaId: 'persona-a',
+        attemptedPatch: { name: 'Accepted name', icon: 'accepted.png' },
+        attemptedPersona: {
+          id: 'persona-a',
+          name: 'Accepted name',
+          displayName: 'Unacknowledged snapshot display name',
+          icon: 'accepted.png',
+          personaPrompt: '',
+          note: '',
+        },
+        attemptedLegacyProfile: {
+          username: 'Accepted name',
+          userIcon: 'accepted.png',
+          personaPrompt: '',
+          userNote: '',
+        },
+        legacyProfileProjectionApplied: true,
+      }),
+    ).toBe(true)
+    expect(getReaderTranscriptPersona()).toMatchObject({
+      username: 'Accepted name',
+      userIcon: 'accepted.png',
+      selectedPersonaId: 'persona-a',
+      personas: [{ name: 'Accepted name', icon: 'accepted.png', displayName: 'Certified display name' }],
+    })
+    expect(collectionsResourceState.values.personas![0]).toMatchObject({
+      name: 'Newer pending name',
+      icon: 'pending.png',
+      displayName: 'Newer pending display name',
+    })
+    expect(settingsResourceState.value).toMatchObject({ username: 'Newer pending name', userIcon: 'pending.png' })
+    expect(isReaderPersonaReadRequired('personas')).toBe(false)
+    expect(isReaderPersonaReadRequired('username')).toBe(false)
   })
 })

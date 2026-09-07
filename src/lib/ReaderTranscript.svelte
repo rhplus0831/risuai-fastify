@@ -22,6 +22,7 @@
     hydrateReaderChatMessageWindow,
   } from '../ts/server/chatMessageHydration.svelte'
   import {
+    getReaderChatIncarnation,
     getReaderTranscriptDisplayCharacters,
     getReaderTranscriptPersona,
   } from '../ts/server/readerTranscriptProjection.svelte'
@@ -63,6 +64,7 @@
     characterId: string
     chatId: string
     lineage: string | null
+    incarnation: number
     character: character
     chat: ChatRecord
     messages: Message[]
@@ -95,6 +97,7 @@
       retained.characterId === characterId &&
       retained.chatId === chatId &&
       retained.lineage === $clientSessionStore.databaseLineage &&
+      retained.incarnation === getReaderChatIncarnation(characterId, chatId) &&
       $clientSessionStore.authenticated &&
       !['missing-character', 'missing-chat', 'ambiguous', 'blocked'].includes(liveScope.status),
     ),
@@ -150,19 +153,27 @@
   // owners and is unavailable immediately after auth or lineage changes.
   $effect(() => {
     if (!liveBodyUsable || !liveCharacter || !liveChat || !liveBody) return
+    const incarnation = getReaderChatIncarnation(characterId, chatId)
+    if (incarnation === null) return
     const snapshotMessages = $state.snapshot(liveBody.messages)
     const snapshotChat = $state.snapshot({ ...liveChat, message: snapshotMessages })
     retained = {
       characterId,
       chatId,
       lineage: $clientSessionStore.databaseLineage,
+      incarnation,
       character: $state.snapshot({ ...liveCharacter, chats: [snapshotChat] }),
       chat: snapshotChat,
       messages: snapshotMessages,
     }
   })
   $effect(() => {
-    if (!$clientSessionStore.authenticated || (retained && retained.lineage !== $clientSessionStore.databaseLineage)) {
+    if (
+      !$clientSessionStore.authenticated ||
+      (retained &&
+        (retained.lineage !== $clientSessionStore.databaseLineage ||
+          retained.incarnation !== getReaderChatIncarnation(characterId, chatId)))
+    ) {
       retained = null
     }
   })
@@ -269,6 +280,7 @@
     const targetCharacter = liveCharacter
     const targetChat = liveChat
     const targetId = chatId
+    const incarnation = getReaderChatIncarnation(characterId, targetId)
     const generation = captureClientSessionGeneration()
     const run = ++readRun
     loading = true
@@ -277,6 +289,7 @@
       !destroyed &&
       run === readRun &&
       chatId === targetId &&
+      getReaderChatIncarnation(characterId, targetId) === incarnation &&
       isClientSessionGenerationCurrent(generation) &&
       liveCharacter === targetCharacter &&
       liveChat === targetChat

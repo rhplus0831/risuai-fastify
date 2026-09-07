@@ -295,6 +295,22 @@ describe('chat message hydration owner', () => {
     expect(getReaderChatMessageOwnerState('chat-1')).toBeUndefined()
   })
 
+  it('drops a held reader body from a deleted incarnation even when both old and new stubs are empty', async () => {
+    const held = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchChat.mockReturnValueOnce(held.promise)
+    const reading = hydrateReaderChatMessageWindow('chat-1', 2)
+    const source = JSON.parse(JSON.stringify(charactersResourceState.characters[0]))
+    applyCharacterResource({
+      revision: 2,
+      character: { ...source, chats: source.chats.filter((chat: { id: string }) => chat.id !== 'chat-1') },
+    })
+    applyCharacterResource({ revision: 3, character: source })
+    held.resolve(okResult('chat-1', [{ role: 'user', data: 'Deleted incarnation response', chatId: 'old-message' }]))
+    await expect(reading).resolves.toBe(false)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([])
+    expect(db().characters[0].chats[0].message).toEqual([])
+  })
+
   it('fills reader history from certified placeholders despite a previously full writer and parked append', async () => {
     setManagedWriterForTest()
     seedTwoStubChats()

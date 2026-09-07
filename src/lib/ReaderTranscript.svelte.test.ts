@@ -439,6 +439,36 @@ describe('connected reader transcript', () => {
     expect(target.textContent).not.toContain(committed)
   })
 
+  it.each([false, true])('never revives a mounted snapshot after delete/re-add (batched: %s)', async (batched) => {
+    const reader = seedReaderChat(2)
+    startReader()
+    const source = JSON.parse(JSON.stringify(reader)) as character
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    expect(target.textContent).toContain('Reader message 1')
+    vi.mocked(hydration.hydrateReaderChatMessageWindow).mockResolvedValue(false)
+    applyCharacterResource({ revision: 2, character: { ...source, chats: [] } })
+    if (!batched) {
+      await settle()
+      expect(target.textContent).not.toContain('Reader message 1')
+    }
+    applyCharacterResource({
+      revision: 3,
+      character: { ...source, chats: source.chats.map((chat) => ({ ...chat, message: [] })) },
+    })
+    await settle()
+    expect(hydration.getReaderChatMessageOwnerState('reader-chat')?.messages).toEqual([])
+    expect(target.textContent).not.toContain('Reader message 1')
+    hydration.applyServerChatMessagesResource(
+      'reader-chat',
+      [{ role: 'char', data: 'New incarnation content', chatId: 'new-message' }],
+      undefined,
+      [],
+    )
+    await settle()
+    expect(target.textContent).toContain('New incarnation content')
+  })
+
   it('uses certified persona bindings and names while newer local edits remain pending', async () => {
     seedReaderChat(1)
     startReader()

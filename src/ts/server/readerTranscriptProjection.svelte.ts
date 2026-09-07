@@ -1,4 +1,4 @@
-import { SvelteMap } from 'svelte/reactivity'
+import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import { captureClientSessionGeneration, clientSessionStore, getClientSessionSnapshot } from '../clientSession'
 import type { character, Chat, Database, Message } from '../storage/database.svelte'
 import { SERVER_CHARACTER_SHELL_MARKER } from '@risuai/protocol/character-summary-resource'
@@ -38,8 +38,11 @@ const personaSettingKeys = ['selectedPersonaId', 'selectedPersona', 'username', 
 let characters = $state.raw<character[]>([])
 let personas = $state.raw<Database['personas']>([])
 let personaSettings = $state.raw<Record<string, unknown>>({})
+const requiredPersonaReads = new SvelteSet<string>()
 const characterRevisions = new Map<string, number | null>()
 const details = new SvelteMap<string, character>()
+const chatIncarnations = new SvelteMap<string, { characterId: string; value: number }>()
+let nextChatIncarnation = 0
 let messageGeneration = $state(0)
 const messages = new SvelteMap<
   string,
@@ -119,12 +122,36 @@ export function recordReaderPersonaSettings(source: object, keys: readonly strin
     if (!keys.includes(key)) continue
     if (Object.hasOwn(source, key)) next[key] = clone((source as Record<string, unknown>)[key])
     else delete next[key]
+    requiredPersonaReads.delete(key)
   }
   personaSettings = next
 }
 
 export function recordReaderPersonas(source: unknown): void {
   personas = Array.isArray(source) ? (source.map((persona) => pick(persona, personaKeys)) as Database['personas']) : []
+  requiredPersonaReads.delete('personas')
+}
+
+/** A PATCH receipt certifies these fields only; other optimistic row fields are not evidence. */
+export function recordReaderPersonaPatch(personaId: string, patch: object): boolean {
+  const certified = pick(
+    patch,
+    personaKeys.filter((key) => key !== 'id'),
+  )
+  if (Object.keys(certified).length === 0) return true
+  if (personas.filter((persona) => persona.id === personaId).length !== 1) return false
+  personas = personas.map((persona) => (persona.id === personaId ? { ...persona, ...certified } : persona))
+  return true
+}
+
+/** Compact structure receipts have revision/write flags, but no certified reader values. */
+export function requireReaderPersonaRefresh(input: { collection?: boolean; settings?: boolean }): void {
+  if (input.collection) requiredPersonaReads.add('personas')
+  if (input.settings) for (const key of personaSettingKeys) requiredPersonaReads.add(key)
+}
+
+export function isReaderPersonaReadRequired(key: string): boolean {
+  return requiredPersonaReads.has(key)
 }
 
 const chatOwners = $derived.by(() => {
@@ -151,6 +178,23 @@ const chatOwners = $derived.by(() => {
 
 function uniqueChat(chatId: string): { characterId: string; chat: Chat } | undefined {
   return chatOwners.get(chatId)
+}
+
+/** Changes synchronously at authoritative membership boundaries, even before a Svelte flush. */
+function reconcileChatIncarnations(): void {
+  for (const [chatId, incarnation] of chatIncarnations) {
+    if (uniqueChat(chatId)?.characterId !== incarnation.characterId) chatIncarnations.delete(chatId)
+  }
+  for (const [chatId, owner] of chatOwners) {
+    if (owner && !chatIncarnations.has(chatId)) {
+      chatIncarnations.set(chatId, { characterId: owner.characterId, value: ++nextChatIncarnation })
+    }
+  }
+}
+
+export function getReaderChatIncarnation(characterId: string, chatId: string): number | null {
+  const incarnation = chatIncarnations.get(chatId)
+  return incarnation?.characterId === characterId ? incarnation.value : null
 }
 
 function pruneMessages(): void {
@@ -194,6 +238,7 @@ export function recordReaderCharacters(source: readonly character[], revision: n
   }
   characterRevisions.clear()
   for (const character of source) characterRevisions.set(character.chaId, revision)
+  reconcileChatIncarnations()
   pruneMessages()
 }
 
@@ -203,6 +248,7 @@ export function recordReaderCharacter(source: character, revision: number): void
   characters = characters.map((character) => (character.chaId === source.chaId ? next : character))
   details.set(source.chaId, next)
   characterRevisions.set(source.chaId, revision)
+  reconcileChatIncarnations()
   pruneMessages()
 }
 
@@ -226,6 +272,7 @@ export function recordReaderChatPatch(characterId: string, chatId: string, patch
 }
 
 export function recordReaderChatPersona(characterId: string, chatId: string, settings: object): void {
+  if (uniqueChat(chatId)?.characterId !== characterId) return
   characters = characters.map((character) =>
     character.chaId === characterId
       ? {
@@ -280,20 +327,25 @@ export function getReaderChatMessages(chatId: string):
       messages: Message[]
       projectionEpoch: number
       current: boolean
+      incarnation: number
     }
   | undefined {
   const owner = uniqueChat(chatId)
   if (!owner) return undefined
+  const incarnation = getReaderChatIncarnation(owner.characterId, chatId)
+  if (incarnation === null) return undefined
   const projection = messages.get(chatId)
   return projection
     ? {
         ...projection,
+        incarnation,
         current:
           projection.generation === messageGeneration &&
           projection.sessionGeneration === captureClientSessionGeneration(),
       }
     : {
         messages: owner.chat.message,
+        incarnation,
         projectionEpoch: -1,
         current: false,
       }
@@ -304,6 +356,7 @@ export function resetReaderChatMessages(): void {
   messageGeneration += 1
   const session = getClientSessionSnapshot()
   if (!session.managed || !session.authenticated) messages.clear()
+  reconcileChatIncarnations()
   pruneMessages()
 }
 
@@ -311,8 +364,10 @@ export function clearReaderTranscriptProjection(): void {
   characters = []
   personas = []
   personaSettings = {}
+  requiredPersonaReads.clear()
   characterRevisions.clear()
   details.clear()
+  chatIncarnations.clear()
   messages.clear()
   messageGeneration += 1
 }

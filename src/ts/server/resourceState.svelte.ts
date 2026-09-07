@@ -32,6 +32,8 @@ import {
   recordReaderChatPatch,
   recordReaderChatPersona,
   recordReaderPersonas,
+  recordReaderPersonaPatch,
+  requireReaderPersonaRefresh,
   recordReaderPersonaSettings,
 } from './readerTranscriptProjection.svelte'
 import {
@@ -2207,7 +2209,8 @@ export function applyLegacyPresetPatchLocalEffect(payload: ServerLegacyPresetPat
  * persona collection or settings row. The optimistic row and legacy mirror
  * are already resident; advancing only their revision fences preserves any
  * later local edits. Authoritative reads alone advance projection epochs and
- * clear acknowledgement taints.
+ * clear acknowledgement taints. The reader owner accepts only fields certified
+ * by this receipt and never copies the newer optimistic row.
  */
 export function applyPersonaPatchLocalEffect(payload: ServerPersonaPatchLocalEffectPayload): boolean {
   const legacyKeys = ['username', 'userIcon', 'personaPrompt', 'userNote'] as const
@@ -2282,6 +2285,16 @@ export function applyPersonaPatchLocalEffect(payload: ServerPersonaPatchLocalEff
     return false
   }
 
+  if (
+    knownCollectionRevision < payload.revision &&
+    !recordReaderPersonaPatch(payload.personaId, payload.attemptedPatch)
+  ) {
+    requireReaderPersonaRefresh({ collection: true })
+  }
+  if (payload.legacyProfileProjectionApplied && knownSettingsRevision < payload.revision) {
+    recordReaderPersonaSettings(payload.attemptedLegacyProfile, ['username', 'userIcon'])
+  }
+
   collectionsResourceState.revisions.personas = payload.revision
   collectionsResourceState.revision = maxRevision(collectionsResourceState.revision, payload.revision)
   collectionsResourceState.statuses.personas = 'ready'
@@ -2301,6 +2314,8 @@ export function applyPersonaPatchLocalEffect(payload: ServerPersonaPatchLocalEff
  * mutation. The response certificate already proved the final ordering,
  * selection, and any saved/mirrored profile, so retain newer optimistic values
  * and advance only the collection/settings revisions the server actually wrote.
+ * The compact effect carries no certified values for the independent reader
+ * owner, which refreshes those slices when a reader needs them.
  */
 export function applyPersonaMutationLocalEffect(payload: ServerPersonaMutationLocalEffectPayload): boolean {
   if (
@@ -2349,6 +2364,7 @@ export function applyPersonaMutationLocalEffect(payload: ServerPersonaMutationLo
 
   let changed = false
   if (payload.collectionWritten && knownCollectionRevision < payload.revision) {
+    requireReaderPersonaRefresh({ collection: true })
     collectionsResourceState.revisions.personas = payload.revision
     collectionsResourceState.revision = maxRevision(collectionsResourceState.revision, payload.revision)
     collectionsResourceState.statuses.personas = 'ready'
@@ -2356,6 +2372,7 @@ export function applyPersonaMutationLocalEffect(payload: ServerPersonaMutationLo
     changed = true
   }
   if (payload.settingsWritten && knownSettingsRevision < payload.revision) {
+    requireReaderPersonaRefresh({ settings: true })
     settingsResourceState.fullRevision = payload.revision
     settingsResourceState.revision = maxRevision(settingsResourceState.revision, payload.revision)
     settingsResourceState.status = 'ready'

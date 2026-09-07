@@ -4,6 +4,7 @@ import {
   settleClientReader,
   resetClientSessionForTests,
   requireClientAuthentication,
+  demoteClientSession,
 } from '../clientSession'
 import {
   ensureReaderDisplayResources,
@@ -13,7 +14,16 @@ import {
 } from './readerDisplayResources'
 import * as reads from './resourceReads'
 import { refreshInvalidatedServerResources } from './resourceInvalidation'
-import { resetServerResourceState, settingsResourceState, collectionsResourceState } from './resourceState.svelte'
+import { setManagedWriterForTest } from '../__tests__/managedClientSession'
+import { getReaderTranscriptPersona } from './readerTranscriptProjection.svelte'
+import {
+  resetServerResourceState,
+  settingsResourceState,
+  collectionsResourceState,
+  replaceResourceDatabase,
+  updatePersonaOwnerState,
+  applyPersonaMutationLocalEffect,
+} from './resourceState.svelte'
 import {
   peekAppliedServerResourceRevision,
   peekCachedServerCommandRevision,
@@ -43,6 +53,81 @@ function displayPayload() {
     group: 'display' as const,
     settings: { useChatCopy: true, chatLoadInitialPages: 15 },
   }
+}
+
+const personaA = { id: 'persona-a', name: 'Server A', icon: 'a.png', personaPrompt: '', note: '' }
+const personaB = { id: 'persona-b', name: 'Server B', icon: 'b.png', personaPrompt: '', note: '' }
+const personaC = { id: 'persona-c', name: 'Server C', icon: 'c.png', personaPrompt: '', note: '' }
+
+function acceptedPersonaMutation(operation: 'create' | 'delete' | 'select') {
+  setManagedWriterForTest()
+  replaceResourceDatabase(
+    {
+      characters: [],
+      modules: [],
+      promptPresets: [],
+      personas: [personaA, personaB],
+      selectedPersonaId: personaA.id,
+      selectedPersona: 0,
+      username: personaA.name,
+      userIcon: personaA.icon,
+      personaPrompt: '',
+      userNote: '',
+    } as never,
+    7,
+  )
+  const serverPersonas =
+    operation === 'create' ? [personaA, personaB, personaC] : operation === 'delete' ? [personaB] : [personaA, personaB]
+  const selected = operation === 'create' ? personaC : personaB
+  updatePersonaOwnerState((draft) => {
+    draft.personas = serverPersonas.map((persona) =>
+      persona.id === selected.id ? { ...persona, name: 'Newer pending name', icon: 'pending.png' } : persona,
+    )
+    draft.selectedPersonaId = selected.id
+    draft.username = 'Newer pending name'
+    draft.userIcon = 'pending.png'
+  })
+  expect(
+    applyPersonaMutationLocalEffect({
+      revision: 8,
+      operation,
+      collectionWritten: operation !== 'select',
+      settingsWritten: true,
+    }),
+  ).toBe(true)
+  expect(settingsResourceState.value.username).toBe('Newer pending name')
+  setAppliedServerResourceRevision(8)
+  setCachedServerCommandRevision(8)
+  demoteClientSession()
+  return { serverPersonas, selected, selectedIndex: serverPersonas.findIndex((persona) => persona.id === selected.id) }
+}
+
+function personaReadResponses(server: ReturnType<typeof acceptedPersonaMutation>) {
+  vi.mocked(reads.fetchServerSettingsGroup).mockImplementation(async (group) => ({
+    status: 'ok',
+    revision: 8,
+    group,
+    settings: { username: server.selected.name },
+  }))
+  vi.mocked(reads.fetchServerCollection).mockImplementation(async (name) => ({
+    status: 'ok',
+    revision: 8,
+    collections: { [name]: server.serverPersonas },
+  }))
+  vi.mocked(reads.fetchServerStandaloneSetting).mockImplementation(async (setting) => ({
+    status: 'ok',
+    revision: 8,
+    setting,
+    state: {
+      present: true,
+      value:
+        setting === 'selectedPersonaId'
+          ? server.selected.id
+          : setting === 'selectedPersona'
+            ? server.selectedIndex
+            : server.selected.icon,
+    },
+  }))
 }
 
 beforeEach(() => {
@@ -79,6 +164,64 @@ afterEach(() => {
 })
 
 describe('reader display resources', () => {
+  it.each(['create', 'delete', 'select'] as const)(
+    'explicitly refreshes accepted persona %s while holding newer pending values out of the reader',
+    async (operation) => {
+      const server = acceptedPersonaMutation(operation)
+      const before = getReaderTranscriptPersona()
+      expect(before).toMatchObject({ selectedPersonaId: personaA.id, username: personaA.name, userIcon: personaA.icon })
+      expect(readerDisplayResourcesReady()).toBe(false)
+      personaReadResponses(server)
+      const held = deferred<Awaited<ReturnType<typeof reads.fetchServerSettingsGroup>>>()
+      vi.mocked(reads.fetchServerSettingsGroup).mockImplementationOnce(() => held.promise)
+      const loading = ensureReaderDisplayResources()
+      await vi.waitFor(() =>
+        expect(reads.fetchServerSettingsGroup).toHaveBeenCalledWith('account', expect.any(AbortSignal)),
+      )
+      expect(getReaderTranscriptPersona()).toEqual(before)
+      held.resolve({ status: 'ok', revision: 8, group: 'account', settings: { username: server.selected.name } })
+      await expect(loading).resolves.toEqual({ status: 'ok' })
+      expect(getReaderTranscriptPersona()).toMatchObject({
+        selectedPersonaId: server.selected.id,
+        selectedPersona: server.selectedIndex,
+        username: server.selected.name,
+        userIcon: server.selected.icon,
+      })
+      expect(getReaderTranscriptPersona().personas.map((persona) => [persona.id, persona.name, persona.icon])).toEqual(
+        server.serverPersonas.map((persona) => [persona.id, persona.name, persona.icon]),
+      )
+      expect(vi.mocked(reads.fetchServerCollection).mock.calls.map(([name]) => name)).toEqual(
+        operation === 'select' ? [] : ['personas'],
+      )
+      expect(vi.mocked(reads.fetchServerSettingsGroup).mock.calls.map(([group]) => group)).toEqual(['account'])
+      expect(vi.mocked(reads.fetchServerStandaloneSetting).mock.calls.map(([setting]) => setting)).toEqual([
+        'selectedPersonaId',
+        'selectedPersona',
+        'userIcon',
+      ])
+      expect(readerDisplayResourcesReady()).toBe(true)
+    },
+  )
+
+  it('keeps committed persona presentation on a failed targeted refresh and retries the required resources', async () => {
+    const server = acceptedPersonaMutation('create')
+    const before = getReaderTranscriptPersona()
+    vi.mocked(reads.fetchServerSettingsGroup).mockResolvedValue({ status: 'error', error: 'account unavailable' })
+    vi.mocked(reads.fetchServerCollection).mockResolvedValue({ status: 'error', error: 'personas unavailable' })
+    vi.mocked(reads.fetchServerStandaloneSetting).mockResolvedValue({ status: 'error', error: 'selection unavailable' })
+    await expect(ensureReaderDisplayResources()).resolves.toMatchObject({ status: 'error' })
+    expect(getReaderTranscriptPersona()).toEqual(before)
+    expect(readerDisplayResourcesReady()).toBe(false)
+    personaReadResponses(server)
+    await expect(ensureReaderDisplayResources()).resolves.toEqual({ status: 'ok' })
+    expect(getReaderTranscriptPersona()).toMatchObject({
+      selectedPersonaId: personaC.id,
+      username: personaC.name,
+      userIcon: personaC.icon,
+    })
+    expect(readerDisplayResourcesReady()).toBe(true)
+  })
+
   it('loads only missing manifest render requirements without advancing event cursors', async () => {
     settingsResourceState.groupStatuses.advanced = 'ready'
     collectionsResourceState.statuses.personas = 'ready'

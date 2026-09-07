@@ -6,6 +6,8 @@ import {
   isClientSessionGenerationCurrent,
 } from '../clientSession'
 import { resolveResourceRequirements, type ResourceRequirement } from './resourceManifest'
+import { isReaderPersonaReadRequired } from './readerTranscriptProjection.svelte'
+import { SERVER_SETTINGS_KEYS_BY_GROUP } from './settingsGroups'
 import { peekAppliedServerResourceRevision } from './commands'
 import { refreshServerResourceTargets, type ServerResourceTargetRefreshInput } from './resourceInvalidation'
 import {
@@ -26,19 +28,36 @@ const requirements = resolveResourceRequirements(['runtime:chat-display']).filte
   (requirement): requirement is ReadRequirement => requirement.kind !== 'projection',
 )
 
+function readerRequirements(): readonly ReadRequirement[] {
+  // Username normally arrives in the shell. A compact persona structure
+  // receipt can invalidate that value without changing the ordinary manifest.
+  return isReaderPersonaReadRequired('username')
+    ? [...requirements, { kind: 'settings-group', group: 'account', keys: ['username'], purposes: ['render'] }]
+    : requirements
+}
+
 function ready(requirement: ReadRequirement): boolean {
   switch (requirement.kind) {
     case 'settings-group':
-      return settingsResourceState.groupStatuses[requirement.group] === 'ready'
+      return (
+        settingsResourceState.groupStatuses[requirement.group] === 'ready' &&
+        !SERVER_SETTINGS_KEYS_BY_GROUP[requirement.group].some(isReaderPersonaReadRequired)
+      )
     case 'collection':
-      return collectionsResourceState.statuses[requirement.collection] === 'ready'
+      return (
+        collectionsResourceState.statuses[requirement.collection] === 'ready' &&
+        !isReaderPersonaReadRequired(requirement.collection)
+      )
     case 'standalone-setting':
-      return settingsResourceState.standaloneStatuses[requirement.setting] === 'ready'
+      return (
+        settingsResourceState.standaloneStatuses[requirement.setting] === 'ready' &&
+        !isReaderPersonaReadRequired(requirement.setting)
+      )
   }
 }
 
 export function readerDisplayResourcesReady(): boolean {
-  return requirements.every(ready)
+  return readerRequirements().every(ready)
 }
 
 function readerCanLoad(): boolean {
@@ -95,7 +114,7 @@ function startLoad(generation: number): DisplayResourceLoad {
     try {
       for (let attempt = 0; attempt < READER_DISPLAY_RESOURCE_MAX_ATTEMPTS; attempt += 1) {
         if (!current()) return { status: 'unavailable' }
-        const missing = requirements.filter((requirement) => !ready(requirement))
+        const missing = readerRequirements().filter((requirement) => !ready(requirement))
         if (missing.length === 0) return { status: 'ok' }
         const appliedRevision = peekAppliedServerResourceRevision()
         const targets: ServerResourceTargetRefreshInput = {
@@ -114,19 +133,21 @@ function startLoad(generation: number): DisplayResourceLoad {
         })
         if (!current()) return { status: 'unavailable' }
         if (readerDisplayResourcesReady()) return { status: 'ok' }
-        const remaining = requirements.filter((requirement) => !ready(requirement))
+        const remaining = readerRequirements().filter((requirement) => !ready(requirement))
         if (peekAppliedServerResourceRevision() !== appliedRevision || remaining.length < missing.length) continue
         const error = result.status === 'error' ? result.error : 'Reader display resources could not be loaded'
         remaining.forEach((requirement) => markFailed(requirement, error))
         return { status: 'error', error }
       }
       const error = 'Reader display resources kept changing while loading'
-      requirements.filter((requirement) => !ready(requirement)).forEach((requirement) => markFailed(requirement, error))
+      readerRequirements()
+        .filter((requirement) => !ready(requirement))
+        .forEach((requirement) => markFailed(requirement, error))
       return { status: 'error', error }
     } catch (error) {
       if (!current()) return { status: 'unavailable' }
       const message = error instanceof Error ? error.message : String(error)
-      requirements
+      readerRequirements()
         .filter((requirement) => !ready(requirement))
         .forEach((requirement) => markFailed(requirement, message))
       return { status: 'error', error: message }
@@ -144,7 +165,7 @@ export function ensureReaderDisplayResources(
 ): Promise<ReaderDisplayResourcesResult> {
   if (options.signal?.aborted || !readerCanLoad()) return Promise.resolve({ status: 'unavailable' })
   const generation = captureClientSessionGeneration()
-  const missing = requirements.filter((requirement) => !ready(requirement))
+  const missing = readerRequirements().filter((requirement) => !ready(requirement))
   if (missing.length === 0) return Promise.resolve({ status: 'ok' })
   if (inFlight && (inFlight.generation !== generation || inFlight.controller.signal.aborted)) {
     inFlight.controller.abort()
