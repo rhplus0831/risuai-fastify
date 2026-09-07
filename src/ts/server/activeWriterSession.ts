@@ -49,6 +49,13 @@ export function peekActiveWriterSessionId(): string | null {
   return activeWriterSessionId
 }
 
+/** Install the page-exclusive identity before connected startup sends any headers. */
+export function installConnectedWriterSessionId(sessionId: string): void {
+  if (!isUsableActiveWriterSessionId(sessionId)) throw new TypeError('Invalid client session identity')
+  activeWriterSessionId = sessionId
+  writeStoredActiveWriterSessionId(sessionId)
+}
+
 /** Adopt a durable outbox owner only when neither memory nor sessionStorage has an identity. */
 export function adoptPendingMutationWriterSessionId(sessionId: string): boolean {
   if (!isUsableActiveWriterSessionId(sessionId)) return false
