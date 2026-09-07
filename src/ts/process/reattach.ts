@@ -109,6 +109,7 @@ interface ReattachRetryState {
 }
 
 const reattachRetryStates = new Map<string, ReattachRetryState>()
+const missingDescriptorRecoveryJobs = new Set<string>()
 
 function sourceRearmsObservation(source: GenerationJobProjectionSource | undefined): boolean {
   return (
@@ -199,10 +200,12 @@ function clearReattachRetryState(jobId: string): void {
   const state = reattachRetryStates.get(jobId)
   if (state?.timer !== null && state?.timer !== undefined) clearTimeout(state.timer)
   reattachRetryStates.delete(jobId)
+  missingDescriptorRecoveryJobs.delete(jobId)
 }
 
 function clearAllReattachRetryStates(): void {
   for (const jobId of reattachRetryStates.keys()) clearReattachRetryState(jobId)
+  missingDescriptorRecoveryJobs.clear()
 }
 
 function isProtocolOperationLive(operation: GenerationOperationProjection): boolean {
@@ -316,6 +319,9 @@ export function setActiveGenerationJobs(
   const nextJobIds = new Set(normalizedJobs.map((job) => job.jobId))
   for (const jobId of reattachRetryStates.keys()) {
     if (!nextJobIds.has(jobId)) clearReattachRetryState(jobId)
+  }
+  for (const jobId of missingDescriptorRecoveryJobs) {
+    if (!nextJobIds.has(jobId)) missingDescriptorRecoveryJobs.delete(jobId)
   }
   activeGenerationJobs.set(normalizedJobs)
 
@@ -667,12 +673,8 @@ async function reattachGenerationJob(job: ActiveGenerationJob, target: ActiveCha
 
   const capture = captureReattachProjection(job)
   reattachingJobIds.add(job.jobId)
-  let observerWasSuperseded = false
+  let reattachAfterSettlement = false
   const previousLifecycle = get(generationJobLifecycles)[job.jobId]
-  updateGenerationJobLifecycle(job, 'retrying', {
-    reattachAttempts: previousLifecycle?.reattachAttempts ?? 0,
-    lastError: previousLifecycle?.lastError,
-  })
   try {
     // Keep the scheduling boundary that runtime module loading used to provide,
     // so a same-turn chat switch wins before this job is consumed.
@@ -683,16 +685,26 @@ async function reattachGenerationJob(job: ActiveGenerationJob, target: ActiveCha
     if (!isOpenChatTargetFresh(target) || !reattachProjectionStillCurrent(capture)) {
       return
     }
-    // Consume the job up front so a re-render / re-selection does not double
-    // reattach while this one streams.
+    const operationStream = generationOperationStreamForActiveJob(job)
+    const missingDescriptor = isProtocolGenerationOperationJob(job) && !operationStream
+    if (missingDescriptor && missingDescriptorRecoveryJobs.has(job.jobId)) return
+    updateGenerationJobLifecycle(job, 'retrying', {
+      reattachAttempts: previousLifecycle?.reattachAttempts ?? 0,
+      lastError: previousLifecycle?.lastError,
+    })
+    if (missingDescriptor) {
+      reattachAfterSettlement = await reconcileMissingGenerationDescriptor(job, capture)
+      return
+    }
+    missingDescriptorRecoveryJobs.delete(job.jobId)
+    // Consume only after the exact attempt can be attached. The in-flight set
+    // already excludes duplicate observers while metadata is being recovered.
     consumePresentedGenerationJob(job.jobId)
     // Carry the running job's mode so the replayed stream renders on the right
     // row (Continue's replayed info selects append/extend; regenerate targets its
     // slot) rather than as a fresh send. Older servers omit `mode` and are treated as send.
     const controller = createActiveGenerationAbortController()
     try {
-      const operationStream = generationOperationStreamForActiveJob(job)
-      if (isProtocolGenerationOperationJob(job) && !operationStream) return
       let outcome: GenerationReattachOutcome | undefined
       const attached = await sendChat(-1, {
         signal: controller.signal,
@@ -723,7 +735,7 @@ async function reattachGenerationJob(job: ActiveGenerationJob, target: ActiveCha
       } else if (settledOutcome.status === 'observer_superseded') {
         // A newer foreground recovery epoch owns the observer. Its projection
         // application and activity subscription decide whether to reattach.
-        observerWasSuperseded = true
+        reattachAfterSettlement = true
       } else if (settledOutcome.status === 'completed' || settledOutcome.status === 'cancelled') {
         forgetActiveGenerationJob(job.jobId, settledOutcome.status)
       } else {
@@ -746,8 +758,45 @@ async function reattachGenerationJob(job: ActiveGenerationJob, target: ActiveCha
     // projection refresh.
   } finally {
     reattachingJobIds.delete(job.jobId)
-    if (observerWasSuperseded && !reattachDisabled) triggerOpenChatGenerationReattach()
+    if (reattachAfterSettlement && !reattachDisabled) triggerOpenChatGenerationReattach()
   }
+}
+
+async function reconcileMissingGenerationDescriptor(
+  job: ActiveGenerationJob,
+  capture: ReattachProjectionCapture,
+): Promise<boolean> {
+  const authority = await refreshGenerationAuthority('status_probe', {
+    supersede: true,
+    ...(job.operationId ? { operationId: job.operationId } : {}),
+  })
+  if (reattachDisabled) return false
+  if (authority.status !== 'ok') {
+    if (restorePresentedGenerationJob(job, capture)) {
+      missingDescriptorRecoveryJobs.add(job.jobId)
+      updateGenerationJobLifecycle(job, 'exhausted-dead', { lastError: authority.error })
+      return false
+    }
+    return Boolean(authoritativeGenerationJobForChat(job.chatId))
+  }
+
+  const current = authoritativeGenerationJobForChat(job.chatId)
+  if (!current) return false
+  const { generationOperationStreamForActiveJob, isProtocolGenerationOperationJob } = getGenerationOperationsRuntime()
+  if (
+    current.jobId === job.jobId &&
+    isProtocolGenerationOperationJob(current) &&
+    !generationOperationStreamForActiveJob(current)
+  ) {
+    // An unchanged incomplete projection must not trigger a status-probe loop.
+    // Keep the job available for repaired metadata or an explicit/lifecycle retry.
+    missingDescriptorRecoveryJobs.add(current.jobId)
+    updateGenerationJobLifecycle(current, 'exhausted-dead', {
+      lastError: 'Generation retry returned no live stream.',
+    })
+    return false
+  }
+  return true
 }
 
 /** Reset the retry budget and reattach only the requested durable job. */

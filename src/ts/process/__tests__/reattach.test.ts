@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import type { ActiveGenerationJob, GenerationOperationProjection } from '../../server/bootstrap'
 
 // vi.hoisted runs before imports, so build minimal svelte-store-contract fakes
 // inline rather than importing `writable`.
@@ -55,6 +56,7 @@ const h = vi.hoisted(() => {
       ) => true,
     ),
     fetchRuntimeJobs: vi.fn(),
+    readGenerationOperationStatus: vi.fn(async () => ({ status: 'retained', error: 'test status probe' })),
     setCachedServerCommandRevision: vi.fn(),
     hydrateChatMessages: vi.fn(
       async (_chatId?: string, _options?: { force?: boolean; strict?: boolean; signal?: AbortSignal | null }) =>
@@ -64,24 +66,17 @@ const h = vi.hoisted(() => {
     retireGenerationJobViewers: vi.fn(),
     applyGenerationOperationBootstrap: vi.fn(),
     isProtocolGenerationOperationJob: vi.fn((job: { operationId?: string }) => Boolean(job.operationId)),
-    generationOperationStreamForActiveJob: vi.fn(
-      (job: {
-        operationId?: string
-        acceptedMessageId?: string
-        attemptNo?: number
-        jobId: string
-        projectionEpoch?: number
-      }) =>
-        job.operationId
-          ? {
-              operationId: job.operationId,
-              ...(job.acceptedMessageId ? { acceptedMessageId: job.acceptedMessageId } : {}),
-              attemptNo: job.attemptNo ?? 1,
-              jobId: job.jobId,
-              projectionEpoch: job.projectionEpoch ?? 1,
-              href: `/api/v1/generation-operations/${job.operationId}/stream?attemptNo=${job.attemptNo ?? 1}&jobId=${job.jobId}&projectionEpoch=${job.projectionEpoch ?? 1}`,
-            }
-          : undefined,
+    generationOperationStreamForActiveJob: vi.fn((job: ActiveGenerationJob) =>
+      job.operationId
+        ? {
+            operationId: job.operationId,
+            ...(job.acceptedMessageId ? { acceptedMessageId: job.acceptedMessageId } : {}),
+            attemptNo: job.attemptNo ?? 1,
+            jobId: job.jobId,
+            projectionEpoch: job.projectionEpoch ?? 1,
+            href: `/api/v1/generation-operations/${job.operationId}/stream?attemptNo=${job.attemptNo ?? 1}&jobId=${job.jobId}&projectionEpoch=${job.projectionEpoch ?? 1}`,
+          }
+        : undefined,
     ),
     stopGenerationOperation: vi.fn(async () => ({ status: 'acknowledged' })),
     retireGenerationOperationViewers: vi.fn(),
@@ -153,6 +148,8 @@ vi.mock('../index.svelte', () => ({
 
 import {
   activeGenerationJobs,
+  authoritativeGenerationJobForChat,
+  clearActiveGenerationJobProjection,
   forgetActiveGenerationJob,
   generationJobLifecycles,
   maybeReattachOpenChatGeneration,
@@ -175,12 +172,71 @@ import {
   resetChatGenerationActivitiesForTests,
 } from '../generationActivity.svelte'
 import {
+  getGenerationOperationsRuntime,
   registerChatHydrationRuntime,
   registerGenerationOperationsRuntime,
   registerGenerationProcessRuntime,
   registerRecoveredEffectsRuntime,
   registerServerChatRuntime,
 } from '../generationRuntimeBridge'
+
+async function usePartialProtocolOperation() {
+  const runtime = getGenerationOperationsRuntime()
+  const operations = await vi.importActual<typeof import('../../server/generationOperations')>(
+    '../../server/generationOperations',
+  )
+  registerGenerationOperationsRuntime(runtime)
+  const operation: GenerationOperationProjection = {
+    operationId: 'operation-partial',
+    protocolVersion: 1,
+    requestOrigin: 'accepted_send',
+    state: 'owned_by_job',
+    stateVersion: 2,
+    projectionEpoch: 40,
+    creatorWriterSessionId: 'writer-a',
+    creatorWriterEpoch: 1,
+    characterId: 'char-a',
+    chatId: 'chat-1',
+    mode: 'send',
+    providerMayHaveRun: true,
+  }
+  operations.generationOperationProjections.set([operation])
+  const applyBootstrap = h.applyGenerationOperationBootstrap.getMockImplementation()!
+  h.applyGenerationOperationBootstrap.mockImplementation((runtime, source) => {
+    operations.generationOperationProjections.set(runtime.generationOperations ?? [])
+    return applyBootstrap(runtime, source)
+  })
+  h.generationOperationStreamForActiveJob.mockImplementation(operations.generationOperationStreamForActiveJob)
+  h.isProtocolGenerationOperationJob.mockImplementation(operations.isProtocolGenerationOperationJob)
+  // A job_accepted frame can retain the job while its earlier operation
+  // projection still lacks currentAttempt. Bootstrap can repair this later.
+  const job = {
+    chatId: 'chat-1',
+    jobId: 'job-partial',
+    operationId: operation.operationId,
+    operationStateVersion: operation.stateVersion,
+    projectionEpoch: operation.projectionEpoch,
+    attemptNo: 1,
+  }
+  rememberActiveGenerationJob(job)
+  return { job, operation, operations }
+}
+
+function withProtocolAttempt(operation: GenerationOperationProjection): GenerationOperationProjection {
+  return {
+    ...operation,
+    currentAttempt: {
+      attemptNo: 1,
+      retryRequestId: 'retry-a',
+      jobId: 'job-partial',
+      status: 'running',
+      serverInstanceId: 'server-a',
+      actorWriterSessionId: 'writer-a',
+      actorWriterEpoch: 1,
+      launchRevision: 8,
+    },
+  }
+}
 
 function openChat(chatId: string): void {
   const characters = [{ chaId: 'char-a', chatPage: 0, chats: [{ id: chatId, message: [] }] }]
@@ -212,7 +268,7 @@ beforeEach(() => {
     generationOperationProjections: h.generationOperationProjections,
     generationOperationStreamForActiveJob: h.generationOperationStreamForActiveJob,
     isProtocolGenerationOperationJob: h.isProtocolGenerationOperationJob,
-    readGenerationOperationStatus: vi.fn(async () => ({ status: 'retained', error: 'test status probe' })),
+    readGenerationOperationStatus: h.readGenerationOperationStatus,
     retireGenerationOperationViewers: h.retireGenerationOperationViewers,
     retryGenerationOperation: h.retryGenerationOperation,
     stopGenerationOperation: h.stopGenerationOperation,
@@ -233,6 +289,7 @@ beforeEach(() => {
   h.createActiveGenerationAbortController.mockClear()
   h.clearActiveGenerationAbortController.mockClear()
   h.fetchRuntimeJobs.mockReset()
+  h.readGenerationOperationStatus.mockReset()
   h.fetchRuntimeJobs.mockResolvedValue({
     status: 'ok',
     bootstrap: { activeGenerationJobs: [] },
@@ -250,8 +307,8 @@ beforeEach(() => {
     })
     return true
   })
-  h.isProtocolGenerationOperationJob.mockClear()
-  h.generationOperationStreamForActiveJob.mockClear()
+  h.isProtocolGenerationOperationJob.mockReset()
+  h.generationOperationStreamForActiveJob.mockReset()
   h.stopGenerationOperation.mockClear()
   h.retireGenerationOperationViewers.mockClear()
   h.retryGenerationOperation.mockReset()
@@ -264,6 +321,221 @@ beforeEach(() => {
 })
 
 describe('reattach open-chat generation', () => {
+  it('retains partial protocol metadata for bounded recovery when authority is unavailable', async () => {
+    openChat('chat-1')
+    const { job, operations } = await usePartialProtocolOperation()
+    expect(operations.isProtocolGenerationOperationJob(job)).toBe(true)
+    expect(operations.generationOperationStreamForActiveJob(job)).toBeUndefined()
+    h.fetchRuntimeJobs.mockResolvedValue({ status: 'error', error: 'bootstrap offline' })
+
+    await maybeReattachOpenChatGeneration()
+    triggerOpenChatGenerationReattach()
+    triggerOpenChatGenerationReattach()
+    await flushMicrotasks()
+
+    expect.soft(authoritativeGenerationJobForChat(job.chatId)).toEqual(job)
+    expect.soft(get(activeGenerationJobs)).toEqual([job])
+    expect.soft(h.fetchRuntimeJobs).toHaveBeenCalledOnce()
+    expect.soft(get(generationJobLifecycles)[job.jobId]).toMatchObject({
+      status: 'exhausted-dead',
+      lastError: 'bootstrap offline',
+    })
+    expect(h.sendChat).not.toHaveBeenCalled()
+    expect(h.createActiveGenerationAbortController).not.toHaveBeenCalled()
+    expect(h.retryGenerationOperation).not.toHaveBeenCalled()
+  })
+
+  it('reattaches once when the bounded authority probe supplies the missing attempt metadata', async () => {
+    openChat('chat-1')
+    const { job, operation } = await usePartialProtocolOperation()
+    h.fetchRuntimeJobs.mockResolvedValueOnce({
+      status: 'ok',
+      bootstrap: {
+        generationOperationProjectionEpoch: 40,
+        generationOperations: [withProtocolAttempt(operation)],
+        activeGenerationJobs: [job],
+      },
+    })
+
+    await maybeReattachOpenChatGeneration()
+    await flushMicrotasks()
+
+    expect(h.readGenerationOperationStatus).toHaveBeenCalledOnce()
+    expect(h.readGenerationOperationStatus).toHaveBeenCalledWith(job.operationId, expect.any(AbortSignal))
+    expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce()
+    expect(h.sendChat).toHaveBeenCalledOnce()
+    expect(h.sendChat).toHaveBeenCalledWith(
+      -1,
+      expect.objectContaining({
+        generationOperationStream: expect.objectContaining({
+          operationId: job.operationId,
+          jobId: job.jobId,
+          attemptNo: 1,
+          projectionEpoch: 40,
+        }),
+      }),
+    )
+    expect(h.retryGenerationOperation).not.toHaveBeenCalled()
+    expect(get(activeGenerationJobs)).toEqual([])
+    expect(get(generationJobLifecycles)[job.jobId]?.status).toBe('completed')
+    triggerOpenChatGenerationReattach()
+    await flushMicrotasks()
+    expect(h.sendChat).toHaveBeenCalledOnce()
+  })
+
+  it('bounds unchanged incomplete authority and permits a later explicit metadata recovery', async () => {
+    vi.useFakeTimers()
+    try {
+      openChat('chat-1')
+      const { job, operation, operations } = await usePartialProtocolOperation()
+      const incompleteOperation = withProtocolAttempt({ ...operation, stateVersion: 1 })
+      operations.generationOperationProjections.set([incompleteOperation])
+      h.fetchRuntimeJobs.mockResolvedValue({
+        status: 'ok',
+        bootstrap: {
+          generationOperationProjectionEpoch: 40,
+          // The retained job carries the newer acceptance state version. The
+          // older operation cannot provide an exact descriptor for that job.
+          generationOperations: [incompleteOperation],
+          activeGenerationJobs: [job],
+        },
+      })
+
+      await maybeReattachOpenChatGeneration()
+      for (let index = 0; index < 4; index += 1) {
+        triggerOpenChatGenerationReattach()
+        await flushMicrotasks()
+      }
+      expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce()
+      expect(h.sendChat).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      expect(get(activeGenerationJobs)).toEqual([expect.objectContaining(job)])
+      expect(get(generationJobLifecycles)[job.jobId]).toMatchObject({
+        status: 'exhausted-dead',
+        lastError: 'Generation retry returned no live stream.',
+      })
+
+      await retryGenerationJobReattach(job.jobId)
+      await flushMicrotasks()
+      expect(h.fetchRuntimeJobs).toHaveBeenCalledTimes(2)
+      expect(h.sendChat).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+
+      h.fetchRuntimeJobs.mockResolvedValueOnce({
+        status: 'ok',
+        bootstrap: {
+          generationOperationProjectionEpoch: 40,
+          generationOperations: [withProtocolAttempt(operation)],
+          activeGenerationJobs: [job],
+        },
+      })
+      await retryGenerationJobReattach(job.jobId)
+      await flushMicrotasks()
+      expect(h.fetchRuntimeJobs).toHaveBeenCalledTimes(3)
+      expect(h.sendChat).toHaveBeenCalledOnce()
+      expect(h.retryGenerationOperation).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      resetGenerationJobLifecyclesForTests()
+      vi.useRealTimers()
+    }
+  })
+
+  it('rejects stale descriptor recovery when a held probe loses its selected-chat authority', async () => {
+    openChat('chat-1')
+    const { job } = await usePartialProtocolOperation()
+    let settleProbe!: (value: unknown) => void
+    h.fetchRuntimeJobs.mockImplementationOnce(() => new Promise((resolve) => (settleProbe = resolve)))
+
+    const attachment = maybeReattachOpenChatGeneration()
+    await vi.waitFor(() => expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce())
+    expect(get(activeGenerationJobs)).toEqual([job])
+    const replacement = { chatId: job.chatId, jobId: 'job-replacement' }
+    setActiveGenerationJobs([replacement], { projectionEpoch: 41 })
+    let settleReplacement!: () => void
+    h.sendChat.mockImplementationOnce(() => new Promise((resolve) => (settleReplacement = () => resolve(true))))
+    settleProbe({ status: 'error', error: 'late authority failure' })
+    await attachment
+    await flushMicrotasks()
+
+    expect(authoritativeGenerationJobForChat(job.chatId)).toEqual(replacement)
+    expect(get(generationJobLifecycles)[job.jobId]).toBeUndefined()
+    expect(h.sendChat).toHaveBeenCalledOnce()
+    expect(h.sendChat).toHaveBeenCalledWith(-1, expect.objectContaining({ reattachJobId: replacement.jobId }))
+    settleReplacement()
+    await flushMicrotasks()
+  })
+
+  it('accepts repaired metadata after an exhausted probe without republishing the retained job', async () => {
+    openChat('chat-1')
+    const { job, operation, operations } = await usePartialProtocolOperation()
+    h.fetchRuntimeJobs.mockResolvedValue({ status: 'error', error: 'bootstrap offline' })
+    await maybeReattachOpenChatGeneration()
+    expect(get(generationJobLifecycles)[job.jobId]?.status).toBe('exhausted-dead')
+
+    operations.generationOperationProjections.set([withProtocolAttempt(operation)])
+    triggerOpenChatGenerationReattach()
+    await flushMicrotasks()
+
+    expect(h.sendChat).toHaveBeenCalledOnce()
+    expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce()
+    expect(get(generationJobLifecycles)[job.jobId]?.status).toBe('completed')
+  })
+
+  it('expires a held metadata probe without consuming its job or leaving retry work scheduled', async () => {
+    vi.useFakeTimers()
+    try {
+      openChat('chat-1')
+      const { job } = await usePartialProtocolOperation()
+      h.fetchRuntimeJobs.mockImplementationOnce(() => new Promise(() => undefined))
+      const attachment = maybeReattachOpenChatGeneration()
+      await vi.advanceTimersByTimeAsync(10_000)
+      await attachment
+
+      expect(get(activeGenerationJobs)).toEqual([job])
+      expect(get(generationJobLifecycles)[job.jobId]).toMatchObject({
+        status: 'exhausted-dead',
+        lastError: 'Generation authority refresh timed out.',
+      })
+      expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce()
+      expect(h.sendChat).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+      triggerOpenChatGenerationReattach()
+      await flushMicrotasks()
+      expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce()
+    } finally {
+      resetGenerationJobLifecyclesForTests()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not resurrect missing metadata after database projection recovery is cleared', async () => {
+    openChat('chat-1')
+    const { job, operation } = await usePartialProtocolOperation()
+    let settleProbe!: (value: unknown) => void
+    h.fetchRuntimeJobs.mockImplementationOnce(() => new Promise((resolve) => (settleProbe = resolve)))
+
+    const attachment = maybeReattachOpenChatGeneration()
+    await vi.waitFor(() => expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce())
+    clearActiveGenerationJobProjection()
+    settleProbe({
+      status: 'ok',
+      bootstrap: {
+        generationOperationProjectionEpoch: 40,
+        generationOperations: [withProtocolAttempt(operation)],
+        activeGenerationJobs: [job],
+      },
+    })
+    await attachment
+    await flushMicrotasks()
+
+    expect(authoritativeGenerationJobForChat(job.chatId)).toBeUndefined()
+    expect(get(activeGenerationJobs)).toEqual([])
+    expect(get(generationJobLifecycles)).toEqual({})
+    expect(h.sendChat).not.toHaveBeenCalled()
+    expect(h.applyGenerationOperationBootstrap).not.toHaveBeenCalled()
+  })
+
   it('holds a selected durable job until chat readiness opens the reattach barrier', async () => {
     openChat('chat-1')
     setActiveGenerationJobs([{ chatId: 'chat-1', jobId: 'job-held' }])
