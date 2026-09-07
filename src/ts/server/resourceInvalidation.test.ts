@@ -115,6 +115,7 @@ import {
   loadInitialServerResources,
   refreshAllServerResources,
   refreshInvalidatedServerResources,
+  refreshServerResourceTargets,
   type ServerResourceInvalidationHooks,
 } from './resourceInvalidation'
 import { lorebookPageOwner } from './lorebookPageOwner.svelte'
@@ -125,14 +126,19 @@ import {
   applyCollectionsResource,
   applySettingsGroupResource,
   applySettingsResource,
+  beginCollectionsResourceLoad,
+  beginSettingsGroupResourceLoad,
+  beginStandaloneSettingResourceLoad,
   captureCharacterLorebookProjectionEpoch,
   captureCharacterRowProjectionEpoch,
   charactersResourceState,
+  collectionsResourceState,
   hasCharacterLorebookProjectionEpochChanged,
   hasCharacterRowProjectionEpochChanged,
   markCharacterLorebookProjectionApplied,
   markChatBodyProjectionApplied,
   resetServerResourceState,
+  settingsResourceState,
 } from './resourceState.svelte'
 import { SERVER_SETTINGS_KEYS_BY_GROUP } from './settingsGroups'
 import { captureDestructiveRefreshEpoch, hasDestructiveRefreshEpochChanged } from './staleStateGuards'
@@ -354,6 +360,84 @@ beforeEach(() => {
 afterEach(() => resetClientSessionForTests())
 
 describe('API-backed resource invalidation', () => {
+  it.each(['group', 'aggregate-group', 'collection', 'standalone'] as const)(
+    'refreshes a loading %s on a committed event and rejects the older held demand read',
+    async (kind) => {
+      const held = deferred<any>()
+      api.settingsGroup.mockImplementation(async (group: string) => ({
+        status: 'ok',
+        revision: 6,
+        group,
+        settings: group === 'runtime' ? { maxContext: 12000 } : {},
+      }))
+      api.collection.mockResolvedValue({
+        status: 'ok',
+        revision: 6,
+        collections: { modules: [{ id: 'module-a', name: 'Committed' }] },
+      })
+      api.standaloneSetting.mockResolvedValue({
+        status: 'ok',
+        revision: 6,
+        setting: 'loreBookPage',
+        state: { present: true, value: 3 },
+      })
+      const group = kind === 'group' || kind === 'aggregate-group'
+      if (group) {
+        beginSettingsGroupResourceLoad('runtime')
+        api.settingsGroup.mockReturnValueOnce(held.promise)
+      } else if (kind === 'collection') {
+        beginCollectionsResourceLoad('modules')
+        api.collection.mockReturnValueOnce(held.promise)
+      } else {
+        beginStandaloneSettingResourceLoad('loreBookPage')
+        api.standaloneSetting.mockReturnValueOnce(held.promise)
+      }
+      const pending = refreshServerResourceTargets(
+        group
+          ? { settingsGroups: ['runtime'] }
+          : kind === 'collection'
+            ? { collections: ['modules'] }
+            : { standaloneSettings: ['loreBookPage'] },
+        { mode: 'reader' },
+      )
+      const changed =
+        kind === 'group'
+          ? event(6, 'settings', { id: 'runtime' })
+          : kind === 'collection'
+            ? event(6, 'moduleUpdated', { id: 'module-a' })
+            : event(6, 'presetPointer')
+      expect(await refreshInvalidatedServerResources(changed, { mode: 'reader', appliedRevision: 5 })).toEqual({
+        status: 'ok',
+        revision: 6,
+        scope: 'targeted',
+      })
+      if (group) {
+        expect(api.settingsGroup.mock.calls.filter(([name]) => name === 'runtime')).toHaveLength(2)
+        expect(settingsResourceState.groupStatuses.runtime).toBe('ready')
+        expect(settingsResourceState.groupRevisions.runtime).toBe(6)
+      } else if (kind === 'collection') {
+        expect(api.collection).toHaveBeenCalledTimes(2)
+        expect(collectionsResourceState.statuses.modules).toBe('ready')
+        expect(collectionsResourceState.revisions.modules).toBe(6)
+      } else {
+        expect(api.standaloneSetting).toHaveBeenCalledTimes(2)
+        expect(settingsResourceState.standaloneStatuses.loreBookPage).toBe('ready')
+        expect(settingsResourceState.standaloneRevisions.loreBookPage).toBe(6)
+      }
+      held.resolve(
+        group
+          ? { status: 'ok', revision: 5, group: 'runtime', settings: { maxContext: 6000 } }
+          : kind === 'collection'
+            ? { status: 'ok', revision: 5, collections: { modules: [{ id: 'module-a', name: 'Old' }] } }
+            : { status: 'ok', revision: 5, setting: 'loreBookPage', state: { present: true, value: 1 } },
+      )
+      expect(await pending).toEqual({ status: 'error', error: 'Reader resource refresh was superseded before apply' })
+      if (group) expect(getResourceDatabase().maxContext).toBe(12000)
+      else if (kind === 'collection') expect(getResourceDatabase().modules[0].name).toBe('Committed')
+      else expect(getResourceDatabase().loreBookPage).toBe(3)
+    },
+  )
+
   it.each(['full', 'targeted'] as const)(
     'does not acknowledge a reader %s snapshot superseded by concurrent detail hydration',
     async (kind) => {

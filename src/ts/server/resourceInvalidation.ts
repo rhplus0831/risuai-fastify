@@ -596,8 +596,8 @@ const SHELL_SETTINGS_GROUPS = new Set<SettingsGroup>(
 
 /**
  * A contiguous event advances the global cursor even when its resource is not
- * resident. Re-read only loaded projections; a later route read gets the
- * current revision directly. Gap/restore recovery bypasses this filter and
+ * resident. Re-read loaded or actively loading projections: a pending route
+ * read may predate this event. Gap/restore recovery bypasses this filter and
  * remains a complete authoritative refresh.
  */
 function retainLoadedRefreshTargets(plan: RefreshPlan): void {
@@ -615,26 +615,26 @@ function retainLoadedRefreshTargets(plan: RefreshPlan): void {
   if (plan.settings && settingsResourceState.fullRevision === null) {
     plan.settings = false
     for (const group of Object.keys(settingsResourceState.groupStatuses)) {
-      if (isSettingsGroup(group) && settingsResourceState.groupStatuses[group] === 'ready') {
+      if (isSettingsGroup(group) && isLoadedOrLoading(settingsResourceState.groupStatuses[group])) {
         plan.settingsGroups.add(group)
       }
     }
     for (const group of SHELL_SETTINGS_GROUPS) plan.settingsGroups.add(group)
     for (const [setting, status] of Object.entries(settingsResourceState.standaloneStatuses)) {
-      if (status === 'ready') plan.standaloneSettings.add(setting as ServerStandaloneSettingName)
+      if (isLoadedOrLoading(status)) plan.standaloneSettings.add(setting as ServerStandaloneSettingName)
     }
   }
 
   for (const group of [...plan.settingsGroups]) {
-    if (settingsResourceState.groupStatuses[group] !== 'ready' && !SHELL_SETTINGS_GROUPS.has(group)) {
+    if (!isLoadedOrLoading(settingsResourceState.groupStatuses[group]) && !SHELL_SETTINGS_GROUPS.has(group)) {
       plan.settingsGroups.delete(group)
     }
   }
   for (const setting of [...plan.standaloneSettings]) {
-    if (settingsResourceState.standaloneStatuses[setting] !== 'ready') plan.standaloneSettings.delete(setting)
+    if (!isLoadedOrLoading(settingsResourceState.standaloneStatuses[setting])) plan.standaloneSettings.delete(setting)
   }
   for (const name of [...plan.collections]) {
-    if (collectionsResourceState.statuses[name] !== 'ready') plan.collections.delete(name)
+    if (!isLoadedOrLoading(collectionsResourceState.statuses[name])) plan.collections.delete(name)
   }
 
   if (plan.inlayCatalog && getServerInlayCatalogResource() === null) plan.inlayCatalog = false
@@ -675,6 +675,10 @@ function residentChatBodyHasContent(chatId: string): boolean {
   return charactersResourceState.characters.some((character) =>
     character.chats?.some((chat) => chat.id === chatId && Array.isArray(chat.message) && chat.message.length > 0),
   )
+}
+
+function isLoadedOrLoading(status: string | undefined): boolean {
+  return status === 'ready' || status === 'loading'
 }
 
 function residentCharacterLorebookIsLoaded(characterId: string): boolean {
