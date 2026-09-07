@@ -674,8 +674,8 @@ describe('API-backed client bootstrap', () => {
       let acknowledge!: () => void
       vi.mocked(waitAlert).mockImplementationOnce(
         () =>
-          new Promise<void>((resolve) => {
-            acknowledge = resolve
+          new Promise<Awaited<ReturnType<typeof waitAlert>>>((resolve) => {
+            acknowledge = () => resolve({ type: 'none', msg: '' })
           }),
       )
       const loading = loadData()
@@ -713,8 +713,8 @@ describe('API-backed client bootstrap', () => {
     let acknowledge!: () => void
     vi.mocked(waitAlert).mockImplementationOnce(
       () =>
-        new Promise<void>((resolve) => {
-          acknowledge = resolve
+        new Promise<Awaited<ReturnType<typeof waitAlert>>>((resolve) => {
+          acknowledge = () => resolve({ type: 'none', msg: '' })
         }),
     )
     const loading = loadData()
