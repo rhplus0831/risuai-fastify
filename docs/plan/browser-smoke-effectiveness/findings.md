@@ -831,3 +831,254 @@ explicit recovery composition, durable job survival and consent-driven first
 initialization. Live reader partial output, observer effects and final default
 rollout remain later reader phases. Phase-ending aggregate acceptance belongs
 in reader status; no smoke Phase 3/4 acceptance is implied.
+
+## Reader Phase 4 Production Fault Evidence
+
+Candidate source: `40b3eb516b87bd37bd083fc7eb53daec53f732da`.
+The unchanged five-case baseline passes in 49.2s after a 14.88s clean build,
+with no page errors or forbidden Reader calls. Its source/emission records are
+under `/tmp/reader-phase4-five-baseline-final-hr9fcca2`; all 1,322 successful
+script URLs match the frozen 503-file emission catalog. This establishes
+URL-to-emission attribution, not independent network-response byte hashes.
+Earlier 0/4, 3/5 and 4/5 baselines remain recorded in
+[reader status](../connected-read-only-clients/status.md#phase-4-implementation-2026-09-07),
+including the reproduced Stop, settings/IGP and atomic receipt defects and the
+separate expected-alert/TTS assertion corrections.
+
+The six exact production faults below were reviewed before execution. Each
+uses one deterministic negative in a detached worktree, with unchanged tests,
+helpers and configuration; source is restored byte-for-byte between faults.
+A final clean build and the unchanged five-case run supply all restored
+controls (S84 jointly controls F1/F2). Commands in the isolated worktree add
+`--config.verify-deps-before-run=false` to use the existing dependency symlink
+without dependency-manager installation. They do not change test semantics.
+
+Frozen spec SHA-256:
+`3fc93e3ea1763785848f4410037dca8f0781c959335c91e2da68a6639c7ffd45`.
+Frozen helper SHA-256:
+`3f5bec3723b916ace0dbb0499caf540adbbeafd92a51f3e9565db3caed7c6560`.
+The literal protocol, exact argv, source hashes and expected faulty hashes are
+in `/tmp/reader-phase4-fault-campaign-p0d1439n/protocol.json`. Root independently
+verified each replacement occurs once and produces its declared hash. Client
+branch markers use retained Reflect calls because the production build strips
+direct console calls. Server faults retain exact source and executed log
+markers. A failure counts only after its declared prerequisites; downstream
+steps that were not reached are never credited.
+
+### R4-F1: Reader live partial omitted
+
+Owner: `src/ts/server/readerGenerationObservation.ts`. Target: S84.
+
+```diff
+--- a/src/ts/server/readerGenerationObservation.ts
++++ b/src/ts/server/readerGenerationObservation.ts
+@@ -241,7 +241,8 @@
+     } else if (event.type === 'token') {
+       accumulator.text += event.content
+       if (!accumulator.gap && !next.halfStreaming) {
+-        next.text = (next.continueDisposition === 'extend' ? (next.continueBase ?? '') : '') + accumulator.text
++        Reflect.apply(console.warn, console, ['RISU_PHASE4_F1_READER_PARTIAL', source.identity.jobId])
++        next.text = null
+       }
+       if (event.generatedTokens !== undefined) next.generatedTokens = event.generatedTokens
+       if (event.elapsedMs !== undefined) next.elapsedMs = event.elapsedMs
+```
+
+Reader live partial count fails after A visible partial, SQL owned_by_job/running, one accepted user/op/attempt/provider and no result/effects. Does not qualify terminal or authority assertions.
+
+**R4-F1 negative qualified:** S84 fails in 33.0s at the unchanged helper's
+Reader partial-count assertion (line 594: zero versus one). A's visible partial
+and accepted user/operation/attempt/provider prerequisites passed. At failure,
+SQL has the same running attempt/owned job and no canonical result or effect
+rows; provider calls are one, aborts zero, and viewers two. B emitted the retained
+job-scoped marker. The marker-bearing `/assets/ReaderTranscript-CBGxU-Xf.js`
+received HTTP 200 and maps to emitted SHA-256
+`7a6ced881b3f3d4a8c3db4341883a3cc3993d26a7042721b9f5d2787f9ff9aa4`.
+Source inputs stayed unchanged, page errors are empty, and byte-for-byte
+restoration with all frozen hashes matching precedes F2. This qualifies partial
+detection only; the shared restored control passes as recorded below.
+
+### R4-F2: Reader canonical generated row omitted
+
+Owner: `src/ts/server/readerTranscriptProjection.svelte.ts`. Target: S84.
+
+```diff
+--- a/src/ts/server/readerTranscriptProjection.svelte.ts
++++ b/src/ts/server/readerTranscriptProjection.svelte.ts
+@@ -313,9 +313,11 @@
+       )?.messages
+     : copied
+   if (!merged) return
++  if (merged.some((message) => message.role === 'char' && message.generationInfo?.operationId))
++    Reflect.apply(console.warn, console, ['RISU_PHASE4_F2_READER_CANONICAL', chatId])
+   messages.set(chatId, {
+     characterId: owner.characterId,
+-    messages: merged,
++    messages: merged.filter((message) => message.role !== 'char' || !message.generationInfo?.operationId),
+     projectionEpoch,
+     generation: messageGeneration,
+     sessionGeneration: captureClientSessionGeneration(),
+```
+
+Reader canonical convergence / temporary projection retirement fails only after its held partial passed, provider release, SQL one exact completed reply/attempt/event and current writer A canonical final. Verify the precise failed Reader assertion from the trace; do not claim generic downstream failures.
+
+**R4-F2 negative qualified:** S84 fails in 37.6s at the exact canonical
+result-ID body assertion on Reader B (helper line 876). Both held partials passed;
+SQL then contains one completed attempt, result and generation.persisted event,
+and writer A's same result-ID text assertion passed (`0-trace` call 335).
+Reader B's row is missing (`1-trace` call 362). The publication marker ran 19
+times; `/assets/resourceState.svelte-Ug8BkjZa.js` has HTTP 200 receipts and emitted
+SHA-256 `252bc6c3ed3e9c0e96a0b9ac5cb12da0e96de66e9267440dec0e2ce30078d8a6`.
+Provider calls remain one, aborts zero, and page errors are empty. All frozen
+inputs match after restoration before F3; the shared restored control passes as recorded below.
+
+### R4-F3: Detached viewer registry membership retained
+
+Owner: `server/fastify/src/streamJobs.ts`. Target: S85.
+
+```diff
+--- a/server/fastify/src/streamJobs.ts
++++ b/server/fastify/src/streamJobs.ts
+@@ -845,7 +845,7 @@
+   detach(jobId: string, client: JobClient): void {
+     const job = this.jobs.get(jobId)
+     if (!job) return
+-    job.clients.delete(client)
++    console.info('RISU_PHASE4_F3_VIEWER_DETACH', jobId)
+     if (job.done && job.clients.size === 0 && job.replayEvents === undefined) {
+       this.cleanup(jobId)
+     }
+```
+
+Viewers fail to become one after actual B Other Chat navigation/Reader URL, starting from two live viewers/Reader partial. Provider calls remain one/aborts zero and same SQL job remains running. Do not claim later close/reopen was reached.
+
+**R4-F3 negative qualified:** S85 fails in 12.6s after both live partials/two viewers,
+then B's actual Other Chat click, Reader route/chat scope and cleared generation
+projection. The registry-viewer assertion (spec line 76) remains two instead of
+one. SQL still has the same running attempt/owned operation; provider calls
+are one, aborts zero and completion false. Executed server detach markers name
+that exact job. Later close/reopen is not reached and is not credited to this
+negative. Source is restored with all frozen hashes matching before F4; the
+shared restored control passes as recorded below.
+
+### R4-F4: Promoted Stop loses its optional cancellation guard
+
+Owner: `src/ts/server/generationOperations.ts`. Target: S86.
+
+```diff
+--- a/src/ts/server/generationOperations.ts
++++ b/src/ts/server/generationOperations.ts
+@@ -831,7 +831,8 @@
+   operation: GenerationOperationProjection,
+   previous?: GenerationOperationCancellation,
+ ): ActiveChatTarget | undefined {
+-  if (previous?.target) return previous.target
++  if (!previous) Reflect.apply(console.warn, console, ['RISU_PHASE4_F4_PROMOTED_STOP', operation.operationId])
++  if (previous!.target) return previous.target
+   if (!operation.chatId && !operation.characterId) return undefined
+   return {
+     selectedCharID: -1,
+```
+
+Exact missing previous.target TypeError on actual current-writer B Stop; SQL never reaches stopping. Prerequisites: real A-to-B confirmation, SQL epoch2, B authorized recovery/ready controls, A Reader partial and same job/provider. The expected TypeError is named evidence, not a generic pageerror failure. Do not claim the later stopping transfer was reached.
+
+**R4-F4 negative qualified:** S86 fails in 13.3s at spec line 145:
+SQL remains `owned_by_job` instead of `stopping`. Real B confirmation and Stop
+clicks completed after SQL epoch 2 and writer recovery/readiness; A's Reader
+partial passed. The operation-scoped marker ran inside that Stop click. The
+single B page error is the intended `Cannot read properties of undefined
+(reading 'target')`; provider calls stay one, aborts zero, and no cancellation
+request is accepted. The later stopping-state transfer is not reached. Source
+and frozen input hashes match after restoration before F5. The marker-bearing
+`/assets/database.svelte-Ds6Cc2t4.js` has HTTP 200 receipts and emitted SHA-256
+`9def5e330f378c1159b5045edf39eb1e42db89e222e8ae3b1ef325d4515de07a`.
+The shared restored control passes as recorded below.
+
+### R4-F5: Recovered IGP settings omitted from narrow reads
+
+Owner: `server/fastify/src/routes/resourceReads.ts`. Target: S87.
+
+```diff
+--- a/server/fastify/src/routes/resourceReads.ts
++++ b/server/fastify/src/routes/resourceReads.ts
+@@ -1238,7 +1238,8 @@
+   // cross-resource event invalidates that collection separately.
+   // Legacy IGP configuration remains round-trip-owned; reading it for a
+   // recovered effect does not introduce a generic settings mutation path.
+-  const readOnlyKey = group === 'language' ? 'translatorPresetId' : group === 'advanced' ? 'igpPrompt' : null
++  if (group === 'advanced') console.info('RISU_PHASE4_F5_RECOVERED_IGP_CONFIG')
++  const readOnlyKey = group === 'language' ? 'translatorPresetId' : null
+   const groupKeys = readOnlyKey ? [...SETTINGS_GROUP_KEYS[group], readOnlyKey] : SETTINGS_GROUP_KEYS[group]
+   const keys = groupKeys.filter(
+     (key) =>
+```
+
+Completed late_recovery IGP receipt fails as skipped/not_configured after real queued journal/finalizing attempt/provider done once, exact writer error OK acknowledgement, actual A-to-B transfer while queued and only then trigger removal. SQL canonical settings stay configured and base result persists once; no IGP provider/PATCH. Does not qualify atomic receipt loss.
+
+**R4-F5 negative qualified:** S87 fails in 39.6s at the exact receipt assertion
+(helper line 946), after passing its real queued-journal and
+finalizing-attempt prerequisites, exact writer Error/OK acknowledgement, and
+A→B transfer while the journal is still pending. Only after the failure trigger
+is removed does the normal retry worker persist one base result. The exact
+IGP receipt is `skipped/not_configured` instead of completed late recovery;
+canonical SQL IGP settings are unchanged, while B's actual HTTP 200 advanced
+settings response omits `igpPrompt`. No IGP completion request or message update
+occurs. Server settings-read markers execute and page errors are empty. All
+source/frozen hashes match after restoration before F6; the shared restored
+control passes as recorded below.
+
+### R4-F6: Accepted IGP append omits its atomic receipt
+
+Owner: `server/fastify/src/generationEffects.ts`. Target: S88.
+
+```diff
+--- a/server/fastify/src/generationEffects.ts
++++ b/server/fastify/src/generationEffects.ts
+@@ -533,6 +533,8 @@
+     // require the same generation precondition as the ordinary text command.
+     if (metadata.generationId !== undefined && input.expectedGenerationId !== input.generationId) return false
+   }
++  console.info('RISU_PHASE4_F6_ATOMIC_IGP_RECEIPT', input.generationId, input.claimId)
++  return true
+   const completed = settleGenerationEffect(db, {
+     databaseLineage: input.databaseLineage,
+     generationId: input.generationId,
+```
+
+Held real PATCH boundary fails IGP completed expectation as claimed, after real A/B roles/partial, provider terminal, live IGP claim/provider and accepted route.fetch PATCH with one SQL suffix/message.updated/command receipt. Browser has not received response. All transaction/lineage/lease/message guards remain. Actual subsequent transfers are downstream and must not be claimed reached on this negative.
+
+**R4-F6 negative qualified:** S88 fails in 8.0s at spec line 444. The
+actual held PATCH returns HTTP 200 with one real echo completion, one appended
+suffix/message.updated and a stored command mutation receipt, but the held
+independent SQL snapshot has IGP `claimed` instead of completed. The executed
+server marker matches the exact generation and claim IDs. Normal response
+release and the subsequent role transfers are not reached; cleanup-only release
+is recorded separately. No page errors occur. All six faults are now restored
+byte-for-byte, the detached source is clean and every frozen input matches.
+The shared clean-build/five-case restored control passes as recorded below.
+
+### Phase 4 restoration and limits
+
+All six negatives qualify against their exact prerequisites and failed
+assertions. The shared restored control passes **5/5 in 51.1s**, after a clean
+12.32s build, at the same frozen source/test/helper hashes. The detached worktree
+is clean, every frozen input matches the main source, and restored emitted
+JavaScript contains none of the six fault markers. All five cases have nonempty
+Reader dispatch audits, no forbidden Reader calls and no page errors. Viewer
+counts reach zero at terminal completion; only the deliberate Stop journey
+aborts its provider once.
+
+S88 again completes both real role transfers, the late original PATCH response
+and Reader Refresh with one IGP execution/PATCH transport, one appended suffix
+and the same atomic completed receipt. The restored five cases jointly control
+all six faults, with S84 controlling both partial and canonical publication.
+Its 1,321 successful script URL receipts map to the frozen emission catalog;
+network-response byte hashes are not claimed.
+
+The final source/emission proofs, exact executed commands, individual
+qualifications and raw artifacts are linked by
+`/tmp/reader-phase4-fault-campaign-p0d1439n/campaign-summary.json`. These controls
+establish the named observation, detach, Stop, configured-effect and atomic
+receipt boundaries. Reader Phase 5 owns the final rollout and combined matrix;
+the remaining smoke Phase 3 audit is still pending. Phase-ending aggregate
+acceptance is recorded in reader status.

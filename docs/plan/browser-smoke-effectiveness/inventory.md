@@ -3,13 +3,15 @@
 Initial execution inventory: 2026-09-07 at `711b1d583` (clean worktree).
 Phase 2 discovery: `6f39fb8f0` plus the real-operation Realm browser spec.
 
-Reader Phase 3 discovery at `7c3da2160` contains 83 registered cases in 20 specs, plus ten local
+Reader Phase 4 source at `40b3eb516` contains 88 registered cases in 21 specs, plus eleven local
 TypeScript support owners and four screenshot baselines. The planning snapshot
 was extended by eight viewport/entry/height cases in `chatEntryLayout.spec.ts`
 and two real-operation Realm confirmation cases added during smoke Phase 2.
 Reader Phase 2 adds one real multi-session connected browsing scenario (S80);
 S32/S60 retain their identities with updated mixed-client behavior. Reader Phase 3
 adds S81–S83 for explicit switching, durable generation survival and empty-server setup.
+Reader Phase 4 adds S84–S88 for live viewing, detach, Stop, queued finalization
+and atomic IGP receipt recovery; their final baseline, all six production faults and restored controls pass.
 Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
@@ -25,6 +27,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `chatHistoryScroll.spec.ts`                |             2 | 2: transcript                             | Pending                                               |
 | `chatStartupRendering.spec.ts`             |             3 | 2: transcript/startup                     | Pending                                               |
 | `connectedReaderBrowsing.spec.ts`          |             1 | Reader 2; Stage 3 reconciliation          | Added; final verification recorded in reader status   |
+| `connectedReaderGeneration.spec.ts`        |             5 | Reader 4; Stage 3 reconciliation          | Added; final verification recorded in reader status   |
 | `connectedWriterSwitching.spec.ts`         |             3 | Reader 3; Stage 3 reconciliation          | Added; final verification recorded in reader status   |
 | `debugEchoLayoutStability.spec.ts`         |             1 | 2: generation/layout                      | Pending                                               |
 | `displayPaintCache.spec.ts`                |             1 | 3: startup/cache                          | Pending                                               |
@@ -39,7 +42,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Pending                                               |
 | `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Pending                                               |
 | `visibleStateRecovery.spec.ts`             |             3 | 2: visible/durable recovery               | Pending                                               |
-| **Total**                                  |        **83** |                                           | **Pilot evidence recorded; remaining review pending** |
+| **Total**                                  |        **88** |                                           | **Pilot evidence recorded; remaining review pending** |
 
 This file-level table is the current universe. The scenario records below are
 keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
@@ -61,8 +64,9 @@ manifest-generated route coverage explicit without inflating default counts.
 | `playwright.fastify-smoke.config.ts`, `util/focused-test.ts`, `util/browser-smoke-workers.ts`, `util/test-all.ts`, `.github/workflows/quality.yml` | What is discovered, skipped, isolated, built, executed, or required by each lane?                              | Retained with limits; see Phase 1 dispositions |
 | Browser API overrides, request controls, and assertion helpers within every spec                                                                   | Does the control preserve the failing transition and does the assertion independently observe its consequence? | Retained with limits; see Phase 1 dispositions |
 
-The current local support set contains ten TypeScript files (952 lines at the
-planning anchor); source line counts are not an execution metric. Follow imports
+The initial local support set contained ten TypeScript files (952 lines at the
+planning anchor). Reader Phase 4 adds `connectedGenerationHarness.ts`, bringing
+the current support set to eleven; source line counts are not an execution metric. Follow imports
 when they reveal additional shared owners; add only dependencies relevant to a
 named test claim. Existing screenshot assets remain companion artifacts of
 their scenario, not independent passing tests.
@@ -178,6 +182,11 @@ row unless the detailed review states a narrower boundary.
 | S81 | `connectedWriterSwitching.spec.ts:580`         | Use this device switches A to B to A in place while preserving reader routes and the originating draft                | Added; Reader Phase 3 reconciliation |
 | S82 | `connectedWriterSwitching.spec.ts:745`         | an accepted server generation keeps its job and durable reply when Use this device transfers the writer               | Added; Reader Phase 3 reconciliation |
 | S83 | `connectedWriterSwitching.spec.ts:953`         | an empty server without Web Locks initializes only after the explicit setup action with a fresh writer identity       | Added; Reader Phase 3 reconciliation |
+| S84 | `connectedReaderGeneration.spec.ts:28`         | a connected Reader sees one live partial and the exact persisted reply without control or effect requests             | Added; Reader Phase 4 verified       |
+| S85 | `connectedReaderGeneration.spec.ts:62`         | Reader chat switching and close/reopen detach viewers while the same provider job keeps running                       | Added; Reader Phase 4 verified       |
+| S86 | `connectedReaderGeneration.spec.ts:122`        | writer transfers during streaming and stopping preserve one cancelled partial without completion effects              | Added; Reader Phase 4 verified       |
+| S87 | `connectedReaderGeneration.spec.ts:201`        | writer transfer while a real finalization journal is queued commits one result and settles one effect ledger          | Added; Reader Phase 4 verified       |
+| S88 | `connectedReaderGeneration.spec.ts:363`        | an accepted IGP append is already receipted when its writer loses ownership before the PATCH response                 | Added; Reader Phase 4 verified       |
 
 ## Conditional and Expanded Execution
 
@@ -525,3 +534,32 @@ All three exact production faults fail after their named startup/action
 preconditions. The unchanged final clean-build controls pass 3/3 in 10.0s.
 Stage 3 must reconcile these additions with subsequent reader viewer/rollout
 changes; this record does not accept the remaining smoke Phase 3 scenarios.
+
+## Reader Phase 4 Smoke Reconciliation
+
+Source `40b3eb516` adds five cases and one shared generation harness; the public
+flag remains disabled. The initial four-case run at `a45fa4b39` failed all four
+cases. Its actual runtime defects and test-contract corrections are recorded in
+[reader status](../connected-read-only-clients/status.md#phase-4-implementation-2026-09-07).
+The final five-case baseline passes in 49.2s after the recorded production and
+assertion corrections. All six exact production faults fail their intended oracles, and the unchanged
+five-case restored control passes in 51.1s. Both phase-ending aggregate gates pass at that implementation, as recorded in
+reader status.
+
+| Scenario/control                     | Real path and independent oracle                                                                                                                                                                                                                                                                                                                                  | Scope and limits                                                                                                                                                                                                                                                                |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| S84: partial and canonical reply     | Actual composer/send starts one local controlled provider and durable operation/attempt/job. Both writer and Reader must visibly show the held partial, then exactly one canonical result with its persisted identity. SQL operation/attempt/message/event and seven effect rows are checked independently.                                                       | One selected ordinary chat. Continue/regenerate, half-stream replay, EOF and changed descriptor/attempt/lineage use the focused transport/coordinator/mounted companions.                                                                                                       |
+| S85: chat-switch/close/reopen        | With two real viewers and the provider held, B opens another chat through UI, closes its context, then reopens a fresh reader. Registry counts, actual routes/visible partials and one running SQL job prove each detach/attachment; release gives the same canonical result.                                                                                     | Browser context closure and UI chat switching are real. Registry counts are read-only server observations. No cancellation request or provider abort is allowed.                                                                                                                |
+| S86: transfer and Stop               | Actual A→B confirmation and SQL epoch 2 precede B's Stop click. The provider holds its abort acknowledgement while another UI transfer occurs. SQL stopping/terminal identity and one stopped partial prove the final outcome, with no completion effects.                                                                                                        | Stop is the existing PUT cancellation route. The original failure reproduced missing local cancellation state after bootstrap; current code handles that state.                                                                                                                 |
+| S87: queued finalization and effects | A scoped SQL failure trigger blocks only the real journal's canonical message insertion after provider completion. Actual UI transfer occurs while the job/journal is finalizing; removing the trigger allows one result and exact effect rows. Enabled retained IGP executes its real server completion request and one targeted text command under B.           | The trigger supplies a persistence fault and creates no journal/result/effect rows. Built-in echo IGP is deterministic; no paid provider runs. Configured SQL settings remain independently visible throughout.                                                                 |
+| S88: accepted IGP response loss      | `route.fetch` sends the real IGP PATCH and holds only delivery of its original response. SQL must already show one suffix, message.updated, command receipt and completed IGP claim. Actual A→B, late response release, B→A and Reader Refresh preserve that exact result and receipt.                                                                            | One logical mutation may replay only with identical mutation ID/body and no new revision/event. Existing generated-translation/plugin/IGP receipts remain immutable; only pending effects may settle under B. No second IGP execution or reader effect/control call is allowed. |
+| Shared controls and provenance       | The helper seeds initialized unowned data, forwards the local provider dependency, observes dispatch-time lifecycle plus headers/body, reads SQLite and viewer counts, and saves artifacts before cleanup. Recovery writes are allowed only under actual SQL writer authority; the response-loss case narrowly matches its independently accepted command replay. | Pure-read POST exceptions are exact existing routes. Bootstrap/events/generation-viewer reads carry no writer header. Request URL/status matching to emitted hashes is source attribution, not an independent hash of network response bytes.                                   |
+
+All new cases retain actual rendered outcomes and durable state assertions;
+capability hooks and provider/gate logs supply prerequisites and attribution.
+The production-fault protocol separately targets partial display, canonical
+handoff, viewer cleanup, promoted Stop, configured recovered IGP and atomic IGP
+completion. All six meet their declared preconditions and fail the intended oracle, then
+pass the shared unchanged restored control. Detailed provenance is recorded in
+[findings](findings.md#reader-phase-4-production-fault-evidence). Final acceptance belongs in reader status; smoke Phases 3–4 stay
+pending until the completed reader handoff.

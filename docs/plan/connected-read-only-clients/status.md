@@ -1,17 +1,18 @@
 # Connected Read-Only Clients Status
 
-Updated: 2026-09-07
+Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite and reader Phases 0–3 accepted; Phase 4 is ready.
+- State: Stage 1 smoke prerequisite and reader Phases 0–4 accepted; Phase 5 verification and rollout are next.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Current task scope: implement the coordinated connected-reader plan after the
-  accepted smoke prerequisite. Reader Phases 0–3 are accepted.
-- Current slice: [Phase 4](phases/phase-4-live-generation-observation.md),
-  selected-reader live output, exact terminal reconciliation and effects separation.
-  Phase 3 browser/fault controls and both final aggregate gates passed.
-  The public rollout default remains disabled until Phase 5.
+  accepted smoke prerequisite. Reader Phases 0–4 are accepted.
+- Current slice: [Phase 5](phases/phase-5-verification-and-rollout.md),
+  final combined acceptance, default activation, conservative fallback and guides.
+  Phase 4's five browser journeys, six production faults/restored controls and
+  both final aggregate gates passed. The public default is still disabled;
+  Phase 5 applies the already-authorized default-enabled rollout.
 - Production behavior: conservative writer flow remains the default. Additive
   ownership metadata/preconditions are available; connected readers are not
   publicly enabled.
@@ -30,7 +31,7 @@ active [phase](phases/README.md) for detailed execution instructions.
 | [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.               |
 | [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Accepted | Reader/browser/fault controls, final test:agent and all 13 test:all lanes passed.                    |
 | [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Accepted | Projection review, UI switching/setup/durable-generation browser faults and both phase gates passed. |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending  | Streaming continuity; observers execute no writer-only actions or effects.                           |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Accepted | Five browser journeys, six qualified faults/restored controls and both final phase gates passed.     |
 | [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.                       |
 
 ## Verification Ledger
@@ -724,3 +725,199 @@ current reattach consumes presentation before checking the stream descriptor,
 but a focused reproduction is still required before calling it a demonstrated
 defect. The public feature remains disabled. Smoke Phases 3–4 remain pending
 until reader Phase 5's completed-feature handoff.
+
+## Phase 4 Implementation — 2026-09-07
+
+Prerequisite: Phase 3 accepted in `e075d3f64`. Four independent read-only Luna
+reviews were reconciled against actual transport, presentation, effects and
+browser owners. Permanent readers use a separate viewing path; the writer
+reattach coordinator retains its existing recovery/effect ownership. Public
+activation stays disabled.
+
+- `8812e9895` adds authenticated GET-only stream observation with immutable
+  lineage/operation/attempt/job checks, replay-aware parsing, verified job-only
+  registry wrappers, exact terminal snapshot references and bounded auth/open/
+  read/snapshot waits. All 54 focused transport tests pass. It never sends a
+  writer header, cancellation, generation submission or completion effect.
+- `70ec31f64` fixes the now-reproduced missing-descriptor reattach gap. The
+  pre-fix test used the actual protocol/descriptor helpers: presented eligibility
+  disappeared, the authoritative job remained, no refresh ran and the lifecycle
+  stayed retrying. Descriptor validation now precedes consumption, with one
+  bounded status/bootstrap probe, retained recovery eligibility, no unchanged
+  metadata loop and stale replacement/lineage fences. All 49 reattach tests pass.
+- `6bcd8ce9c` adds reader-owned send/Continue/regenerate presentation, stable
+  operation/attempt and target row keys, explicit isolation from writer display
+  stores, localized interruption status, scoped lifecycle/Refresh and safe
+  partial copy. The 22 mounted reader, eight identity and six existing startup
+  tests pass. Stream rows remain outside canonical messages and retained drafts.
+- `fc5f03ea7` adds selected-chat discovery, one viewer/request/probe timer,
+  bounded EOF/read retries, hidden/offline/session teardown and exact terminal
+  hydration. Thirty-three coordinator tests cover stale reads, missing and
+  replaced descriptors, command-before-terminal, newer already-terminal attempts,
+  half-stream replay, Continue bases, finalization and current auth loss.
+  Exact generation-suffix reads support targets outside the initial window and
+  preserve certified prefixes/omitted Hypa state. All 89 hydration tests pass;
+  aborted non-cooperative reads promptly release ownership for a new read.
+
+Independent coordinator review identified and fixed a terminal newer-attempt
+handoff, incomplete new-operation replacement and a stale false-hydration
+continuation. Root review also fenced older active bootstrap responses after a
+newer terminal frame and added target-specific hydration. The final combined
+coordinator/hydration run passes 122 tests. Initial integration typechecks found
+two test typing errors, both corrected. Final Svelte check reports zero errors
+and warnings; protocol/shared-core/Fastify/browser typechecks pass.
+
+The architecture check detected two new endpoint strings in the browser
+read-only allowlist. `33ad31c87` records those reviewed test-only markers (20 →
+22); production aggregate consumers/bridges remain zero and fixture compatibility
+references remain 4,274. No owner policy or runtime allowance changed.
+
+`586ad4591` drafts four independent real-browser journeys: same-owner partial
+and terminal viewing, chat-switch/close/reopen detachment, streaming/stopping
+role transfers and cancelled partial, and queued-finalization transfer/recovery.
+`1dc49b259` and `b8e4f5970` add a read-only session snapshot to classify each
+fetch at dispatch, distinguish authorized recovery from ordinary mutation
+readiness and retain the actual 409 confirmation handshake. The production
+writer session/epoch is independently checked against SQL.
+
+The first four-case browser baseline at `a45fa4b39` built successfully but all
+four cases failed (`/tmp/reader-phase4-browser-baseline-i9vgys8x`). The first two
+completed their visible partial/final or chat-switch prerequisites before an
+overly strict assertion rejected the existing read-only display-sources POST
+identity header. The third reached actual writer transfer and exposed a Stop
+TypeError when bootstrapped operation authority had no local cancellation row.
+`3ab2f74fb` fixes the optional row access; the pre-fix regression reproduced it
+and all 29 operation tests pass. `7188599b3` corrects the request classification,
+retains the genuine confirmation handshake, and checks cancellation across all
+non-read methods. The earlier Phase 3 durable-detach negative was independently
+re-audited across all recorded API methods: no cancellation request occurred.
+
+The fourth browser case reached a real queued finalization journal, transferred
+the writer and committed one result, but its configured IGP effect was skipped.
+A focused server regression proved the full settings read retained `igpPrompt`
+while the narrow advanced read omitted it. `2c44274ac` exposes that retained
+configuration through the read-only advanced projection without adding generic
+write ownership, waits for scoped generation resources before recovered effect
+claims, and supplies that resource view to the IGP request. The 110 frontend
+and 49 server focused tests pass; Svelte reports zero errors/warnings and all
+server/browser/architecture checks pass, with 4,274 fixture references unchanged.
+
+An additional source review identified an independent persistence gap: an IGP
+message PATCH could commit before writer loss suppressed its separate effect
+receipt. The next writer could reclaim the lease and append again. A real route
+regression now reproduces two suffixes and an extra revision in
+`/tmp/phase4-igp-server-red.log`. `a5acf1883` now completes the exact unexpired IGP claim in the message command
+transaction, checking lineage, character/chat/message and stored generation
+identity. Message/effect failures roll back together; a later same-claim completed
+receipt acknowledges the existing result. All 56 focused server tests pass,
+including the red ordering, command replay, stale authority, rollback and legacy
+compatibility. `6859f2096` carries that claim through both live and recovered IGP
+into the frozen durable command, with no claim for legacy or unrelated effects.
+All 432 focused client tests, 27 route-backed send tests and Svelte checking
+(zero errors/warnings) pass.
+
+The fifth browser journey holding the accepted PATCH response is drafted. Final
+clean-build baseline, production-fault/restored evidence and both aggregate
+gates remain pending. None of the initial four failed cases is counted as a pass.
+
+The five-case baseline at `aee6815c3` built in 12.94s and passed S84–S86,
+including Reader close/reopen and both streaming/stopping role transfers.
+S87 completed its queued transfer, canonical result and configured IGP effect,
+but the Reader Refresh click was blocked by the exact deliberately injected
+storage-error alert. Source review shows the still-current writer reports that
+queued terminal failure; the corrected journey will explicitly assert and
+acknowledge that error through OK before transfer, retaining the same queued
+journal and all recovery oracles.
+
+S88 reached a real accepted IGP PATCH and atomic completed receipt, but appended
+`Request settings are not ready.` instead of the configured output. Live IGP
+had not passed the request-scoped settings view, and failed provider results
+were treated as appendable text. Two focused tests reproduced those separate
+failures before fixing the live caller and rejecting failed request results.
+The four final focused suites pass 63 tests. Evidence and exact gate/alert
+snapshots are under `/tmp/reader-phase4-five-baseline-utchvix2`; this run remains
+3/5, and no production fault has yet run.
+
+`25764dced` commits the live IGP correction. The next baseline at `b56d9275e`
+passes S84–S87 (4/5 in 46.9s). S88 now has the correct real echo request,
+appended suffix and atomic completed IGP receipt, but its held-state assertion
+incorrectly expected TTS to remain pending. The live terminal settles TTS as
+`skipped/live_terminal/not_requested` before plugin output and IGP; this is the
+observed, source-backed behavior. The browser correction retains that exact TTS
+receipt unchanged across transfers. `/tmp/reader-phase4-final-five-baseline-gg4d0il3`
+preserves the 4/5 result and gate evidence; it is not final acceptance.
+
+### Phase 4 Final Browser Baseline — 2026-09-07
+
+At `40b3eb516`, the final clean build passes in 14.88s and all five unchanged
+browser cases pass in 49.2s. Every case has a nonempty role audit, no page errors
+and no forbidden Reader calls. S88 completes A→B, late original PATCH response,
+B→A and Reader Refresh with one real IGP completion request, one PATCH transport,
+one granted claim plus a harmless recovery probe, one suffix/message.updated
+and the same completed live-terminal IGP receipt throughout. Earlier 0/4, 3/5
+and 4/5 runs remain recorded with their exact causes and source limits.
+
+The baseline artifact is `/tmp/reader-phase4-five-baseline-final-hr9fcca2`.
+All 1,322 successful script URLs match the frozen 503-file emission catalog;
+source inputs are unchanged throughout. This is URL-to-emission attribution,
+not an independent hash of downloaded script response bytes. Six declared
+production-fault controls and final restoration, then phase-ending agent/full
+suite verification, remain pending. The feature remains disabled by default.
+
+### Phase 4 Fault Controls and Aggregate Verification — 2026-09-08
+
+All six exact production-fault negatives at `40b3eb516` qualify: missing Reader
+partial, missing canonical publication, retained detached viewer, the reproduced
+promoted Stop exception, omitted configured IGP read and missing atomic IGP
+receipt. Their unchanged browser oracles fail after their declared prerequisites;
+downstream actions not reached are explicitly excluded. Source is restored
+byte-for-byte between every fault. Full protocol, literal hunks, SHA-256 values,
+branch/chunk/trace/SQL evidence and precise results are in the
+[smoke findings](../browser-smoke-effectiveness/findings.md#reader-phase-4-production-fault-evidence).
+
+The final clean restored build passes in 12.32s and the same five cases pass
+in 51.1s. All frozen main/lab inputs match; the lab is clean, emitted scripts
+contain no fault markers, and no browser/build job remains running. All five
+have nonempty Reader audits with no forbidden calls or page errors. The final
+atomic IGP case again completes A→B, late original response, B→A and Refresh
+with one provider effect, one append and unchanged receipt state. The manifest
+is `/tmp/reader-phase4-fault-campaign-p0d1439n/campaign-summary.json`.
+
+Implementation and self-review are complete. Current documentation validation
+passes all 49 guides, explicit validation passes all 22 plan/index documents,
+and Playwright discovery confirms 88 cases in 21 specs. Changed Markdown is
+formatted and whitespace checks pass. The required phase-ending
+`pnpm test:agent` and `pnpm test:all` are the remaining acceptance gates. The public flag stays disabled until the
+Phase 5 rollout work and evidence are complete.
+
+`pnpm test:agent` passes at `40b3eb516` plus these evidence documents in
+2m 34.9s: 712 frontend suites / 9,045 passed tests (three existing skips),
+223 server suites / 4,222 passed tests (two existing skips), zero Svelte
+errors/warnings, server/browser types, topology, current documentation and
+smoke build. Log: `/tmp/reader-phase4-final-test-agent.log`. The required
+`pnpm test:all` is running at that implementation; Phase 4 remains pending its
+result before the Phase 5 handoff.
+
+### Phase 4 Acceptance and Phase 5 Handoff — 2026-09-08
+
+Final implementation: `40b3eb516`, with the six evidence documents committed
+with this acceptance. `pnpm test:all` passes all 13 lanes in **6m 4.9s**,
+including **88/88 browser cases in 3.1m** (3m 19.2s including build/runner),
+current compatibility, UI coverage, Realm scale and frontend performance.
+S22's full input/remount case passes in 44.7s. The existing three frontend/two
+server skips and deliberately filtered scale/performance lanes retain their
+stated scope; no new skip or exclusion was added. Physical devices, other
+browser engines and the separate pinned compatibility lane are not claimed.
+Log: `/tmp/reader-phase4-final-test-all.log`.
+
+Current documentation (49) and the explicit coordination/index/bundle check
+(22) pass, with Markdown formatting and whitespace checks. The final five-case
+baseline and restored controls remain tied to their frozen inputs and six
+qualified negatives in the linked smoke findings.
+
+**Phase 4 accepted.** Phase 5 now owns default-enabled startup, simultaneous
+readers, combined lifecycle/security/operational evidence, fallback preserving
+local work, and current guide updates. Read-only preparation has identified
+fixture ownership and evidence gaps; it does not establish rollout acceptance.
+The public flag stays disabled until Phase 5 applies the authorized default and
+verifies it. Smoke Phases 3–4 remain pending until the completed reader handoff.

@@ -12,4 +12,4 @@ It owns the execution order and handoffs; each plan's status file owns progress.
 | Plan                        | State                                           | Entry point                                                                                            |
 | --------------------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | Browser smoke effectiveness | Phases 0–2 accepted; awaiting reader completion | [Plan](browser-smoke-effectiveness/PLAN.md), [execution status](browser-smoke-effectiveness/status.md) |
-| Connected read-only clients | Phases 0–3 accepted; Phase 4 ready              | [Plan](connected-read-only-clients/PLAN.md), [execution status](connected-read-only-clients/status.md) |
+| Connected read-only clients | Phases 0–4 accepted; Phase 5 next               | [Plan](connected-read-only-clients/PLAN.md), [execution status](connected-read-only-clients/status.md) |

@@ -299,3 +299,22 @@ Reader Phase 3 is accepted: `pnpm test:agent` passed in 2m 31.9s and all 13
 `pnpm test:all` lanes passed in 5m 54.3s at `7c3da2160` plus its evidence docs,
 including all 83 browser cases. The public flag remains disabled. Phase 4 now
 adds live viewing; the smoke workstream continues to wait for reader Phase 5.
+
+Reader Phase 4 adds S84–S88 and `connectedGenerationHarness.ts` at
+`40b3eb516`, bringing the source universe to 88 cases, 21 specs and eleven
+local TypeScript support owners. Its final five-case baseline passes in 49.2s
+with no page errors or forbidden Reader calls. Earlier failed baselines remain
+in the reader ledger with their production defects and test-contract causes.
+The [inventory](inventory.md#reader-phase-4-smoke-reconciliation) classifies the
+real provider, queued journal, response gate, per-dispatch role audit and
+SQLite/DOM oracles. All six declared production-fault controls qualify and the shared
+restored five-case run passes in 51.1s, recorded in [findings](findings.md#reader-phase-4-production-fault-evidence).
+Reader Phase 4's aggregate gates and Phase 5 rollout remain pending; the smoke
+workstream has not advanced to Phase 3.
+
+Reader Phase 4 is accepted at `40b3eb516` plus its six evidence documents:
+`pnpm test:agent` passes in 2m 34.9s and all 13 `pnpm test:all` lanes pass in
+6m 4.9s, including all 88 browser cases. The five new journeys have complete
+baseline, six qualified negative controls and a clean five-case restored run.
+Phase 5 now owns final activation and combined acceptance; public default is
+still disabled. Resume the remaining smoke review only after that handoff.
