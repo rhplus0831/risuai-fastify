@@ -329,6 +329,10 @@ let connectedWriterPromotion: {
   controller: AbortController
   promise: Promise<ConnectedWriterPromotionResult>
 } | null = null
+let connectedInitializationDecision: {
+  operation: ClientSessionOperation
+  controller: AbortController
+} | null = null
 
 setActiveGenerationReattachReadinessPredicate(
   () => startupChatReattachReady && startupGenerationRecoveryReady && isPluginRuntimeReady(),
@@ -393,6 +397,7 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
         },
         onCoherentReadView: (runtime, operation) =>
           installConnectedReaderProjection(runtime, operation.generation, { subscribe: false }),
+        onInitializationRequired: confirmConnectedServerInitialization,
       })
       if (startup.role === 'reader') {
         await installConnectedReaderProjection(startup.runtime, startup.operation.generation)
@@ -570,6 +575,29 @@ async function recoverConnectedWriter(
   restoreStartupWriterCapabilities()
 }
 
+/** An empty server needs an explicit action when this page cannot establish exclusivity. */
+async function confirmConnectedServerInitialization(operation: ClientSessionOperation): Promise<boolean> {
+  if (!isClientSessionOperationCurrent(operation)) return false
+  const controller = new AbortController()
+  const decision = { operation, controller }
+  connectedInitializationDecision = decision
+  const stop = clientSessionStore.subscribe(() => {
+    if (!isClientSessionOperationCurrent(operation)) controller.abort()
+  })
+  try {
+    const selection = await alertRequiredSelect(
+      [language.connectedReaders.setupThisServer],
+      language.connectedReaders.setupServerBody,
+      language.connectedReaders.setupServerTitle,
+      { signal: controller.signal },
+    )
+    return selection === '0' && !controller.signal.aborted && isClientSessionOperationCurrent(operation)
+  } finally {
+    stop()
+    if (connectedInitializationDecision === decision) connectedInitializationDecision = null
+  }
+}
+
 /** Reader re-entry never performs acquisition or touches dormant local intent. */
 function refreshConnectedReader(): Promise<void> {
   const generation = captureClientSessionGeneration()
@@ -658,6 +686,7 @@ function installConnectedSessionLifecycle(): void {
       else if (state.lifecycle === 'reading' && !connectedReaderSync) void refreshConnectedReader()
     }
     const pageHide = () => {
+      if (getClientSessionSnapshot().lifecycle === 'resolving') demoteClientSession()
       setClientConnectionState('interrupted')
       stopFailedWriterPromotionRuntimes()
       connectedReaderSync?.stop()
@@ -971,6 +1000,11 @@ function stopFailedWriterPromotionRuntimes(): void {
 export function stopConnectedClientServices(): void {
   stopConnectedSessionLifecycle?.()
   stopConnectedSessionLifecycle = null
+  if (connectedInitializationDecision) {
+    connectedInitializationDecision.controller.abort()
+    failClientSessionOperation(connectedInitializationDecision.operation)
+    connectedInitializationDecision = null
+  }
   if (connectedWriterPromotion) {
     connectedWriterPromotion.controller.abort()
     if (isClientSessionGenerationCurrent(connectedWriterPromotion.operation.generation)) {

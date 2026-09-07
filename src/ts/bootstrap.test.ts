@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
 const readerApi = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), retry: vi.fn() }))
+const identityApi = vi.hoisted(() => ({ exclusive: true }))
 
 const bootstrapApi = vi.hoisted(() => ({
   fetch: vi.fn(),
@@ -174,7 +175,7 @@ vi.mock('./observerProjectionLifecycle', () => ({
 vi.mock('./server/connectedTabIdentity', () => ({
   resolveConnectedTabIdentity: async () => ({
     sessionId: getActiveWriterSessionId(),
-    exclusive: true,
+    exclusive: identityApi.exclusive,
     previousSessionId: null,
   }),
   releaseConnectedTabIdentity: vi.fn(),
@@ -522,6 +523,7 @@ function seedResourceDatabase() {
 beforeEach(() => {
   stopConnectedClientServices()
   resetWriterAccessLostForTests()
+  identityApi.exclusive = true
   __observerShellFlagTestHooks.setOverride(false)
   resetObserverShellLifecycleForTests()
   resetStartupReadinessForTests()
@@ -5847,6 +5849,87 @@ describe('explicit connected writer switching', () => {
     observeClientWriter(writer)
     return writer
   }
+
+  it('waits for explicit setup before acquiring an empty server without exclusive tab identity', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    identityApi.exclusive = false
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({
+        initialized: false,
+        requestedWriterWasActive: false,
+        writerEpoch: 0,
+        writer: { sessionId: null, epoch: 0 },
+      }),
+    )
+    bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap({ initialized: false, requestedWriterWasActive: false }))
+    const setup = deferred<string>()
+    vi.mocked(alertRequiredSelect).mockImplementationOnce(() => setup.promise)
+    const loading = loadData()
+    await vi.waitFor(() => expect(alertRequiredSelect).toHaveBeenCalledOnce())
+    expect(alertRequiredSelect).toHaveBeenCalledWith(
+      [language.connectedReaders.setupThisServer],
+      language.connectedReaders.setupServerBody,
+      language.connectedReaders.setupServerTitle,
+      { signal: expect.any(AbortSignal) },
+    )
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(commandApi.initialize).not.toHaveBeenCalled()
+    expect(readerApi.start).not.toHaveBeenCalled()
+    expect(canUseClientWriteAccess()).toBe(false)
+    expect(getClientSessionSnapshot().projectionReady).toBe(false)
+    setup.resolve('0')
+    await loading
+    expect(bootstrapApi.fetch).toHaveBeenCalledExactlyOnceWith(null, {
+      expectedWriter: { epoch: 0, databaseLineage: 'database-a' },
+    })
+    expect(commandApi.initialize).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.prepare).toHaveBeenCalledOnce()
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'writing',
+      projectionReady: true,
+      connection: 'live',
+    })
+  })
+
+  it('abandons a pending empty-server setup decision on pagehide', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    identityApi.exclusive = false
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ initialized: false, writerEpoch: 0, writer: { sessionId: null, epoch: 0 } }),
+    )
+    const setup = deferred<string>()
+    vi.mocked(alertRequiredSelect).mockImplementationOnce(() => setup.promise)
+    const loading = loadData()
+    await vi.waitFor(() => expect(alertRequiredSelect).toHaveBeenCalledOnce())
+    const signal = vi.mocked(alertRequiredSelect).mock.calls[0]![3]!.signal!
+    window.dispatchEvent(new Event('pagehide'))
+    expect(signal.aborted).toBe(true)
+    setup.resolve('0')
+    await loading
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(commandApi.initialize).not.toHaveBeenCalled()
+    expect(alertError).not.toHaveBeenCalled()
+    expect(canUseClientWriteAccess()).toBe(false)
+  })
+
+  it('cannot initialize from a late acquisition after setup pagehide', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    identityApi.exclusive = false
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ initialized: false, writerEpoch: 0, writer: { sessionId: null, epoch: 0 } }),
+    )
+    const acquisition = deferred<ReturnType<typeof runtimeBootstrap>>()
+    bootstrapApi.fetch.mockImplementationOnce(() => acquisition.promise)
+    const loading = loadData()
+    await vi.waitFor(() => expect(bootstrapApi.fetch).toHaveBeenCalledOnce())
+    window.dispatchEvent(new Event('pagehide'))
+    acquisition.resolve(runtimeBootstrap({ initialized: false }))
+    await loading
+    expect(commandApi.initialize).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    expect(alertError).not.toHaveBeenCalled()
+    expect(canUseClientWriteAccess()).toBe(false)
+  })
 
   it('shares one confirmed acquisition/recovery chain and keeps the chosen reader route', async () => {
     await startReader()
