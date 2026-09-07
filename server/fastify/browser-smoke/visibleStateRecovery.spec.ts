@@ -2,9 +2,11 @@ import { expect, test, type Page, type Response } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { buildApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
 import { setupBrowserSmokeAuth } from './auth.js'
+import { OBSERVER_SHELL_OVERRIDE_KEY, setObserverShellMode } from './fastBootstrapHarness.js'
 
 // DOM-oracle journeys for visible state. These drive real clicks in the real
 // Fastify-served browser, assert on rendered DOM (page.locator), and cross-check
@@ -14,9 +16,9 @@ import { setupBrowserSmokeAuth } from './auth.js'
 //     repaints the newly active chat's prompt preset id.
 //   - Journey 2 (settle): toggle a sidebar checkbox -> the flip survives the
 //     command + resource refresh (not just the optimistic paint).
-//   - Journey 3 (GATE): hold an old-lineage command, open the "character"
-//     sidebar tab, then import a full state replacement. The same route/history
-//     entry must retain the user's sidebar view through the recovery reload.
+//   - Journey 3 (GATE): retain the character sidebar across an old-lineage
+//     command and import: conservative startup reloads, while connected startup
+//     becomes a Reader in place and restores the view after Use this device.
 
 interface Harness {
   app: FastifyInstance
@@ -142,26 +144,16 @@ test('a sidebar toggle flip survives the command + resource refresh', async ({ p
   expect(stored, diagnostics()).toBe('0')
 })
 
-test('the same-character sidebar view survives old-lineage recovery after import', async ({ page }) => {
+test('conservative startup preserves the same-character sidebar view through old-lineage recovery reload', async ({
+  page,
+}) => {
   const diagnostics = attachDiagnostics(page)
-  await boot(page)
-  await openCharacter(page)
-
-  // Reach the chat route via a real row click so the route-application effect
-  // is the one driving store state (this is what the untrack fix guards).
-  await clickChatRow(page, 'chat-a')
-
-  // Switch the sidebar to the "character" tab.
-  const characterTab = page.locator('[data-risu-sidebar-tab="character"]').first()
-  await expect(characterTab).toBeVisible({ timeout: 15_000 })
-  await characterTab.click()
-  await expect
-    .poll(() => sidebarTabActive(page, 'character'), {
-      timeout: 10_000,
-      message: 'character sidebar tab did not become active',
-    })
-    .toBe(true)
-  await expect(page.locator('[data-risu-sidebar-panel="character"]').first()).toBeVisible()
+  await setObserverShellMode(page.context(), 'disabled')
+  await openCharacterSidebarForImport(page)
+  expect(await page.evaluate((key) => sessionStorage.getItem(key), OBSERVER_SHELL_OVERRIDE_KEY)).toBe('disabled')
+  expect(await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().managed)).toBe(
+    false,
+  )
 
   // Hold a real durable (lineage-tagged) command at the network boundary so the
   // import deterministically leaves old-lineage work in flight. Releasing it
@@ -234,7 +226,305 @@ test('the same-character sidebar view survives old-lineage recovery after import
   await expect(page.locator('[data-risu-sidebar-panel="character"]').first()).toBeVisible()
 })
 
+test('connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(90_000)
+  page.setDefaultTimeout(10_000)
+  const diagnostics = attachDiagnostics(page)
+  const traffic: Array<{
+    method: string
+    path: string
+    writerSession: string | null
+    observerSession: string | null
+    expectedWriterEpoch: string | null
+    expectedDatabaseLineage: string | null
+    disconnectExistingWriter: string | null
+    mutationId: string | null
+    databaseLineage: string | null
+    body: string | null
+  }> = []
+  const bootstraps: Array<{ writerSession: string | null; status: number; body: unknown }> = []
+  const bootstrapReads: Array<Promise<void>> = []
+  const documentResponses: Array<{ url: string; status: number }> = []
+  const evidence: Record<string, unknown> = {
+    mode: 'connected-default',
+    traffic,
+    bootstraps,
+    documentResponses,
+    importEventEvidence:
+      'The import response exposes state.imported. Consumption of its SSE event is inferred from source and subsequent ownership discovery; no raw SSE frame body is asserted.',
+  }
+  page.on('request', (request) => {
+    const url = new URL(request.url())
+    if (!url.pathname.startsWith('/api/')) return
+    const headers = request.headers()
+    traffic.push({
+      method: request.method(),
+      path: url.pathname,
+      writerSession: headers['risu-writer-session'] ?? null,
+      observerSession: headers['risu-writer-observer-session'] ?? null,
+      expectedWriterEpoch: headers['risu-expected-writer-epoch'] ?? null,
+      expectedDatabaseLineage: headers['risu-expected-database-lineage'] ?? null,
+      disconnectExistingWriter: headers['risu-disconnect-existing-writer'] ?? null,
+      mutationId: headers['risu-mutation-id'] ?? null,
+      databaseLineage: headers['risu-database-lineage'] ?? null,
+      body: request.method() === 'GET' ? null : request.postData(),
+    })
+  })
+  page.on('response', (response) => {
+    const request = response.request()
+    if (request.isNavigationRequest() && request.frame() === page.mainFrame()) {
+      documentResponses.push({ url: response.url(), status: response.status() })
+    }
+    if (new URL(response.url()).pathname === '/api/v1/bootstrap') {
+      bootstrapReads.push(
+        response
+          .json()
+          .then((body: unknown) => {
+            bootstraps.push({
+              writerSession: request.headers()['risu-writer-session'] ?? null,
+              status: response.status(),
+              body,
+            })
+          })
+          .catch(() => undefined),
+      )
+    }
+  })
+  let heldCommand: Awaited<ReturnType<typeof holdNextRuntimeSettingsCommand>> | undefined
+  try {
+    expect(importOwnershipSnapshot().ownership).toMatchObject({ active_writer_session_id: null, writer_epoch: 0 })
+    await openCharacterSidebarForImport(page)
+    const original = await page.evaluate(() => ({
+      role: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot(),
+      url: location.href,
+      timeOrigin: performance.timeOrigin,
+    }))
+    expect(original.role).toMatchObject({ managed: true, lifecycle: 'writing', recoveryAuthorized: false })
+    expect(original.role.sessionId).toMatch(/\S/u)
+    expect(await page.evaluate((key) => sessionStorage.getItem(key), OBSERVER_SHELL_OVERRIDE_KEY)).toBeNull()
+    const beforeImport = importOwnershipSnapshot()
+    expect(beforeImport.ownership).toMatchObject({ active_writer_session_id: original.role.sessionId, writer_epoch: 1 })
+    expect(beforeImport.ownership.lineage).toBe(original.role.databaseLineage)
+    evidence.original = {
+      ...original,
+      sql: beforeImport,
+      sidebarCharacterActive: await sidebarTabActive(page, 'character'),
+    }
+
+    heldCommand = await holdNextRuntimeSettingsCommand(page)
+    await page.evaluate(() => {
+      void window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: true })
+    })
+    await heldCommand.started
+    const heldRequest = traffic.filter((request) => request.path === '/api/v1/commands/settings/runtime').at(-1)!
+    expect(heldRequest).toMatchObject({
+      method: 'PATCH',
+      writerSession: original.role.sessionId,
+      databaseLineage: original.role.databaseLineage,
+      mutationId: expect.stringMatching(/\S/u),
+    })
+    expect(JSON.parse(heldRequest.body!)).toMatchObject({ patch: { streamGeminiThoughts: true } })
+    evidence.heldRequest = heldRequest
+    const importTrafficStart = traffic.length
+    const importedResponse = await importStateForResync(page)
+    evidence.import = { response: importedResponse }
+    expect(importedResponse.status, diagnostics()).toBe(200)
+    const imported = requireRevisionedResponseBody(importedResponse.body, 'RisuSave import')
+    expect(imported.databaseLineage).toMatch(/\S/u)
+    expect(imported.databaseLineage).not.toBe(beforeImport.ownership.lineage)
+    expect(importedResponse.body).toMatchObject({ event: { type: 'state.imported', revision: imported.revision } })
+    // Keep the old command held until the actual replacement projection is a
+    // coherent Reader. Its later conflict must respect the superseded writer
+    // generation, independent of response-versus-SSE scheduling races.
+    await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+      'Read only. Updates from the writer appear here.',
+      { timeout: 30_000 },
+    )
+    await expect(page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', 'chat-a')
+    await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
+    await expect(page.getByRole('button', { name: 'Open chat Chat B', exact: true })).toBeVisible()
+    await waitForAppliedResourceRevision(page, imported.revision)
+    const reader = await page.evaluate(() => ({
+      role: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot(),
+      url: location.href,
+      timeOrigin: performance.timeOrigin,
+      chatIds: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().characters[0]?.chats.map((chat) => chat.id),
+    }))
+    expect(reader).toMatchObject({
+      url: original.url,
+      timeOrigin: original.timeOrigin,
+      chatIds: ['chat-a', 'chat-b'],
+      role: {
+        managed: true,
+        lifecycle: 'reading',
+        databaseLineage: imported.databaseLineage,
+        sessionId: original.role.sessionId,
+        writer: { sessionId: original.role.sessionId, epoch: 1 },
+      },
+    })
+    const afterImport = importOwnershipSnapshot()
+    expect(afterImport.ownership).toEqual({ ...beforeImport.ownership, lineage: imported.databaseLineage })
+    expect(afterImport.revision).toBe(imported.revision)
+    evidence.readerBeforeOldResponse = { ...reader, sql: afterImport }
+    const conflictPromise = page.waitForResponse(isDatabaseLineageConflictResponse, { timeout: 20_000 })
+    heldCommand.release()
+    const conflict = await conflictPromise
+    const conflictBody: unknown = await conflict.json()
+    expect(conflictBody).toMatchObject({
+      error: 'database_lineage_conflict',
+      databaseLineage: imported.databaseLineage,
+    })
+    evidence.import = { response: importedResponse, conflictStatus: conflict.status(), conflictBody }
+    await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+      'Read only. Updates from the writer appear here.',
+    )
+    const readerTraffic = traffic.slice(importTrafficStart)
+    const readerDiscovery = readerTraffic.filter((request) => request.path === '/api/v1/bootstrap')
+    expect(readerDiscovery.length).toBeGreaterThan(0)
+    expect(
+      readerDiscovery.every(
+        (request) => request.writerSession === null && request.observerSession === original.role.sessionId,
+      ),
+    ).toBe(true)
+    expect(
+      readerTraffic
+        .filter((request) => request.path === '/api/v1/events')
+        .every((request) => request.writerSession === null),
+    ).toBe(true)
+    expect(readerTraffic.some((request) => request.path === '/api/v1/events')).toBe(true)
+    expect(readerTraffic.filter((request) => request.path.startsWith('/api/v1/commands/'))).toEqual([])
+    expect(readerTraffic.filter((request) => request.disconnectExistingWriter !== null)).toEqual([])
+    expect(documentResponses).toEqual([{ url: harness.baseUrl + '/', status: 200 }])
+    evidence.reader = { ...reader, sql: afterImport, traffic: readerTraffic }
+
+    const promotionTrafficStart = traffic.length
+    await page.getByRole('button', { name: 'Use this device', exact: true }).click()
+    await expect
+      .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot()), {
+        timeout: 30_000,
+      })
+      .toMatchObject({
+        managed: true,
+        lifecycle: 'writing',
+        databaseLineage: imported.databaseLineage,
+        sessionId: original.role.sessionId,
+        writer: { sessionId: original.role.sessionId, epoch: 1 },
+      })
+    await expect
+      .poll(() =>
+        page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
+      )
+      .toMatchObject({ canMutate: true, canGenerate: true })
+    await expect(page.getByTestId('default-chat-composer')).toBeEditable()
+    await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toHaveCount(0)
+    await expect
+      .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getLifecycleSnapshot()))
+      .toMatchObject({ outbox: [], receiptAcknowledgements: [] })
+    const afterPromotion = importOwnershipSnapshot()
+    expect(afterPromotion).toEqual(afterImport)
+    const promotionRequests = traffic.slice(promotionTrafficStart)
+    const acquisition = promotionRequests.filter(
+      (request) => request.path === '/api/v1/bootstrap' && request.writerSession !== null,
+    )
+    expect(acquisition).toEqual([
+      expect.objectContaining({
+        writerSession: original.role.sessionId,
+        expectedWriterEpoch: '1',
+        expectedDatabaseLineage: imported.databaseLineage,
+        disconnectExistingWriter: null,
+      }),
+    ])
+    expect(promotionRequests.filter((request) => request.disconnectExistingWriter !== null)).toEqual([])
+    await Promise.all(bootstrapReads)
+    const acquiredResponses = bootstraps.filter(
+      (response) =>
+        response.writerSession === original.role.sessionId &&
+        (response.body as { databaseLineage?: unknown } | null)?.databaseLineage === imported.databaseLineage,
+    )
+    expect(acquiredResponses).toEqual([
+      expect.objectContaining({
+        status: 200,
+        body: expect.objectContaining({
+          databaseLineage: imported.databaseLineage,
+          writer: { sessionId: original.role.sessionId, epoch: 1 },
+          requestedWriterWasActive: true,
+        }),
+      }),
+    ])
+    const final = await page.evaluate(() => ({
+      role: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot(),
+      url: location.href,
+      timeOrigin: performance.timeOrigin,
+    }))
+    evidence.afterPromotion = {
+      ...final,
+      sql: afterPromotion,
+      traffic: promotionRequests,
+      acquisitionResponses: acquiredResponses,
+      sidebarCharacterActive: await sidebarTabActive(page, 'character'),
+    }
+    expect(final).toMatchObject({ url: original.url, timeOrigin: original.timeOrigin })
+    expect(documentResponses).toHaveLength(1)
+    expect(await sidebarTabActive(page, 'character'), diagnostics()).toBe(true)
+    await expect(page.locator('[data-risu-sidebar-panel="character"]').first()).toBeVisible()
+  } finally {
+    heldCommand?.release()
+    await Promise.all(bootstrapReads)
+    evidence.terminalSql = importOwnershipSnapshot()
+    await testInfo.attach('connected-import-sidebar-recovery.json', {
+      body: JSON.stringify(evidence, null, 2),
+      contentType: 'application/json',
+    })
+  }
+})
+
 // --- helpers ---------------------------------------------------------------
+
+function importOwnershipSnapshot() {
+  const database = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+  try {
+    return {
+      ownership: database
+        .prepare('SELECT lineage, active_writer_session_id, writer_epoch FROM database_metadata WHERE id = 1')
+        .get() as { lineage: string; active_writer_session_id: string | null; writer_epoch: number },
+      revision: (database.prepare('SELECT revision FROM schema_version WHERE id = 1').get() as { revision: number })
+        .revision,
+      settings: database.prepare('SELECT data_json FROM settings WHERE id = 1').get(),
+      chats: database
+        .prepare('SELECT id, character_id, position, data_json FROM chats ORDER BY character_id, position')
+        .all(),
+      events: database
+        .prepare('SELECT revision, type, resource, origin_writer_session_id FROM command_events ORDER BY revision')
+        .all(),
+      receipts: database
+        .prepare(
+          'SELECT mutation_id, database_lineage, creator_writer_session_id, request_fingerprint, response_json FROM command_mutation_receipts ORDER BY mutation_id',
+        )
+        .all(),
+    }
+  } finally {
+    database.close()
+  }
+}
+
+async function openCharacterSidebarForImport(page: Page): Promise<void> {
+  await boot(page)
+  await openCharacter(page)
+  // Real row and tab clicks establish the route and the originating view.
+  await clickChatRow(page, 'chat-a')
+  const characterTab = page.locator('[data-risu-sidebar-tab="character"]').first()
+  await expect(characterTab).toBeVisible({ timeout: 15_000 })
+  await characterTab.click()
+  await expect
+    .poll(() => sidebarTabActive(page, 'character'), {
+      timeout: 10_000,
+      message: 'character sidebar tab did not become active',
+    })
+    .toBe(true)
+  await expect(page.locator('[data-risu-sidebar-panel="character"]').first()).toBeVisible()
+}
 
 function attachDiagnostics(page: Page): () => string {
   const lines: string[] = []
