@@ -350,3 +350,36 @@ describe('active writer browser session', () => {
     expect(reload).toHaveBeenCalledOnce()
   })
 })
+
+describe('managed writer recovery interaction', () => {
+  it('keeps connected reader controls available while recovering a lost writer', async () => {
+    const activeWriterSession = await importActiveWriterSession()
+    const session = await import('../clientSession')
+    const operation = session.beginClientSession('managed-client')
+    session.authorizeClientWriterRecovery(operation, {
+      databaseLineage: 'managed-lineage',
+      writer: { sessionId: 'managed-client', epoch: 1 },
+    })
+    session.setClientProjectionReady(true)
+    session.setClientConnectionState('live')
+    expect(session.completeClientWriterRecovery(operation)).toBe(true)
+    document.body.innerHTML = '<div id="app"><button>Read another chat</button></div>'
+    activeWriterSession.enterWriterTakeoverFlow()
+    expect(activeWriterSession.isWriterAccessLost()).toBe(true)
+    expect(session.canUseClientWriteAccess()).toBe(false)
+    const promotion = session.beginClientPromotion()!
+    expect(
+      session.authorizeClientWriterRecovery(promotion, {
+        databaseLineage: 'managed-lineage',
+        writer: { sessionId: 'managed-client', epoch: 2 },
+      }),
+    ).toBe(true)
+    expect(activeWriterSession.beginWriterAccessRecovery()).toBe(true)
+    expect(session.canUseClientWriteAccess()).toBe(false)
+    expect(session.canUseClientReadServices()).toBe(true)
+    expect(document.getElementById('app')?.classList.contains('risu-writer-takeover-pending')).toBe(false)
+    expect(takeoverMocks.alertRequiredSelect).not.toHaveBeenCalled()
+    activeWriterSession.completeWriterAccessRecovery(false)
+    expect(document.getElementById('app')?.classList.contains('risu-writer-takeover-pending')).toBe(false)
+  })
+})

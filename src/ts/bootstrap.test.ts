@@ -360,6 +360,7 @@ import {
   discardGenerationRecoveryStartup,
   loadData,
   loadWebInitialDatabase,
+  promoteConnectedReader,
   retryGenerationRecoveryStartup,
   retryObserverWriterPromotion,
   retryPluginStartup,
@@ -367,7 +368,13 @@ import {
   stopConnectedClientServices,
   stopServerResourceEvents,
 } from './bootstrap'
-import { getClientSessionSnapshot, setClientConnectionState } from './clientSession'
+import {
+  canUseClientWriteAccess,
+  clientSessionStore,
+  getClientSessionSnapshot,
+  observeClientWriter,
+  setClientConnectionState,
+} from './clientSession'
 import { loadPlugins, startPluginRuntimeSync } from './plugins/plugins.svelte'
 import { alertError, alertRequiredSelect, waitAlert } from './alert'
 import { language } from 'src/lang'
@@ -382,7 +389,7 @@ import {
   subscribeServerCommandLocalEffectApplied,
   withDirectServerCommandEventReconciliation,
 } from './server/commands'
-import { getActiveWriterSessionId } from './server/activeWriterSession'
+import { getActiveWriterSessionId, resetWriterAccessLostForTests } from './server/activeWriterSession'
 import { adoptReplacementDatabaseOwnership } from './server/replacementDatabaseOwnership'
 import {
   backgroundReady,
@@ -514,6 +521,7 @@ function seedResourceDatabase() {
 
 beforeEach(() => {
   stopConnectedClientServices()
+  resetWriterAccessLostForTests()
   __observerShellFlagTestHooks.setOverride(false)
   resetObserverShellLifecycleForTests()
   resetStartupReadinessForTests()
@@ -5809,5 +5817,371 @@ describe('global bootstrap error handlers', () => {
 
     expect(alertError).toHaveBeenNthCalledWith(1, error)
     expect(alertError).toHaveBeenNthCalledWith(2, 'useful rejection')
+  })
+})
+
+describe('explicit connected writer switching', () => {
+  function deferred<T>() {
+    let resolve!: (value: T) => void
+    const promise = new Promise<T>((finish) => {
+      resolve = finish
+    })
+    return { promise, resolve }
+  }
+
+  async function startReader() {
+    __observerShellFlagTestHooks.setOverride(true)
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writer: { sessionId: 'foreign-writer', epoch: 1 } }),
+    )
+    await loadData()
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } }),
+    )
+  }
+
+  function newerWriter() {
+    const writer = { sessionId: 'newer-writer', epoch: 3 }
+    bootstrapApi.fetchReadOnly.mockResolvedValue(runtimeBootstrap({ writer, writerEpoch: 3 }))
+    observeClientWriter(writer)
+    return writer
+  }
+
+  it('shares one confirmed acquisition/recovery chain and keeps the chosen reader route', async () => {
+    await startReader()
+    currentRoute.set({ kind: 'character', path: '/character/char-a/chat-a', chaId: 'char-a', chatId: 'chat-a' })
+    const held = deferred<{ status: 'ok'; revision: number; scope: 'shell' }>()
+    resourceApi.loadInitial.mockImplementationOnce(() => held.promise)
+    bootstrapApi.fetch.mockResolvedValueOnce({ status: 'active-writer-connected', error: 'active_writer_connected' })
+    const switching = promoteConnectedReader()
+    expect(promoteConnectedReader()).toBe(switching)
+    await vi.waitFor(() => expect(resourceApi.loadInitial).toHaveBeenCalledTimes(2))
+    expect(promoteConnectedReader()).toBe(switching)
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'recovering-writer', projectionReady: true })
+    expect(canUseClientWriteAccess()).toBe(false)
+    expect(readerApi.start).toHaveBeenCalledTimes(2)
+    expect(bootstrapApi.fetch).toHaveBeenNthCalledWith(1, expect.any(AbortSignal), {
+      expectedWriter: { epoch: 1, databaseLineage: 'database-a' },
+    })
+    expect(bootstrapApi.fetch).toHaveBeenNthCalledWith(2, expect.any(AbortSignal), {
+      expectedWriter: { epoch: 1, databaseLineage: 'database-a' },
+      disconnectExistingWriter: true,
+    })
+    expect(alertRequiredSelect).toHaveBeenCalledWith(
+      [language.writerConnectDisconnectExisting, language.cancel],
+      language.writerConnectConflictBody,
+      language.writerConnectConflictTitle,
+      { signal: expect.any(AbortSignal) },
+    )
+    held.resolve({ status: 'ok', revision: 9, scope: 'shell' })
+    await expect(switching).resolves.toEqual({ status: 'promoted' })
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'writing',
+      connection: 'live',
+      writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+    })
+    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
+    expect(get(currentRoute)).toMatchObject({ chaId: 'char-a', chatId: 'chat-a' })
+    expect(pendingMutationApi.readOwner).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.flushAcknowledgements).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+    expect(eventApi.subscribe).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.prepare.mock.invocationCallOrder[0]).toBeLessThan(
+      pendingMutationApi.flushAcknowledgements.mock.invocationCallOrder[0]!,
+    )
+    expect(pendingMutationApi.flushAcknowledgements.mock.invocationCallOrder[0]).toBeLessThan(
+      pendingMutationApi.replay.mock.invocationCallOrder[0]!,
+    )
+    expect(pendingMutationApi.replay.mock.invocationCallOrder[0]).toBeLessThan(
+      resourceApi.loadInitial.mock.invocationCallOrder[1]!,
+    )
+    expect(resourceApi.loadInitial.mock.invocationCallOrder[1]).toBeLessThan(
+      eventApi.subscribe.mock.invocationCallOrder[0]!,
+    )
+  })
+
+  it('cancels without takeover, replay, or blocking a fresh reader subscription', async () => {
+    await startReader()
+    bootstrapApi.fetch.mockResolvedValueOnce({ status: 'active-writer-connected', error: 'active_writer_connected' })
+    vi.mocked(alertRequiredSelect).mockResolvedValueOnce('1')
+    await expect(promoteConnectedReader()).resolves.toEqual({ status: 'cancelled' })
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledTimes(3))
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'reading',
+      projectionReady: true,
+      connection: 'live',
+    })
+    expect(canUseClientWriteAccess()).toBe(false)
+  })
+
+  it('aborts its own confirmation when a newer writer wins and ignores a late confirm', async () => {
+    await startReader()
+    bootstrapApi.fetch.mockResolvedValueOnce({ status: 'active-writer-connected', error: 'active_writer_connected' })
+    const selection = deferred<string>()
+    vi.mocked(alertRequiredSelect).mockImplementationOnce(() => selection.promise)
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(alertRequiredSelect).toHaveBeenCalledOnce())
+    const signal = vi.mocked(alertRequiredSelect).mock.calls[0]![3]!.signal!
+    newerWriter()
+    expect(signal.aborted).toBe(true)
+    selection.resolve('0')
+    await expect(switching).resolves.toEqual({ status: 'superseded' })
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+  })
+
+  it('rejects a held acquisition success after a later writer without applying its bootstrap', async () => {
+    await startReader()
+    const acquisition = deferred<ReturnType<typeof runtimeBootstrap>>()
+    bootstrapApi.fetch.mockImplementationOnce(() => acquisition.promise)
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(bootstrapApi.fetch).toHaveBeenCalledOnce())
+    const writer = newerWriter()
+    acquisition.resolve(
+      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } }),
+    )
+    await expect(switching).resolves.toEqual({ status: 'superseded' })
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    expect(eventApi.subscribe).not.toHaveBeenCalled()
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', writer })
+  })
+
+  it.each(['prepare', 'receipt', 'replay', 'hydration', 'events'] as const)(
+    'does not continue writer work after supersession during %s',
+    async (phase) => {
+      await startReader()
+      const held = deferred<unknown>()
+      const step =
+        phase === 'prepare'
+          ? pendingMutationApi.prepare
+          : phase === 'receipt'
+            ? pendingMutationApi.flushAcknowledgements
+            : phase === 'replay'
+              ? pendingMutationApi.replay
+              : phase === 'hydration'
+                ? resourceApi.loadInitial
+                : eventApi.subscribe
+      const oldCount = step.mock.calls.length
+      step.mockImplementationOnce(() => held.promise)
+      const switching = promoteConnectedReader()
+      await vi.waitFor(() => expect(step).toHaveBeenCalledTimes(oldCount + 1))
+      expect(canUseClientWriteAccess()).toBe(false)
+      newerWriter()
+      held.resolve(
+        phase === 'prepare'
+          ? { discarded: 0 }
+          : phase === 'receipt'
+            ? undefined
+            : phase === 'replay'
+              ? { attempted: 0, discarded: 0, retained: 0, succeeded: 0 }
+              : phase === 'hydration'
+                ? { status: 'ok', revision: 7, scope: 'shell' }
+                : { status: 'ok', unsubscribe: eventApi.unsubscribe },
+      )
+      await expect(switching).resolves.toEqual({ status: 'superseded' })
+      expect(canUseClientWriteAccess()).toBe(false)
+      expect(loadPlugins).not.toHaveBeenCalled()
+      expect(recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+      if (phase === 'prepare') expect(pendingMutationApi.flushAcknowledgements).not.toHaveBeenCalled()
+      if (phase === 'prepare' || phase === 'receipt') expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+      if (phase !== 'events') expect(eventApi.subscribe).not.toHaveBeenCalled()
+      else expect(eventApi.unsubscribe).toHaveBeenCalled()
+      await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+      expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+    },
+  )
+
+  it.each(['retained', 'unreadable'] as const)(
+    'preserves %s recovery work while returning to a usable reader',
+    async (reason) => {
+      await startReader()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      if (reason === 'retained')
+        pendingMutationApi.replay.mockResolvedValueOnce({ attempted: 1, discarded: 0, retained: 1, succeeded: 0 })
+      else pendingMutationApi.count.mockResolvedValueOnce(null)
+      bootstrapApi.fetchReadOnly.mockResolvedValue(
+        runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } }),
+      )
+      await expect(promoteConnectedReader()).resolves.toEqual({ status: 'failed', reason: 'retained-work' })
+      await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledTimes(3))
+      expect(getClientSessionSnapshot()).toMatchObject({
+        lifecycle: 'reading',
+        projectionReady: true,
+        connection: 'live',
+      })
+      expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+      expect(pendingMutationApi.prepare).toHaveBeenCalledOnce()
+      expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+      expect(ownershipApi.discard).not.toHaveBeenCalled()
+      expect(loadPlugins).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['replay-unavailable', 'unavailable'] as const)(
+    'cannot inherit reader connection readiness when the writer subscription is %s',
+    async (status) => {
+      await startReader()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const refresh = deferred<{ status: 'ok'; revision: number }>()
+      resourceApi.forceRefresh.mockImplementationOnce(() => refresh.promise)
+      resourceApi.forceReplacement.mockImplementationOnce(() => refresh.promise)
+      eventApi.subscribe.mockResolvedValueOnce(
+        status === 'replay-unavailable' ? { status, currentRevision: 12 } : { status },
+      )
+      const acquired = runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } })
+      bootstrapApi.fetch.mockImplementationOnce(async () => {
+        bootstrapApi.fetchReadOnly.mockResolvedValue(acquired)
+        return acquired
+      })
+      const lifecycles: string[] = []
+      const stop = clientSessionStore.subscribe((state) => lifecycles.push(state.lifecycle))
+      try {
+        await expect(promoteConnectedReader()).resolves.toEqual({ status: 'failed', reason: 'unavailable' })
+        expect(lifecycles).not.toContain('writing')
+        expect(canUseClientWriteAccess()).toBe(false)
+        expect(loadPlugins).not.toHaveBeenCalled()
+        await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+        expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+        expect(eventApi.subscribe).toHaveBeenCalledOnce()
+      } finally {
+        refresh.resolve({ status: 'ok', revision: 12 })
+        stop()
+      }
+    },
+  )
+
+  it('does not automatically reacquire after the conditional server check loses a race', async () => {
+    await startReader()
+    bootstrapApi.fetch.mockResolvedValueOnce({ status: 'error', error: 'active_writer_changed', httpStatus: 409 })
+    await expect(promoteConnectedReader()).resolves.toEqual({ status: 'failed', reason: 'unavailable' })
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledTimes(3))
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+  })
+
+  it('requires fresh explicit action after an interrupted confirmation', async () => {
+    await startReader()
+    bootstrapApi.fetch.mockResolvedValueOnce({ status: 'active-writer-connected', error: 'active_writer_connected' })
+    const selection = deferred<string>()
+    vi.mocked(alertRequiredSelect).mockImplementationOnce(() => selection.promise)
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(alertRequiredSelect).toHaveBeenCalledOnce())
+    window.dispatchEvent(new Event('offline'))
+    selection.resolve('0')
+    await expect(switching).resolves.toEqual({ status: 'failed', reason: 'interrupted' })
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+  })
+
+  it('clears a newly discovered lineage without claiming its writer', async () => {
+    await startReader()
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({
+        databaseLineage: 'database-b',
+        writerEpoch: 0,
+        writer: { sessionId: 'replacement-writer', epoch: 0 },
+      }),
+    )
+    await expect(promoteConnectedReader()).resolves.toEqual({ status: 'superseded' })
+    await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+    expect(projectionLifecycleApi.discard).toHaveBeenCalledWith('lineage-change')
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', databaseLineage: 'database-b' })
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+  })
+
+  it('does not let an older held result demote a later successful explicit switch', async () => {
+    await startReader()
+    const oldAcquisition = deferred<ReturnType<typeof runtimeBootstrap>>()
+    bootstrapApi.fetch.mockImplementationOnce(() => oldAcquisition.promise)
+    const oldSwitch = promoteConnectedReader()
+    await vi.waitFor(() => expect(bootstrapApi.fetch).toHaveBeenCalledOnce())
+    newerWriter()
+    await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({
+        writerEpoch: 4,
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 4 },
+      }),
+    )
+    const newSwitch = promoteConnectedReader()
+    expect(newSwitch).not.toBe(oldSwitch)
+    await expect(newSwitch).resolves.toEqual({ status: 'promoted' })
+    const generation = getClientSessionSnapshot().generation
+    oldAcquisition.resolve(
+      runtimeBootstrap({
+        writerEpoch: 2,
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+      }),
+    )
+    await expect(oldSwitch).resolves.toEqual({ status: 'superseded' })
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'writing',
+      generation,
+      writer: { sessionId: getActiveWriterSessionId(), epoch: 4 },
+    })
+    expect(canUseClientWriteAccess()).toBe(true)
+    expect(pendingMutationApi.prepare).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+  })
+
+  it('does not publish resources from a stale ownership discovery after demotion', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await loadData()
+    const writer = { sessionId: 'newer-writer', epoch: 3 }
+    bootstrapApi.fetchReadOnly
+      .mockResolvedValueOnce(runtimeBootstrap())
+      .mockResolvedValue(runtimeBootstrap({ writer, writerEpoch: 3 }))
+    eventApi.subscriptions[0]!.onWriterEvent!(writer)
+    await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('interrupted'))
+    expect(resourceApi.readAll).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledOnce(), { timeout: 3000 })
+    expect(resourceApi.readAll).toHaveBeenCalledOnce()
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live', writer })
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+  })
+
+  it('fences deferred services when teardown follows completed writer recovery', async () => {
+    await startReader()
+    const plugins = deferred<void>()
+    vi.mocked(loadPlugins).mockImplementationOnce(() => plugins.promise)
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(loadPlugins).toHaveBeenCalledOnce())
+    expect(getClientSessionSnapshot().lifecycle).toBe('writing')
+    const ownerStops = ownerMutationLifecycleApi.stop.mock.calls.length
+    stopConnectedClientServices()
+    expect(canUseClientWriteAccess()).toBe(false)
+    expect(ownerMutationLifecycleApi.stop.mock.calls.length).toBeGreaterThan(ownerStops)
+    plugins.resolve()
+    await expect(switching).resolves.toEqual({ status: 'superseded' })
+    expect(startPluginRuntimeSync).not.toHaveBeenCalled()
+    expect(recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+  })
+
+  it('tears down a held operation without allowing it to acquire afterward', async () => {
+    await startReader()
+    const discovery = deferred<ReturnType<typeof runtimeBootstrap>>()
+    bootstrapApi.fetchReadOnly.mockImplementationOnce(() => discovery.promise)
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(2))
+    stopConnectedClientServices()
+    discovery.resolve(runtimeBootstrap())
+    await expect(switching).resolves.toEqual({ status: 'superseded' })
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
   })
 })

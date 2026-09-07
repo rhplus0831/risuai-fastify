@@ -101,7 +101,7 @@ export function beginWriterAccessRecovery(): boolean {
   if (!writerAccessLost) return false
   invalidateResourceCacheWork()
   writerAccessLost = false
-  setWriterTakeoverInteractionBlocked(true)
+  setWriterTakeoverInteractionBlocked(!isClientSessionManaged())
   return true
 }
 
