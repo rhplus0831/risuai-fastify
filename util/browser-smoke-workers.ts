@@ -1,7 +1,9 @@
 import { availableParallelism } from 'node:os'
 
 const localWorkerUtilization = 0.75
-const localWorkerCeiling = 8
+// Each worker runs both Chromium and a Fastify/SQLite harness. Leave capacity
+// for those processes when the direct-link batches repeatedly boot the app.
+const localWorkerCeiling = 4
 
 export interface BrowserSmokeWorkerOptions {
   availableWorkers?: number

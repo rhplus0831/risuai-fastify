@@ -36,7 +36,7 @@ declare global {
 let harness: Harness
 let browserSmokeAssertion: string
 
-test.beforeAll(async () => {
+test.beforeEach(async () => {
   harness = await startHarness()
   browserSmokeAssertion = await setupBrowserSmokeAuth(harness.app)
   await importDatabase(harness.app, browserSmokeAssertion, browserSmokeDatabase())
@@ -119,7 +119,8 @@ function browserSmokeDatabase(includeDragFixtures = false): Record<string, unkno
   }
 }
 
-test.afterAll(async () => {
+test.afterEach(async ({ context }) => {
+  await context.close()
   await harness.app.close()
   rmSync(harness.dataDir, { recursive: true, force: true })
 })

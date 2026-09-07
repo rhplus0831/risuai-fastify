@@ -126,7 +126,7 @@ reason. Explicit suffixes and legacy registrations determine Svelte+Node and DOM
 ownership; other `*.test.ts` files default to Node. Use runner discovery for the
 current exact file distribution.
 
-Playwright keeps each spec serial, uses 75% of available local CPUs up to eight
+Playwright keeps each spec serial, uses 75% of available local CPUs up to four
 file workers (one in CI), retains traces on failure, and sets `forbidOnly` in CI. The normally skipped
 7,000-display-asset Realm stress case is enabled by running
 `realmImport.test.ts` directly. Broad frontend and backend coverage are

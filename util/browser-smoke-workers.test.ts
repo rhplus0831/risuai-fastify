@@ -6,8 +6,8 @@ describe('browser-smoke worker selection', () => {
     expect(resolveBrowserSmokeWorkers({ availableWorkers: 1, ci: false })).toBe(1)
     expect(resolveBrowserSmokeWorkers({ availableWorkers: 2, ci: false })).toBe(2)
     expect(resolveBrowserSmokeWorkers({ availableWorkers: 4, ci: false })).toBe(3)
-    expect(resolveBrowserSmokeWorkers({ availableWorkers: 10, ci: false })).toBe(8)
-    expect(resolveBrowserSmokeWorkers({ availableWorkers: 32, ci: false })).toBe(8)
+    expect(resolveBrowserSmokeWorkers({ availableWorkers: 10, ci: false })).toBe(4)
+    expect(resolveBrowserSmokeWorkers({ availableWorkers: 32, ci: false })).toBe(4)
   })
 
   it('keeps CI conservative unless an explicit override is supplied', () => {

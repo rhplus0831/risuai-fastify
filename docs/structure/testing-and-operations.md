@@ -169,7 +169,7 @@ preserves any failure in the final aggregate result. Set
 before the ordinary frontend lane starts. Browser smoke runs outside that pool and
 waits for `check:server` because declaration checking and the smoke build both
 use `dist/`; its stateful tests remain serial within each spec, while local runs
-use 75% of available CPUs up to eight workers. Set
+use 75% of available CPUs up to four workers. Set
 `RISU_BROWSER_SMOKE_WORKERS=<count>` for an explicit local or CI override; CI
 defaults to one worker. The direct-link owner is the narrow exception to
 file-serial execution: it divides the manifest-derived routes into four
@@ -236,7 +236,7 @@ test timeout, and
 sets `RISU_DIRECT_REALM_IMPORT_TEST` only when the Realm import test is directly
 selected. Playwright smoke keeps tests within each file serial except for the
 explicitly parallel direct-link batches. Local workers use 75% of
-available CPUs capped at eight, CI stays at one by default, and
+available CPUs capped at four, CI stays at one by default, and
 `RISU_BROWSER_SMOKE_WORKERS` overrides either choice. It retains Chromium traces
 on failure and rejects focused tests when CI is truthy.
 The frontend and server Vitest configs set `allowOnly: false`. Directly selecting
