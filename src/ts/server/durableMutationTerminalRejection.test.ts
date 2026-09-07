@@ -10,7 +10,8 @@ vi.mock('../storage/fastifyStorage', () => ({
 const recoveryApi = vi.hoisted(() => ({ scheduleReload: vi.fn() }))
 const activeWriterApi = vi.hoisted(() => ({ handleStale: vi.fn() }))
 const discardAlertApi = vi.hoisted(() => ({ alertError: vi.fn() }))
-vi.mock('./activeWriterSession', () => ({
+vi.mock('./activeWriterSession', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./activeWriterSession')>()),
   activeWriterSessionHeader: () => ({}),
   handleActiveWriterStaleResponse: activeWriterApi.handleStale,
   isWriterAccessLost: () => false,

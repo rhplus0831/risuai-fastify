@@ -1,4 +1,9 @@
 import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
+import {
   acknowledgeServerMutationReceipts,
   replayDurableMutationRequests,
   replayDurableMutationRequestsInline,
@@ -17,6 +22,7 @@ import {
   deletePendingMutationReceiptAcknowledgement,
   discardPendingMutation,
   isPendingMutationCurrent,
+  getPendingMutationHandleSessionGeneration,
   listPendingMutationPredecessors,
   listPendingMutationReceiptAcknowledgements,
   registerPendingMutationDiscardListener,
@@ -135,6 +141,7 @@ export function dispatchDurableMutation<T extends Record<string, unknown> = {}>(
   dispatch: (options: ServerCommandTransportOptions) => Promise<ServerCommandResult<T>>,
   options: DurableMutationDispatchOptions<T> = {},
 ): Promise<ServerCommandResult<T>> {
+  const generation = captureClientSessionGeneration()
   if (!handle.databaseLineage) {
     const executionWrapper: ServerCommandExecutionWrapper = (execute) =>
       withLocalPendingMutationLock(`risu:durable-mutation-unavailable:${handle.key}`, async () => {
@@ -166,16 +173,16 @@ export function dispatchDurableMutation<T extends Record<string, unknown> = {}>(
         }
         const shortCircuitResult = options.beforeExecuteResult?.()
         if (shortCircuitResult) {
-          settlement = await settleDurableMutation(handle, intent, shortCircuitResult)
+          settlement = await settleDurableMutation(handle, intent, shortCircuitResult, generation)
           return shortCircuitResult
         }
-        if (persistence === 'persisted' && !(await drainPendingMutationPredecessors(handle))) {
+        if (persistence === 'persisted' && !(await drainPendingMutationPredecessors(handle, generation))) {
           settlement = 'retained'
           return { status: 'unavailable' }
         }
         const result =
           persistence === 'unavailable' ? await runServerCommandWithoutMutationReceipt(execute) : await execute()
-        settlement = await settleDurableMutation(handle, intent, result)
+        settlement = await settleDurableMutation(handle, intent, result, generation)
         return result
       })
     } catch (error) {
@@ -211,6 +218,7 @@ export async function executePreparedDurableMutationWithinQueue<T extends Record
   input: PreparedDurableMutationExecutionInput,
   execute: () => Promise<ServerCommandResult<T>>,
 ): Promise<PreparedDurableMutationExecutionOutcome<T>> {
+  const generation = captureClientSessionGeneration()
   if (!input.handle.databaseLineage) {
     const result = await runServerCommandWithoutMutationReceipt(execute)
     return { disposition: 'sent', handle: input.handle, intent: input.intent, result, settlement: 'unavailable' }
@@ -309,7 +317,7 @@ export async function executePreparedDurableMutationWithinQueue<T extends Record
         settlement: preparedPredecessors.status === 'ok' ? 'retained' : preparedPredecessors.status,
       }
     }
-    if (preparedPredecessors.entries.length > 0 && !(await drainPendingMutationPredecessors(handle))) {
+    if (preparedPredecessors.entries.length > 0 && !(await drainPendingMutationPredecessors(handle, generation))) {
       return { disposition: 'retained-without-send' as const, handle, intent, settlement: 'retained' as const }
     }
 
@@ -323,7 +331,7 @@ export async function executePreparedDurableMutationWithinQueue<T extends Record
         return { disposition: 'retained-without-send' as const, handle, intent, settlement: 'superseded' as const }
       }
       const result = await runServerCommandWithMutationReceipt(execute, handle.mutationId, handle.databaseLineage!)
-      const settlement = await settleDurableMutation(handle, intent, result)
+      const settlement = await settleDurableMutation(handle, intent, result, generation)
       return { disposition: 'sent' as const, handle, intent, result, settlement }
     })
   })
@@ -346,9 +354,14 @@ export async function dispatchDurableMutationReplay(
   handle: PendingMutationHandle,
   intent: DurableMutationIntent,
 ): Promise<DurableMutationReplayOutcome> {
+  const generation = captureClientSessionGeneration()
+  const current = () => canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
+  if (!current()) return { disposition: 'retained' }
   if (!handle.databaseLineage) return { disposition: 'discarded' }
   return withPendingMutationDispatchLocks(handle, intent.dependencyKeys ?? [], async () => {
+    if (!current()) return { disposition: 'retained' }
     const persistence = await beginPendingMutationDispatch(handle)
+    if (!current()) return { disposition: 'retained' }
     if (persistence !== 'persisted') return { disposition: 'skipped' }
 
     const result = await replayDurableMutationRequests(intent.requests, handle.mutationId, handle.databaseLineage!)
@@ -356,19 +369,24 @@ export async function dispatchDurableMutationReplay(
       const completed = await completePendingMutation(handle, intent.requests.length)
       if (completed !== 'deleted') return { disposition: 'skipped', result }
       publishDurableMutationFinalSettlement(handle.mutationId, 'accepted', { result })
-      await flushReceiptAcknowledgement({
-        mutationId: handle.mutationId,
-        requestCount: intent.requests.length,
-        databaseLineage: handle.databaseLineage!,
-        queuedAt: 0,
-      })
+      if (current())
+        await flushReceiptAcknowledgement(
+          {
+            mutationId: handle.mutationId,
+            requestCount: intent.requests.length,
+            databaseLineage: handle.databaseLineage!,
+            queuedAt: 0,
+          },
+          generation,
+        )
       return { disposition: 'succeeded', result }
     }
     if (result.status === 'error' && shouldDiscardDurableMutation(result.reason)) {
       const discarded = await discardPendingMutation(handle)
       if (discarded === 'deleted') {
         publishDurableMutationFinalSettlement(handle.mutationId, 'discarded', { result })
-        if (isTerminalRequestRejection(result.reason)) await notifyPendingMutationDiscarded(handle.key, result.error)
+        if (current() && isTerminalRequestRejection(result.reason))
+          await notifyPendingMutationDiscarded(handle.key, result.error)
       }
       return { disposition: 'discarded', result }
     }
@@ -376,16 +394,21 @@ export async function dispatchDurableMutationReplay(
   })
 }
 
-async function drainPendingMutationPredecessors(handle: PendingMutationHandle): Promise<boolean> {
+async function drainPendingMutationPredecessors(handle: PendingMutationHandle, generation: number): Promise<boolean> {
+  const current = () => canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
+  if (!current()) return false
   const predecessors = await listPendingMutationPredecessors(handle)
-  if (predecessors.status !== 'ok') return false
+  if (!current() || predecessors.status !== 'ok') return false
 
   for (const predecessor of predecessors.entries) {
+    if (!current()) return false
     const ready = await withPendingMutationLock(
       predecessor.handle.databaseLineage!,
       predecessor.handle.mutationId,
       async () => {
+        if (!current()) return false
         const persistence = await beginPendingMutationDispatch(predecessor.handle)
+        if (!current()) return false
         if (persistence === 'superseded') return true
         if (persistence !== 'persisted') return false
 
@@ -399,12 +422,15 @@ async function drainPendingMutationPredecessors(handle: PendingMutationHandle): 
           if (completed === 'superseded') return true
           if (completed !== 'deleted') return false
           publishDurableMutationFinalSettlement(predecessor.handle.mutationId, 'accepted', { result })
-          await flushReceiptAcknowledgement({
-            mutationId: predecessor.handle.mutationId,
-            requestCount: predecessor.intent.requests.length,
-            databaseLineage: predecessor.handle.databaseLineage!,
-            queuedAt: 0,
-          })
+          await flushReceiptAcknowledgement(
+            {
+              mutationId: predecessor.handle.mutationId,
+              requestCount: predecessor.intent.requests.length,
+              databaseLineage: predecessor.handle.databaseLineage!,
+              queuedAt: 0,
+            },
+            generation,
+          )
           return true
         }
         if (result.status === 'error' && shouldDiscardDurableMutation(result.reason)) {
@@ -412,14 +438,14 @@ async function drainPendingMutationPredecessors(handle: PendingMutationHandle): 
           if (discarded !== 'deleted' && discarded !== 'superseded') return false
           if (discarded === 'deleted') {
             publishDurableMutationFinalSettlement(predecessor.handle.mutationId, 'discarded', { result })
-            if (isTerminalRequestRejection(result.reason)) {
+            if (current() && isTerminalRequestRejection(result.reason)) {
               await notifyPendingMutationDiscarded(predecessor.handle.key, result.error)
             }
             // The request was rejected and the durable row is gone, but this
             // page no longer owns the predecessor's optimistic rollback. Stop
             // the successor and let startup replay it before hydrating the
             // authoritative state that removes the rejected projection.
-            schedulePendingMutationRecoveryReload()
+            if (current()) schedulePendingMutationRecoveryReload()
             return false
           }
           // A malformed/orphaned predecessor says nothing about a later exact
@@ -429,7 +455,7 @@ async function drainPendingMutationPredecessors(handle: PendingMutationHandle): 
         return false
       },
     )
-    if (!ready) return false
+    if (!ready || !current()) return false
   }
   return true
 }
@@ -445,18 +471,23 @@ export async function settleDurableMutation(
   handle: PendingMutationHandle,
   intent: DurableMutationIntent,
   result: ServerCommandResult | null | undefined,
+  generation = getPendingMutationHandleSessionGeneration(handle),
 ): Promise<DurableMutationSettlement> {
+  const current = () => canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
   if (result?.status === 'ok') {
     const completed = await completePendingMutation(handle, intent.requests.length)
     if (completed !== 'deleted' || !handle.databaseLineage) {
       return completed === 'superseded' ? 'superseded' : 'unavailable'
     }
-    await flushReceiptAcknowledgement({
-      mutationId: handle.mutationId,
-      requestCount: intent.requests.length,
-      databaseLineage: handle.databaseLineage,
-      queuedAt: 0,
-    })
+    await flushReceiptAcknowledgement(
+      {
+        mutationId: handle.mutationId,
+        requestCount: intent.requests.length,
+        databaseLineage: handle.databaseLineage,
+        queuedAt: 0,
+      },
+      generation,
+    )
     return 'accepted'
   }
   if (result?.status === 'error' && shouldDiscardDurableMutation(result.reason)) {
@@ -464,7 +495,8 @@ export async function settleDurableMutation(
     if (persistence !== 'persisted') return persistence
     const discarded = await discardPendingMutation(handle)
     if (discarded === 'deleted') {
-      if (isTerminalRequestRejection(result.reason)) await notifyPendingMutationDiscarded(handle.key, result.error)
+      if (current() && isTerminalRequestRejection(result.reason))
+        await notifyPendingMutationDiscarded(handle.key, result.error)
       return 'discarded'
     }
     if (discarded === 'superseded') return 'superseded'
@@ -483,15 +515,23 @@ async function notifyPendingMutationDiscarded(key: string, error: string): Promi
 
 /** Retry crash-safe receipt cleanup after authenticated bootstrap. */
 export async function flushPendingMutationReceiptAcknowledgements(): Promise<void> {
+  const generation = captureClientSessionGeneration()
+  const current = () => canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
+  if (!current()) return
   const acknowledgements = await listPendingMutationReceiptAcknowledgements()
   for (const acknowledgement of acknowledgements) {
+    if (!current()) return
     await withPendingMutationLock(acknowledgement.databaseLineage, acknowledgement.mutationId, () =>
-      flushReceiptAcknowledgement(acknowledgement),
+      flushReceiptAcknowledgement(acknowledgement, generation),
     )
   }
 }
 
-async function flushReceiptAcknowledgement(acknowledgement: PendingMutationReceiptAcknowledgement): Promise<void> {
+async function flushReceiptAcknowledgement(
+  acknowledgement: PendingMutationReceiptAcknowledgement,
+  generation: number,
+): Promise<void> {
+  if (!canUseClientRecoveryAccess() || !isClientSessionGenerationCurrent(generation)) return
   const accepted = await acknowledgeServerMutationReceipts(
     acknowledgement.mutationId,
     acknowledgement.requestCount,

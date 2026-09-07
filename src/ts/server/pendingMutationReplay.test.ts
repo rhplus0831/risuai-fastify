@@ -1,3 +1,14 @@
+import {
+  resetClientSessionForTests,
+  beginClientSession,
+  authorizeClientWriterRecovery,
+  setClientConnectionState,
+} from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const outboxApi = vi.hoisted(() => ({ list: vi.fn() }))
@@ -18,6 +29,7 @@ vi.mock('./generationOperations', () => ({
 import { replayPendingMutations } from './pendingMutationReplay'
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.clearAllMocks()
   durableApi.replay.mockResolvedValue({ disposition: 'succeeded', result: { status: 'ok' } })
   generationOperationApi.replay.mockResolvedValue({ disposition: 'succeeded', result: { status: 'accepted' } })
@@ -265,3 +277,57 @@ function entry(key: string, mutationId: string, path = '/settings/runtime', depe
     },
   }
 }
+
+describe('replay session continuation guards', () => {
+  it('does not inspect or replay pending rows in a reader', async () => {
+    setManagedReaderForTest()
+    await expect(replayPendingMutations()).resolves.toEqual({ attempted: 0, discarded: 0, retained: 0, succeeded: 0 })
+    expect(outboxApi.list).not.toHaveBeenCalled()
+    expect(durableApi.replay).not.toHaveBeenCalled()
+    expect(generationOperationApi.replay).not.toHaveBeenCalled()
+  })
+
+  it('admits explicit authenticated writer recovery before ordinary writing is enabled', async () => {
+    const operation = beginClientSession('recovery-writer')
+    authorizeClientWriterRecovery(operation, {
+      databaseLineage: 'database-a',
+      writer: { sessionId: 'recovery-writer', epoch: 1 },
+    })
+    setClientConnectionState('live')
+    outboxApi.list.mockResolvedValue([entry('settings:runtime', 'recovered')])
+    await expect(replayPendingMutations()).resolves.toEqual({ attempted: 1, discarded: 0, retained: 0, succeeded: 1 })
+    expect(durableApi.replay).toHaveBeenCalledOnce()
+  })
+
+  it('does not revive a held list after demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    let release!: (entries: unknown[]) => void
+    outboxApi.list.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = replayPendingMutations()
+    demoteAndRepromoteForTest()
+    release([entry('settings:runtime', 'parked')])
+    await expect(pending).resolves.toEqual({ attempted: 0, discarded: 0, retained: 1, succeeded: 0 })
+    expect(durableApi.replay).not.toHaveBeenCalled()
+  })
+
+  it('settles an already-dispatched acceptance but never starts the next old replay entry', async () => {
+    setManagedWriterForTest()
+    outboxApi.list.mockResolvedValue([entry('settings:first', 'accepted'), entry('settings:next', 'parked')])
+    let release!: (result: unknown) => void
+    durableApi.replay.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = replayPendingMutations()
+    await vi.waitFor(() => expect(durableApi.replay).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release({ disposition: 'succeeded', result: { status: 'ok' } })
+    await expect(pending).resolves.toEqual({ attempted: 1, discarded: 0, retained: 1, succeeded: 1 })
+    expect(durableApi.replay).toHaveBeenCalledOnce()
+  })
+})

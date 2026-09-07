@@ -1,3 +1,18 @@
+import {
+  canUseClientRecoveryAccess,
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  clientSessionStore,
+  getClientSessionSnapshot,
+  isClientSessionGenerationCurrent,
+  isClientSessionManaged,
+  registerClientWriterLossHandler,
+} from '../clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+} from '../clientWriteOperation'
 import { gcm } from '@noble/ciphers/aes.js'
 import {
   findProtocolDurableCommandOperation,
@@ -169,11 +184,62 @@ let nextSequenceOffset = 0
 let nextProjectionGenerationOrdinal = 0
 let persistenceWarningReported = false
 let pendingMutationScope: PendingMutationScope | null = null
+let handleSessionGenerations = new WeakMap<PendingMutationHandle, number>()
 const pendingMutationStageLockTails = new Map<string, Promise<void>>()
+const admittedPendingMutationWrites = new Set<Promise<PendingMutationPersistenceStatus>>()
 const liveProjectionGenerations = new Map<string, LivePendingMutationProjectionGeneration>()
 const liveProjectionGenerationStacks = new Map<string, string[]>()
 const pendingMutationDiscardListeners = new Set<PendingMutationDiscardListener>()
 let pendingMutationCommitTransactionHookForTests: ((transaction: IDBTransaction) => void) | null = null
+
+/** Originating page generation for delayed dispatch and exact settlement callbacks. */
+export function getPendingMutationHandleSessionGeneration(handle: PendingMutationHandle): number {
+  return handleSessionGenerations.get(handle) ?? captureClientSessionGeneration()
+}
+
+function stampPendingHandle(handle: PendingMutationHandle, generation: number): PendingMutationHandle {
+  handleSessionGenerations.set(handle, generation)
+  return handle
+}
+
+function outboxRecoveryIsCurrent(generation: number): boolean {
+  return canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
+}
+
+function canRecoverPendingOwner(writerSessionId: string | null, databaseLineage: string | null): boolean {
+  const session = getClientSessionSnapshot()
+  return !session.managed || (session.sessionId === writerSessionId && session.databaseLineage === databaseLineage)
+}
+
+function assertOutboxRecovery(generation: number): void {
+  if (!canUseClientRecoveryAccess()) throw new Error('client_recovery_access_required')
+  if (!isClientSessionGenerationCurrent(generation)) throw new Error('client_recovery_operation_stale')
+}
+
+function watchOutboxTransaction(transaction: IDBTransaction, generation: number, ordinaryWrite = false): () => void {
+  const current = () =>
+    ordinaryWrite ? isClientWriteOperationCurrent(generation) : outboxRecoveryIsCurrent(generation)
+  const abort = () => {
+    if (current()) return
+    try {
+      transaction.abort()
+    } catch {}
+  }
+  const stopLoss = registerClientWriterLossHandler(abort)
+  const stopSession = clientSessionStore.subscribe(abort)
+  return () => {
+    stopLoss()
+    stopSession()
+  }
+}
+
+clientSessionStore.subscribe(() => {
+  if (isClientSessionManaged() && !canUseClientRecoveryAccess()) {
+    pendingMutationActivityRefresh += 1
+    clearLivePendingMutationProjectionGenerations()
+    setPendingMutationOutboxActive(false)
+  }
+})
 
 export function pendingMutationSettingsFieldProjectionTarget(field: string): string {
   return `settings-field:${encodeProjectionTargetPart(field)}`
@@ -281,6 +347,7 @@ export function recordPendingMutationProjectionTargets(
   handle: PendingMutationHandle,
   targets: readonly string[],
 ): void {
+  if (!canUseClientWriteAccess()) return
   const scope = pendingMutationScopeFromHandle(handle)
   if (!scope) return
   recordLiveProjectionGeneration(projectionGenerationId(scope, handle.mutationId), scope, targets)
@@ -291,7 +358,7 @@ export function advancePendingMutationProjectionTargets(
   targets: readonly string[],
 ): PendingMutationLocalProjectionToken | null {
   const scope = pendingMutationScope
-  if (!scope || targets.length === 0) return null
+  if (!canUseClientWriteAccess() || !scope || targets.length === 0) return null
   const generationId = projectionGenerationId(scope, `local-${createMutationId()}`)
   recordLiveProjectionGeneration(generationId, scope, targets)
   return { generationId }
@@ -367,6 +434,7 @@ function liveProjectionFence(generationId: string, target: string): PendingMutat
 }
 
 export function isPendingMutationProjectionFenceCurrent(fence: PendingMutationProjectionFence): boolean {
+  if (!canUseClientWriteAccess()) return false
   const currentScope = pendingMutationScope
   if (
     !currentScope ||
@@ -396,6 +464,8 @@ export function retirePendingMutationProjectionTargets(handle: PendingMutationHa
  * browser restart lost sessionStorage but retained IndexedDB.
  */
 export async function readSinglePendingMutationOwner(): Promise<PendingMutationOwnerCandidate | null> {
+  if (isClientSessionManaged()) return null
+  const generation = captureClientSessionGeneration()
   const database = await openOutboxDatabase()
   if (!database) return null
   try {
@@ -404,6 +474,7 @@ export async function readSinglePendingMutationOwner(): Promise<PendingMutationO
       transaction.objectStore(OUTBOX_MUTATION_STORE).getAll(),
     )
     await transactionDone(transaction)
+    if (isClientSessionManaged() || !isClientSessionGenerationCurrent(generation)) return null
     const owners = new Map<string, PendingMutationOwnerCandidate>()
     for (const mutation of mutations) {
       if (
@@ -444,36 +515,66 @@ export async function readSinglePendingMutationOwner(): Promise<PendingMutationO
 export async function preparePendingMutationOutbox(
   input: PreparePendingMutationOutboxInput,
 ): Promise<PreparePendingMutationOutboxSummary> {
+  const generation = captureClientSessionGeneration()
+  assertOutboxRecovery(generation)
   const scope = normalizeScope(input.writerSessionId, input.writerEpoch, input.databaseLineage)
-  const ownershipChanged =
-    pendingMutationScope !== null &&
-    (pendingMutationScope.writerSessionId !== scope.writerSessionId ||
-      pendingMutationScope.writerEpoch !== scope.writerEpoch ||
-      pendingMutationScope.databaseLineage !== scope.databaseLineage)
-  if (ownershipChanged) input.onOwnershipChange?.()
-  if (!input.requestedWriterWasActive || ownershipChanged) {
-    clearLivePendingMutationProjectionGenerations()
-    clearRetainedChatProjections()
+  const managed = isClientSessionManaged()
+  const requestedWriterWasActive = input.requestedWriterWasActive
+  const onOwnershipChange = input.onOwnershipChange
+  if (managed && scope.writerSessionId !== getClientSessionSnapshot().sessionId) {
+    throw new Error('client_recovery_owner_mismatch')
   }
-  pendingMutationScope = scope
+  const adoptScope = () => {
+    assertOutboxRecovery(generation)
+    const ownershipChanged = pendingMutationScope !== null && !pendingMutationScopeEquals(scope)
+    const lineageChanged =
+      pendingMutationScope !== null && pendingMutationScope.databaseLineage !== scope.databaseLineage
+    // The conservative path retains its established reset policy. Connected
+    // writer epochs park intent; only authenticated lineage replacement disposes it.
+    const resetOwners = managed ? lineageChanged : ownershipChanged
+    if (resetOwners) onOwnershipChange?.()
+    assertOutboxRecovery(generation)
+    if (!requestedWriterWasActive || ownershipChanged) {
+      clearLivePendingMutationProjectionGenerations()
+      if (!managed || lineageChanged) clearRetainedChatProjections()
+    }
+    pendingMutationScope = scope
+  }
+  // Preserve legacy synchronous scope setup. Managed recovery commits adoption
+  // only after awaited storage reads have passed the originating session fence.
+  if (!managed) adoptScope()
+  else {
+    // A just-demoted writer may still be finishing encryption for an intent
+    // that was already admitted. Recovery must see that row before replay.
+    await Promise.all([...admittedPendingMutationWrites])
+    assertOutboxRecovery(generation)
+  }
   const [database, encryptionKey] = await Promise.all([openOutboxDatabase(), getOutboxEncryptionKey()])
+  assertOutboxRecovery(generation)
   if (!database || !encryptionKey) {
+    if (managed) adoptScope()
     await refreshPendingMutationActivity()
+    assertOutboxRecovery(generation)
     return { discarded: 0 }
   }
 
   const discardedMutationIds: string[] = []
+  let stopTransactionWatch: (() => void) | undefined
   try {
     const transaction = database.transaction([OUTBOX_MUTATION_STORE, OUTBOX_RECEIPT_ACK_STORE], 'readwrite')
+    const done = transactionDone(transaction)
+    void done.catch(() => undefined)
+    stopTransactionWatch = watchOutboxTransaction(transaction, generation)
     const mutationStore = transaction.objectStore(OUTBOX_MUTATION_STORE)
     const receiptStore = transaction.objectStore(OUTBOX_RECEIPT_ACK_STORE)
     const [mutations, receipts] = await Promise.all([
       requestResult<StoredPendingMutation[]>(mutationStore.getAll()),
       requestResult<PendingMutationReceiptAcknowledgement[]>(receiptStore.getAll()),
     ])
+    assertOutboxRecovery(generation)
+    if (managed) adoptScope()
     for (const mutation of mutations) {
-      const lineageMismatch = mutation.databaseLineage !== scope.databaseLineage
-      if (lineageMismatch) {
+      if (mutation.databaseLineage !== scope.databaseLineage) {
         mutationStore.delete(mutation.mutationId)
         discardedMutationIds.push(mutation.mutationId)
       }
@@ -481,14 +582,20 @@ export async function preparePendingMutationOutbox(
     for (const receipt of receipts) {
       if (receipt.databaseLineage !== scope.databaseLineage) receiptStore.delete(receipt.mutationId)
     }
-    await transactionDone(transaction)
+    await done
+    assertOutboxRecovery(generation)
     for (const mutationId of discardedMutationIds) publishPendingMutationDiscard(mutationId)
   } catch (error) {
+    assertOutboxRecovery(generation)
     reportPersistenceWarning('Unable to prepare the pending-mutation outbox', error)
     await refreshPendingMutationActivity()
+    assertOutboxRecovery(generation)
     return { discarded: 0 }
+  } finally {
+    stopTransactionWatch?.()
   }
   await refreshPendingMutationActivity()
+  assertOutboxRecovery(generation)
   return { discarded: discardedMutationIds.length }
 }
 
@@ -524,8 +631,10 @@ export function stagePendingMutation(
   intent: DurableMutationIntent,
   previous?: PendingMutationHandle | null,
 ): PendingMutationHandle {
+  const generation = captureClientWriteOperation()
   const semanticKey = normalizeOutboxKey(key)
   const normalizedIntent = normalizeIntent(intent)
+  assertClientWriteOperation(generation)
   return stageNormalizedPendingMutation(semanticKey, normalizedIntent, previous)
 }
 
@@ -536,6 +645,7 @@ function stageNormalizedPendingMutation(
   normalizedIntent: DurableMutationIntent,
   previous?: PendingMutationHandle | null,
 ): PendingMutationHandle {
+  const generation = captureClientWriteOperation()
   const scope = pendingMutationScope
   const replacePrevious =
     !!scope &&
@@ -562,6 +672,11 @@ function stageNormalizedPendingMutation(
         replacePrevious ? previous : null,
       )
     : Promise.resolve('unavailable' as const)
+  admittedPendingMutationWrites.add(ready)
+  void ready.then(
+    () => admittedPendingMutationWrites.delete(ready),
+    () => admittedPendingMutationWrites.delete(ready),
+  )
   if (!scope) reportPersistenceWarning('Pending mutation staged before server database ownership was established')
   const finishPersistenceActivity = scope ? beginPersistenceActivity() : null
 
@@ -575,10 +690,11 @@ function stageNormalizedPendingMutation(
     phase: 'staged',
     ready,
   }
+  stampPendingHandle(handle, generation)
   recordPendingMutationProjectionTargets(handle, normalizedPendingMutationProjectionTargets(normalizedIntent))
   void ready.then(async (status) => {
     if (status !== 'persisted') retirePendingMutationProjectionGeneration(handle)
-    if (status === 'persisted') {
+    if (status === 'persisted' && isClientWriteOperationCurrent(generation)) {
       setPendingMutationOutboxActive(true)
     } else {
       await refreshPendingMutationActivity()
@@ -597,11 +713,18 @@ export function pendingMutationIntentPayloadByteLength(intent: DurableMutationIn
 export async function beginPendingMutationDispatch(
   handle: PendingMutationHandle,
 ): Promise<PendingMutationPersistenceStatus> {
-  if (handle.phase === 'superseded') return 'superseded'
+  const generation = getPendingMutationHandleSessionGeneration(handle)
+  if (
+    !outboxRecoveryIsCurrent(generation) ||
+    !canRecoverPendingOwner(handle.ownerWriterSessionId, handle.databaseLineage) ||
+    handle.phase === 'superseded'
+  )
+    return 'superseded'
   handle.phase = 'dispatching'
   const persistence = await handle.ready
+  if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
   if (persistence !== 'persisted') return persistence
-  return markPendingMutationDispatchStarted(handle)
+  return markPendingMutationDispatchStarted(handle, generation)
 }
 
 /**
@@ -614,9 +737,17 @@ export async function replaceStagedPendingMutationIntent(
   handle: PendingMutationHandle,
   intent: DurableMutationIntent,
 ): Promise<PendingMutationIntentReplacementResult> {
-  if (handle.phase !== 'staged') return { status: 'superseded' }
+  const generation = getPendingMutationHandleSessionGeneration(handle)
+  if (
+    !isClientWriteOperationCurrent(generation) ||
+    !canRecoverPendingOwner(handle.ownerWriterSessionId, handle.databaseLineage) ||
+    handle.phase !== 'staged'
+  )
+    return { status: 'superseded' }
   const normalizedIntent = normalizeIntent(intent)
-  const replacement = await replacePendingMutationIntentExact(handle, normalizedIntent)
+  if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
+  const replacement = await replacePendingMutationIntentExact(handle, normalizedIntent, generation)
+  if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
   if (replacement.status === 'replaced') {
     handle.phase = 'superseded'
     recordPendingMutationProjectionTargets(
@@ -654,22 +785,36 @@ export async function isPendingMutationCurrent(handle: PendingMutationHandle): P
 
 async function markPendingMutationDispatchStarted(
   handle: PendingMutationHandle,
+  generation: number,
 ): Promise<PendingMutationPersistenceStatus> {
   const database = await openOutboxDatabase()
+  if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
   if (!database) return 'unavailable'
+  let stopWatch: (() => void) | undefined
   try {
     const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readwrite')
+    const done = transactionDone(transaction)
+    void done.catch(() => undefined)
+    stopWatch = watchOutboxTransaction(transaction, generation)
     const store = transaction.objectStore(OUTBOX_MUTATION_STORE)
     const current = await requestResult<StoredPendingMutation | undefined>(store.get(handle.mutationId))
+    if (!outboxRecoveryIsCurrent(generation)) {
+      transaction.abort()
+      return 'superseded'
+    }
     const matches = storedMutationMatchesHandle(current, handle)
     if (matches && current && current.dispatchStarted !== true) {
       store.put({ ...current, dispatchStarted: true } satisfies StoredPendingMutation)
     }
-    await transactionDone(transaction)
+    await done
+    if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
     return matches ? 'persisted' : 'superseded'
   } catch (error) {
+    if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
     reportPersistenceWarning('Unable to mark a pending server mutation for dispatch', error)
     return 'unavailable'
+  } finally {
+    stopWatch?.()
   }
 }
 
@@ -743,9 +888,12 @@ export async function completePendingMutation(
 }
 
 export async function listPendingMutations(): Promise<PendingMutationOutboxEntry[]> {
+  const generation = captureClientSessionGeneration()
+  if (!outboxRecoveryIsCurrent(generation)) return []
   const scope = pendingMutationScope
+  if (scope && !canRecoverPendingOwner(scope.writerSessionId, scope.databaseLineage)) return []
   const database = await openOutboxDatabase()
-  if (!database || !scope) return []
+  if (!database || !scope || !outboxRecoveryIsCurrent(generation)) return []
 
   let stored: StoredPendingMutation[]
   try {
@@ -766,6 +914,7 @@ export async function listPendingMutations(): Promise<PendingMutationOutboxEntry
     .sort((left, right) => left.order - right.order)) {
     try {
       const intent = await decryptIntent(record)
+      if (!outboxRecoveryIsCurrent(generation)) return []
       const handle: PendingMutationHandle = {
         key: record.semanticKey,
         mutationId: record.mutationId,
@@ -776,12 +925,12 @@ export async function listPendingMutations(): Promise<PendingMutationOutboxEntry
         phase: 'staged',
         ready: Promise.resolve('persisted'),
       }
-      entries.push({ handle, intent })
+      entries.push({ handle: stampPendingHandle(handle, generation), intent })
     } catch (error) {
       reportPersistenceWarning(`Unable to decrypt pending server mutation ${record.semanticKey}`, error)
     }
   }
-  return entries
+  return outboxRecoveryIsCurrent(generation) ? entries : []
 }
 
 /**
@@ -790,16 +939,21 @@ export async function listPendingMutations(): Promise<PendingMutationOutboxEntry
  * mistaken for an empty outbox and followed by stale authoritative hydration.
  */
 export async function countPendingMutationRecords(): Promise<number | null> {
+  const generation = captureClientSessionGeneration()
+  if (!outboxRecoveryIsCurrent(generation)) return 0
   const scope = pendingMutationScope
+  if (scope && !canRecoverPendingOwner(scope.writerSessionId, scope.databaseLineage)) return 0
   if (!scope) return 0
   if (typeof globalThis.indexedDB === 'undefined') return 0
   const database = await openOutboxDatabase()
+  if (!outboxRecoveryIsCurrent(generation)) return null
   if (!database) return null
 
   try {
     const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readonly')
     const stored = await requestResult<StoredPendingMutation[]>(transaction.objectStore(OUTBOX_MUTATION_STORE).getAll())
     await transactionDone(transaction)
+    if (!outboxRecoveryIsCurrent(generation)) return null
     return stored.filter(
       (candidate) =>
         candidate.ownerWriterSessionId === scope.writerSessionId && candidate.databaseLineage === scope.databaseLineage,
@@ -817,22 +971,28 @@ export async function countPendingMutationRecords(): Promise<number | null> {
  * prevent authoritative resource hydration. Unreadable rows still fail closed.
  */
 export async function countBlockingPendingMutationRecords(): Promise<number | null> {
+  const generation = captureClientSessionGeneration()
+  if (!outboxRecoveryIsCurrent(generation)) return 0
   const scope = pendingMutationScope
+  if (scope && !canRecoverPendingOwner(scope.writerSessionId, scope.databaseLineage)) return 0
   if (!scope) return 0
   if (typeof globalThis.indexedDB === 'undefined') return 0
   const database = await openOutboxDatabase()
+  if (!outboxRecoveryIsCurrent(generation)) return null
   if (!database) return null
 
   try {
     const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readonly')
     const stored = await requestResult<StoredPendingMutation[]>(transaction.objectStore(OUTBOX_MUTATION_STORE).getAll())
     await transactionDone(transaction)
+    if (!outboxRecoveryIsCurrent(generation)) return null
     let blocking = 0
     for (const record of stored.filter(
       (candidate) =>
         candidate.ownerWriterSessionId === scope.writerSessionId && candidate.databaseLineage === scope.databaseLineage,
     )) {
       const intent = await decryptIntent(record)
+      if (!outboxRecoveryIsCurrent(generation)) return null
       if (intent.kind !== 'generation-operation-cancel') blocking += 1
     }
     return blocking
@@ -852,9 +1012,17 @@ export async function listPendingMutationPredecessors(
   handle: PendingMutationHandle,
   additionalDependencyKeys: readonly string[] = [],
 ): Promise<PendingMutationPredecessorResult> {
+  const generation = getPendingMutationHandleSessionGeneration(handle)
+  if (
+    !outboxRecoveryIsCurrent(generation) ||
+    !canRecoverPendingOwner(handle.ownerWriterSessionId, handle.databaseLineage)
+  )
+    return { status: 'superseded' }
   const persistence = await handle.ready
+  if (!outboxRecoveryIsCurrent(generation)) return { status: 'superseded' }
   if (persistence !== 'persisted') return { status: persistence }
   const database = await openOutboxDatabase()
+  if (!outboxRecoveryIsCurrent(generation)) return { status: 'superseded' }
   if (!database) return { status: 'unavailable' }
 
   let records: StoredPendingMutation[]
@@ -880,6 +1048,7 @@ export async function listPendingMutationPredecessors(
 
   try {
     const currentIntent = await decryptIntent(current)
+    if (!outboxRecoveryIsCurrent(generation)) return { status: 'superseded' }
     const orderCutoffByKey = new Map<string, number>([[current.semanticKey, current.order]])
     for (const dependencyKey of [
       ...(currentIntent.dependencyKeys ?? []),
@@ -898,17 +1067,21 @@ export async function listPendingMutationPredecessors(
         if (cutoff === undefined || record.order >= cutoff) continue
 
         const intent = await decryptIntent(record)
+        if (!outboxRecoveryIsCurrent(generation)) return { status: 'superseded' }
         selected.set(record.mutationId, {
-          handle: {
-            key: record.semanticKey,
-            mutationId: record.mutationId,
-            sequence: record.sequence,
-            ownerWriterSessionId: record.ownerWriterSessionId,
-            writerEpoch: record.writerEpoch,
-            databaseLineage: record.databaseLineage,
-            phase: 'staged',
-            ready: Promise.resolve('persisted'),
-          },
+          handle: stampPendingHandle(
+            {
+              key: record.semanticKey,
+              mutationId: record.mutationId,
+              sequence: record.sequence,
+              ownerWriterSessionId: record.ownerWriterSessionId,
+              writerEpoch: record.writerEpoch,
+              databaseLineage: record.databaseLineage,
+              phase: 'staged',
+              ready: Promise.resolve('persisted'),
+            },
+            generation,
+          ),
           intent,
         })
         expanded = true
@@ -1000,7 +1173,9 @@ export function resetPendingMutationOutboxForTests(): void {
   nextProjectionGenerationOrdinal = 0
   persistenceWarningReported = false
   pendingMutationScope = null
+  handleSessionGenerations = new WeakMap()
   pendingMutationStageLockTails.clear()
+  admittedPendingMutationWrites.clear()
   pendingMutationCommitTransactionHookForTests = null
   pendingMutationActivityRefresh += 1
   setPendingMutationOutboxActive(false)
@@ -1016,9 +1191,10 @@ export function setPendingMutationCommitTransactionHookForTests(
 }
 
 async function refreshPendingMutationActivity(): Promise<void> {
+  const generation = captureClientSessionGeneration()
   const refresh = ++pendingMutationActivityRefresh
   const count = await countPendingMutationRecords()
-  if (refresh === pendingMutationActivityRefresh && count !== null) {
+  if (isClientSessionGenerationCurrent(generation) && refresh === pendingMutationActivityRefresh && count !== null) {
     setPendingMutationOutboxActive(count > 0)
   }
 }
@@ -1049,10 +1225,10 @@ async function persistPendingMutationLocked(
   intent: DurableMutationIntent,
   replacement: PendingMutationHandle | null,
 ): Promise<PendingMutationPersistenceStatus> {
-  if (!pendingMutationScopeEquals(scope)) return 'superseded'
+  if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
   const replacementPersistence = replacement ? await replacement.ready : null
   const persistedReplacement = replacementPersistence === 'persisted' ? replacement : null
-  if (!pendingMutationScopeEquals(scope)) return 'superseded'
+  if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
 
   try {
     const payload = serializePendingMutationIntent(intent)
@@ -1063,7 +1239,7 @@ async function persistPendingMutationLocked(
     if (!database || !encryptionKey) return 'unavailable'
 
     while (true) {
-      if (!pendingMutationScopeEquals(scope)) return 'superseded'
+      if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
       const lastCommittedOrder = await readPendingMutationOrderBase(database, scope)
       const candidateOrder = nextPendingMutationOrder(lastCommittedOrder)
       // Each attempt gets a new nonce. A CAS loss changes the authenticated
@@ -1075,7 +1251,7 @@ async function persistPendingMutationLocked(
         mutationAdditionalData(semanticKey, mutationId, sequence, candidateOrder, scope),
         payload,
       )
-      if (!pendingMutationScopeEquals(scope)) return 'superseded'
+      if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
 
       const committed = await commitPendingMutationOrderAndRow({
         database,
@@ -1193,7 +1369,7 @@ function commitPendingMutationOrderAndRow(input: CommitPendingMutationInput): Pr
           outcome = { status: 'order-raced' }
           return
         }
-        if (currentRequest.result !== undefined || !pendingMutationScopeEquals(input.scope)) {
+        if (currentRequest.result !== undefined || !mayPersistCapturedPendingMutationScope(input.scope)) {
           outcome = { status: 'superseded' }
           return
         }
@@ -1334,11 +1510,15 @@ type ExactPendingMutationIntentReplacementResult =
 async function replacePendingMutationIntentExact(
   handle: PendingMutationHandle,
   intent: DurableMutationIntent,
+  generation: number,
 ): Promise<ExactPendingMutationIntentReplacementResult> {
   const persistence = await handle.ready
+  if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
   if (persistence !== 'persisted') return { status: persistence }
   const [database, encryptionKey] = await Promise.all([openOutboxDatabase(), getOutboxEncryptionKey()])
+  if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
   if (!database || !encryptionKey) return { status: 'unavailable' }
+  let stopWatch: (() => void) | undefined
 
   try {
     const readTransaction = database.transaction(OUTBOX_MUTATION_STORE, 'readonly')
@@ -1346,6 +1526,7 @@ async function replacePendingMutationIntentExact(
       readTransaction.objectStore(OUTBOX_MUTATION_STORE).get(handle.mutationId),
     )
     await transactionDone(readTransaction)
+    if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
     if (!candidate || !storedMutationMatchesHandle(candidate, handle)) return { status: 'superseded' }
     if (candidate.dispatchStarted === true) return { status: 'started' }
 
@@ -1367,15 +1548,23 @@ async function replacePendingMutationIntentExact(
       payload,
     )
 
+    if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
     const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readwrite')
+    const done = transactionDone(transaction)
+    void done.catch(() => undefined)
+    stopWatch = watchOutboxTransaction(transaction, generation, true)
     const store = transaction.objectStore(OUTBOX_MUTATION_STORE)
     const current = await requestResult<StoredPendingMutation | undefined>(store.get(handle.mutationId))
+    if (!isClientWriteOperationCurrent(generation)) {
+      transaction.abort()
+      return { status: 'superseded' }
+    }
     if (!current || !storedMutationMatchesHandle(current, handle)) {
-      await transactionDone(transaction)
+      await done
       return { status: 'superseded' }
     }
     if (current.dispatchStarted === true) {
-      await transactionDone(transaction)
+      await done
       return { status: 'started' }
     }
     store.put({
@@ -1387,23 +1576,29 @@ async function replacePendingMutationIntentExact(
       iv: iv.buffer,
       ciphertext,
     } satisfies StoredPendingMutation)
-    await transactionDone(transaction)
+    await done
     return {
       status: 'replaced',
-      handle: {
-        key: current.semanticKey,
-        mutationId: current.mutationId,
-        sequence,
-        ownerWriterSessionId: current.ownerWriterSessionId,
-        writerEpoch: current.writerEpoch,
-        databaseLineage: current.databaseLineage,
-        phase: 'staged',
-        ready: Promise.resolve('persisted'),
-      },
+      handle: stampPendingHandle(
+        {
+          key: current.semanticKey,
+          mutationId: current.mutationId,
+          sequence,
+          ownerWriterSessionId: current.ownerWriterSessionId,
+          writerEpoch: current.writerEpoch,
+          databaseLineage: current.databaseLineage,
+          phase: 'staged',
+          ready: Promise.resolve('persisted'),
+        },
+        generation,
+      ),
     }
   } catch (error) {
+    if (!isClientWriteOperationCurrent(generation)) return { status: 'superseded' }
     reportPersistenceWarning('Unable to replace a staged pending server mutation', error)
     return { status: 'unavailable' }
+  } finally {
+    stopWatch?.()
   }
 }
 
@@ -1997,6 +2192,12 @@ function pendingMutationScopeMatchesHandle(scope: PendingMutationScope, handle: 
     handle.writerEpoch === scope.writerEpoch &&
     handle.databaseLineage === scope.databaseLineage
   )
+}
+
+function mayPersistCapturedPendingMutationScope(scope: PendingMutationScope): boolean {
+  return isClientSessionManaged()
+    ? pendingMutationScope?.databaseLineage === scope.databaseLineage
+    : pendingMutationScopeEquals(scope)
 }
 
 function pendingMutationScopeEquals(scope: PendingMutationScope): boolean {

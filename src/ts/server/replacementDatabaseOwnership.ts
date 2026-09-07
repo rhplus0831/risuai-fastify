@@ -1,3 +1,8 @@
+import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { getActiveWriterSessionId } from './activeWriterSession'
 import {
   countRegisteredDurableMutationSettlements,
@@ -74,21 +79,34 @@ export async function waitForLocalReplacementDatabaseOperations(): Promise<void>
 export async function adoptReplacementDatabaseOwnership(
   ownership: ReplacementDatabaseOwnership,
 ): Promise<ReplacementDatabaseOwnershipAdoption> {
+  ownership = { ...ownership }
+  const generation = captureClientSessionGeneration()
+  const current = () => canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
+  if (!current()) return { discarded: 0, ownershipChanged: false }
   let locallyDiscarded = 0
   let ownershipChanged = false
-  const preparation = await preparePendingMutationOutbox({
-    writerSessionId: getActiveWriterSessionId(),
-    writerEpoch: ownership.writerEpoch,
-    databaseLineage: ownership.databaseLineage,
-    requestedWriterWasActive: true,
-    onOwnershipChange: () => {
-      ownershipChanged = true
-      pendingReplacementRefreshOwnershipKey = replacementOwnershipKey(ownership)
-      locallyDiscarded = countRegisteredDurableMutationSettlements()
-      resetRegisteredOwnerState()
-      discardRegisteredDurableMutationSettlements()
-    },
-  })
+  let preparation: { discarded: number }
+  try {
+    preparation = await preparePendingMutationOutbox({
+      writerSessionId: getActiveWriterSessionId(),
+      writerEpoch: ownership.writerEpoch,
+      databaseLineage: ownership.databaseLineage,
+      requestedWriterWasActive: true,
+      onOwnershipChange: () => {
+        if (!current()) return
+        ownershipChanged = true
+        pendingReplacementRefreshOwnershipKey = replacementOwnershipKey(ownership)
+        locallyDiscarded = countRegisteredDurableMutationSettlements()
+        resetRegisteredOwnerState()
+        discardRegisteredDurableMutationSettlements()
+      },
+    })
+  } catch (error) {
+    if (current()) throw error
+    // The initiating server replacement may already be accepted. Stale local
+    // preparation must not turn that confirmed result into a rejected import.
+    return { discarded: locallyDiscarded, ownershipChanged }
+  }
   return {
     discarded: Math.max(preparation.discarded, locallyDiscarded),
     ownershipChanged,

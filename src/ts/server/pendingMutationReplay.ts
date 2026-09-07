@@ -1,3 +1,8 @@
+import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { dispatchDurableMutationReplay } from './durableMutationDispatch'
 import { dispatchGenerationOperationPendingReplay } from './generationOperations'
 import { isGenerationOperationPendingIntent, listPendingMutations } from './pendingMutationOutbox'
@@ -21,6 +26,10 @@ export interface PendingMutationReplaySummary {
  * reported before disposal.
  */
 export async function replayPendingMutations(): Promise<PendingMutationReplaySummary> {
+  const generation = captureClientSessionGeneration()
+  const current = () => canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
+  const summary: PendingMutationReplaySummary = { attempted: 0, discarded: 0, retained: 0, succeeded: 0 }
+  if (!current()) return summary
   const entries = await listPendingMutations()
   // A Stop and its submit may both survive a crash. Deliver the cancellation
   // first for latency; the server tombstone/state machine makes either order
@@ -34,14 +43,18 @@ export async function replayPendingMutations(): Promise<PendingMutationReplaySum
     return leftCancel - rightCancel
   })
   const blockedKeys = new Set<string>()
-  const summary: PendingMutationReplaySummary = {
-    attempted: 0,
-    discarded: 0,
-    retained: 0,
-    succeeded: 0,
+  const retain = (entry: (typeof entries)[number]) => {
+    if (entry.intent.kind === 'generation-operation-cancel')
+      summary.controlRetained = (summary.controlRetained ?? 0) + 1
+    else summary.retained += 1
   }
 
-  for (const entry of entries) {
+  for (let index = 0; index < entries.length; index++) {
+    const entry = entries[index]
+    if (!current()) {
+      for (const remaining of entries.slice(index)) retain(remaining)
+      break
+    }
     if (
       blockedKeys.has(entry.handle.key) ||
       (entry.intent.dependencyKeys ?? []).some((dependencyKey) => blockedKeys.has(dependencyKey))
@@ -66,6 +79,8 @@ export async function replayPendingMutations(): Promise<PendingMutationReplaySum
       }
       blockedKeys.add(entry.handle.key)
       console.warn(`Pending server mutation replay failed for ${entry.handle.key}`, outcome.result)
+    } else if (outcome.disposition === 'skipped' && !current()) {
+      retain(entry)
     } else if (outcome.disposition === 'discarded') {
       summary.discarded += 1
       console.warn(`Pending server mutation was discarded for ${entry.handle.key}`, outcome.result)
