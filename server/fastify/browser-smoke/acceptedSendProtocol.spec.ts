@@ -350,7 +350,7 @@ test.afterAll(async () => {
   await harness.close()
 })
 
-test('send -> reload mid-generation reattaches and commits one reply', async ({ page }) => {
+test('send -> mid-stream and completed reloads retain one exact reply', async ({ page }) => {
   const chatId = chats.reloadDesktop
   const userText = 'desktop reload request'
   const partial = 'Desktop reload'
@@ -368,6 +368,44 @@ test('send -> reload mid-generation reattaches and commits one reply', async ({ 
 
   harness.provider.release(chatId)
   await expectTerminalTruth(page, chatId, userText, reply, 'completed', operation.operationId)
+  const committed = await authoritativeMessages(page, chatId)
+  expect(committed).toHaveLength(2)
+  const [userMessage, replyMessage] = committed
+  expect(userMessage!.chatId).toBe(operation.acceptedMessageId)
+  expect(replyMessage!.chatId).toMatch(/\S/u)
+  expect(replyMessage!.chatId).not.toBe(userMessage!.chatId)
+  expect(replyMessage!.generationInfo?.operationId).toBe(operation.operationId)
+
+  // A completed reply must survive ordinary bootstrap and ranged hydration,
+  // independently of the live stream or an explicit foreground-recovery signal.
+  const documentTimeOrigin = await page.evaluate(() => performance.timeOrigin)
+  await page.reload()
+  await waitForBrowserLoaded(page)
+  expect(await page.evaluate(() => performance.timeOrigin)).not.toBe(documentTimeOrigin)
+  await expectTerminalTruth(page, chatId, userText, reply, 'completed', operation.operationId)
+  const identity = (messages: ApiMessage[]) =>
+    messages.map(({ chatId: messageId, role, data }) => ({ messageId, role, data }))
+  expect(identity(await residentMessages(page, chatId))).toEqual(identity(committed))
+  expect(identity(await authoritativeMessages(page, chatId))).toEqual(identity(committed))
+  const completedOperation = {
+    operationId: operation.operationId,
+    chatId,
+    state: 'completed',
+    acceptedMessageId: userMessage!.chatId,
+    resultMessageId: replyMessage!.chatId,
+  }
+  expect(await operationForChat(page, chatId)).toMatchObject(completedOperation)
+  expect(
+    (await authoritativeBootstrap(page)).generationOperations?.find(
+      (entry) => entry.operationId === operation.operationId,
+    ),
+  ).toMatchObject(completedOperation)
+  for (const [index, message] of committed.entries()) {
+    await expect(page.locator(`.default-chat-screen .risu-chat[data-chat-index="${index}"]`)).toHaveAttribute(
+      'data-risu-message-id',
+      message.chatId,
+    )
+  }
   expect(harness.provider.calls(chatId)).toBe(1)
 })
 

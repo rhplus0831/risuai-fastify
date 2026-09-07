@@ -302,18 +302,59 @@ in the phase-ending full suite.
   browser assertion. Preserve S33's presentation/accessibility contract.
 - Disposition: **open**; prevents Stage 1 handoff until browser evidence passes.
 
-## BSE-003: Pending generation reload does not prove completed-reply reload
+## BSE-003: Completed normal-send identity survives full reload
 
-- Classification: source-supported critical coverage gap, owner Phase 2c.
-- S01 uses real composer/stream/authoritative message assertions and reloads
-  **during** generation. Its terminal helper compares API/client content but does
-  not reload a fully completed reply. S46 does reload a completed reroll, with a
-  different entry path. These useful contracts do not prove the entire normal
-  send → incremental output → completion → durable reload journey.
-- Required repair: extend the normal send journey through a final full reload,
-  keeping operation/message identity and no duplicate provider invocation.
-  Demonstrate an appropriate persistence/finalization fault with unchanged test.
-- Disposition: **open**; separate from any claim of a current persistence bug.
+- Classification: **reproduced missed fault**, owner Phase 2c. No current
+  application persistence defect was found.
+- Starting source `4585333b4`: S01 drives the real composer, observes a held
+  provider's first chunk, reloads during generation, releases completion, and
+  checks client/API content. It omitted a completed reload and terminal result
+  identity. S46's completed reroll reload is a different entry path.
+- Repair: S01 is now `send -> mid-stream and completed reloads retain one exact
+reply`. After completion it captures the two authoritative message IDs and
+  verifies the accepted user ID and assistant operation lineage. A second full
+  reload, with a changed document time origin and no synthetic recovery events,
+  must restore the same DOM IDs, client rows, authoritative rows, and completed
+  operation's accepted/result IDs. The controlled provider must run exactly once.
+- Path observation remains independent: real composer fill/click, running
+  operation/job/accepted-user assertions with one visible partial reply, real
+  terminal storage reads, then new-document bootstrap and normal ranged chat
+  hydration. No hook supplies completion or the expected restored IDs.
+
+Fault in `server/fastify/src/routes/generationChat.ts`, within the actual
+transactional operation finalization call:
+
+```diff
+             terminalOutcome: args.operationLineage.terminalOutcome,
+-            resultMessageId: write.messageId,
+```
+
+The assistant row and live stream still complete, but the durable operation
+loses its link to that reply. The field is optional in the function signature,
+so this is a behavior fault, not a type/import failure. Client assets are
+unchanged; Playwright loads the changed Fastify route directly.
+
+Commands at the fixed source and in the isolated checkout use `pnpm exec
+playwright test -c playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/acceptedSendProtocol.spec.ts --workers=1`, with the
+same disposable-checkout pnpm dependency-check option described under Phase 0.
+
+- Strengthened baseline, `-g 'completed reloads'`: **1/1 pass**, 3.7s case/6.1s total.
+- Same unchanged strengthened regression/fixture against the fault:
+  **1/1 fails** after the completed reload at line 397,
+  `operationForChat(...).toMatchObject(completedOperation)`, because
+  `resultMessageId` is absent. Earlier visible-content, new-document, hydrated
+  message-ID, and authoritative message-ID assertions pass.
+- Additional comparison using the **unmodified old test file from `4585333b4`**
+  and the same fault, `-g 'reload mid-generation'`: **1/1 passes**, 2.1s case/4.0s
+  total. This is the missed fault; it is separate from the unchanged-test
+  fixed/fault/restored experiment above.
+- Restore the production field and strengthened test; execute all 11
+  accepted-send cases. **11/11 pass in 26.4s** at the restored source.
+
+Disposition: **focused repair verified**; Phase 2 aggregate evidence pending. Generation failure/retry, Stop, transport loss, concurrent chats, and
+queued finalization keep their existing separate cases and deterministic
+external-provider boundaries.
 
 ## BSE-004: Paint-cache observation must sample every held phase
 

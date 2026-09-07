@@ -4,29 +4,29 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Phases 0–1 accepted; Phase 2 critical journeys are next.
-- Execution source: Phase 0 accepted at `7399389f9` (implementation `711b1d583`);
-  Phase 1 changes are in progress on that source.
+- State: Phases 0–1 accepted; Phase 2 in progress; the 2c send/durable-reload slice is verified.
+- Execution source: `4585333b4` (accepted Phase 1), with the Phase 2c normal-send
+  reload regression in progress.
 - Current scope: the four critical browser contracts; prioritize normal-send
   durable reload (2c) and stale-response recovery (2d).
-- Next action: extend the normal composer journey through completed reload and
-  exact durable identities, then finish recovery, confirmation and transcript proof.
+- Next action: finish the 2d stale-response/recovery review, then 2a operation
+  confirmation and 2b transcript acceptance. Run the full Phase 2 gates afterward.
 - Confirmed gaps: BSE-002 (browser operation confirmation, Phase 2a) and BSE-003
   (completed normal-send reload, Phase 2c). BSE-001/004 are verified repairs.
-- Blockers: none. Reader implementation and smoke Phases 2–4 remain pending.
+- Blockers: none. Reader implementation and smoke Phases 3–4 remain pending.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State    | Next evidence required                                              |
-| --------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                  |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Pending  | Per-caller control classification and focused consumer proof        |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Pending  | Four critical contracts with relevant fault detection               |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending  | Complete review dispositions and repaired confirmed gaps            |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending  | Final discovery, focused/aggregate/full-browser evidence, residuals |
+| Phase                                                                       | State       | Next evidence required                                              |
+| --------------------------------------------------------------------------- | ----------- | ------------------------------------------------------------------- |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted    | Evidence below; proceed to Phase 1                                  |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted    | Shared controls, repair faults, agent and full-suite evidence below |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | In progress | Complete 2c/2d, then 2a/2b and the phase-ending full gate           |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Pending     | Complete review dispositions and repaired confirmed gaps            |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending     | Final discovery, focused/aggregate/full-browser evidence, residuals |
 
 ## Verification Ledger
 
@@ -152,3 +152,22 @@ repair; parent review, independent faults and real browser consumers are complet
 - Final documentation checks: current guides **49 pass**, both plan bundles plus
   coordination/index **22 pass**; explicit Markdown Prettier and whitespace pass.
   **Phase 1 accepted.** No reader changes yet; smoke Phase 2 is the next slice.
+
+## Phase 2c — Normal Send, Stream and Completed Reload
+
+Starting source `4585333b4`; only the accepted-send browser spec and owning
+evidence/guidance changed. The [BSE-003 experiment](findings.md#bse-003-completed-normal-send-identity-survives-full-reload)
+proves the old test missed a deleted durable result-message ID and the unchanged
+strengthened test detects it after a full completed reload. Fixed selected case
+**1/1 pass**, injected production fault **1/1 fails** at the intended post-reload
+identity assertion, old-test comparison **1/1 passes under the same fault**, and
+restored full accepted-send spec **11/11 pass** in 26.4s. No production fix was
+needed. The built frontend remains unchanged; the fault changes only the real
+Fastify finalization route.
+
+S01 now covers the entire normal composer → partial stream → completion → full
+reload contract with exact user/reply/operation IDs in DOM, client, messages API
+and bootstrap. The remaining accepted-send cases retain specific Retry, Stop,
+viewer-loss, restart, concurrent-chat and queued-finalization coverage; reroll
+and Debug Echo remain separate companion contracts. The 2c slice is verified;
+Phase 2 stays in progress pending the other slices and its aggregate/full gate.
