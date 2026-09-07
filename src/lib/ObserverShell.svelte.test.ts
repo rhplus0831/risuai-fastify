@@ -77,7 +77,13 @@ import {
   preparePendingMutationOutbox,
   resetPendingMutationOutboxForTests,
 } from '../ts/server/pendingMutationOutbox'
-import { charactersResourceState, replaceResourceDatabase } from '../ts/server/resourceState.svelte'
+import { SERVER_CHARACTER_SUMMARY_VERSION } from '@risuai/protocol/character-summary-resource'
+import {
+  charactersResourceState,
+  replaceResourceDatabase,
+  applyCharactersResource,
+  applyCharacterResource,
+} from '../ts/server/resourceState.svelte'
 import { withTestDatabaseWrite } from '../ts/__tests__/resourceDatabaseState'
 import { peekObserverRouteIntent, resetObserverRouteIntentForTests } from '../ts/observerRouteIntent'
 import { resetObserverShellLifecycleForTests, setObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
@@ -161,11 +167,22 @@ async function showConnectedReaderChat(): Promise<void> {
   replaceResourceDatabase({ characters: [reader], currentChar: -1 } as unknown as Database)
   const operation = beginClientSession('reader-a')
   settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+  publishReaderCharacters()
   setClientProjectionReady(true)
   setClientConnectionState('live')
   const router = await createRouterMock()
   router.navigate('/character/char-a/chat-a')
   await vi.waitFor(() => expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull())
+}
+
+function publishReaderCharacters() {
+  applyCharactersResource({
+    version: SERVER_CHARACTER_SUMMARY_VERSION,
+    revision: (charactersResourceState.revision ?? 0) + 1,
+    characters: JSON.parse(JSON.stringify(charactersResourceState.characters)),
+    characterOrder: [],
+    currentChar: charactersResourceState.currentChar,
+  })
 }
 
 function useThisDeviceButton(): HTMLButtonElement {
@@ -184,6 +201,7 @@ describe('pre-writer ObserverShell', () => {
   it('gates an authoring URL while keeping keyboard-focusable reader navigation and honest connection status', async () => {
     const operation = beginClientSession('reader-a')
     settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    publishReaderCharacters()
     setClientProjectionReady(true)
     setClientConnectionState('live')
     const router = await createRouterMock()
@@ -575,6 +593,7 @@ describe('pre-writer ObserverShell', () => {
     selectedCharID.set(0)
     const operation = beginClientSession('reader-a')
     settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    publishReaderCharacters()
     setClientProjectionReady(true)
     setClientConnectionState('live')
     await tick()
@@ -608,23 +627,28 @@ describe('pre-writer ObserverShell', () => {
     replaceResourceDatabase({ characters: [reader], currentChar: -1 } as unknown as Database)
     const operation = beginClientSession('reader-a')
     settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    publishReaderCharacters()
     setClientProjectionReady(true)
     const router = await createRouterMock()
     router.navigate('/character/char-a/chat-a')
     await vi.waitFor(() =>
       expect(target.querySelector('[data-reader-test-transcript]'), target.innerHTML).not.toBeNull(),
     )
-    withTestDatabaseWrite(() => {
-      charactersResourceState.characters[0].chats.splice(0, 1)
-    })
+    const deletedChat = JSON.parse(JSON.stringify(charactersResourceState.characters[0])) as character
+    deletedChat.chats.splice(0, 1)
+    applyCharacterResource({ revision: 2, character: deletedChat })
     await vi.waitFor(() => expect(get(router.currentRoute).path).toBe('/character/char-a/chat-b'))
     await tick()
     expect(observerShellMocks.navigate).toHaveBeenLastCalledWith('/character/char-a/chat-b', { replace: true })
     expect(target.querySelector('[data-reader-route-notice]')?.textContent).toBe(
       language.connectedReaders.chatUnavailable,
     )
-    withTestDatabaseWrite(() => {
-      charactersResourceState.characters = []
+    applyCharactersResource({
+      version: SERVER_CHARACTER_SUMMARY_VERSION,
+      revision: 3,
+      characters: [],
+      characterOrder: [],
+      currentChar: -1,
     })
     await vi.waitFor(() => expect(get(router.currentRoute).path).toBe('/'))
     await tick()
@@ -641,6 +665,7 @@ describe('pre-writer ObserverShell', () => {
     replaceResourceDatabase({ characters: [reader], currentChar: -1 } as unknown as Database)
     const operation = beginClientSession('reader-a')
     settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    publishReaderCharacters()
     setClientProjectionReady(true)
     const router = await createRouterMock()
     router.navigate('/character/char-a/chat-a')
@@ -660,11 +685,26 @@ describe('pre-writer ObserverShell', () => {
       charactersResourceState.status = 'ready'
       charactersResourceState.characters.push({ ...reader, chaId: 'duplicate-chat-owner' })
     })
+    publishReaderCharacters()
     await tick()
     expect(target.querySelector('[data-reader-ambiguous-target]')?.textContent).toBe(
       language.connectedReaders.ambiguousConversation,
     )
     expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
     expect(get(router.currentRoute).path).toBe('/character/char-a/chat-a')
+  })
+  it('retains reader membership and labels while the former writer has optimistic edits or deletion', async () => {
+    await showConnectedReaderChat()
+    withTestDatabaseWrite(() => {
+      charactersResourceState.characters[0].displayName = 'Pending character name'
+      charactersResourceState.characters[0].chats[0].name = 'Pending chat name'
+      charactersResourceState.characters[0].chats.splice(0, 1)
+    })
+    await tick()
+    const router = await createRouterMock()
+    expect(get(router.currentRoute).path).toBe('/character/char-a/chat-a')
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
+    expect(target.textContent).not.toContain('Pending character name')
+    expect(target.textContent).not.toContain('Pending chat name')
   })
 })

@@ -5703,6 +5703,7 @@ export function appendOptimisticGenerationOperationUserMessage(
   const messageId = message.chatId
   if (!messageId) return { status: 'error', error: 'The accepted message id is missing.' }
 
+  const sourceGeneration = captureClientSessionGeneration()
   let applied = false
   withChatOwnerProjectionWrite(() => {
     const character = locateSnapshotCharacter(target.characterId, target.selectedCharID)
@@ -5717,17 +5718,26 @@ export function appendOptimisticGenerationOperationUserMessage(
   })
   if (!applied) return { status: 'error', error: 'The accepted message could not be staged in the active chat.' }
   if (target.chatId) markChatMessageMutationIntent(target.chatId)
+  const projectionEpoch = target.chatId ? captureChatBodyProjectionEpoch(target.chatId) : undefined
 
   return {
     status: 'ok',
     messageId,
-    rollback: () =>
+    rollback: () => {
+      // The same message id may now be an accepted row in a newer server body.
+      // A retired writer callback owns neither that body nor its newer drafts.
+      if (
+        !isClientSessionGenerationCurrent(sourceGeneration) ||
+        (target.chatId && captureChatBodyProjectionEpoch(target.chatId) !== projectionEpoch)
+      )
+        return
       removeOptimisticCurrentChatMessage({
         selectedCharID: target.selectedCharID,
         characterId: target.characterId,
         chatId: target.chatId,
         messageId,
-      }),
+      })
+    },
   }
 }
 

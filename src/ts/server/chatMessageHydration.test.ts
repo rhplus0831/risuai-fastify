@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { demoteClientSession, requireClientAuthentication, resetClientSessionForTests } from '../clientSession'
+import { setManagedWriterForTest } from '../__tests__/managedClientSession'
 import { testDatabaseState } from '../__tests__/resourceDatabaseState'
 
 const projectionState = vi.hoisted(() => ({
@@ -40,6 +42,8 @@ import {
   hydrateChatMessageWindow,
   hydrateChatMessages,
   getChatMessageOwnerState,
+  getReaderChatMessageOwnerState,
+  hydrateReaderChatMessageWindow,
   reconcileAcceptedSendCompletion,
   applyServerChatMessagesResource,
   applyMessageTranslationLocalEffect,
@@ -66,6 +70,7 @@ import {
   captureCharacterLorebookBodyProjectionEpoch,
   captureChatBodyProjectionEpoch,
   charactersResourceState,
+  applyCharacterResource,
   hasCharacterLorebookBodyProjectionEpochChanged,
   hasChatBodyProjectionEpochChanged,
   hasNewerCharacterLorebookBodyResourceRevision,
@@ -218,6 +223,7 @@ function seedManyLorebookStubCharacters(count: number) {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   projectionState.canUse.mockReturnValue(true)
   projectionState.fetchChat.mockReset()
   projectionState.fetchGenerationChat.mockReset()
@@ -250,6 +256,128 @@ const db = () =>
   ).db
 
 describe('chat message hydration owner', () => {
+  it('keeps the certified reader body through demotion and failed reads without retaining writer overlays', async () => {
+    setManagedWriterForTest()
+    seedTwoStubChats()
+    const committed = { role: 'user', data: 'committed', chatId: 'committed-id' }
+    applyServerChatMessagesResource('chat-1', [committed], undefined, [])
+    const pending = { role: 'user', data: 'pending', chatId: 'pending-id' }
+    db().characters[0].chats[0].message.push(pending)
+    registerRetainedChatProjection({ kind: 'chat-body', chatId: 'chat-1' }, () => {
+      db().characters[0].chats[0].message.push(pending)
+    })
+    demoteClientSession()
+    resetChatHydration()
+    expect(getReaderChatMessageOwnerState('chat-1')).toMatchObject({ messages: [committed], resourceLoaded: false })
+    const held = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchChat.mockReturnValueOnce(held.promise)
+    const reading = hydrateReaderChatMessageWindow('chat-1', 2)
+    // Cleanup of the parked writer graph must neither leak pending rows nor
+    // make this independent reader response stale.
+    db().characters[0].chats[0].message = [pending]
+    held.resolve(okResult('chat-1', [{ ...committed, data: 'newer server content' }]))
+    await expect(reading).resolves.toBe(true)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages.map((message) => message.data)).toEqual([
+      'newer server content',
+    ])
+    expect(db().characters[0].chats[0].message.map((message) => message.data)).toEqual([
+      'newer server content',
+      'pending',
+    ])
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    projectionState.fetchChat.mockResolvedValueOnce({ status: 'error', error: 'read failed' })
+    await expect(hydrateReaderChatMessageWindow('chat-1', 2, { force: true })).resolves.toBe(false)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages.map((message) => message.data)).toEqual([
+      'newer server content',
+    ])
+    warn.mockRestore()
+    requireClientAuthentication()
+    expect(getReaderChatMessageOwnerState('chat-1')).toBeUndefined()
+  })
+
+  it('fills reader history from certified placeholders despite a previously full writer and parked append', async () => {
+    setManagedWriterForTest()
+    seedTwoStubChats()
+    applyServerChatMessagesResource(
+      'chat-1',
+      [
+        { role: 'user', data: 'old prefix', chatId: 'm1' },
+        { role: 'char', data: 'old tail', chatId: 'm2' },
+      ],
+      undefined,
+      [],
+    )
+    demoteClientSession()
+    projectionState.fetchChat.mockResolvedValueOnce({
+      ...okWindowResult('chat-1', [{ role: 'char', data: 'new tail', chatId: 'm3' }], 2, 3),
+      revision: 2,
+    })
+    await expect(hydrateReaderChatMessageWindow('chat-1', 1)).resolves.toBe(true)
+    db().characters[0].chats[0].message.push({ role: 'user', data: 'parked writer append', chatId: 'pending' })
+    projectionState.fetchChat.mockResolvedValueOnce(
+      okWindowResult(
+        'chat-1',
+        [
+          { role: 'user', data: 'certified prefix 1', chatId: 'm1' },
+          { role: 'char', data: 'certified prefix 2', chatId: 'm2' },
+        ],
+        0,
+        3,
+      ),
+    )
+    await expect(hydrateReaderChatMessageWindow('chat-1', 3)).resolves.toBe(true)
+    expect(projectionState.fetchChat).toHaveBeenLastCalledWith('chat-1', { start: 0, limit: 2 })
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages.map((row) => row.data)).toEqual([
+      'certified prefix 1',
+      'certified prefix 2',
+      'new tail',
+    ])
+  })
+
+  it('replaces deleted reader rows without restoring them from a deferred old body or a reset prefix', async () => {
+    setManagedWriterForTest()
+    seedTwoStubChats()
+    applyServerChatMessagesResource(
+      'chat-1',
+      [
+        { role: 'user', data: 'old prefix', chatId: 'old-prefix' },
+        { role: 'char', data: 'old tail', chatId: 'old-tail' },
+      ],
+      undefined,
+      [],
+    )
+    const held = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchChat.mockReturnValueOnce(held.promise)
+    const reading = hydrateReaderChatMessageWindow('chat-1', 2, { force: true })
+    applyServerChatMessagesResource('chat-1', [], undefined, [])
+    held.resolve(okResult('chat-1', [{ role: 'user', data: 'deleted content', chatId: 'old-prefix' }]))
+    await expect(reading).resolves.toBe(false)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([])
+    applyServerChatMessagesResource(
+      'chat-1',
+      [
+        { role: 'user', data: 'before reset', chatId: 'old-prefix' },
+        { role: 'char', data: 'before reset tail', chatId: 'old-tail' },
+      ],
+      undefined,
+      [],
+    )
+    resetChatHydration()
+    projectionState.fetchChat.mockResolvedValueOnce(
+      okWindowResult('chat-1', [{ role: 'char', data: 'replacement tail', chatId: 'replacement' }], 1, 2),
+    )
+    await expect(hydrateReaderChatMessageWindow('chat-1', 1)).resolves.toBe(true)
+    const after = getReaderChatMessageOwnerState('chat-1')!.messages
+    expect(isServerChatMessagePlaceholder(after[0])).toBe(true)
+    expect(after[1].data).toBe('replacement tail')
+    // A server deletion retires the old body even if the same id is later reused.
+    const character = JSON.parse(JSON.stringify(charactersResourceState.characters[0]))
+    applyCharacterResource({ revision: 3, character: { ...character, chats: [] } })
+    expect(getReaderChatMessageOwnerState('chat-1')).toBeUndefined()
+    applyCharacterResource({ revision: 4, character })
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual([])
+  })
+
   it('fails closed when a ready resource collection has duplicate chat owners', async () => {
     testDatabaseState.db.characters.push({
       chaId: 'char-2',
@@ -614,6 +742,7 @@ describe('chat message hydration owner', () => {
     const messages = db().characters[0].chats[0].message as Array<{ data: string }>
     expect(messages.map((message) => message.data)).toEqual(['older-1', 'older-2', 'older-3', 'tail'])
     expect(hasNewerChatBodyResourceRevision('chat-1', 1)).toBe(true)
+    expect(getReaderChatMessageOwnerState('chat-1')?.messages).toEqual(messages)
   })
 
   it('reports an older-window hydration failure without claiming the range is resident', async () => {

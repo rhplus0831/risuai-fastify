@@ -3,6 +3,7 @@
   import { language } from '../lang'
   import { observerShellLifecycleStore, type ObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
   import { hydrateCharacterShell, characterShellHydrationState } from '../ts/server/characterShellHydration.svelte'
+  import { getReaderTranscriptCharacters } from '../ts/server/readerTranscriptProjection.svelte'
   import { charactersResourceState } from '../ts/server/resourceState.svelte'
   import { isServerCharacterShell } from '../ts/storage/database.svelte'
   import { characterRoutePath, currentRoute, navigate } from '../ts/router'
@@ -31,12 +32,16 @@
     selectedIsShell ? ((selectedCharacter as unknown as { chatCount?: number }).chatCount ?? 0) : selectedChats.length,
   )
   const readerScope = $derived(
-    resolveReaderRoute($currentRoute, charactersResourceState, $clientSessionStore.projectionReady),
+    resolveReaderRoute(
+      $currentRoute,
+      { ...charactersResourceState, characters: getReaderTranscriptCharacters() },
+      $clientSessionStore.projectionReady,
+    ),
   )
   const readerCharacter = $derived('character' in readerScope ? readerScope.character : undefined)
-  const readerCharacters = $derived(uniqueReaderCharacters(charactersResourceState.characters))
+  const readerCharacters = $derived(uniqueReaderCharacters(getReaderTranscriptCharacters()))
   const readerChatIds = $derived(
-    readerCharacter ? uniqueReaderChatIds(charactersResourceState.characters, readerCharacter) : [],
+    readerCharacter ? uniqueReaderChatIds(getReaderTranscriptCharacters(), readerCharacter) : [],
   )
   const readerChats = $derived(
     readerCharacter && !isServerCharacterShell(readerCharacter)

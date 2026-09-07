@@ -46,6 +46,11 @@ import { acknowledgeHydratedGenerationPersistences } from '../process/generation
 import { transcriptHasReplyForAcceptedSend } from '../process/acceptedSendRecoveryState'
 import { reconcileGenerationOperationTranscriptHydration } from './generationOperations'
 import { registerChatHydrationRuntime } from '../process/generationRuntimeBridge'
+import {
+  getReaderChatMessages,
+  recordReaderChatMessages,
+  resetReaderChatMessages,
+} from './readerTranscriptProjection.svelte'
 
 export const BULK_HYDRATION_BATCH_SIZE = 32
 export const ACTIVE_CHAT_INITIAL_MESSAGE_WINDOW = DEFAULT_CHAT_LOAD_INITIAL_PAGES
@@ -77,6 +82,7 @@ interface ChatHydrationFreshnessToken {
   expectedChatState: string | null
   expectedRerollState: string | null
   trackRerollState: boolean
+  reader: boolean
 }
 
 // Targeted message projections are authoritative writes and invalidate every
@@ -216,6 +222,20 @@ export function getChatMessageOwnerState(chatId: string): ChatMessageOwnerState 
   }
 }
 
+/** Authoritative display-only transcript. Pending writer intent never enters this projection. */
+export function getReaderChatMessageOwnerState(chatId: string): ChatMessageOwnerState | undefined {
+  const projection = getReaderChatMessages(chatId)
+  if (!projection) return undefined
+  return {
+    chatId,
+    messages: projection.messages,
+    projectionEpoch: projection.projectionEpoch,
+    resourceLoaded: projection.current,
+    hydrationPending: isChatMessageHydrationPending(chatId, projection.messages.length),
+    hydrationFailed: failedChatIds.has(chatId),
+  }
+}
+
 function syncChatMessageOwnerProjection(chatId: string): void {
   const legacyMessages = chatMessageArray(chatId)
   if (!legacyMessages) return
@@ -284,14 +304,15 @@ function rerollStateSnapshot(chatId: string): string | null {
 
 function beginChatHydrationFreshness(
   chatId: string,
-  options: { trackRerollState: boolean },
+  options: { trackRerollState: boolean; reader?: boolean },
 ): ChatHydrationFreshnessToken {
   const trackRerollState = options.trackRerollState
   const token: ChatHydrationFreshnessToken = {
     projectionEpoch: chatProjectionEpochs.get(chatId) ?? 0,
-    expectedChatState: chatStateSnapshot(chatId),
+    expectedChatState: options.reader ? snapshotJson(getReaderChatMessages(chatId)) : chatStateSnapshot(chatId),
     expectedRerollState: trackRerollState ? rerollStateSnapshot(chatId) : null,
     trackRerollState,
+    reader: options.reader ?? false,
   }
   const pending = pendingChatHydrationFreshness.get(chatId) ?? new Set<ChatHydrationFreshnessToken>()
   pending.add(token)
@@ -310,7 +331,7 @@ function chatHydrationStaleReason(chatId: string, token: ChatHydrationFreshnessT
   if ((chatProjectionEpochs.get(chatId) ?? 0) !== token.projectionEpoch) {
     return 'newer-targeted-chat-projection'
   }
-  const currentChatState = chatStateSnapshot(chatId)
+  const currentChatState = token.reader ? snapshotJson(getReaderChatMessages(chatId)) : chatStateSnapshot(chatId)
   if (token.expectedChatState === null || currentChatState === null || currentChatState !== token.expectedChatState) {
     return 'chat-state-changed'
   }
@@ -336,7 +357,7 @@ function refreshPendingFreshnessAfterHydration(chatId: string, completedToken: C
   const expectedRerollState = rerollStateSnapshot(chatId)
   for (const token of pending) {
     if (token === completedToken) continue
-    token.expectedChatState = expectedChatState
+    token.expectedChatState = token.reader ? snapshotJson(getReaderChatMessages(chatId)) : expectedChatState
     if (token.trackRerollState) {
       token.expectedRerollState = expectedRerollState
     }
@@ -363,11 +384,8 @@ export function invalidateChatHydration(chatId: string): void {
   advanceChatProjectionEpoch(chatId)
   pendingChatHydrationFreshness.delete(chatId)
   for (const requestKey of inFlight.keys()) {
-    if (
-      requestKey === `full:${chatId}` ||
-      requestKey.startsWith(`tail:${chatId}:`) ||
-      requestKey.startsWith(`range:${chatId}:`)
-    ) {
+    const key = requestKey.replace(/^reader:/, '')
+    if (key === `full:${chatId}` || key.startsWith(`tail:${chatId}:`) || key.startsWith(`range:${chatId}:`)) {
       inFlight.delete(requestKey)
     }
   }
@@ -378,6 +396,7 @@ type ChatHydrationRangeRequest =
   | { start: number; limit: number; tail?: never }
 
 interface ChatHydrationRequest {
+  reader?: boolean
   force?: boolean
   range?: ChatHydrationRangeRequest
   seedReroll?: boolean
@@ -438,11 +457,12 @@ function rangedHydrationOverlapsResidentMessages(
   chatId: string,
   range: { start: number; total: number },
   returnedCount: number,
+  reader = false,
 ): boolean {
   // A newer disjoint range may have advanced the chat-level resource revision
   // while this request was in flight. Filling its remaining placeholders is
   // safe; replacing any resident row would let the older response win a race.
-  const messages = uniqueChatForHydration(chatId)?.chat.message
+  const messages = reader ? getReaderChatMessages(chatId)?.messages : uniqueChatForHydration(chatId)?.chat.message
   if (
     !messages ||
     messages.length !== range.total ||
@@ -462,8 +482,8 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
   if (charactersResourceState.status === 'ready' && !uniqueChatForHydration(chatId)) return false
   const force = request.force ?? false
   const wantsFullHydration = !request.range
-  if (!force && hydratedChatIds.has(chatId)) return true
-  const requestKey = chatHydrationRequestKey(chatId, request)
+  if (!request.reader && !force && hydratedChatIds.has(chatId)) return true
+  const requestKey = `${request.reader ? 'reader:' : ''}${chatHydrationRequestKey(chatId, request)}`
   const currentRequest = inFlight.get(requestKey)
   if (currentRequest) return currentRequest
 
@@ -477,6 +497,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
   const baselineRevision = peekCachedServerCommandRevision()
   const freshness = beginChatHydrationFreshness(chatId, {
     trackRerollState: request.seedReroll !== false,
+    reader: request.reader,
   })
   let shouldMarkAttempted = true
   let requestPromise: Promise<boolean>
@@ -517,7 +538,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         recordHydrationStaleDrop('chat', staleReason)
         return false
       }
-      if (request.range && !force && hydratedChatIds.has(chatId)) {
+      if (!request.reader && request.range && !force && hydratedChatIds.has(chatId)) {
         return true
       }
 
@@ -528,7 +549,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
       const hasNewerResourceRevision = hasNewerChatBodyResourceRevision(chatId, result.revision)
       if (
         hasNewerResourceRevision &&
-        (!range || rangedHydrationOverlapsResidentMessages(chatId, range, result.message.length))
+        (!range || rangedHydrationOverlapsResidentMessages(chatId, range, result.message.length, request.reader))
       ) {
         shouldMarkAttempted = false
         recordHydrationStaleDrop('chat', 'newer-overlapping-range')
@@ -544,6 +565,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
       }
       markChatBodyResourceRevision(chatId, result.revision)
       markChatBodyProjectionApplied(chatId)
+      recordReaderChatMessages(chatId, result.message as Message[], captureChatBodyProjectionEpoch(chatId), range)
       reapplyRetainedChatBodyProjections(chatId)
       syncChatMessageOwnerProjection(chatId)
       acknowledgeHydratedChatGenerationState(chatId, result.message as Message[])
@@ -640,6 +662,7 @@ async function hydrateChatsBulk(chatIds: readonly string[], options: BulkHydrati
         }
         markChatBodyResourceRevision(chatId, result.revision)
         markChatBodyProjectionApplied(chatId)
+        recordReaderChatMessages(chatId, hydration.message as Message[], captureChatBodyProjectionEpoch(chatId))
         reapplyRetainedChatBodyProjections(chatId)
         syncChatMessageOwnerProjection(chatId)
         acknowledgeHydratedChatGenerationState(chatId, hydration.message as Message[])
@@ -731,6 +754,29 @@ export async function hydrateChatMessageWindow(
   )
 }
 
+/** Read through retained writer overlays, using only certified rows to choose missing ranges. */
+export async function hydrateReaderChatMessageWindow(
+  chatId: string,
+  loadPages: number,
+  options: { force?: boolean } = {},
+): Promise<boolean> {
+  const projection = getReaderChatMessageOwnerState(chatId)
+  if (!projection) return false
+  if (options.force || !projection.resourceLoaded || projection.messages.length === 0) {
+    return hydrateChat(chatId, {
+      reader: true,
+      force: true,
+      seedReroll: false,
+      ...(Number.isFinite(loadPages) ? { range: { tail: requestedTailSize(loadPages) } } : {}),
+    })
+  }
+  for (const range of unloadedRangesForTail(projection.messages, loadPages)) {
+    if (!(await hydrateChat(chatId, { reader: true, range, seedReroll: false }))) return false
+  }
+  const current = getReaderChatMessageOwnerState(chatId)
+  return !!current && !current.hydrationFailed && unloadedRangesForTail(current.messages, loadPages).length === 0
+}
+
 /** Hydrate the currently-open chat's complete transcript. */
 export async function hydrateActiveChatFully(options: { force?: boolean } = {}): Promise<void> {
   const chatId = activeChatId()
@@ -787,6 +833,12 @@ export function applyServerChatMessagesResource(
   )
   if (!applied) return false
   advanceChatProjectionEpoch(chatId)
+  recordReaderChatMessages(
+    chatId,
+    message as Message[],
+    captureChatBodyProjectionEpoch(chatId),
+    range ? { ...range, preserveExistingOnGrowth: true } : undefined,
+  )
   reapplyRetainedChatBodyProjections(chatId)
   syncChatMessageOwnerProjection(chatId)
   acknowledgeHydratedChatGenerationState(chatId, message as Message[])
@@ -1301,6 +1353,7 @@ export async function ensureAllCharacterLorebooksHydrated(options: BulkHydration
  * re-stubs every chat), so the next `hydrateActiveChat` refetches.
  */
 export function resetChatHydration(): void {
+  resetReaderChatMessages()
   hydratedChatIds.clear()
   attemptedChatIds.clear()
   failedChatIds.clear()

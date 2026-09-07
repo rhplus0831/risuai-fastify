@@ -9,6 +9,10 @@ import {
   charactersResourceState,
   settingsResourceState,
   collectionsResourceState,
+  applyCharactersResource,
+  applyCharacterResource,
+  applyCollectionsResource,
+  applySettingsGroupResource,
 } from '../ts/server/resourceState.svelte'
 import * as hydration from '../ts/server/chatMessageHydration.svelte'
 import * as resourceReads from '../ts/server/resourceReads'
@@ -25,6 +29,10 @@ import {
 } from '../ts/clientSession'
 import { resetStartupReadinessForTests } from '../ts/startupReadiness'
 import { clearChatBodyParseMemo } from './ChatScreens/ChatBodyParseMemo'
+import { SERVER_CHARACTER_SUMMARY_VERSION } from '@risuai/protocol/character-summary-resource'
+import { demoteClientSession } from '../ts/clientSession'
+import { setManagedWriterForTest } from '../ts/__tests__/managedClientSession'
+import { appendOptimisticGenerationOperationUserMessage } from '../ts/chatCommands'
 import type { character, Message } from '../ts/storage/database.svelte'
 
 vi.mock('../ts/process/modules', async (importActual) => ({
@@ -53,6 +61,22 @@ function startReader() {
   settleClientReader(operation, { databaseLineage: 'reader-tests', writer: { sessionId: 'writer', epoch: 1 } })
   setClientProjectionReady(true)
   setClientConnectionState('live')
+  publishReaderFixtures()
+}
+
+function publishReaderFixtures() {
+  const source = JSON.parse(JSON.stringify(charactersResourceState.characters)) as character[]
+  applyCharactersResource({
+    version: SERVER_CHARACTER_SUMMARY_VERSION,
+    revision: 1,
+    characters: source,
+    characterOrder: [],
+    currentChar: 0,
+  })
+  for (const character of source)
+    for (const chat of character.chats) {
+      hydration.applyServerChatMessagesResource(chat.id!, chat.message, undefined, [])
+    }
 }
 
 function seedReaderChat(count = 3) {
@@ -92,7 +116,7 @@ beforeEach(() => {
   target = document.createElement('div')
   document.body.appendChild(target)
   vi.spyOn(parser, 'ParseMarkdown').mockImplementation(async (source) => `<p>${source}</p>`)
-  vi.spyOn(hydration, 'hydrateChatMessageWindow').mockResolvedValue(true)
+  vi.spyOn(hydration, 'hydrateReaderChatMessageWindow').mockResolvedValue(true)
   vi.stubGlobal(
     'fetch',
     vi.fn(() => Promise.reject(new Error('unexpected network request'))),
@@ -135,7 +159,7 @@ describe('connected reader transcript', () => {
       copy!.click()
       await settle()
       expect(clipboard.writeText).toHaveBeenCalledWith('Reader message 2')
-      expect(hydration.hydrateChatMessageWindow).toHaveBeenCalledWith('reader-chat', 2, { force: false })
+      expect(hydration.hydrateReaderChatMessageWindow).not.toHaveBeenCalled()
       expect(get(selectedCharID)).toBe(0)
       expect(charactersResourceState.currentChar).toBe(0)
       expect(charactersResourceState.characters[0].chatPage).toBe(0)
@@ -254,7 +278,7 @@ describe('connected reader transcript', () => {
     const newest = target.querySelector('[data-risu-message-id="render-cost-message-4"]')
     target.querySelector<HTMLButtonElement>('[data-reader-load-more]')!.click()
     await settle()
-    expect(hydration.hydrateChatMessageWindow).toHaveBeenLastCalledWith('reader-chat', 4, { force: false })
+    expect(hydration.hydrateReaderChatMessageWindow).toHaveBeenLastCalledWith('reader-chat', 4, { force: false })
     expect(target.querySelectorAll('.risu-chat')).toHaveLength(4)
     expect(target.querySelector('[data-risu-message-id="render-cost-message-4"]')).toBe(newest)
     expect(get(selectedCharID)).toBe(0)
@@ -270,7 +294,7 @@ describe('connected reader transcript', () => {
     hydration.applyServerChatMessagesResource('reader-chat', committed, undefined, [])
     await settle()
     expect(target.textContent).toContain('Committed reader update')
-    vi.mocked(hydration.hydrateChatMessageWindow).mockResolvedValueOnce(false)
+    vi.mocked(hydration.hydrateReaderChatMessageWindow).mockResolvedValueOnce(false)
     target.querySelector<HTMLButtonElement>('[data-reader-refresh]')!.click()
     await settle()
     expect(target.querySelector('[data-reader-read-failed]')?.textContent).toBe(language.connectedReaders.readFailed)
@@ -286,14 +310,14 @@ describe('connected reader transcript', () => {
     component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
     await settle()
     expect(target.textContent).toContain('Reader message 2')
-    vi.mocked(hydration.hydrateChatMessageWindow).mockResolvedValue(false)
+    vi.mocked(hydration.hydrateReaderChatMessageWindow).mockResolvedValue(false)
     withTestDatabaseWrite(() => {
       charactersResourceState.characters[1].chats[0].message = []
     })
     hydration.resetChatHydration()
     await settle()
     expect(target.textContent).toContain('Reader message 2')
-    expect(hydration.hydrateChatMessageWindow).toHaveBeenCalledTimes(2)
+    expect(hydration.hydrateReaderChatMessageWindow).toHaveBeenCalledTimes(1)
     expect(target.querySelector('[data-reader-read-failed]')).not.toBeNull()
   })
   it('clears live and retained transcript content when authentication is lost', async () => {
@@ -306,5 +330,143 @@ describe('connected reader transcript', () => {
     await settle()
     expect(target.textContent).not.toContain('Reader message 2')
     expect(target.querySelector('.risu-chat')).toBeNull()
+  })
+  it('keeps staged writer rows and metadata out of a demoted reader during held and failed refresh', async () => {
+    setManagedWriterForTest()
+    seedReaderChat(2)
+    publishReaderFixtures()
+    const previous = JSON.parse(JSON.stringify(charactersResourceState.characters[0])) as character
+    const chatId = previous.chats[0].id!
+    const committed = previous.chats[0].message[1].data
+    const appended = appendOptimisticGenerationOperationUserMessage(
+      {
+        selectedCharID: 0,
+        chatPage: 0,
+        characterId: previous.chaId,
+        chatId,
+      },
+      { role: 'user', data: 'Pending writer send', chatId: 'pending-send' },
+    )
+    expect(appended.status).toBe('ok')
+    withTestDatabaseWrite(() => {
+      charactersResourceState.characters[0].displayName = 'Pending character name'
+      charactersResourceState.characters[0].chats[0].name = 'Pending chat name'
+      charactersResourceState.characters[0].firstMessage = 'Pending greeting'
+    })
+    let finish!: (value: boolean) => void
+    vi.mocked(hydration.hydrateReaderChatMessageWindow).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    demoteClientSession()
+    component = mount(ReaderTranscript, { target, props: { characterId: previous.chaId, chatId } })
+    await settle()
+    expect(hydration.hydrateReaderChatMessageWindow).toHaveBeenCalledOnce()
+    expect(target.textContent).toContain(committed)
+    expect(target.textContent).not.toContain('Pending writer send')
+    expect(target.textContent).not.toContain('Pending character name')
+    expect(target.textContent).not.toContain('Pending chat name')
+    expect(target.textContent).not.toContain('Pending greeting')
+    finish(false)
+    await settle()
+    expect(target.textContent).toContain(committed)
+    expect(target.querySelector('[data-reader-read-failed]')).not.toBeNull()
+    // A late obsolete rollback cannot change the newer certified reader body.
+    const accepted = [
+      ...previous.chats[0].message,
+      { role: 'user', data: 'Server accepted send', chatId: 'pending-send' },
+    ] as Message[]
+    hydration.applyServerChatMessagesResource(chatId, accepted, undefined, [])
+    if (appended.status === 'ok') appended.rollback()
+    await settle()
+    expect(charactersResourceState.characters[0].chats[0].message.at(-1)?.data).toBe('Server accepted send')
+    expect(target.textContent).toContain('Server accepted send')
+    expect(target.textContent).not.toContain('Pending writer send')
+  })
+
+  it('keeps committed body and details when a newer sparse shell cannot hydrate, including leave and return', async () => {
+    setManagedWriterForTest()
+    seedReaderChat(2)
+    publishReaderFixtures()
+    const previous = JSON.parse(JSON.stringify(charactersResourceState.characters[0])) as character
+    const chatId = previous.chats[0].id!
+    const committed = previous.chats[0].message[1].data
+    demoteClientSession()
+    const summary = {
+      chaId: previous.chaId,
+      name: 'New committed summary name',
+      type: 'character',
+      __serverCharacterShell: true,
+      chatIds: [chatId],
+      chatCount: 1,
+    } as unknown as character
+    applyCharactersResource({
+      version: SERVER_CHARACTER_SUMMARY_VERSION,
+      revision: 2,
+      characters: [summary],
+      characterOrder: [],
+      currentChar: 0,
+    })
+    vi.mocked(hydration.hydrateReaderChatMessageWindow).mockResolvedValue(false)
+    for (let visit = 0; visit < 2; visit += 1) {
+      component = mount(ReaderTranscript, { target, props: { characterId: previous.chaId, chatId } })
+      await settle()
+      expect(target.textContent).toContain(committed)
+      expect(target.querySelector('[data-reader-read-failed]')).not.toBeNull()
+      expect(target.textContent).toContain('New committed summary name')
+      await unmount(component)
+      component = undefined
+    }
+    applyCharactersResource({
+      version: SERVER_CHARACTER_SUMMARY_VERSION,
+      revision: 3,
+      characters: [{ ...summary, chatIds: [] } as unknown as character],
+      characterOrder: [],
+      currentChar: 0,
+    })
+    applyCharactersResource({
+      version: SERVER_CHARACTER_SUMMARY_VERSION,
+      revision: 4,
+      characters: [summary],
+      characterOrder: [],
+      currentChar: 0,
+    })
+    expect(hydration.getReaderChatMessageOwnerState(chatId)?.messages).toEqual([])
+    component = mount(ReaderTranscript, { target, props: { characterId: previous.chaId, chatId } })
+    await settle()
+    expect(target.textContent).not.toContain(committed)
+  })
+
+  it('uses certified persona bindings and names while newer local edits remain pending', async () => {
+    seedReaderChat(1)
+    startReader()
+    const source = JSON.parse(JSON.stringify(charactersResourceState.characters[1])) as character
+    source.chats[0].generationSettings = { personaId: 'persona-a' }
+    source.chats[0].message[0].role = 'user'
+    hydration.applyServerChatMessagesResource('reader-chat', source.chats[0].message, undefined, [])
+    applyCharacterResource({ revision: 2, character: source })
+    applyCollectionsResource({
+      revision: 2,
+      collections: {
+        personas: [
+          { id: 'persona-a', name: 'Committed persona', icon: '', largePortrait: false, personaPrompt: '' },
+          { id: 'persona-b', name: 'Other persona', icon: '', largePortrait: false, personaPrompt: '' },
+        ],
+      },
+    })
+    applySettingsGroupResource({ revision: 2, group: 'display', settings: { username: 'Committed user' } }, [
+      'username',
+    ])
+    withTestDatabaseWrite(() => {
+      charactersResourceState.characters[1].chats[0].generationSettings = { personaId: 'persona-b' }
+      collectionsResourceState.values.personas![0].name = 'Pending persona name'
+    })
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    expect(target.textContent).toContain('Committed persona')
+    expect(target.textContent).not.toContain('Other persona')
+    expect(target.textContent).not.toContain('Pending persona name')
   })
 })

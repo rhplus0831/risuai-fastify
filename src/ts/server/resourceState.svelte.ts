@@ -25,6 +25,16 @@ import { applySettingsRuntimeProjectionEffects } from './settingsRuntimeProjecti
 import { applyPendingSettingsProjectionOverlays } from './settingsPendingProjection'
 import { reapplyRetainedCharacterProjections } from './chatRetainedProjection'
 import {
+  clearReaderTranscriptProjection,
+  recordReaderCharacters,
+  recordReaderCharacter,
+  recordReaderCharacterPatch,
+  recordReaderChatPatch,
+  recordReaderChatPersona,
+  recordReaderPersonas,
+  recordReaderPersonaSettings,
+} from './readerTranscriptProjection.svelte'
+import {
   SERVER_CHARACTER_SHELL_MARKER,
   SERVER_CHARACTER_SUMMARY_VERSION,
 } from '@risuai/protocol/character-summary-resource'
@@ -1314,6 +1324,7 @@ export function applySettingsResource(payload: ServerSettingsResourcePayload): b
   const runtimeProjectionKeys = Array.from(new Set([...Object.keys(liveSettings), ...Object.keys(payload.settings)]))
   const hasLiveLoreBookPage = Object.prototype.hasOwnProperty.call(liveSettings, 'loreBookPage')
   const liveLoreBookPage = preserveLoreBookPage ? cloneJsonValue(liveSettings.loreBookPage) : undefined
+  recordReaderPersonaSettings(payload.settings)
   settingsResourceState.value = cloneJsonValue(payload.settings)
   if (preserveEnabledModules) {
     ;(settingsResourceState.value as Record<string, unknown>).enabledModules = liveEnabledModules
@@ -1388,6 +1399,7 @@ export function applyShellSettingsResource(payload: ServerShellSettingsResourceP
   if (!canApplyShellSettingsResource(payload)) return false
 
   const target = settingsResourceState.value as Record<string, unknown>
+  recordReaderPersonaSettings(payload.settings, SERVER_SHELL_SETTINGS_KEYS)
   for (const key of SERVER_SHELL_SETTINGS_KEYS) target[key] = cloneJsonValue(payload.settings[key])
   applyPendingSettingsProjectionOverlays(target, new Set(SERVER_SHELL_SETTINGS_KEYS))
   settingsResourceState.shellRevision = payload.revision
@@ -1430,6 +1442,7 @@ export function applyStandaloneSettingResource(payload: ServerStandaloneSettingP
   const target = settingsResourceState.value as Record<string, unknown>
   if (payload.state.present) target[payload.setting] = cloneJsonValue(payload.state.value)
   else delete target[payload.setting]
+  recordReaderPersonaSettings(target, [payload.setting])
   applyPendingSettingsProjectionOverlays(target, new Set([payload.setting]))
   settingsResourceState.standaloneRevisions[payload.setting] = payload.revision
   settingsResourceState.standaloneStatuses[payload.setting] = 'ready'
@@ -1469,6 +1482,7 @@ export function applySettingsGroupResource(
       delete target[key]
     }
   }
+  recordReaderPersonaSettings(incoming, groupKeys)
   applyPendingSettingsProjectionOverlays(target, new Set(groupKeys))
   settingsResourceState.groupRevisions[payload.group] = payload.revision
   settingsResourceState.groupStatuses[payload.group] = 'ready'
@@ -1520,6 +1534,7 @@ export function applySettingsPatchLocalEffect(payload: ServerSettingsPatchLocalE
     return true
   }
 
+  recordReaderPersonaSettings(payload.settings, canonicalKeys)
   const settingsTarget = settingsResourceState.value as Record<string, unknown>
   const previousLanguage = settingsTarget.language
   for (const key of attemptedKeys) {
@@ -2057,6 +2072,7 @@ export function applyCollectionsResource(
   const appliedNames: ServerCollectionName[] = []
   for (const name of names) {
     if (isOlderRevision(payload.revision, collectionsResourceState.revisions[name] ?? null)) continue
+    if (name === 'personas') recordReaderPersonas(payload.collections.personas)
     collectionsResourceState.values[name] = cloneJsonValue(payload.collections[name]) as never
     collectionsResourceState.revisions[name] = payload.revision
     collectionsResourceState.statuses[name] = 'ready'
@@ -2769,6 +2785,7 @@ export function applyCharactersResource(
   if (!preserveResidentChatBodies) advanceAllChatBodyProjectionEpochs()
   if (!preserveResidentChatBodies) advanceAllCharacterLorebookBodyProjectionEpochs()
   advanceAllCharacterLorebookProjectionEpochs()
+  recordReaderCharacters(payload.characters, payload.revision)
   reapplyRetainedCharacterProjections()
   return true
 }
@@ -2859,6 +2876,7 @@ export function applyCharacterResource(payload: ServerCharacterResourcePayload):
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
   advanceCharacterRowProjectionEpoch(characterId)
   advanceCharacterLorebookProjectionEpoch(characterId)
+  recordReaderCharacter(payload.character, payload.revision)
   reapplyRetainedCharacterProjections(characterId)
   return true
 }
@@ -2963,6 +2981,7 @@ export function applyChatGenerationSettingsLocalEffect(
   charactersResourceState.rowStatuses[payload.characterId] = 'ready'
   delete charactersResourceState.rowErrors[payload.characterId]
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
+  recordReaderChatPersona(payload.characterId, payload.chatId, payload.generationSettings)
   return true
 }
 
@@ -2986,6 +3005,7 @@ export function applyCharacterPatchLocalEffect(payload: ServerCharacterPatchLoca
   charactersResourceState.rowStatuses[payload.characterId] = 'ready'
   delete charactersResourceState.rowErrors[payload.characterId]
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
+  recordReaderCharacterPatch(payload.characterId, payload.patch)
   return true
 }
 
@@ -3047,10 +3067,12 @@ export function applyChatPatchLocalEffect(payload: ServerChatPatchLocalEffectPay
   charactersResourceState.rowStatuses[payload.characterId] = 'ready'
   delete charactersResourceState.rowErrors[payload.characterId]
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
+  recordReaderChatPatch(payload.characterId, payload.chatId, payload.patch)
   return true
 }
 
 export function resetServerResourceState(): void {
+  clearReaderTranscriptProjection()
   invalidateModuleRenderRevision()
   settingsResourceState.value = {}
   settingsResourceState.revision = null
@@ -3201,6 +3223,9 @@ export function replaceResourceDatabase(database: Database, revision?: number): 
   const characters = Array.isArray(databaseRecord.characters)
     ? (databaseRecord.characters as unknown as character[])
     : []
+  recordReaderCharacters(characters, nextRevision)
+  recordReaderPersonas(collections.personas)
+  recordReaderPersonaSettings(settings)
   charactersResourceState.characters = characters
   charactersResourceState.characterOrder = Array.isArray(databaseRecord.characterOrder)
     ? (databaseRecord.characterOrder as Database['characterOrder'])

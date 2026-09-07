@@ -16,12 +16,15 @@
     clientSessionStore,
     isClientSessionGenerationCurrent,
   } from '../ts/clientSession'
+  import { charactersResourceState, settingsResourceState } from '../ts/server/resourceState.svelte'
   import {
-    charactersResourceState,
-    getPersonaOwnerStateSnapshot,
-    settingsResourceState,
-  } from '../ts/server/resourceState.svelte'
-  import { getChatMessageOwnerState, hydrateChatMessageWindow } from '../ts/server/chatMessageHydration.svelte'
+    getReaderChatMessageOwnerState,
+    hydrateReaderChatMessageWindow,
+  } from '../ts/server/chatMessageHydration.svelte'
+  import {
+    getReaderTranscriptDisplayCharacters,
+    getReaderTranscriptPersona,
+  } from '../ts/server/readerTranscriptProjection.svelte'
   import {
     currentGreetingTranslatorSettingsSignature,
     findGreetingTranslation,
@@ -68,13 +71,16 @@
   const liveScope = $derived(
     resolveReaderRoute(
       { kind: 'character', path: '', chaId: characterId, chatId },
-      charactersResourceState,
+      { ...charactersResourceState, characters: getReaderTranscriptDisplayCharacters() },
       $clientSessionStore.projectionReady,
     ),
   )
   const liveChat = $derived(liveScope.status === 'chat' ? liveScope.chat : undefined)
   const liveCharacter = $derived('character' in liveScope ? liveScope.character : undefined)
-  const liveBody = $derived(liveChat ? getChatMessageOwnerState(chatId) : undefined)
+  const liveBody = $derived.by(() => {
+    void $clientSessionStore.generation
+    return liveChat ? getReaderChatMessageOwnerState(chatId) : undefined
+  })
   const liveBodyUsable = $derived(
     Boolean(
       liveChat &&
@@ -106,30 +112,20 @@
               : 'loading'
       },
       get characters() {
-        return usingRetained ? [retained!.character] : charactersResourceState.characters
+        return usingRetained ? [retained!.character] : getReaderTranscriptDisplayCharacters()
       },
       get currentChar() {
         return -1
       },
     },
-    (id) => (usingRetained && id === chatId ? retained!.messages : getChatMessageOwnerState(id)?.messages),
+    (id) => (usingRetained && id === chatId ? retained!.messages : getReaderChatMessageOwnerState(id)?.messages),
     () => ({ characterId, chatId }),
   )
   setContext(CHAT_READ_OWNERS_CONTEXT, readOwners)
   const displayCharacter = $derived(readOwners.character())
   const displayChat = $derived(readOwners.chat())
   const messages = $derived((readOwners.messages() ?? []) as Message[])
-  const presentation = $derived(
-    resolveUserPersonaPresentation(
-      (getPersonaOwnerStateSnapshot() ?? {
-        personas: [],
-        selectedPersonaId: null,
-        username: 'User',
-        userIcon: '',
-      }) as Database,
-      displayChat,
-    ),
-  )
+  const presentation = $derived(resolveUserPersonaPresentation(getReaderTranscriptPersona() as Database, displayChat))
   const simpleCharacter = $derived(displayCharacter ? createSimpleCharacter(displayCharacter) : null)
   const greetingIndex = $derived(displayChat?.fmIndex ?? -1)
   const greeting = $derived(
@@ -285,7 +281,7 @@
       liveCharacter === targetCharacter &&
       liveChat === targetChat
     try {
-      const hydrated = await hydrateChatMessageWindow(targetId, nextPages, { force })
+      const hydrated = await hydrateReaderChatMessageWindow(targetId, nextPages, { force })
       if (!current()) return
       if (!hydrated) {
         readFailed = true
