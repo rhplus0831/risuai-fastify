@@ -907,11 +907,13 @@ describe('TranslatorPresetSettings server-backed edits', () => {
         async () => {
           staged = await listPendingMutations()
           expect(staged).toHaveLength(1)
+          // A staged generation can be replaced while the remote reader
+          // decrypts it. Re-read until the exact dispatch marker commits.
+          await expect(beginPendingMutationDispatch(staged[0].handle)).resolves.toBe('persisted')
         },
         { interval: 0 },
       )
       expect(commandSpies.updateInputs).toEqual([])
-      await expect(beginPendingMutationDispatch(staged[0].handle)).resolves.toBe('persisted')
 
       await editPrompt('old prompt A')
       await vi.waitFor(
@@ -979,12 +981,12 @@ describe('TranslatorPresetSettings server-backed edits', () => {
         async () => {
           staged = await listPendingMutations()
           expect(staged).toHaveLength(1)
+          await expect(beginPendingMutationDispatch(staged[0].handle)).resolves.toBe('persisted')
         },
         { interval: 0 },
       )
       expect(commandSpies.updateInputs).toEqual([])
       const predecessor = staged[0]
-      await expect(beginPendingMutationDispatch(predecessor.handle)).resolves.toBe('persisted')
 
       await editMaxResponse(321)
       await editPrompt('old prompt A')
