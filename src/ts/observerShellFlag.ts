@@ -1,4 +1,5 @@
 const ENABLED_VALUE = 'TRUE'
+const DISABLED_VALUE = 'FALSE'
 const SMOKE_OVERRIDE_STORAGE_KEY = 'risu:fast-bootstrap-observer-shell'
 
 let testOverride: boolean | null = null
@@ -15,9 +16,9 @@ function readSmokeOverride(): boolean | null {
   return null
 }
 
-/** Temporary Phase 6 rollout flag. Production remains conservative by default. */
+/** Connected readers are the default; FALSE retains the conservative writer flow. */
 export function isPreWriterObserverShellEnabled(): boolean {
-  return testOverride ?? readSmokeOverride() ?? import.meta.env.VITE_FAST_BOOTSTRAP_OBSERVER === ENABLED_VALUE
+  return testOverride ?? readSmokeOverride() ?? import.meta.env.VITE_FAST_BOOTSTRAP_OBSERVER !== DISABLED_VALUE
 }
 
 export const __observerShellFlagTestHooks = {
