@@ -1304,6 +1304,26 @@
     },
     {
       "id": "character-aggregate-endpoint",
+      "file": "server/fastify/browser-smoke/connectedGenerationHarness.ts",
+      "marker": "/api/v1/characters/aggregate",
+      "count": 1,
+      "owner": "Fastify compatibility character/chat resource read",
+      "disposition": "retained external compatibility; first-party production clients use narrow owners",
+      "migrationPhase": "Workstream 3 Phase 7 retained-seam decision",
+      "removalTrigger": "Remove after path-only access telemetry records zero supported-client requests for 30 consecutive days."
+    },
+    {
+      "id": "character-aggregate-endpoint",
+      "file": "server/fastify/browser-smoke/connectedGenerationHarness.ts",
+      "marker": "/characters/aggregate",
+      "count": 1,
+      "owner": "Fastify compatibility character/chat resource read",
+      "disposition": "retained external compatibility; first-party production clients use narrow owners",
+      "migrationPhase": "Workstream 3 Phase 7 retained-seam decision",
+      "removalTrigger": "Remove after path-only access telemetry records zero supported-client requests for 30 consecutive days."
+    },
+    {
+      "id": "character-aggregate-endpoint",
       "file": "server/fastify/src/routes/resourceReads.ts",
       "marker": "/api/v1/characters/aggregate",
       "count": 2,
