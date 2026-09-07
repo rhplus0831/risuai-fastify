@@ -851,7 +851,7 @@ under `/tmp/reader-phase4-five-baseline-final-hr9fcca2`; all 1,322 successful
 script URLs match the frozen 503-file emission catalog. This establishes
 URL-to-emission attribution, not independent network-response byte hashes.
 Earlier 0/4, 3/5 and 4/5 baselines remain recorded in
-[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-4-implementation-2026-09-07),
+[reader status](../../ui-and-user-input/connected-read-only-clients/status.md#phase-4-implementation-2026-09-07),
 including the reproduced Stop, settings/IGP and atomic receipt defects and the
 separate expected-alert/TTS assertion corrections.
 
@@ -1277,7 +1277,7 @@ process kill. Deterministic local providers and native browser storage preserve
 the named boundaries without certifying physical devices or external providers.
 
 The Phase 5 integration repairs remain separately traceable in
-[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-enabled-build-baseline-and-integration-repairs):
+[reader status](../../ui-and-user-input/connected-read-only-clients/status.md#phase-5-enabled-build-baseline-and-integration-repairs):
 initial-preview display gating (`36f0d33ff`), writer reroll hydration after Reader
 residency (`f24d781ae`), initial locale/shell retry (`a9e2ad06e`), per-sample
 fixture ownership (`e8333ffa2`), and owned-context shutdown (`22da08cd1`). The

@@ -18,7 +18,7 @@ results, decisions, and dispositions. [Phase documents](phases/README.md) define
 bounded work. Only `status.md` owns the execution cursor, phase acceptance, and
 aggregate verification summaries; it links to detailed findings rather than
 duplicating their experiment logs. Current source and the
-[architecture guides](../../structure/README.md) remain authoritative for shipped
+[architecture guides](../../../docs/structure/README.md) remain authoritative for shipped
 behavior. A completed plan document does not mean its implementation is complete.
 
 ## Planning Evidence
@@ -43,13 +43,13 @@ Source anchor: `ac5a1cec1dc2e74354001fe7f86b372048e691fd`.
   Browser behavior requires separate focused evidence.
 
 Use the earlier
-[test-effectiveness audit](../../../.archived-docs/performance-and-stability/test-suite-effectiveness-audit/plan.md)
+[test-effectiveness audit](../test-suite-effectiveness-audit/plan.md)
 and its
-[final residuals](../../../.archived-docs/performance-and-stability/test-suite-effectiveness-audit/status.md#final-accepted-residuals)
+[final residuals](../test-suite-effectiveness-audit/status.md#final-accepted-residuals)
 as historical leads. Recheck every retained claim against current source; do not
 import old gaps or completion totals as current findings. Reuse the stable-plan,
 moving-status, bounded-phase structure from the
-[maintainability workstream](../../../.archived-docs/performance-and-stability/maintainability-and-performance/PLAN.md).
+[maintainability workstream](../maintainability-and-performance/PLAN.md).
 
 ## Scope
 
@@ -190,7 +190,7 @@ dependencies. A shared harness redesign is a scope decision, not assumed work.
 
 ## Validation and Completion
 
-Follow the current [test workflow](../../tests/README.md#running-the-suite).
+Follow the current [test workflow](../../../docs/tests/README.md#running-the-suite).
 During implementation use `pnpm test -- <one-test-or-source-file>` for a concrete
 diagnostic; exact browser specs build and run the selected spec. Once an
 implementation batch is complete, run `pnpm test:agent`. Documentation changes

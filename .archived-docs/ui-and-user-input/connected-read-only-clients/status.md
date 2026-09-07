@@ -16,13 +16,14 @@ Updated: 2026-09-08
   FALSE builds, named production faults and restored controls are recorded below.
 - Final maintenance validation: production/browser through `7aad1bb37`, focused
   controls at `985da9bc8`, and both final gates at clean `39356086c` pass.
-- Archive: this intact bundle is preserved under UI/user input. Continue the
-  [smoke workstream](../../../docs/plan/browser-smoke-effectiveness/status.md) through its final archival action.
-- Follow-up: [BSE-009](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
+- Archive: this intact bundle is preserved under UI/user input. The completed
+  [smoke workstream](../../performance-and-stability/browser-smoke-effectiveness/status.md) and coordination record are archived under performance/stability.
+- Next action: none; both workstreams and combined closeout are complete.
+- Follow-up: [BSE-009](../../performance-and-stability/browser-smoke-effectiveness/status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
   changes writer startup when the retained route supersedes pending hydration.
   Focused red/green, two qualified browser negatives, both 18-case normal
   cohorts and two actual compiled-FALSE controls pass at `985da9bc8` as recorded
-  in the [follow-up evidence](../../../docs/plan/browser-smoke-effectiveness/status.md#bse-009-writer-startup-and-reader-revalidation).
+  in the [follow-up evidence](../../performance-and-stability/browser-smoke-effectiveness/status.md#bse-009-writer-startup-and-reader-revalidation).
   Final-source agent/full verification passes at `39356086c`. Original product
   follow-up scope and browser/provider/device limits remain explicit below.
 
@@ -44,7 +45,7 @@ active [phase](phases/README.md) for detailed execution instructions.
 ## Verification Ledger
 
 2026-09-07 coordination-policy update: shared documentation checks passed as
-recorded in the [smoke verification ledger](../../../docs/plan/browser-smoke-effectiveness/status.md#verification-ledger).
+recorded in the [smoke verification ledger](../../performance-and-stability/browser-smoke-effectiveness/status.md#verification-ledger).
 This validates the policy edit only; no implementation phase ended and
 `pnpm test:all` was not run for this edit.
 
@@ -108,7 +109,7 @@ product questions requiring another approval round.
 
 ## Stage 1 Smoke Prerequisite
 
-Received 2026-09-07: [smoke Phases 0–2 accepted](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-2-acceptance-and-stage-1-handoff-2026-09-07),
+Received 2026-09-07: [smoke Phases 0–2 accepted](../../performance-and-stability/browser-smoke-effectiveness/status.md#phase-2-acceptance-and-stage-1-handoff-2026-09-07),
 including all four critical contracts, their required fault demonstrations and
 restored browser proof, and the phase-ending agent-executed `pnpm test:all`
 (**79/79 browser cases, all 13 lanes pass**). No high-risk critical gap remains
@@ -532,7 +533,7 @@ oracles after real accepted server commands: skipped message projection (S80),
 omitted demotion resubscription (S60), and reader teardown on a subsequent foreign
 writer frame (S32). R2-F1 additionally retains independent SQLite message/event
 origin proof. Exact hunks, commands, hashes and limits are recorded in the
-[smoke findings](../../../docs/plan/browser-smoke-effectiveness/findings.md#reader-phase-2-production-fault-evidence).
+[smoke findings](../../performance-and-stability/browser-smoke-effectiveness/findings.md#reader-phase-2-production-fault-evidence).
 Both production files were restored; a clean build and the same three selected
 controls passed **3/3 in 13.6s**. Production remains unchanged by the later test
 repairs, so these three results retain their source scope.
@@ -547,7 +548,7 @@ compatibility (18), scale and performance; browser passed 79/80 cases. S22 alone
 failed its nonempty pause-coverage guard. Saved observations contained a stable
 readable pause after its first sample; no production scroll defect was shown.
 
-[BSE-005](../../../docs/plan/browser-smoke-effectiveness/findings.md#bse-005-pause-sampling-misses-readable-anchors-after-hydration)
+[BSE-005](../../performance-and-stability/browser-smoke-effectiveness/findings.md#bse-005-pause-sampling-misses-readable-anchors-after-hydration)
 owns the bounded repair. The unchanged test passed two isolated controls, but
 that did not erase the failed full gate. `38604f7f9` adds a fixed second pass over
 recently measured history, preserving the original sample-zero anchor oracle.
@@ -678,7 +679,7 @@ After the terminal-pointer correction above, the emitted-build baseline passed
 **3/3 in 9.9s**: A → B → A (3.5s), generation survival (3.7s), and empty setup
 (0.95s). Browser typechecks, formatting and whitespace checks passed. Current
 discovery is 83 cases in 20 specs; the smoke
-[inventory](../../../docs/plan/browser-smoke-effectiveness/inventory.md#reader-phase-3-smoke-reconciliation)
+[inventory](../../performance-and-stability/browser-smoke-effectiveness/inventory.md#reader-phase-3-smoke-reconciliation)
 records every new control and oracle.
 
 Three separately declared production faults each fail the unchanged intended
@@ -687,7 +688,7 @@ recovery leaves writer capabilities closed after SQL ownership transfers;
 viewer-detach cancellation destroys the exact already-running durable job;
 and dropped accepted setup consent leaves the genuinely empty server
 uninitialized after the real button click. The
-[findings](../../../docs/plan/browser-smoke-effectiveness/findings.md#reader-phase-3-production-fault-evidence)
+[findings](../../performance-and-stability/browser-smoke-effectiveness/findings.md#reader-phase-3-production-fault-evidence)
 record exact hunks, source/test/chunk hashes, commands, independent SQL/provider
 truth and exclusions. All three are qualified fault detections, with no page
 errors or test/fixture changes. No injected fault remains in production.
@@ -880,7 +881,7 @@ receipt. Their unchanged browser oracles fail after their declared prerequisites
 downstream actions not reached are explicitly excluded. Source is restored
 byte-for-byte between every fault. Full protocol, literal hunks, SHA-256 values,
 branch/chunk/trace/SQL evidence and precise results are in the
-[smoke findings](../../../docs/plan/browser-smoke-effectiveness/findings.md#reader-phase-4-production-fault-evidence).
+[smoke findings](../../performance-and-stability/browser-smoke-effectiveness/findings.md#reader-phase-4-production-fault-evidence).
 
 The final clean restored build passes in 12.32s and the same five cases pass
 in 51.1s. All frozen main/lab inputs match; the lab is clean, emitted scripts
@@ -1050,7 +1051,7 @@ Each reaches its named transition and fails the intended assertion. The clean
 restored four-case cohort passes **4/4 in 18.3s** after a 13.14s build, with no
 emitted/runtime fault markers, no page errors and 1,374 successful script URL
 receipts. Both main and the detached lab retain their exact frozen inputs.
-The [smoke findings](../../../docs/plan/browser-smoke-effectiveness/findings.md#reader-phase-5-production-fault-evidence)
+The [smoke findings](../../performance-and-stability/browser-smoke-effectiveness/findings.md#reader-phase-5-production-fault-evidence)
 contain the literal hunks, commands, hashes, prerequisites and assertion results.
 Accepted Phase 4 controls retain their unchanged generation/effect source limits.
 
@@ -1101,7 +1102,7 @@ normal. Both catalogs have 503 files; FALSE differs as expected, while every
 restored normal file hash exactly matches the first normal build. The latter is
 an emission comparison, not an extra browser run. Normal/FALSE audits capture
 702/343 successful script URL receipts, with no page errors and unchanged lab
-inputs. Source and [reproduction commands](../../../docs/plan/browser-smoke-effectiveness/findings.md#reader-phase-5-default-and-fallback-build-proof)
+inputs. Source and [reproduction commands](../../performance-and-stability/browser-smoke-effectiveness/findings.md#reader-phase-5-default-and-fallback-build-proof)
 are recorded in the smoke findings; temporary artifacts are
 `/tmp/reader-phase5-default-verification-tfvklw0_`.
 
@@ -1178,7 +1179,7 @@ two S22 controls, the retained parser-owner fault twice, the narrow S92 retained
 intent fault once, restored S22/S92 controls, actual compiled-FALSE S90, and a
 byte-identical normal rebuild. No unrelated fault matrix is added. Final agent
 and full phase-ending gates must run again after the production App change.
-The [smoke findings](../../../docs/plan/browser-smoke-effectiveness/findings.md#reader-phase-5-final-gate-repairs)
+The [smoke findings](../../performance-and-stability/browser-smoke-effectiveness/findings.md#reader-phase-5-final-gate-repairs)
 own the reproducible campaign and its remaining source limits.
 
 The first frozen combined baseline at `678876571` passes **10/11 in 29.0s**
@@ -1215,7 +1216,7 @@ every one of the 503 baseline output files. Across the completed campaign,
 script URLs map to their catalog, and zero page errors occur. All 2,473 lab inputs
 remain frozen and both production faults are restored byte-for-byte.
 
-The [renewed proof](../../../docs/plan/browser-smoke-effectiveness/findings.md#renewed-combined-controls-and-fallback)
+The [renewed proof](../../performance-and-stability/browser-smoke-effectiveness/findings.md#renewed-combined-controls-and-fallback)
 records exact commands, hashes, timing, assertion ordering and scope limits.
 Discovery at `593b01eae` confirms all 92 cases/22 specs, twelve local support
 files and four PNGs; current anchors and the full hook map are reconciled.
@@ -1283,7 +1284,7 @@ full gate at `d5b5e5ed7` passes all thirteen lanes and 92/92 browser cases.
 
 This changes test setup only; Reader product acceptance and rollout/fallback
 contracts retain their original source and scope. The receiving
-[smoke status](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-3-acceptance-2026-09-08)
+[smoke status](../../performance-and-stability/browser-smoke-effectiveness/status.md#phase-3-acceptance-2026-09-08)
 records the failed run, verified repair and separate Phase 4 closeout requirements.
 
 ## Combined Closeout Maintenance Acceptance — 2026-09-08
@@ -1295,7 +1296,7 @@ cases. Its two qualified native-ordering negatives, both eighteen-case normal
 cohorts and two actual compiled-FALSE controls pass at the identical application/
 test implementation. The normal default, explicit switching, generation,
 lineage/recovery and originating draft/pending-intent protections remain intact.
-See the [complete smoke acceptance](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-4-acceptance-2026-09-08)
+See the [complete smoke acceptance](../../performance-and-stability/browser-smoke-effectiveness/status.md#phase-4-acceptance-2026-09-08)
 for final source, counts, existing skips, no matching CI run and execution limits.
 Earlier Reader phase evidence retains its original source; this maintenance
 record supplies the affected final-source supplement. No Reader work remains.

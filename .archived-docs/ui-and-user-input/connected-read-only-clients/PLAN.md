@@ -245,7 +245,7 @@ phase's final source; missing required evidence leaves the phase pending. This
 overrides the default user/CI-only ownership for this workstream. The command
 includes full browser execution and current compatibility; additional pinned
 compatibility lanes retain their existing user/CI ownership. See the
-[coordination policy](../../../docs/plan/browser-smoke-and-connected-readers.md#verification-and-completion).
+[coordination policy](../../performance-and-stability/browser-smoke-and-connected-readers.md#verification-and-completion).
 Do not claim that a planning check or an earlier passing commit proves later
 behavior.
 

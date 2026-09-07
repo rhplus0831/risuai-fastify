@@ -4,8 +4,7 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: all Smoke Phases 0–4 and Reader Phases 0–5 accepted. Implementation
-  and final verification are complete; archival is the remaining closeout action.
+- State: all Smoke Phases 0–4 and Reader Phases 0–5 accepted. Both workstreams and the combined coordination record are complete and archived.
 - Accepted implementation: writer-startup repair `f87624888`, passive diagnostics
   and native S81 control `7aad1bb37`, reviewed fixture inventory `985da9bc8`.
   Final agent and all thirteen full-suite lanes pass at clean `39356086c`.
@@ -14,10 +13,10 @@ Updated: 2026-09-08
   complete scenario/control dispositions; no pending or partial review owner.
 - Confirmed gaps: BSE-001–009 have verified named controls. Earlier failed runs
   and unqualified candidate faults retain their explicit source limits.
-- Next action: archive this intact bundle and the coordination record under
-  performance/stability, repair links and indexes, and validate moved documents.
+- Next action: none. This intact bundle and the coordination record are archived
+  under performance/stability; current guides own future maintenance.
 - Blockers and required verification gaps: none. The
-  [Reader workstream](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
+  [Reader workstream](../../ui-and-user-input/connected-read-only-clients/status.md)
   and its affected startup/default/fallback maintenance are fully verified below.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
@@ -25,13 +24,13 @@ for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State    | Next evidence required                                                                                                      |
-| --------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                                                                          |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted | Shared controls, repair faults, agent and full-suite evidence below                                                         |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted | Four contract faults, restored browsers and phase gates below                                                               |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Accepted | All scenario/control dispositions, qualified BSE-007 repair and all 13 full-suite lanes passed.                             |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Accepted | Final discovery/findings, both final gates, affected Reader proof and CI availability recorded; archive follows acceptance. |
+| Phase                                                                       | State    | Next evidence required                                                                                                   |
+| --------------------------------------------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------ |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                                                                       |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted | Shared controls, repair faults, agent and full-suite evidence below                                                      |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted | Four contract faults, restored browsers and phase gates below                                                            |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Accepted | All scenario/control dispositions, qualified BSE-007 repair and all 13 full-suite lanes passed.                          |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Accepted | Final discovery/findings, both final gates, affected Reader proof and CI availability recorded; intact archive complete. |
 
 ## Verification Ledger
 
@@ -252,7 +251,7 @@ this stage; isolated faults were restored. The normal-send spec changed in
 | 2d stale response/recovery    | P0-R real held lineage-tagged request/import/conflict/new-document recovery and visible newer view choice; omitted restoration fails its final DOM oracle. Outbox identity, one revision/receipt, event-gap ordering, takeover and queued-finalization companions retain verified current-source evidence. |
 
 **Phase 2 and Stage 1 accepted.** The receiving
-[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#stage-1-smoke-prerequisite)
+[reader status](../../ui-and-user-input/connected-read-only-clients/status.md#stage-1-smoke-prerequisite)
 links this prerequisite. No high-risk critical gap was deferred. All remaining
 smoke scenario reviews, including S65–S72 and other still-pending inventory
 rows, stay for Phase 3 after reader implementation. Stage 3 must reconcile
@@ -272,7 +271,7 @@ records their real paths, controls, oracles and remaining limits. Required
 production-fault evidence belongs to the
 [findings](findings.md#reader-phase-2-production-fault-evidence), and final
 focused/aggregate phase evidence belongs to
-[reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md).
+[reader status](../../ui-and-user-input/connected-read-only-clients/status.md).
 
 This update maintains Stage 1's affected evidence during implementation; it
 accepts no smoke Phase 3/4 work. Resume the remaining scenario audit only after
@@ -349,7 +348,7 @@ entries after the expanded flag tests and guarded legacy setup helper. All
 frontend/server tests, Svelte check, topology, docs and smoke build pass, but the
 aggregate remains failed until the reviewed count/removal reconciliation and
 final checks pass. This changes no browser assertion, production owner or rollout
-behavior; [reader status](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#final-aggregate-inventory-reconciliation)
+behavior; [reader status](../../ui-and-user-input/connected-read-only-clients/status.md#final-aggregate-inventory-reconciliation)
 retains the precise source, result and remaining gates.
 
 Reader Phase 5's repeated agent aggregate passes at `90069ac9c`, but its required
@@ -370,7 +369,7 @@ now repeats its final aggregate gates; Smoke Phase 3/4 acceptance is still pendi
 
 ## Stage 3 Reader Completion Handoff — 2026-09-08
 
-Received [accepted reader Phases 0–5](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08)
+Received [accepted reader Phases 0–5](../../ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08)
 at `eb9673942`: final `test:agent` passes in 2m 21.3s and all thirteen required
 `test:all` lanes pass in 7m 16.0s, including 92/92 browser cases. Normal connected
 startup and actual compiled-FALSE intent/draft recovery pass; named faults and
@@ -789,3 +788,20 @@ records are revalidated with Markdown's Prettier ignore override and whitespace
 checks. Archive the intact smoke bundle and coordination record next, repair
 links/indexes and revalidate the moved documents. That routine documentary
 closeout does not extend the final behavioral evidence to another code change.
+
+## Archive Closeout — 2026-09-08
+
+Following acceptance in `5d8bbb488`, this intact bundle and the
+[coordination record](../browser-smoke-and-connected-readers.md) are preserved
+under performance/stability. The completed Reader bundle remains under UI/user
+input. Relative links and both archive/active indexes are repaired; the active
+plan directory contains only its index. Both execution cursors now have no
+remaining work. Historical failures, phase acceptance, scope and reproducible
+fault details remain intact. This relocation and its index/cursor edits change
+no application or test code after the passing `39356086c` gates.
+
+Post-relocation validation passes all 49 current documents and all 24 moved/
+retained plan, coordination and affected index documents, with empty index
+specifications and literal-path exemptions. Explicit Prettier formatting and
+whitespace checks pass. Both archive indexes are current and no active-plan
+entry remains for either completed workstream or their coordination record.

@@ -10,11 +10,11 @@ audit against the resulting behavior.
 
 This single file owns execution order, handoffs, and combined completion.
 The [smoke plan](browser-smoke-effectiveness/PLAN.md) and
-[reader plan](../../.archived-docs/ui-and-user-input/connected-read-only-clients/PLAN.md) retain their scope,
+[reader plan](../ui-and-user-input/connected-read-only-clients/PLAN.md) retain their scope,
 implementation instructions, invariants, and acceptance criteria. Progress,
 source anchors, verification, blockers, and handoff records belong in their
 respective [smoke status](browser-smoke-effectiveness/status.md) and
-[reader status](../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md). Keep detailed evidence
+[reader status](../ui-and-user-input/connected-read-only-clients/status.md). Keep detailed evidence
 in each workstream's existing inventory/findings owners and cross-link it.
 This file has no separate execution cursor, checklist, or evidence ledger.
 
@@ -23,7 +23,7 @@ This file has no separate execution cursor, checklist, or evidence ledger.
 | Stage                            | Work                                                                                                                                                                                                                                                   | Handoff condition                                                                                                                                                       |
 | -------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1. Establish regression coverage | Smoke [Phase 0](browser-smoke-effectiveness/phases/phase-0-inventory-and-pilot.md), [Phase 1](browser-smoke-effectiveness/phases/phase-1-shared-harnesses.md), then [Phase 2](browser-smoke-effectiveness/phases/phase-2-critical-journeys.md).        | All three phases accepted in smoke status, including all four critical contracts and their required fault-detection evidence; no open high-risk gap in those contracts. |
-| 2. Implement connected readers   | Reader [phases 0–5](../../.archived-docs/ui-and-user-input/connected-read-only-clients/phases/README.md), following their internal dependencies through verification and rollout.                                                                      | All reader phases and completion criteria accepted in reader status, with required browser evidence and rollout disposition recorded.                                   |
+| 2. Implement connected readers   | Reader [phases 0–5](../ui-and-user-input/connected-read-only-clients/phases/README.md), following their internal dependencies through verification and rollout.                                                                                        | All reader phases and completion criteria accepted in reader status, with required browser evidence and rollout disposition recorded.                                   |
 | 3. Finish the smoke audit        | Reconcile the earlier smoke coverage with the reader changes, then complete smoke [Phase 3](browser-smoke-effectiveness/phases/phase-3-remaining-scenarios.md) and [Phase 4](browser-smoke-effectiveness/phases/phase-4-verification-and-closeout.md). | The full smoke plan meets its completion criteria at the final implementation source, including affected reader behavior and required full-browser evidence.            |
 
 Within smoke Phase 2, prioritize send/stream/durable reload (2c) and stale
