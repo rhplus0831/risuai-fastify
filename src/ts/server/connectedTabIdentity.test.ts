@@ -132,4 +132,16 @@ describe('connected page identity', () => {
     await expect(pending).rejects.toThrow('superseded')
     expect(identity.install).not.toHaveBeenCalled()
   })
+
+  it('can stay a reader on an insecure origin where randomUUID and Web Locks are unavailable', async () => {
+    vi.stubGlobal('navigator', {})
+    vi.stubGlobal('crypto', { getRandomValues: (bytes: Uint8Array) => bytes.fill(9) })
+    const current = await page()
+    const result = await current.resolveConnectedTabIdentity()
+    expect(result).toEqual({
+      sessionId: '09090909090909090909090909090909',
+      exclusive: false,
+      previousSessionId: 'originating-tab',
+    })
+  })
 })

@@ -37,7 +37,7 @@ async function resolveIdentity(sourceGeneration: number): Promise<ConnectedTabId
       if (retained) return remember(candidate, true, null)
       // A copied sessionStorage belongs to a different live page. Its drafts
       // remain with that page, and are never adopted by the duplicate.
-      const fresh = crypto.randomUUID()
+      const fresh = freshSessionId()
       const claimed = await claim(locks, fresh, sourceGeneration)
       assertCurrent()
       if (claimed) return remember(fresh, true, null)
@@ -51,7 +51,17 @@ async function resolveIdentity(sourceGeneration: number): Promise<ConnectedTabId
     previousSessionId = sessionStorage.getItem(PREVIOUS_SESSION_KEY) || candidate
     sessionStorage.setItem(PREVIOUS_SESSION_KEY, previousSessionId)
   } catch {}
-  return remember(crypto.randomUUID(), false, previousSessionId)
+  return remember(freshSessionId(), false, previousSessionId)
+}
+
+function freshSessionId(): string {
+  const cryptoApi = globalThis.crypto
+  if (typeof cryptoApi?.randomUUID === 'function') return cryptoApi.randomUUID()
+  if (typeof cryptoApi?.getRandomValues === 'function') {
+    const bytes = cryptoApi.getRandomValues(new Uint8Array(16))
+    return Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+  return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`
 }
 
 function remember(sessionId: string, exclusive: boolean, previousSessionId: string | null): ConnectedTabIdentity {
