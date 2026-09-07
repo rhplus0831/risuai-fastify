@@ -1,24 +1,32 @@
 import { IDBFactory } from 'fake-indexeddb'
 import {
+  authorizeClientWriterRecovery,
+  beginClientPromotion,
   beginClientSession,
+  completeClientWriterRecovery,
+  failClientSessionOperation,
+  getClientSessionSnapshot,
+  observeClientWriter,
   settleClientReader,
   setClientProjectionReady,
   setClientConnectionState,
   resetClientSessionForTests,
 } from '../ts/clientSession'
-import { language } from '../lang'
+import { changeLanguage, language } from '../lang'
 import { mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { AppRoute } from '../ts/routerRoute'
 import type { Database, character } from '../ts/storage/database.svelte'
+import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
 
 const observerShellMocks = vi.hoisted(() => ({
   hydrateCharacterShell: vi.fn(async () => true),
   hydrationState: { rows: {} as Record<string, { status: string; error: string | null }> },
   navigate: vi.fn(),
   retryObserverWriterPromotion: vi.fn(async () => false),
+  promoteConnectedReader: vi.fn<() => Promise<ConnectedWriterPromotionResult>>(async () => ({ status: 'cancelled' })),
   routerExports: undefined as
     | {
         characterRoutePath: (characterId: string, chatId?: string) => string
@@ -60,6 +68,7 @@ vi.mock('../ts/server/characterShellHydration.svelte', () => ({
 }))
 vi.mock('../ts/bootstrap', () => ({
   retryObserverWriterPromotion: observerShellMocks.retryObserverWriterPromotion,
+  promoteConnectedReader: observerShellMocks.promoteConnectedReader,
 }))
 
 import {
@@ -146,6 +155,31 @@ async function mountObserverShell(): Promise<void> {
   await tick()
 }
 
+async function showConnectedReaderChat(): Promise<void> {
+  const reader = makeDetailedCharacter()
+  reader.chats.push({ ...reader.chats[0], id: 'chat-b', name: 'Second reader chat', message: [] })
+  replaceResourceDatabase({ characters: [reader], currentChar: -1 } as unknown as Database)
+  const operation = beginClientSession('reader-a')
+  settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+  setClientProjectionReady(true)
+  setClientConnectionState('live')
+  const router = await createRouterMock()
+  router.navigate('/character/char-a/chat-a')
+  await vi.waitFor(() => expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull())
+}
+
+function useThisDeviceButton(): HTMLButtonElement {
+  return target.querySelector<HTMLButtonElement>('[data-reader-use-this-device]')!
+}
+
+function deferredPromotion() {
+  let resolve!: (result: ConnectedWriterPromotionResult) => void
+  const promise = new Promise<ConnectedWriterPromotionResult>((settle) => {
+    resolve = settle
+  })
+  return { promise, resolve }
+}
+
 describe('pre-writer ObserverShell', () => {
   it('gates an authoring URL while keeping keyboard-focusable reader navigation and honest connection status', async () => {
     const operation = beginClientSession('reader-a')
@@ -178,6 +212,7 @@ describe('pre-writer ObserverShell', () => {
   })
 
   beforeEach(async () => {
+    await changeLanguage('en')
     resetClientSessionForTests()
     vi.stubGlobal('indexedDB', new IDBFactory())
     vi.stubGlobal('fetch', vi.fn())
@@ -193,6 +228,7 @@ describe('pre-writer ObserverShell', () => {
     observerShellMocks.hydrationState.rows = {}
     observerShellMocks.hydrateCharacterShell.mockReset().mockResolvedValue(true)
     observerShellMocks.retryObserverWriterPromotion.mockReset().mockResolvedValue(false)
+    observerShellMocks.promoteConnectedReader.mockReset().mockResolvedValue({ status: 'cancelled' })
     observerShellMocks.navigate.mockClear()
     observerShellMocks.routerExports?.currentRoute.set({ kind: 'home', path: '/' })
     selectedCharID.set(-1)
@@ -214,6 +250,7 @@ describe('pre-writer ObserverShell', () => {
     resetObserverShellLifecycleForTests()
     replaceResourceDatabase({} as Database)
     target.remove()
+    await changeLanguage('en')
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
   })
@@ -289,6 +326,242 @@ describe('pre-writer ObserverShell', () => {
 
     expect(document.activeElement).toBe(retry)
     expect(target.querySelector('[data-observer-shell]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-use-this-device]')).toBeNull()
+    expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [
+      'en',
+      'Use this device',
+      'Move write access to this device. The other device will keep receiving updates in read-only mode.',
+    ],
+    [
+      'ko',
+      '이 기기 사용하기',
+      '쓰기 권한을 이 기기로 옮깁니다. 다른 기기는 읽기 전용으로 변경 사항을 계속 받아볼 수 있습니다.',
+    ],
+  ])('localizes the explicit switch and its effect in %s', async (code, label, help) => {
+    await changeLanguage(code)
+    await showConnectedReaderChat()
+    await mountObserverShell()
+    setObserverShellLifecycleMode('retrying')
+    await tick()
+
+    const button = useThisDeviceButton()
+    expect(button.textContent?.trim()).toBe(label)
+    expect(button.type).toBe('button')
+    expect(button.disabled).toBe(false)
+    expect(document.getElementById(button.getAttribute('aria-describedby')!)?.textContent?.trim()).toBe(help)
+    expect(target.querySelector('[data-observer-writer-retry]')).toBeNull()
+    expect(target.querySelector('[data-observer-read-only-status]')?.getAttribute('aria-live')).toBe('polite')
+
+    button.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent?.trim()).toBe(
+        language.connectedReaders.switchCancelled,
+      ),
+    )
+  })
+
+  it('calls the exported promotion operation once and keeps reader navigation available through writer recovery', async () => {
+    await showConnectedReaderChat()
+    const pending = deferredPromotion()
+    let operation: ReturnType<typeof beginClientPromotion>
+    observerShellMocks.promoteConnectedReader.mockImplementationOnce(() => {
+      operation = beginClientPromotion()
+      return pending.promise
+    })
+    const { promoteConnectedReader } = await import('../ts/bootstrap')
+    const button = useThisDeviceButton()
+    const transcript = target.querySelector('[data-reader-test-transcript]')
+    button.click()
+    button.click()
+    button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await vi.waitFor(() => expect(promoteConnectedReader).toHaveBeenCalledOnce())
+    await tick()
+
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-busy')).toBe('true')
+    expect(button.textContent?.trim()).toBe(language.connectedReaders.switchingDevice)
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.switching,
+    )
+    expect(target.querySelector('[data-reader-test-transcript]')).toBe(transcript)
+    expect(transcript?.closest('[inert], [aria-disabled="true"]')).toBeNull()
+    expect(getClientSessionSnapshot().lifecycle).toBe('promoting')
+
+    const secondChat = target.querySelector<HTMLButtonElement>('button[aria-label="Open chat Second reader chat"]')!
+    expect(secondChat.disabled).toBe(false)
+    secondChat.focus()
+    secondChat.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-b'),
+    )
+    expect(
+      authorizeClientWriterRecovery(operation!, {
+        databaseLineage: 'database-a',
+        writer: { sessionId: 'reader-a', epoch: 2 },
+      }),
+    ).toBe(true)
+    await tick()
+    expect(getClientSessionSnapshot().lifecycle).toBe('recovering-writer')
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.switching,
+    )
+    expect(useThisDeviceButton().disabled).toBe(true)
+    expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-b')
+    expect(get(selectedCharID)).toBe(-1)
+    expect(await countPendingMutationRecords()).toBe(0)
+
+    expect(completeClientWriterRecovery(operation!)).toBe(true)
+    pending.resolve({ status: 'promoted' })
+    await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBe('false'))
+    expect(getClientSessionSnapshot().lifecycle).toBe('writing')
+    expect(target.querySelector('[data-reader-writer-switch-result]')).toBeNull()
+    expect(observerShellMocks.retryObserverWriterPromotion).not.toHaveBeenCalled()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    [{ status: 'cancelled' }, 'switchCancelled'],
+    [{ status: 'superseded' }, 'switchSuperseded'],
+    [{ status: 'failed', reason: 'retained-work' }, 'switchRetainedWork'],
+    [{ status: 'failed', reason: 'unavailable' }, 'switchUnavailable'],
+    [{ status: 'failed', reason: 'interrupted' }, 'switchInterrupted'],
+  ] as const)('leaves reading and an explicit retry available after %j', async (result, messageKey) => {
+    await showConnectedReaderChat()
+    const pending = deferredPromotion()
+    let operation: ReturnType<typeof beginClientPromotion>
+    observerShellMocks.promoteConnectedReader.mockImplementationOnce(() => {
+      operation = beginClientPromotion()
+      return pending.promise
+    })
+    const transcript = target.querySelector('[data-reader-test-transcript]')
+    const button = useThisDeviceButton()
+    button.focus()
+    button.click()
+    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce())
+    if (result.status === 'superseded') observeClientWriter({ sessionId: 'writer-c', epoch: 3 })
+    else failClientSessionOperation(operation!)
+    pending.resolve(result)
+    await vi.waitFor(() => expect(button.disabled).toBe(false))
+
+    expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent?.trim()).toBe(
+      language.connectedReaders[messageKey],
+    )
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.connected,
+    )
+    expect(target.querySelector('[data-reader-test-transcript]')).toBe(transcript)
+    expect(transcript?.closest('[inert], [aria-disabled="true"]')).toBeNull()
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+    expect(document.activeElement).toBe(button)
+    expect(button.textContent?.trim()).toBe(language.connectedReaders.useThisDevice)
+    expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce()
+
+    const home = target.querySelector<HTMLButtonElement>('nav button')!
+    home.click()
+    await tick()
+    expect(get((await createRouterMock()).currentRoute).kind).toBe('home')
+    button.click()
+    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledTimes(2))
+    expect(await countPendingMutationRecords()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('blocks switching during interruption and keeps reader focus when an operation settles', async () => {
+    await showConnectedReaderChat()
+    const button = useThisDeviceButton()
+    setClientConnectionState('interrupted')
+    await tick()
+    button.click()
+    expect(button.disabled).toBe(true)
+    expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
+
+    setClientConnectionState('live')
+    await tick()
+    const pending = deferredPromotion()
+    observerShellMocks.promoteConnectedReader.mockImplementationOnce(() => {
+      beginClientPromotion()
+      return pending.promise
+    })
+    button.click()
+    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce())
+    const home = target.querySelector<HTMLButtonElement>('nav button')!
+    home.focus()
+    setClientConnectionState('interrupted')
+    pending.resolve({ status: 'failed', reason: 'interrupted' })
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent?.trim()).toBe(
+        language.connectedReaders.switchInterrupted,
+      ),
+    )
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.interrupted,
+    )
+    expect(button.disabled).toBe(true)
+    expect(document.activeElement).toBe(home)
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
+    setClientConnectionState('live')
+    await tick()
+    expect(button.disabled).toBe(false)
+    expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce()
+  })
+
+  it('keeps a failed operation import or request readable without exposing protocol errors', async () => {
+    await showConnectedReaderChat()
+    observerShellMocks.promoteConnectedReader.mockRejectedValueOnce(new Error('private_protocol_failure'))
+    useThisDeviceButton().click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent?.trim()).toBe(
+        language.connectedReaders.switchUnavailable,
+      ),
+    )
+    expect(target.textContent).not.toContain('private_protocol_failure')
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
+    expect(useThisDeviceButton().disabled).toBe(false)
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+  })
+
+  it('does not announce active switching for an interrupted former writer or start a second recovery', async () => {
+    await showConnectedReaderChat()
+    const operation = beginClientPromotion()!
+    authorizeClientWriterRecovery(operation, {
+      databaseLineage: 'database-a',
+      writer: { sessionId: 'reader-a', epoch: 2 },
+    })
+    completeClientWriterRecovery(operation)
+    setClientConnectionState('interrupted')
+    await tick()
+    const button = useThisDeviceButton()
+
+    expect(getClientSessionSnapshot().lifecycle).toBe('recovering-writer')
+    expect(button.disabled).toBe(true)
+    expect(button.getAttribute('aria-busy')).toBe('false')
+    expect(button.textContent?.trim()).toBe(language.connectedReaders.useThisDevice)
+    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+      language.connectedReaders.interrupted,
+    )
+    button.click()
+    expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
+  })
+
+  it('preserves reader navigation focus when a live switch fails', async () => {
+    await showConnectedReaderChat()
+    const pending = deferredPromotion()
+    observerShellMocks.promoteConnectedReader.mockReturnValueOnce(pending.promise)
+    useThisDeviceButton().click()
+    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce())
+    const home = target.querySelector<HTMLButtonElement>('nav button')!
+    home.focus()
+    pending.resolve({ status: 'failed', reason: 'unavailable' })
+    await vi.waitFor(() => expect(useThisDeviceButton().disabled).toBe(false))
+
+    expect(document.activeElement).toBe(home)
+    expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
   })
   it('browses a reader chat independently of canonical selection and follows local history routes', async () => {
     const writer = makeDetailedCharacter()

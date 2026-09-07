@@ -2145,6 +2145,17 @@ export const languageEnglish = {
     connecting: 'Connecting to updates…',
     interrupted: 'Connection interrupted. Showing the last received content.',
     switching: 'Preparing write access. You can keep reading.',
+    useThisDevice: 'Use this device',
+    useThisDeviceHelp:
+      'Move write access to this device. The other device will keep receiving updates in read-only mode.',
+    switchingDevice: 'Switching to this device…',
+    switchCancelled: 'Switch cancelled. You can keep reading.',
+    switchSuperseded: 'Write access changed on another device. You can keep reading or try again.',
+    switchInterrupted:
+      'The connection was interrupted before write access was ready. You can try again when connected.',
+    switchRetainedWork:
+      'Write access is paused because saved changes on this device need recovery. You can keep reading and try again.',
+    switchUnavailable: 'Write access could not be moved to this device. You can keep reading and try again.',
     writeAccessRequired: 'You need write access to edit this page.',
     limitedDisplay: 'Some custom display features are unavailable in read-only mode. The original text is shown.',
     messageDraft: 'Message edit',

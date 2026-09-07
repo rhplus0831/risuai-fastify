@@ -9,6 +9,7 @@
   import { recordObserverRouteIntent } from '../ts/observerRouteIntent'
   import { canUseClientReadServices, clientSessionStore } from '../ts/clientSession'
   import { resolveReaderRoute, uniqueReaderCharacters, uniqueReaderChatIds } from '../ts/readerRouteScope'
+  import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
 
   let characters = $derived(charactersResourceState.status === 'ready' ? charactersResourceState.characters : [])
   let routeCharacterId = $derived($currentRoute.kind === 'character' ? $currentRoute.chaId : null)
@@ -77,6 +78,17 @@
   })
 
   let retryWriterButton: HTMLButtonElement | undefined = $state()
+  let useThisDeviceButton: HTMLButtonElement | undefined = $state()
+  let writerSwitchPending = $state(false)
+  let writerSwitchResult = $state<ConnectedWriterPromotionResult | null>(null)
+  const writerSwitchInProgress = $derived(
+    writerSwitchPending ||
+      ($clientSessionStore.connection !== 'interrupted' &&
+        ['promoting', 'recovering-writer'].includes($clientSessionStore.lifecycle)),
+  )
+  const writerSwitchDisabled = $derived(
+    writerSwitchInProgress || $clientSessionStore.connection !== 'live' || $clientSessionStore.lifecycle !== 'reading',
+  )
   let writerRetryAvailable = $derived(
     !$clientSessionStore.managed &&
       ['takeover-denied', 'unavailable', 'writer-lost', 'offline'].includes($observerShellLifecycleStore.mode),
@@ -113,8 +125,7 @@
     if ($clientSessionStore.managed) {
       if ($clientSessionStore.connection === 'interrupted') return language.connectedReaders.interrupted
       if ($clientSessionStore.connection === 'connecting') return language.connectedReaders.connecting
-      if (['promoting', 'recovering-writer'].includes($clientSessionStore.lifecycle))
-        return language.connectedReaders.switching
+      if (writerSwitchInProgress) return language.connectedReaders.switching
       return language.connectedReaders.connected
     }
     switch (mode) {
@@ -145,6 +156,44 @@
       retryWriterButton?.focus()
     }
   }
+
+  function writerSwitchStatus(result: ConnectedWriterPromotionResult | null): string {
+    if (!result || result.status === 'promoted') return ''
+    if (result.status === 'cancelled') return language.connectedReaders.switchCancelled
+    if (result.status === 'superseded') return language.connectedReaders.switchSuperseded
+    if (result.status === 'failed') {
+      if (result.reason === 'interrupted') return language.connectedReaders.switchInterrupted
+      if (result.reason === 'retained-work') return language.connectedReaders.switchRetainedWork
+      return language.connectedReaders.switchUnavailable
+    }
+    return ''
+  }
+
+  async function useThisDevice(): Promise<void> {
+    if (writerSwitchDisabled || !$clientSessionStore.managed) return
+    writerSwitchPending = true
+    writerSwitchResult = null
+    try {
+      const { promoteConnectedReader } = await import('../ts/bootstrap')
+      writerSwitchResult = await promoteConnectedReader()
+    } catch {
+      writerSwitchResult = {
+        status: 'failed',
+        reason: $clientSessionStore.connection === 'interrupted' ? 'interrupted' : 'unavailable',
+      }
+    } finally {
+      writerSwitchPending = false
+      await tick()
+      if (
+        writerSwitchResult?.status !== 'promoted' &&
+        useThisDeviceButton?.isConnected &&
+        !writerSwitchDisabled &&
+        (document.activeElement === document.body || document.activeElement === useThisDeviceButton)
+      ) {
+        useThisDeviceButton.focus()
+      }
+    }
+  }
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-bg text-textcolor" data-observer-shell>
@@ -161,7 +210,29 @@
         <p class="text-sm text-textcolor2" data-observer-lifecycle-status>
           {lifecycleStatus($observerShellLifecycleStore.mode)}
         </p>
-        {#if writerRetryAvailable}
+        {#if $clientSessionStore.managed}
+          <p id="reader-writer-switch-help" class="mt-2 max-w-2xl text-sm text-textcolor2">
+            {language.connectedReaders.useThisDeviceHelp}
+          </p>
+          <button
+            bind:this={useThisDeviceButton}
+            type="button"
+            class="mt-2 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+            aria-describedby="reader-writer-switch-help"
+            aria-busy={writerSwitchInProgress}
+            data-reader-use-this-device
+            disabled={writerSwitchDisabled}
+            onclick={() => void useThisDevice()}>
+            {writerSwitchInProgress
+              ? language.connectedReaders.switchingDevice
+              : language.connectedReaders.useThisDevice}
+          </button>
+          {#if writerSwitchStatus(writerSwitchResult)}
+            <p class="mt-2 max-w-2xl text-sm text-textcolor2" data-reader-writer-switch-result>
+              {writerSwitchStatus(writerSwitchResult)}
+            </p>
+          {/if}
+        {:else if writerRetryAvailable}
           <button
             bind:this={retryWriterButton}
             type="button"
