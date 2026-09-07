@@ -21,6 +21,8 @@ const SEED_MESSAGE_COUNT = 65
 const COPY_TEXT = 'Reader B can copy this committed conversation.'
 const LIVE_MESSAGE_ID = 'connected-reader-live-message'
 const LIVE_TEXT = 'Writer A committed this message while Reader B was connected.'
+const SECOND_READER_MESSAGE_ID = 'connected-reader-independent-message'
+const SECOND_READER_TEXT = 'Reader C receives this commit in its own selected chat.'
 const RECONNECTED_MESSAGE_ID = 'connected-reader-reconnected-message'
 const RECONNECTED_TEXT = 'Writer A committed this message while Reader B was offline.'
 // resourceReads.ts registers these exact POST routes with cacheReadRouteOptions;
@@ -327,7 +329,6 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     expect(clonedTabSession).not.toBe(readerSession)
     expect(clonedTabRequests.filter(isReaderMutation)).toEqual([])
     evidence.clonedTabSession = clonedTabSession
-    await clonedTab.close()
     await writer.reload({ waitUntil: 'domcontentloaded' })
     await waitForSmokeHook(writer)
     await writer.evaluate(() =>
@@ -342,8 +343,10 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     const liveRevision = await writerCommand(writer, `/api/v1/commands/chats/${CHAT_A}/messages`, {
       message: { chatId: LIVE_MESSAGE_ID, role: 'char', data: LIVE_TEXT },
     })
-    await expect(messageBody(reader, LIVE_MESSAGE_ID)).toHaveText(LIVE_TEXT, { timeout: 30_000 })
-    await expectAppliedRevision(reader, liveRevision)
+    for (const observer of [reader, clonedTab]) {
+      await expect(messageBody(observer, LIVE_MESSAGE_ID)).toHaveText(LIVE_TEXT, { timeout: 30_000 })
+      await expectAppliedRevision(observer, liveRevision)
+    }
     const liveSnapshot = durableSnapshot(harness.dataDir)
     expect(liveSnapshot.messages).toContainEqual(expect.objectContaining({ uid: LIVE_MESSAGE_ID, data: LIVE_TEXT }))
     expect(liveSnapshot.events).toContainEqual(
@@ -362,11 +365,41 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     await expectAppliedRevision(reader, selectionRevision)
     await expect(reader).toHaveURL(`${harness.baseUrl}${ROUTE_A}`)
     await expectReader(reader, CHAT_A)
-    const beforeLocalBrowsing = durableSnapshot(harness.dataDir)
-    expect(JSON.parse((beforeLocalBrowsing.settings as { data_json: string }).data_json)).toMatchObject({
+    await expectAppliedRevision(clonedTab, selectionRevision)
+    await expect(clonedTab).toHaveURL(`${harness.baseUrl}${ROUTE_A}`)
+    await expectReader(clonedTab, CHAT_A)
+    const beforeSecondReaderNavigation = durableSnapshot(harness.dataDir)
+    expect(JSON.parse((beforeSecondReaderNavigation.settings as { data_json: string }).data_json)).toMatchObject({
       currentChar: 1,
     })
     const writerUrl = writer.url()
+
+    await openReaderNavigation(clonedTab)
+    await clonedTab.getByRole('button', { name: 'Open Reader Character B', exact: true }).click()
+    await clonedTab.getByRole('button', { name: 'Open chat Reader Chat B', exact: true }).click()
+    await expect(clonedTab).toHaveURL(`${harness.baseUrl}${ROUTE_B}`)
+    await expectReader(clonedTab, CHAT_B)
+    await expect(reader).toHaveURL(`${harness.baseUrl}${ROUTE_A}`)
+    expect(durableSnapshot(harness.dataDir)).toEqual(beforeSecondReaderNavigation)
+    const secondReaderRevision = await writerCommand(writer, `/api/v1/commands/chats/${CHAT_B}/messages`, {
+      message: { chatId: SECOND_READER_MESSAGE_ID, role: 'char', data: SECOND_READER_TEXT },
+    })
+    await expect(messageBody(clonedTab, SECOND_READER_MESSAGE_ID)).toHaveText(SECOND_READER_TEXT, { timeout: 30_000 })
+    await expectAppliedRevision(clonedTab, secondReaderRevision)
+    await expectAppliedRevision(reader, secondReaderRevision)
+    await expect(reader).toHaveURL(`${harness.baseUrl}${ROUTE_A}`)
+    await expectReader(reader, CHAT_A)
+    await expect(messageBody(reader, SECOND_READER_MESSAGE_ID)).toHaveCount(0)
+    const beforeLocalBrowsing = durableSnapshot(harness.dataDir)
+    expect(beforeLocalBrowsing.events).toContainEqual(
+      expect.objectContaining({
+        revision: secondReaderRevision,
+        id: SECOND_READER_MESSAGE_ID,
+        origin_writer_session_id: writerSession,
+      }),
+    )
+    evidence.secondReaderRevision = secondReaderRevision
+    evidence.independentReaderRoutes = { reader: reader.url(), clonedTab: clonedTab.url() }
 
     // These are production navigation buttons. Reader selection must never become a command.
     await openReaderNavigation(reader)
@@ -404,6 +437,9 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     await reader.bringToFront()
     await expectReader(reader, CHAT_A)
     expect(writer.url()).toBe(writerUrl)
+    await expect(clonedTab).toHaveURL(`${harness.baseUrl}${ROUTE_B}`)
+    await expectReader(clonedTab, CHAT_B)
+    await expect(messageBody(clonedTab, SECOND_READER_MESSAGE_ID)).toHaveText(SECOND_READER_TEXT)
     expect(durableSnapshot(harness.dataDir)).toEqual(beforeLocalBrowsing)
     expect(readerRequests.filter(isReaderMutation)).toEqual([])
     evidence.afterLocalBrowsing = durableSnapshot(harness.dataDir)
@@ -419,6 +455,9 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     const reconnectRevision = await writerCommand(writer, `/api/v1/commands/chats/${CHAT_A}/messages`, {
       message: { chatId: RECONNECTED_MESSAGE_ID, role: 'char', data: RECONNECTED_TEXT },
     })
+    await expectAppliedRevision(clonedTab, reconnectRevision)
+    await expect(clonedTab).toHaveURL(`${harness.baseUrl}${ROUTE_B}`)
+    await expectReader(clonedTab, CHAT_B)
     await readerContext.setOffline(false)
     await expectReader(reader, CHAT_A)
     await expect(messageBody(reader, RECONNECTED_MESSAGE_ID)).toHaveText(RECONNECTED_TEXT, { timeout: 30_000 })
@@ -436,12 +475,37 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     expect(readerRequests.some((request) => request.path === '/api/v1/events' && request.writerSession === null)).toBe(
       true,
     )
-    expect(await reader.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getLifecycleSnapshot())).toMatchObject({
-      outbox: [],
-      receiptAcknowledgements: [],
-      activeGenerationJobs: [],
-      activeChatGenerations: [],
-    })
+    const clonedBootstraps = clonedTabRequests.filter((request) => request.path === '/api/v1/bootstrap')
+    expect(clonedBootstraps.length).toBeGreaterThan(0)
+    expect(
+      clonedBootstraps.every(
+        (request) => request.observerSession === clonedTabSession && request.writerSession === null,
+      ),
+    ).toBe(true)
+    expect(
+      clonedTabRequests.some((request) => request.path === '/api/v1/events' && request.writerSession === null),
+    ).toBe(true)
+    const readerLifecycleEvidence = []
+    for (const [name, observer] of [
+      ['reader', reader],
+      ['clonedTab', clonedTab],
+    ] as const) {
+      const lifecycle = await observer.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getLifecycleSnapshot())
+      const role = await observer.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())
+      expect(lifecycle).toMatchObject({
+        outbox: [],
+        receiptAcknowledgements: [],
+        activeGenerationJobs: [],
+        activeChatGenerations: [],
+      })
+      expect(role).toMatchObject({
+        managed: true,
+        lifecycle: 'reading',
+        writer: { sessionId: writerSession, epoch: 1 },
+      })
+      readerLifecycleEvidence.push({ name, role, lifecycle, url: observer.url() })
+    }
+    evidence.readerLifecycleEvidence = readerLifecycleEvidence
     expect(pageErrors).toEqual([])
     const screenshotPath = testInfo.outputPath('connected-reader-mobile.png')
     await reader.screenshot({ path: screenshotPath })
@@ -449,6 +513,7 @@ test('a mobile connected Reader follows committed updates and browses locally wi
   } finally {
     try {
       evidence.forbiddenReaderRequests = readerRequests.filter(isReaderMutation)
+      evidence.forbiddenClonedTabRequests = clonedTabRequests.filter(isReaderMutation)
       evidence.terminal = durableSnapshot(harness.dataDir)
       const evidencePath = testInfo.outputPath('connected-reader-browsing.json')
       writeFileSync(evidencePath, JSON.stringify(evidence, null, 2))
