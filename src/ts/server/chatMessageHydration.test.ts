@@ -1,12 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import {
+  authorizeClientWriterRecovery,
   beginClientPromotion,
+  completeClientWriterRecovery,
   demoteClientSession,
   requireClientAuthentication,
   resetClientSessionForTests,
 } from '../clientSession'
-import { setManagedWriterForTest } from '../__tests__/managedClientSession'
+import { setManagedReaderForTest, setManagedWriterForTest } from '../__tests__/managedClientSession'
 import { testDatabaseState } from '../__tests__/resourceDatabaseState'
 
 const projectionState = vi.hoisted(() => ({
@@ -32,7 +34,7 @@ vi.mock('./resourceReads', () => ({
 
 import { selectedCharID } from '../stores.svelte'
 import { clearCachedServerCommandRevision, setCachedServerCommandRevision } from './commands'
-import { isServerChatMessagePlaceholder, type Message } from '../storage/database.svelte'
+import { isServerChatMessagePlaceholder, SERVER_CHARACTER_SHELL_MARKER, type Message } from '../storage/database.svelte'
 import {
   BULK_HYDRATION_BATCH_SIZE,
   ACTIVE_CHAT_INITIAL_MESSAGE_WINDOW,
@@ -76,6 +78,7 @@ import {
   captureCharacterLorebookBodyProjectionEpoch,
   captureChatBodyProjectionEpoch,
   charactersResourceState,
+  applyCharactersResource,
   applyCharacterResource,
   hasCharacterLorebookBodyProjectionEpochChanged,
   hasChatBodyProjectionEpochChanged,
@@ -214,6 +217,27 @@ function seedManyStubChats(count: number) {
   selectedCharID.set(0)
 }
 
+function promoteHydrationReader() {
+  const promotion = beginClientPromotion()!
+  expect(
+    authorizeClientWriterRecovery(promotion, {
+      databaseLineage: 'external-operation-database',
+      writer: { sessionId: 'external-operation-test', epoch: 2 },
+    }),
+  ).toBe(true)
+  expect(completeClientWriterRecovery(promotion)).toBe(true)
+}
+
+function readerRerollResult(start = 0, total = 2) {
+  const user = { role: 'user', data: 'greet me', chatId: 'user' }
+  const assistant = { role: 'char', data: 'rerolled reply', chatId: 'new-reply' }
+  const alternate = { role: 'char', data: 'old reply', chatId: 'old-reply' }
+  return {
+    ...okWindowResult('chat-1', start === 0 ? [user, assistant] : [assistant], start, total),
+    alternates: [assistant, alternate],
+  }
+}
+
 function seedManyLorebookStubCharacters(count: number) {
   ;(testDatabaseState as { db: unknown }).db = {
     enableLorebookStubs: true,
@@ -262,6 +286,172 @@ const db = () =>
   ).db
 
 describe('chat message hydration owner', () => {
+  it('rebuilds persisted reroll candidates when a reader-filled tail is handed to writer hydration', async () => {
+    setManagedReaderForTest()
+    seedTwoStubChats()
+    resetChatHydration()
+    const user = { role: 'user', data: 'greet me', chatId: 'user' }
+    const assistant = { role: 'char', data: 'rerolled reply', chatId: 'new-reply' }
+    const alternate = { role: 'char', data: 'old reply', chatId: 'old-reply' }
+    projectionState.fetchChat.mockResolvedValue({
+      ...okWindowResult('chat-1', [user, assistant], 0, 2),
+      alternates: [assistant, alternate],
+    })
+
+    await expect(hydrateReaderChatMessageWindow('chat-1', 2)).resolves.toBe(true)
+    expect(db().characters[0].chats[0].message).toEqual([user, assistant])
+    expect(getRerollBuffer()).toEqual([])
+    expect(getRerollId()).toBe(-1)
+
+    promoteHydrationReader()
+    await expect(hydrateActiveChat({ loadPages: 2 })).resolves.toBe(true)
+
+    expect(getRerollBuffer().map((candidate) => candidate[0]?.data)).toEqual(['old reply', 'rerolled reply'])
+    expect(getRerollId()).toBe(1)
+    expect(db().characters[0].chats[0].message).toEqual([user, assistant])
+  })
+
+  it.each([
+    ['cached full transcript', 'none', 'full'],
+    ['reset resident tail', 'reset', 'window'],
+    ['reset full transcript', 'reset', 'full'],
+    ['invalidated resident tail', 'invalidate', 'window'],
+    ['invalidated full transcript', 'invalidate', 'full'],
+  ] as const)('rebuilds reader alternates through %s', async (_name, reset, entrypoint) => {
+    setManagedReaderForTest()
+    seedTwoStubChats()
+    const result = readerRerollResult()
+    projectionState.fetchChat.mockResolvedValue(result)
+    await expect(hydrateReaderChatMessageWindow('chat-1', 2)).resolves.toBe(true)
+    const resident = db().characters[0].chats[0].message
+    expect(getRerollBuffer()).toEqual([])
+    if (reset === 'reset') resetChatHydration()
+    else if (reset === 'invalidate') invalidateChatHydration('chat-1')
+    expect(db().characters[0].chats[0].message).toBe(resident)
+    promoteHydrationReader()
+
+    if (entrypoint === 'full') await hydrateActiveChatFully()
+    else await expect(hydrateActiveChat({ loadPages: 2 })).resolves.toBe(true)
+    expect(getRerollBuffer().map((candidate) => candidate[0]?.data)).toEqual(['old reply', 'rerolled reply'])
+    expect(getRerollId()).toBe(1)
+    expect(projectionState.fetchChat).toHaveBeenCalledTimes(2)
+    await hydrateActiveChat({ loadPages: 2 })
+    expect(projectionState.fetchChat).toHaveBeenCalledTimes(2)
+  })
+
+  it('restores alternates for a reader-filled resident tail while older history remains unloaded', async () => {
+    setManagedReaderForTest()
+    seedTwoStubChats()
+    projectionState.fetchChat.mockResolvedValue(readerRerollResult(5, 6))
+    await expect(hydrateReaderChatMessageWindow('chat-1', 1)).resolves.toBe(true)
+    expect(db().characters[0].chats[0].message.slice(0, 5).every(isServerChatMessagePlaceholder)).toBe(true)
+    expect(getRerollBuffer()).toEqual([])
+    promoteHydrationReader()
+    await expect(hydrateActiveChat({ loadPages: 1 })).resolves.toBe(true)
+    expect(getRerollBuffer().map((candidate) => candidate[0]?.data)).toEqual(['old reply', 'rerolled reply'])
+    expect(db().characters[0].chats[0].message.slice(0, 5).every(isServerChatMessagePlaceholder)).toBe(true)
+    expect(projectionState.fetchChat).toHaveBeenLastCalledWith('chat-1', { tail: 1 })
+  })
+
+  it.each(['same-revision summary clone', 'newer character detail'])(
+    'preserves unseeded alternates through %s',
+    async (refresh) => {
+      setManagedReaderForTest()
+      seedTwoStubChats()
+      expect(
+        applyCharactersResource({
+          version: 1,
+          revision: 1,
+          characters: charactersResourceState.characters,
+          characterOrder: ['char-1'],
+          currentChar: 0,
+        }),
+      ).toBe(true)
+      projectionState.fetchChat.mockResolvedValue(readerRerollResult())
+      await expect(hydrateReaderChatMessageWindow('chat-1', 2)).resolves.toBe(true)
+      const resident = db().characters[0].chats[0].message
+      const epoch = captureChatBodyProjectionEpoch('chat-1')
+      const metadata = JSON.parse(JSON.stringify(charactersResourceState.characters[0]))
+      metadata.chats = metadata.chats.map((chat: { id: string }) => ({ id: chat.id, message: [] }))
+      if (refresh === 'same-revision summary clone') {
+        expect(
+          applyCharactersResource({
+            version: 1,
+            revision: 1,
+            characters: [{ ...metadata, [SERVER_CHARACTER_SHELL_MARKER]: true }],
+            characterOrder: ['char-1'],
+            currentChar: 0,
+          }),
+        ).toBe(true)
+        expect(db().characters[0].chats[0].message).not.toBe(resident)
+      } else {
+        expect(applyCharacterResource({ revision: 2, character: metadata })).toBe(true)
+        expect(db().characters[0].chats[0].message).toBe(resident)
+      }
+      expect(db().characters[0].chats[0].message).toEqual(resident)
+      expect(captureChatBodyProjectionEpoch('chat-1')).toBe(epoch)
+      resetChatHydration()
+      promoteHydrationReader()
+      await expect(hydrateActiveChat({ loadPages: 2 })).resolves.toBe(true)
+      expect(getRerollBuffer().map((candidate) => candidate[0]?.data)).toEqual(['old reply', 'rerolled reply'])
+    },
+  )
+
+  it.each(['event resource', 'bulk read'])(
+    'defers reader %s alternates until authorized writer hydration',
+    async (source) => {
+      setManagedReaderForTest()
+      seedTwoStubChats()
+      const result = readerRerollResult()
+      projectionState.fetchChat.mockResolvedValue(result)
+      if (source === 'event resource') {
+        expect(applyServerChatMessagesResource('chat-1', result.message, undefined, result.alternates)).toBe(true)
+      } else {
+        projectionState.fetchBulkChat.mockResolvedValueOnce({
+          ...okBulkResult(['chat-1', 'chat-2']),
+          chats: [
+            { chatId: 'chat-1', message: result.message, alternates: result.alternates },
+            { chatId: 'chat-2', message: [], alternates: [] },
+          ],
+        })
+        await ensureAllChatsHydrated()
+      }
+      expect(db().characters[0].chats[0].message).toEqual(result.message)
+      expect(getRerollBuffer()).toEqual([])
+      expect(getRerollId()).toBe(-1)
+      promoteHydrationReader()
+      await expect(hydrateActiveChat({ loadPages: 2 })).resolves.toBe(true)
+      expect(getRerollBuffer().map((candidate) => candidate[0]?.data)).toEqual(['old reply', 'rerolled reply'])
+      expect(projectionState.fetchChat).toHaveBeenCalledTimes(1)
+    },
+  )
+
+  it.each(['failure', 'stale result'])(
+    'keeps reader reroll hydration eligible after writer read %s',
+    async (failure) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        setManagedReaderForTest()
+        seedTwoStubChats()
+        const result = readerRerollResult()
+        projectionState.fetchChat.mockResolvedValue(result)
+        await expect(hydrateReaderChatMessageWindow('chat-1', 2)).resolves.toBe(true)
+        promoteHydrationReader()
+        setCachedServerCommandRevision(1)
+        projectionState.fetchChat.mockResolvedValueOnce(
+          failure === 'failure' ? { status: 'error', error: 'offline' } : { ...result, revision: 0 },
+        )
+        await expect(hydrateActiveChat({ loadPages: 2 })).resolves.toBe(false)
+        expect(db().characters[0].chats[0].message).toEqual(result.message)
+        expect(getRerollBuffer()).toEqual([])
+        await expect(hydrateActiveChat({ loadPages: 2 })).resolves.toBe(true)
+        expect(getRerollBuffer().map((candidate) => candidate[0]?.data)).toEqual(['old reply', 'rerolled reply'])
+      } finally {
+        warn.mockRestore()
+      }
+    },
+  )
+
   it('aborts a reader window promptly and permits a new read while the old transport is still unresolved', async () => {
     const committed = { role: 'char', data: 'Committed body', chatId: 'committed' }
     applyServerChatMessagesResource('chat-1', [committed], undefined, [])

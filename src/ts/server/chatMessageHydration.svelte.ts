@@ -1,6 +1,10 @@
 import { SvelteMap, SvelteSet } from 'svelte/reactivity'
 import type { ActiveChatTarget } from '../chatCommands'
-import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
+import {
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import {
   hydrateServerCharacterLorebook,
   hydrateServerChatMessages,
@@ -66,6 +70,10 @@ export const ACTIVE_CHAT_INITIAL_MESSAGE_WINDOW = DEFAULT_CHAT_LOAD_INITIAL_PAGE
 // Reactive so the chat UI can render a loading state until the open chat's
 // messages arrive instead of flashing the greeting-only stub.
 const hydratedChatIds = new SvelteSet<string>()
+// Reader reads can fill the shared body without seeding writer reroll state.
+// Track only its resource epoch: detail/summary refreshes may clone that body,
+// while a hydration reset may keep it resident. Neither makes alternates ready.
+const pendingRerollHydrationEpochs = new Map<string, number>()
 // Chat ids whose hydration attempt has *finished* this session (success OR
 // failure). Lets the loading state clear after a failed/empty fetch so a chat
 // that will never gain messages does not spin forever. Reactive; cleared on
@@ -271,6 +279,27 @@ function rerollTargetForChatId(chatId: string): ActiveChatTarget | null {
   return { selectedCharID, chatPage, characterId: owner.character.chaId, chatId }
 }
 
+function needsRerollHydration(chatId: string): boolean {
+  return (
+    canUseClientRecoveryAccess() && pendingRerollHydrationEpochs.get(chatId) === captureChatBodyProjectionEpoch(chatId)
+  )
+}
+
+function applyHydratedRerollState(chatId: string, messages: unknown[], alternates: unknown[], seed = true): void {
+  if (!seed || !canUseClientRecoveryAccess()) {
+    pendingRerollHydrationEpochs.set(chatId, captureChatBodyProjectionEpoch(chatId))
+    return
+  }
+  seedRerollBufferFromAlternates(messages, alternates, rerollTargetForChatId(chatId))
+  pendingRerollHydrationEpochs.delete(chatId)
+}
+
+function markHydratedChatBodyProjectionApplied(chatId: string): void {
+  const pendingReroll = pendingRerollHydrationEpochs.get(chatId) === captureChatBodyProjectionEpoch(chatId)
+  markChatBodyProjectionApplied(chatId)
+  if (pendingReroll) pendingRerollHydrationEpochs.set(chatId, captureChatBodyProjectionEpoch(chatId))
+}
+
 function snapshotJson(value: unknown): string | null {
   try {
     return JSON.stringify(value) ?? 'undefined'
@@ -375,7 +404,7 @@ function refreshPendingFreshnessAfterHydration(chatId: string, completedToken: C
 
 function advanceChatProjectionEpoch(chatId: string): void {
   chatProjectionEpochs.set(chatId, (chatProjectionEpochs.get(chatId) ?? 0) + 1)
-  markChatBodyProjectionApplied(chatId)
+  markHydratedChatBodyProjectionApplied(chatId)
 }
 
 /**
@@ -391,6 +420,7 @@ export function invalidateChatHydration(chatId: string): void {
   attemptedChatIds.delete(chatId)
   failedChatIds.delete(chatId)
   advanceChatProjectionEpoch(chatId)
+  if (!chatMessageArray(chatId)?.length) pendingRerollHydrationEpochs.delete(chatId)
   pendingChatHydrationFreshness.delete(chatId)
   for (const requestKey of inFlight.keys()) {
     const key = requestKey.replace(/^reader:/, '')
@@ -498,7 +528,13 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
   if (charactersResourceState.status === 'ready' && !uniqueChatForHydration(chatId)) return false
   const force = request.force ?? false
   const wantsFullHydration = !request.range && !request.generationMessageId
-  if (!request.reader && !force && hydratedChatIds.has(chatId)) return true
+  if (
+    !request.reader &&
+    !force &&
+    hydratedChatIds.has(chatId) &&
+    (request.seedReroll === false || !needsRerollHydration(chatId))
+  )
+    return true
   const requestKey = `${request.reader ? 'reader:' : ''}${chatHydrationRequestKey(chatId, request)}`
   const currentRequest = inFlight.get(requestKey)
   if (currentRequest) return currentRequest
@@ -561,7 +597,13 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         recordHydrationStaleDrop('chat', staleReason)
         return false
       }
-      if (!request.reader && request.range && !force && hydratedChatIds.has(chatId)) {
+      if (
+        !request.reader &&
+        request.range &&
+        !force &&
+        hydratedChatIds.has(chatId) &&
+        (request.seedReroll === false || !needsRerollHydration(chatId))
+      ) {
         return true
       }
 
@@ -587,7 +629,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         return false
       }
       markChatBodyResourceRevision(chatId, result.revision)
-      markChatBodyProjectionApplied(chatId)
+      markHydratedChatBodyProjectionApplied(chatId)
       recordReaderChatMessages(chatId, result.message as Message[], captureChatBodyProjectionEpoch(chatId), range)
       reapplyRetainedChatBodyProjections(chatId)
       syncChatMessageOwnerProjection(chatId)
@@ -597,8 +639,8 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
       }
       // Tail/full hydration owns this chat's durable reroll candidates even if
       // the user navigates before the response settles.
-      if (request.seedReroll !== false && !hasNewerResourceRevision) {
-        seedRerollBufferFromAlternates(result.message, result.alternates, rerollTargetForChatId(chatId))
+      if (!hasNewerResourceRevision && (request.reader || request.seedReroll !== false)) {
+        applyHydratedRerollState(chatId, result.message, result.alternates, !request.reader)
       }
       refreshPendingFreshnessAfterHydration(chatId, freshness)
       return true
@@ -687,13 +729,13 @@ async function hydrateChatsBulk(chatIds: readonly string[], options: BulkHydrati
           continue
         }
         markChatBodyResourceRevision(chatId, result.revision)
-        markChatBodyProjectionApplied(chatId)
+        markHydratedChatBodyProjectionApplied(chatId)
         recordReaderChatMessages(chatId, hydration.message as Message[], captureChatBodyProjectionEpoch(chatId))
         reapplyRetainedChatBodyProjections(chatId)
         syncChatMessageOwnerProjection(chatId)
         acknowledgeHydratedChatGenerationState(chatId, hydration.message as Message[])
         hydratedChatIds.add(chatId)
-        seedRerollBufferFromAlternates(hydration.message, hydration.alternates, rerollTargetForChatId(chatId))
+        applyHydratedRerollState(chatId, hydration.message, hydration.alternates)
         refreshPendingFreshnessAfterHydration(chatId, freshness)
       }
       if (options.strict && missingIds.length > 0) {
@@ -747,11 +789,11 @@ export async function hydrateChatMessageWindow(
   if (!chatId) return false
   if (!Number.isFinite(loadPages)) {
     await hydrateChat(chatId, { force: options.force, seedReroll: true })
-    return hydratedChatIds.has(chatId)
+    return hydratedChatIds.has(chatId) && !needsRerollHydration(chatId)
   }
 
   const messages = chatMessageArray(chatId)
-  if (!messages || messages.length === 0 || options.force) {
+  if (!messages || messages.length === 0 || options.force || needsRerollHydration(chatId)) {
     await hydrateChat(chatId, {
       force: options.force,
       range: { tail: requestedTailSize(loadPages) },
@@ -760,6 +802,7 @@ export async function hydrateChatMessageWindow(
     const hydratedMessages = chatMessageArray(chatId)
     return (
       !failedChatIds.has(chatId) &&
+      !needsRerollHydration(chatId) &&
       Boolean(hydratedMessages) &&
       (hydratedChatIds.has(chatId) || unloadedRangesForTail(hydratedMessages!, loadPages).length === 0)
     )
@@ -775,6 +818,7 @@ export async function hydrateChatMessageWindow(
   const hydratedMessages = chatMessageArray(chatId)
   return (
     !failedChatIds.has(chatId) &&
+    !needsRerollHydration(chatId) &&
     Boolean(hydratedMessages) &&
     unloadedRangesForTail(hydratedMessages!, loadPages).length === 0
   )
@@ -898,7 +942,7 @@ export function applyServerChatMessagesResource(
   }
   attemptedChatIds.add(chatId)
   failedChatIds.delete(chatId)
-  seedRerollBufferFromAlternates(message, alternates, rerollTargetForChatId(chatId))
+  applyHydratedRerollState(chatId, message, alternates)
   return true
 }
 
@@ -1404,6 +1448,14 @@ export async function ensureAllCharacterLorebooksHydrated(options: BulkHydration
  * re-stubs every chat), so the next `hydrateActiveChat` refetches.
  */
 export function resetChatHydration(): void {
+  // Unlike a full shell replacement, this function does not clear body values.
+  // Preserve unseeded alternates for retained bodies, including cloned metadata
+  // refreshes at the same resource epoch; discard debts for replaced/stubbed rows.
+  for (const [chatId, epoch] of pendingRerollHydrationEpochs) {
+    if (!chatMessageArray(chatId)?.length || epoch !== captureChatBodyProjectionEpoch(chatId)) {
+      pendingRerollHydrationEpochs.delete(chatId)
+    }
+  }
   resetReaderChatMessages()
   hydratedChatIds.clear()
   attemptedChatIds.clear()
