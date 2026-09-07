@@ -1,3 +1,5 @@
+import { resetClientSessionForTests, canUseClientWriteAccess } from './clientSession'
+import { setManagedWriterForTest, demoteAndRepromoteForTest } from './__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const platformState = vi.hoisted(() => ({ isFastifyServer: true }))
@@ -254,4 +256,19 @@ describe('fetchNative streaming cancellation', () => {
     expect(stream.requestSignal?.aborted).toBe(false)
     expect(removeAbortListener).toHaveBeenCalledTimes(1)
   })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+it('rejects delayed native body chunks after demotion and repromotion', async () => {
+  setManagedWriterForTest()
+  const stream = stubStreamingFetch()
+  const response = await fetchNative('https://provider.example.test', { method: 'GET' })
+  expect(response.status).toBe(202)
+  const text = response.text()
+  demoteAndRepromoteForTest()
+  stream.close('stale provider output')
+  await expect(text).rejects.toThrow('client_write_operation_stale')
+  expect(canUseClientWriteAccess()).toBe(true)
 })

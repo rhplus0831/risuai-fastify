@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from './activeWriterSession'
 import { recordAssetByteRead } from './protocolDiagnostics'
 import { setCachedServerCommandRevision } from './commands'
@@ -71,7 +72,9 @@ async function advanceServerAssetRevision(revision: unknown): Promise<void> {
 }
 
 export async function uploadServerAssetBytes(data: Uint8Array, contentType: string): Promise<string> {
+  const operation = captureClientWriteOperation()
   const auth = await resolveServerAssetAuth(undefined)
+  assertClientWriteOperation(operation)
   const uploadBody = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
   const response = await fetch('/api/v1/assets', {
     method: 'POST',
@@ -88,7 +91,7 @@ export async function uploadServerAssetBytes(data: Uint8Array, contentType: stri
       .clone()
       .json()
       .catch(() => null)
-    handleActiveWriterStaleResponse(response, activeWriterBody)
+    handleActiveWriterStaleResponse(response, activeWriterBody, operation)
     const body = await response.text().catch(() => '')
     throw new Error(body || `Failed to upload server asset: ${response.status}`)
   }
@@ -96,6 +99,7 @@ export async function uploadServerAssetBytes(data: Uint8Array, contentType: stri
   if (typeof responseBody.assetId !== 'string') {
     throw new Error('Server asset upload response missing assetId')
   }
+  assertClientWriteOperation(operation)
   await advanceServerAssetRevision(responseBody.revision)
   return responseBody.assetId
 }

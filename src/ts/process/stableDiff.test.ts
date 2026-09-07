@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const state = vi.hoisted(() => ({
@@ -588,5 +594,37 @@ describe('stableDiff image-generation hygiene', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+describe('image runtime reader admission', () => {
+  it('does not run prompt preparation or image generation in a reader', async () => {
+    setManagedReaderForTest()
+    seedNovelAiDb()
+    await expect(stableDiff(makeCharacter(), 'hello')).resolves.toBe(false)
+    await expect(generateAIImage('hello', makeCharacter(), '', 'inlay')).resolves.toBe(false)
+    expect(state.requestChatData).not.toHaveBeenCalled()
+    expect(state.requestImageGeneration).not.toHaveBeenCalled()
+    expect(state.globalFetch).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a delayed image after demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    seedNovelAiDb()
+    let release!: (image: string) => void
+    state.requestImageGeneration.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = generateAIImage('hello', makeCharacter(), '', '')
+    await vi.waitFor(() => expect(state.requestImageGeneration).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release('data:image/png;base64,stale')
+    await expect(pending).resolves.toBe(false)
+    expect(state.charEmotionSet).not.toHaveBeenCalled()
   })
 })

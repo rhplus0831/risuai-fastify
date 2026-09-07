@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
   import { language } from 'src/lang'
   import {
     pushNotificationWarningDismissed,
@@ -24,6 +25,10 @@
     settingsResourceState.groupStatuses.display === 'ready' ? settingsResourceState.value : undefined,
   )
   let notificationChecked = $state(false)
+  let canWrite = $derived.by(() => {
+    $clientSessionStore
+    return canUseClientWriteAccess()
+  })
 
   onMount(() => {
     void initializePushNotificationCoordinator()
@@ -81,9 +86,10 @@
 <div class="mt-2">
   <Check
     bind:check={notificationChecked}
-    disabled={!displaySettings}
+    disabled={!displaySettings || !canWrite}
     name={language.notification}
     onChange={(nextValue) => {
+      if (!canUseClientWriteAccess()) return
       applyServerBackedSetting('notification', nextValue)
       void reconcileChatCompletionPushNotificationSetting(nextValue, { requestPermission: nextValue })
     }} />
@@ -121,7 +127,7 @@
         <button
           type="button"
           class="mt-1 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-textcolor disabled:opacity-60"
-          disabled={$pushNotificationCoordinatorState.phase !== 'idle'}
+          disabled={!canWrite || $pushNotificationCoordinatorState.phase !== 'idle'}
           onclick={() => void retryChatCompletionPushNotificationStorage()}>
           {language.pushNotifications.retryStorage}
         </button>
@@ -130,7 +136,7 @@
         <button
           type="button"
           class="mt-1 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-textcolor disabled:opacity-60"
-          disabled={$pushNotificationCoordinatorState.phase !== 'idle' || notificationChecked}
+          disabled={!canWrite || $pushNotificationCoordinatorState.phase !== 'idle' || notificationChecked}
           onclick={() => void retryChatCompletionPushNotificationCleanup()}>
           {language.pushNotifications.retryCleanup}
         </button>
@@ -144,7 +150,7 @@
       <button
         type="button"
         class="mt-1 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-textcolor disabled:opacity-60"
-        disabled={$pushNotificationCoordinatorState.phase !== 'idle'}
+        disabled={!canWrite || $pushNotificationCoordinatorState.phase !== 'idle'}
         onclick={() =>
           void (notificationChecked
             ? retryChatCompletionPushNotificationSetup()

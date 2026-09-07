@@ -1,3 +1,9 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+} from '../clientWriteOperation'
 import type { character, customscript } from '../storage/database.svelte'
 import type { Database } from '../storage/databaseTypes'
 import { safeStructuredClone } from '../safeStructuredClone'
@@ -731,6 +737,8 @@ export function getCurrentTranslatorPreset(boundPresetId = activeChatTranslatorP
 }
 
 export async function translate(text: string, reverse: boolean, presetScope?: TranslatorPresetScope) {
+  if (!canUseClientWriteAccess()) return text
+  const operation = captureClientSessionGeneration()
   const db = getTranslatorDatabase()
   if (!db) return text
   const capturedPresetScope = captureTranslatorPresetScope(db, presetScope)
@@ -752,7 +760,8 @@ export async function translate(text: string, reverse: boolean, presetScope?: Tr
   pendingTranslateCache.set(key, promise)
 
   try {
-    return await promise
+    const result = await promise
+    return isClientWriteOperationCurrent(operation) ? result : text
   } finally {
     if (pendingTranslateCache.get(key) === promise) {
       pendingTranslateCache.delete(key)
@@ -767,6 +776,8 @@ export async function runTranslator(
   target: string,
   exarg?: { translatorNote?: string; translatorPresetId?: string | null },
 ) {
+  if (!canUseClientWriteAccess()) return text
+  const operation = captureClientSessionGeneration()
   const capturedPresetScope = captureTranslatorPresetScope(
     getTranslatorDatabase(),
     exarg && Object.prototype.hasOwnProperty.call(exarg, 'translatorPresetId')
@@ -817,7 +828,9 @@ export async function runTranslator(
         fullResult.push(chunk[0])
         continue
       }
+      if (!isClientWriteOperationCurrent(operation)) return text
       const result = await translateMain(trimed, arg)
+      if (!isClientWriteOperationCurrent(operation)) return text
 
       if (result.startsWith('ERR::')) {
         alertError(result)
@@ -847,6 +860,7 @@ async function translateMain(
     translatorPresetId: string | null
   },
 ) {
+  const operation = captureClientWriteOperation()
   const db = getTranslatorDatabase()
   if (!db) return text
   if (db.translatorType === 'llm') {
@@ -880,6 +894,7 @@ async function translateMain(
         const waitTime = waitTrans - Date.now()
         waitTrans = Date.now() + 3000
         await sleep(waitTime)
+        assertClientWriteOperation(operation)
       }
     }
 
@@ -927,11 +942,13 @@ async function translateMain(
     `https://${arg.host}/translate_a/single?client=gtx&dt=t&sl=${db.translatorInputLanguage}&tl=${arg.to}&q=` +
     encodeURIComponent(text)
 
+  assertClientWriteOperation(operation)
   const f = await fetch(url, {
     method: 'GET',
   })
 
   const res = await f.json()
+  assertClientWriteOperation(operation)
 
   if (typeof res === 'string') {
     return res as unknown as string
@@ -973,6 +990,8 @@ export async function translateHTML(
   regenerate = false,
   presetScope?: TranslatorPresetScope,
 ): Promise<string> {
+  if (!canUseClientWriteAccess()) return html
+  const operation = captureClientSessionGeneration()
   const db = getTranslatorDatabase()
   if (!db) return html
   const translationTarget = captureTranslatorActiveChatTarget(db)
@@ -1006,6 +1025,7 @@ export async function translateHTML(
       return html
     }
   }
+  if (!isClientWriteOperationCurrent(operation)) return html
   const initialMemoKey = getTranslateHTMLMemoKey(html, reverse, charArg, chatID, alwaysExistChar, capturedPresetScope)
   if (!regenerate) {
     const memoized = readTranslateHTMLMemo(initialMemoKey)
@@ -1014,6 +1034,7 @@ export async function translateHTML(
     }
   }
   const cacheTranslateHTMLResult = (translated: string) => {
+    if (!isClientWriteOperationCurrent(operation)) return html
     writeTranslateHTMLMemo(
       getTranslateHTMLMemoKey(html, reverse, charArg, chatID, alwaysExistChar, capturedPresetScope),
       translated,
@@ -1029,6 +1050,7 @@ export async function translateHTML(
       regenerate,
       translatorPresetId: capturedPresetScope.translatorPresetId,
     })
+    if (!isClientWriteOperationCurrent(operation)) return html
     if (db.playMessageOnTranslateEnd) {
       playCompletionDing()
     }
@@ -1087,7 +1109,9 @@ export async function translateHTML(
     }
 
     try {
+      assertClientWriteOperation(operation)
       const translated = await translate(text, reverse, capturedPresetScope)
+      assertClientWriteOperation(operation)
 
       const split = translated.split('■')
 
@@ -1097,6 +1121,7 @@ export async function translateHTML(
         const fallbackCount = Math.min(currentChunk.chunks.length, fallbackRemaining)
         deeplXFallbackSegmentsUsed += fallbackCount
         for (let i = 0; i < fallbackCount; i++) {
+          assertClientWriteOperation(operation)
           currentChunk.deferreds[i].resolve(await translate(currentChunk.chunks[i], reverse, capturedPresetScope))
         }
         for (let i = fallbackCount; i < currentChunk.chunks.length; i++) {
@@ -1145,6 +1170,7 @@ export async function translateHTML(
         return
       }
 
+      assertClientWriteOperation(operation)
       const { data: processedTranslated } = await processScriptFull(alwaysExistChar, translated, 'editdisplay', chatID)
       // If the translation is the same, don't replace the node
       if (translated == processedTranslated) {
@@ -1218,6 +1244,7 @@ export async function translateHTML(
   // Remove the outer <html|body|head> tags
   translatedHTML = translatedHTML.replace(/<\/?(html|body|head)[^>]*>/g, '')
 
+  if (!isClientWriteOperationCurrent(operation)) return html
   translatedHTML = applyEdittransRegex(translatedHTML, charArg, alwaysExistChar)
 
   // Return the translated HTML, excluding the outer <body> tags if needed
@@ -1238,6 +1265,8 @@ async function translateLLM(
     translatorPresetId?: string | null
   },
 ): Promise<string> {
+  if (!canUseClientWriteAccess()) return text
+  const operation = captureClientSessionGeneration()
   const originalText = text
   const db = getTranslatorDatabase()
   if (!db) return originalText
@@ -1254,6 +1283,7 @@ async function translateLLM(
   const cacheKey = getLLMTranslationCacheKey(originalText, arg, preset, translatorNote, currentChar, translateProfile)
   if (!arg.regenerate) {
     const cacheMatch = await readLLMCacheEntry(cacheKey)
+    if (!isClientWriteOperationCurrent(operation)) return originalText
     if (cacheMatch) {
       return cacheMatch
     }
@@ -1285,6 +1315,7 @@ async function translateLLM(
           resolveModelProfileByProfileId({ database: db, role: 'translate', profileId: model.profileId })
             ? model.profileId
             : undefined
+        assertClientWriteOperation(operation)
         const response = await requestChatData(
           {
             formated: messages,
@@ -1297,6 +1328,7 @@ async function translateLLM(
           'translate',
           signal ?? null,
         )
+        assertClientWriteOperation(operation)
         if (response.type === 'fail') throw new Error(response.result)
         if (response.type === 'streaming' || response.type === 'multiline') {
           throw new Error('Unexpected response type')
@@ -1305,10 +1337,12 @@ async function translateLLM(
       },
     )
   } catch (error) {
+    if (!isClientWriteOperationCurrent(operation)) return originalText
     alertError(error instanceof Error ? error.message : String(error))
     return originalText
   }
 
+  if (!isClientWriteOperationCurrent(operation)) return originalText
   const result = sendTextAsIs
     ? pipelineResult
     : pipelineResult
@@ -1317,7 +1351,7 @@ async function translateLLM(
         })
         .replace(/<\/style-data>/g, '')
   await writeLLMCacheEntry(cacheKey, result)
-  return result
+  return isClientWriteOperationCurrent(operation) ? result : originalText
 }
 
 export async function getLLMCache(text: string): Promise<string | null> {

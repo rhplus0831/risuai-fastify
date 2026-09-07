@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { language } from '../../lang'
 import { MASKED_MODEL_PROFILE_SECRET } from '../model/modelProfileSecrets'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
@@ -38,7 +39,9 @@ export async function requestProviderOperation<T>(
   operation: ProviderOperation,
   options: RequestProviderOperationOptions,
 ): Promise<T> {
+  const clientOperation = captureClientWriteOperation()
   const auth = await getNodeServerProxyAuth()
+  assertClientWriteOperation(clientOperation)
   const response = await fetch(PROVIDER_OPERATIONS_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -60,5 +63,6 @@ export async function requestProviderOperation<T>(
   if (!body || body.operation !== operation || !Object.prototype.hasOwnProperty.call(body, 'data')) {
     throw new Error(language.errors.providerOperationResponseMalformed)
   }
+  assertClientWriteOperation(clientOperation)
   return body.data as T
 }

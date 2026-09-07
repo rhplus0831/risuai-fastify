@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { MASKED_PROVIDER_SECRET } from '../providerSecretMask'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import type { TtsSynthesisCredential, TtsSynthesisRequest } from '@risuai/protocol/tts-synthesis'
@@ -42,7 +43,9 @@ export async function requestTtsSynthesis(
   request: TtsSynthesisRequest,
   options: RequestTtsSynthesisOptions = {},
 ): Promise<TtsAudioResponse> {
+  const operation = captureClientWriteOperation()
   const auth = await getNodeServerProxyAuth()
+  assertClientWriteOperation(operation)
   const response = await fetch(TTS_SYNTHESIS_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -68,8 +71,10 @@ export async function requestTtsSynthesis(
     await response.body?.cancel().catch(() => undefined)
     throw new TtsSynthesisRequestError(502, { error: 'tts_upstream_invalid_response' })
   }
+  const audio = await response.arrayBuffer()
+  assertClientWriteOperation(operation)
   return {
-    audio: await response.arrayBuffer(),
+    audio,
     contentType,
   }
 }

@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../../../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../../../__tests__/managedClientSession'
 import fc from 'fast-check'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
 import type { InlayAsset } from '../inlays'
@@ -914,5 +920,46 @@ describe('set -> remove -> get', () => {
         expect(await getInlayAsset(id)).toBeNull()
       }),
     )
+  })
+})
+
+beforeEach(() => resetClientSessionForTests())
+
+describe('inlay managed-session admission', () => {
+  test('denies reader asset writes and lists canonical assets without legacy migration', async () => {
+    store.set('legacy', {
+      name: 'old.png',
+      ext: 'png',
+      type: 'image',
+      data: new Blob(['legacy'], { type: 'image/png' }),
+    })
+    setManagedReaderForTest()
+    await expect(postInlayAsset({ name: 'new.png', data: new Uint8Array([1]) })).rejects.toThrow(
+      'client_write_access_required',
+    )
+    await expect(
+      setInlayAsset('new', { name: 'new', ext: 'png', type: 'image', data: new Blob(['new']) }),
+    ).rejects.toThrow('client_write_access_required')
+    await expect(removeInlayAsset('legacy')).rejects.toThrow('client_write_access_required')
+    await expect(listInlayAssets()).resolves.toEqual([])
+    expect(uploadServerAssetBytes).not.toHaveBeenCalled()
+    expect(store.has('legacy')).toBe(true)
+  })
+
+  test('does not upload an inlay whose blob read crosses demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    const blob = new Blob(['pending'])
+    let release!: (bytes: ArrayBuffer) => void
+    vi.spyOn(blob, 'arrayBuffer').mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = setInlayAsset('old', { name: 'old', ext: 'png', type: 'image', data: blob })
+    demoteAndRepromoteForTest()
+    release(new Uint8Array([1]).buffer)
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
+    expect(uploadServerAssetBytes).not.toHaveBeenCalled()
+    expect(catalogStore.size).toBe(0)
   })
 })

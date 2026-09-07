@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { fireDesktopNotification } from '../postGeneration/notification'
 
@@ -103,4 +109,31 @@ describe('fireDesktopNotification', () => {
     vi.stubGlobal('Notification', undefined)
     await expect(fireDesktopNotification('hello')).resolves.toBeUndefined()
   })
+})
+
+beforeEach(() => resetClientSessionForTests())
+afterEach(() => vi.unstubAllGlobals())
+
+it('does not ask for notification permission in a reader', async () => {
+  setManagedReaderForTest()
+  const { calls } = setupNotification({ permission: 'granted' })
+  await fireDesktopNotification('reader output')
+  expect(Notification.requestPermission).not.toHaveBeenCalled()
+  expect(calls).toHaveLength(0)
+})
+
+it('does not show a late notification after permission crosses repromotion', async () => {
+  setManagedWriterForTest()
+  const { calls } = setupNotification({ permission: 'granted' })
+  let release!: (permission: NotificationPermission) => void
+  vi.mocked(Notification.requestPermission).mockReturnValueOnce(
+    new Promise((resolve) => {
+      release = resolve
+    }),
+  )
+  const pending = fireDesktopNotification('old output')
+  demoteAndRepromoteForTest()
+  release('granted')
+  await pending
+  expect(calls).toHaveLength(0)
 })

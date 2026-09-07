@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from './clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from './__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const platformState = vi.hoisted(() => ({ isFastifyServer: true }))
@@ -12,9 +18,8 @@ vi.mock('./platform', async (importActual) => {
   }
 })
 
-vi.mock('./storage/fastifyStorage', () => ({
-  getNodeServerProxyAuth: async () => 'proxy-auth-token',
-}))
+const proxyAuthMocks = vi.hoisted(() => ({ auth: vi.fn(async () => 'proxy-auth-token') }))
+vi.mock('./storage/fastifyStorage', () => ({ getNodeServerProxyAuth: proxyAuthMocks.auth }))
 
 vi.mock('./process/modules', async (importActual) => {
   const actual = await importActual<typeof import('./process/modules')>()
@@ -423,4 +428,64 @@ describe('Fastify proxy routing', () => {
     await expect(res.text()).rejects.toThrow('closed before a terminal frame')
     expect(proxyDeleteCalls()).toHaveLength(1)
   })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+describe('generic network writer admission', () => {
+  it('denies reader buffered, native and plugin requests without dispatch', async () => {
+    setManagedReaderForTest()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const args = { method: 'GET' as const }
+    await expect(globalFetch('https://example.test', args)).resolves.toMatchObject({ ok: false, status: 400 })
+    await expect(pluginGlobalFetch('https://example.test', args)).resolves.toMatchObject({ ok: false, status: 400 })
+    await expect(fetchNative('https://example.test', args)).rejects.toThrow('client_write_access_required')
+    await expect(pluginFetchNative('https://example.test', args)).rejects.toThrow('client_write_access_required')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['buffered', 'native', 'stream-job'])(
+    'does not dispatch a stale %s proxy request after auth',
+    async (kind) => {
+      setManagedWriterForTest()
+      let release!: (value: string) => void
+      proxyAuthMocks.auth.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve
+        }),
+      )
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const pending =
+        kind === 'buffered'
+          ? pluginGlobalFetch('https://example.test', { method: 'GET' })
+          : kind === 'native'
+            ? pluginFetchNative('https://example.test', { method: 'GET' })
+            : fetchNative('http://127.0.0.1:9000', {
+                method: 'POST',
+                body: '{}',
+                networkRoute: 'local_network',
+                interceptor: 'openai_streaming',
+              })
+      demoteAndRepromoteForTest()
+      release('old-auth')
+      if (kind === 'buffered') await expect(pending).resolves.toMatchObject({ ok: false, status: 400 })
+      else await expect(pending).rejects.toThrow('client_write_operation_stale')
+      expect(fetchMock).not.toHaveBeenCalled()
+    },
+  )
+})
+
+it('does not delete an old proxy job when cancelled after repromotion', async () => {
+  setManagedWriterForTest()
+  const pending = startStreamingProxyFetch()
+  const socket = await waitForWebSocket()
+  socket.emit({ type: 'upstream_headers', status: 200, headers: { 'content-type': 'text/event-stream' } })
+  const response = await pending
+  demoteAndRepromoteForTest()
+  await response.body?.cancel('reader closed old stream')
+  await vi.waitFor(() => expect(socket.closeCalls).toBeGreaterThan(0))
+  expect(proxyDeleteCalls()).toHaveLength(0)
 })

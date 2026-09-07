@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const alertState = vi.hoisted(() => ({
@@ -215,4 +221,46 @@ describe('FastifyStorage client', () => {
     expect(session.get('risuauth')).toBe(replacementToken)
     expect(alertState.alertInput).toHaveBeenCalledTimes(1)
   })
+})
+
+beforeEach(() => resetClientSessionForTests())
+
+describe('legacy server-file writer admission', () => {
+  it('does not authenticate or mutate a file from a reader', async () => {
+    setManagedReaderForTest()
+    const storage = new FastifyStorage()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(storage.setItem('save/database.bin', new Uint8Array([1]))).rejects.toThrow(
+      'client_write_access_required',
+    )
+    await expect(storage.removeItem('save/database.bin')).rejects.toThrow('client_write_access_required')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each(['setItem', 'removeItem'] as const)(
+    'does not dispatch %s after delayed auth and repromotion',
+    async (method) => {
+      setManagedWriterForTest()
+      const storage = new FastifyStorage()
+      vi.spyOn(storage as any, 'checkAuth').mockResolvedValue(undefined)
+      let release!: (auth: string) => void
+      vi.spyOn(storage, 'createAuth').mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve
+        }),
+      )
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const pending =
+        method === 'setItem'
+          ? storage.setItem('save/test.bin', new Uint8Array([1]))
+          : storage.removeItem('save/test.bin')
+      await vi.waitFor(() => expect(storage.createAuth).toHaveBeenCalledOnce())
+      demoteAndRepromoteForTest()
+      release('old-auth')
+      await expect(pending).rejects.toThrow('client_write_operation_stale')
+      expect(fetchMock).not.toHaveBeenCalled()
+    },
+  )
 })

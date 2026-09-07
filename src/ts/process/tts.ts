@@ -1,3 +1,13 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  registerClientWriterLossHandler,
+} from '../clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+} from '../clientWriteOperation'
 import { alertError } from '../alert'
 import type { character, Database } from '../storage/database.svelte'
 import { getSelectedCharacterOwner } from '../characterState'
@@ -70,7 +80,10 @@ let sourceNodeCleanup: (() => void) | null = null
 let activeTtsRequest: AbortController | null = null
 let activeTtsRun = 0
 
+let releaseWriterLossHandler: (() => void) | null = null
+
 interface TtsRun {
+  generation: number
   id: number
   controller: AbortController
 }
@@ -140,6 +153,8 @@ function stopActiveSource(): void {
 }
 
 function beginTtsRun(): TtsRun {
+  releaseWriterLossHandler?.()
+  releaseWriterLossHandler = registerClientWriterLossHandler(stopTTS)
   const previousRun = activeTtsRequest
   previousRun?.abort()
   if (previousRun) {
@@ -149,13 +164,19 @@ function beginTtsRun(): TtsRun {
   const controller = new AbortController()
   activeTtsRequest = controller
   return {
+    generation: captureClientSessionGeneration(),
     id: ++activeTtsRun,
     controller,
   }
 }
 
 function isCurrentTtsRun(run: TtsRun): boolean {
-  return run.id === activeTtsRun && activeTtsRequest === run.controller && !run.controller.signal.aborted
+  return (
+    isClientWriteOperationCurrent(run.generation) &&
+    run.id === activeTtsRun &&
+    activeTtsRequest === run.controller &&
+    !run.controller.signal.aborted
+  )
 }
 
 function isAbortError(error: unknown): boolean {
@@ -181,7 +202,7 @@ async function awaitTtsRun<T>(promise: PromiseLike<T> | T, run: TtsRun): Promise
     const onAbort = () => settle(() => reject(ttsAbortError()))
     signal.addEventListener('abort', onAbort, { once: true })
     Promise.resolve(promise).then(
-      (value) => settle(() => resolve(value)),
+      (value) => settle(() => (isCurrentTtsRun(run) ? resolve(value) : reject(ttsAbortError()))),
       (error) => settle(() => reject(error)),
     )
     if (signal.aborted) onAbort()
@@ -296,6 +317,7 @@ function voicevoxRequestUrl(baseUrl: string, path: string, params: Record<string
 }
 
 export async function sayTTS(character: character, text: string) {
+  if (!canUseClientWriteAccess()) return
   const ttsRun = beginTtsRun()
   try {
     if (!character) {
@@ -681,6 +703,8 @@ export async function sayTTS(character: character, text: string) {
 export const oaiVoices = ['alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer']
 
 export function stopTTS() {
+  releaseWriterLossHandler?.()
+  releaseWriterLossHandler = null
   activeTtsRun += 1
   activeTtsRequest?.abort()
   activeTtsRequest = null
@@ -710,6 +734,7 @@ function requireCatalogResponse(response: Response, provider: string): void {
 }
 
 export async function getElevenTTSVoices(): Promise<ElevenTTSVoice[]> {
+  if (!canUseClientWriteAccess()) return []
   const settings = ttsSettingsOwner('media')
   if (!settings) return []
   const apiKey = typeof settings.elevenLabKey === 'string' ? settings.elevenLabKey : ''
@@ -735,6 +760,7 @@ export async function getElevenTTSVoices(): Promise<ElevenTTSVoice[]> {
 }
 
 export async function getVOICEVOXVoices(): Promise<VoicevoxSpeaker[]> {
+  if (!canUseClientWriteAccess()) return []
   const settings = ttsSettingsOwner('media')
   if (!settings) return []
   const configuredUrl = typeof settings.voicevoxUrl === 'string' ? settings.voicevoxUrl.trim() : ''
@@ -742,9 +768,11 @@ export async function getVOICEVOXVoices(): Promise<VoicevoxSpeaker[]> {
   const baseUrl = configuredUrl.replace(/\/+$/, '')
 
   return voicevoxSpeakerCatalogRequests.request(baseUrl, async () => {
+    const operation = captureClientWriteOperation()
     const response = await fetch(`${baseUrl}/speakers`)
     requireCatalogResponse(response, 'VOICEVOX')
     const body: unknown = await response.json()
+    assertClientWriteOperation(operation)
     if (!Array.isArray(body)) {
       throw new Error('VOICEVOX speaker catalog response was malformed')
     }
@@ -771,6 +799,7 @@ export async function getVOICEVOXVoices(): Promise<VoicevoxSpeaker[]> {
 }
 
 export async function getFishSpeechModels(): Promise<FishSpeechModel[]> {
+  if (!canUseClientWriteAccess()) return []
   const settings = ttsSettingsOwner('media')
   if (!settings) return []
   const apiKey = typeof settings.fishSpeechKey === 'string' ? settings.fishSpeechKey : ''

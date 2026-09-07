@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
@@ -525,6 +531,79 @@ describe('push notification setting reconciliation', () => {
     expect(get(coordinator.state).retryStorageError).toBe(storageFailure)
     await coordinator.retryStorage()
     expect(get(coordinator.state).retryStorageError).toBeNull()
+    expect(enable).not.toHaveBeenCalled()
+    expect(disable).not.toHaveBeenCalled()
+  })
+})
+
+beforeEach(() => resetClientSessionForTests())
+
+describe('push coordinator managed-session admission', () => {
+  it('hydrates reader retry metadata without permission, subscription or cleanup effects', async () => {
+    setManagedReaderForTest()
+    const enable = vi.fn()
+    const disable = vi.fn()
+    const permission = vi.fn()
+    const retry = memoryRetryStorage(['https://push.example.test/old'], true)
+    const coordinator = makeCoordinator({
+      enablePushNotifications: enable,
+      disablePushNotifications: disable,
+      requestPermission: permission,
+      retryStorage: retry.storage,
+    })
+    await coordinator.initialize()
+    await expect(coordinator.reconcile(true, { requestPermission: true })).resolves.toEqual({
+      status: 'superseded',
+      enabled: true,
+    })
+    await expect(coordinator.retryCleanup()).resolves.toMatchObject({ status: 'superseded' })
+    expect(get(coordinator.state).pendingEndpoints).toEqual(['https://push.example.test/old'])
+    expect(enable).not.toHaveBeenCalled()
+    expect(disable).not.toHaveBeenCalled()
+    expect(permission).not.toHaveBeenCalled()
+  })
+
+  it('does not enable or publish a fallback after pending permission crosses repromotion', async () => {
+    setManagedWriterForTest()
+    const permission = deferred<void>()
+    const enable = vi.fn(async () => ({ status: 'fallback' as const, reason: 'server-registration-failed' as const }))
+    const coordinator = makeCoordinator({
+      enablePushNotifications: enable,
+      requestPermission: () => permission.promise,
+    })
+    const pending = coordinator.reconcile(true, { requestPermission: true })
+    demoteAndRepromoteForTest()
+    permission.resolve(undefined)
+    await expect(pending).resolves.toEqual({ status: 'superseded', enabled: true })
+    expect(enable).not.toHaveBeenCalled()
+    expect(get(coordinator.state).setupFailure).toBeNull()
+    expect(get(coordinator.state).nextRetryAt).toBeNull()
+  })
+
+  it('does not execute a reconciliation queued before demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    const apply = vi.fn(async () => 'enabled')
+    const reconciler = createPushNotificationSettingReconciler(apply)
+    const pending = reconciler.reconcile(true)
+    demoteAndRepromoteForTest()
+    await expect(pending).resolves.toEqual({ status: 'superseded', enabled: true })
+    expect(apply).not.toHaveBeenCalled()
+    await expect(reconciler.reconcile(true)).resolves.toEqual({ status: 'applied', enabled: true, result: 'enabled' })
+  })
+
+  it('fences pending cleanup hydration before invoking a device adapter', async () => {
+    setManagedWriterForTest()
+    const hydration = deferred<{ pendingEndpoints: string[]; localInspectionPending: boolean }>()
+    const enable = vi.fn()
+    const disable = vi.fn()
+    const applier = createPushNotificationSettingApplyDesiredState(enable, disable, {
+      loadPendingCleanup: () => hydration.promise,
+      savePendingCleanup: vi.fn(),
+    })
+    const pending = applier.apply(false)
+    demoteAndRepromoteForTest()
+    hydration.resolve({ pendingEndpoints: ['old'], localInspectionPending: true })
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
     expect(enable).not.toHaveBeenCalled()
     expect(disable).not.toHaveBeenCalled()
   })

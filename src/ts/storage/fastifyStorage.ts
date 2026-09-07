@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { language } from 'src/lang'
 import { alertError, alertInput, waitAlert } from '../alert'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../server/activeWriterSession'
@@ -156,14 +157,17 @@ export class FastifyStorage {
   }
 
   async setItem(key: string, value: Uint8Array) {
+    const operation = captureClientWriteOperation()
     await this.checkAuth()
+    const auth = await this.createAuth()
+    assertClientWriteOperation(operation)
     const da = await fetch(ROUTES.write, {
       method: 'POST',
       body: value as any,
       headers: {
         'content-type': 'application/octet-stream',
         'file-path': Buffer.from(key, 'utf-8').toString('hex'),
-        'risu-auth': await this.createAuth(),
+        'risu-auth': auth,
         ...activeWriterSessionHeader(),
       },
     })
@@ -172,7 +176,7 @@ export class FastifyStorage {
         .clone()
         .json()
         .catch(() => null)
-      handleActiveWriterStaleResponse(da, body)
+      handleActiveWriterStaleResponse(da, body, operation)
       throw 'setItem Error'
     }
     const data = await da.json()
@@ -235,14 +239,17 @@ export class FastifyStorage {
     return data.content
   }
   async removeItem(key: string | string[]) {
+    const operation = captureClientWriteOperation()
     await this.checkAuth()
+    const auth = await this.createAuth()
+    assertClientWriteOperation(operation)
     const hexKey = (k: string) => Buffer.from(k, 'utf-8').toString('hex')
     const filePath = Array.isArray(key) ? key.map(hexKey).join('$$') : hexKey(key)
     const da = await fetch(ROUTES.remove, {
       method: 'POST',
       headers: {
         'file-path': filePath,
-        'risu-auth': await this.createAuth(),
+        'risu-auth': auth,
         ...activeWriterSessionHeader(),
       },
     })
@@ -251,7 +258,7 @@ export class FastifyStorage {
         .clone()
         .json()
         .catch(() => null)
-      handleActiveWriterStaleResponse(da, body)
+      handleActiveWriterStaleResponse(da, body, operation)
       throw 'removeItem Error'
     }
     const data = await da.json()

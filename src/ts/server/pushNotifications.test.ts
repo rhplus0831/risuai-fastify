@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const pushNotificationMocks = vi.hoisted(() => ({
@@ -639,5 +645,54 @@ describe('push notification browser helper', () => {
       localInspectionPending: true,
       failures: [{ step: 'service-worker' }],
     })
+  })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+describe('push managed-session admission', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  it('does not request permission, enable or disable subscriptions in a reader', async () => {
+    setManagedReaderForTest()
+    const notification = setupNotification('default', 'granted')
+    const worker = setupServiceWorker({})
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(requestChatCompletionNotificationPermission()).resolves.toBe('unavailable')
+    await expect(enableChatCompletionPushNotifications()).resolves.toMatchObject({ status: 'fallback' })
+    await expect(
+      disableChatCompletionPushNotifications(['https://push.example.test/old'], true),
+    ).resolves.toMatchObject({ status: 'partial', pendingEndpoints: ['https://push.example.test/old'] })
+    expect(notification.requestPermission).not.toHaveBeenCalled()
+    expect(worker.register).not.toHaveBeenCalled()
+    expect(worker.getRegistration).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not subscribe after inspection crosses demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    setupNotification('granted')
+    let release!: (value: PushSubscription | null) => void
+    const getSubscription = vi.fn(
+      () =>
+        new Promise<PushSubscription | null>((resolve) => {
+          release = resolve
+        }),
+    )
+    const subscribe = vi.fn()
+    setupServiceWorker({ pushManager: { getSubscription, subscribe } as unknown as PushManager })
+    const calls = setupPushFetch()
+    const pending = enableChatCompletionPushNotifications()
+    await vi.waitFor(() => expect(getSubscription).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(null)
+    await expect(pending).resolves.toMatchObject({ status: 'fallback' })
+    expect(subscribe).not.toHaveBeenCalled()
+    expect(calls.filter((call) => call.method === 'POST')).toHaveLength(0)
   })
 })

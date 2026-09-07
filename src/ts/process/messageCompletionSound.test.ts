@@ -550,3 +550,33 @@ describe('completion sound HTMLAudio fallback', () => {
     expect(playMessageCompletionSoundIfEnabled()).toBe(false)
   })
 })
+
+describe('completion audio managed-session admission', () => {
+  it('does not play Web Audio or HTML fallback in a reader while preserving gesture unlock', async () => {
+    const module = await loadCompletionSoundModule()
+    const { setManagedReaderForTest } = await import('../__tests__/managedClientSession')
+    setManagedReaderForTest()
+    resourceDatabase.playMessage = true
+    expect(module.playMessageCompletionSoundIfEnabled()).toBe(false)
+    module.playCompletionDing()
+    expect(StubAudioContext.instances).toHaveLength(0)
+    expect(fallbackAudioHarness.AudioMock).not.toHaveBeenCalled()
+    module.unlockCompletionAudioContext()
+    await vi.waitFor(() => expect(StubAudioContext.instances[0]?.decoded).toHaveLength(1))
+    expect(StubAudioContext.instances[0].sources).toHaveLength(0)
+  })
+
+  it('does not start playback after decode crosses demotion and repromotion', async () => {
+    const module = await loadCompletionSoundModule()
+    const { setManagedWriterForTest, demoteAndRepromoteForTest } = await import('../__tests__/managedClientSession')
+    setManagedWriterForTest()
+    webAudioControl.decodeDeferred = deferred<AudioBuffer>()
+    module.playCompletionDing()
+    await vi.waitFor(() => expect(StubAudioContext.instances[0]?.decoded).toHaveLength(1))
+    demoteAndRepromoteForTest()
+    webAudioControl.decodeDeferred.resolve(decodedBuffer)
+    await vi.waitFor(() => expect(StubAudioContext.instances[0]?.suspend).toHaveBeenCalledOnce())
+    expect(StubAudioContext.instances[0].sources).toHaveLength(0)
+    expect(fallbackAudioHarness.AudioMock).not.toHaveBeenCalled()
+  })
+})

@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../clientSession'
+import { assertClientWriteOperation, isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { navigate } from '../router'
 
@@ -127,6 +129,9 @@ function readServiceWorkerNavigationPath(data: unknown): string | null {
 }
 
 export async function enableChatCompletionPushNotifications(): Promise<EnablePushNotificationsResult> {
+  const operation = captureClientSessionGeneration()
+  const denied = { status: 'fallback', reason: 'server-registration-failed' } as const
+  if (!isClientWriteOperationCurrent(operation)) return denied
   const permission = typeof Notification === 'undefined' ? 'unavailable' : Notification.permission
   if (permission === 'denied') return { status: 'permission-denied' }
   if (permission === 'unavailable') return { status: 'fallback', reason: 'notification-unavailable' }
@@ -136,20 +141,23 @@ export async function enableChatCompletionPushNotifications(): Promise<EnablePus
     return { status: 'fallback', reason: 'service-worker-unavailable' }
   }
 
-  const registration = await registerPushServiceWorker()
+  const registration = await registerPushServiceWorker(operation)
+  if (!isClientWriteOperationCurrent(operation)) return denied
   if (!registration) return { status: 'fallback', reason: 'service-worker-failed' }
 
   const pushManager = pushManagerForRegistration(registration)
   if (!pushManager) return { status: 'fallback', reason: 'push-unavailable' }
 
   const publicKey = await fetchVapidPublicKey()
+  if (!isClientWriteOperationCurrent(operation)) return denied
   if (!publicKey) return { status: 'fallback', reason: 'vapid-unavailable' }
 
-  const subscription = await getOrCreatePushSubscription(pushManager, publicKey)
+  const subscription = await getOrCreatePushSubscription(pushManager, publicKey, operation)
+  if (!isClientWriteOperationCurrent(operation)) return denied
   if (!subscription) return { status: 'fallback', reason: 'subscription-failed' }
 
   const endpoint = subscription.endpoint
-  const registered = await registerPushSubscription(subscription)
+  const registered = await registerPushSubscription(subscription, operation)
   if (!registered.ok) {
     // A failed refresh must not destroy a subscription that may already be
     // registered on the server. Reuse it when connectivity recovers.
@@ -160,6 +168,7 @@ export async function enableChatCompletionPushNotifications(): Promise<EnablePus
     }
   }
 
+  if (!isClientWriteOperationCurrent(operation)) return denied
   return { status: 'enabled', endpoint }
 }
 
@@ -167,6 +176,18 @@ export async function disableChatCompletionPushNotifications(
   pendingEndpoints: readonly string[] = [],
   requireLocalInspection = false,
 ): Promise<DisablePushNotificationsResult> {
+  const operation = captureClientSessionGeneration()
+  if (!isClientWriteOperationCurrent(operation)) {
+    return {
+      status: 'partial',
+      subscriptionFound: null,
+      localUnsubscribed: null,
+      serverDeleted: null,
+      pendingEndpoints: [...pendingEndpoints],
+      localInspectionPending: requireLocalInspection,
+      failures: [{ step: 'subscription-inspection', error: 'client_write_access_required' }],
+    }
+  }
   const failures: DisablePushNotificationFailure[] = []
   const endpoints = new Set(pendingEndpoints)
   let subscriptionFound: boolean | null = null
@@ -191,7 +212,7 @@ export async function disableChatCompletionPushNotifications(
 
       if (subscription) {
         endpoints.add(subscription.endpoint)
-        const unsubscribeResult = await unsubscribePushSubscription(subscription)
+        const unsubscribeResult = await unsubscribePushSubscription(subscription, operation)
         localUnsubscribed = unsubscribeResult.ok
         if (unsubscribeResult.ok === false) {
           localInspectionPending = true
@@ -213,7 +234,7 @@ export async function disableChatCompletionPushNotifications(
   const failedServerEndpoints: string[] = []
   if (endpoints.size > 0) {
     const deletionResults = await Promise.all(
-      [...endpoints].map(async (endpoint) => ({ endpoint, result: await deletePushSubscription(endpoint) })),
+      [...endpoints].map(async (endpoint) => ({ endpoint, result: await deletePushSubscription(endpoint, operation) })),
     )
     serverDeleted = deletionResults.every(({ result }) => result.ok)
     for (const { endpoint, result } of deletionResults) {
@@ -243,6 +264,8 @@ export async function disableChatCompletionPushNotifications(
 
 /** Call directly from a user action, before awaiting storage or network work. */
 export async function requestChatCompletionNotificationPermission(): Promise<NotificationPermission | 'unavailable'> {
+  const operation = captureClientSessionGeneration()
+  if (!isClientWriteOperationCurrent(operation)) return 'unavailable'
   if (typeof Notification === 'undefined' || typeof Notification.requestPermission !== 'function') {
     return 'unavailable'
   }
@@ -250,7 +273,8 @@ export async function requestChatCompletionNotificationPermission(): Promise<Not
   if (Notification.permission !== 'default') return Notification.permission
 
   try {
-    return await Notification.requestPermission()
+    const permission = await Notification.requestPermission()
+    return isClientWriteOperationCurrent(operation) ? permission : 'unavailable'
   } catch (error) {
     warnPushError('Failed to request notification permission.', error)
     return Notification.permission
@@ -261,8 +285,9 @@ function canUseServiceWorker(): boolean {
   return typeof navigator !== 'undefined' && !!navigator.serviceWorker
 }
 
-async function registerPushServiceWorker(): Promise<ServiceWorkerRegistration | null> {
+async function registerPushServiceWorker(operation: number): Promise<ServiceWorkerRegistration | null> {
   try {
+    assertClientWriteOperation(operation)
     return await navigator.serviceWorker.register(SERVICE_WORKER_URL)
   } catch (error) {
     warnPushError('Failed to register the notification service worker.', error)
@@ -313,9 +338,12 @@ async function fetchVapidPublicKey(): Promise<string | null> {
 async function getOrCreatePushSubscription(
   pushManager: PushManager,
   publicKey: string,
+  operation: number,
 ): Promise<PushSubscription | null> {
   try {
+    assertClientWriteOperation(operation)
     const existingSubscription = await pushManager.getSubscription()
+    assertClientWriteOperation(operation)
     if (existingSubscription) return existingSubscription
 
     return await pushManager.subscribe({
@@ -328,9 +356,14 @@ async function getOrCreatePushSubscription(
   }
 }
 
-async function registerPushSubscription(subscription: PushSubscription): Promise<PushTransportResult> {
+async function registerPushSubscription(
+  subscription: PushSubscription,
+  operation: number,
+): Promise<PushTransportResult> {
   try {
+    assertClientWriteOperation(operation)
     const auth = await getNodeServerProxyAuth()
+    assertClientWriteOperation(operation)
     const response = await fetch(PUSH_SUBSCRIPTIONS_ENDPOINT, {
       method: 'POST',
       headers: {
@@ -351,9 +384,11 @@ async function registerPushSubscription(subscription: PushSubscription): Promise
   }
 }
 
-async function deletePushSubscription(endpoint: string): Promise<PushTransportResult> {
+async function deletePushSubscription(endpoint: string, operation: number): Promise<PushTransportResult> {
   try {
+    assertClientWriteOperation(operation)
     const auth = await getNodeServerProxyAuth()
+    assertClientWriteOperation(operation)
     const response = await fetch(PUSH_SUBSCRIPTIONS_ENDPOINT, {
       method: 'DELETE',
       headers: {
@@ -374,8 +409,12 @@ async function deletePushSubscription(endpoint: string): Promise<PushTransportRe
   }
 }
 
-async function unsubscribePushSubscription(subscription: PushSubscription): Promise<PushTransportResult> {
+async function unsubscribePushSubscription(
+  subscription: PushSubscription,
+  operation: number,
+): Promise<PushTransportResult> {
   try {
+    assertClientWriteOperation(operation)
     const unsubscribed = await subscription.unsubscribe()
     if (!unsubscribed) throw new Error('Browser push subscription unsubscribe returned false.')
     return { ok: true }

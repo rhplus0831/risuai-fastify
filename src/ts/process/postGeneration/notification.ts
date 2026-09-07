@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../../clientSession'
+import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 const RISU_NOTIFICATION_ICON = '/logo_192.png'
 const MAX_NOTIFICATION_BODY_BYTES = 1024
 const NOTIFICATION_BODY_TRUNCATION_MARKER = '...'
@@ -10,8 +12,11 @@ export interface DesktopNotificationInput {
 }
 
 export async function fireDesktopNotification(input: string | DesktopNotificationInput): Promise<void> {
+  if (!canUseClientWriteAccess()) return
+  const operation = captureClientSessionGeneration()
   try {
     const permission = await Notification.requestPermission()
+    if (!isClientWriteOperationCurrent(operation)) return
     if (permission !== 'granted') return
     const { body, icon } = normalizeNotificationInput(input)
     const noti = new Notification('Risuai', {

@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from './activeWriterSession'
 import type { CommandEvent } from './commands'
@@ -84,7 +86,7 @@ export interface ServerBackupProgressOptions {
 }
 
 export function canUseServerBackups(): boolean {
-  return true
+  return canUseClientWriteAccess()
 }
 
 export async function createServerBackup(
@@ -94,11 +96,15 @@ export async function createServerBackup(
     onProgress?: ServerBackupProgressCallback
   } = {},
 ): Promise<ServerBackupResult<{ backup: ServerBackupManifest }>> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
+  const operation = captureClientSessionGeneration()
+  input = { ...input, onProgress: guardWriterProgress(input.onProgress, operation) }
   reportProgress(input.onProgress, {
     phase: 'process',
     message: 'Creating server backup',
     percent: 10,
   })
+  if (!isClientWriteOperationCurrent(operation)) return { status: 'unavailable' }
   const result = await requestServerBackupJson('', {
     method: 'POST',
     body: { label: input.label ?? null },
@@ -106,7 +112,7 @@ export async function createServerBackup(
     validate: readBackupManifest,
     map: (backup) => ({ backup }),
   })
-  if (result.status === 'ok') {
+  if (result.status === 'ok' && isClientWriteOperationCurrent(operation)) {
     reportProgress(input.onProgress, {
       phase: 'complete',
       message: 'Server backup saved',
@@ -138,6 +144,9 @@ export async function restoreServerBackup(input: {
   signal?: AbortSignal | null
   onProgress?: ServerBackupProgressCallback
 }): Promise<ServerBackupResult<{ revision: number; event?: CommandEvent; discardedPendingMutations: number }>> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
+  const operation = captureClientSessionGeneration()
+  input = { ...input, onProgress: guardWriterProgress(input.onProgress, operation) }
   const finishReplacement = beginLocalReplacementDatabaseOperation()
   try {
     return await restoreServerBackupImplementation(input)
@@ -151,11 +160,14 @@ async function restoreServerBackupImplementation(input: {
   signal?: AbortSignal | null
   onProgress?: ServerBackupProgressCallback
 }): Promise<ServerBackupResult<{ revision: number; event?: CommandEvent; discardedPendingMutations: number }>> {
+  const operation = captureClientSessionGeneration()
+  input = { ...input, onProgress: guardWriterProgress(input.onProgress, operation) }
   reportProgress(input.onProgress, {
     phase: 'process',
     message: 'Restoring server backup',
     percent: 10,
   })
+  if (!isClientWriteOperationCurrent(operation)) return { status: 'unavailable' }
   const restored = await requestServerBackupJson(`/${encodeURIComponent(input.id)}/restore`, {
     method: 'POST',
     signal: input.signal,
@@ -180,6 +192,16 @@ async function restoreServerBackupImplementation(input: {
     map: (result) => result,
   })
   if (restored.status !== 'ok') return restored
+  // The server accepted this replacement. A stale caller must not adopt its
+  // ownership or overwrite the current projection; canonical refresh reconciles it.
+  if (!isClientWriteOperationCurrent(operation)) {
+    return {
+      status: 'ok',
+      revision: restored.revision,
+      discardedPendingMutations: 0,
+      ...(restored.event ? { event: restored.event } : {}),
+    }
+  }
   const { discarded: discardedPendingMutations } = await adoptReplacementDatabaseOwnership(restored)
 
   reportProgress(input.onProgress, {
@@ -187,6 +209,13 @@ async function restoreServerBackupImplementation(input: {
     message: 'Refreshing local state',
     percent: 75,
   })
+  if (!isClientWriteOperationCurrent(operation))
+    return {
+      status: 'ok',
+      revision: restored.revision,
+      discardedPendingMutations,
+      ...(restored.event ? { event: restored.event } : {}),
+    }
   const resync = await forceServerDatabaseReplacementRefresh('backup-restore')
   if (resync.status !== 'ok') {
     return {
@@ -198,7 +227,7 @@ async function restoreServerBackupImplementation(input: {
           : `Backup restored, but resource refresh failed: ${resync.error}`,
     }
   }
-  await showLegacyMemoryMigrationNoticeAfterReplacement()
+  if (isClientWriteOperationCurrent(operation)) await showLegacyMemoryMigrationNoticeAfterReplacement(operation)
   reportProgress(input.onProgress, {
     phase: 'complete',
     message: 'Server backup loaded',
@@ -256,8 +285,6 @@ async function exportServerBackupBlob(
   defaultFilename: string,
   options?: AbortSignal | ServerBackupProgressOptions | null,
 ): Promise<ServerBackupResult<{ blob: Blob; filename: string }>> {
-  if (!canUseServerBackups()) return { status: 'unavailable' }
-
   const { signal, onProgress } = normalizeProgressOptions(options)
   reportProgress(onProgress, {
     phase: 'request',
@@ -330,6 +357,9 @@ export async function importServerBundle(input: {
   | UnsupportedBackupGroupsResult
   | UnsupportedStandaloneChatBlocksResult
 > {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
+  const operation = captureClientSessionGeneration()
+  input = { ...input, onProgress: guardWriterProgress(input.onProgress, operation) }
   const finishReplacement = beginLocalReplacementDatabaseOperation()
   try {
     return await importServerBundleImplementation(input)
@@ -355,6 +385,7 @@ async function importServerBundleImplementation(input: {
   | UnsupportedStandaloneChatBlocksResult
 > {
   if (!canUseServerBackups()) return { status: 'unavailable' }
+  const operation = captureClientSessionGeneration()
 
   reportProgress(input.onProgress, {
     phase: 'prepare',
@@ -362,6 +393,7 @@ async function importServerBundleImplementation(input: {
     percent: 2,
   })
   const auth = await getNodeServerProxyAuth()
+  if (!isClientWriteOperationCurrent(operation)) return { status: 'unavailable' }
   const form = new FormData()
   form.append('file', input.file, input.filename ?? DEFAULT_BUNDLE_FILENAME)
 
@@ -403,7 +435,7 @@ async function importServerBundleImplementation(input: {
   }
 
   if (!response.ok) {
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, operation)
     const unsupportedStandaloneChatBlocks = readUnsupportedStandaloneChatBlocks(body)
     if (unsupportedStandaloneChatBlocks) return unsupportedStandaloneChatBlocks
     const unsupportedGroups = readUnsupportedBackupGroups(body)
@@ -415,6 +447,16 @@ async function importServerBundleImplementation(input: {
   if (imported === null) {
     return { status: 'error', error: 'Invalid bundle import response' }
   }
+  if (!isClientWriteOperationCurrent(operation)) {
+    return {
+      status: 'ok',
+      revision: imported.revision,
+      discardedPendingMutations: 0,
+      assetReport: imported.assetReport,
+      skippedBlocks: imported.skippedBlocks,
+      ...(imported.event ? { event: imported.event } : {}),
+    }
+  }
   const { discarded: discardedPendingMutations } = await adoptReplacementDatabaseOwnership(imported)
 
   reportProgress(input.onProgress, {
@@ -422,6 +464,15 @@ async function importServerBundleImplementation(input: {
     message: 'Refreshing local state',
     percent: 90,
   })
+  if (!isClientWriteOperationCurrent(operation))
+    return {
+      status: 'ok',
+      revision: imported.revision,
+      discardedPendingMutations,
+      assetReport: imported.assetReport,
+      skippedBlocks: imported.skippedBlocks,
+      ...(imported.event ? { event: imported.event } : {}),
+    }
   const resync = await forceServerDatabaseReplacementRefresh('bundle-restore')
   if (resync.status !== 'ok') {
     return {
@@ -433,7 +484,7 @@ async function importServerBundleImplementation(input: {
           : `Backup imported, but resource refresh failed: ${resync.error}`,
     }
   }
-  await showLegacyMemoryMigrationNoticeAfterReplacement()
+  if (isClientWriteOperationCurrent(operation)) await showLegacyMemoryMigrationNoticeAfterReplacement(operation)
   reportProgress(input.onProgress, {
     phase: 'complete',
     message: 'Local backup loaded',
@@ -459,9 +510,9 @@ function readUnsupportedStandaloneChatBlocks(body: unknown): UnsupportedStandalo
   }
 }
 
-async function showLegacyMemoryMigrationNoticeAfterReplacement(): Promise<void> {
+async function showLegacyMemoryMigrationNoticeAfterReplacement(operation: number): Promise<void> {
   const { showLegacyMemoryMigrationNoticeIfNeeded } = await import('../process/legacyMemoryMigrationNotice')
-  showLegacyMemoryMigrationNoticeIfNeeded()
+  if (isClientWriteOperationCurrent(operation)) showLegacyMemoryMigrationNoticeIfNeeded()
 }
 
 function readUnsupportedBackupGroups(body: unknown): UnsupportedBackupGroupsResult | null {
@@ -496,6 +547,17 @@ function readUnsupportedBackupGroups(body: unknown): UnsupportedBackupGroupsResu
     groups,
     error: record.error,
   }
+}
+
+function guardWriterProgress(
+  onProgress: ServerBackupProgressCallback | undefined,
+  operation: number,
+): ServerBackupProgressCallback | undefined {
+  return onProgress
+    ? (progress) => {
+        if (isClientWriteOperationCurrent(operation)) onProgress(progress)
+      }
+    : undefined
 }
 
 function reportProgress(onProgress: ServerBackupProgressCallback | undefined, progress: ServerBackupProgress): void {
@@ -768,9 +830,12 @@ async function requestServerBackupJson<T, R extends Record<string, unknown>>(
     map: (value: T) => R
   },
 ): Promise<ServerBackupResult<R>> {
-  if (!canUseServerBackups()) return { status: 'unavailable' }
+  const operation = captureClientSessionGeneration()
+  const mutation = init.method !== 'GET'
+  if (mutation && !canUseClientWriteAccess()) return { status: 'unavailable' }
 
   const auth = await getNodeServerProxyAuth()
+  if (mutation && !isClientWriteOperationCurrent(operation)) return { status: 'unavailable' }
   let response: Response
   try {
     response = await fetch(`${BACKUPS_ENDPOINT}${path}`, {
@@ -796,7 +861,7 @@ async function requestServerBackupJson<T, R extends Record<string, unknown>>(
   }
 
   if (!response.ok) {
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, operation)
     return { status: 'error', error: errorMessageFromBody(body, `HTTP ${response.status}`) }
   }
 

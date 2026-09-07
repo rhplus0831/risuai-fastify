@@ -1,3 +1,9 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../../clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+} from '../../clientWriteOperation'
 import localforage from 'localforage'
 import { getImageType } from 'src/ts/media'
 import { getModelInfo, LLMFlags, type LLMFormat, type LLMModel } from 'src/ts/model/modellist'
@@ -88,7 +94,8 @@ async function blobToBytes(blob: Blob): Promise<Uint8Array> {
   return new Uint8Array(await blob.arrayBuffer())
 }
 
-async function uploadInlayAssetToServer(img: InlayAsset): Promise<string> {
+async function uploadInlayAssetToServer(img: InlayAsset, operation: number): Promise<string> {
+  assertClientWriteOperation(operation)
   if (img.serverAssetId) return img.serverAssetId
   if (img.data === undefined) {
     throw new Error(`Inlay asset ${img.name} has no local bytes to upload`)
@@ -96,7 +103,9 @@ async function uploadInlayAssetToServer(img: InlayAsset): Promise<string> {
 
   if (img.data instanceof Blob) {
     const contentType = img.data.type || inlayContentType(img.type, img.ext)
-    return uploadServerAssetBytes(await blobToBytes(img.data), contentType)
+    const bytes = await blobToBytes(img.data)
+    assertClientWriteOperation(operation)
+    return uploadServerAssetBytes(bytes, contentType)
   }
 
   if (img.type === 'signature') {
@@ -111,7 +120,9 @@ async function rememberServerInlayAsset(
   id: string,
   img: InlayAsset & { serverAssetId: string },
   aliases: readonly string[] = [],
+  operation = captureClientWriteOperation(),
 ): Promise<void> {
+  assertClientWriteOperation(operation)
   const allAliases = Array.from(new Set([...(id !== img.serverAssetId ? [id] : []), ...aliases])).filter(
     (alias) => alias !== img.serverAssetId,
   )
@@ -138,6 +149,7 @@ async function rememberServerInlayAsset(
           : 'Inlay catalog is unavailable',
     )
   }
+  if (!isClientWriteOperationCurrent(operation)) return
   applyServerInlayCatalogEntryReceipt(result.asset, result.revision)
   const cached = { ...img, data: undefined, serverCatalogCache: true as const }
   try {
@@ -233,6 +245,7 @@ async function waitForInlayImageLoad(imgObj: HTMLImageElement) {
 }
 
 export async function postInlayAsset(img: { name: string; data: Uint8Array }) {
+  const operation = captureClientWriteOperation()
   const extention = img.name.split('.').at(-1)?.toLowerCase()
   const imgObj = new Image()
 
@@ -251,23 +264,35 @@ export async function postInlayAsset(img: { name: string; data: Uint8Array }) {
 
   if (extention && inlayAudioExts.includes(extention)) {
     const assetId = await uploadServerAssetBytes(img.data, inlayContentType('audio', extention))
-    await rememberServerInlayAsset(assetId, {
-      name: img.name,
-      ext: extention,
-      type: 'audio',
-      serverAssetId: assetId,
-    })
+    assertClientWriteOperation(operation)
+    await rememberServerInlayAsset(
+      assetId,
+      {
+        name: img.name,
+        ext: extention,
+        type: 'audio',
+        serverAssetId: assetId,
+      },
+      [],
+      operation,
+    )
     return assetId
   }
 
   if (extention && inlayVideoExts.includes(extention)) {
     const assetId = await uploadServerAssetBytes(img.data, inlayContentType('video', extention))
-    await rememberServerInlayAsset(assetId, {
-      name: img.name,
-      ext: extention,
-      type: 'video',
-      serverAssetId: assetId,
-    })
+    assertClientWriteOperation(operation)
+    await rememberServerInlayAsset(
+      assetId,
+      {
+        name: img.name,
+        ext: extention,
+        type: 'video',
+        serverAssetId: assetId,
+      },
+      [],
+      operation,
+    )
     return assetId
   }
 
@@ -278,11 +303,13 @@ export async function writeInlayImage(
   imgObj: HTMLImageElement,
   arg: { name?: string; ext?: string; id?: string } = {},
 ) {
+  const operation = captureClientWriteOperation()
   let drawHeight = 0
   let drawWidth = 0
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
   await waitForInlayImageLoad(imgObj)
+  assertClientWriteOperation(operation)
   ;({ height: drawHeight, width: drawWidth } = getLoadedImageDimensions(imgObj))
   assertInlayImageDecodeBudget(drawWidth, drawHeight)
 
@@ -301,7 +328,10 @@ export async function writeInlayImage(
   ctx.drawImage(imgObj, 0, 0, drawWidth, drawHeight)
   const imageBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
 
-  const assetId = await uploadServerAssetBytes(await blobToBytes(imageBlob as Blob), 'image/png')
+  const bytes = await blobToBytes(imageBlob as Blob)
+  assertClientWriteOperation(operation)
+  const assetId = await uploadServerAssetBytes(bytes, 'image/png')
+  assertClientWriteOperation(operation)
   await rememberServerInlayAsset(
     assetId,
     {
@@ -313,6 +343,7 @@ export async function writeInlayImage(
       serverAssetId: assetId,
     },
     arg.id && arg.id !== assetId ? [arg.id] : [],
+    operation,
   )
   return assetId
 }
@@ -327,6 +358,7 @@ export type InlaySignature = {
 }
 
 export async function saveInlayedSignature(sigid: string, signature: InlaySignature) {
+  const operation = captureClientWriteOperation()
   const data = JSON.stringify(signature)
   const assetId = await uploadServerAssetBytes(new TextEncoder().encode(data), SERVER_INLAY_SIGNATURE_CONTENT_TYPE)
   await rememberServerInlayAsset(
@@ -338,6 +370,7 @@ export async function saveInlayedSignature(sigid: string, signature: InlaySignat
       serverAssetId: assetId,
     },
     sigid !== assetId ? [sigid] : [],
+    operation,
   )
   return assetId
 }
@@ -391,6 +424,11 @@ async function ensureServerInlayCatalog(): Promise<void> {
 let legacyCatalogMigration: Promise<void> | null = null
 
 async function migrateLegacyInlayCatalog(): Promise<void> {
+  if (!canUseClientWriteAccess()) {
+    await ensureServerInlayCatalog()
+    return
+  }
+  const operation = captureClientWriteOperation()
   if (legacyCatalogMigration) return legacyCatalogMigration
   const migration = (async () => {
     await ensureServerInlayCatalog()
@@ -399,15 +437,17 @@ async function migrateLegacyInlayCatalog(): Promise<void> {
       localEntries.push([key, value])
     })
 
+    assertClientWriteOperation(operation)
     const grouped = new Map<string, { aliases: Set<string>; asset: InlayAsset & { serverAssetId: string } }>()
     for (const [key, local] of localEntries) {
+      assertClientWriteOperation(operation)
       if (local.serverCatalogCache) {
         const cachedAssetId = local.serverAssetId ?? serverAssetIdFromReference(key)
         if (!cachedAssetId || !findServerInlayCatalogEntry(cachedAssetId)) await inlayStorage.removeItem(key)
         continue
       }
       let assetId = local.serverAssetId ?? serverAssetIdFromReference(key)
-      if (!assetId && local.data !== undefined) assetId = await uploadInlayAssetToServer(local)
+      if (!assetId && local.data !== undefined) assetId = await uploadInlayAssetToServer(local, operation)
       if (!assetId) {
         // Metadata without either durable bytes or a server id is a stale
         // browser-only ghost, not an authoritative catalog row.
@@ -427,7 +467,7 @@ async function migrateLegacyInlayCatalog(): Promise<void> {
       const aliases = [...group.aliases]
       if (existing && aliases.every((alias) => existing.aliases.includes(alias))) continue
       try {
-        await rememberServerInlayAsset(assetId, group.asset, aliases)
+        await rememberServerInlayAsset(assetId, group.asset, aliases, operation)
       } catch (error) {
         if (!(error instanceof MissingServerInlayAssetError)) throw error
         await Promise.all([assetId, ...aliases].map((key) => inlayStorage.removeItem(key)))
@@ -489,6 +529,7 @@ export async function getInlayAsset(id: string) {
 
 // Returns with Blob
 export async function getInlayAssetBlob(id: string) {
+  const operation = captureClientSessionGeneration()
   const serverAsset = await getServerInlayAssetId(id)
   if (serverAsset) {
     const meta = findServerInlayCatalogEntry(id) ?? findServerInlayCatalogEntry(serverAsset)
@@ -522,9 +563,10 @@ export async function getInlayAssetBlob(id: string) {
   if (typeof img.data === 'string') {
     // Migrate to Blob
     data = base64ToBlob(img.data)
-    void setInlayAsset(id, { ...img, data }).catch((error) => {
-      console.warn('Unable to migrate the browser-local inlay asset', error)
-    })
+    if (isClientWriteOperationCurrent(operation))
+      void setInlayAsset(id, { ...img, data }).catch((error) => {
+        console.warn('Unable to migrate the browser-local inlay asset', error)
+      })
   } else {
     data = img.data
   }
@@ -541,13 +583,16 @@ export async function listInlayAssets(): Promise<[id: string, InlayAsset][]> {
 }
 
 export async function setInlayAsset(id: string, img: InlayAsset) {
-  const assetId = await uploadInlayAssetToServer(img)
-  await rememberServerInlayAsset(id, { ...img, serverAssetId: assetId })
+  const operation = captureClientWriteOperation()
+  const assetId = await uploadInlayAssetToServer(img, operation)
+  await rememberServerInlayAsset(id, { ...img, serverAssetId: assetId }, [], operation)
   return assetId
 }
 
 export async function removeInlayAsset(id: string) {
+  const operation = captureClientWriteOperation()
   await ensureServerInlayCatalog()
+  assertClientWriteOperation(operation)
   const catalogEntry = findServerInlayCatalogEntry(id)
   if (!catalogEntry) {
     await inlayStorage.removeItem(id)
@@ -566,6 +611,7 @@ export async function removeInlayAsset(id: string) {
           : 'Inlay catalog is unavailable',
     )
   }
+  if (!isClientWriteOperationCurrent(operation)) return
   applyServerInlayCatalogDeletionReceipt(catalogEntry.assetId, result.revision)
 
   const aliases: string[] = []
@@ -574,6 +620,7 @@ export async function removeInlayAsset(id: string) {
       aliases.push(key)
     }
   })
+  assertClientWriteOperation(operation)
   await Promise.all(aliases.map((key) => inlayStorage.removeItem(key)))
 }
 
@@ -583,6 +630,7 @@ export function supportsInlayImage(modelInfo?: Pick<LLMModel, 'flags'>) {
 }
 
 export async function getServerInlayAssetId(id: string): Promise<string | null> {
+  const operation = captureClientSessionGeneration()
   const direct = serverAssetIdFromReference(id)
   if (direct) return direct
 
@@ -597,9 +645,10 @@ export async function getServerInlayAssetId(id: string): Promise<string | null> 
     return null
   }
   if (img.serverAssetId) return img.serverAssetId
+  if (!isClientWriteOperationCurrent(operation)) return null
 
-  const assetId = await uploadInlayAssetToServer(img)
-  await rememberServerInlayAsset(id, { ...img, serverAssetId: assetId })
+  const assetId = await uploadInlayAssetToServer(img, operation)
+  await rememberServerInlayAsset(id, { ...img, serverAssetId: assetId }, [], operation)
   return assetId
 }
 

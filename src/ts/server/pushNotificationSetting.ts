@@ -1,3 +1,14 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  registerClientWriterLossHandler,
+} from '../clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+} from '../clientWriteOperation'
 import { subscribeBrowserLifecycleRecovery, type BrowserLifecycleRecoveryTrigger } from './lifecycleRecovery'
 import { isWriterAccessLost } from './activeWriterSession'
 import { readonly, writable, type Readable, type Writable } from 'svelte/store'
@@ -42,6 +53,7 @@ export interface PushNotificationSettingReconciler<TResult> {
 }
 
 interface PendingReconciliation<TResult> {
+  operation: number
   enabled: boolean
   promise: Promise<PushNotificationSettingReconcileOutcome<TResult>>
   resolve: (outcome: PushNotificationSettingReconcileOutcome<TResult>) => void
@@ -78,7 +90,18 @@ export function createPushNotificationSettingReconciler<TResult>(
         const enabled = desiredState === true
 
         try {
+          const operation = pending.get(revision)!.operation
+          if (!isClientWriteOperationCurrent(operation)) {
+            appliedRevision = revision
+            settleThrough(revision, { status: 'superseded', enabled })
+            continue
+          }
           const result = await applyDesiredState(enabled)
+          if (!isClientWriteOperationCurrent(operation)) {
+            appliedRevision = revision
+            settleThrough(revision, { status: 'superseded', enabled })
+            continue
+          }
           appliedRevision = revision
           settleThrough(revision, { status: 'applied', enabled, result })
         } catch (error) {
@@ -105,7 +128,15 @@ export function createPushNotificationSettingReconciler<TResult>(
       enabled: boolean,
       options: { force?: boolean } = {},
     ): Promise<PushNotificationSettingReconcileOutcome<TResult>> {
-      if (!options.force && desiredState === enabled && currentRequest) return currentRequest.promise
+      if (!canUseClientWriteAccess()) return Promise.resolve({ status: 'superseded', enabled })
+      const operation = captureClientSessionGeneration()
+      if (
+        !options.force &&
+        desiredState === enabled &&
+        currentRequest &&
+        isClientWriteOperationCurrent(currentRequest.operation)
+      )
+        return currentRequest.promise
 
       desiredState = enabled
       const revision = ++desiredRevision
@@ -113,7 +144,7 @@ export function createPushNotificationSettingReconciler<TResult>(
       const promise = new Promise<PushNotificationSettingReconcileOutcome<TResult>>((settle) => {
         resolve = settle
       })
-      currentRequest = { enabled, promise, resolve, revision }
+      currentRequest = { enabled, promise, resolve, revision, operation }
       pending.set(revision, currentRequest)
       running ??= Promise.resolve().then(drain)
       return promise
@@ -154,8 +185,8 @@ export function createPushNotificationSettingApplyDesiredState(
   let hydrationPromise: Promise<void> | null = null
   let retryStorageError: unknown | null = null
 
-  async function persistPendingEndpoints(): Promise<void> {
-    if (!hydrated) return
+  async function persistPendingEndpoints(operation: number): Promise<void> {
+    if (!hydrated || !isClientWriteOperationCurrent(operation)) return
     try {
       await retryStorage.savePendingCleanup({
         pendingEndpoints: pendingDisableEndpoints,
@@ -170,6 +201,7 @@ export function createPushNotificationSettingApplyDesiredState(
   async function hydratePendingEndpoints(): Promise<void> {
     if (hydrated) return
     if (hydrationPromise) return hydrationPromise
+    const operation = captureClientSessionGeneration()
     hydrationPromise = (async () => {
       try {
         const persisted = await retryStorage.loadPendingCleanup()
@@ -182,7 +214,7 @@ export function createPushNotificationSettingApplyDesiredState(
         localInspectionPending = mergedInspectionPending
         hydrated = true
         retryStorageError = null
-        if (shouldPersistMerge) await persistPendingEndpoints()
+        if (shouldPersistMerge) await persistPendingEndpoints(operation)
       } catch (error) {
         retryStorageError = error
       } finally {
@@ -203,8 +235,9 @@ export function createPushNotificationSettingApplyDesiredState(
     },
 
     async retryStorage(): Promise<PushNotificationRetryHydration> {
+      const operation = captureClientWriteOperation()
       await hydratePendingEndpoints()
-      if (hydrated) await persistPendingEndpoints()
+      if (hydrated) await persistPendingEndpoints(operation)
       return {
         pendingEndpoints: [...pendingDisableEndpoints],
         localInspectionPending,
@@ -213,10 +246,13 @@ export function createPushNotificationSettingApplyDesiredState(
     },
 
     async apply(enabled: boolean): Promise<PushNotificationDeviceApplyReceipt> {
+      const operation = captureClientWriteOperation()
       await hydratePendingEndpoints()
+      assertClientWriteOperation(operation)
       let result: PushNotificationSettingApplyResult
       if (enabled) {
         result = await enablePushNotifications()
+        assertClientWriteOperation(operation)
         if (result.status === 'enabled') {
           const activeEndpoint = result.endpoint
           pendingDisableEndpoints = pendingDisableEndpoints.filter((endpoint) => endpoint !== activeEndpoint)
@@ -224,10 +260,11 @@ export function createPushNotificationSettingApplyDesiredState(
         }
       } else {
         result = await disablePushNotifications(pendingDisableEndpoints, localInspectionPending)
+        assertClientWriteOperation(operation)
         pendingDisableEndpoints = normalizePendingPushEndpoints(result.pendingEndpoints)
         localInspectionPending = result.localInspectionPending
       }
-      await persistPendingEndpoints()
+      await persistPendingEndpoints(operation)
       return {
         result,
         pendingEndpoints: [...pendingDisableEndpoints],
@@ -295,18 +332,23 @@ export function createPushNotificationCoordinator(
   const transportReconciler = createPushNotificationSettingReconciler((enabled) => desiredStateApplier.apply(enabled))
   const requestPermission = dependencies.requestPermission ?? requestChatCompletionNotificationPermission
   const subscribeRecovery = dependencies.subscribeRecovery ?? subscribeBrowserLifecycleRecovery
-  const canRetry = dependencies.canRetry ?? (() => !isWriterAccessLost())
+  const canRetry = () => canUseClientWriteAccess() && (dependencies.canRetry?.() ?? !isWriterAccessLost())
   const isOnline = dependencies.isOnline ?? (() => typeof navigator === 'undefined' || navigator.onLine !== false)
   let stateSnapshot = initialPushNotificationCoordinatorState()
   const stateWritable = dependencies.state ?? writable(stateSnapshot)
   let coordinatorRevision = 0
   let initializationPromise: Promise<void> | null = null
-  let activeReconciliation: { enabled: boolean; promise: Promise<PushNotificationSettingReconcileOutcome> } | null =
-    null
+  let activeReconciliation: {
+    operation: number
+    enabled: boolean
+    promise: Promise<PushNotificationSettingReconcileOutcome>
+  } | null = null
   let lifecycleGeneration = 0
   let retryTimer: ReturnType<typeof setTimeout> | null = null
   let retryAttempt = 0
   let stopRecovery: (() => void) | null = null
+  let stopWriterLoss: (() => void) | null = null
+  let initializationSessionGeneration: number | null = null
   let requireFreshReconciliation = true
   let lastAttemptAt = -Infinity
 
@@ -338,11 +380,18 @@ export function createPushNotificationCoordinator(
       return
     const delay = Math.min(INITIAL_RETRY_DELAY_MS * 2 ** Math.min(retryAttempt++, 4), MAX_RETRY_DELAY_MS)
     const generation = lifecycleGeneration
+    const operation = captureClientSessionGeneration()
     updateState({ nextRetryAt: Date.now() + delay })
     retryTimer = setTimeout(() => {
       retryTimer = null
       updateState({ nextRetryAt: null })
-      if (generation !== lifecycleGeneration || !stateSnapshot.desiredEnabled || !canRetry()) return
+      if (
+        !isClientWriteOperationCurrent(operation) ||
+        generation !== lifecycleGeneration ||
+        !stateSnapshot.desiredEnabled ||
+        !canRetry()
+      )
+        return
       if (stateSnapshot.phase !== 'idle') {
         scheduleRetry()
         return
@@ -380,22 +429,26 @@ export function createPushNotificationCoordinator(
   }
 
   async function initialize(): Promise<void> {
-    if (initializationPromise) return initializationPromise
+    const operation = captureClientSessionGeneration()
+    if (initializationPromise && initializationSessionGeneration === operation) return initializationPromise
+    initializationSessionGeneration = operation
+    stopWriterLoss ??= registerClientWriterLossHandler(dispose)
     const generation = lifecycleGeneration
     stopRecovery ??= subscribeRecovery(retryOnReturn)
     initializationPromise = (async () => {
       try {
         updateState({ phase: 'hydrating' })
         const hydration = await desiredStateApplier.hydrate()
-        if (generation !== lifecycleGeneration) return
+        if (generation !== lifecycleGeneration || !isClientSessionGenerationCurrent(operation)) return
         updateState({ phase: stateSnapshot.desiredEnabled ? 'enabling' : 'idle', ...hydration })
         if (hydration.pendingEndpoints.length === 0 && !hydration.localInspectionPending) return
+        if (!isClientWriteOperationCurrent(operation)) return
         updateState({ phase: 'startup-cleanup' })
         const outcome = await transportReconciler.reconcile(false, { force: true })
-        if (generation !== lifecycleGeneration) return
+        if (generation !== lifecycleGeneration || !isClientSessionGenerationCurrent(operation)) return
         recordCleanupOutcome(outcome)
       } catch (error) {
-        if (generation !== lifecycleGeneration) return
+        if (generation !== lifecycleGeneration || !isClientSessionGenerationCurrent(operation)) return
         initializationPromise = null
         updateState({ phase: 'idle', operationError: error })
         throw error
@@ -408,8 +461,15 @@ export function createPushNotificationCoordinator(
     enabled: boolean,
     options: PushNotificationReconcileOptions = {},
   ): Promise<PushNotificationSettingReconcileOutcome> {
-    if (enabled && !canRetry()) return Promise.resolve({ status: 'superseded', enabled })
-    if (activeReconciliation?.enabled === enabled && !options.force && !options.requestPermission) {
+    if (!canUseClientWriteAccess() || (enabled && !canRetry()))
+      return Promise.resolve({ status: 'superseded', enabled })
+    const operation = captureClientSessionGeneration()
+    if (
+      activeReconciliation?.enabled === enabled &&
+      isClientWriteOperationCurrent(activeReconciliation.operation) &&
+      !options.force &&
+      !options.requestPermission
+    ) {
       return activeReconciliation.promise
     }
     const revision = ++coordinatorRevision
@@ -433,7 +493,8 @@ export function createPushNotificationCoordinator(
         permissionRequest = Promise.reject(error)
       }
     }
-    const current = () => revision === coordinatorRevision && generation === lifecycleGeneration
+    const current = () =>
+      isClientWriteOperationCurrent(operation) && revision === coordinatorRevision && generation === lifecycleGeneration
     const promise = (async (): Promise<PushNotificationSettingReconcileOutcome> => {
       try {
         await Promise.all([initialize(), permissionRequest])
@@ -471,10 +532,11 @@ export function createPushNotificationCoordinator(
         scheduleRetry()
         return { status: 'error', enabled, error }
       } finally {
-        if (current()) activeReconciliation = null
+        if (activeReconciliation?.operation === operation && revision === coordinatorRevision)
+          activeReconciliation = null
       }
     })()
-    activeReconciliation = { enabled, promise }
+    activeReconciliation = { enabled, promise, operation }
     return promise
   }
 
@@ -484,13 +546,26 @@ export function createPushNotificationCoordinator(
   }
 
   async function retryStorage(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
+    const operation = captureClientSessionGeneration()
     const generation = lifecycleGeneration
     const revision = coordinatorRevision
     await initialize()
-    if (generation !== lifecycleGeneration || revision !== coordinatorRevision || stateSnapshot.phase !== 'idle') return
+    if (
+      !isClientWriteOperationCurrent(operation) ||
+      generation !== lifecycleGeneration ||
+      revision !== coordinatorRevision ||
+      stateSnapshot.phase !== 'idle'
+    )
+      return
     updateState({ phase: 'retrying-storage' })
     const hydration = await desiredStateApplier.retryStorage()
-    if (generation !== lifecycleGeneration || revision !== coordinatorRevision) return
+    if (
+      !isClientWriteOperationCurrent(operation) ||
+      generation !== lifecycleGeneration ||
+      revision !== coordinatorRevision
+    )
+      return
     updateState({ phase: 'idle', ...hydration })
     scheduleRetry()
   }
@@ -511,6 +586,8 @@ export function createPushNotificationCoordinator(
     lastAttemptAt = -Infinity
     stopRecovery?.()
     stopRecovery = null
+    stopWriterLoss?.()
+    stopWriterLoss = null
     updateState(initialPushNotificationCoordinatorState())
   }
 

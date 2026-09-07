@@ -1,3 +1,9 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration, isClientSessionManaged } from './clientSession'
+import {
+  captureClientWriteOperation,
+  assertClientWriteOperation,
+  isClientWriteOperationCurrent,
+} from './clientWriteOperation'
 import { checkNullish } from './util'
 import { sha256Hex } from './sha256Fallback'
 import { get } from 'svelte/store'
@@ -167,6 +173,7 @@ export async function readImage(data: string) {
  * @returns {Promise<string>} - A promise that resolves to the path of the saved asset file.
  */
 export async function saveAsset(data: Uint8Array, customId: string = '', fileName: string = '') {
+  captureClientWriteOperation()
   const fileExtension = assetExtensionFromFileName(fileName)
   return uploadServerAsset(data, fileExtension)
 }
@@ -175,9 +182,15 @@ export async function saveAssets(
   assets: readonly AssetSaveInput[],
   options: SaveAssetsOptions = {},
 ): Promise<string[]> {
+  const operation = captureClientWriteOperation()
   if (assets.length === 0) return []
   const prepared = await prepareServerAssetUploads(assets)
-  const missingIds = await findMissingServerAssetIds(prepared.map((asset) => asset.assetId))
+  assertClientWriteOperation(operation)
+  const missingIds = await findMissingServerAssetIds(
+    prepared.map((asset) => asset.assetId),
+    operation,
+  )
+  assertClientWriteOperation(operation)
   const missingUploads: PreparedServerAssetUpload[] = []
   const queuedMissingIds = new Set<string>()
   for (const asset of prepared) {
@@ -202,18 +215,25 @@ export async function saveAssets(
       options.onProgress(completed, assets.length)
     }
 
-    await uploadServerAssetsIndividually(missingUploads, (uploadedId) => {
-      completed += inputCountsByAssetId.get(uploadedId) ?? 0
-      options.onProgress?.(completed, assets.length)
-    })
+    await uploadServerAssetsIndividually(
+      missingUploads,
+      (uploadedId) => {
+        assertClientWriteOperation(operation)
+        completed += inputCountsByAssetId.get(uploadedId) ?? 0
+        options.onProgress?.(completed, assets.length)
+      },
+      operation,
+    )
+    assertClientWriteOperation(operation)
     return prepared.map((asset) => asset.assetId)
   }
 
   for (const batch of chunkServerAssetUploads(missingUploads)) {
-    const uploadedIds = await uploadServerAssetsBatch(batch)
+    const uploadedIds = await uploadServerAssetsBatch(batch, operation)
     validateServerAssetUploadIds(batch, uploadedIds)
   }
 
+  assertClientWriteOperation(operation)
   return prepared.map((asset) => asset.assetId)
 }
 
@@ -239,20 +259,24 @@ async function prepareServerAssetUploads(assets: readonly AssetSaveInput[]): Pro
   return prepared
 }
 
-async function findMissingServerAssetIds(assetIds: readonly string[]): Promise<Set<string>> {
+async function findMissingServerAssetIds(assetIds: readonly string[], operation: number): Promise<Set<string>> {
   const uniqueAssetIds = [...new Set(assetIds)]
   if (uniqueAssetIds.length === 0) return new Set()
   const missing = new Set<string>()
 
   for (let offset = 0; offset < uniqueAssetIds.length; offset += SERVER_ASSET_EXISTS_MAX_IDS) {
     const ids = uniqueAssetIds.slice(offset, offset + SERVER_ASSET_EXISTS_MAX_IDS)
-    const response = await fetchServerAssetOperation('/api/v1/assets/exists', {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
+    const response = await fetchServerAssetOperation(
+      '/api/v1/assets/exists',
+      {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ ids }),
       },
-      body: JSON.stringify({ ids }),
-    })
+      operation,
+    )
     if (!response.ok) {
       const body = await response.text().catch(() => '')
       throw new Error(body || `Failed to check server assets: ${response.status}`)
@@ -308,6 +332,7 @@ function chunkServerAssetUploads(assets: readonly PreparedServerAssetUpload[]): 
 async function uploadServerAssetsIndividually(
   assets: readonly PreparedServerAssetUpload[],
   onUploaded: (assetId: string) => void,
+  operation: number,
 ): Promise<void> {
   let nextIndex = 0
   let failed = false
@@ -321,7 +346,7 @@ async function uploadServerAssetsIndividually(
         if (index >= assets.length) return
         const asset = assets[index]
         try {
-          const uploadedIds = await uploadServerAssetsBatch([asset])
+          const uploadedIds = await uploadServerAssetsBatch([asset], operation)
           validateServerAssetUploadIds([asset], uploadedIds)
           onUploaded(uploadedIds[0])
         } catch (error) {
@@ -348,7 +373,11 @@ function validateServerAssetUploadIds(
   }
 }
 
-async function uploadServerAssetsBatch(assets: readonly PreparedServerAssetUpload[]): Promise<string[]> {
+async function uploadServerAssetsBatch(
+  assets: readonly PreparedServerAssetUpload[],
+  operation: number,
+): Promise<string[]> {
+  assertClientWriteOperation(operation)
   if (assets.length === 0) return []
   if (assets.length === 1) {
     const [asset] = assets
@@ -360,22 +389,26 @@ async function uploadServerAssetsBatch(assets: readonly PreparedServerAssetUploa
   }
 
   const auth = await getNodeServerProxyAuth()
-  const response = await fetchServerAssetOperation('/api/v1/assets/bulk', {
-    method: 'POST',
-    headers: {
-      'content-type': SERVER_ASSET_BULK_BINARY_CONTENT_TYPE,
-      prefer: 'return=minimal',
-      'risu-auth': auth,
-      ...activeWriterSessionHeader(),
+  const response = await fetchServerAssetOperation(
+    '/api/v1/assets/bulk',
+    {
+      method: 'POST',
+      headers: {
+        'content-type': SERVER_ASSET_BULK_BINARY_CONTENT_TYPE,
+        prefer: 'return=minimal',
+        'risu-auth': auth,
+        ...activeWriterSessionHeader(),
+      },
+      body: buildServerAssetBulkBinaryBody(assets),
     },
-    body: buildServerAssetBulkBinaryBody(assets),
-  })
+    operation,
+  )
 
   if (response.status === 413 && assets.length > 1) {
     const midpoint = Math.ceil(assets.length / 2)
     return [
-      ...(await uploadServerAssetsBatch(assets.slice(0, midpoint))),
-      ...(await uploadServerAssetsBatch(assets.slice(midpoint))),
+      ...(await uploadServerAssetsBatch(assets.slice(0, midpoint), operation)),
+      ...(await uploadServerAssetsBatch(assets.slice(midpoint), operation)),
     ]
   }
 
@@ -384,7 +417,7 @@ async function uploadServerAssetsBatch(assets: readonly PreparedServerAssetUploa
       .clone()
       .json()
       .catch(() => null)
-    handleActiveWriterStaleResponse(response, activeWriterBody)
+    handleActiveWriterStaleResponse(response, activeWriterBody, operation)
     const body = await response.text().catch(() => '')
     throw new Error(body || `Failed to upload server assets: ${response.status}`)
   }
@@ -396,6 +429,7 @@ async function uploadServerAssetsBatch(assets: readonly PreparedServerAssetUploa
   if (!Array.isArray(responseBody.assetIds) || responseBody.assetIds.length !== assets.length) {
     throw new Error('Server bulk asset upload response has invalid asset ids')
   }
+  assertClientWriteOperation(operation)
   advanceServerAssetRevision(responseBody.revision)
   return responseBody.assetIds.map((assetId, index) => {
     if (typeof assetId !== 'string') {
@@ -405,9 +439,15 @@ async function uploadServerAssetsBatch(assets: readonly PreparedServerAssetUploa
   })
 }
 
-async function fetchServerAssetOperation(input: RequestInfo | URL, init: RequestInit): Promise<Response> {
+async function fetchServerAssetOperation(
+  input: RequestInfo | URL,
+  init: RequestInit,
+  operation: number,
+): Promise<Response> {
   for (let retry = 0; ; retry += 1) {
+    assertClientWriteOperation(operation)
     const response = await fetchServerAssetOperationAttempt(input, init)
+    assertClientWriteOperation(operation)
     if (response.status !== 429 || retry >= SERVER_ASSET_RATE_LIMIT_MAX_RETRIES) {
       return response
     }
@@ -753,11 +793,13 @@ export function addFetchLog(arg: {
  */
 export async function globalFetch(url: string, arg: GlobalFetchArgs = {}): Promise<GlobalFetchResult> {
   try {
+    const operation = captureClientWriteOperation()
     if (arg.abortSignal?.aborted) {
       return { ok: false, data: 'aborted', headers: {}, status: 400 }
     }
 
     const urlHost = new URL(url).hostname
+    assertClientWriteOperation(operation)
     const useLocalNetworkRoute = arg.networkRoute === 'local_network' && isLocalNetworkUrl(url)
     const forcePlainFetch =
       (knownHostes.includes(urlHost) || settingsResourceState.value.usePlainFetch || arg.plainFetchForce) &&
@@ -766,6 +808,7 @@ export async function globalFetch(url: string, arg: GlobalFetchArgs = {}): Promi
 
     if (arg.interceptor && isPluginRuntimeReady()) {
       for (const interceptor of bodyIntercepterStore) {
+        assertClientWriteOperation(operation)
         try {
           arg.body = (await interceptor.callback(arg.body, arg.interceptor)) || arg.body
         } catch (e) {
@@ -774,6 +817,7 @@ export async function globalFetch(url: string, arg: GlobalFetchArgs = {}): Promi
       }
     }
 
+    assertClientWriteOperation(operation)
     const timeoutSignal = buildTimeoutSignal(arg.abortSignal, arg.requestTimeoutMs)
     const requestArg = timeoutSignal.signal === arg.abortSignal ? arg : { ...arg, abortSignal: timeoutSignal.signal }
 
@@ -846,6 +890,7 @@ function addFetchLogInGlobalFetch(response: any, success: boolean, url: string, 
  */
 async function fetchWithPlainFetch(url: string, arg: GlobalFetchArgs): Promise<GlobalFetchResult> {
   try {
+    const operation = captureClientWriteOperation()
     const headers = { 'Content-Type': 'application/json', ...arg.headers }
     const response = await fetch(new URL(url), {
       body: JSON.stringify(arg.body),
@@ -854,6 +899,7 @@ async function fetchWithPlainFetch(url: string, arg: GlobalFetchArgs): Promise<G
       signal: arg.abortSignal,
     })
     const data = arg.rawResponse ? new Uint8Array(await response.arrayBuffer()) : await response.json()
+    assertClientWriteOperation(operation)
     const ok = response.ok && response.status >= 200 && response.status < 300
     addFetchLogInGlobalFetch(data, ok, url, arg, response.status)
     return { ok, data, headers: Object.fromEntries(response.headers), status: response.status }
@@ -871,6 +917,7 @@ async function fetchWithPlainFetch(url: string, arg: GlobalFetchArgs): Promise<G
  */
 async function fetchWithUSFetch(url: string, arg: GlobalFetchArgs): Promise<GlobalFetchResult> {
   try {
+    const operation = captureClientWriteOperation()
     const headers = { 'Content-Type': 'application/json', ...arg.headers }
     const response = await userScriptFetch(url, {
       body: JSON.stringify(arg.body),
@@ -879,6 +926,7 @@ async function fetchWithUSFetch(url: string, arg: GlobalFetchArgs): Promise<Glob
       signal: arg.abortSignal,
     })
     const data = arg.rawResponse ? new Uint8Array(await response.arrayBuffer()) : await response.json()
+    assertClientWriteOperation(operation)
     const ok = response.ok && response.status >= 200 && response.status < 300
     addFetchLogInGlobalFetch(data, ok, url, arg, response.status)
     return { ok, data, headers: Object.fromEntries(response.headers), status: response.status }
@@ -900,6 +948,7 @@ async function fetchWithProxy(
   proxyUrl: string = getProxyFetchUrl(),
 ): Promise<GlobalFetchResult> {
   try {
+    const operation = captureClientWriteOperation()
     const upstreamHeaders = { ...(arg.headers ?? {}) }
     upstreamHeaders['Content-Type'] ??=
       arg.body instanceof URLSearchParams ? 'application/x-www-form-urlencoded' : 'application/json'
@@ -919,6 +968,7 @@ async function fetchWithProxy(
 
     const body = arg.body instanceof URLSearchParams ? arg.body.toString() : JSON.stringify(arg.body)
 
+    assertClientWriteOperation(operation)
     const response = await fetch(proxyUrl, {
       body,
       headers,
@@ -929,6 +979,7 @@ async function fetchWithProxy(
 
     if (arg.rawResponse) {
       const data = new Uint8Array(await response.arrayBuffer())
+      assertClientWriteOperation(operation)
       addFetchLogInGlobalFetch('Uint8Array Response', isSuccess, url, arg, response.status)
       return {
         ok: isSuccess,
@@ -939,6 +990,7 @@ async function fetchWithProxy(
     }
 
     const text = await response.text()
+    assertClientWriteOperation(operation)
     try {
       const data = JSON.parse(text)
       addFetchLogInGlobalFetch(data, isSuccess, url, arg, response.status)
@@ -972,12 +1024,14 @@ async function fetchWithProxy(
  */
 export async function pluginGlobalFetch(url: string, arg: GlobalFetchArgs = {}): Promise<GlobalFetchResult> {
   try {
+    const operation = captureClientWriteOperation()
     if (arg.abortSignal?.aborted) {
       return { ok: false, data: 'aborted', headers: {}, status: 400 }
     }
 
     if (arg.interceptor && isPluginRuntimeReady()) {
       for (const interceptor of bodyIntercepterStore) {
+        assertClientWriteOperation(operation)
         try {
           arg.body = (await interceptor.callback(arg.body, arg.interceptor)) || arg.body
         } catch (error) {
@@ -986,6 +1040,7 @@ export async function pluginGlobalFetch(url: string, arg: GlobalFetchArgs = {}):
       }
     }
 
+    assertClientWriteOperation(operation)
     const timeoutSignal = buildTimeoutSignal(arg.abortSignal, arg.requestTimeoutMs)
     const requestArg = timeoutSignal.signal === arg.abortSignal ? arg : { ...arg, abortSignal: timeoutSignal.signal }
     try {
@@ -1312,12 +1367,15 @@ async function fetchViaProxyJobWs(
     chatId?: string
     fetchLogIndex: number
   },
+  operation: number,
 ): Promise<Response> {
+  assertClientWriteOperation(operation)
   const auth = await getNodeServerProxyAuth()
 
   const requestSignal = arg.signal
 
   let jobId = ''
+  assertClientWriteOperation(operation)
   const createRes = await fetch(getProxyStreamJobsCreateUrl(), {
     method: 'POST',
     headers: {
@@ -1341,6 +1399,7 @@ async function fetchViaProxyJobWs(
   }
 
   const created = (await createRes.json()) as { jobId?: string }
+  assertClientWriteOperation(operation)
   if (!created.jobId) {
     throw new Error('Proxy stream job creation returned no jobId')
   }
@@ -1379,7 +1438,7 @@ async function fetchViaProxyJobWs(
   }
 
   const deleteProxyJobOnce = () => {
-    if (cancelDeleteSent || !jobId) {
+    if (cancelDeleteSent || !jobId || !isClientWriteOperationCurrent(operation)) {
       return
     }
     cancelDeleteSent = true
@@ -1451,6 +1510,11 @@ async function fetchViaProxyJobWs(
   }
 
   ws.onmessage = (event) => {
+    if (!isClientWriteOperationCurrent(operation)) {
+      ensureHeadersReady()
+      closeAndEnd(new Error('client_write_operation_stale'))
+      return
+    }
     const binaryChunk = readProxyJobWsBinaryChunk(event.data)
     if (binaryChunk) {
       if (!headersReady) {
@@ -1584,6 +1648,7 @@ async function fetchNativeInternal(
   arg: NativeFetchArgs | PluginNativeFetchArgs = {},
   pluginNetworkRequest = false,
 ): Promise<Response> {
+  const operation = captureClientWriteOperation()
   const useInterceptor = !!arg.interceptor
   if (!pluginNetworkRequest && arg.body === undefined && (arg.method === 'POST' || arg.method === 'PUT')) {
     throw new Error('Body is required for POST and PUT requests')
@@ -1602,6 +1667,7 @@ async function fetchNativeInternal(
     let body: string = arg.body
     if (useInterceptor && isPluginRuntimeReady()) {
       for (const interceptor of bodyIntercepterStore) {
+        assertClientWriteOperation(operation)
         try {
           body = (await interceptor.callback(body, arg.interceptor)) || body
         } catch (e) {
@@ -1618,6 +1684,7 @@ async function fetchNativeInternal(
     throw new Error('Invalid body type')
   }
 
+  assertClientWriteOperation(operation)
   const useLocalNetworkRoute = arg.networkRoute === 'local_network' && isLocalNetworkUrl(url)
   const throughProxy = pluginNetworkRequest || useLocalNetworkRoute
   const timeoutSignal = buildTimeoutSignal(arg.signal, arg.requestTimeoutMs)
@@ -1629,6 +1696,8 @@ async function fetchNativeInternal(
     timeoutSignal.cleanup()
   }
   const finalizeResponse = (response: Response) => {
+    assertClientWriteOperation(operation)
+    response = fenceClientWriteResponse(response, operation)
     if (!arg.requestTimeoutMs || arg.requestTimeoutMs <= 0) return response
     return retainFetchCancellationThroughBody(response, requestSignal, cleanupRequest)
   }
@@ -1657,25 +1726,31 @@ async function fetchNativeInternal(
       const useProxyJobWs =
         !pluginNetworkRequest && arg.interceptor === 'openai_streaming' && arg.method === 'POST' && useLocalNetworkRoute
       const nodeProxyAuth = await getNodeServerProxyAuth()
+      assertClientWriteOperation(operation)
 
       if (useProxyJobWs) {
         try {
           return finalizeResponse(
-            await fetchViaProxyJobWs(url, {
-              body: realBody,
-              headers,
-              method: 'POST',
-              signal: requestSignal,
-              requestTimeoutMs: arg.requestTimeoutMs,
-              chatId: arg.chatId,
-              fetchLogIndex,
-            }),
+            await fetchViaProxyJobWs(
+              url,
+              {
+                body: realBody,
+                headers,
+                method: 'POST',
+                signal: requestSignal,
+                requestTimeoutMs: arg.requestTimeoutMs,
+                chatId: arg.chatId,
+                fetchLogIndex,
+              },
+              operation,
+            ),
           )
         } catch (wsErr) {
           console.warn('[ProxyJobWS] falling back to Fastify proxy fetch due to error:', wsErr)
         }
       }
 
+      assertClientWriteOperation(operation)
       const r = await fetch(pluginNetworkRequest ? getPluginProxyFetchUrl() : getProxyFetchUrl(), {
         body: realBody as any,
         headers: arg.useRisuTk
@@ -1729,6 +1804,32 @@ async function fetchNativeInternal(
     cleanupRequest()
     throw error
   }
+}
+
+function fenceClientWriteResponse(response: Response, operation: number): Response {
+  if (!isClientSessionManaged() || !response.body) return response
+  const body = response.body.pipeThrough(
+    new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        assertClientWriteOperation(operation)
+        controller.enqueue(chunk)
+      },
+      flush() {
+        assertClientWriteOperation(operation)
+      },
+    }),
+  )
+  const guardedResponse = new Response(body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  })
+  Object.defineProperties(guardedResponse, {
+    redirected: { configurable: true, enumerable: true, get: () => response.redirected },
+    type: { configurable: true, enumerable: true, get: () => response.type },
+    url: { configurable: true, enumerable: true, get: () => response.url },
+  })
+  return guardedResponse
 }
 
 export async function fetchNative(url: string, arg: NativeFetchArgs = {}): Promise<Response> {
@@ -1830,12 +1931,25 @@ export interface LoadInternalBackupOptions {
 export type LoadInternalBackupStatus = 'ok' | 'error' | 'unavailable' | 'cancelled'
 
 export async function loadInternalBackup(options: LoadInternalBackupOptions = {}): Promise<LoadInternalBackupStatus> {
+  if (!canUseClientWriteAccess()) return 'unavailable'
+  const operation = captureClientSessionGeneration()
+  const onProgress = options.onProgress
+  options = {
+    ...options,
+    onProgress: onProgress
+      ? (progress) => {
+          if (isClientWriteOperationCurrent(operation)) onProgress(progress)
+        }
+      : undefined,
+  }
   reportInternalBackupProgress(options.onProgress, {
     phase: 'request',
     message: 'Loading server backups',
     percent: 5,
   })
+  if (!isClientWriteOperationCurrent(operation)) return 'cancelled'
   const list = await listServerBackups(options.signal)
+  if (!isClientWriteOperationCurrent(operation)) return 'cancelled'
   if (list.status === 'unavailable') return 'unavailable'
   if (list.status === 'error') {
     alertError(list.error)
@@ -1856,7 +1970,9 @@ export async function loadInternalBackup(options: LoadInternalBackupOptions = {}
     const label = displayLabel ? `${displayLabel} - ` : ''
     return `${label}${new Date(backup.createdAt).toLocaleString()}`
   })
+  if (!isClientWriteOperationCurrent(operation)) return 'cancelled'
   const selection = await alertSelect(selectOptions)
+  if (!isClientWriteOperationCurrent(operation)) return 'cancelled'
   if (selection === null) return 'cancelled'
   const alertResult = Number(selection)
 
@@ -1868,6 +1984,7 @@ export async function loadInternalBackup(options: LoadInternalBackupOptions = {}
     onProgress: scaleInternalBackupProgress(options.onProgress, 20, 100),
   })
   if (restored.status === 'ok') {
+    if (!isClientWriteOperationCurrent(operation)) return 'ok'
     if (restored.discardedPendingMutations > 0) {
       alertError(language.backupQueuedChangesDiscarded)
     } else {
@@ -1875,6 +1992,7 @@ export async function loadInternalBackup(options: LoadInternalBackupOptions = {}
     }
     return 'ok'
   } else if (restored.status === 'error') {
+    if (!isClientWriteOperationCurrent(operation)) return 'error'
     alertError(
       restored.discardedPendingMutations
         ? `${restored.error}\n\n${language.backupQueuedChangesDiscarded}`

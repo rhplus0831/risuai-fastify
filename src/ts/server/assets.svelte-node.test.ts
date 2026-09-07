@@ -1,3 +1,9 @@
+import { resetClientSessionForTests, canUseClientWriteAccess } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const assetAuthMocks = vi.hoisted(() => ({
@@ -169,5 +175,60 @@ describe('asset byte read fanout diagnostics', () => {
     const after = getProtocolDiagnosticsSnapshot().assetByteReads
     expect(after.requests - before.requests).toBe(0)
     expect(fetchImpl).not.toHaveBeenCalled()
+  })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+describe('asset writer admission', () => {
+  it('denies uploads while preserving immutable reader downloads', async () => {
+    setManagedReaderForTest()
+    const fetchMock = vi.fn(async () => new Response(new Uint8Array([1, 2])))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(uploadServerAsset(new Uint8Array([1]), 'png')).rejects.toThrow('client_write_access_required')
+    expect(assetAuthMocks.getNodeServerProxyAuth).not.toHaveBeenCalled()
+    await expect(readServerAssetBytes('a'.repeat(64))).resolves.toEqual(new Uint8Array([1, 2]))
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('does not upload after authentication crosses demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    let release!: (auth: string) => void
+    assetAuthMocks.getNodeServerProxyAuth.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = uploadServerAsset(new Uint8Array([1]), 'png')
+    demoteAndRepromoteForTest()
+    release('old-auth')
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it.each([200, 423])('does not apply old upload response %s to the new writer', async (status) => {
+    setManagedWriterForTest()
+    let release!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = uploadServerAsset(new Uint8Array([1]), 'png')
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(
+      Response.json(status === 200 ? { assetId: 'a'.repeat(64), revision: 50 } : { error: 'active_writer_stale' }, {
+        status,
+      }),
+    )
+    await expect(pending).rejects.toThrow()
+    expect(canUseClientWriteAccess()).toBe(true)
+    expect(peekCachedServerCommandRevision()).toBeNull()
   })
 })

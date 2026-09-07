@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { language } from '../../lang'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 
@@ -10,7 +11,9 @@ export async function requestOpenAITranscription(file: File, signal?: AbortSigna
     throw new Error(language.errors.openAITranscriptionFileSize)
   }
 
+  const operation = captureClientWriteOperation()
   const auth = await getNodeServerProxyAuth()
+  assertClientWriteOperation(operation)
   if (signal?.aborted) throw signal.reason ?? new DOMException('Transcription cancelled', 'AbortError')
 
   const form = new FormData()
@@ -31,5 +34,6 @@ export async function requestOpenAITranscription(file: File, signal?: AbortSigna
   if (vtt.length > OPENAI_TRANSCRIPTION_MAX_RESPONSE_CHARS || !/^WEBVTT(?:\s|$)/.test(vtt) || vtt.includes('\0')) {
     throw new Error(language.errors.openAITranscriptionResponseMalformed)
   }
+  assertClientWriteOperation(operation)
   return vtt
 }

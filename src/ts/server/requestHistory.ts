@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from './activeWriterSession'
 
@@ -88,7 +90,14 @@ async function requestHistoryJson<T>(
   init: { method: 'GET' | 'DELETE'; signal?: AbortSignal },
   read: (body: unknown) => T | null,
 ): Promise<RequestHistoryApiResult<T>> {
+  const operation = captureClientSessionGeneration()
+  if (init.method === 'DELETE' && !canUseClientWriteAccess()) {
+    return { status: 'error', error: 'client_write_access_required' }
+  }
   const auth = await getNodeServerProxyAuth()
+  if (init.method === 'DELETE' && !isClientWriteOperationCurrent(operation)) {
+    return { status: 'error', error: 'client_write_operation_stale' }
+  }
   let response: Response
   try {
     response = await fetch(url, {
@@ -107,7 +116,7 @@ async function requestHistoryJson<T>(
     body = null
   }
   if (!response.ok) {
-    handleActiveWriterStaleResponse(response, body)
+    handleActiveWriterStaleResponse(response, body, operation)
     return { status: 'error', error: errorFromBody(body, `HTTP ${response.status}`) }
   }
   const value = read(body)

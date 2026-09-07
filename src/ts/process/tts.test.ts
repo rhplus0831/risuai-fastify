@@ -949,3 +949,30 @@ describe('sayTTS HuggingFace server operation', () => {
     expect(StubAudioContext.instances).toHaveLength(1)
   })
 })
+
+describe('TTS managed-session admission', () => {
+  it('does not synthesize or speak from a reader', async () => {
+    const { setManagedReaderForTest } = await import('../__tests__/managedClientSession')
+    setManagedReaderForTest()
+    const { sayTTS } = await importTTS()
+    await sayTTS(makeCharacter(), 'hello')
+    await sayTTS(makeCharacter({ ttsMode: 'webspeech' }), 'hello')
+    expect(testState.requestTtsSynthesis).not.toHaveBeenCalled()
+    expect(speechSynthesis.speak).not.toHaveBeenCalled()
+  })
+
+  it('does not play an old synthesis result after demotion and repromotion', async () => {
+    const { setManagedWriterForTest, demoteAndRepromoteForTest } = await import('../__tests__/managedClientSession')
+    setManagedWriterForTest()
+    const result = deferred<ReturnType<typeof ttsAudio>>()
+    testState.requestTtsSynthesis.mockReturnValueOnce(result.promise)
+    const { sayTTS } = await importTTS()
+    const pending = sayTTS(makeCharacter(), 'hello')
+    await vi.waitFor(() => expect(testState.requestTtsSynthesis).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    result.resolve(ttsAudio(new Uint8Array([1]), 'audio/mpeg'))
+    await pending
+    expect(StubAudioContext.instances).toHaveLength(0)
+    expect(testState.alertError).not.toHaveBeenCalled()
+  })
+})

@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { Buffer } from 'buffer'
 import { language } from '../../lang'
 import { MASKED_PROVIDER_SECRET } from '../providerSecretMask'
@@ -20,7 +21,9 @@ export async function requestImageGeneration(
   request: ImageGenerationRequest,
   signal?: AbortSignal | null,
 ): Promise<string> {
+  const operation = captureClientWriteOperation()
   const auth = await getNodeServerProxyAuth()
+  assertClientWriteOperation(operation)
   const response = await fetch(IMAGE_GENERATION_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -43,6 +46,7 @@ export async function requestImageGeneration(
   }
 
   const bytes = await readBoundedResponse(response, MAX_IMAGE_RESPONSE_BYTES)
+  assertClientWriteOperation(operation)
   if (bytes.byteLength === 0) {
     throw new Error(language.errors.imageGenerationResponseEmpty)
   }

@@ -1,3 +1,5 @@
+import { resetClientSessionForTests, demoteClientSession } from 'src/ts/clientSession'
+import { setManagedReaderForTest, setManagedWriterForTest } from 'src/ts/__tests__/managedClientSession'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -325,4 +327,30 @@ describe('NotificationToggle shared push acknowledgement', () => {
     buttonNamed(language.pushNotifications.retryOperation).click()
     await vi.waitFor(() => expect(notificationMocks.retryCleanup).toHaveBeenCalledOnce())
   })
+})
+
+beforeEach(() => resetClientSessionForTests())
+
+it('disables the notification setting for a managed reader without changing the saved preference', async () => {
+  setManagedReaderForTest()
+  component = mount(NotificationToggle, { target })
+  await tick()
+  expect(checkbox().disabled).toBe(true)
+  checkbox().click()
+  await tick()
+  expect(notificationMocks.applyServerBackedSetting).not.toHaveBeenCalled()
+  expect(notificationMocks.reconcile).not.toHaveBeenCalled()
+})
+
+it('revokes a mounted notification setting immediately on demotion', async () => {
+  setManagedWriterForTest()
+  component = mount(NotificationToggle, { target })
+  await tick()
+  expect(checkbox().disabled).toBe(false)
+  demoteClientSession()
+  await tick()
+  expect(checkbox().disabled).toBe(true)
+  checkbox().click()
+  expect(notificationMocks.applyServerBackedSetting).not.toHaveBeenCalled()
+  expect(notificationMocks.reconcile).not.toHaveBeenCalled()
 })

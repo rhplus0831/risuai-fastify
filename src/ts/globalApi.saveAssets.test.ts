@@ -1,3 +1,11 @@
+import * as alerts from './alert'
+import * as backupApi from './server/backups'
+import { resetClientSessionForTests } from './clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from './__tests__/managedClientSession'
 import { createHash, webcrypto } from 'node:crypto'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -20,6 +28,7 @@ vi.mock('./process/modules', async (importActual) => {
 
 import { testDatabaseState } from './__tests__/resourceDatabaseState'
 import {
+  loadInternalBackup,
   saveAsset,
   saveAssets,
   SERVER_ASSET_HASH_CONCURRENCY,
@@ -327,4 +336,47 @@ describe('saveAsset media type', () => {
     expect(fetchCalls[0].input).toBe('/api/v1/assets')
     expect(fetchCalls[0].init?.headers).toMatchObject({ 'content-type': expectedContentType })
   })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+describe('asset save reader admission', () => {
+  it('does not save a single or bulk asset from a managed reader', async () => {
+    setManagedReaderForTest()
+    await expect(saveAsset(missingAsset)).rejects.toThrow('client_write_access_required')
+    await expect(saveAssets([{ data: missingAsset }])).rejects.toThrow('client_write_access_required')
+    expect(fetchCalls).toHaveLength(0)
+  })
+
+  it('does not upload after a held hash crosses demotion and repromotion', async () => {
+    setManagedWriterForTest()
+    const hash = createDeferred<ArrayBuffer>()
+    vi.stubGlobal('crypto', { subtle: { digest: vi.fn(() => hash.promise) } })
+    const pending = saveAssets([{ data: missingAsset }])
+    demoteAndRepromoteForTest()
+    hash.resolve(new Uint8Array(32).buffer)
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
+    expect(fetchCalls).toHaveLength(0)
+  })
+})
+
+it('does not restore a backup selected after demotion and repromotion', async () => {
+  setManagedWriterForTest()
+  const selection = createDeferred<string>()
+  vi.spyOn(backupApi, 'listServerBackups').mockResolvedValueOnce({
+    status: 'ok',
+    backups: [
+      { _version: 1, id: 'backup', label: null, createdAt: '2026-09-07T00:00:00Z', revision: 1, assetCount: 0 },
+    ],
+  })
+  const select = vi.spyOn(alerts, 'alertSelect').mockReturnValueOnce(selection.promise)
+  const restore = vi.spyOn(backupApi, 'restoreServerBackup')
+  const pending = loadInternalBackup()
+  await vi.waitFor(() => expect(select).toHaveBeenCalledOnce())
+  demoteAndRepromoteForTest()
+  selection.resolve('0')
+  await expect(pending).resolves.toBe('cancelled')
+  expect(restore).not.toHaveBeenCalled()
+  expect(fetchCalls).toHaveLength(0)
 })

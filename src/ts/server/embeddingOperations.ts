@@ -1,3 +1,4 @@
+import { captureClientWriteOperation, assertClientWriteOperation } from '../clientWriteOperation'
 import { isMaskedProviderSecret } from '../providerSecretMask'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import type {
@@ -80,7 +81,9 @@ async function requestEmbeddingOperation(
   request: EmbeddingOperationRequest,
   signal?: AbortSignal | null,
 ): Promise<EmbeddingTextsOperationSuccess | EmbeddingGroupsOperationSuccess> {
+  const operation = captureClientWriteOperation()
   const auth = await getNodeServerProxyAuth()
+  assertClientWriteOperation(operation)
   const response = await fetch(EMBEDDING_OPERATIONS_ENDPOINT, {
     method: 'POST',
     headers: {
@@ -101,7 +104,9 @@ async function requestEmbeddingOperation(
     throw new Error(code)
   }
 
-  return (await response.json()) as EmbeddingTextsOperationSuccess | EmbeddingGroupsOperationSuccess
+  const body = (await response.json()) as EmbeddingTextsOperationSuccess | EmbeddingGroupsOperationSuccess
+  assertClientWriteOperation(operation)
+  return body
 }
 
 function validVectors(value: unknown, expectedCount: number, dimension: number): value is number[][] {

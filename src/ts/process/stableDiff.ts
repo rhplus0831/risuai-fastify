@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { get } from 'svelte/store'
 import { language } from '../../lang'
 import type { character, Database } from '../storage/database.svelte'
@@ -43,6 +45,7 @@ const SERVER_IMAGE_PROVIDERS = new Set([
 ])
 
 interface ActiveImageGeneration {
+  generation: number
   key: string
   sequence: number
   controller: AbortController
@@ -70,6 +73,7 @@ function beginServerImageGeneration(
     callerSignal?.addEventListener('abort', forwardCallerAbort, { once: true })
   }
   const operation: ActiveImageGeneration = {
+    generation: captureClientSessionGeneration(),
     key,
     sequence: ++nextImageGenerationSequence,
     controller,
@@ -81,12 +85,16 @@ function beginServerImageGeneration(
 }
 
 function isFreshImageGeneration(operation: ActiveImageGeneration): boolean {
-  return activeImageGenerations.get(operation.key)?.sequence === operation.sequence
+  return (
+    isClientWriteOperationCurrent(operation.generation) &&
+    activeImageGenerations.get(operation.key)?.sequence === operation.sequence
+  )
 }
 
 function clearImageGeneration(operation: ActiveImageGeneration): void {
   operation.cleanupCallerAbort()
-  if (isFreshImageGeneration(operation)) activeImageGenerations.delete(operation.key)
+  if (activeImageGenerations.get(operation.key)?.sequence === operation.sequence)
+    activeImageGenerations.delete(operation.key)
 }
 
 async function requestAndApplyServerImage(
@@ -96,6 +104,7 @@ async function requestAndApplyServerImage(
   operation: ActiveImageGeneration,
 ): Promise<string | false> {
   try {
+    if (!isFreshImageGeneration(operation)) return false
     const image = await requestImageGeneration(request, operation.signal)
     if (operation.signal.aborted || !isFreshImageGeneration(operation)) return false
     if (returnSdData === 'inlay') return image
@@ -219,6 +228,8 @@ export async function loadStableDiffReferenceImageForTests(
 }
 
 export async function stableDiff(currentChar: character, prompt: string, options: ImageGenerationOptions = {}) {
+  if (!canUseClientWriteAccess()) return false
+  const operation = captureClientSessionGeneration()
   const db = imageGenerationSettingsOwner(options.database)
 
   if (!db || db.sdProvider === '') {
@@ -254,7 +265,7 @@ export async function stableDiff(currentChar: character, prompt: string, options
     options.signal,
   )
 
-  if (isImageGenerationAborted(options.signal)) {
+  if (!isClientWriteOperationCurrent(operation) || isImageGenerationAborted(options.signal)) {
     return false
   }
 
@@ -282,9 +293,12 @@ export async function generateAIImage(
   returnSdData: string,
   options: ImageGenerationOptions = {},
 ): Promise<string | false> {
+  if (!canUseClientWriteAccess()) return false
+  const generation = captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(generation)
   const db = imageGenerationSettingsOwner(options.database)
   if (!db) return false
-  if (isImageGenerationAborted(options.signal)) {
+  if (!isCurrent() || isImageGenerationAborted(options.signal)) {
     return false
   }
   const serverOperation = SERVER_IMAGE_PROVIDERS.has(db.sdProvider)
@@ -317,7 +331,7 @@ export async function generateAIImage(
         abortSignal: options.signal,
       })
 
-      if (isImageGenerationAborted(options.signal)) {
+      if (!isCurrent() || isImageGenerationAborted(options.signal)) {
         return false
       }
 
@@ -341,7 +355,7 @@ export async function generateAIImage(
 
       return returnSdData
     } catch (error) {
-      if (isImageGenerationAborted(options.signal) || isImageGenerationAbortError(error)) {
+      if (!isCurrent() || isImageGenerationAborted(options.signal) || isImageGenerationAbortError(error)) {
         return false
       }
       alertError(error)
@@ -650,6 +664,7 @@ export async function generateAIImage(
     }
 
     const fetchWrapper = async (url: string, options = {}) => {
+      if (!isCurrent()) throw mediaAbortError()
       const response = await globalFetch(url, options)
       if (!response.ok) {
         throw new Error(JSON.stringify(response.data))
@@ -696,6 +711,7 @@ export async function generateAIImage(
       const startTime = Date.now()
       const timeout = db.comfyConfig.timeout * 1000
       while (
+        isCurrent() &&
         !isImageGenerationAborted(options.signal) &&
         !(item = (
           await (
@@ -715,7 +731,7 @@ export async function generateAIImage(
           return false
         }
       } // Check history until the generation is complete.
-      if (isImageGenerationAborted(options.signal)) {
+      if (!isCurrent() || isImageGenerationAborted(options.signal)) {
         return false
       }
       const genImgInfo = Object.values(item.outputs).flatMap((output: any) => output.images)[0]
@@ -732,10 +748,11 @@ export async function generateAIImage(
           signal: options.signal,
         },
       )
-      if (isImageGenerationAborted(options.signal)) {
+      if (!isCurrent() || isImageGenerationAborted(options.signal)) {
         return false
       }
       const img64 = Buffer.from(await imgResponse.arrayBuffer()).toString('base64')
+      if (!isCurrent()) return false
 
       if (returnSdData === 'inlay') {
         return `data:image/png;base64,${img64}`
@@ -749,7 +766,7 @@ export async function generateAIImage(
 
       return returnSdData
     } catch (error) {
-      if (isImageGenerationAborted(options.signal) || isImageGenerationAbortError(error)) {
+      if (!isCurrent() || isImageGenerationAborted(options.signal) || isImageGenerationAbortError(error)) {
         return false
       }
       alertError(error)

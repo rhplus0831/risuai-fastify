@@ -1,3 +1,9 @@
+import { resetClientSessionForTests, canUseClientWriteAccess } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const resourceRefreshSpies = vi.hoisted(() => ({
@@ -46,9 +52,8 @@ vi.mock('./durableMutationDispatch', () => ({
 
 vi.mock('../platform', () => ({ isFastifyServer: true }))
 
-vi.mock('../storage/fastifyStorage', () => ({
-  getNodeServerProxyAuth: async () => 'backup-auth-token',
-}))
+const backupAuthMocks = vi.hoisted(() => ({ auth: vi.fn(async () => 'backup-auth-token') }))
+vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: backupAuthMocks.auth }))
 
 vi.mock('../process/modules', () => ({
   getModuleLorebooks: vi.fn(() => []),
@@ -697,5 +702,70 @@ describe('device backup helpers (Save/Load Backup Locally)', () => {
       error: 'Backup imported, but resource refresh failed: collections failed',
     })
     expect(peekCachedServerCommandRevision()).toBeNull()
+  })
+})
+
+// Each case starts on the conservative path unless it explicitly manages a session.
+beforeEach(() => resetClientSessionForTests())
+
+describe('backup writer admission', () => {
+  it('denies reader mutations while preserving list and both exports', async () => {
+    setManagedReaderForTest()
+    const fetchMock = vi.fn(async (url: string) =>
+      url === '/api/v1/backups' ? Response.json({ backups: [] }) : new Response('backup'),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(createServerBackup()).resolves.toEqual({ status: 'unavailable' })
+    await expect(deleteServerBackup({ id: 'backup' })).resolves.toEqual({ status: 'unavailable' })
+    await expect(restoreServerBackup({ id: 'backup' })).resolves.toEqual({ status: 'unavailable' })
+    await expect(importServerBundle({ file: new Blob(['backup']) })).resolves.toEqual({ status: 'unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
+    await expect(listServerBackups()).resolves.toEqual({ status: 'ok', backups: [] })
+    expect((await exportServerBundle()).status).toBe('ok')
+    expect((await exportServerLocalBackup()).status).toBe('ok')
+    expect(fetchMock).toHaveBeenCalledTimes(3)
+  })
+
+  it('keeps a backup held at authentication unsent across repromotion', async () => {
+    setManagedWriterForTest()
+    const auth = deferred<string>()
+    backupAuthMocks.auth.mockReturnValueOnce(auth.promise)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = createServerBackup()
+    demoteAndRepromoteForTest()
+    auth.resolve('old-auth')
+    await expect(pending).resolves.toEqual({ status: 'unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('retains confirmed restoration identity without adopting a stale response', async () => {
+    setManagedWriterForTest()
+    const result = deferred<Response>()
+    const fetchMock = vi.fn(() => result.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = restoreServerBackup({ id: 'backup' })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    const event = { type: 'database.replaced', resource: 'database', revision: 20 }
+    result.resolve(Response.json({ revision: 20, event, ...replacementOwnership }))
+    await expect(pending).resolves.toEqual({ status: 'ok', revision: 20, event, discardedPendingMutations: 0 })
+    expect(ownershipSpies.preparePendingMutationOutbox).not.toHaveBeenCalled()
+    expect(resourceRefreshSpies.forceServerDatabaseReplacementRefresh).not.toHaveBeenCalled()
+    expect(ownerResetSpies.resetRegisteredOwnerState).not.toHaveBeenCalled()
+    expect(canUseClientWriteAccess()).toBe(true)
+  })
+
+  it('does not demote the new writer for an old backup stale response', async () => {
+    setManagedWriterForTest()
+    const result = deferred<Response>()
+    const fetchMock = vi.fn(() => result.promise)
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = createServerBackup()
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    result.resolve(Response.json({ error: 'active_writer_stale' }, { status: 423 }))
+    await expect(pending).resolves.toMatchObject({ status: 'error', error: 'active_writer_stale' })
+    expect(canUseClientWriteAccess()).toBe(true)
   })
 })

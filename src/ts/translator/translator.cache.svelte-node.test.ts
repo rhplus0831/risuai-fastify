@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const testState = vi.hoisted(() => {
@@ -946,5 +952,40 @@ describe('auto-translate cache', () => {
     expect(testState.db.translatorPresetId).toBe(99)
     expect(testState.db.translatorPrompt).toBe('legacy only prompt')
     expect(testState.db.translatorMaxResponse).toBe(333)
+  })
+})
+
+beforeEach(() => resetClientSessionForTests())
+
+describe('translator managed-session admission', () => {
+  it('returns readable source without provider work for a reader', async () => {
+    resetDatabase()
+    setManagedReaderForTest()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(translate('source', false)).resolves.toBe('source')
+    await expect(runTranslator('source', false, 'en', 'ja')).resolves.toBe('source')
+    await expect(translateHTML('<p>source</p>', false, '', 0)).resolves.toBe('<p>source</p>')
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not cache delayed Google output after demotion and repromotion', async () => {
+    resetDatabase()
+    __translatorTestHooks.clearTranslateCache()
+    setManagedWriterForTest()
+    let release!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = translate('old source', false)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(Response.json([[['old translation', 'old source']]]))
+    await expect(pending).rejects.toThrow('client_write_operation_stale')
+    expect(__translatorTestHooks.getTranslateCacheEntries()).toEqual([])
   })
 })

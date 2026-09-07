@@ -1,3 +1,9 @@
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  registerClientWriterLossHandler,
+} from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import sendSound from '../../etc/send.mp3'
 import type { Database } from '../storage/database.svelte'
 import { settingsResourceState } from '../server/resourceState.svelte'
@@ -14,6 +20,7 @@ let activeFallbackErrorListener: (() => void) | null = null
 let completionAudioUnlockState: CompletionAudioUnlockState = 'idle'
 let completionAudioUnlockInstalled = false
 let completionAudioUnlockAttempt = 0
+let stopWriterLossHandler: (() => void) | null = null
 let latestPlaybackRequest = 0
 let pendingPlaybackRequests = 0
 let contextIdleTransition: Promise<void> | null = null
@@ -320,7 +327,7 @@ function playFallbackCompletionDing(): void {
   }
 }
 
-async function playWebAudioCompletionDing(context: AudioContext, request: number): Promise<void> {
+async function playWebAudioCompletionDing(context: AudioContext, request: number, operation: number): Promise<void> {
   pendingPlaybackRequests += 1
   try {
     const idleTransition = contextIdleTransition
@@ -328,10 +335,16 @@ async function playWebAudioCompletionDing(context: AudioContext, request: number
       await idleTransition
     }
 
+    if (!isClientWriteOperationCurrent(operation)) return
     const resumePromise = requestContextResume(context)
     const bufferPromise = loadCompletionSoundBuffer(context)
     const [, buffer] = await Promise.all([resumePromise, bufferPromise])
-    if (completionAudioContext !== context || latestPlaybackRequest !== request) return
+    if (
+      !isClientWriteOperationCurrent(operation) ||
+      completionAudioContext !== context ||
+      latestPlaybackRequest !== request
+    )
+      return
 
     stopActiveCompletionSource()
     if (latestPlaybackRequest !== request) return
@@ -355,7 +368,7 @@ async function playWebAudioCompletionDing(context: AudioContext, request: number
     completionAudioUnlockState = 'unlocked'
     removeCompletionAudioUnlockListeners()
   } catch (error) {
-    if (latestPlaybackRequest === request) {
+    if (isClientWriteOperationCurrent(operation) && latestPlaybackRequest === request) {
       markCompletionAudioUnlockFailed()
       warnForPlaybackFailure(error)
     }
@@ -369,6 +382,16 @@ async function playWebAudioCompletionDing(context: AudioContext, request: number
 
 /** Play the completion ding without applying a feature setting gate. */
 export function playCompletionDing(): void {
+  if (!canUseClientWriteAccess()) return
+  const operation = captureClientSessionGeneration()
+  stopWriterLossHandler?.()
+  stopWriterLossHandler = registerClientWriterLossHandler(() => {
+    latestPlaybackRequest += 1
+    stopActiveCompletionSource()
+    if (activeFallbackElement) releaseFallbackElement(activeFallbackElement)
+    stopWriterLossHandler?.()
+    stopWriterLossHandler = null
+  })
   const AudioContextClass = getAudioContextConstructor()
   if (!AudioContextClass) {
     playFallbackCompletionDing()
@@ -389,12 +412,13 @@ export function playCompletionDing(): void {
     releaseFallbackElement(activeFallbackElement)
   }
   const request = ++latestPlaybackRequest
-  void playWebAudioCompletionDing(context, request)
+  void playWebAudioCompletionDing(context, request, operation)
 }
 
 /** Play the user-configured ding for one successfully completed chat generation. */
 export function playMessageCompletionSoundIfEnabled(): boolean {
   if (
+    !canUseClientWriteAccess() ||
     displaySettingsOwner()?.playMessage !== true ||
     (getAudioContextConstructor() === null && typeof Audio === 'undefined')
   ) {
