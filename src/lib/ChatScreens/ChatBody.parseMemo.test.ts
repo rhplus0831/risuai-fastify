@@ -2,7 +2,8 @@ import { mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { character, Database } from '../../ts/storage/database.svelte'
-import { replaceResourceDatabase } from '../../ts/server/resourceState.svelte'
+import { charactersResourceState, replaceResourceDatabase } from '../../ts/server/resourceState.svelte'
+import { createChatReadOwners } from './chatReadOwners.svelte'
 import { ReloadChatPointer, ReloadGUIPointer, VariableReloadGUIPointer, selectedCharID } from '../../ts/stores.svelte'
 import { RegexDisplayReloadPointer, reloadRegexDisplay } from '../../ts/process/regexDisplayReload'
 import { getResourceDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
@@ -258,6 +259,48 @@ afterEach(async () => {
 })
 
 describe('ChatBody content-keyed parse memo', () => {
+  it('isolates equal message IDs in local read scopes without following canonical chat selection', async () => {
+    seedDb()
+    const character = charactersResourceState.characters[0]
+    const first = character.chats[0]
+    character.chats.push({ ...first, id: 'local-reader-second', message: [], modules: ['local-module'] })
+    const second = character.chats[1]
+    const parser = await import('../../ts/parser/parser.svelte')
+    const parse = vi
+      .spyOn(parser, 'ParseMarkdown')
+      .mockImplementation(
+        async (_data, _char, _mode, _index, _cbs, target) => `parsed ${target?.readContext?.chat?.id}`,
+      )
+    const memo = await import('./ChatBodyParseMemo')
+    const input = (chatId: string) => ({
+      data: 'same source',
+      charArg: character.chaId,
+      mode: 'notrim' as const,
+      chatID: 0,
+      cbsConditions: {},
+      chatId,
+      messageId: 'same-message-id',
+      readOnly: true,
+      owners: memo.createChatBodyParseOwnerReaders(
+        createChatReadOwners(
+          charactersResourceState,
+          () => [],
+          () => ({ characterId: character.chaId, chatId }),
+        ),
+      ),
+    })
+    const firstInput = input(first.id!)
+    const secondInput = input(second.id!)
+    const firstKey = memo.getChatBodyParseMemoKey(firstInput)
+    expect(firstKey).not.toBe(memo.getChatBodyParseMemoKey(secondInput))
+    await expect(memo.memoizedChatBodyParse(firstInput)).resolves.toBe(`parsed ${first.id}`)
+    await expect(memo.memoizedChatBodyParse(secondInput)).resolves.toBe(`parsed ${second.id}`)
+    character.chatPage = 1
+    expect(memo.getChatBodyParseMemoKey(firstInput)).toBe(firstKey)
+    await expect(memo.memoizedChatBodyParse(firstInput)).resolves.toBe(`parsed ${first.id}`)
+    expect(parse).toHaveBeenCalledTimes(2)
+  })
+
   it('invalidates asset markup when a cached paint width is replaced by the authoritative default', async () => {
     const character = seedDb()
     const memo = await import('./ChatBodyParseMemo')

@@ -1,10 +1,11 @@
 <script module lang="ts">
-  import { sharedChatReadOwners as renderOwners } from './sharedChatReadOwners.svelte'
+  import { sharedChatReadOwners } from './sharedChatReadOwners.svelte'
   let manualTriggerDisplayGeneration = 0
 </script>
 
 <script lang="ts">
   import { getContext, onDestroy, untrack } from 'svelte'
+  import { getChatReadOwnersContext } from './chatReadOwnersContext'
   import {
     canUseClientWriteAccess,
     captureClientSessionGeneration,
@@ -184,6 +185,7 @@
   import type { SettingsGroup } from '@risuai/shared-core/settings-groups'
 
   let translating = $state(false)
+  const renderOwners = getChatReadOwnersContext()
   let editMode = $state(false)
   let messageEditText = $state('')
   let statusMessage: string = $state('')
@@ -402,8 +404,9 @@
   })
   function canChatWrite(): boolean {
     if (readOnly || !canUseClientWriteAccess()) return false
-    if (displayChatId && displayChatId !== renderOwners.chat()?.id) return false
-    if (idx >= 0 && displayMessageId && displayMessageId !== renderOwners.message(idx)?.chatId) return false
+    if (renderOwners.chat() !== sharedChatReadOwners.chat()) return false
+    if (displayChatId && displayChatId !== sharedChatReadOwners.chat()?.id) return false
+    if (idx >= 0 && displayMessageId && displayMessageId !== sharedChatReadOwners.message(idx)?.chatId) return false
     return true
   }
   function isChatWriteCurrent(generation: number): boolean {
@@ -1994,6 +1997,7 @@
   ): boolean {
     const job = serverTranslationJob
     return (
+      isChatWriteCurrent(target.sessionGeneration) &&
       !isCancelled() &&
       !!job &&
       'messageId' in job &&
@@ -2013,6 +2017,7 @@
   ): boolean {
     const job = serverTranslationJob
     return (
+      isChatWriteCurrent(target.sessionGeneration) &&
       !isCancelled() &&
       !!job &&
       'characterId' in job &&
@@ -2134,6 +2139,7 @@
 
   $effect(() => {
     const job = serverTranslationJob
+    if (!writeActionsAllowed) return
     if (serverTranslationInProgress) {
       sawServerTranslationInProgress = true
       return
@@ -2548,6 +2554,9 @@
             alertRequestData({
               genInfo: currentGenerationInfo,
               idx: idx,
+              characterId: renderOwners.character()?.chaId,
+              chatId: currentLiveChat()?.id,
+              messageId: ownerMessage?.chatId,
             })
           }}>
           <BotIcon size={20} />
@@ -2783,7 +2792,7 @@
       <span class="text-xs" aria-live="polite">{statusMessage}</span>
       <div class="flex items-center ml-2 gap-2">
         {@render translationButton()}
-        {#if $SizeStore.w >= 640}
+        {#if $SizeStore.w >= 640 || !writeActionsAllowed}
           {@render majorIconButtonsBody(false)}
           {#if writeActionsAllowed && renderCharacter && idx > -1}
             <PopupButton>

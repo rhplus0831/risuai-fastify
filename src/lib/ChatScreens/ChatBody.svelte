@@ -38,6 +38,7 @@
   } from './ChatBodyParseMemo'
   import type { DisplaySourceLayer } from '@risuai/protocol/display-source'
   import type { DisplaySourcePriority } from 'src/ts/server/displaySources'
+  import { getChatReadOwnersContext } from './chatReadOwnersContext'
 
   interface Props {
     character?: simpleCharacterArgument | string | null
@@ -90,7 +91,7 @@
     void $clientSessionStore
     return readOnly || !canUseClientWriteAccess()
   })
-  const parseOwners = createChatBodyParseOwnerReaders()
+  const parseOwners = createChatBodyParseOwnerReaders(getChatReadOwnersContext())
   const displayScheduler = getContext<ChatDisplayScheduler | undefined>(CHAT_DISPLAY_SCHEDULER)
   let queuedDisplay: AbortController | undefined
 

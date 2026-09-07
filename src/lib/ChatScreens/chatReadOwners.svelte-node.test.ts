@@ -29,6 +29,62 @@ beforeEach(() => {
 })
 
 describe('shared chat render owners', () => {
+  it('keeps simultaneous explicit scopes independent of canonical selection and equal message IDs', () => {
+    const canonical = readers()
+    const readMessages = (id: string) =>
+      charactersResourceState.characters.flatMap((character) => character.chats).find((chat) => chat.id === id)?.message
+    const a = createChatReadOwners(charactersResourceState, readMessages, () => ({
+      characterId: 'a',
+      chatId: 'chat-a',
+    }))
+    const b = createChatReadOwners(charactersResourceState, readMessages, () => ({
+      characterId: 'b',
+      chatId: 'chat-b',
+    }))
+    charactersResourceState.characters[0].chats[0].message[0].data = 'reader a'
+    charactersResourceState.characters[1].chats[0].message[0].data = 'reader b'
+    expect(a.message(0)?.chatId).toBe(b.message(0)?.chatId)
+    expect(a.message(0)?.data).toBe('reader a')
+    expect(b.message(0)?.data).toBe('reader b')
+    expect(b.messages()).toBe(charactersResourceState.characters[1].chats[0].message)
+    charactersResourceState.currentChar = 1
+    expect(canonical.chat()?.id).toBe('chat-b')
+    expect(a.chat()?.id).toBe('chat-a')
+    charactersResourceState.characters[0].chatPage = 100
+    expect(a.chat()?.id).toBe('chat-a')
+    expect(a.message(0)?.data).toBe('reader a')
+  })
+
+  it('retains a scoped committed row through refresh errors but rejects mismatched, duplicate and removed owners', () => {
+    const readMessages = (id: string) =>
+      charactersResourceState.characters.flatMap((character) => character.chats).find((chat) => chat.id === id)?.message
+    const scoped = createChatReadOwners(charactersResourceState, readMessages, () => ({
+      characterId: 'a',
+      chatId: 'chat-a',
+    }))
+    const mismatch = createChatReadOwners(charactersResourceState, readMessages, () => ({
+      characterId: 'b',
+      chatId: 'chat-a',
+    }))
+    const absent = createChatReadOwners(charactersResourceState, readMessages, () => null)
+    const retained = scoped.chat()
+    expect(mismatch.chat()).toBeUndefined()
+    expect(absent.chat()).toBeUndefined()
+    charactersResourceState.status = 'error'
+    expect(scoped.chat()).toBe(retained)
+    expect(scoped.message(0)?.data).toBe('0')
+    expect(readers().chat()).toBeUndefined()
+    charactersResourceState.status = 'ready'
+    charactersResourceState.characters[1].chats[0].id = 'chat-a'
+    expect(scoped.chat()).toBeUndefined()
+    charactersResourceState.characters[1].chats[0].id = 'chat-b'
+    charactersResourceState.characters[0].chats = []
+    expect(scoped.chat()).toBeUndefined()
+    expect(scoped.message(0)).toBeUndefined()
+    charactersResourceState.status = 'loading'
+    expect(scoped.character()).toBeUndefined()
+  })
+
   it('rejects ambiguous character, global chat, and message IDs and recovers after rollback', () => {
     const read = readers()
     const a = charactersResourceState.characters[0]

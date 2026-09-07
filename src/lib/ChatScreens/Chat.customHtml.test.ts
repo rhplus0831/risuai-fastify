@@ -434,6 +434,9 @@ vi.mock('src/ts/utilState', () => ({
 }))
 
 import Chat from './Chat.svelte'
+import { createChatReadOwners } from './chatReadOwners.svelte'
+import { CHAT_READ_OWNERS_CONTEXT } from './chatReadOwnersContext'
+import { getChatMessageOwnerState } from 'src/ts/server/chatMessageHydration.svelte'
 import PopupList from '../UI/PopupList.svelte'
 import {
   clearCustomHtmlTemplateMemo,
@@ -3219,42 +3222,132 @@ describe('server raw translation controls', () => {
 })
 
 describe('connected reader message authority', () => {
-  it('keeps plain copy while hiding every write action in explicit read-only custom snippets', async () => {
-    seedDatabase(
-      1,
-      '<div><risutextbox></risutextbox><risubuttons></risubuttons><button class="reader-trigger" risu-trigger="manual" risu-id="id">Run</button><button class="reader-lua" risu-btn="lua">Lua</button></div>',
-    )
-    testDatabaseState.db.useChatCopy = true
-    testDatabaseState.db.enableBookmark = true
-    testDatabaseState.db.characters[0].ttsMode = 'browser'
-    const clipboard = { writeText: vi.fn(async () => undefined), write: vi.fn(async () => undefined) }
-    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard')
-    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: clipboard })
-    try {
-      mountCustomHtmlRows(1, 'char', { readOnly: true, rerollIcon: true })
-      await settle()
-      expect(
-        Array.from(target.querySelectorAll('[data-risu-message-action]')).map((button) =>
-          button.getAttribute('data-risu-message-action'),
-        ),
-      ).toEqual(['copy'])
-      expect(target.querySelector<HTMLButtonElement>('.reader-trigger')?.disabled).toBe(true)
-      expect(target.querySelector<HTMLButtonElement>('.reader-lua')?.disabled).toBe(true)
-      target.querySelector<HTMLButtonElement>('.reader-trigger')?.click()
-      target.querySelector<HTMLButtonElement>('.reader-lua')?.click()
-      target.querySelector<HTMLButtonElement>('.button-icon-copy')?.click()
-      await settle()
-      expect(clipboard.writeText).toHaveBeenCalledWith('visible message 0')
-      expect(clipboard.write).not.toHaveBeenCalled()
-      expect(customHtmlMocks.ParseMarkdown).not.toHaveBeenCalled()
-      expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
-      expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
-      expect(customHtmlMocks.risuChatParser).not.toHaveBeenCalled()
-    } finally {
-      if (descriptor) Object.defineProperty(window.navigator, 'clipboard', descriptor)
-      else Reflect.deleteProperty(window.navigator, 'clipboard')
+  it('renders two local chat scopes with equal message IDs without borrowing canonical translation or request metadata', async () => {
+    seedDatabase(1, null as unknown as string)
+    testDatabaseState.db.translator = 'configured'
+    testDatabaseState.db.translatorType = 'llm'
+    testDatabaseState.db.requestInfoInsideChat = true
+    const character = testDatabaseState.db.characters[0]
+    const first = character.chats[0]
+    const second = character.chats[1]
+    first.autoTranslate = true
+    second.autoTranslate = true
+    first.message[0].translation = {
+      source: 'raw',
+      text: 'first scoped translation',
+      sourceHash: 'a'.repeat(64),
+      targetLanguage: 'ko',
+      inputLanguage: 'en',
+      translatorType: 'llm',
+      settingsHash: 'b'.repeat(64),
+      updatedAt: 1,
     }
+    second.message[0].chatId = first.message[0].chatId
+    second.message[0].translation = { ...first.message[0].translation, text: 'second scoped translation' }
+    first.message[0].generationInfo = { model: 'gpt35', generationId: 'first-generation' }
+    second.message[0].generationInfo = { model: 'gpt35', generationId: 'second-generation' }
+    setActiveMessageTranslations([
+      { chatId: first.id!, messageId: first.message[0].chatId!, jobId: 'first-reader-job', status: 'succeeded' },
+      { chatId: second.id!, messageId: second.message[0].chatId!, jobId: 'second-reader-job', status: 'succeeded' },
+    ])
+    const hosts = [first, second].map((chat) => {
+      const host = document.createElement('section')
+      target.appendChild(host)
+      const owners = createChatReadOwners(
+        charactersResourceState,
+        (chatId) => getChatMessageOwnerState(chatId)?.messages,
+        () => ({ characterId: character.chaId, chatId: chat.id }),
+      )
+      components.push(
+        mount(Chat, {
+          target: host,
+          context: new Map([[CHAT_READ_OWNERS_CONTEXT, owners]]),
+          props: {
+            message: chat.message[0].data,
+            name: 'Scoped reader',
+            isLastMemory: false,
+            idx: 0,
+            role: 'char',
+            displayChatId: chat.id,
+            displayMessageId: chat.message[0].chatId,
+            totalLength: 1,
+            readOnly: true,
+            messageGenerationInfo: chat.message[0].generationInfo,
+          },
+        }) as MountedComponent,
+      )
+      return host
+    })
+    await settle()
+    expect(hosts[0].textContent).toContain('first scoped translation')
+    expect(hosts[0].textContent).not.toContain('second scoped translation')
+    expect(hosts[1].textContent).toContain('second scoped translation')
+    expect(hosts[1].textContent).not.toContain('first scoped translation')
+    Array.from(hosts[1].querySelectorAll<HTMLButtonElement>('button'))
+      .find((button) => button.textContent?.includes('Mock-model'))
+      ?.click()
+    await settle()
+    expect(customHtmlMocks.alertRequestData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        characterId: character.chaId,
+        chatId: second.id,
+        messageId: first.message[0].chatId,
+        genInfo: expect.objectContaining({ generationId: 'second-generation' }),
+      }),
+    )
+    expect(character.chatPage).toBe(0)
+    expect(get(selectedCharID)).toBe(0)
+    expect(dispatchUpdateMessageScoped).not.toHaveBeenCalled()
+    expect(customHtmlMocks.translateMessageCommand).not.toHaveBeenCalled()
+    expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+    expect(get(activeMessageTranslations).map((job) => job.jobId)).toEqual(['first-reader-job', 'second-reader-job'])
+    expect(customHtmlMocks.hydrateChatMessages).not.toHaveBeenCalled()
+    character.chatPage = 1
+    await settle()
+    expect(hosts[0].textContent).toContain('first scoped translation')
+    expect(hosts[1].textContent).toContain('second scoped translation')
   })
+
+  it.each([320, 900])(
+    'keeps plain copy inline without a popup in read-only custom snippets (width=%s)',
+    async (width) => {
+      seedDatabase(
+        1,
+        '<div><risutextbox></risutextbox><risubuttons></risubuttons><button class="reader-trigger" risu-trigger="manual" risu-id="id">Run</button><button class="reader-lua" risu-btn="lua">Lua</button></div>',
+      )
+      testDatabaseState.db.useChatCopy = true
+      testDatabaseState.db.enableBookmark = true
+      testDatabaseState.db.characters[0].ttsMode = 'browser'
+      SizeStore.set({ w: width, h: 700 })
+      const clipboard = { writeText: vi.fn(async () => undefined), write: vi.fn(async () => undefined) }
+      const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard')
+      Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: clipboard })
+      try {
+        mountCustomHtmlRows(1, 'char', { readOnly: true, rerollIcon: true })
+        await settle()
+        expect(
+          Array.from(target.querySelectorAll('[data-risu-message-action]')).map((button) =>
+            button.getAttribute('data-risu-message-action'),
+          ),
+        ).toEqual(['copy'])
+        expect(target.querySelector<HTMLButtonElement>('.reader-trigger')?.disabled).toBe(true)
+        expect(target.querySelector<HTMLButtonElement>('.reader-lua')?.disabled).toBe(true)
+        target.querySelector<HTMLButtonElement>('.reader-trigger')?.click()
+        target.querySelector<HTMLButtonElement>('.reader-lua')?.click()
+        target.querySelector<HTMLButtonElement>('.button-icon-copy')?.click()
+        await settle()
+        expect(clipboard.writeText).toHaveBeenCalledWith('visible message 0')
+        expect(clipboard.write).not.toHaveBeenCalled()
+        expect(customHtmlMocks.ParseMarkdown).not.toHaveBeenCalled()
+        expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+        expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+        expect(customHtmlMocks.risuChatParser).not.toHaveBeenCalled()
+      } finally {
+        if (descriptor) Object.defineProperty(window.navigator, 'clipboard', descriptor)
+        else Reflect.deleteProperty(window.navigator, 'clipboard')
+      }
+    },
+  )
 
   it('does not request automatic translation as a managed reader', async () => {
     seedDatabase(1, null as unknown as string)

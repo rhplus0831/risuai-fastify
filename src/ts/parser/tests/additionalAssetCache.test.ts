@@ -14,6 +14,7 @@ import {
 } from '../../server/resourceState.svelte'
 import { invalidateModuleRenderRevision } from '../../moduleRenderRevision'
 import { pickHashRand } from '../../util'
+import type { character } from '../../storage/database.svelte'
 
 const mocks = vi.hoisted(() => ({
   db: {
@@ -85,6 +86,7 @@ vi.mock(import('../../process/scripts'), () => ({
 
 vi.mock(import('../../server/displaySources'), () => ({
   requestServerDisplaySource: mocks.requestServerDisplaySource,
+  markReaderDisplayLimited: vi.fn(),
 }))
 
 vi.mock(import('../../model/modellist'), () => ({
@@ -142,6 +144,79 @@ beforeEach(() => {
 })
 
 describe('additional asset resolution cache', () => {
+  it('isolates local chat modules and source portraits from the canonical selected chat', async () => {
+    mocks.db.enabledModules = []
+    mocks.db.modules = [
+      { id: 'writer-module', name: 'Writer', description: '', assets: [['shared', 'writer-asset', 'png']] },
+      { id: 'reader-module', name: 'Reader', description: '', assets: [['shared', 'reader-asset', 'png']] },
+    ]
+    collectionsResourceState.values.modules = mocks.db.modules
+    const writer = {
+      chaId: 'writer',
+      chatPage: 0,
+      image: 'writer-portrait',
+      chats: [
+        { id: 'writer-chat', modules: ['writer-module'], message: [{ chatId: 'same-message-id', data: 'writer' }] },
+      ],
+    } as character
+    const reader = {
+      chaId: 'reader',
+      chatPage: 0,
+      image: 'reader-portrait',
+      chats: [
+        { id: 'reader-first', modules: ['writer-module'], message: [{ chatId: 'same-message-id', data: 'first' }] },
+        { id: 'reader-second', modules: ['reader-module'], message: [{ chatId: 'same-message-id', data: 'second' }] },
+      ],
+    } as character
+    charactersResourceState.characters = [writer, reader]
+    charactersResourceState.currentChar = 0
+    charactersResourceState.status = 'ready'
+    const charArg = simpleCharacter('reader')
+    const data = '{{raw::shared}} {{source::char}} {{source::user}}'
+    const first = await ParseMarkdown(
+      data,
+      charArg,
+      'back',
+      0,
+      {},
+      {
+        readOnly: true,
+        chatId: 'reader-first',
+        messageId: 'same-message-id',
+        readContext: { character: reader, chat: reader.chats[0], userIcon: 'first-persona' },
+      },
+    )
+    const second = await ParseMarkdown(
+      data,
+      charArg,
+      'back',
+      0,
+      {},
+      {
+        readOnly: true,
+        chatId: 'reader-second',
+        messageId: 'same-message-id',
+        readContext: { character: reader, chat: reader.chats[1], userIcon: 'second-persona' },
+      },
+    )
+    expect(first).toContain('/resolved/writer-asset')
+    expect(first).toContain('/resolved/first-persona')
+    expect(second).toContain('/resolved/reader-asset')
+    expect(second).toContain('/resolved/second-persona')
+    expect(second).not.toContain('/resolved/writer-asset')
+    expect(first).toContain('/resolved/reader-portrait')
+    expect(second).toContain('/resolved/reader-portrait')
+    expect(second).not.toContain('/resolved/writer-portrait')
+    expect(mocks.requestServerDisplaySource.mock.calls.map(([input]) => (input as { chatId: string }).chatId)).toEqual([
+      'reader-first',
+      'reader-second',
+    ])
+    expect(mocks.processScriptFull).not.toHaveBeenCalled()
+    expect(charactersResourceState.currentChar).toBe(0)
+    expect(reader.chatPage).toBe(0)
+    expect(getAdditionalAssetCacheStatsForTests().entries).toBe(2)
+  })
+
   it('resolves colliding names from the character passed to ParseMarkdown', async () => {
     const lucy = simpleCharacter('lucy', [['bg', 'lucy-background', 'png']])
     const haniel = simpleCharacter('haniel', [['bg.png', 'haniel-background', 'png']])

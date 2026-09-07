@@ -27,7 +27,7 @@ import css, { type CssAtRuleAST } from '@adobe/css-tools'
 import { calcString } from '../process/infunctions'
 import { safeStructuredClone } from '../polyfill'
 import { pickHashRand, replaceAsync } from '../util'
-import { getPersonaPrompt, getUserIcon, getUserName } from '../utilState'
+import { getPersonaPrompt, getUserIcon, getUserName, resolveUserPersonaPresentation } from '../utilState'
 import { getInlayAssetBlob, type InlayAsset } from '../process/files/inlays'
 import type { RisuModule } from '../process/modules'
 import { captureModuleRenderRevision } from '../moduleRenderRevision'
@@ -317,8 +317,8 @@ function parserModuleLorebooks(): loreBook[] {
 }
 
 function parserModuleOwners(context: { character: character | undefined; chat: Chat | undefined }) {
-  return parserModules(
-    context.character ? { character: context.character, ...(context.chat ? { chat: context.chat } : {}) } : undefined,
+  return resolveActiveModuleStates(parserRuntimeDatabase(), context.character, context.chat).map(
+    (state) => state.module as RisuModule,
   )
 }
 
@@ -715,6 +715,8 @@ interface AssetPathMatch {
 }
 
 interface AssetResolutionContext {
+  sourceCharacterImage: string | undefined
+  sourceUserIcon: string
   characterAssets: readonly (readonly string[])[]
   characterAssetSource: readonly (readonly string[])[]
   characterSignature: string
@@ -746,7 +748,18 @@ const assetCollectionIndexes = new AssetCollectionIndexCache((kind) => {
   else additionalAssetCacheStats.characterAssetTuplesVisited += 1
 }, captureModuleRenderRevision)
 
-function moduleOwnersForCharacter(char: simpleCharacterArgument | character): RisuModule[] {
+export interface ChatDisplayReadContext {
+  /** Resolved together by the caller's duplicate-safe transcript read owners. */
+  character: character | undefined
+  chat: Chat | undefined
+  userIcon?: string
+}
+
+function moduleOwnersForCharacter(
+  char: simpleCharacterArgument | character,
+  readContext?: ChatDisplayReadContext,
+): RisuModule[] {
+  if (readContext) return parserModuleOwners(readContext)
   const ownerCharacter = parserCharacterOwnerById(char.chaId)
   const contextCharacter = char.type === 'simple' ? ownerCharacter : char
   const rows = charactersResourceState.status === 'ready' ? charactersResourceState.characters : []
@@ -768,22 +781,36 @@ function activeModuleAssetKey(moduleOwners: readonly RisuModule[]): string {
   return JSON.stringify(moduleOwners.map((moduleOwner) => moduleOwner.id))
 }
 
-function getAssetResolutionContext(char: simpleCharacterArgument | character): AssetResolutionContext {
+function getAssetResolutionContext(
+  char: simpleCharacterArgument | character,
+  readContext?: ChatDisplayReadContext,
+): AssetResolutionContext {
   const moduleRenderRevision = captureModuleRenderRevision()
   if (cachedModuleRenderRevision !== moduleRenderRevision) {
     assetResolutionCache.clear()
     cachedModuleRenderRevision = moduleRenderRevision
   }
 
-  const moduleOwners = moduleOwnersForCharacter(char)
+  const moduleOwners = moduleOwnersForCharacter(char, readContext)
   const activeModuleKey = activeModuleAssetKey(moduleOwners)
   const characterSignature = characterAssetResolutionSignature(char)
-  const ownerKey = `${char.type === 'simple' ? 'simple' : 'character'}:${char.chaId}`
+  const sourceCharacterImage = readContext ? readContext.character?.image : parserSelectedContext()?.character?.image
+  const sourceUserIcon = readContext
+    ? (readContext.userIcon ?? resolveUserPersonaPresentation(parserRuntimeDatabase(), readContext.chat).userIcon)
+    : getUserIcon()
+  const ownerKey = JSON.stringify([
+    char.type === 'simple' ? 'simple' : 'character',
+    char.chaId,
+    readContext?.character?.chaId,
+    readContext?.chat?.id,
+  ])
   const cached = assetResolutionCache.get(ownerKey)
   if (
     cached?.moduleRenderRevision === moduleRenderRevision &&
     cached.activeModuleKey === activeModuleKey &&
-    cached.characterSignature === characterSignature
+    cached.characterSignature === characterSignature &&
+    cached.sourceCharacterImage === sourceCharacterImage &&
+    cached.sourceUserIcon === sourceUserIcon
   ) {
     assetResolutionCache.delete(ownerKey)
     assetResolutionCache.set(ownerKey, cached)
@@ -794,6 +821,8 @@ function getAssetResolutionContext(char: simpleCharacterArgument | character): A
   // yielding so an in-place edit cannot produce an index mixing two versions.
   const [characterAssets, emotionAssets] = JSON.parse(characterSignature)
   const entry: AssetResolutionCacheEntry = {
+    sourceCharacterImage,
+    sourceUserIcon,
     activeModuleKey,
     characterAssets,
     characterAssetSource: char.additionalAssets ?? characterAssets,
@@ -981,10 +1010,12 @@ async function parseAdditionalAssets(
   })
 
   if (needsSourceAccess) {
-    const chara = parserSelectedContext()?.character
-    data = data.replace(/\uE9b4CHAR\uE9b4/g, chara?.image ? await getFileSrc(chara.image) : '')
+    data = data.replace(
+      /\uE9b4CHAR\uE9b4/g,
+      context.sourceCharacterImage ? await getFileSrc(context.sourceCharacterImage) : '',
+    )
 
-    data = data.replace(/\uE9b4USER\uE9b4/g, getUserIcon() ? await getFileSrc(getUserIcon()) : '')
+    data = data.replace(/\uE9b4USER\uE9b4/g, context.sourceUserIcon ? await getFileSrc(context.sourceUserIcon) : '')
   }
 
   return data
@@ -1265,6 +1296,7 @@ export async function ParseMarkdown(
   cbsConditions: CbsConditions = {},
   displayTarget: {
     readOnly?: boolean
+    readContext?: ChatDisplayReadContext
     chatId?: string
     layer?: DisplaySourceLayer
     messageId?: string
@@ -1278,11 +1310,16 @@ export async function ParseMarkdown(
   let firstParsed = ''
   const additionalAssetMode = mode === 'back' ? 'back' : 'normal'
   let char = typeof charArg === 'string' ? parserCharacterOwnerById(charArg) : charArg
+  const readContext =
+    displayTarget.readContext ??
+    (displayTarget.chatId && char
+      ? { character: parserCharacterOwnerById(char.chaId), chat: parserChatOwnerById(char.chaId, displayTarget.chatId) }
+      : undefined)
   let assetResolutionContext: AssetResolutionContext | null = null
 
   const parseAssetsIfPresent = async (source: string): Promise<string> => {
     if (!char || !assetMarkerPresenceRegex.test(source)) return source
-    assetResolutionContext ??= getAssetResolutionContext(char)
+    assetResolutionContext ??= getAssetResolutionContext(char, readContext)
     return parseAdditionalAssets(
       source,
       char,
@@ -1300,12 +1337,10 @@ export async function ParseMarkdown(
   }
 
   if (char) {
-    const currentChat = displayTarget.chatId
-      ? parserChatOwnerById(char.chaId, displayTarget.chatId)
-      : parserSelectedContext()?.chat
+    const currentChat = readContext ? readContext.chat : parserSelectedContext()?.chat
     const messageId = displayTarget.messageId ?? (chatID >= 0 ? currentChat?.message?.[chatID]?.chatId : undefined)
     const currentTriggerId = get(CurrentTriggerIdStore)
-    const hasBrowserOnlyTriggerContext = currentTriggerId !== null && currentTriggerId !== 'null'
+    const hasBrowserOnlyTriggerContext = !startedReadOnly && currentTriggerId !== null && currentTriggerId !== 'null'
     const serverDisplaySource =
       currentChat?.id && !hasBrowserOnlyTriggerContext
         ? await requestServerDisplaySource({

@@ -1,10 +1,15 @@
 import { flushSync, mount, tick, unmount } from 'svelte'
+import { get } from 'svelte/store'
 import DOMPurify from 'dompurify'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { seedRenderCostMessages } from '../../ts/__tests__/renderCostHarness'
 import { withTestDatabaseWrite } from '../../ts/__tests__/resourceDatabaseState'
 import { applyCharacterResource, charactersResourceState } from '../../ts/server/resourceState.svelte'
-import { applyServerChatMessagesResource, getChatMessageOwnerState } from '../../ts/server/chatMessageHydration.svelte'
+import {
+  applyServerChatMessagesResource,
+  getChatMessageOwnerState,
+  resetChatHydration,
+} from '../../ts/server/chatMessageHydration.svelte'
 import {
   beginStartupAttempt,
   completeStartupAttempt,
@@ -15,8 +20,16 @@ import * as parser from '../../ts/parser/parser.svelte'
 import ChatsHarness from './Chats.startupHarness.svelte'
 import { invalidateModuleRenderRevision } from '../../ts/moduleRenderRevision'
 import { reloadGuiDisplay } from '../../ts/stores.svelte'
+import { chatFoldedStateMessageIndex } from '../../ts/globalApi.svelte'
+import {
+  automaticTranslationMessageIds,
+  replaceAutomaticTranslationMessageIds,
+  resetAutomaticTranslationEligibilityForTests,
+} from '../../ts/process/generatedMessageTranslationEligibility'
 import {
   beginGenerationDisplayProjection,
+  generationDisplayProjections,
+  updateGenerationDisplayProjection,
   resetGenerationDisplayProjectionsForTests,
 } from '../../ts/process/generationDisplayProjection.svelte'
 const scheduledDisplay = vi.hoisted(() => vi.fn())
@@ -59,10 +72,48 @@ afterEach(() => {
   vi.unstubAllGlobals()
   resetStartupReadinessForTests()
   resetGenerationDisplayProjectionsForTests()
+  resetChatHydration()
+  resetAutomaticTranslationEligibilityForTests()
+  chatFoldedStateMessageIndex.index = -1
   document.body.innerHTML = ''
 })
 
 describe('chat startup rendering', () => {
+  it('ignores writer folding and preserves finalizing projections in a reader transcript', async () => {
+    seedRenderCostMessages(6)
+    const character = charactersResourceState.characters[0]
+    const chat = character.chats[0]
+    const projection = beginGenerationDisplayProjection({
+      operationId: 'writer-finalizing',
+      attemptNo: 1,
+      characterId: character.chaId,
+      chatId: chat.id!,
+      mode: 'regenerate',
+      targetMessageId: chat.message[0].chatId,
+      generationId: chat.message[0].chatId,
+      projectionEpoch: 1,
+    })
+    updateGenerationDisplayProjection(projection, { status: 'finalizing' })
+    chatFoldedStateMessageIndex.index = 2
+    vi.spyOn(parser, 'ParseMarkdown').mockImplementation(async (html) => `<p>${html}</p>`)
+    const target = document.createElement('div')
+    document.body.appendChild(target)
+    const component = mount(ChatsHarness, {
+      target,
+      props: { chatId: chat.id!, characterId: character.chaId, readOnly: true },
+    })
+    try {
+      await flush()
+      expect(target.querySelectorAll('.risu-chat')).toHaveLength(6)
+      expect(get(generationDisplayProjections)).toMatchObject([
+        { operationId: 'writer-finalizing', status: 'finalizing' },
+      ])
+      expect(chatFoldedStateMessageIndex.index).toBe(2)
+    } finally {
+      await unmount(component)
+    }
+  })
+
   it('keeps diagnostic legacy paging available beyond the ordinary residency bound', async () => {
     seedRenderCostMessages(180)
     const character = charactersResourceState.characters[0]
@@ -166,7 +217,7 @@ describe('chat startup rendering', () => {
     }
   })
 
-  it('keeps all rows mounted, progressively parses older bodies, and ignores unrelated character hydration', async () => {
+  it.each([false, true])('progressively parses older bodies with its own readiness (readOnly=%s)', async (readOnly) => {
     resetStartupReadinessForTests()
     const startupAttempt = beginStartupAttempt()
     const callbacks = new Map<number, IdleRequestCallback>()
@@ -197,7 +248,11 @@ describe('chat startup rendering', () => {
     const sanitize = vi.spyOn(DOMPurify, 'sanitize')
     const target = document.createElement('div')
     document.body.appendChild(target)
-    const component = mount(ChatsHarness, { target, props: { chatId: chat.id, characterId: character.chaId } })
+    if (readOnly) replaceAutomaticTranslationMessageIds(['writer-only-id'])
+    const component = mount(ChatsHarness, {
+      target,
+      props: { chatId: chat.id, characterId: character.chaId, readOnly },
+    })
     try {
       flushSync()
       await flush()
@@ -206,15 +261,18 @@ describe('chat startup rendering', () => {
       expect(target.textContent).toContain(chat.message[5].data)
       expect(target.textContent).not.toContain(chat.message[0].data)
       await frame()
-      expect(parse).toHaveBeenCalledTimes(2)
-      recordStartupMilestone('background-ready')
-      completeStartupAttempt(startupAttempt)
+      expect(parse).toHaveBeenCalledTimes(readOnly ? 3 : 2)
+      if (!readOnly) {
+        recordStartupMilestone('background-ready')
+        completeStartupAttempt(startupAttempt)
+      }
       await flush()
-      for (let count = 3; count <= 6; count++) {
+      for (let count = readOnly ? 4 : 3; count <= 6; count++) {
         await frame()
         expect(parse).toHaveBeenCalledTimes(count)
       }
       for (const message of chat.message) expect(target.textContent).toContain(message.data)
+      if (readOnly) expect(get(automaticTranslationMessageIds)).toEqual(['writer-only-id'])
 
       parse.mockClear()
       sanitize.mockClear()

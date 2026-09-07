@@ -102,6 +102,9 @@ vi.mock('src/ts/globalApi.svelte', () => ({
 }))
 
 import ChatBody from './ChatBody.svelte'
+import { createChatReadOwners } from './chatReadOwners.svelte'
+import { CHAT_READ_OWNERS_CONTEXT } from './chatReadOwnersContext'
+import type { character as Character } from 'src/ts/storage/database.svelte'
 import { CHAT_DISPLAY_SCHEDULER, createChatDisplayScheduler } from './chatDisplayScheduler'
 
 vi.mock('./sharedChatReadOwners.svelte', () => ({
@@ -377,6 +380,60 @@ describe('ChatBody translation parse bounds', () => {
     expect(chatBodyMocks.getFileSrc).toHaveBeenCalledWith('owner-asset-id')
     expect(bodyRoot.querySelector('img')?.getAttribute('src')).toBe('/api/v1/assets/owner-asset-id')
     expect(bodyRoot.querySelector('img')?.classList.contains('root-loaded-image-contain')).toBe(true)
+  })
+
+  it('passes the local reader chat into parser and image-module reads while canonical owners stay selected', async () => {
+    setChatBodyDatabase({ newImageHandlingBeta: true })
+    const local = {
+      chaId: 'reader-character',
+      chatPage: 0,
+      additionalAssets: [['portrait.png', 'reader-asset-id', 'png']],
+      prebuiltAssetStyle: 'contain',
+      chats: [
+        { id: 'reader-canonical-chat', message: [], modules: ['canonical-module'] },
+        { id: 'reader-local-chat', message: [], modules: ['reader-module'] },
+      ],
+    } as Character
+    const localChat = local.chats[1]
+    const owners = createChatReadOwners(
+      { status: 'ready', currentChar: 0, characters: [local] },
+      () => [],
+      () => ({ characterId: local.chaId, chatId: localChat.id! }),
+    )
+    chatBodyMocks.getFileSrc.mockResolvedValue('/api/v1/assets/reader-asset-id')
+    const bodyRoot = document.createElement('span')
+    bodyRoot.innerHTML = '<img src="portrait.png">'
+    target.appendChild(bodyRoot)
+    component = mount(ChatBody, {
+      target,
+      context: new Map([[CHAT_READ_OWNERS_CONTEXT, owners]]),
+      props: {
+        character: local.chaId,
+        chatId: localChat.id,
+        messageId: 'same-message-id',
+        bodyRoot,
+        idx: 0,
+        modelShortName: '',
+        msgDisplay: 'local scoped body',
+        role: 'char',
+        translated: false,
+        translating: false,
+        retranslate: false,
+        readOnly: true,
+      },
+    })
+    flushSync()
+    await flushComponentPromises()
+    expect(chatBodyMocks.getModuleAssets).toHaveBeenCalledWith({ character: local, chat: localChat })
+    expect(chatBodyMocks.getFileSrc).toHaveBeenCalledWith('reader-asset-id')
+    expect((chatBodyMocks.ParseMarkdown.mock.calls[0] as unknown[])[5]).toMatchObject({
+      chatId: localChat.id,
+      messageId: 'same-message-id',
+      readOnly: true,
+      readContext: { character: local, chat: localChat },
+    })
+    expect(chatBodyMocks.translateHTML).not.toHaveBeenCalled()
+    expect(local.chatPage).toBe(0)
   })
 
   it('does not rescan module assets for an already resolved server asset URL', async () => {

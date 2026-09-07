@@ -6,21 +6,33 @@ interface CharacterReadState {
   currentChar: number
 }
 
+export interface ChatReadSelection {
+  characterId: string
+  chatId: string
+}
+
+export type ChatReadOwners = ReturnType<typeof createChatReadOwners>
+
 /**
  * Shared render reads. Track identities and array structure, not message bodies,
  * metadata, or projection epochs (which also change for unrelated row edits).
  * Svelte invalidates these derived indexes synchronously for in-place optimistic
  * edits, rollback, hydration and replacement as well as authoritative updates.
  * Mutation callers must still capture and revalidate their own freshness tokens.
+ * An explicit selection is local to this reader and never falls back to the
+ * canonical selection. A failed refresh retains its unique committed rows.
  */
 export function createChatReadOwners(
   state: CharacterReadState,
   readMessages: (chatId: string) => readonly Message[] | undefined,
+  readSelection?: () => ChatReadSelection | null | undefined,
 ) {
+  const selection = $derived(readSelection?.())
+  const readable = $derived(state.status === 'ready' || (readSelection !== undefined && state.status === 'error'))
   const owners = $derived.by(() => {
     const characters = new Map<string, character | undefined>()
     const chats = new Map<string, { character: character; chat: Chat } | undefined>()
-    if (state.status !== 'ready') return { characters, chats }
+    if (!readable) return { characters, chats }
     for (const character of state.characters) {
       if (character?.chaId) {
         characters.set(character.chaId, characters.has(character.chaId) ? undefined : character)
@@ -36,14 +48,20 @@ export function createChatReadOwners(
   })
 
   const selectedCharacter = $derived.by(() => {
-    if (state.status !== 'ready') return undefined
+    if (!readable) return undefined
+    if (readSelection) return selection?.characterId ? owners.characters.get(selection.characterId) : undefined
     const candidate = state.characters[state.currentChar]
     return candidate?.chaId && owners.characters.get(candidate.chaId) === candidate ? candidate : undefined
   })
 
   const selectedChat = $derived.by(() => {
     const character = selectedCharacter
-    if (!character || typeof character.chatPage !== 'number') return undefined
+    if (!character) return undefined
+    if (readSelection) {
+      const owner = selection?.chatId ? owners.chats.get(selection.chatId) : undefined
+      return owner?.character === character ? owner.chat : undefined
+    }
+    if (typeof character.chatPage !== 'number') return undefined
     const candidate = character.chats?.[character.chatPage]
     const owner = candidate?.id ? owners.chats.get(candidate.id) : undefined
     return owner?.character === character ? owner.chat : undefined
@@ -62,6 +80,7 @@ export function createChatReadOwners(
     characterById: (id: string): character | undefined => owners.characters.get(id),
     character: () => selectedCharacter,
     chat: () => selectedChat,
+    messages: () => messages,
     message(index: number): Message | undefined {
       if (index < 0) return undefined
       const candidate = messages?.[index]

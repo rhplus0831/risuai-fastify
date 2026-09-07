@@ -69,6 +69,7 @@
   import type { ChatGenerationLoadingPhase } from './chatGenerationLoading'
   import { scrollElementToContainerStart } from './chatScroll'
   import type { ActiveGenerationJob } from 'src/ts/server/bootstrap'
+  import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
 
   const getCurrentChatRoomId = () => chatId ?? null
 
@@ -121,6 +122,10 @@
     initialRowsPending?: boolean
     readOnly?: boolean
   } = $props()
+  const writeActionsAllowed = $derived.by(() => {
+    void $clientSessionStore
+    return !readOnly && canUseClientWriteAccess()
+  })
 
   function legacyChatMetadataFallback(): ReturnType<typeof projectChatMetadata> | undefined {
     if (!chatId) return undefined
@@ -358,7 +363,7 @@
     const { loadStart, loadEnd: configuredLoadEnd } = getTranscriptWindowRange({
       messageCount: messages.length,
       loadPages,
-      foldedMessageIndex: chatFoldedStateMessageIndex.index,
+      foldedMessageIndex: readOnly ? -1 : chatFoldedStateMessageIndex.index,
     })
     // Send/streaming can reduce the ordinary page count while an older editor
     // or selection is still owned. Retain its already-hydrated logical range;
@@ -1343,7 +1348,7 @@
             message.generationInfo?.generationId === projection.generationId),
       )
     ) {
-      finishGenerationDisplayProjection(projection)
+      if (writeActionsAllowed) finishGenerationDisplayProjection(projection)
       return
     }
 
@@ -1412,7 +1417,7 @@
     // Subscribe to the semantic startup signal, including localized failures.
     // Older rows never participate in the newest-row readiness registrations.
     void $startupCoordinatorStore
-    displayScheduler.setPaused(initialDisplayPending || initialRowsPending || !backgroundReady())
+    displayScheduler.setPaused(initialDisplayPending || initialRowsPending || (!readOnly && !backgroundReady()))
   })
 
   $effect(() => {
@@ -1434,9 +1439,9 @@
       pendingEntryChatRoomId = currentChatRoomId
       hasNewUnreadMessage = false
       markChatRead(currentChatRoomId)
-      replaceAutomaticTranslationMessageIds([])
+      if (writeActionsAllowed) replaceAutomaticTranslationMessageIds([])
       previousIsGenerationActive = isGenerationActive
-    } else {
+    } else if (writeActionsAllowed) {
       const residentMessageIds = new Set(messages.map((message) => message.chatId).filter((id): id is string => !!id))
       const retainedIds = untrack(() => $automaticTranslationMessageIds).filter(
         (id) => residentMessageIds.has(id) && !$serverOwnedGeneratedMessageIds.has(id),
@@ -1609,7 +1614,9 @@
             typeof row.message.chatId === 'string' &&
             $automaticTranslationMessageIds.includes(row.message.chatId) &&
             !$serverOwnedGeneratedMessageIds.has(row.message.chatId)}
-          onAutoTranslationEligibilityConsumed={() => consumeAutomaticTranslationEligibility(row.message.chatId ?? '')}
+          onAutoTranslationEligibilityConsumed={() => {
+            if (!readOnly && canUseClientWriteAccess()) consumeAutomaticTranslationEligibility(row.message.chatId ?? '')
+          }}
           onInitialDisplayParseStart={(registration) => {
             beginRowParse(entry.key, registration)
             if (row.awaitInitialDisplayParse) initialDisplayReadiness.start(row.scopeId, registration)

@@ -10,8 +10,10 @@ import {
   type Database,
 } from '../../ts/storage/database.svelte'
 import { sharedChatReadOwners } from './sharedChatReadOwners.svelte'
-import { readChatBodyModules } from './chatBodyModuleReads.svelte'
+import { createChatBodyModuleReads, readChatBodyModules } from './chatBodyModuleReads.svelte'
+import type { ChatReadOwners } from './chatReadOwners.svelte'
 import { collectionsResourceState, settingsResourceState } from '../../ts/server/resourceState.svelte'
+import { resolveUserPersonaPresentation } from '../../ts/utilState'
 import { CurrentTriggerIdStore, ReloadGUIPointer, VariableReloadGUIPointer } from '../../ts/stores.svelte'
 import { captureModuleRenderRevision } from '../../ts/moduleRenderRevision'
 import { getLLMCache, getLLMCacheMutationEpoch } from '../../ts/translator/translator'
@@ -36,20 +38,33 @@ export interface ChatBodyParseOwnerReaders {
   assetWidthForPaint?: () => Database['assetWidth'] | undefined
   promptPresetOwners: () => Database['promptPresets'] | undefined
   moduleOwners?: () => ReturnType<typeof getModules>
+  userIconOwner?: () => string
 }
 
-export function createChatBodyParseOwnerReaders(): ChatBodyParseOwnerReaders {
+export function createChatBodyParseOwnerReaders(
+  owners: ChatReadOwners = sharedChatReadOwners,
+): ChatBodyParseOwnerReaders {
   return {
     characterOwner: (charArg) => {
-      if (typeof charArg === 'string') return sharedChatReadOwners.characterById(charArg)
+      if (typeof charArg === 'string') return owners.characterById(charArg)
       return charArg ?? undefined
     },
-    activeCharacterOwner: sharedChatReadOwners.character,
-    activeChatOwner: sharedChatReadOwners.chat,
+    activeCharacterOwner: owners.character,
+    activeChatOwner: owners.chat,
     settingsOwner: () => settingsResourceState.value as Partial<Database>,
     assetWidthForPaint: () => displaySettingForPaint('assetWidth'),
     promptPresetOwners: () => collectionsResourceState.values.promptPresets,
-    moduleOwners: readChatBodyModules,
+    moduleOwners: owners === sharedChatReadOwners ? readChatBodyModules : createChatBodyModuleReads(owners),
+    userIconOwner: () =>
+      resolveUserPersonaPresentation(
+        {
+          personas: collectionsResourceState.values.personas ?? [],
+          selectedPersonaId: settingsResourceState.value.selectedPersonaId,
+          username: settingsResourceState.value.username,
+          userIcon: settingsResourceState.value.userIcon,
+        } as Database,
+        owners.chat(),
+      ).userIcon,
   }
 }
 
@@ -393,8 +408,9 @@ function activeChatSignature(owners: ChatBodyParseOwnerReaders) {
 
   return {
     chaId: char?.chaId,
-    chatPage: char?.chatPage,
     chatId: chat?.id,
+    characterImage: char?.image,
+    userIcon: owners.userIconOwner?.(),
     chatModules: chat?.modules,
     scriptstate: normalizeForSignature(chat?.scriptstate ?? null),
   }
@@ -407,8 +423,9 @@ function activeChatSignatureToken(owners: ChatBodyParseOwnerReaders) {
   return {
     reloadEpoch: get(ReloadGUIPointer),
     chaId: char?.chaId,
-    chatPage: char?.chatPage,
     chatId: chat?.id,
+    characterImage: char?.image,
+    userIcon: owners.userIconOwner?.(),
     chatModules: scalarListSignature(chat?.modules),
     scriptstate: normalizeForSignature(chat?.scriptstate ?? null),
   }
@@ -563,6 +580,15 @@ export function memoizedChatBodyParse(input: ChatBodyParseMemoInput): Promise<st
     if (cached) {
       return refresh(parseMemo, key, cached)
     }
+    const activeChat = input.owners.activeChatOwner()
+    const readContext =
+      !input.chatId || activeChat?.id === input.chatId
+        ? {
+            character: input.owners.activeCharacterOwner(),
+            chat: activeChat,
+            userIcon: input.owners.userIconOwner?.(),
+          }
+        : undefined
 
     const promise = ParseMarkdown(
       input.data,
@@ -578,6 +604,7 @@ export function memoizedChatBodyParse(input: ChatBodyParseMemoInput): Promise<st
         streaming: input.streaming,
         priority: input.displayPriority,
         readOnly: input.readOnly,
+        readContext,
       },
     ).catch((error) => {
       deleteParseMemoEntry(key)

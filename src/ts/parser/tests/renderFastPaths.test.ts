@@ -21,6 +21,7 @@ import {
 import { createChatBodyRenderMemo } from '../../../lib/ChatScreens/ChatBodyRenderMemo'
 import { pruneEmptyBilingualPairs } from '../../translator/bilingualInterleave'
 import { charactersResourceState, settingsResourceState } from '../../server/resourceState.svelte'
+import { CurrentTriggerIdStore } from '../../stores.svelte'
 
 const mocks = vi.hoisted(() => ({
   processScriptFull: vi.fn(async (_char, source) => ({ data: 'script: ' + source })),
@@ -305,6 +306,27 @@ describe('connected reader ParseMarkdown fallback', () => {
     )
     expect(html).toContain('<strong>readable</strong>')
     expect(mocks.processScriptFull).not.toHaveBeenCalled()
+  })
+  it('does not borrow an active writer trigger when requesting reader display', async () => {
+    CurrentTriggerIdStore.set('writer-trigger')
+    try {
+      const html = await ParseMarkdown(
+        'reader source',
+        character as any,
+        'normal',
+        0,
+        {},
+        {
+          chatId: 'reader-chat',
+          readOnly: true,
+        },
+      )
+      expect(html).toContain('reader source')
+      expect(mocks.displaySource).toHaveBeenCalledOnce()
+      expect(mocks.processScriptFull).not.toHaveBeenCalled()
+    } finally {
+      CurrentTriggerIdStore.set(null)
+    }
   })
   it('preserves the normal writer script fallback', async () => {
     const html = await ParseMarkdown('readable', character as any, 'normal', 0, {}, { chatId: 'reader-chat' })
