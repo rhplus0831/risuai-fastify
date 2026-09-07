@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from './activeWriterSession'
 import {
@@ -42,6 +44,13 @@ export async function importRealmCharacterFromServer(
     onProgress?: (progress: ServerRealmImportProgress) => void
   } = {},
 ): Promise<ServerRealmImportResult> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
+  const sourceGeneration = captureClientSessionGeneration()
+  const onProgress = options.onProgress
+    ? (progress: ServerRealmImportProgress) => {
+        if (isClientWriteOperationCurrent(sourceGeneration)) options.onProgress?.(progress)
+      }
+    : undefined
   let confirmedCharacterId: string | null = null
   return withDirectServerCommandEventReconciliation(
     (event) =>
@@ -50,11 +59,13 @@ export async function importRealmCharacterFromServer(
       (confirmedCharacterId === null || event.id === confirmedCharacterId),
     async (reconcileResponseEvent) => {
       const baseRevision = await getServerCommandBaseRevision(options.signal)
+      if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'unavailable' }
       if (baseRevision === null) {
         return { status: 'error', error: 'Unable to read server command revision' }
       }
 
       const auth = await getNodeServerProxyAuth()
+      if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'unavailable' }
       let response: Response
       try {
         response = await fetch(REALM_IMPORT_ENDPOINT, {
@@ -81,9 +92,9 @@ export async function importRealmCharacterFromServer(
 
       const result =
         options.onProgress && response.ok && response.headers.get('content-type')?.includes('text/event-stream')
-          ? await readRealmImportProgressStream(response, options)
-          : await readRealmImportJsonResponse(response)
-      if (result.status === 'ok') {
+          ? await readRealmImportProgressStream(response, { ...options, onProgress }, sourceGeneration)
+          : await readRealmImportJsonResponse(response, sourceGeneration)
+      if (result.status === 'ok' && isClientWriteOperationCurrent(sourceGeneration)) {
         confirmedCharacterId = result.characterId
         await reconcileResponseEvent(result.event)
       }
@@ -98,6 +109,7 @@ async function readRealmImportProgressStream(
     signal?: AbortSignal | null
     onProgress?: (progress: ServerRealmImportProgress) => void
   },
+  sourceGeneration: number,
 ): Promise<ServerRealmImportResult> {
   if (!response.body) {
     return { status: 'error', error: 'Invalid Realm import progress response' }
@@ -115,7 +127,7 @@ async function readRealmImportProgressStream(
         continue
       }
       if (frame.event === 'done') {
-        return readRealmImportSuccessBody(parseJsonFrame(frame.data))
+        return readRealmImportSuccessBody(parseJsonFrame(frame.data), sourceGeneration)
       }
       if (frame.event === 'low_level_access') {
         return lowLevelAccessResult(parseJsonFrame(frame.data))
@@ -129,7 +141,8 @@ async function readRealmImportProgressStream(
       if (frame.event === 'conflict') {
         const body = parseJsonFrame(frame.data)
         const currentRevision = readCurrentRevision(body)
-        if (currentRevision !== null) setCachedServerCommandRevision(currentRevision)
+        if (currentRevision !== null && isClientWriteOperationCurrent(sourceGeneration))
+          setCachedServerCommandRevision(currentRevision)
         return currentRevision === null
           ? { status: 'error', error: errorMessageFromBody(body, 'Revision mismatch') }
           : { status: 'conflict', currentRevision }
@@ -149,7 +162,10 @@ async function readRealmImportProgressStream(
   return { status: 'error', error: 'Realm import progress stream ended without a result' }
 }
 
-async function readRealmImportJsonResponse(response: Response): Promise<ServerRealmImportResult> {
+async function readRealmImportJsonResponse(
+  response: Response,
+  sourceGeneration: number,
+): Promise<ServerRealmImportResult> {
   let body: unknown = null
   try {
     body = await response.json()
@@ -162,7 +178,8 @@ async function readRealmImportJsonResponse(response: Response): Promise<ServerRe
       return lowLevelAccessResult(body)
     }
     const currentRevision = readCurrentRevision(body)
-    if (currentRevision !== null) setCachedServerCommandRevision(currentRevision)
+    if (currentRevision !== null && isClientWriteOperationCurrent(sourceGeneration))
+      setCachedServerCommandRevision(currentRevision)
     return currentRevision === null
       ? { status: 'error', error: errorMessageFromBody(body, 'HTTP 409') }
       : { status: 'conflict', currentRevision }
@@ -175,7 +192,7 @@ async function readRealmImportJsonResponse(response: Response): Promise<ServerRe
     }
   }
 
-  if (handleActiveWriterStaleResponse(response, body)) {
+  if (handleActiveWriterStaleResponse(response, body, sourceGeneration)) {
     return { status: 'error', error: errorMessageFromBody(body, 'HTTP 423') }
   }
 
@@ -183,10 +200,10 @@ async function readRealmImportJsonResponse(response: Response): Promise<ServerRe
     return { status: 'error', error: errorMessageFromBody(body, `HTTP ${response.status}`) }
   }
 
-  return readRealmImportSuccessBody(body)
+  return readRealmImportSuccessBody(body, sourceGeneration)
 }
 
-function readRealmImportSuccessBody(body: unknown): ServerRealmImportResult {
+function readRealmImportSuccessBody(body: unknown, sourceGeneration: number): ServerRealmImportResult {
   if (!body || typeof body !== 'object') {
     return { status: 'error', error: 'Invalid Realm import response' }
   }
@@ -202,7 +219,7 @@ function readRealmImportSuccessBody(body: unknown): ServerRealmImportResult {
   }
 
   const revision = record.revision as number
-  setCachedServerCommandRevision(revision)
+  if (isClientWriteOperationCurrent(sourceGeneration)) setCachedServerCommandRevision(revision)
   return {
     status: 'ok',
     revision,

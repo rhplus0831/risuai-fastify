@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fflate from 'fflate'
 
@@ -107,6 +113,7 @@ const MAX_ASSET_SIZE_BYTES = DEFAULT_CHARX_MAX_ENTRY_SIZE_BYTES
 const encoder = new TextEncoder()
 
 function resetMocks() {
+  resetClientSessionForTests()
   globalApiState.saveAsset.mockClear()
   globalApiState.saveAssets.mockClear()
   globalApiState.saveAssets.mockImplementation(async (assets: readonly { data: Uint8Array }[]) =>
@@ -491,5 +498,54 @@ describe('CharXWriter media cleanup', () => {
       createUrl.mockRestore()
       revokeUrl.mockRestore()
     }
+  })
+})
+
+describe('CharX asset queue writer lifecycle', () => {
+  it('rejects Reader imports before parsing or uploading assets', async () => {
+    setManagedReaderForTest()
+    const importer = new CharXImporter()
+    const push = vi.spyOn(importer.unzip, 'push')
+    await expect(importer.parse(new Uint8Array([1]))).rejects.toThrow('client_write_access_required')
+    expect(push).not.toHaveBeenCalled()
+    expect(globalApiState.saveAssets).not.toHaveBeenCalled()
+  })
+
+  it('does not dispatch a queued asset batch or publish the held batch after writer loss and re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (ids: string[]) => void
+    globalApiState.saveAssets.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const entries = Object.fromEntries(
+      Array.from({ length: 64 }, (_, index) => [`assets/${index}.png`, new Uint8Array([index])]),
+    )
+    const importer = new CharXImporter()
+    await importer.parse(fflate.zipSync(entries, { level: 0 }))
+    expect(globalApiState.saveAssets).toHaveBeenCalledOnce()
+    demoteAndRepromoteForTest()
+    release(Array.from({ length: 32 }, (_, index) => `old-${index}`))
+    await expect(importer.done()).rejects.toMatchObject({
+      errors: [
+        expect.objectContaining({ message: 'client_write_operation_stale' }),
+        expect.objectContaining({ message: 'client_write_operation_stale' }),
+      ],
+    })
+    expect(globalApiState.saveAssets).toHaveBeenCalledOnce()
+    expect(importer.assets).toEqual({})
+  })
+
+  it('keeps explicit hash-only inspection available to Readers without saving a hash signal', async () => {
+    setManagedReaderForTest()
+    const importer = new CharXImporter()
+    importer.skipSaving = true
+    importer.hashSignal = 'read-only-signal'
+    await importer.parse(fflate.zipSync({ 'assets/read.png': new Uint8Array([1, 2]) }, { level: 0 }))
+    await importer.done()
+    expect(importer.assets).toEqual({ 'assets/read.png': 'assets/hash-2.png' })
+    expect(globalApiState.saveAsset).not.toHaveBeenCalled()
+    expect(globalApiState.saveAssets).not.toHaveBeenCalled()
   })
 })

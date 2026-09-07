@@ -1,3 +1,5 @@
+import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from './activeWriterSession'
 import {
@@ -73,16 +75,25 @@ async function importLocalFileFromServer(
   kind: 'character' | 'module',
   options: LocalFileImportOptions,
 ): Promise<ServerLocalCharacterImportResult | ServerLocalModuleImportResult> {
+  if (!canUseClientWriteAccess()) return { status: 'unavailable' }
+  const sourceGeneration = captureClientSessionGeneration()
+  const onProgress = options.onProgress
+    ? (progress: LocalFileImportProgress) => {
+        if (isClientWriteOperationCurrent(sourceGeneration)) options.onProgress?.(progress)
+      }
+    : undefined
   let confirmedId: string | null = null
   const expectedEventType = kind === 'character' ? 'character.created' : 'module.created'
   return withDirectServerCommandEventReconciliation(
     (event) => event.type === expectedEventType && (confirmedId === null || event.id === confirmedId),
     async (reconcileResponseEvent) => {
-      reportLocalFileImportProgress(options.onProgress, { phase: 'prepare' })
+      reportLocalFileImportProgress(onProgress, { phase: 'prepare' })
       const baseRevision = await getServerCommandBaseRevision(options.signal)
+      if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'unavailable' }
       if (baseRevision === null) return { status: 'error', error: 'Unable to read server command revision' }
 
       const auth = await getNodeServerProxyAuth()
+      if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'unavailable' }
       const endpoint = kind === 'character' ? CHARACTER_IMPORT_ENDPOINT : MODULE_IMPORT_ENDPOINT
       const headers: Record<string, string> = {
         'risu-auth': auth,
@@ -109,13 +120,13 @@ async function importLocalFileFromServer(
       let response: Response
       try {
         response =
-          kind === 'character' && options.onProgress
+          kind === 'character' && onProgress
             ? await sendLocalCharacterImport({
                 url,
                 headers,
                 body,
                 signal: options.signal,
-                onProgress: options.onProgress,
+                onProgress,
               })
             : await fetch(url, {
                 method: 'POST',
@@ -128,10 +139,10 @@ async function importLocalFileFromServer(
         return { status: 'error', error: `Network error: ${message}` }
       }
 
-      const result = await readLocalFileImportResponse(kind, response, options.pendingImportToken)
-      if (result.status === 'ok') {
+      const result = await readLocalFileImportResponse(kind, response, options.pendingImportToken, sourceGeneration)
+      if (result.status === 'ok' && isClientWriteOperationCurrent(sourceGeneration)) {
         confirmedId = 'characterId' in result ? result.characterId : result.moduleId
-        reportLocalFileImportProgress(options.onProgress, { phase: 'refresh' })
+        reportLocalFileImportProgress(onProgress, { phase: 'refresh' })
         await reconcileResponseEvent(result.event)
       }
       return result
@@ -143,6 +154,7 @@ async function readLocalFileImportResponse(
   kind: 'character' | 'module',
   response: Response,
   pendingImportToken: string | undefined,
+  sourceGeneration: number,
 ): Promise<ServerLocalCharacterImportResult | ServerLocalModuleImportResult> {
   let body: unknown = null
   try {
@@ -169,11 +181,11 @@ async function readLocalFileImportResponse(
   if (response.status === 409) {
     const currentRevision = readBodyNumber(body, 'currentRevision')
     if (currentRevision !== null) {
-      setCachedServerCommandRevision(currentRevision)
+      if (isClientWriteOperationCurrent(sourceGeneration)) setCachedServerCommandRevision(currentRevision)
       return { status: 'conflict', currentRevision }
     }
   }
-  if (handleActiveWriterStaleResponse(response, body)) {
+  if (handleActiveWriterStaleResponse(response, body, sourceGeneration)) {
     return { status: 'error', error: errorMessageFromBody(body, `HTTP ${response.status}`) }
   }
   if (!response.ok) return { status: 'error', error: errorMessageFromBody(body, `HTTP ${response.status}`) }
@@ -187,7 +199,7 @@ async function readLocalFileImportResponse(
   if (revision === null || !record.event || typeof record.event !== 'object') {
     return { status: 'error', error: 'Invalid local file import response' }
   }
-  setCachedServerCommandRevision(revision)
+  if (isClientWriteOperationCurrent(sourceGeneration)) setCachedServerCommandRevision(revision)
   if (kind === 'character') {
     if (typeof record.characterId !== 'string') return { status: 'error', error: 'Invalid character import response' }
     return {

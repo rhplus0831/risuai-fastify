@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const platformState = vi.hoisted(() => ({ isFastifyServer: true }))
@@ -83,6 +89,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   platformState.isFastifyServer = true
   commandState.baseRevision = 7
   commandState.cachedRevision = null
@@ -272,5 +279,43 @@ describe('Realm import server adapter', () => {
       status: 'low-level-access',
       pendingImportToken: 'pending-token',
     })
+  })
+})
+
+describe('Realm import writer lifecycle', () => {
+  it('denies Reader import before sending transport', async () => {
+    setManagedReaderForTest()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(importRealmCharacterFromServer('realm-id')).resolves.toMatchObject({ status: 'unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('preserves exact success without replaying old progress or projection after re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const onProgress = vi.fn()
+    const pending = importRealmCharacterFromServer('realm-id', { onProgress })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(
+      new Response(
+        streamOf(
+          'event: progress\ndata: {"phase":"download","percent":12}\n\nevent: done\ndata: {"revision":9,"event":{"type":"character.created","resource":"character","revision":9,"id":"char-1"},"characterId":"char-1"}\n\n',
+        ),
+        { status: 200, headers: { 'content-type': 'text/event-stream' } },
+      ),
+    )
+    await expect(pending).resolves.toMatchObject({ status: 'ok', characterId: 'char-1' })
+    expect(commandState.cachedRevision).toBeNull()
+    expect(commandState.reconciledEvents).toEqual([])
+    expect(onProgress).not.toHaveBeenCalled()
   })
 })

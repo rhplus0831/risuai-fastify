@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../clientSession'
+import { assertClientWriteOperation, isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { AppendableBuffer, saveAsset, saveAssets, type LocalWriter, type VirtualWriter } from '../globalApi.svelte'
 import * as fflate from 'fflate'
 import { asBuffer } from '../util'
@@ -176,6 +178,18 @@ export class CharXWriter {
  * - Saving assets to storage concurrently (limited to prevent memory exhaustion)
  */
 export class CharXImporter {
+  private readonly sourceGeneration = captureClientSessionGeneration()
+  private parseFailure: Error | undefined
+
+  #isCurrent(): boolean {
+    return !this.parseFailure && (this.skipSaving || isClientWriteOperationCurrent(this.sourceGeneration))
+  }
+
+  #assertCurrent(): void {
+    if (this.parseFailure) throw this.parseFailure
+    if (!this.skipSaving) assertClientWriteOperation(this.sourceGeneration)
+  }
+
   // ZIP streaming parser
   unzip: fflate.Unzip
 
@@ -228,7 +242,7 @@ export class CharXImporter {
     this.unzip.register(fflate.UnzipInflate)
     this.unzip.onfile = (file) => this.#handleFile(file)
     this.onProgress = (done, total) => {
-      if (this.alertInfo) {
+      if (this.alertInfo && this.#isCurrent()) {
         alertStore.set({
           type: 'wait',
           msg: `Loading... (Saving Assets ${done}/${total})`,
@@ -259,22 +273,39 @@ export class CharXImporter {
    * ```
    */
   async parse(data: Uint8Array | File | ReadableStream<Uint8Array>) {
+    this.#assertCurrent()
     // Create completion promise at the start of parsing
     this.completionPromise = this.#awaitCompletion()
+    // parse() can reject before callers reach done(); retain that rejection without an unhandled promise.
+    void this.completionPromise.catch(() => {})
 
     // Convert all input types to ReadableStream for uniform processing
     const stream = this.#toStream(data)
 
     const reader = stream.getReader()
-    while (true) {
-      const { done, value } = await reader.read()
-      if (value) {
-        await this.#feedChunk(value, false)
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        this.#assertCurrent()
+        if (value) {
+          await this.#feedChunk(value, false)
+          this.#assertCurrent()
+        }
+        if (done) {
+          await this.#feedChunk(new Uint8Array(0), true)
+          break
+        }
       }
-      if (done) {
-        await this.#feedChunk(new Uint8Array(0), true)
-        break
-      }
+    } catch (error) {
+      this.parseFailure = error instanceof Error ? error : new Error(String(error))
+      this.errors.push(this.parseFailure)
+      this.isFinalized = true
+      void this.#flushAssetBatch()
+      this.#checkCompletion()
+      void reader.cancel(error).catch(() => {})
+      throw error
+    } finally {
+      reader.releaseLock()
     }
   }
 
@@ -515,12 +546,14 @@ export class CharXImporter {
 
     const run = async () => {
       try {
+        this.#assertCurrent()
         // CharX zip asset payloads are image bytes by
         // convention; PNG default matches the existing `assets/<sha>.png`
         // path scheme used by `skipSaving`.
         const savedAssetIds = this.skipSaving
           ? await Promise.all(batch.map((asset) => hasher(asset.data).then((id) => `assets/${id}.png`)))
           : await saveAssets(batch.map((asset) => ({ data: asset.data })))
+        this.#assertCurrent()
         if (savedAssetIds.length !== batch.length) {
           throw new Error('Bulk asset save returned an unexpected result count')
         }
@@ -552,7 +585,8 @@ export class CharXImporter {
     // the hash signal is an opaque tracking marker
     // persisted alongside the CharX asset set; the persisted extension is
     // immaterial because the bytes are never re-served as a media file.
-    if (this.hashSignal) {
+    if (this.hashSignal && !this.skipSaving) {
+      this.#assertCurrent()
       await saveAsset(new TextEncoder().encode(this.hashSignal))
     }
 

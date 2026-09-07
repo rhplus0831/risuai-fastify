@@ -1,3 +1,10 @@
+import { saveAsset, saveAssets } from './globalApi.svelte'
+import { resetClientSessionForTests } from './clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from './__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { alertData } from './types/alert'
 
@@ -299,6 +306,7 @@ function fallbackRealmCard(name: string) {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   vi.clearAllMocks()
   alertPresentationStore.set({ type: 'none', msg: '' })
   cancelPendingRealmInfoRequest()
@@ -556,6 +564,7 @@ describe('Realm character import finish refresh', () => {
   })
 
   it('uses the returned character id for unsupported Realm fallback navigation after local reorder', async () => {
+    setManagedWriterForTest()
     realmImportState.importRealmCharacterFromServer.mockResolvedValue({ status: 'unsupported' })
     dbState.db = {
       characters: [{ chaId: 'existing-char', name: 'Existing' }],
@@ -746,6 +755,108 @@ describe('preset URL imports', () => {
     })
     expect(settingsState.settingsMenuIndexSet).not.toHaveBeenCalled()
     expect(settingsState.settingsOpenSet).not.toHaveBeenCalled()
+    expect(alertState.alertNormal).not.toHaveBeenCalled()
+  })
+})
+
+describe('Realm import completion writer lifecycle', () => {
+  it('does not start a Realm import or terms prompt as a Reader', async () => {
+    setManagedReaderForTest()
+    await downloadRisuHub('reader-card')
+    expect(alertState.alertRealmTerms).not.toHaveBeenCalled()
+    expect(realmImportState.importRealmCharacterFromServer).not.toHaveBeenCalled()
+  })
+
+  it('does not confirm, refresh, or navigate an old import result after re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (value: unknown) => void
+    realmImportState.importRealmCharacterFromServer.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = downloadRisuHub('writer-card', { forceRedirect: true })
+    await vi.waitFor(() => expect(realmImportState.importRealmCharacterFromServer).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(okRealmImport('char-imported'))
+    await pending
+    expect(resourceRefreshState.refreshServerRealmImportResources).not.toHaveBeenCalled()
+    expect(characterState.changeChar).not.toHaveBeenCalled()
+    expect(alertState.alertNormal).not.toHaveBeenCalled()
+  })
+})
+
+describe('browser URL fallback writer lifecycle', () => {
+  it('leaves a Reader import hash untouched and does not fetch the import', async () => {
+    setManagedReaderForTest()
+    window.history.replaceState(null, '', '/#import=https://example.test/card.png')
+    const originalHash = location.hash
+    vi.stubGlobal('fetch', vi.fn())
+    await characterURLImport()
+    expect(location.hash).toBe(originalHash)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(characterCommandState.dispatchCreateCharacter).not.toHaveBeenCalled()
+  })
+
+  it('does not parse or create from a held URL response after re-promotion', async () => {
+    setManagedWriterForTest()
+    window.history.replaceState(null, '', '/#import=https://example.test/card.png')
+    const response = deferred<Response>()
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(() => response.promise),
+    )
+    const pending = characterURLImport()
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    response.resolve(
+      new Response(new Uint8Array([1, 2, 3]), {
+        status: 200,
+        headers: { 'content-disposition': 'attachment; filename="card.png"' },
+      }),
+    )
+    await pending
+    expect(saveAsset).not.toHaveBeenCalled()
+    expect(saveAssets).not.toHaveBeenCalled()
+    expect(characterCommandState.applyCharacterCreateOptimistically).not.toHaveBeenCalled()
+    expect(characterCommandState.dispatchCreateCharacter).not.toHaveBeenCalled()
+    expect(alertState.alertNormal).not.toHaveBeenCalled()
+    expect(alertState.alertError).not.toHaveBeenCalled()
+  })
+
+  it('does not upload a held Realm emotion asset or create its character after re-promotion', async () => {
+    setManagedWriterForTest()
+    realmImportState.importRealmCharacterFromServer.mockResolvedValueOnce({ status: 'unsupported' })
+    vi.mocked(saveAsset).mockResolvedValueOnce('primary-asset')
+    const base = fallbackRealmCard('Held Realm resource')
+    const card = {
+      ...base,
+      spec: 'chara_card_v2',
+      data: { ...base.data, extensions: { risuai: { emotions: [['happy', 'held-emotion']] } } },
+    }
+    const emotion = deferred<Response>()
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.startsWith('https://realm.risuai.net/api/v1/download/dynamic/'))
+        return new Response(JSON.stringify({ card, img: 'primary' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      if (url === '/api/v1/hub/resource/primary') return new Response(new Uint8Array([1]), { status: 200 })
+      if (url === '/api/v1/hub/resource/held-emotion') return emotion.promise
+      throw new Error(`Unexpected URL: ${url}`)
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = downloadRisuHub('realm-held', { forceRedirect: true })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith('/api/v1/hub/resource/held-emotion'))
+    expect(saveAsset).toHaveBeenCalledOnce()
+    demoteAndRepromoteForTest()
+    emotion.resolve(new Response(new Uint8Array([2]), { status: 200 }))
+    await pending
+    expect(saveAsset).toHaveBeenCalledOnce()
+    expect(saveAssets).not.toHaveBeenCalled()
+    expect(characterCommandState.applyCharacterCreateOptimistically).not.toHaveBeenCalled()
+    expect(characterCommandState.dispatchCreateCharacter).not.toHaveBeenCalled()
     expect(alertState.alertNormal).not.toHaveBeenCalled()
   })
 })

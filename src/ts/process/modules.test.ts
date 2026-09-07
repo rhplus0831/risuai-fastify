@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const selectedFileState = vi.hoisted(() => ({
@@ -374,6 +380,7 @@ function installCompleteModuleApplyFixture(): character {
 
 describe('module imports', () => {
   beforeEach(() => {
+    resetClientSessionForTests()
     characterRowEpochState.epoch = 0
     characterLorebookEpochState.epoch = 0
     moduleCollectionEpochState.epoch = 0
@@ -626,6 +633,77 @@ describe('module imports', () => {
 
     expect(importLocalModuleFileFromServer).toHaveBeenCalledOnce()
     expect(alertError).toHaveBeenCalledWith(language.moduleImport.commandUnavailable)
+  })
+
+  it('does not upload decoded module assets after writer loss and re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: (data: Uint8Array) => void
+    decodeRPack
+      .mockImplementationOnce(async (data) => data)
+      .mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            release = resolve
+          }),
+      )
+    const pending = importRisuModuleData(
+      buildRisum({ id: 'old', name: 'Held decode', assets: [['one', '', 'one.png']] }, [new Uint8Array([1])]),
+    )
+    await vi.waitFor(() => expect(decodeRPack).toHaveBeenCalledTimes(2))
+    demoteAndRepromoteForTest()
+    release(new Uint8Array([1]))
+    await expect(pending).resolves.toBeUndefined()
+    expect(saveAssets).not.toHaveBeenCalled()
+    expect(createGlobalModule).not.toHaveBeenCalled()
+    expect(alertError).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a failed module asset batch after its delay crosses re-promotion', async () => {
+    setManagedWriterForTest()
+    let release!: () => void
+    saveAssets.mockRejectedValueOnce(new Error('temporary upload failure'))
+    sleep.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = importRisuModuleData(
+      buildRisum({ id: 'old', name: 'Held retry', assets: [['one', '', 'one.png']] }, [new Uint8Array([1])]),
+    )
+    await vi.waitFor(() => expect(sleep).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release()
+    await expect(pending).resolves.toBeUndefined()
+    expect(saveAssets).toHaveBeenCalledOnce()
+    expect(createGlobalModule).not.toHaveBeenCalled()
+    expect(alertError).not.toHaveBeenCalled()
+  })
+
+  it('does not create a module after low-level confirmation resumes under a new writer', async () => {
+    setManagedWriterForTest()
+    let release!: (accepted: boolean) => void
+    alertConfirm.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = importRisuModuleObject({ id: 'old', name: 'Held confirmation', lowLevelAccess: true } as never)
+    await vi.waitFor(() => expect(alertConfirm).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(true)
+    await expect(pending).resolves.toBe(false)
+    expect(createGlobalModule).not.toHaveBeenCalled()
+    expect(alertNormal).not.toHaveBeenCalled()
+  })
+
+  it('denies Reader module import entry points before decode or creation', async () => {
+    setManagedReaderForTest()
+    await importRisuModuleData(buildRisum({ id: 'old', name: 'Reader module' }))
+    await importRisuModuleObject({ id: 'old', name: 'Reader module' } as never)
+    await importModule()
+    expect(decodeRPack).not.toHaveBeenCalled()
+    expect(createGlobalModule).not.toHaveBeenCalled()
+    expect(importLocalModuleFileFromServer).not.toHaveBeenCalled()
   })
 
   it('imports .risum asset tuples with a null filename slot using empty filename fallback', async () => {

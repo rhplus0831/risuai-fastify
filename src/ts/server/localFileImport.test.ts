@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from '../clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from '../__tests__/managedClientSession'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const auth = vi.hoisted(() => vi.fn(async () => 'auth-token'))
@@ -25,6 +31,7 @@ vi.mock('./commands', () => ({
 import { importLocalCharacterFileFromServer, importLocalModuleFileFromServer } from './localFileImport'
 
 beforeEach(() => {
+  resetClientSessionForTests()
   auth.mockClear()
   getBaseRevision.mockClear()
   setRevision.mockClear()
@@ -246,4 +253,63 @@ class FakeImportXhr {
 
 beforeEach(() => {
   FakeImportXhr.latest = undefined
+})
+
+describe('local import writer lifecycle', () => {
+  it('rejects Reader import before auth or transport', async () => {
+    setManagedReaderForTest()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(importLocalCharacterFileFromServer({ file: new Blob(['card']) })).resolves.toMatchObject({
+      status: 'unavailable',
+    })
+    expect(auth).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not resume import after authentication in a newer writer session', async () => {
+    setManagedWriterForTest()
+    let release!: (value: string) => void
+    auth.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = importLocalCharacterFileFromServer({ file: new Blob(['card']) })
+    await vi.waitFor(() => expect(auth).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release('auth')
+    await expect(pending).resolves.toMatchObject({ status: 'unavailable' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('returns exact accepted import without stale progress, revision, or reconciliation', async () => {
+    setManagedWriterForTest()
+    let release!: (response: Response) => void
+    const fetchMock = vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          release = resolve
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = importLocalCharacterFileFromServer({ file: new Blob(['card']) })
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release(
+      new Response(
+        JSON.stringify({
+          revision: 8,
+          event: { type: 'character.created', resource: 'character', revision: 8, id: 'character-a' },
+          characterId: 'character-a',
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    await expect(pending).resolves.toMatchObject({ status: 'ok', characterId: 'character-a' })
+    expect(setRevision).not.toHaveBeenCalled()
+    expect(reconcileEvent).not.toHaveBeenCalled()
+  })
 })

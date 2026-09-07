@@ -1,3 +1,9 @@
+import { resetClientSessionForTests } from './clientSession'
+import {
+  setManagedWriterForTest,
+  setManagedReaderForTest,
+  demoteAndRepromoteForTest,
+} from './__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import * as fflate from 'fflate'
 
@@ -312,6 +318,7 @@ const BASE_PNG = new Uint8Array(
 let consoleLogSpy: ReturnType<typeof vi.spyOn>
 
 beforeEach(() => {
+  resetClientSessionForTests()
   dbState.db = {
     characters: [],
     characterOrder: [],
@@ -1253,3 +1260,59 @@ function createExportCharacter(): any {
     replaceGlobalNote: '',
   }
 }
+
+describe('browser card parser writer lifecycle', () => {
+  it('does not parse or create a character as a Reader', async () => {
+    setManagedReaderForTest()
+    await expect(
+      importCharacterProcess({ name: 'card.json', data: Buffer.from(JSON.stringify(characterCardFixture('Reader'))) }),
+    ).resolves.toBeNull()
+    expect(globalApiState.saveAsset).not.toHaveBeenCalled()
+    expect(globalApiState.saveAssets).not.toHaveBeenCalled()
+    expect(characterCommandState.applyCharacterCreateOptimistically).not.toHaveBeenCalled()
+    expect(characterCommandState.dispatchCreateCharacter).not.toHaveBeenCalled()
+  })
+
+  it('does not save PNG assets or create a character when delayed parsing resumes after re-promotion', async () => {
+    const fixture = await createPngCardFixture()
+    setManagedWriterForTest()
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const data = new ReadableStream<Uint8Array>({
+      start(value) {
+        controller = value
+      },
+    })
+    const reading = vi.spyOn(PngChunk, 'readGenerator')
+    try {
+      const pending = importCharacterProcess({ name: 'held.png', data })
+      await vi.waitFor(() => expect(reading).toHaveBeenCalled())
+      demoteAndRepromoteForTest()
+      controller.enqueue(fixture.png)
+      controller.close()
+      await expect(pending).resolves.toBeNull()
+      expect(globalApiState.saveAsset).not.toHaveBeenCalled()
+      expect(globalApiState.saveAssets).not.toHaveBeenCalled()
+      expect(characterCommandState.applyCharacterCreateOptimistically).not.toHaveBeenCalled()
+      expect(characterCommandState.dispatchCreateCharacter).not.toHaveBeenCalled()
+      expect(alertState.alertNormal).not.toHaveBeenCalled()
+    } finally {
+      reading.mockRestore()
+    }
+  })
+
+  it('preserves a managed writer CharX import with embedded assets', async () => {
+    setManagedWriterForTest()
+    const card = characterCardFixture('Managed CharX')
+    card.data.assets = [{ type: 'icon', uri: 'embeded://assets/main.png', name: 'main', ext: 'png' }]
+    const archive = createCharXArchive({
+      'card.json': Buffer.from(JSON.stringify(card)),
+      'assets/main.png': new Uint8Array([1, 2, 3]),
+    })
+    await expect(importCharacterProcess({ name: 'writer.charx', data: archive })).resolves.toMatchObject({
+      status: 'accepted',
+    })
+    expect(globalApiState.saveAssets).toHaveBeenCalledOnce()
+    expect(characterCommandState.dispatchCreateCharacter).toHaveBeenCalledOnce()
+    expect(dbState.db.characters[0].name).toBe('Managed CharX')
+  })
+})

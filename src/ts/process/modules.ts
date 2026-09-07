@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../clientSession'
+import { awaitClientWriteOperation, isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { language } from 'src/lang'
 import { alertClear, alertConfirm, alertError, alertModuleSelect, alertNormal, alertStore, alertWait } from '../alert'
 import {
@@ -119,10 +121,12 @@ function attachModuleTriggerOwner(trigger: triggerscript, module: RisuModule): t
 }
 
 export interface ReadModuleOptions {
+  sourceGeneration?: number
   beforeSaveAssets?: (module: RisuModule) => boolean | void | Promise<boolean | void>
 }
 
 interface ImportRisuModuleOptions {
+  sourceGeneration?: number
   alertSuccess?: boolean
 }
 
@@ -132,12 +136,15 @@ function moduleImportCommandError(result: Exclude<ServerCommandResult, { status:
   return language.moduleImport.commandError(result.error)
 }
 
-async function createImportedGlobalModule(module: RisuModule): Promise<boolean> {
+async function createImportedGlobalModule(module: RisuModule, sourceGeneration: number): Promise<boolean> {
+  if (!isClientWriteOperationCurrent(sourceGeneration)) return false
   try {
     const result = await createGlobalModule(module)
     if (result === null || result.status === 'ok') return true
+    if (!isClientWriteOperationCurrent(sourceGeneration)) return false
     alertError(moduleImportCommandError(result))
   } catch (error) {
+    if (!isClientWriteOperationCurrent(sourceGeneration)) return false
     alertError(language.moduleImport.commandError(error instanceof Error ? error.message : String(error)))
   }
   return false
@@ -261,7 +268,8 @@ function uploadFileNameForModuleAsset(fileName: string, data: Uint8Array): strin
   return `asset.${inferModuleAssetExtension(data) ?? 'png'}`
 }
 
-async function guardImportableRisuModule(module: RisuModule): Promise<boolean> {
+async function guardImportableRisuModule(module: RisuModule, sourceGeneration: number): Promise<boolean> {
+  if (!isClientWriteOperationCurrent(sourceGeneration)) return false
   if (hasMcpModuleMetadata(module)) {
     const mcp = module.mcp as unknown
     const url = isRecord(mcp) && typeof mcp.url === 'string' ? mcp.url.trim() : ''
@@ -273,6 +281,7 @@ async function guardImportableRisuModule(module: RisuModule): Promise<boolean> {
   }
   if (module.lowLevelAccess) {
     const conf = await alertConfirm(language.lowLevelAccessConfirm)
+    if (!isClientWriteOperationCurrent(sourceGeneration)) return false
     if (!conf) {
       return false
     }
@@ -367,6 +376,10 @@ export async function readModule(
   data: Uint8Array | Buffer,
   options: ReadModuleOptions = {},
 ): Promise<RisuModule | undefined> {
+  const sourceGeneration = options.sourceGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return undefined
+
   const buf = Buffer.isBuffer(data) ? data : Buffer.from(data)
   let pos = 0
 
@@ -409,7 +422,7 @@ export async function readModule(
     const main: {
       type?: unknown
       module?: unknown
-    } = JSON.parse(Buffer.from(await decodeRPack(mainData)).toString())
+    } = JSON.parse(Buffer.from(await awaitClientWriteOperation(sourceGeneration, decodeRPack(mainData))).toString())
 
     const parsedModule = normalizeRisuModuleMetadata(main.module)
     if (main.type !== 'risuModule' || !parsedModule) {
@@ -418,7 +431,7 @@ export async function readModule(
 
     let module = parsedModule
 
-    const shouldReadAssets = await options.beforeSaveAssets?.(module)
+    const shouldReadAssets = await awaitClientWriteOperation(sourceGeneration, options.beforeSaveAssets?.(module))
     if (shouldReadAssets === false) {
       return
     }
@@ -430,6 +443,7 @@ export async function readModule(
     let reportedCompleted = -1
 
     const reportCompleted = (nextCompleted: number) => {
+      if (!isCurrent()) return
       const boundedCompleted = Math.max(0, Math.min(totalAssets, nextCompleted))
       if (boundedCompleted <= reportedCompleted) return
       reportedCompleted = boundedCompleted
@@ -449,7 +463,7 @@ export async function readModule(
       const decodedTasks: { task: AssetTask; decoded: Uint8Array; fileName: string }[] = []
       for (const task of tasks) {
         try {
-          const decoded = await decodeRPack(task.data)
+          const decoded = await awaitClientWriteOperation(sourceGeneration, decodeRPack(task.data))
           if (!module.assets?.[task.index]) {
             throw new Error(`Missing asset metadata for index ${task.index}`)
           }
@@ -459,6 +473,8 @@ export async function readModule(
             fileName: uploadFileNameForModuleAsset(module.assets[task.index][2] ?? '', decoded),
           })
         } catch (error) {
+          if (!isCurrent()) throw error
+
           throw new Error(`Failed to decode module asset ${task.index + 1}`, { cause: error })
         }
       }
@@ -466,14 +482,17 @@ export async function readModule(
       reportCompleted(completed)
       try {
         const completedBeforeBatch = completed
-        const savedAssetIds = await saveAssets(
-          decodedTasks.map((task) => ({
-            data: task.decoded,
-            fileName: task.fileName,
-          })),
-          {
-            onProgress: (batchCompleted) => reportCompleted(completedBeforeBatch + batchCompleted),
-          },
+        const savedAssetIds = await awaitClientWriteOperation(
+          sourceGeneration,
+          saveAssets(
+            decodedTasks.map((task) => ({
+              data: task.decoded,
+              fileName: task.fileName,
+            })),
+            {
+              onProgress: (batchCompleted) => reportCompleted(completedBeforeBatch + batchCompleted),
+            },
+          ),
         )
         for (let i = 0; i < decodedTasks.length; i++) {
           // Preserve the module asset's declared filename (the [2] slot of
@@ -483,6 +502,8 @@ export async function readModule(
           completed += 1
         }
       } catch (error) {
+        if (!isCurrent()) throw error
+
         failed.push(...decodedTasks.map((task) => task.task))
       }
       reportCompleted(completed)
@@ -513,23 +534,25 @@ export async function readModule(
     }
 
     try {
-      let failed = await runAssetTasks(tasks)
+      let failed = await awaitClientWriteOperation(sourceGeneration, runAssetTasks(tasks))
       let retryCount = 0
       while (failed.length > 0 && retryCount < maxRetries) {
-        await sleep(retryDelayMs)
+        await awaitClientWriteOperation(sourceGeneration, sleep(retryDelayMs))
         retryCount += 1
-        failed = await runAssetTasks(failed)
+        failed = await awaitClientWriteOperation(sourceGeneration, runAssetTasks(failed))
       }
       if (failed.length > 0) {
         throw new Error(`Failed to save ${failed.length} assets`)
       }
     } finally {
-      alertClear()
+      if (isCurrent()) alertClear()
     }
 
     module.id = v4()
     return module
   } catch (error) {
+    if (!isCurrent()) return undefined
+
     console.error(error)
     alertError(language.errors.noData)
     return
@@ -540,17 +563,22 @@ export async function importRisuModuleData(
   data: Uint8Array | Buffer,
   options: ImportRisuModuleOptions = {},
 ): Promise<RisuModule | undefined> {
+  const sourceGeneration = options.sourceGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return undefined
+
   const alertSuccess = options.alertSuccess ?? true
   const module = await readModule(data, {
-    beforeSaveAssets: guardImportableRisuModule,
+    sourceGeneration,
+    beforeSaveAssets: (module) => guardImportableRisuModule(module, sourceGeneration),
   })
-  if (!module) {
+  if (!module || !isCurrent()) {
     return
   }
-  if (!(await createImportedGlobalModule(module))) {
+  if (!(await createImportedGlobalModule(module, sourceGeneration))) {
     return
   }
-  if (alertSuccess) {
+  if (isCurrent() && alertSuccess) {
     alertNormal(language.successImport)
   }
   return module
@@ -560,38 +588,52 @@ export async function importRisuModuleObject(
   importData: RisuModule,
   options: ImportRisuModuleOptions = {},
 ): Promise<RisuModule | false | undefined> {
+  const sourceGeneration = options.sourceGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return undefined
+
   const alertSuccess = options.alertSuccess ?? false
   const normalizedImportData = normalizeRisuModuleMetadata(importData)
   if (!normalizedImportData) {
     alertError(language.errors.noData)
     return
   }
-  if (!(await guardImportableRisuModule(normalizedImportData))) {
+  if (!(await guardImportableRisuModule(normalizedImportData, sourceGeneration)) || !isCurrent()) {
     return false
   }
   normalizedImportData.id = v4()
-  if (!(await createImportedGlobalModule(normalizedImportData))) {
+  if (!(await createImportedGlobalModule(normalizedImportData, sourceGeneration))) {
     return
   }
-  if (alertSuccess) {
+  if (isCurrent() && alertSuccess) {
     alertNormal(language.successImport)
   }
   return normalizedImportData
 }
 
 export async function importModule() {
+  const sourceGeneration = captureClientSessionGeneration()
+  if (!isClientWriteOperationCurrent(sourceGeneration)) return
   const file = (await selectFileByDom(['json', 'lorebook', 'risum'], 'single'))?.[0]
-  if (!file) {
+  if (!file || !isClientWriteOperationCurrent(sourceGeneration)) {
     return
   }
-  await importModuleFile(file, file.name)
+  await importModuleFile(file, file.name, sourceGeneration)
 }
 
-export async function importModuleFile(file: Blob, fileName = file instanceof File ? file.name : 'module.risum') {
+export async function importModuleFile(
+  file: Blob,
+  fileName = file instanceof File ? file.name : 'module.risum',
+  sourceGeneration = captureClientSessionGeneration(),
+) {
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return
   alertWait('Loading... (Uploading)')
   let result = await importLocalModuleFileFromServer({ file, fileName })
+  if (!isCurrent()) return
   if (result.status === 'low-level-access') {
     const confirmed = await alertConfirm(language.lowLevelAccessConfirm)
+    if (!isCurrent()) return
     if (!confirmed) {
       alertClear()
       return
@@ -602,6 +644,7 @@ export async function importModuleFile(file: Blob, fileName = file instanceof Fi
       allowLowLevelAccess: true,
     })
   }
+  if (!isCurrent()) return
   if (result.status === 'ok') {
     alertNormal(language.successImport)
     return
