@@ -333,3 +333,11 @@ The authorized default is enabled in `70a8b18e1`, with ten passing flag tests;
 the reader phase's final aggregate checks are still pending. Smoke Phases 3–4
 continue to wait for accepted reader Phase 5 rather than inheriting its partial
 rollout acceptance.
+
+At `a394b1310`, normal no-override S89/S90/S91 pass 3/3; the actual compiled-FALSE
+S90 variant passes 1/1 with its override removed before reload and exact retained
+intent/ACK/newer-draft behavior. A fresh normal rebuild matches all 503 emitted
+file hashes. [Profile proof](findings.md#reader-phase-5-default-and-fallback-build-proof)
+records the environments and limits. Reader Phase 5 now has only its final
+aggregate checks and acceptance/archive outstanding; this smoke workstream still
+resumes Phase 3 after that accepted handoff.

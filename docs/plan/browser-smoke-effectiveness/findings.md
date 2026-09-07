@@ -1277,3 +1277,52 @@ full cohort. S44 and S77 retain their conservative contracts, with connected
 recovery separately owned by S80 and S91. No second-reader, restart, replay,
 draft or sidebar fault result accepts the pending default/FALSE rollout builds
 or the reader phase's final aggregate gates.
+
+## Reader Phase 5 Default and Fallback Build Proof
+
+Frozen source `a394b13101190c367c254e4cdcd3af6628b4f4e1` includes the default
+change in `70a8b18e1`; no test, fixture or production source changes occur between
+these profiles. The normal build unsets both rollout environment selectors and
+passes S89/S90/S91 (3/3, Playwright 18.8s). Initial overrides are null in the two
+rollout cases and S91's exact null assertion passes. The FALSE build runs only
+S90 with its pre-existing compiled-fallback selector (1/1, 5.6s). Its initial
+writer/Reader setup is deliberately enabled, then the writer removes that
+override before actual reload. The resumed conservative writer has
+`managed=false`, its original identity/lineage/epoch one, a same-ID/body replay,
+one ACK, one SQL edit/event/receipt, empty native queues and the newer visible
+draft. The Reader remains in its original document with no forbidden request.
+
+| Profile            | Build process | Browser result                                                               | 503-file emitted catalog digest                                    |
+| ------------------ | ------------- | ---------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| Normal, flag unset | 15.55s        | S89/S90/S91: 3 passed                                                        | `1ec95446d85ccab71472476e4378591a89895e66a5cdddc0a042b1b45e9901df` |
+| Explicit FALSE     | 13.19s        | S90 compiled fallback: 1 passed                                              | `397b0f5d1e9eceeb481fef50aa1f722b3bb5bc28d0cc44e3e2065c380fb5869d` |
+| Restored normal    | 14.30s        | No extra browser repetition; every emitted file hash matches original normal | `1ec95446d85ccab71472476e4378591a89895e66a5cdddc0a042b1b45e9901df` |
+
+The profile checkout freezes 2,473 inputs with digest
+`6d51d036d5ad18f120d25d9096b431cdf29de41e40957ec98b41abea373c9e30`.
+Normal/FALSE capture 702/343 successful script URL receipts and zero page errors;
+all source inputs stay unchanged. The catalog digest summarizes captured emitted
+file hashes, not downloaded network-body hashes. The native FALSE row has a
+12-byte IV and 220-byte ciphertext before reload; sequence one/two drafts are
+created through actual composer input. The post-reload command permits only
+baseRevision rebasing and ACK changes only the original receipt's acknowledged
+field. No fixture writes the expected pending row or draft on behalf of the UI.
+
+Reproduce at that source with the same runtime/dependencies and detached-checkout
+rules as the preceding fault campaign. Use the S89/S90/S91 exact titles from its
+table for the normal three-case selection. The commands below show equivalent
+unique title prefixes; no browser case or assertion changes between profiles.
+
+```sh
+env -u VITE_FAST_BOOTSTRAP_OBSERVER -u RISU_READER_ROLLOUT_COMPILED_FALLBACK pnpm --config.verify-deps-before-run=false build:smoke
+env -u VITE_FAST_BOOTSTRAP_OBSERVER -u RISU_READER_ROLLOUT_COMPILED_FALLBACK pnpm --config.verify-deps-before-run=false exec playwright test --config playwright.fastify-smoke.config.ts server/fastify/browser-smoke/connectedReaderRollout.spec.ts server/fastify/browser-smoke/visibleStateRecovery.spec.ts --grep 'default connected Reader reconnects|conservative fallback reload replays|connected-default import recovery preserves' --workers=1 --trace=on
+VITE_FAST_BOOTSTRAP_OBSERVER=FALSE pnpm --config.verify-deps-before-run=false build:smoke
+VITE_FAST_BOOTSTRAP_OBSERVER=FALSE RISU_READER_ROLLOUT_COMPILED_FALLBACK=TRUE pnpm --config.verify-deps-before-run=false exec playwright test --config playwright.fastify-smoke.config.ts server/fastify/browser-smoke/connectedReaderRollout.spec.ts --grep 'conservative fallback reload replays' --workers=1 --trace=on
+env -u VITE_FAST_BOOTSTRAP_OBSERVER -u RISU_READER_ROLLOUT_COMPILED_FALLBACK pnpm --config.verify-deps-before-run=false build:smoke
+```
+
+The final command restores the documented normal configuration; compare the
+complete emitted file hash mapping with the first build. The final phase's
+aggregate checks separately build and execute the normal full suite. The
+mixed-client policy still relies on the retained conservative-handshake path,
+not an unchanged historical bundle gaining the new Reader interface.

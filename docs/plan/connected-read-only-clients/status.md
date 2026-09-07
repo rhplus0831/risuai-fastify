@@ -12,7 +12,8 @@ Updated: 2026-09-08
   final combined acceptance, default activation, conservative fallback and guides.
   The corrected 91-case enabled baseline, five isolated production faults and
   restored controls passed. The authorized default is enabled in `70a8b18e1`;
-  normal/FALSE builds and final aggregate gates remain pending.
+  normal and actual FALSE builds also pass. Only final aggregate gates and
+  phase acceptance/archive remain pending.
 - Production behavior: normal builds enable connected readers. Exact build-time
   `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the conservative writer fallback.
   Drafts and pending intent keep their originating local scope.
@@ -1068,3 +1069,37 @@ Original broad audit dates are retained with targeted source-check dates.
 The normal no-override build, actual compiled-FALSE fallback, and final
 `pnpm test:agent` / phase-ending `pnpm test:all` are still pending. Phase 5 is
 not accepted and smoke Phases 3–4 remain pending until those checks pass.
+
+### Normal and Compiled-FALSE Rollout Verification
+
+At `a394b1310`, a separate clean checkout freezes 2,473 inputs while main receives
+only evidence-document updates. With `VITE_FAST_BOOTSTRAP_OBSERVER` and
+`RISU_READER_ROLLOUT_COMPILED_FALLBACK` both unset, the fresh normal build passes
+and S89/S90/S91 pass **3/3 in 18.8s**. S89/S90 capture null initial browser
+overrides; S91's null-override assertion and same-document sidebar recovery pass.
+This establishes ordinary default behavior rather than relying on an enabled
+smoke override.
+
+A separate build with `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` then passes S90's
+`RISU_READER_ROLLOUT_COMPILED_FALLBACK=TRUE` variant **1/1 in 5.6s**. Only initial
+fixture establishment uses enabled overrides. Before the actual writer reload,
+its override is removed; the new document is an unmanaged conservative writer
+with the same identity, lineage and epoch one. The native encrypted mutation
+replays with its same ID and semantic body, allowing only baseRevision rebasing.
+One ACK settles the original receipt; SQL contains one edit/event/receipt and
+no unsent draft text. The newer sequence-two composer draft is visibly restored,
+queues empty, and the still-connected Reader makes no forbidden call.
+
+Build-process durations are 15.55s normal, 13.19s FALSE and 14.30s restored
+normal. Both catalogs have 503 files; FALSE differs as expected, while every
+restored normal file hash exactly matches the first normal build. The latter is
+an emission comparison, not an extra browser run. Normal/FALSE audits capture
+702/343 successful script URL receipts, with no page errors and unchanged lab
+inputs. Source and [reproduction commands](../browser-smoke-effectiveness/findings.md#reader-phase-5-default-and-fallback-build-proof)
+are recorded in the smoke findings; temporary artifacts are
+`/tmp/reader-phase5-default-verification-tfvklw0_`.
+
+Implementation, guide review, fault controls, normal rollout and conservative
+fallback are complete. The final `pnpm test:agent` and phase-ending
+`pnpm test:all` now own the remaining acceptance evidence. No required phase
+check has been transferred to the user.

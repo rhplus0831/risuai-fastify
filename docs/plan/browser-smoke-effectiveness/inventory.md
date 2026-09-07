@@ -607,3 +607,11 @@ include exact second-Reader, restart, intent replay, draft and sidebar oracles.
 `70a8b18e1` now enables connected readers by default; normal/FALSE build checks
 and the reader phase's final aggregate gates remain pending. This is not the
 Stage 3 handoff or acceptance of the still-pending remaining scenario reviews.
+
+Normal and actual compiled-FALSE verification now pass at `a394b1310`:
+S89/S90/S91 use null initial overrides in the normal build; the FALSE S90 variant
+removes the override before real conservative reload and retains exact command,
+receipt and newer-draft behavior. The restored normal emission matches all 503
+original files. [Build proof](findings.md#reader-phase-5-default-and-fallback-build-proof)
+retains the command/environment and fixture limits. Final reader aggregate gates
+and the subsequent Stage 3 scenario review remain pending.
