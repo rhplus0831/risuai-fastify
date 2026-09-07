@@ -74,6 +74,7 @@ import {
   alertNormal,
   alertPluginConfirm,
   alertProgress,
+  alertRequiredSelect,
   alertSelect,
   alertSelectChar,
   alertToast,
@@ -496,6 +497,144 @@ describe('select results', () => {
 
     expect(resolveAlertSelection(secondOwner, null)).toBe(true)
     await expect(second).resolves.toBeNull()
+  })
+})
+
+describe('cancellable required selections', () => {
+  it('closes only its active selection on abort and advances the queue without answering the next prompt', async () => {
+    const controller = new AbortController()
+    const selection = alertRequiredSelect(['Use this device', 'Keep reading'], 'Switch write access?', 'Write access', {
+      signal: controller.signal,
+    })
+    const selectionOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    let nextSettled = false
+    const next = alertConfirm('Unrelated confirmation').then((result) => {
+      nextSettled = true
+      return result
+    })
+
+    controller.abort()
+
+    await expect(selection).resolves.toBe('')
+    expect(nextSettled).toBe(false)
+    expect(alertTestState.alertStoreValue).toMatchObject({ type: 'ask', msg: 'Unrelated confirmation' })
+    const nextOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    expect(nextOwner).not.toBe(selectionOwner)
+    expect(resolveAlertSelection(selectionOwner, 0)).toBe(false)
+    expect(alertTestState.alertStoreValue.dialogOwner).toBe(nextOwner)
+    expect(resolveAlertConfirmation(nextOwner, true)).toBe(true)
+    await expect(next).resolves.toBe(true)
+  })
+
+  it('removes only its queued selection when aborted behind an unrelated prompt', async () => {
+    const current = alertInput('Keep editing this input')
+    const currentOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    const controller = new AbortController()
+    const selection = alertRequiredSelect(['Switch', 'Stay'], 'Queued switch', 'Write access', {
+      signal: controller.signal,
+    })
+    const next = alertSelect(['First option', 'Second option'], 'Continue after input')
+    alertTestState.alertStoreSet.mockClear()
+
+    controller.abort()
+
+    await expect(selection).resolves.toBe('')
+    expect(alertTestState.alertStoreSet).not.toHaveBeenCalled()
+    expect(alertTestState.alertStoreValue).toMatchObject({
+      type: 'input',
+      msg: 'Keep editing this input',
+      dialogOwner: currentOwner,
+    })
+    expect(resolveAlertInput(currentOwner, 'Preserved input')).toBe(true)
+    await expect(current).resolves.toBe('Preserved input')
+    expect(alertTestState.alertStoreValue).toMatchObject({
+      type: 'select',
+      msg: '__DISPLAY__Continue after input||First option||Second option',
+    })
+    const nextOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    expect(resolveAlertSelection(nextOwner, 1)).toBe(true)
+    await expect(next).resolves.toBe('1')
+  })
+
+  it('detaches cancellation on normal settlement before the next prompt can be affected', async () => {
+    const controller = new AbortController()
+    const addListener = vi.spyOn(controller.signal, 'addEventListener')
+    const removeListener = vi.spyOn(controller.signal, 'removeEventListener')
+    try {
+      const selection = alertRequiredSelect(['Switch', 'Stay'], 'Switch?', 'Write access', {
+        signal: controller.signal,
+      })
+      const selectionOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+      const next = alertRequiredSelect(['Continue', 'Stop'], 'Later choice', 'Another task')
+      const abortListener = addListener.mock.calls.find(([event]) => event === 'abort')?.[1]
+
+      expect(resolveAlertSelection(selectionOwner, 1)).toBe(true)
+      expect(removeListener).toHaveBeenCalledWith('abort', abortListener)
+      const nextOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+      alertTestState.alertStoreSet.mockClear()
+      controller.abort()
+
+      await expect(selection).resolves.toBe('1')
+      expect(alertTestState.alertStoreSet).not.toHaveBeenCalled()
+      expect(alertTestState.alertStoreValue).toMatchObject({
+        type: 'select',
+        msg: '__DISPLAY__Later choice||Continue||Stop',
+        dialogOwner: nextOwner,
+        dismissible: false,
+      })
+      expect(resolveAlertSelection(nextOwner, 0)).toBe(true)
+      await expect(next).resolves.toBe('0')
+    } finally {
+      addListener.mockRestore()
+      removeListener.mockRestore()
+    }
+  })
+
+  it('enqueues nothing for an already-aborted signal and preserves the active notice', async () => {
+    alertNormal('Read this notice')
+    const controller = new AbortController()
+    controller.abort()
+    alertTestState.alertStoreSet.mockClear()
+
+    await expect(
+      alertRequiredSelect(['Switch', 'Stay'], 'Obsolete switch', 'Write access', { signal: controller.signal }),
+    ).resolves.toBe('')
+    expect(alertTestState.alertStoreSet).not.toHaveBeenCalled()
+    expect(alertTestState.alertStoreValue).toEqual({ type: 'normal', msg: 'Read this notice' })
+
+    const next = alertConfirm('After the notice')
+    alertClear()
+    await vi.waitFor(() =>
+      expect(alertTestState.alertStoreValue).toMatchObject({ type: 'ask', msg: 'After the notice' }),
+    )
+    expect(resolveAlertConfirmation(alertTestState.alertStoreValue.dialogOwner as symbol, true)).toBe(true)
+    await expect(next).resolves.toBe(true)
+  })
+
+  it('preserves required-selection metadata, index validation, and shared FIFO order without a signal', async () => {
+    const first = alertConfirm('First confirmation')
+    const firstOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    const selection = alertRequiredSelect(['Switch', 'Stay'], 'Switch write access?', 'Write access')
+    const last = alertInput('Last input')
+
+    expect(alertTestState.alertStoreValue).toMatchObject({ type: 'ask', msg: 'First confirmation' })
+    expect(resolveAlertConfirmation(firstOwner, true)).toBe(true)
+    await expect(first).resolves.toBe(true)
+    expect(alertTestState.alertStoreValue).toMatchObject({
+      type: 'select',
+      msg: '__DISPLAY__Switch write access?||Switch||Stay',
+      title: 'Write access',
+      dismissible: false,
+    })
+    const selectionOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    expect(resolveAlertSelection(selectionOwner, 2)).toBe(false)
+    expect(alertTestState.alertStoreValue.dialogOwner).toBe(selectionOwner)
+    expect(resolveAlertSelection(selectionOwner, 0)).toBe(true)
+    await expect(selection).resolves.toBe('0')
+    expect(alertTestState.alertStoreValue).toMatchObject({ type: 'input', msg: 'Last input' })
+    const lastOwner = alertTestState.alertStoreValue.dialogOwner as symbol
+    expect(resolveAlertInput(lastOwner, 'Last result')).toBe(true)
+    await expect(last).resolves.toBe('Last result')
   })
 })
 

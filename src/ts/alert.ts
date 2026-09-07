@@ -267,9 +267,42 @@ function ensureResultDialogStoreSubscription(): void {
   alertStoreImported.subscribe(handleResultDialogStoreValue)
 }
 
-function queueResultDialog<T>(createRequest: (resolve: (value: T) => void) => ResultDialogRequest): Promise<T> {
+function cancelResultDialog(request: ResultDialogRequest): void {
+  const queuedIndex = resultDialogQueue.indexOf(request)
+  if (queuedIndex >= 0) {
+    resultDialogQueue.splice(queuedIndex, 1)
+    settleResultDialog(request, false, '')
+    return
+  }
+
+  const current = get(alertStoreImported)
+  if (
+    activeResultDialog === request &&
+    current.dialogOwner === request.owner &&
+    current.type === resultDialogType(request)
+  ) {
+    alertStoreImported.set({ type: 'none', msg: '', dialogOwner: request.owner })
+  }
+}
+
+function queueResultDialog<T>(
+  createRequest: (resolve: (value: T) => void) => ResultDialogRequest,
+  signal?: AbortSignal,
+): Promise<T> {
   ensureResultDialogStoreSubscription()
-  const promise = new Promise<T>((resolve) => resultDialogQueue.push(createRequest(resolve)))
+  const promise = new Promise<T>((resolve) => {
+    const abort = () => cancelResultDialog(request)
+    const request = createRequest((value) => {
+      signal?.removeEventListener('abort', abort)
+      resolve(value)
+    })
+    if (signal?.aborted) {
+      settleResultDialog(request, false, '')
+      return
+    }
+    resultDialogQueue.push(request)
+    signal?.addEventListener('abort', abort, { once: true })
+  })
   showNextResultDialog()
   return promise
 }
@@ -287,17 +320,21 @@ function queueConfirmation(type: ConfirmationAlertType, msg: string): Promise<bo
 function queueSelection(
   options: string[],
   display?: string,
-  settings: { dismissible?: boolean; title?: string } = {},
+  settings: { dismissible?: boolean; title?: string; signal?: AbortSignal } = {},
 ): Promise<string | null> {
-  return queueResultDialog<string | null>((resolve) => ({
-    kind: 'selection',
-    owner: Symbol('alert-dialog'),
-    options: [...options],
-    display,
-    dismissible: settings.dismissible !== false,
-    ...(settings.title === undefined ? {} : { title: settings.title }),
-    resolve,
-  }))
+  if (settings.signal?.aborted) return Promise.resolve(null)
+  return queueResultDialog<string | null>(
+    (resolve) => ({
+      kind: 'selection',
+      owner: Symbol('alert-dialog'),
+      options: [...options],
+      display,
+      dismissible: settings.dismissible !== false,
+      ...(settings.title === undefined ? {} : { title: settings.title }),
+      resolve,
+    }),
+    settings.signal,
+  )
 }
 
 function queueInput(msg: string, datalist?: [string, string][], defaultValue?: string): Promise<string> {
@@ -503,8 +540,13 @@ export async function alertSelect(msg: string[], display?: string): Promise<stri
   return queueSelection(msg, display)
 }
 
-export async function alertRequiredSelect(msg: string[], display: string, title: string): Promise<string> {
-  return (await queueSelection(msg, display, { dismissible: false, title })) ?? ''
+export async function alertRequiredSelect(
+  msg: string[],
+  display: string,
+  title: string,
+  options: { signal?: AbortSignal } = {},
+): Promise<string> {
+  return (await queueSelection(msg, display, { dismissible: false, title, signal: options.signal })) ?? ''
 }
 
 export async function alertErrorWait(msg: string) {
