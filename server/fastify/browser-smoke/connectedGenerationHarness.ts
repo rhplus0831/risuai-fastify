@@ -25,6 +25,8 @@ export const OTHER_ROUTE = `/character/${CHARACTER}/${OTHER_CHAT}`
 export const REQUEST = 'One accepted request from the current writer.'
 export const PARTIAL = 'Connected reader partial'
 export const REPLY = `${PARTIAL} and canonical completed reply.`
+export const IGP_SUFFIX = ' [One durable IGP effect]'
+export const IGP_REPLY = `${REPLY}${IGP_SUFFIX}`
 const SESSION_KEY = 'risu:active-writer-session-id'
 const GENERATION_SETTINGS = {
   configured: true,
@@ -35,7 +37,7 @@ const GENERATION_SETTINGS = {
   sidebarToggles: {},
 }
 
-function fixture(): Record<string, unknown> {
+function fixture(enabledIgp = false): Record<string, unknown> {
   const database = smallFastBootstrapFixture()
   const character = (database.characters as Array<Record<string, unknown>>)[0]!
   return {
@@ -76,14 +78,16 @@ function fixture(): Record<string, unknown> {
     maxContext: 100_000,
     maxResponse: 100,
     aiModel: 'echo_model',
+    subModel: 'echo_model',
+    modelRoles: { emotion: 'echo_model' },
     useStreaming: true,
     removeIncompleteResponse: false,
     requestRetrys: 0,
-    echoMessage: 'unused deterministic echo',
+    echoMessage: enabledIgp ? IGP_SUFFIX : 'unused deterministic echo',
     echoDelay: 0,
-    // The real ledger still contains all seven effect kinds. Their precise skip
-    // receipts prove completion ownership without external providers or plugins.
-    igpPrompt: '',
+    // The queued-finalization journey executes a real scoped IGP message update
+    // through the built-in local echo provider; other journeys disable effects.
+    igpPrompt: enabledIgp ? '<|im_start|>system<|im_sep|>Return the deterministic fixture suffix.<|im_end|>' : '',
     notification: false,
     ttsAuto: false,
     playMessage: false,
@@ -171,6 +175,11 @@ export function readGenerationTruth(dataDir: string) {
       persistedEvents: db
         .prepare(
           "SELECT revision, type, id, parent_id FROM command_events WHERE type = 'generation.persisted' ORDER BY revision",
+        )
+        .all(),
+      messageUpdateEvents: db
+        .prepare(
+          "SELECT revision, type, id, parent_id, origin_writer_session_id FROM command_events WHERE type = 'message.updated' ORDER BY revision",
         )
         .all(),
     }
@@ -283,6 +292,7 @@ interface FetchRecord {
   auditActive: boolean
   session: BrowserSmokeClientSessionSnapshot | null
   status?: number
+  body: Record<string, unknown> | null
 }
 export interface GenerationClient {
   name: string
@@ -307,10 +317,10 @@ export interface GenerationPair {
 
 export async function createGenerationPair(
   browser: Browser,
-  options: { holdAfterAbort?: boolean; finalizationFailure?: boolean } = {},
+  options: { holdAfterAbort?: boolean; finalizationFailure?: boolean; enabledIgp?: boolean } = {},
 ): Promise<GenerationPair> {
   const provider = new HeldReaderGenerationProvider(options.holdAfterAbort)
-  const harness = await startFastBootstrapHarness(fixture(), {
+  const harness = await startFastBootstrapHarness(fixture(options.enabledIgp), {
     temporaryDirectoryPrefix: 'risu-connected-reader-generation-',
     databaseSeedMode: 'unowned-migration',
     generationChat: {
@@ -378,6 +388,17 @@ export async function addGenerationClient(
       const url = new URL(input instanceof Request ? input.url : String(input), location.href)
       const snapshot = window.__RISU_FASTIFY_BROWSER_SMOKE__?.getStartupCoordinatorSnapshot()
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+      let body: Record<string, unknown> | null = null
+      if (
+        typeof init?.body === 'string' &&
+        (url.pathname === '/api/v1/generate/completion' ||
+          /^\/api\/v1\/commands\/messages\/[^/]+$/u.test(url.pathname) ||
+          /^\/api\/v1\/generation-effects\/[^/]+\/igp\/(?:claims|receipt)$/u.test(url.pathname))
+      ) {
+        try {
+          body = JSON.parse(init.body) as Record<string, unknown>
+        } catch {}
+      }
       const record = {
         id: ++requestId,
         at: performance.timeOrigin + performance.now(),
@@ -393,6 +414,7 @@ export async function addGenerationClient(
         revoked: snapshot?.writerCapabilitiesRevoked ?? null,
         auditActive: observedWindow.__connectedGenerationAuditActive === true,
         session: window.__RISU_FASTIFY_BROWSER_SMOKE__?.getClientSessionSnapshot() ?? null,
+        body,
       }
       const observed = url.origin === location.origin && url.pathname.startsWith('/api/')
       if (observed) void observedWindow.__recordConnectedGenerationFetch(record).catch(() => undefined)
@@ -818,6 +840,7 @@ export async function expectEffectReceipts(
   pair: GenerationPair,
   operationId: string,
   delivery: 'live_terminal' | 'late_recovery',
+  enabledIgp = false,
 ): Promise<EffectRow[]> {
   // All seven rows are mandatory even with disabled features. In particular,
   // asserting only no duplicate keys on an empty ledger would be vacuous.
@@ -832,8 +855,8 @@ export async function expectEffectReceipts(
   ].map(([effect_kind, effect_class, reason]) => ({
     effect_kind,
     effect_class,
-    status: 'skipped',
-    reason,
+    status: effect_kind === 'igp' && enabledIgp ? 'completed' : 'skipped',
+    reason: effect_kind === 'igp' && enabledIgp ? null : reason,
     delivery: effect_kind === 'generated_translation' ? 'server' : delivery,
   }))
   await expect

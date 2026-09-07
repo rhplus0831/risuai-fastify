@@ -4,6 +4,8 @@ import {
   OTHER_CHAT,
   PARTIAL,
   REPLY,
+  IGP_REPLY,
+  IGP_SUFFIX,
   addGenerationClient,
   bootGenerationPair,
   createGenerationPair,
@@ -197,7 +199,7 @@ test('writer transfer while a real finalization journal is queued commits one re
   browser,
 }, testInfo) => {
   test.setTimeout(120_000)
-  const pair = await createGenerationPair(browser, { finalizationFailure: true })
+  const pair = await createGenerationPair(browser, { finalizationFailure: true, enabledIgp: true })
   try {
     await bootGenerationPair(pair)
     const { operation, attempt } = await startHeldGeneration(pair)
@@ -241,11 +243,71 @@ test('writer transfer while a real finalization journal is queued commits one re
     // The real journal and completed UI transfer are now independently proven.
     // Removing the failure lets the ordinary server retry worker commit it.
     setAssistantInsertFailure(pair.harness.dataDir, false)
-    await expectTerminalGeneration(pair, 'completed', REPLY, operation.operation_id, attempt.job_id)
-    const receipts = await expectEffectReceipts(pair, operation.operation_id, 'late_recovery')
+    const receipts = await expectEffectReceipts(pair, operation.operation_id, 'late_recovery', true)
+    const terminal = await expectTerminalGeneration(
+      pair,
+      'completed',
+      IGP_REPLY,
+      operation.operation_id,
+      attempt.job_id,
+    )
+    const resultId = terminal.operations[0]!.result_message_id!
+    const resultText = terminal.messages.find((message) => message.uid === resultId)!.data
+    expect(resultText.split(IGP_SUFFIX)).toHaveLength(2)
+    expect(terminal.messageUpdateEvents).toMatchObject([
+      { type: 'message.updated', id: resultId, parent_id: CHAT, origin_writer_session_id: pair.b.sessionId },
+    ])
+    expect(terminal.messageUpdateEvents).toHaveLength(1)
+    const igp = receipts.find((effect) => effect.effect_kind === 'igp')!
+    expect(igp).toMatchObject({ status: 'completed', delivery: 'late_recovery', reason: null })
+    const completion = pair.fetches.filter(
+      (record) => record.method === 'POST' && record.path === '/api/v1/generate/completion',
+    )
+    const update = pair.fetches.filter(
+      (record) => record.method === 'PATCH' && record.path === `/api/v1/commands/messages/${resultId}`,
+    )
+    const claim = pair.fetches.filter(
+      (record) => record.method === 'POST' && record.path === `/api/v1/generation-effects/${attempt.job_id}/igp/claims`,
+    )
+    const receipt = pair.fetches.filter(
+      (record) => record.method === 'PUT' && record.path === `/api/v1/generation-effects/${attempt.job_id}/igp/receipt`,
+    )
+    for (const calls of [completion, update, claim, receipt]) {
+      expect(calls).toHaveLength(1)
+      expect(calls[0]).toMatchObject({
+        client: 'B',
+        canMutate: true,
+        session: {
+          lifecycle: 'writing',
+          sessionId: pair.b.sessionId,
+          writer: { sessionId: pair.b.sessionId, epoch: 2 },
+        },
+      })
+    }
+    expect(completion[0]).toMatchObject({ status: 200, body: { mode: 'emotion' } })
+    expect(update[0]).toMatchObject({
+      status: 200,
+      writerSession: pair.b.sessionId,
+      body: {
+        patch: { data: IGP_REPLY },
+        expectedData: REPLY,
+        expectedChatId: CHAT,
+        expectedGenerationId: attempt.job_id,
+      },
+    })
+    expect(claim[0]).toMatchObject({
+      status: 201,
+      writerSession: pair.b.sessionId,
+      body: { delivery: 'late_recovery', messageId: resultId },
+    })
+    expect(receipt[0]).toMatchObject({
+      status: 200,
+      writerSession: pair.b.sessionId,
+      body: { claimId: igp.claim_id, status: 'completed' },
+    })
     await pair.a.page.locator('[data-reader-refresh]').click()
     await expectGenerationReader(pair.a)
-    await expectTerminalGeneration(pair, 'completed', REPLY, operation.operation_id, attempt.job_id)
+    await expectTerminalGeneration(pair, 'completed', IGP_REPLY, operation.operation_id, attempt.job_id)
     expect(readGenerationTruth(pair.harness.dataDir).effects).toEqual(receipts)
     expect(
       pair.fetches.filter((record) => record.method === 'POST' && record.path === '/api/v1/generation-operations'),
