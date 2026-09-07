@@ -11,4 +11,4 @@ records their execution order and handoffs; the smoke status owns remaining work
 
 | Plan                        | State                                    | Entry point                                                                                            |
 | --------------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| Browser smoke effectiveness | Phases 0–2 accepted; Phase 3 in progress | [Plan](browser-smoke-effectiveness/PLAN.md), [execution status](browser-smoke-effectiveness/status.md) |
+| Browser smoke effectiveness | Phases 0–3 accepted; Phase 4 in progress | [Plan](browser-smoke-effectiveness/PLAN.md), [execution status](browser-smoke-effectiveness/status.md) |

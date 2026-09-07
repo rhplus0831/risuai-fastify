@@ -44,7 +44,7 @@ All spec names below resolve under `server/fastify/browser-smoke`.
 | `startupRecoveryIntegrationMatrix.spec.ts` |             7 | 2: stale-response recovery                | Retained/strengthened; complete scenario review        |
 | `transcriptResidency.spec.ts`              |            12 | 2: transcript; 3: remaining interactions  | Retained/strengthened; complete scenario review        |
 | `visibleStateRecovery.spec.ts`             |             4 | 2: visible/durable recovery               | Retained/strengthened; complete scenario review        |
-| **Total**                                  |        **92** |                                           | **All scenarios reviewed; final phase gate pending**   |
+| **Total**                                  |        **92** |                                           | **All scenarios reviewed; Phase 3 accepted**           |
 
 This file-level table is the current universe. The scenario records below are
 keyed by spec plus full test title and meaningful subjourney/parameter labels. A whole
@@ -743,3 +743,9 @@ selection-owner fault. The fault leaves ready/local target and successful native
 selection response intact while SQL remains old; the new guard independently
 stops setup. All current scenario/control owners are reviewed and repaired or
 accurately reclassified. The repeated final Phase 3 full gate remains separate.
+
+Phase 3 is [accepted at `d5b5e5ed7`](status.md#phase-3-acceptance-2026-09-08):
+all thirteen full-suite lanes pass, including 92/92 browser cases. BSE-007's
+shared setup repair and named fault/restored proof are complete. No current
+scenario/control owner is pending or partial; Phase 4 retains its separate final
+verification and archive requirements.

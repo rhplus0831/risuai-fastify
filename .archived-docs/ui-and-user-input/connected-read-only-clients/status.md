@@ -1261,3 +1261,19 @@ historical faults and source limits. The receiving smoke status resumes Stage 3:
 reconcile remaining scenario/support dispositions, the two source-backed title
 corrections, affected critical browser evidence and its own required phase gates.
 Reader acceptance does not accept those unfinished smoke phases.
+
+## Smoke Phase 3 Maintenance — 2026-09-08
+
+The receiving smoke audit completes all remaining source dispositions and
+revalidates affected critical journeys. Its first full gate finds a fixture
+configuration write racing native chat selection, before generation/restart;
+no product wrong-target send is established. `ee04eacba` adds a read-only
+route/local/SQL/selection-intent precondition while preserving all eleven original
+lifecycle journeys and configuration retry logic. Both all-eleven controls and
+the named server selection-persistence fault qualify. The repeated smoke Phase 3
+full gate at `d5b5e5ed7` passes all thirteen lanes and 92/92 browser cases.
+
+This changes test setup only; Reader product acceptance and rollout/fallback
+contracts retain their original source and scope. The receiving
+[smoke status](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-3-acceptance-2026-09-08)
+records the failed run, verified repair and separate Phase 4 closeout requirements.

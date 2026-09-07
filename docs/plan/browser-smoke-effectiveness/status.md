@@ -4,35 +4,33 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: Smoke Phases 0–2 and all reader Phases 0–5 accepted; Stage 3 smoke
-  reconciliation and the remaining scenario review are active.
-- Current implementation: production through `a703b9d4b`, browser through
-  `60ac61bde`; reader final gates pass at clean `eb9673942` with 92/92 cases.
-- Current scope: Phase 3 review and the eight-case focused cohort are complete.
-  The S05 fixture race found by its first full gate now has a verified BSE-007
-  repair and all-eleven baseline/restored controls. The repeated required full
-  gate remains before Phase 3 acceptance.
-- Next action: finish Phase 3 and its required full gate, then execute Phase 4
-  verification, final findings and closeout.
-- Confirmed gaps: BSE-001–007 have their named verified repair/control evidence.
-  BSE-007 is a fixture ordering defect; no new production wrong-chat send is
-  established. Final Phase 3 aggregate acceptance remains pending.
-- Blockers: none. Reader default/FALSE rollout and archive are owned by the
-  [accepted reader handoff](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md#phase-5-acceptance-and-stage-3-handoff-2026-09-08).
-  Smoke Phase 3/4 acceptance remains separate.
+- State: Smoke Phases 0–3 and all reader Phases 0–5 accepted; Phase 4 final
+  verification and closeout are active.
+- Accepted implementation: production through `a703b9d4b`, browser through
+  `ee04eacba`; final Phase 3 full gate passes at clean `d5b5e5ed7`.
+- Review universe: all 92 cases/22 specs, twelve support files and four PNGs have
+  complete scenario/control dispositions; no pending or partial review owner.
+- Confirmed gaps: BSE-001–007 have verified named controls. Earlier failed runs
+  and unqualified candidate faults retain their explicit source limits.
+- Next action: complete final discovery/finding reconciliation, run Phase 4's
+  required `test:agent` and `test:all`, collect matching CI when available, then
+  archive the smoke bundle and coordination record.
+- Blockers: none. The [reader workstream](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
+  is accepted and archived; normal default and compiled-FALSE protection remain
+  verified at the recorded implementation.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State       | Next evidence required                                                                         |
-| --------------------------------------------------------------------------- | ----------- | ---------------------------------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted    | Evidence below; proceed to Phase 1                                                             |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted    | Shared controls, repair faults, agent and full-suite evidence below                            |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted    | Four contract faults, restored browsers and phase gates below                                  |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | In progress | Final scenario/control dispositions, focused critical browser evidence and required full gate. |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Pending     | Final discovery, focused/aggregate/full-browser evidence, residuals                            |
+| Phase                                                                       | State       | Next evidence required                                                                          |
+| --------------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted    | Evidence below; proceed to Phase 1                                                              |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted    | Shared controls, repair faults, agent and full-suite evidence below                             |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted    | Four contract faults, restored browsers and phase gates below                                   |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Accepted    | All scenario/control dispositions, qualified BSE-007 repair and all 13 full-suite lanes passed. |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | In progress | Final discovery/findings, required agent and full gates, CI availability and archive.           |
 
 ## Verification Ledger
 
@@ -529,3 +527,29 @@ page errors. Current guides describe the read-only native-selection setup guard;
 original tests and configuration retry are unchanged. BSE-007 has no remaining
 focused repair work. The required `pnpm test:all` is repeated at the final test/
 documentation candidate; the failed `f430dc3a1` run remains recorded.
+
+## Phase 3 Acceptance — 2026-09-08
+
+**Phase 3 is accepted at `d5b5e5ed7`.** The repeated implementing-agent
+`pnpm test:all` passes all thirteen lanes in **6m 20.1s**, including **92/92
+browser cases**; its browser lane takes 3m 29.9s with a fresh current build.
+The previously failing S05 passes in 3.5s, S22 in 45.9s, and all original
+send/reload/retry/Stop/effect, reader and remaining scenario oracles pass.
+Types, topology, current docs, 8,842 ordinary frontend tests, 241 UI tests,
+formatting, 18 current compatibility cases, 4,228 server tests, the selected
+Realm scale case and six performance cases pass. Three existing frontend and
+two server skips remain; the targeted scale selection excludes its other 29
+cases. Svelte checking reports zero errors/warnings.
+
+All scenario/subjourney/control and conditional owners have complete dispositions.
+S38/S57 titles and current guides now match their actual narrow contracts.
+BSE-007's all-eleven baseline/restored consumers and qualified selection-owner
+fault close the fixture defect found by the first full gate. Root self-review,
+current docs (49), explicit active/archived plan/index validation (24), Prettier
+and whitespace checks pass. No required repair is deferred and no failed run
+has been relabeled as a passing result. The complete full log is
+`/tmp/smoke-phase3-final-test-all-restored.log`.
+
+Phase 4 now reconciles final discovery/findings and runs its own required agent
+and full gates. This acceptance supplies that prerequisite; it does not replace
+Phase 4's explicit final validation or archival actions.
