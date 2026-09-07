@@ -6060,6 +6060,111 @@ describe('explicit connected writer switching', () => {
     )
   })
 
+  it('settles the restored reader target when selection changes during writer startup hydration', async () => {
+    await startReader()
+    currentRoute.set({ kind: 'character', path: '/character/char-a/chat-a', chaId: 'char-a', chatId: 'chat-a' })
+    const selectedChat = deferred<void>()
+    hydrationApi.hydrateActiveChat.mockImplementationOnce(async () => {
+      const selectedIndex = get(selectedCharID)
+      await selectedChat.promise
+      // The real active-chat owner rejects readiness for a chat that stopped
+      // being selected while its message request was in flight.
+      return get(selectedCharID) === selectedIndex
+    })
+
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
+    expect(get(selectedCharID)).toBe(1)
+    expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
+
+    // Writer recovery restores the persisted B selection before App finishes
+    // applying this reader's retained A route.
+    selectedCharID.set(0)
+    selectedChat.resolve()
+
+    await expect(switching).resolves.toEqual({ status: 'promoted' })
+    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
+    expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
+    expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps generation gated for a prompt owner changed during writer startup hydration', async () => {
+    await startReader()
+    withTestDatabaseWrite(() => {
+      getDatabase().characters[1].chats[0].generationSettings = { promptPresetId: 'prompt-older' }
+    })
+    const olderPrompt = deferred<boolean>()
+    const newerPrompt = deferred<boolean>()
+    promptTemplateApi.ensure
+      .mockImplementationOnce(() => olderPrompt.promise)
+      .mockImplementationOnce(() => newerPrompt.promise)
+
+    const switching = promoteConnectedReader()
+    try {
+      await vi.waitFor(() => expect(promptTemplateApi.ensure).toHaveBeenCalledOnce())
+      expect(promptTemplateApi.ensure).toHaveBeenLastCalledWith({
+        applyProjection: false,
+        promptPresetId: 'prompt-older',
+        minimumRevision: 5,
+      })
+      withTestDatabaseWrite(() => {
+        getDatabase().characters[1].chats[0].generationSettings = { promptPresetId: 'prompt-newer' }
+      })
+      olderPrompt.resolve(true)
+
+      await vi.waitFor(() => expect(promptTemplateApi.ensure).toHaveBeenCalledTimes(2))
+      expect(promptTemplateApi.ensure).toHaveBeenLastCalledWith({
+        applyProjection: false,
+        promptPresetId: 'prompt-newer',
+        minimumRevision: 5,
+      })
+      expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
+      expect(runtimeApi.prepareOpenChatGenerationReattach).not.toHaveBeenCalled()
+      newerPrompt.resolve(true)
+
+      await expect(switching).resolves.toEqual({ status: 'promoted' })
+      expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
+      expect(runtimeApi.prepareOpenChatGenerationReattach).toHaveBeenCalledOnce()
+    } finally {
+      olderPrompt.resolve(true)
+      newerPrompt.resolve(true)
+      await switching
+    }
+  })
+
+  it('keeps a failed unchanged writer startup target gated without automatically retrying it', async () => {
+    await startReader()
+    hydrationApi.hydrateActiveChat.mockResolvedValueOnce(false)
+
+    await expect(promoteConnectedReader()).resolves.toEqual({ status: 'promoted' })
+
+    expect(getStartupCoordinatorSnapshot()).toMatchObject({
+      capabilities: { canMutate: true, canGenerate: false },
+      failures: {
+        canGenerate: expect.objectContaining({ failureCode: 'selected-chat-hydration-failed' }),
+      },
+    })
+    expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce()
+    expect(runtimeApi.prepareOpenChatGenerationReattach).not.toHaveBeenCalled()
+  })
+
+  it('does not retry a changed startup target after writer ownership is superseded', async () => {
+    await startReader()
+    const selectedChat = deferred<boolean>()
+    hydrationApi.hydrateActiveChat.mockImplementationOnce(() => selectedChat.promise)
+
+    const switching = promoteConnectedReader()
+    await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
+    selectedCharID.set(0)
+    newerWriter()
+    selectedChat.resolve(false)
+
+    await expect(switching).resolves.toEqual({ status: 'superseded' })
+    expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: false, canGenerate: false })
+    expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce()
+    expect(runtimeApi.prepareOpenChatGenerationReattach).not.toHaveBeenCalled()
+  })
+
   it('cancels without takeover, replay, or blocking a fresh reader subscription', async () => {
     await startReader()
     bootstrapApi.fetch.mockResolvedValueOnce({ status: 'active-writer-connected', error: 'active_writer_connected' })
