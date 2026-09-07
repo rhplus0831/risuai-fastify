@@ -24,8 +24,8 @@ export async function startFastBootstrapHarness(
   database: Record<string, unknown>,
   options: {
     temporaryDirectoryPrefix?: string
-    /** Import normally, migrate an unowned fixture, or leave application state uninitialized. */
-    databaseSeedMode?: 'writer-import' | 'unowned-migration' | 'empty'
+    /** Default to an unowned API import; explicit modes retain owned/migration/empty producers. */
+    databaseSeedMode?: 'unowned-import' | 'writer-import' | 'unowned-migration' | 'empty'
     generationChat?: BuildAppOptions['generationChat']
   } = {},
 ): Promise<FastBootstrapHarness> {
@@ -33,7 +33,8 @@ export async function startFastBootstrapHarness(
   const dataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), options.temporaryDirectoryPrefix ?? 'risu-fast-bootstrap-matrix-'),
   )
-  if (options.databaseSeedMode === 'unowned-migration') {
+  const databaseSeedMode = options.databaseSeedMode ?? 'unowned-import'
+  if (databaseSeedMode === 'unowned-migration') {
     fs.writeFileSync(
       path.join(dataDir, 'db.json'),
       JSON.stringify({ _version: 1, database: normalizeRisuSaveSnapshotDatabase(database), assets: [] }),
@@ -63,13 +64,13 @@ export async function startFastBootstrapHarness(
       throw new Error('Fast-bootstrap browser harness did not bind to a TCP port')
     }
     const assertion = await setupBrowserSmokeAuth(app)
-    if (options.databaseSeedMode === 'unowned-migration' || options.databaseSeedMode === 'empty') {
+    if (databaseSeedMode === 'unowned-migration' || databaseSeedMode === 'empty') {
       const db = new DatabaseSync(path.join(dataDir, 'risu.db'), { readOnly: true })
       try {
         expect(
           db.prepare('SELECT active_writer_session_id, writer_epoch FROM database_metadata WHERE id = 1').get(),
         ).toMatchObject({ active_writer_session_id: null, writer_epoch: 0 })
-        if (options.databaseSeedMode === 'unowned-migration') {
+        if (databaseSeedMode === 'unowned-migration') {
           expect(fs.existsSync(path.join(dataDir, 'db.json.migrated'))).toBe(true)
         } else {
           expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toBeUndefined()
@@ -95,7 +96,7 @@ export async function startFastBootstrapHarness(
         db.close()
       }
     } else {
-      await importFastBootstrapDatabase(app, assertion, database)
+      await importFastBootstrapDatabase(app, assertion, database, { mode: databaseSeedMode, dataDir })
     }
     return { app, assertion, baseUrl: `http://127.0.0.1:${address.port}`, dataDir }
   } catch (error) {
@@ -114,21 +115,51 @@ export async function importFastBootstrapDatabase(
   app: FastifyInstance,
   assertion: string,
   database: Record<string, unknown>,
+  options: { mode?: 'unowned-import' | 'writer-import'; dataDir?: string } = {},
 ): Promise<void> {
-  const writerSession = `fast-bootstrap-import-${randomUUID()}`
-  const registered = await app.inject({
-    method: 'GET',
-    url: '/api/v1/bootstrap',
-    headers: { 'risu-auth': assertion, 'risu-writer-session': writerSession },
-  })
-  expect(registered.statusCode).toBe(200)
+  // Authenticated imports are supported before the first writer is acquired.
+  // Keep that API producer without inventing a foreign owner for the browser.
+  // Re-seeding is allowed only while the harness is still actually unowned.
+  const writerSession = options.mode === 'writer-import' ? `fast-bootstrap-import-${randomUUID()}` : undefined
+  if (writerSession) {
+    const registered = await app.inject({
+      method: 'GET',
+      url: '/api/v1/bootstrap',
+      headers: { 'risu-auth': assertion, 'risu-writer-session': writerSession },
+    })
+    expect(registered.statusCode).toBe(200)
+  } else {
+    await expectUnownedImportFixture(app, assertion, options.dataDir)
+  }
   const imported = await app.inject({
     method: 'POST',
     url: '/api/v1/import/risusave',
-    headers: { 'risu-auth': assertion, 'risu-writer-session': writerSession },
+    headers: { 'risu-auth': assertion, ...(writerSession ? { 'risu-writer-session': writerSession } : {}) },
     payload: { database },
   })
   expect(imported.statusCode).toBe(200)
+  if (!writerSession) await expectUnownedImportFixture(app, assertion, options.dataDir)
+}
+
+async function expectUnownedImportFixture(app: FastifyInstance, assertion: string, dataDir?: string): Promise<void> {
+  const bootstrap = await app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: { 'risu-auth': assertion } })
+  expect(bootstrap.statusCode).toBe(200)
+  expect(bootstrap.json().writer, 'unowned fixture imports must not acquire or replace a writer').toEqual({
+    sessionId: null,
+    epoch: 0,
+  })
+  if (!dataDir) return
+  const db = new DatabaseSync(path.join(dataDir, 'risu.db'), { readOnly: true })
+  try {
+    expect(
+      db.prepare('SELECT active_writer_session_id, writer_epoch FROM database_metadata WHERE id = 1').get(),
+    ).toMatchObject({
+      active_writer_session_id: null,
+      writer_epoch: 0,
+    })
+  } finally {
+    db.close()
+  }
 }
 
 export async function setObserverShellMode(context: BrowserContext, mode: ObserverShellMode): Promise<void> {

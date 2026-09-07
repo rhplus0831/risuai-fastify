@@ -1,5 +1,4 @@
 import { expect, test, type Page, type Route } from '@playwright/test'
-import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -8,6 +7,7 @@ import { phase1LazyBoundarySources } from '../../../util/fast-bootstrap-boundari
 import { buildApp } from '../src/app.js'
 import { setupBrowserSmokeAuth } from './auth.js'
 import { browserSmokeEnglish } from './englishFixture.js'
+import { importFastBootstrapDatabase } from './fastBootstrapHarness.js'
 
 interface Harness {
   app: FastifyInstance
@@ -724,20 +724,7 @@ async function startHarness(): Promise<Harness> {
 }
 
 async function importDatabase(app: FastifyInstance, assertion: string, database: Record<string, unknown>) {
-  const writerSession = `phase1b-import-${randomUUID()}`
-  const registered = await app.inject({
-    method: 'GET',
-    url: '/api/v1/bootstrap',
-    headers: { 'risu-auth': assertion, 'risu-writer-session': writerSession },
-  })
-  expect(registered.statusCode).toBe(200)
-  const imported = await app.inject({
-    method: 'POST',
-    url: '/api/v1/import/risusave',
-    headers: { 'risu-auth': assertion, 'risu-writer-session': writerSession },
-    payload: { database },
-  })
-  expect(imported.statusCode).toBe(200)
+  await importFastBootstrapDatabase(app, assertion, database, { dataDir: harness.dataDir })
 }
 
 function lazyBoundaryDatabase(): Record<string, unknown> {

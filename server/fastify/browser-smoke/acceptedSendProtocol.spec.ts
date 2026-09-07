@@ -13,6 +13,7 @@ import type {
 import type { StreamJob } from '../src/streamJobs.js'
 import type { GenerationJobRegistry } from '../src/generationJobs.js'
 import { setupBrowserSmokeAuth } from './auth.js'
+import { importFastBootstrapDatabase } from './fastBootstrapHarness.js'
 
 interface ProviderPlan {
   chunks: string[]
@@ -732,7 +733,72 @@ test('queued finalization keeps a provisional row through reload and later settl
 
 async function bootChat(page: Page, chatId: string): Promise<void> {
   await page.goto(`${harness.baseUrl}/character/${CHARACTER_ID}/${chatId}`)
+  // This suite deliberately shares one server across independent cases. A new
+  // page must explicitly acquire its writer precondition from the prior case;
+  // the mid-stream/completed reloads and restart journeys above do not use this.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const hook = window.__RISU_FASTIFY_BROWSER_SMOKE__
+          if (!hook) return 'starting'
+          const session = hook.getClientSessionSnapshot()
+          if (
+            session.managed &&
+            session.lifecycle === 'reading' &&
+            session.authenticated &&
+            session.projectionReady &&
+            session.connection === 'live' &&
+            session.writer?.sessionId &&
+            session.writer.sessionId !== session.sessionId
+          )
+            return 'reader'
+          return hook.isLoaded() && (!session.managed || session.lifecycle === 'writing') ? 'loaded' : 'starting'
+        }),
+      { timeout: 15_000 },
+    )
+    .not.toBe('starting')
+  const session = await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())
+  if (
+    session.managed &&
+    session.lifecycle === 'reading' &&
+    session.writer?.sessionId &&
+    session.writer.sessionId !== session.sessionId
+  ) {
+    await page.getByRole('button', { name: 'Use this device', exact: true }).click()
+    const confirmation = page.getByRole('button', { name: 'Disconnect existing client', exact: true })
+    await expect
+      .poll(
+        async () => {
+          const current = await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())
+          return current.lifecycle === 'writing'
+            ? 'writer'
+            : (await confirmation.isVisible())
+              ? 'confirmation'
+              : 'promoting'
+        },
+        { timeout: 15_000 },
+      )
+      .not.toBe('promoting')
+    if (await confirmation.isVisible()) await confirmation.click()
+    await expect
+      .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().lifecycle), {
+        timeout: 15_000,
+      })
+      .toBe('writing')
+  }
   await waitForBrowserLoaded(page)
+  const writerHeaders = await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders())
+  const database = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+  try {
+    expect(database.prepare('SELECT active_writer_session_id FROM database_metadata WHERE id = 1').get()).toMatchObject(
+      {
+        active_writer_session_id: writerHeaders['risu-writer-session'],
+      },
+    )
+  } finally {
+    database.close()
+  }
   await expect(page.locator('.default-chat-screen')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByTestId('default-chat-composer')).toBeVisible()
   await ensureChatGenerationSettingsReady(page, chatId)
@@ -1229,11 +1295,5 @@ function lifecycleFixtureDatabase(): Record<string, unknown> {
 }
 
 async function importDatabase(app: FastifyInstance, auth: string, database: Record<string, unknown>): Promise<void> {
-  const imported = await app.inject({
-    method: 'POST',
-    url: '/api/v1/import/risusave',
-    headers: { 'risu-auth': auth },
-    payload: { database },
-  })
-  expect(imported.statusCode, imported.body).toBe(200)
+  await importFastBootstrapDatabase(app, auth, database, { dataDir: harness.dataDir })
 }

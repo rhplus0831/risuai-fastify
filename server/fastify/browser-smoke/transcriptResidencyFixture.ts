@@ -151,7 +151,7 @@ export async function startTranscriptResidencyHarness(messageCount: number): Pro
     const address = app.server.address()
     if (!address || typeof address === 'string') throw new Error('Residency harness did not bind a TCP port')
     const assertion = await setupBrowserSmokeAuth(app)
-    await importFastBootstrapDatabase(app, assertion, transcriptResidencyFixture(messageCount))
+    await importFastBootstrapDatabase(app, assertion, transcriptResidencyFixture(messageCount), { dataDir })
     return {
       app,
       assertion,

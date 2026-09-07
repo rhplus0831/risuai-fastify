@@ -1,11 +1,11 @@
 import { devices, expect, test, type Locator, type Page } from '@playwright/test'
-import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { buildApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
 import { setupBrowserSmokeAuth } from './auth.js'
+import { importFastBootstrapDatabase } from './fastBootstrapHarness.js'
 
 interface Harness {
   app: FastifyInstance
@@ -1298,22 +1298,7 @@ async function startHarness(): Promise<Harness> {
 }
 
 async function importDatabase(app: FastifyInstance, auth: string, database: Record<string, unknown>) {
-  // The import route is writer-guarded: once an earlier test's page has
-  // registered a writer session, a header-less inject is rejected with 423.
-  // Claim the lease the way a freshly booted tab would (bootstrap registers
-  // the requested writer session), then import under that same session.
-  const writerSession = `browser-smoke-import-${randomUUID()}`
-  const registered = await app.inject({
-    method: 'GET',
-    url: '/api/v1/bootstrap',
-    headers: { 'risu-auth': auth, 'risu-writer-session': writerSession },
-  })
-  expect(registered.statusCode).toBe(200)
-  const imported = await app.inject({
-    method: 'POST',
-    url: '/api/v1/import/risusave',
-    headers: { 'risu-auth': auth, 'risu-writer-session': writerSession },
-    payload: { database },
-  })
-  expect(imported.statusCode).toBe(200)
+  // Each test has a fresh server; these setup imports precede its first page
+  // navigation. In-test backup/Realm imports still use their actual UI/API flow.
+  await importFastBootstrapDatabase(app, auth, database, { dataDir: harness.dataDir })
 }
