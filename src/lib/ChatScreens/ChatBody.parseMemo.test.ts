@@ -556,6 +556,21 @@ describe('ChatBody content-keyed parse memo', () => {
     expect(stats.parseEntries).toBeLessThan(16)
   })
 
+  it('separates explicitly read-only parse entries from writer entries', async () => {
+    const memoModule = await import('./ChatBodyParseMemo')
+    const input = {
+      data: 'reader and writer source',
+      charArg: null,
+      owners: memoModule.createChatBodyParseOwnerReaders(),
+      mode: 'normal' as const,
+      chatID: 0,
+      cbsConditions: {},
+    }
+    expect(memoModule.getChatBodyParseMemoKey({ ...input, readOnly: true })).not.toBe(
+      memoModule.getChatBodyParseMemoKey({ ...input, readOnly: false }),
+    )
+  })
+
   it('includes both sentence paragraph preferences in parser memo keys with legacy fallbacks', async () => {
     seedDb()
     const memoModule = await import('./ChatBodyParseMemo')

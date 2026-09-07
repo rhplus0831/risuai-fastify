@@ -6,6 +6,13 @@
 <script lang="ts">
   import { getContext, onDestroy, untrack } from 'svelte'
   import {
+    canUseClientWriteAccess,
+    captureClientSessionGeneration,
+    clientSessionStore,
+    isClientSessionGenerationCurrent,
+  } from 'src/ts/clientSession'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+  import {
     ArrowLeft,
     ArrowLeftRightIcon,
     ArrowRight,
@@ -228,15 +235,18 @@
   // Mutable access is restricted to ready, uniquely identified character/chat
   // owners while command helpers retain durable mutation authority.
   function mutableChatOwnerRows(): readonly Character[] {
+    if (!canChatWrite()) return []
     return characterRowsForRead()
   }
 
   function mutableCharacterOwnerById(characterId: string): Character | undefined {
+    if (!canChatWrite()) return undefined
     if (!characterId || charactersResourceState.status !== 'ready') return undefined
     return getCharacterResourceOwner(characterId)
   }
 
   function mutableChatOwnerById(characterId: string, chatId: string): CharacterChatOwner | undefined {
+    if (!canChatWrite()) return undefined
     const readOwner = uniqueChatReadOwner(chatId)
     return readOwner?.character.chaId === characterId ? readOwner : undefined
   }
@@ -296,6 +306,7 @@
     generationStartedAt?: number
     generationStage?: number
     disabled?: boolean | 'allBefore'
+    readOnly?: boolean
     autoTranslateOnReady?: boolean
     onAutoTranslationEligibilityConsumed?: () => void
     onInitialDisplayParseStart?: (registration: symbol) => void
@@ -306,11 +317,13 @@
   }
 
   interface CapturedChatButtonTriggerTarget {
+    sessionGeneration: number
     snapshot: ChatButtonTriggerFreshnessSnapshot
     previous: ReturnType<typeof currentChatScopedSnapshot>
   }
 
   interface TranslationMessageTarget {
+    sessionGeneration: number
     messageId: string
     chatId?: string
   }
@@ -324,10 +337,11 @@
   }
 
   type RawTranslationTarget =
-    | { kind: 'message'; chatId: string; messageId: string }
-    | ({ kind: 'greeting' } & GreetingTranslationTarget)
+    | ({ kind: 'message' } & TranslationMessageTarget & { chatId: string })
+    | ({ kind: 'greeting'; sessionGeneration: number } & GreetingTranslationTarget)
 
   interface MessageEditorTarget {
+    sessionGeneration: number
     characterId?: string
     characterReference: object
     chatId?: string
@@ -373,6 +387,7 @@
     generationStartedAt = undefined,
     generationStage = 0,
     disabled = false,
+    readOnly = false,
     autoTranslateOnReady = false,
     onAutoTranslationEligibilityConsumed = () => {},
     onInitialDisplayParseStart = () => {},
@@ -381,6 +396,40 @@
     displayChatId = null,
     displayMessageId = null,
   }: Props = $props()
+  let writeActionsAllowed = $derived.by(() => {
+    void $clientSessionStore
+    return canChatWrite()
+  })
+  function canChatWrite(): boolean {
+    if (readOnly || !canUseClientWriteAccess()) return false
+    if (displayChatId && displayChatId !== renderOwners.chat()?.id) return false
+    if (idx >= 0 && displayMessageId && displayMessageId !== renderOwners.message(idx)?.chatId) return false
+    return true
+  }
+  function isChatWriteCurrent(generation: number): boolean {
+    return canChatWrite() && isClientSessionGenerationCurrent(generation)
+  }
+  async function awaitChatWrite<T>(generation: number, pending: T | PromiseLike<T>): Promise<T> {
+    try {
+      return await pending
+    } finally {
+      if (!isChatWriteCurrent(generation)) throw new Error('chat_write_access_required')
+    }
+  }
+  async function runChatWriteAction<T>(action: (generation: number) => T | Promise<T>): Promise<T | undefined> {
+    if (!canChatWrite()) return
+    const generation = captureClientSessionGeneration()
+    return interactions.run(async () => {
+      if (!isChatWriteCurrent(generation)) return
+      try {
+        return await action(generation)
+      } catch (error) {
+        if (!isChatWriteCurrent(generation)) return
+        throw error
+      }
+    })
+  }
+
   const interactionProvider = getContext<TranscriptInteractionProvider | undefined>(TRANSCRIPT_INTERACTION_CONTEXT)
   const interactions = createTranscriptInteractionScope(
     interactionProvider,
@@ -446,6 +495,51 @@
   let lastDisplayParseKey = ''
   let rerollMenuButtonId = Math.random()
   let messageEditOriginalText: string | null = $state(null)
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const text =
+        activeAutoPopupMessageSessionId !== null && isPopupEditorSessionCurrent(activeAutoPopupMessageSessionId)
+          ? popUpEditorStore.value
+          : messageEditText
+      if (!editMode || text === (messageEditOriginalText ?? messageEditTarget?.sourceData)) return null
+      const target = messageEditTarget
+      return {
+        key: `message-edit:${target?.chatId ?? displayChatId}:${target?.messageId ?? displayMessageId ?? idx}`,
+        label: language.connectedReaders.messageDraft,
+        route: globalThis.location?.pathname,
+        fields: [{ label: language.connectedReaders.messageDraft, value: text }],
+        data: {
+          characterId: target?.characterId,
+          chatId: target?.chatId ?? displayChatId,
+          messageId: target?.messageId ?? displayMessageId,
+          text,
+        },
+        baseline: { source: messageEditOriginalText ?? target?.sourceData },
+      }
+    }),
+  )
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      if (!editTranslationMode) return null
+      const text =
+        activeAutoPopupTranslationSessionId !== null && isPopupEditorSessionCurrent(activeAutoPopupTranslationSessionId)
+          ? popUpEditorStore.value
+          : editTranslationText
+      const baseline = editTranslationTarget
+        ? liveRawTranslationForTarget(editTranslationTarget)?.text
+        : activeRawTranslation()?.text
+      if (text === baseline) return null
+      return {
+        key: `translation-edit:${editTranslationTarget?.chatId ?? displayChatId}:${editTranslationTarget?.messageId ?? displayMessageId ?? idx}`,
+        label: language.editTranslation,
+        route: globalThis.location?.pathname,
+        fields: [{ label: language.editTranslation, value: text }],
+        data: { target: $state.snapshot(editTranslationTarget), text },
+        baseline: { text: baseline },
+      }
+    }),
+  )
+
   let messageEditTarget: MessageEditorTarget | null = null
 
   function captureMessageEditorTarget(): MessageEditorTarget | null {
@@ -458,6 +552,7 @@
 
     return {
       characterId: character.chaId || undefined,
+      sessionGeneration: captureClientSessionGeneration(),
       characterReference: character,
       chatId: chat.id || undefined,
       chatReference: chat,
@@ -478,6 +573,7 @@
   }
 
   function isCurrentMessageEditorTarget(target: MessageEditorTarget): boolean {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return false
     // Stable message identity survives unrelated insertions/removals before this row.
     if (!target.messageId && idx !== target.messageIndex) return false
 
@@ -521,7 +617,21 @@
     messageEditText = ''
   }
 
+  $effect(() => {
+    void $clientSessionStore
+    if (editMode && messageEditTarget && !isChatWriteCurrent(messageEditTarget.sessionGeneration)) {
+      if (activeAutoPopupMessageSessionId !== null) closePopupEditorSession(activeAutoPopupMessageSessionId)
+      cancelMessageEdit()
+    }
+    if (editTranslationMode && editTranslationTarget && !isChatWriteCurrent(editTranslationTarget.sessionGeneration)) {
+      if (activeAutoPopupTranslationSessionId !== null) closePopupEditorSession(activeAutoPopupTranslationSessionId)
+      editTranslationMode = false
+      editTranslationTarget = null
+    }
+  })
+
   function beginMessageEdit() {
+    if (!canChatWrite()) return
     if (translationInProgress) return
     if (editMode) return
     const target = captureMessageEditorTarget()
@@ -553,6 +663,7 @@
   }
 
   async function saveMessageEdit() {
+    if (!canChatWrite()) return
     if (translationInProgress) return
     if (!editMode) return
     const target = messageEditTarget
@@ -571,6 +682,7 @@
   }
 
   function openRerollMenu(e: MouseEvent, children: import('svelte').Snippet): void {
+    if (!canChatWrite()) return
     const trigger = e.currentTarget as HTMLButtonElement
     if (popupStore.openId === rerollMenuButtonId && popupStore.children) {
       popupStore.children = null
@@ -587,6 +699,7 @@
   }
 
   async function openAutoPopupMessageEditor() {
+    if (!canChatWrite()) return
     if (autoPopupMessageEditorOpen || popUpEditorStore.open) return
 
     const target = messageEditTarget
@@ -634,6 +747,7 @@
   }
 
   async function openAutoPopupTranslationEditor() {
+    if (!canChatWrite()) return
     if (autoPopupTranslationEditorOpen || popUpEditorStore.open) return
 
     const target = editTranslationTarget ?? captureTranslationMessageTarget()
@@ -648,6 +762,7 @@
       while (isPopupEditorSessionCurrent(sessionId) && popUpEditorStore.open) {
         await sleep(100)
         if (
+          !isChatWriteCurrent(target.sessionGeneration) ||
           editTranslationTarget !== target ||
           !editTranslationMode ||
           editTranslationText !== initialValue ||
@@ -660,6 +775,7 @@
 
       if (!isPopupEditorSessionCurrent(sessionId)) return
       if (
+        !isChatWriteCurrent(target.sessionGeneration) ||
         editTranslationTarget !== target ||
         !editTranslationMode ||
         editTranslationText !== initialValue ||
@@ -733,7 +849,7 @@
   }
 
   function localChatMutation(callback: () => void) {
-    if (reportWriterAccessLostMutation()) return
+    if (!canChatWrite() || reportWriterAccessLostMutation()) return
     if (!canUseServerCommands()) {
       callback()
     }
@@ -760,7 +876,11 @@
     sourceChatId: string,
     provisionalChatId: string,
   ): void {
-    const recover = () => recoverFailedChatBranchNavigation(characterId, sourceChatId, provisionalChatId)
+    const generation = captureClientSessionGeneration()
+    const recover = () => {
+      if (isChatWriteCurrent(generation))
+        recoverFailedChatBranchNavigation(characterId, sourceChatId, provisionalChatId)
+    }
     void outcome.then((settled) => {
       if (settled.status === 'failed') {
         recover()
@@ -775,6 +895,7 @@
   }
 
   async function branchFromCurrentMessage(target: MessageEditorTarget): Promise<void> {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return
     const sourceCharacterId = target.characterId
     const sourceChatId = target.chatId
     const sourceMessageId = target.messageId
@@ -785,9 +906,9 @@
         return
       }
       try {
-        await hydrateChatMessages(sourceChatId, { strict: true })
+        await awaitChatWrite(target.sessionGeneration, hydrateChatMessages(sourceChatId, { strict: true }))
       } catch {
-        alertError(language.chatDataLoadFailed)
+        if (isChatWriteCurrent(target.sessionGeneration)) alertError(language.chatDataLoadFailed)
         return
       }
     }
@@ -878,14 +999,14 @@
   }
 
   async function openBranchSource(branchReference: ReturnType<typeof parseBranchComment>): Promise<void> {
-    return interactions.run(async () => {
+    return runChatWriteAction(async (generation) => {
       if (!branchReference) return
       const originTarget = captureMessageEditorTarget()
       if (!originTarget) return
 
       if (canUseServerCommands()) {
         try {
-          await hydrateChatMessages(branchReference.sourceChatId, { strict: true })
+          await awaitChatWrite(generation, hydrateChatMessages(branchReference.sourceChatId, { strict: true }))
         } catch {
           if (isCurrentMessageEditorTarget(originTarget)) alertError(language.chatDataLoadFailed)
           return
@@ -915,6 +1036,7 @@
   }
 
   function resolveActiveMessageTarget(target: MessageEditorTarget): { chat: Chat; messageIndex: number } | null {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return null
     if (!target.characterId || !target.chatId) return null
     const owner = mutableChatOwnerById(target.characterId, target.chatId)
     const character = owner?.character
@@ -952,9 +1074,9 @@
         return
       }
       try {
-        await hydrateChatMessages(target.chatId, { strict: true })
+        await awaitChatWrite(target.sessionGeneration, hydrateChatMessages(target.chatId, { strict: true }))
       } catch {
-        alertError(language.chatDataLoadFailed)
+        if (isChatWriteCurrent(target.sessionGeneration)) alertError(language.chatDataLoadFailed)
         return
       }
       resolved = resolveActiveMessageTarget(target)
@@ -1011,7 +1133,7 @@
     bookmarks: string[],
     bookmarkNames: Record<string, string>,
   ): boolean {
-    if (!previous.chat) return false
+    if (!canChatWrite() || !previous.chat) return false
     if (!previous.characterId || !previous.chatId || charactersResourceState.status !== 'ready') return false
     const character = getCharacterResourceOwner(previous.characterId)
     const chatMatches = character?.chats?.filter((candidate) => candidate.id === previous.chatId) ?? []
@@ -1047,11 +1169,11 @@
   }
 
   function canTranslateRawTarget() {
-    return canUseServerCommands() && hasServerRawTranslationTarget()
+    return writeActionsAllowed && canUseServerCommands() && hasServerRawTranslationTarget()
   }
 
   function canEditPersistedTranslation(): boolean {
-    return captureRawTranslationTarget()?.kind === 'message' && activeRawTranslation() !== null
+    return writeActionsAllowed && captureRawTranslationTarget()?.kind === 'message' && activeRawTranslation() !== null
   }
 
   function currentLiveMessage(): Message | null {
@@ -1088,6 +1210,7 @@
     if (!messageId) return null
     return {
       messageId,
+      sessionGeneration: captureClientSessionGeneration(),
       chatId: currentChatId || undefined,
     }
   }
@@ -1095,15 +1218,15 @@
   function captureRawTranslationTarget(): RawTranslationTarget | null {
     if (idx < 0) {
       if (!greetingTarget || greetingTarget.source !== message || greetingTarget.greetingIndex < -1) return null
-      return { kind: 'greeting', ...greetingTarget }
+      return { kind: 'greeting', ...greetingTarget, sessionGeneration: captureClientSessionGeneration() }
     }
     const target = captureTranslationMessageTarget()
     if (!target?.chatId) return null
-    return { kind: 'message', chatId: target.chatId, messageId: target.messageId }
+    return { kind: 'message', ...target, chatId: target.chatId }
   }
 
   function sameRawTranslationTarget(left: RawTranslationTarget, right: RawTranslationTarget): boolean {
-    if (left.kind !== right.kind) return false
+    if (left.sessionGeneration !== right.sessionGeneration || left.kind !== right.kind) return false
     if (left.kind === 'message' && right.kind === 'message') {
       return left.chatId === right.chatId && left.messageId === right.messageId
     }
@@ -1135,6 +1258,7 @@
     const resultMessageId = result.messageId || capturedTarget.messageId
     if (resultMessageId !== capturedTarget.messageId) return null
     return {
+      sessionGeneration: capturedTarget.sessionGeneration,
       messageId: resultMessageId,
       chatId: result.chatId || capturedTarget.chatId,
     }
@@ -1242,6 +1366,10 @@
     target: RawTranslationTarget | null = captureRawTranslationTarget(),
     reserved?: () => void,
   ) {
+    if (!target || !isChatWriteCurrent(target.sessionGeneration)) {
+      reserved?.()
+      return
+    }
     const release = reserved ?? interactions.acquire()
     if (!release) return
     try {
@@ -1294,14 +1422,17 @@
         // uses the captured message text as the commit precondition, so keep it
         // outside the global revisioned-mutation queue and let unrelated edits
         // continue while the provider is running.
-        const baseRevision = await getServerCommandBaseRevision()
+        const baseRevision = await awaitChatWrite(target.sessionGeneration, getServerCommandBaseRevision())
         if (baseRevision === null) {
           if (isRenderingRawTranslationTarget(target)) translated = false
           setStatusMessage('Unable to read server command revision.', 3000)
           return
         }
         if (target.kind === 'message') {
-          const result = await translateMessageCommand({ baseRevision, messageId: target.messageId, jobId })
+          const result = await awaitChatWrite(
+            target.sessionGeneration,
+            translateMessageCommand({ baseRevision, messageId: target.messageId, jobId }),
+          )
           if (!isCurrentMessageTranslationJob(target.messageId, jobId)) return
           if (result.status === 'ok') {
             if (result.jobId !== jobId) return
@@ -1324,13 +1455,16 @@
           return
         }
 
-        const result = await translateGreetingCommand({
-          baseRevision,
-          characterId: target.characterId,
-          chatId: target.chatId,
-          greetingIndex: target.greetingIndex,
-          jobId,
-        })
+        const result = await awaitChatWrite(
+          target.sessionGeneration,
+          translateGreetingCommand({
+            baseRevision,
+            characterId: target.characterId,
+            chatId: target.chatId,
+            greetingIndex: target.greetingIndex,
+            jobId,
+          }),
+        )
         if (
           !isCurrentGreetingTranslationJob(
             target.characterId,
@@ -1376,6 +1510,7 @@
           setStatusMessage(result.error, 3000)
         }
       } catch (error) {
+        if (!isChatWriteCurrent(target.sessionGeneration)) return
         if (isRenderingRawTranslationTarget(target)) translated = false
         const detail = error instanceof Error ? error.message : String(error)
         setStatusMessage(language.playground.translationRunFailed(detail), 5000)
@@ -1393,20 +1528,20 @@
   }
 
   async function confirmServerRawRetranslation() {
-    return interactions.run(async () => {
+    return runChatWriteAction(async (generation) => {
       const target = captureRawTranslationTarget()
       if (!target || translationInProgress) return
-      if (!(await alertConfirm(language.retranslateConfirm))) return
+      if (!(await awaitChatWrite(generation, alertConfirm(language.retranslateConfirm)))) return
       if (!isRenderingRawTranslationTarget(target) || translationInProgress || !canTranslateRawTarget()) return
       await requestServerRawTranslation(target)
     })
   }
 
   async function confirmClientRetranslation() {
-    return interactions.run(async () => {
+    return runChatWriteAction(async (generation) => {
       const sourceMessage = message
       const sourceIndex = idx
-      if (!(await alertConfirm(language.retranslateConfirm))) return
+      if (!(await awaitChatWrite(generation, alertConfirm(language.retranslateConfirm)))) return
       if (
         translationInProgress ||
         !translated ||
@@ -1427,6 +1562,7 @@
     target: TranslationMessageTarget,
     nextTranslation: MessageTranslation | null,
   ): { dispatched: ReturnType<typeof dispatchUpdateMessageScoped> } | null {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return null
     const previous = translationScopedSnapshot(target)
     if (!previous.chat) return null
     applyLocalTranslation(target, nextTranslation)
@@ -1438,6 +1574,7 @@
   }
 
   async function saveServerTranslationEdit() {
+    if (!canChatWrite()) return
     const target = editTranslationTarget ?? captureTranslationMessageTarget()
     const existing = target
       ? (liveRawTranslationForTarget(target) ??
@@ -1460,6 +1597,7 @@
     editTranslationMode = false
     editTranslationTarget = null
     const result = await outcome.dispatched
+    if (!isChatWriteCurrent(target.sessionGeneration)) return
     if (saveOperation !== translationEditOperation) return
     if (result && !isSameTranslation(findLiveMessageByTarget(target)?.translation, nextTranslation)) {
       if (isRenderingTranslationMessageTarget(target)) {
@@ -1473,6 +1611,7 @@
   // translation editor's persistence; a result that trims to nothing removes
   // the translation instead of storing empty text.
   function persistTranslationTextEdit(target: TranslationMessageTarget, nextText: string): void {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return
     const existing = liveRawTranslationForTarget(target)
     if (!existing) return
     translationEditOperation += 1
@@ -1492,7 +1631,7 @@
   }
 
   async function rm(e: MouseEvent, rec?: boolean) {
-    return interactions.run(async () => {
+    return runChatWriteAction(async (generation) => {
       if (translationInProgress) return
       const messageTarget = captureMessageEditorTarget()
       if (!messageTarget) return
@@ -1501,10 +1640,10 @@
         return
       }
 
-      const rm = sidebarSettings.askRemoval ? await alertConfirm(language.removeChat) : true
+      const rm = sidebarSettings.askRemoval ? await awaitChatWrite(generation, alertConfirm(language.removeChat)) : true
       if (rm) {
         if (sidebarSettings.instantRemove || rec) {
-          const r = await alertConfirm(language.instantRemoveConfirm)
+          const r = await awaitChatWrite(generation, alertConfirm(language.instantRemoveConfirm))
           if (!r) {
             await truncateAtMessageTarget(messageTarget)
           } else {
@@ -1518,6 +1657,7 @@
   }
 
   async function edit(target: MessageEditorTarget, nextData: string) {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return
     const originalText = messageEditOriginalText
     messageEditOriginalText = null
     messageEditTarget = null
@@ -1553,6 +1693,7 @@
   }
 
   function handlePartialEditSave(e: CustomEvent<PartialEditSaveDetail>) {
+    if (!canChatWrite()) return
     if (idx >= 0) {
       const chat = mutableActiveChatOwner()?.chat
       const liveMessage = chat?.message?.[idx]
@@ -1627,6 +1768,7 @@
   }
 
   async function loadTranslationForEdit() {
+    if (!canChatWrite()) return
     if (editTranslationMode) return
     const target = captureTranslationMessageTarget()
     if (!target) return
@@ -1642,6 +1784,7 @@
   }
 
   async function saveTranslationEdit() {
+    if (!canChatWrite()) return
     pendingTranslationEdits += 1
     try {
       await saveServerTranslationEdit()
@@ -1651,6 +1794,10 @@
   }
 
   function displaya(message: string) {
+    if (!canChatWrite()) {
+      msgDisplay = message
+      return
+    }
     const cbsConditions = getCbsCondition()
     const chara = name
     const chatID = idx
@@ -1950,6 +2097,7 @@
 
   $effect(() => {
     void interactionAvailability
+    if (!writeActionsAllowed) return
     if (!autoTranslateOnReady || automaticTranslationEligibilityConsumed) return
     if (!automaticTranslationRequestEnabled()) {
       consumeAutomaticTranslationEligibility()
@@ -2001,7 +2149,11 @@
     if (job?.status === 'succeeded') {
       let cancelled = false
       if ('messageId' in job) {
-        const target = { chatId: job.chatId, messageId: job.messageId }
+        const target = {
+          chatId: job.chatId,
+          messageId: job.messageId,
+          sessionGeneration: captureClientSessionGeneration(),
+        }
         void restoreSucceededServerTranslation(job.jobId, target, () => cancelled)
       } else {
         const target = captureRawTranslationTarget()
@@ -2027,6 +2179,7 @@
     const variableReloadEpoch = idx < 0 ? $VariableReloadGUIPointer : 0
     const displayParseKey = JSON.stringify([
       displayMessage,
+      writeActionsAllowed,
       name,
       idx,
       role,
@@ -2044,6 +2197,7 @@
   })
 
   function RenderGUIHtml(html: string, cacheScopeKey: string) {
+    if (!writeActionsAllowed) return new DOMParser().parseFromString(html, 'text/html').body
     return renderCustomHtmlTemplate(html, getCbsCondition(), cacheScopeKey)
   }
 
@@ -2113,6 +2267,7 @@
     const { chat } = owner
 
     return {
+      sessionGeneration: captureClientSessionGeneration(),
       snapshot: captureChatButtonTriggerFreshness(liveTarget, renderedChatButtonTriggerOperationTracker),
       previous: {
         selectedCharID: liveTarget.selectedCharacterIndex,
@@ -2124,6 +2279,7 @@
   }
 
   function isChatButtonTriggerTargetFresh(target: CapturedChatButtonTriggerTarget): boolean {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return false
     const liveTarget = readChatButtonTriggerLiveTarget(target.snapshot)
     if (!liveTarget) {
       return false
@@ -2133,6 +2289,7 @@
   }
 
   function isChatButtonTriggerTargetCurrentAfterHydration(target: CapturedChatButtonTriggerTarget): boolean {
+    if (!isChatWriteCurrent(target.sessionGeneration)) return false
     const liveTarget = readChatButtonTriggerLiveTarget(target.snapshot)
     if (!liveTarget) {
       return false
@@ -2166,7 +2323,7 @@
     const target = event.target as HTMLElement
     const origin = target.closest('[risu-trigger], [risu-btn]')
     if (!origin) return
-    return interactions.run(async () => {
+    return runChatWriteAction(async (generation) => {
       const triggerName = origin.getAttribute('risu-trigger')
       const triggerId = origin.getAttribute('risu-id')
       const btnEvent = origin.getAttribute('risu-btn')
@@ -2188,7 +2345,7 @@
             return
           }
           try {
-            await hydrateChatMessages(hydrationTarget.snapshot.chatId, { strict: true })
+            await awaitChatWrite(generation, hydrateChatMessages(hydrationTarget.snapshot.chatId, { strict: true }))
           } catch {
             if (isChatButtonTriggerTargetCurrentAfterHydration(hydrationTarget)) {
               alertError(language.chatDataLoadFailed)
@@ -2243,7 +2400,7 @@
       } finally {
         if (triggerName && triggerId) {
           setTimeout(() => {
-            if (manualTriggerDisplayGeneration !== triggerDisplayGeneration) return
+            if (!isChatWriteCurrent(generation) || manualTriggerDisplayGeneration !== triggerDisplayGeneration) return
             CurrentTriggerIdStore.update((currentTriggerId) =>
               currentTriggerId === triggerId ? null : currentTriggerId,
             )
@@ -2258,7 +2415,7 @@
   )
 
   async function toggleBookmark() {
-    return interactions.run(async () => {
+    return runChatWriteAction(async (generation) => {
       const previous = currentChatScopedSnapshot()
       const chat = mutableActiveChatOwner()?.chat
 
@@ -2291,7 +2448,10 @@
         bookmarks.push(messageId)
 
         const msgSender = chat.message[idx]?.role === 'user' ? name || getUserDisplayName() : name
-        const newName = await alertInput(language.bookmarkAskNameOrDefault, [], bookmarkNames[messageId] || '')
+        const newName = await awaitChatWrite(
+          generation,
+          alertInput(language.bookmarkAskNameOrDefault, [], bookmarkNames[messageId] || ''),
+        )
 
         if (newName && newName.trim() !== '') {
           bookmarkNames[messageId] = newName
@@ -2423,7 +2583,7 @@
             </span>
           </button>
         {/if}
-      {:else if !hasServerRawTranslationTarget() && languageSettings.translatorType === 'llm' && translated && !translationInProgress}
+      {:else if writeActionsAllowed && !hasServerRawTranslationTarget() && languageSettings.translatorType === 'llm' && translated && !translationInProgress}
         <button
           class="text-sm p-1 text-textcolor2 border-darkborderc float-end mr-2 my-1
                             hover:ring-darkbutton hover:ring-3 rounded-md hover:text-textcolor transition-all flex justify-center items-center"
@@ -2466,7 +2626,7 @@
 {/snippet}
 
 {#snippet textBox()}
-  {#if editTranslationMode && !isGenerationLoading}
+  {#if writeActionsAllowed && editTranslationMode && !isGenerationLoading}
     <AutoresizeArea
       bind:value={editTranslationText}
       ariaLabel={language.editTranslation}
@@ -2475,7 +2635,7 @@
       handleLongPress={() => {
         saveTranslationEdit()
       }} />
-  {:else if editMode && !isGenerationLoading}
+  {:else if writeActionsAllowed && editMode && !isGenerationLoading}
     <AutoresizeArea
       bind:value={messageEditText}
       ariaLabel={language.messageInput}
@@ -2529,6 +2689,7 @@
         {#if hasServerRawTranslationTarget()}
           <ChatBody
             {character}
+            readOnly={!writeActionsAllowed}
             {firstMessage}
             {idx}
             chatId={currentDisplayChatId || undefined}
@@ -2551,6 +2712,7 @@
         {:else}
           <ChatBody
             {character}
+            readOnly={!writeActionsAllowed}
             {firstMessage}
             {idx}
             chatId={currentDisplayChatId || undefined}
@@ -2567,14 +2729,15 @@
             bind:translated
             bind:translating
             bind:retranslate
-            allowClientTranslation={idx < 0 &&
+            allowClientTranslation={writeActionsAllowed &&
+              idx < 0 &&
               languageSettings.translator !== '' &&
               languageSettings.translatorType !== 'none'}
             {onInitialDisplayParseStart}
             {onInitialDisplayParseSettled} />
         {/if}
       {/key}
-      {#if idx >= 0 && !editMode && !translationInProgress && !isGenerationProjection && partialEditEnabled && (sidebarSettings.enableBlockPartialEdit || sidebarSettings.enableDragPartialEdit)}
+      {#if writeActionsAllowed && idx >= 0 && !editMode && !translationInProgress && !isGenerationProjection && partialEditEnabled && (sidebarSettings.enableBlockPartialEdit || sidebarSettings.enableDragPartialEdit)}
         <PartialEditController
           messageData={message}
           chatIndex={idx}
@@ -2603,7 +2766,7 @@
 
 {#snippet iconButtons(options: { applyTextColors?: boolean } = {})}
   <div class="grow flex items-center justify-end" class:text-textcolor2={options?.applyTextColors !== false}>
-    {#if isComment}
+    {#if isComment && writeActionsAllowed}
       <button
         data-risu-message-action="remove"
         aria-label={language.remove}
@@ -2622,7 +2785,7 @@
         {@render translationButton()}
         {#if $SizeStore.w >= 640}
           {@render majorIconButtonsBody(false)}
-          {#if renderCharacter && idx > -1}
+          {#if writeActionsAllowed && renderCharacter && idx > -1}
             <PopupButton>
               {@render minorIconButtonsBody(true)}
             </PopupButton>
@@ -2630,7 +2793,7 @@
         {:else if renderCharacter}
           <PopupButton>
             {@render majorIconButtonsBody(true)}
-            {#if idx > -1}
+            {#if writeActionsAllowed && idx > -1}
               {@render minorIconButtonsBody(true)}
             {/if}
           </PopupButton>
@@ -2650,7 +2813,14 @@
       aria-label={language.copy}
       class="flex items-center hover:text-blue-500 transition-colors button-icon-copy"
       onclick={async () => {
-        return interactions.run(async () => {
+        if (!canChatWrite()) {
+          try {
+            await window.navigator.clipboard.writeText(msgDisplay)
+            setStatusMessage(language.copied)
+          } catch {}
+          return
+        }
+        return runChatWriteAction(async (generation) => {
           if (window.navigator.clipboard.write) {
             try {
               alertWait(language.loading)
@@ -2658,10 +2828,13 @@
 
               const parser = new DOMParser()
               const doc = parser.parseFromString(
-                await ParseMarkdown(msgDisplay, renderCharacter, 'normal', idx, getCbsCondition(), {
-                  chatId: currentDisplayChatId || undefined,
-                  messageId: (displayMessageId ?? messageRowId) || undefined,
-                }),
+                await awaitChatWrite(
+                  generation,
+                  ParseMarkdown(msgDisplay, renderCharacter, 'normal', idx, getCbsCondition(), {
+                    chatId: currentDisplayChatId || undefined,
+                    messageId: (displayMessageId ?? messageRowId) || undefined,
+                  }),
+                ),
                 'text/html',
               )
 
@@ -2731,12 +2904,13 @@
                     url.startsWith('/'))
                 ) {
                   try {
+                    if (!isChatWriteCurrent(generation)) return
                     let fetchUrl = url
                     if (url.startsWith('/')) {
                       fetchUrl = window.location.origin + url
                     }
 
-                    const data = await fetch(fetchUrl)
+                    const data = await awaitChatWrite(generation, fetch(fetchUrl))
                     if (data.ok) {
                       const canvas = document.createElement('canvas')
                       const ctx = canvas.getContext('2d')
@@ -2764,6 +2938,7 @@
                       img.setAttribute('src', dataURL)
                     }
                   } catch (error) {
+                    if (!isChatWriteCurrent(generation)) return
                     console.error('Image error:', error)
                   }
                 }
@@ -2773,7 +2948,8 @@
               let hasValidImage = false
 
               try {
-                const iconImage = (await getFileSrc(renderCharacter?.image ?? '')) ?? ''
+                if (!isChatWriteCurrent(generation)) return
+                const iconImage = (await awaitChatWrite(generation, getFileSrc(renderCharacter?.image ?? ''))) ?? ''
 
                 if (
                   iconImage &&
@@ -2788,7 +2964,7 @@
                     iconDataUrl = iconImage
                     hasValidImage = true
                   } else {
-                    const data = await fetch(iconImage)
+                    const data = await awaitChatWrite(generation, fetch(iconImage))
                     if (data.ok) {
                       const canvas = document.createElement('canvas')
                       const ctx = canvas.getContext('2d')
@@ -2832,6 +3008,7 @@
                   }
                 }
               } catch (error) {
+                if (!isChatWriteCurrent(generation)) return
                 console.error('Icon error:', error)
                 hasValidImage = false
               }
@@ -2852,7 +3029,8 @@
                 const userIcon = getUserIcon()
                 if (userIcon) {
                   try {
-                    const userIconSrc = await getFileSrc(userIcon)
+                    if (!isChatWriteCurrent(generation)) return
+                    const userIconSrc = await awaitChatWrite(generation, getFileSrc(userIcon))
                     if (
                       userIconSrc &&
                       (userIconSrc.startsWith('http://asset.localhost') ||
@@ -2866,7 +3044,7 @@
                         finalIconDataUrl = userIconSrc
                         finalHasValidImage = true
                       } else {
-                        const data = await fetch(userIconSrc)
+                        const data = await awaitChatWrite(generation, fetch(userIconSrc))
                         if (data.ok) {
                           const canvas = document.createElement('canvas')
                           const ctx = canvas.getContext('2d')
@@ -2910,6 +3088,7 @@
                       }
                     }
                   } catch (error) {
+                    if (!isChatWriteCurrent(generation)) return
                     console.error('User icon error:', error)
                     finalHasValidImage = false
                   }
@@ -2932,6 +3111,7 @@
 </div>
 </div>`
 
+              if (!isChatWriteCurrent(generation)) return
               await window.navigator.clipboard.write([
                 new ClipboardItem({
                   'text/plain': new Blob([msgDisplay], { type: 'text/plain' }),
@@ -2941,6 +3121,7 @@
               alertNormal(language.copied)
               return
             } catch {
+              if (!isChatWriteCurrent(generation)) return
               alertClear()
             }
           }
@@ -2956,13 +3137,14 @@
       {/if}
     </button>
   {/if}
-  {#if idx > -1}
+  {#if writeActionsAllowed && idx > -1}
     {#if renderCharacter?.ttsMode !== 'none' && renderCharacter?.ttsMode}
       <button
         data-risu-message-action="tts"
         aria-label={language.readMessageAloud}
         class="flex items-center hover:text-blue-500 transition-colors button-icon-tts"
         onclick={() => {
+          if (!canChatWrite()) return
           return sayTTS(null, message)
         }}>
         <Volume2Icon size={20} />
@@ -2995,7 +3177,7 @@
 {/snippet}
 
 {#snippet translationButton(showNames = false)}
-  {#if languageSettings.translator !== '' && languageSettings.translatorType !== 'none' && !blankMessage}
+  {#if (writeActionsAllowed || activeRawTranslation()) && languageSettings.translator !== '' && languageSettings.translatorType !== 'none' && !blankMessage}
     <button
       data-risu-message-action="translate"
       class={'flex items-center cursor-pointer hover:text-blue-500 transition-colors button-icon-translate ' +
@@ -3007,6 +3189,12 @@
       aria-label={translationInProgress ? language.translating : language.translate}
       onclick={async () => {
         if (translationInProgress) return
+        if (!canChatWrite()) {
+          if (!activeRawTranslation()) return
+          translated = !translated
+          suppressAutomaticTranslationDisplay = !translated
+          return
+        }
         if (!canTranslateRawTarget()) {
           if (hasServerRawTranslationTarget()) return
           translated = !translated
@@ -3035,7 +3223,7 @@
       {/if}
     </button>
   {/if}
-  {#if idx > -1}
+  {#if writeActionsAllowed && idx > -1}
     <button
       data-risu-message-action="edit"
       aria-label={editMode ? language.save : language.edit}
@@ -3061,7 +3249,7 @@
 {/snippet}
 
 {#snippet rerolls()}
-  {#if rerollIcon || altGreeting}
+  {#if writeActionsAllowed && (rerollIcon || altGreeting)}
     {#if altGreeting}
       <button
         data-risu-message-action="unreroll"
@@ -3071,7 +3259,7 @@
         class:dyna-icon={rerollIcon === 'dynamic'}
         disabled={translationInProgress}
         onclick={() => {
-          if (translationInProgress) return
+          if (!canChatWrite() || translationInProgress) return
           unReroll()
         }}>
         <ArrowLeft size={22} />
@@ -3087,7 +3275,7 @@
         class:dyna-icon={rerollIcon === 'dynamic'}
         disabled={translationInProgress}
         onclick={() => {
-          if (translationInProgress) return
+          if (!canChatWrite() || translationInProgress) return
           onReroll()
         }}>
         <ArrowRight size={22} />
@@ -3118,7 +3306,7 @@
         class:dyna-icon={rerollIcon === 'dynamic'}
         disabled={translationInProgress}
         onclick={() => {
-          if (translationInProgress) return
+          if (!canChatWrite() || translationInProgress) return
           onReroll()
         }}>
         <RefreshCcwIcon size={20} />
@@ -3128,122 +3316,130 @@
 {/snippet}
 
 {#snippet rerollMenu()}
-  <RerollList
-    currentMessage={message}
-    target={rerollTarget}
-    disabled={translationInProgress}
-    {onNewReroll}
-    {onSelectRerollCandidate} />
+  {#if writeActionsAllowed}
+    <RerollList
+      currentMessage={message}
+      target={rerollTarget}
+      disabled={translationInProgress}
+      onNewReroll={() => {
+        if (canChatWrite()) onNewReroll()
+      }}
+      onSelectRerollCandidate={(index) => {
+        if (canChatWrite()) onSelectRerollCandidate(index)
+      }} />
+  {/if}
 {/snippet}
 
 {#snippet minorIconButtonsBody(showNames: boolean)}
-  {#if advancedSettings.enableBookmark}
+  {#if writeActionsAllowed}
+    {#if advancedSettings.enableBookmark}
+      <button
+        data-risu-message-action="bookmark"
+        aria-label={language.bookmark}
+        class="flex items-center hover:text-blue-500 transition-colors button-icon-bookmark {isBookmarked
+          ? 'text-yellow-400'
+          : ''}"
+        onclick={() => {
+          void toggleBookmark()
+        }}>
+        <BookmarkIcon size={20} />
+        {#if showNames}
+          <span class="ml-1">{language.bookmark}</span>
+        {/if}
+      </button>
+    {/if}
+
     <button
-      data-risu-message-action="bookmark"
-      aria-label={language.bookmark}
-      class="flex items-center hover:text-blue-500 transition-colors button-icon-bookmark {isBookmarked
-        ? 'text-yellow-400'
-        : ''}"
-      onclick={() => {
-        void toggleBookmark()
+      data-risu-message-action="branch"
+      aria-label={language.branch}
+      class="flex items-center hover:text-blue-500 transition-colors"
+      onclick={async () => {
+        return runChatWriteAction(async (generation) => {
+          const target = captureMessageEditorTarget()
+          if (!target) return
+          if (!(await awaitChatWrite(generation, alertConfirm(language.branchConfirm)))) return
+          await branchFromCurrentMessage(target)
+        })
       }}>
-      <BookmarkIcon size={20} />
+      <SplitIcon size={20} />
       {#if showNames}
-        <span class="ml-1">{language.bookmark}</span>
+        <span class="ml-1">{language.branch}</span>
+      {/if}
+    </button>
+
+    <button
+      data-risu-message-action="toggle-disabled"
+      aria-label={language.disableMessage}
+      class="flex items-center hover:text-blue-500 transition-colors"
+      onclick={() => {
+        const chat = mutableActiveChatOwner()?.chat
+        const currentMessage = chat?.message[idx]
+        const readMessage = currentLiveMessage()
+        if (!currentMessage?.chatId || readMessage?.chatId !== currentMessage.chatId) return
+        const previous = currentChatScopedSnapshot()
+        const disabled = !currentMessage.disabled
+        const messageId = currentMessage.chatId
+        if (canUseServerCommands()) {
+          if (messageId) {
+            observeMessageMutation(dispatchUpdateMessageScoped(messageId, { disabled }, previous))
+          } else {
+            const nextMessages = cloneMessagesWithIds(chat)
+            if (nextMessages[idx]) {
+              nextMessages[idx].disabled = disabled
+              dispatchReplaceMessagesForChat(chat, nextMessages, previous)
+            }
+          }
+        } else {
+          const localMessageId = ensureMessageId(currentMessage)
+          currentMessage.disabled = disabled
+          observeMessageMutation(dispatchUpdateMessageScoped(localMessageId, { disabled }, previous))
+        }
+      }}>
+      <PowerOff size={20} />
+      {#if showNames}
+        <span class="ml-1">{language.disableMessage}</span>
+      {/if}
+    </button>
+
+    <button
+      data-risu-message-action="disable-above"
+      aria-label={language.disableAbove}
+      class="flex items-center hover:text-blue-500 transition-colors"
+      onclick={() => {
+        const chat = mutableActiveChatOwner()?.chat
+        const currentMessage = chat?.message[idx]
+        const readMessage = currentLiveMessage()
+        if (!currentMessage?.chatId || readMessage?.chatId !== currentMessage.chatId) return
+        const previous = currentChatScopedSnapshot()
+        const disabled = currentMessage.disabled === 'allBefore' ? false : 'allBefore'
+        const messageId = currentMessage.chatId
+        if (canUseServerCommands()) {
+          if (messageId) {
+            observeMessageMutation(dispatchUpdateMessageScoped(messageId, { disabled }, previous))
+          } else {
+            const nextMessages = cloneMessagesWithIds(chat)
+            if (nextMessages[idx]) {
+              nextMessages[idx].disabled = disabled
+              dispatchReplaceMessagesForChat(chat, nextMessages, previous)
+            }
+          }
+        } else {
+          const localMessageId = ensureMessageId(currentMessage)
+          currentMessage.disabled = disabled
+          observeMessageMutation(dispatchUpdateMessageScoped(localMessageId, { disabled }, previous))
+        }
+      }}>
+      <Scissors size={20} />
+      {#if showNames}
+        <span class="ml-1">{language.disableAbove}</span>
       {/if}
     </button>
   {/if}
-
-  <button
-    data-risu-message-action="branch"
-    aria-label={language.branch}
-    class="flex items-center hover:text-blue-500 transition-colors"
-    onclick={async () => {
-      return interactions.run(async () => {
-        const target = captureMessageEditorTarget()
-        if (!target) return
-        if (!(await alertConfirm(language.branchConfirm))) return
-        await branchFromCurrentMessage(target)
-      })
-    }}>
-    <SplitIcon size={20} />
-    {#if showNames}
-      <span class="ml-1">{language.branch}</span>
-    {/if}
-  </button>
-
-  <button
-    data-risu-message-action="toggle-disabled"
-    aria-label={language.disableMessage}
-    class="flex items-center hover:text-blue-500 transition-colors"
-    onclick={() => {
-      const chat = mutableActiveChatOwner()?.chat
-      const currentMessage = chat?.message[idx]
-      const readMessage = currentLiveMessage()
-      if (!currentMessage?.chatId || readMessage?.chatId !== currentMessage.chatId) return
-      const previous = currentChatScopedSnapshot()
-      const disabled = !currentMessage.disabled
-      const messageId = currentMessage.chatId
-      if (canUseServerCommands()) {
-        if (messageId) {
-          observeMessageMutation(dispatchUpdateMessageScoped(messageId, { disabled }, previous))
-        } else {
-          const nextMessages = cloneMessagesWithIds(chat)
-          if (nextMessages[idx]) {
-            nextMessages[idx].disabled = disabled
-            dispatchReplaceMessagesForChat(chat, nextMessages, previous)
-          }
-        }
-      } else {
-        const localMessageId = ensureMessageId(currentMessage)
-        currentMessage.disabled = disabled
-        observeMessageMutation(dispatchUpdateMessageScoped(localMessageId, { disabled }, previous))
-      }
-    }}>
-    <PowerOff size={20} />
-    {#if showNames}
-      <span class="ml-1">{language.disableMessage}</span>
-    {/if}
-  </button>
-
-  <button
-    data-risu-message-action="disable-above"
-    aria-label={language.disableAbove}
-    class="flex items-center hover:text-blue-500 transition-colors"
-    onclick={() => {
-      const chat = mutableActiveChatOwner()?.chat
-      const currentMessage = chat?.message[idx]
-      const readMessage = currentLiveMessage()
-      if (!currentMessage?.chatId || readMessage?.chatId !== currentMessage.chatId) return
-      const previous = currentChatScopedSnapshot()
-      const disabled = currentMessage.disabled === 'allBefore' ? false : 'allBefore'
-      const messageId = currentMessage.chatId
-      if (canUseServerCommands()) {
-        if (messageId) {
-          observeMessageMutation(dispatchUpdateMessageScoped(messageId, { disabled }, previous))
-        } else {
-          const nextMessages = cloneMessagesWithIds(chat)
-          if (nextMessages[idx]) {
-            nextMessages[idx].disabled = disabled
-            dispatchReplaceMessagesForChat(chat, nextMessages, previous)
-          }
-        }
-      } else {
-        const localMessageId = ensureMessageId(currentMessage)
-        currentMessage.disabled = disabled
-        observeMessageMutation(dispatchUpdateMessageScoped(localMessageId, { disabled }, previous))
-      }
-    }}>
-    <Scissors size={20} />
-    {#if showNames}
-      <span class="ml-1">{language.disableAbove}</span>
-    {/if}
-  </button>
 {/snippet}
 
 {#snippet senderIcon(options: { rounded?: boolean; styleFix?: string } = {})}
   {#if showSenderIdentity && !$HideIconStore}
-    {#if renderCharacter?.chaId === '§playground'}
+    {#if writeActionsAllowed && renderCharacter?.chaId === '§playground'}
       <div
         class="shadow-lg border-textcolor2 border flex justify-center items-center text-textcolor2"
         style={options?.styleFix ??
@@ -3404,7 +3600,8 @@
     </del>
   {:else if dom.tagName === 'BUTTON'}
     <button
-      {...getRisuButtonAttributes(dom)}
+      {...writeActionsAllowed ? getRisuButtonAttributes(dom) : {}}
+      disabled={!writeActionsAllowed && (dom.hasAttribute('risu-trigger') || dom.hasAttribute('risu-btn'))}
       class={dom.getAttribute('class') ?? ''}
       style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
@@ -3492,7 +3689,7 @@
                 {name}
               </h2>
             </div>
-            {#if editMode && !isGenerationLoading}
+            {#if writeActionsAllowed && editMode && !isGenerationLoading}
               <textarea
                 aria-label={language.messageInput}
                 class="grow h-138 sm:h-96 overflow-y-auto bg-transparent text-black p-2 mb-2 resize-none message-edit-area"
@@ -3516,7 +3713,7 @@
       {@render senderIcon({ rounded: displaySettings.roundIcons })}
       <span class="flex flex-col ml-4 w-full max-w-full min-w-0 text-black">
         <div class="flexium items-center chat-width">
-          {#if renderCharacter?.chaId === '§playground' && !blankMessage && ownerMessage}
+          {#if writeActionsAllowed && renderCharacter?.chaId === '§playground' && !blankMessage && ownerMessage}
             <span class="chat-width text-xl border-darkborderc flex items-center text-textcolor">
               <span>{ownerMessage.role === 'char' ? 'Assistant' : 'User'}</span>
               <button

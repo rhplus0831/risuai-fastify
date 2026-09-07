@@ -1,3 +1,10 @@
+import { demoteClientSession, resetClientSessionForTests } from 'src/ts/clientSession'
+import { enterClientWriter, repromoteClientWriter } from 'src/ts/__tests__/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  capturedWriterDrafts,
+  endWriterDraftCaptureTest,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -184,6 +191,7 @@ vi.mock('../../lang', async () => {
   return {
     language: new Proxy(
       {
+        connectedReaders: languageEnglish.connectedReaders,
         halfStreamingTokensPerSecond: languageEnglish.halfStreamingTokensPerSecond,
         halfStreamingGeneratedTokens: languageEnglish.halfStreamingGeneratedTokens,
       },
@@ -595,6 +603,9 @@ function mountCustomHtmlRows(
   role = 'char',
   props: Partial<{
     message: string
+    readOnly: boolean
+    displayChatId: string
+    displayMessageId: string
     isComment: boolean
     rerollIcon: boolean | 'dynamic'
     onReroll: () => void
@@ -825,6 +836,7 @@ afterEach(() => {
   setActiveMessageTranslations([])
   target.remove()
   document.body.innerHTML = ''
+  resetClientSessionForTests()
 })
 
 describe('empty synthetic greeting identity', () => {
@@ -3203,5 +3215,230 @@ describe('server raw translation controls', () => {
       expect.objectContaining({ jobId: 'translation-old-chat', status: 'succeeded' }),
     ])
     expect(target.textContent).not.toContain('Translation failed:')
+  })
+})
+
+describe('connected reader message authority', () => {
+  it('keeps plain copy while hiding every write action in explicit read-only custom snippets', async () => {
+    seedDatabase(
+      1,
+      '<div><risutextbox></risutextbox><risubuttons></risubuttons><button class="reader-trigger" risu-trigger="manual" risu-id="id">Run</button><button class="reader-lua" risu-btn="lua">Lua</button></div>',
+    )
+    testDatabaseState.db.useChatCopy = true
+    testDatabaseState.db.enableBookmark = true
+    testDatabaseState.db.characters[0].ttsMode = 'browser'
+    const clipboard = { writeText: vi.fn(async () => undefined), write: vi.fn(async () => undefined) }
+    const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard')
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: clipboard })
+    try {
+      mountCustomHtmlRows(1, 'char', { readOnly: true, rerollIcon: true })
+      await settle()
+      expect(
+        Array.from(target.querySelectorAll('[data-risu-message-action]')).map((button) =>
+          button.getAttribute('data-risu-message-action'),
+        ),
+      ).toEqual(['copy'])
+      expect(target.querySelector<HTMLButtonElement>('.reader-trigger')?.disabled).toBe(true)
+      expect(target.querySelector<HTMLButtonElement>('.reader-lua')?.disabled).toBe(true)
+      target.querySelector<HTMLButtonElement>('.reader-trigger')?.click()
+      target.querySelector<HTMLButtonElement>('.reader-lua')?.click()
+      target.querySelector<HTMLButtonElement>('.button-icon-copy')?.click()
+      await settle()
+      expect(clipboard.writeText).toHaveBeenCalledWith('visible message 0')
+      expect(clipboard.write).not.toHaveBeenCalled()
+      expect(customHtmlMocks.ParseMarkdown).not.toHaveBeenCalled()
+      expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+      expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+      expect(customHtmlMocks.risuChatParser).not.toHaveBeenCalled()
+    } finally {
+      if (descriptor) Object.defineProperty(window.navigator, 'clipboard', descriptor)
+      else Reflect.deleteProperty(window.navigator, 'clipboard')
+    }
+  })
+
+  it('does not request automatic translation as a managed reader', async () => {
+    seedDatabase(1, null as unknown as string)
+    testDatabaseState.db.translator = 'ko'
+    testDatabaseState.db.translatorType = 'llm'
+    testDatabaseState.db.characters[0].chats[0].autoTranslate = true
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    enterClientWriter()
+    demoteClientSession()
+    mountCustomHtmlRows(1, 'char', { autoTranslateOnReady: true })
+    await settle()
+    expect(target.querySelector('[data-risu-message-action="translate"]')).toBeNull()
+    expect(target.querySelector('[data-risu-message-action="edit"]')).toBeNull()
+    expect(customHtmlMocks.translateMessageCommand).not.toHaveBeenCalled()
+  })
+
+  it('denies writes when displayed identity differs from the canonical writer chat', async () => {
+    seedDatabase(1, null as unknown as string)
+    mountCustomHtmlRows(1, 'char', { displayChatId: 'different-chat', displayMessageId: 'different-message' })
+    await settle()
+    expect(target.querySelector('[data-risu-message-action="edit"]')).toBeNull()
+  })
+
+  it('does not resume a bookmark confirmation after demotion and promotion', async () => {
+    seedDatabase(1, null as unknown as string)
+    testDatabaseState.db.enableBookmark = true
+    enterClientWriter()
+    const pending = deferred<string>()
+    customHtmlMocks.alertInput.mockReturnValueOnce(pending.promise)
+    mountCustomHtmlRows(1)
+    mountPopupList()
+    await settle()
+    await openMessageActions()
+    target.querySelector<HTMLButtonElement>('[data-risu-message-action="bookmark"]')?.click()
+    await settle()
+    expect(customHtmlMocks.alertInput).toHaveBeenCalledOnce()
+    demoteClientSession()
+    repromoteClientWriter()
+    pending.resolve('late bookmark')
+    await settle()
+    expect(testDatabaseState.db.characters[0].chats[0].bookmarks).toEqual([])
+    expect(dispatchUpdateChatScopedWithOutcome).not.toHaveBeenCalled()
+  })
+
+  it('does not start a trigger after hydration resumes in a newer writer session', async () => {
+    seedDatabase(1, customHtmlMocks.templates.triggerButton)
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    enterClientWriter()
+    const pending = deferred<void>()
+    customHtmlMocks.hydrateChatMessages.mockReturnValueOnce(pending.promise)
+    mountCustomHtmlRows(1)
+    await settle()
+    target.querySelector<HTMLButtonElement>('.manual-trigger-button')?.click()
+    await settle()
+    expect(customHtmlMocks.hydrateChatMessages).toHaveBeenCalledOnce()
+    demoteClientSession()
+    repromoteClientWriter()
+    pending.resolve()
+    await settle()
+    expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+    expect(dispatchCompatibleChatUpdateScoped).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a translation response received after demotion and promotion', async () => {
+    seedDatabase(1, null as unknown as string)
+    testDatabaseState.db.translator = 'ko'
+    testDatabaseState.db.translatorType = 'llm'
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    enterClientWriter()
+    const receipt = await customHtmlMocks.translateMessageCommand({
+      baseRevision: 1,
+      messageId: 'message-0',
+      jobId: 'seed',
+    })
+    customHtmlMocks.translateMessageCommand.mockClear()
+    const pending = deferred<typeof receipt>()
+    customHtmlMocks.translateMessageCommand.mockReturnValueOnce(pending.promise)
+    mountCustomHtmlRows(1)
+    await settle()
+    target.querySelector<HTMLButtonElement>('.button-icon-translate')?.click()
+    await settle()
+    expect(customHtmlMocks.translateMessageCommand).toHaveBeenCalledOnce()
+    const jobId = customHtmlMocks.translateMessageCommand.mock.calls[0][0].jobId
+    demoteClientSession()
+    repromoteClientWriter()
+    pending.resolve({ ...receipt, jobId })
+    await settle()
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].translation).toBeUndefined()
+    expect(target.textContent).not.toContain('translated raw')
+  })
+
+  it('does not apply a manual trigger result received after demotion and promotion', async () => {
+    seedDatabase(1, customHtmlMocks.templates.triggerButton)
+    enterClientWriter()
+    const pending = deferred<any>()
+    customHtmlMocks.runTrigger.mockReturnValueOnce(pending.promise)
+    mountCustomHtmlRows(1)
+    await settle()
+    target.querySelector<HTMLButtonElement>('.manual-trigger-button')?.click()
+    await settle()
+    expect(customHtmlMocks.runTrigger).toHaveBeenCalledOnce()
+    const nextChat = JSON.parse(JSON.stringify(testDatabaseState.db.characters[0].chats[0]))
+    nextChat.message[0].data = 'stale trigger output'
+    demoteClientSession()
+    repromoteClientWriter()
+    pending.resolve({ chat: nextChat })
+    await settle()
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('visible message 0')
+    expect(dispatchCompatibleChatUpdateScoped).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('captures the message draft on demotion (popup=%s)', async (popup) => {
+    seedDatabase(1, null as unknown as string)
+    testDatabaseState.db.disableAutoPopupMessageEditor = !popup
+    await beginWriterDraftCaptureTest()
+    const pending = deferred<void>()
+    if (popup) customHtmlMocks.sleep.mockReturnValueOnce(pending.promise)
+    mountCustomHtmlRows(1)
+    await settle()
+    target.querySelector<HTMLButtonElement>('.button-icon-edit')?.click()
+    await settle()
+    if (popup) {
+      expect(popUpEditorStore.open).toBe(true)
+      popUpEditorStore.value = 'recover this message draft'
+    } else {
+      const editor = target.querySelector<HTMLTextAreaElement>('.message-edit-area')!
+      editor.value = 'recover this message draft'
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+      await settle()
+    }
+    demoteClientSession()
+    pending.resolve()
+    await settle()
+    expect(capturedWriterDrafts().map((draft) => draft.fields[0]?.value)).toContain('recover this message draft')
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('visible message 0')
+    expect(dispatchUpdateMessageScoped).not.toHaveBeenCalled()
+    for (const component of components) unmount(component)
+    components = []
+    await endWriterDraftCaptureTest()
+  })
+
+  it.each([false, true])('captures the translation draft on demotion (popup=%s)', async (popup) => {
+    seedDatabase(1, null as unknown as string)
+    testDatabaseState.db.disableAutoPopupMessageEditor = !popup
+    testDatabaseState.db.translator = 'ko'
+    testDatabaseState.db.translatorType = 'llm'
+    testDatabaseState.db.characters[0].chats[0].autoTranslate = true
+    const message = testDatabaseState.db.characters[0].chats[0].message[0]
+    message.translation = {
+      source: 'raw',
+      text: 'saved translation',
+      sourceHash: 'a'.repeat(64),
+      targetLanguage: 'ko',
+      inputLanguage: 'en',
+      translatorType: 'llm',
+      settingsHash: 'b'.repeat(64),
+      updatedAt: 123,
+    }
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    await beginWriterDraftCaptureTest()
+    const pending = deferred<void>()
+    if (popup) customHtmlMocks.sleep.mockReturnValueOnce(pending.promise)
+    mountCustomHtmlRows(1)
+    await settle()
+    buttonByText('editTranslation')?.click()
+    await settle()
+    if (popup) {
+      expect(popUpEditorStore.open).toBe(true)
+      popUpEditorStore.value = 'recover this translation draft'
+    } else {
+      const editor = target.querySelector<HTMLTextAreaElement>('[aria-label="editTranslation"]')!
+      expect(editor).toBeTruthy()
+      editor.value = 'recover this translation draft'
+      editor.dispatchEvent(new Event('input', { bubbles: true }))
+      await settle()
+    }
+    demoteClientSession()
+    pending.resolve()
+    await settle()
+    expect(capturedWriterDrafts().map((draft) => draft.fields[0]?.value)).toContain('recover this translation draft')
+    expect(message.translation?.text).toBe('saved translation')
+    expect(dispatchUpdateMessageScoped).not.toHaveBeenCalled()
+    for (const component of components) unmount(component)
+    components = []
+    await endWriterDraftCaptureTest()
   })
 })

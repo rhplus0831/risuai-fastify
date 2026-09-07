@@ -95,6 +95,7 @@
     hasNewUnreadMessage = $bindable(false),
     initialDisplayPending = $bindable(false),
     initialRowsPending = false,
+    readOnly = false,
   }: {
     messages: Message[]
     chatId?: string | null
@@ -118,6 +119,7 @@
     hasNewUnreadMessage?: boolean
     initialDisplayPending?: boolean
     initialRowsPending?: boolean
+    readOnly?: boolean
   } = $props()
 
   function legacyChatMetadataFallback(): ReturnType<typeof projectChatMetadata> | undefined {
@@ -1564,6 +1566,7 @@
         data-risu-dyna-icons={row.key === dynaIconRowKey ? 'true' : undefined}
         data-generation-display-projection={row.generationPresentationMode}>
         <Chat
+          {readOnly}
           message={row.generationDisplayProjection ? (row.generationDisplayProjection.text ?? '') : row.message.data}
           translation={row.generationDisplayProjection ? null : (row.message.translation ?? null)}
           isLastMemory={row.isLastMemory}
@@ -1602,7 +1605,8 @@
           (row.idx === messages.length - 1 && row.message.role === 'char')
             ? activeHalfStreamingProgress?.generatedTokens
             : undefined}
-          autoTranslateOnReady={typeof row.message.chatId === 'string' &&
+          autoTranslateOnReady={!readOnly &&
+            typeof row.message.chatId === 'string' &&
             $automaticTranslationMessageIds.includes(row.message.chatId) &&
             !$serverOwnedGeneratedMessageIds.has(row.message.chatId)}
           onAutoTranslationEligibilityConsumed={() => consumeAutomaticTranslationEligibility(row.message.chatId ?? '')}

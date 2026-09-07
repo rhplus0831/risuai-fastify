@@ -1,3 +1,5 @@
+import { demoteClientSession, resetClientSessionForTests } from 'src/ts/clientSession'
+import { enterClientWriter, repromoteClientWriter } from 'src/ts/__tests__/clientSession'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -163,6 +165,68 @@ describe('ChatBody translation parse bounds', () => {
     target.remove()
     document.body.innerHTML = ''
     chatBodyMocks.settingsOwner = {}
+    resetClientSessionForTests()
+  })
+
+  it.each([false, true])(
+    'skips automatic and requested client translation for read-only display (managed=%s)',
+    async (managed) => {
+      chatBodyMocks.ParseMarkdown.mockImplementation(async (text: string) => text)
+      if (managed) {
+        enterClientWriter()
+        demoteClientSession()
+      }
+      component = mount(ChatBody, {
+        target,
+        props: {
+          idx: 0,
+          modelShortName: '',
+          msgDisplay: `readonly source ${managed}`,
+          role: 'char',
+          translated: true,
+          translating: false,
+          retranslate: true,
+          readOnly: !managed,
+        },
+      })
+      flushSync()
+      await flushComponentPromises()
+      expect(chatBodyMocks.translateHTML).not.toHaveBeenCalled()
+      expect(chatBodyMocks.getLLMCache).not.toHaveBeenCalled()
+      expect(chatBodyMocks.ParseMarkdown).toHaveBeenCalledOnce()
+      expect((chatBodyMocks.ParseMarkdown.mock.calls[0] as unknown[])?.[5]).toMatchObject({ readOnly: true })
+    },
+  )
+
+  it('does not start delayed client translation after demotion and promotion', async () => {
+    setChatBodyDatabase({ translateBeforeHTMLFormatting: true, translatorType: 'llm' })
+    enterClientWriter()
+    let release!: () => void
+    chatBodyMocks.sleep.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+    )
+    component = mount(ChatBody, {
+      target,
+      props: {
+        idx: 0,
+        modelShortName: '',
+        msgDisplay: 'delayed writer translation',
+        role: 'char',
+        translated: true,
+        translating: false,
+        retranslate: true,
+      },
+    })
+    flushSync()
+    await flushComponentPromises()
+    expect(chatBodyMocks.sleep).toHaveBeenCalledOnce()
+    demoteClientSession()
+    repromoteClientWriter()
+    release()
+    await flushComponentPromises()
+    expect(chatBodyMocks.translateHTML).not.toHaveBeenCalled()
   })
 
   it('surfaces translateHTML failure once without retrying the full pipeline', async () => {

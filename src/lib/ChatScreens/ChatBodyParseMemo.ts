@@ -66,6 +66,7 @@ export interface ChatBodyParseMemoInput {
   name?: string
   streaming?: boolean
   displayPriority?: DisplaySourcePriority
+  readOnly?: boolean
   memoKey?: string
 }
 
@@ -82,6 +83,7 @@ export interface ChatBodyCachedOnlyInput {
   name?: string
   streaming?: boolean
   displayPriority?: DisplaySourcePriority
+  readOnly?: boolean
   cachedOnlyParseKey?: string
   detectionKey?: string
 }
@@ -487,7 +489,7 @@ export function getChatBodyParseMemoKey(input: ChatBodyParseMemoInput): string {
       input.chatId,
     )},"chatID":${stableFragment(
       input.chatID,
-    )},"data":${stableFragment(input.data ?? '')},"kind":"chat-body-parse","mode":${stableFragment(
+    )},"data":${stableFragment(input.data ?? '')},"kind":"chat-body-parse","readOnly":${stableFragment(input.readOnly === true)},"mode":${stableFragment(
       input.mode,
     )},"displayLayer":${stableFragment(input.displayLayer)},"messageId":${stableFragment(
       input.messageId,
@@ -540,6 +542,7 @@ export function getChatBodyCachedOnlyLlmDetectionKey(input: ChatBodyCachedOnlyIn
           name: input.name,
           streaming: input.streaming,
           displayPriority: input.displayPriority,
+          readOnly: input.readOnly,
         }))
 
   const parseKeyFragment = detectionMode === 'raw' ? '' : `,"parseKey":${stableFragment(parseKey ?? '')}`
@@ -574,6 +577,7 @@ export function memoizedChatBodyParse(input: ChatBodyParseMemoInput): Promise<st
         name: input.name,
         streaming: input.streaming,
         priority: input.displayPriority,
+        readOnly: input.readOnly,
       },
     ).catch((error) => {
       deleteParseMemoEntry(key)
@@ -609,6 +613,7 @@ export async function getChatBodyCachedOnlyLlmDecision(input: ChatBodyCachedOnly
           name: input.name,
           streaming: input.streaming,
           displayPriority: input.displayPriority,
+          readOnly: input.readOnly,
           memoKey: input.cachedOnlyParseKey,
         })
     return (await getLLMCache(cacheKey)) !== null

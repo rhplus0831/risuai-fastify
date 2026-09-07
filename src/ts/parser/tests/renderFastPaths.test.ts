@@ -294,6 +294,18 @@ describe('connected reader ParseMarkdown fallback', () => {
     expect(await rendered).toContain('readable')
     expect(mocks.processScriptFull).not.toHaveBeenCalled()
   })
+  it('honors an explicit read-only display even when the client otherwise has writer access', async () => {
+    const html = await ParseMarkdown(
+      '**readable**',
+      character as any,
+      'normal',
+      0,
+      {},
+      { chatId: 'reader-chat', readOnly: true },
+    )
+    expect(html).toContain('<strong>readable</strong>')
+    expect(mocks.processScriptFull).not.toHaveBeenCalled()
+  })
   it('preserves the normal writer script fallback', async () => {
     const html = await ParseMarkdown('readable', character as any, 'normal', 0, {}, { chatId: 'reader-chat' })
     expect(html).toContain('script: readable')

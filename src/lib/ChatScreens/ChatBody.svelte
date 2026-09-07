@@ -1,5 +1,11 @@
 <script lang="ts">
   import { getContext, onDestroy, untrack } from 'svelte'
+  import {
+    canUseClientWriteAccess,
+    captureClientSessionGeneration,
+    clientSessionStore,
+    isClientSessionGenerationCurrent,
+  } from 'src/ts/clientSession'
   import { sleep } from 'src/ts/util'
   import { alertError } from '../../ts/alert'
   import {
@@ -50,6 +56,7 @@
     translating: boolean
     retranslate: boolean
     allowClientTranslation?: boolean
+    readOnly?: boolean
     bodyRoot?: HTMLElement | null
     modelShortName: string
     onInitialDisplayParseStart?: (registration: symbol) => void
@@ -73,11 +80,16 @@
     translating = $bindable(false),
     retranslate = $bindable(false),
     allowClientTranslation = true,
+    readOnly = false,
     bodyRoot,
     modelShortName = '',
     onInitialDisplayParseStart = () => {},
     onInitialDisplayParseSettled = () => {},
   }: Props = $props()
+  const effectiveReadOnly = $derived.by(() => {
+    void $clientSessionStore
+    return readOnly || !canUseClientWriteAccess()
+  })
   const parseOwners = createChatBodyParseOwnerReaders()
   const displayScheduler = getContext<ChatDisplayScheduler | undefined>(CHAT_DISPLAY_SCHEDULER)
   let queuedDisplay: AbortController | undefined
@@ -172,15 +184,15 @@
     regenerate: boolean,
     fallback: string,
     setTranslating: (value: boolean) => void,
+    canTranslate: () => boolean,
   ): Promise<{ ok: true; value: string } | { ok: false; value: string }> {
+    if (!canTranslate()) return { ok: false, value: fallback }
     setTranslating(true)
     try {
-      return {
-        ok: true,
-        value: await translateHTML(html, false, charArg, chatID, regenerate),
-      }
+      const value = await translateHTML(html, false, charArg, chatID, regenerate)
+      return canTranslate() ? { ok: true, value } : { ok: false, value: fallback }
     } catch (error) {
-      reportParsingError(error)
+      if (canTranslate()) reportParsingError(error)
       return { ok: false, value: fallback }
     } finally {
       setTranslating(false)
@@ -189,10 +201,15 @@
 
   const markParsing = async (data: string, charArg: string | simpleCharacterArgument, chatID: number) => {
     const runId = ++markParsingRun
+    const sessionGeneration = captureClientSessionGeneration()
+    const parseReadOnly = effectiveReadOnly
+    const isRunCurrent = () => runId === markParsingRun && isClientSessionGenerationCurrent(sessionGeneration)
+    const canTranslateForRun = () => isRunCurrent() && !readOnly && canUseClientWriteAccess() && allowClientTranslation
+    const parseForRun = (input: Parameters<typeof memoizedChatBodyParse>[0]) =>
+      isRunCurrent() ? memoizedChatBodyParse(input) : Promise.resolve(data)
     const setTranslatingForRun = (value: boolean) => {
-      if (runId === markParsingRun) {
-        translating = value
-      }
+      // A retired run may clear only its own busy indicator; a replacement run owns its own state.
+      if (runId === markParsingRun && (!value || isRunCurrent())) translating = value
     }
     // track 'translated' and 'retranslate' state
     translated
@@ -201,7 +218,7 @@
     const cbsConditions = getCbsCondition()
 
     try {
-      const detectTranslation = allowClientTranslation && !retranslate
+      const detectTranslation = canTranslateForRun() && !retranslate
       const automaticTranslation = detectTranslation && automaticClientTranslationEnabled()
       const settings = parseOwners.settingsOwner()
       const detectCachedLlm =
@@ -222,6 +239,7 @@
               name,
               streaming,
               displayPriority,
+              readOnly: parseReadOnly,
             })
           : undefined
       const detectionKey = detectCachedLlm
@@ -255,6 +273,7 @@
                 name,
                 streaming,
                 displayPriority,
+                readOnly: parseReadOnly,
                 fallbackMode: mode,
                 cachedOnlyParseKey,
                 detectionKey,
@@ -267,9 +286,7 @@
           const lastTranslated = translated
 
           setTimeout(() => {
-            if (runId === markParsingRun) {
-              translated = translateText
-            }
+            if (canTranslateForRun()) translated = translateText
           }, 10)
 
           // State change of `translated` triggers markParsing again,
@@ -282,7 +299,7 @@
         }
       }
 
-      if (allowClientTranslation && (retranslate || translated)) {
+      if (canTranslateForRun() && (retranslate || translated)) {
         const settings = parseOwners.settingsOwner()
         if (settings.showTranslationLoading) {
           lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid #3b82f6; border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
@@ -290,13 +307,21 @@
 
         if (settings.translatorType === 'llm' && settings.translateBeforeHTMLFormatting) {
           await sleep(100)
-          const translatedHtml = await translateHTMLOnce(data, charArg, chatID, retranslate, data, setTranslatingForRun)
+          const translatedHtml = await translateHTMLOnce(
+            data,
+            charArg,
+            chatID,
+            retranslate,
+            data,
+            setTranslatingForRun,
+            canTranslateForRun,
+          )
           if (!translatedHtml.ok) {
             return translatedHtml.value
           }
           const marked = await parseWithRetry(
             () =>
-              memoizedChatBodyParse({
+              parseForRun({
                 data: translatedHtml.value,
                 charArg,
                 owners: parseOwners,
@@ -309,6 +334,7 @@
                 name,
                 streaming,
                 displayPriority,
+                readOnly: parseReadOnly,
               }),
             data,
           )
@@ -316,7 +342,7 @@
             return marked.value
           }
           setTimeout(() => {
-            if (runId === markParsingRun) {
+            if (isRunCurrent()) {
               retranslate = false
             }
           }, 10)
@@ -324,7 +350,7 @@
         } else if (!settings.legacyTranslation) {
           const marked = await parseWithRetry(
             () =>
-              memoizedChatBodyParse({
+              parseForRun({
                 data,
                 charArg,
                 owners: parseOwners,
@@ -338,6 +364,7 @@
                 name,
                 streaming,
                 displayPriority,
+                readOnly: parseReadOnly,
               }),
             data,
           )
@@ -351,6 +378,7 @@
             retranslate,
             data,
             setTranslatingForRun,
+            canTranslateForRun,
           )
           if (!translatedHtml.ok) {
             return translatedHtml.value
@@ -363,7 +391,7 @@
             return translated.value
           }
           setTimeout(() => {
-            if (runId === markParsingRun) {
+            if (isRunCurrent()) {
               retranslate = false
             }
           }, 10)
@@ -371,7 +399,7 @@
         } else {
           const marked = await parseWithRetry(
             () =>
-              memoizedChatBodyParse({
+              parseForRun({
                 data,
                 charArg,
                 owners: parseOwners,
@@ -385,6 +413,7 @@
                 name,
                 streaming,
                 displayPriority,
+                readOnly: parseReadOnly,
               }),
             data,
           )
@@ -398,12 +427,13 @@
             retranslate,
             data,
             setTranslatingForRun,
+            canTranslateForRun,
           )
           if (!translated.ok) {
             return translated.value
           }
           setTimeout(() => {
-            if (runId === markParsingRun) {
+            if (isRunCurrent()) {
               retranslate = false
             }
           }, 10)
@@ -412,7 +442,7 @@
       } else {
         const marked = await parseWithRetry(
           () =>
-            memoizedChatBodyParse({
+            parseForRun({
               data,
               charArg,
               owners: parseOwners,
@@ -426,6 +456,7 @@
               name,
               streaming,
               displayPriority,
+              readOnly: parseReadOnly,
             }),
           data,
         )
@@ -435,7 +466,7 @@
         return marked.value
       }
     } catch (error) {
-      if (runId === markParsingRun) {
+      if (isRunCurrent()) {
         settleInitialDisplayParse()
       }
       throw error
@@ -550,6 +581,7 @@
       translated,
       retranslate,
       allowClientTranslation,
+      effectiveReadOnly,
       firstMessage,
       role,
     ]

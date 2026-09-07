@@ -1264,6 +1264,7 @@ export async function ParseMarkdown(
   chatID = -1,
   cbsConditions: CbsConditions = {},
   displayTarget: {
+    readOnly?: boolean
     chatId?: string
     layer?: DisplaySourceLayer
     messageId?: string
@@ -1273,7 +1274,7 @@ export async function ParseMarkdown(
   } = {},
 ) {
   const sessionGeneration = captureClientSessionGeneration()
-  const startedReadOnly = isClientReadOnly()
+  const startedReadOnly = displayTarget.readOnly === true || isClientReadOnly()
   let firstParsed = ''
   const additionalAssetMode = mode === 'back' ? 'back' : 'normal'
   let char = typeof charArg === 'string' ? parserCharacterOwnerById(charArg) : charArg
