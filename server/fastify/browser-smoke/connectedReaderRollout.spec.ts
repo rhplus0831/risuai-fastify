@@ -109,6 +109,8 @@ test('default connected Reader reconnects after an actual server restart without
   })
   const writerContext = await browser.newContext()
   const readerContext = await browser.newContext()
+  writerContext.setDefaultTimeout(10_000)
+  readerContext.setDefaultTimeout(10_000)
   const writer = await writerContext.newPage()
   const reader = await readerContext.newPage()
   const readerRequests: RolloutApiRequest[] = []
@@ -118,6 +120,7 @@ test('default connected Reader reconnects after an actual server restart without
     variant: 'default-restart',
     restartMechanism:
       'Close all Fastify HTTP connections and SQLite, rebuild Fastify on the same port and data directory; the Node test process remains alive.',
+    editEntry: 'Message Edit → default Popup Editor plain-text input → Close, which invokes saveMessageEdit.',
     readerRequests,
     writerRequests,
     pageErrors,
@@ -226,6 +229,8 @@ test('conservative fallback reload replays one UI-saved command and preserves th
   })
   const writerContext = await browser.newContext()
   const readerContext = await browser.newContext()
+  writerContext.setDefaultTimeout(10_000)
+  readerContext.setDefaultTimeout(10_000)
   const writer = await writerContext.newPage()
   const reader = await readerContext.newPage()
   const readerRequests: RolloutApiRequest[] = []
@@ -240,6 +245,7 @@ test('conservative fallback reload replays one UI-saved command and preserves th
   const acknowledgements: Array<{ body: unknown; status: number }> = []
   const evidence: Record<string, unknown> = {
     variant: COMPILED_FALLBACK ? 'compiled-FALSE-fallback' : 'default-to-explicit-disabled-fallback',
+    editEntry: 'Message Edit → default Popup Editor plain-text input → Close, which invokes saveMessageEdit.',
     readerRequests,
     writerRequests,
     pageErrors,

@@ -170,8 +170,13 @@ export async function saveRolloutMessageThroughUi(page: Page, text: string): Pro
     await row.getByRole('button', { name: 'More actions', exact: true }).click()
     await page.locator('#risu-popup-menu [data-risu-message-action="edit"]').click()
   }
-  await row.getByRole('textbox').fill(text)
-  await row.getByRole('button', { name: 'Save', exact: true }).click()
+  const popup = page.getByRole('dialog', { name: 'Popup Editor', exact: true })
+  await expect(popup).toBeVisible()
+  await popup.getByRole('textbox', { name: 'Plain text editor', exact: true }).fill(text)
+  // The default message editor saves through openAutoPopupMessageEditor when
+  // its current popup session closes; this dialog has no separate Save button.
+  await popup.getByRole('button', { name: 'Close', exact: true }).click()
+  await expect(popup).toHaveCount(0)
 }
 
 export async function rolloutPageIdentity(page: Page) {
