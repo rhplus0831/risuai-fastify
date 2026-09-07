@@ -188,3 +188,16 @@ The current old-writer freeze is an existing contract, not the desired connected
 reader behavior. Its replacement and new ownership/draft protections are required
 at the reader handoff and Stage 3 reconciliation. Phase 2 is still in progress;
 confirmation/transcript acceptance and the final phase gates remain.
+
+## Phase 2b — Transcript Input and Rendering
+
+The [transcript dispositions](inventory.md#critical-contract-2b-transcript-input-and-rendering)
+cover real input/remount overlap, initial skeleton/display gates, newest-row
+priority, logical identity, nonempty transient samples and resident bounds.
+**2b slice verified** by the unchanged P0-T cached-height fault and two restored
+repetitions, plus Phase 1's full-browser runs of the retained entry/startup and
+residency cases. Production sources remain unchanged at this review; no new
+execution is claimed. Direct geometry/scroll controls retain narrower algorithm
+claims and do not replace real input. Unreviewed residency interactions remain
+for Phase 3. Phase 2a implementation is the only active code slice; full Phase 2
+acceptance still requires its browser fault proof and the phase-ending gates.
