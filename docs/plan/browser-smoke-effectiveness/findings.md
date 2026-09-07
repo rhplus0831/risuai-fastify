@@ -234,9 +234,61 @@ exactly-once generation, and writer transitions remain separate Phase 2 owners.
   diagnostics useful while preventing their promotion to successful final
   evidence. Check all helper consumers and demonstrate unchanged repaired tests
   reject the original helper behavior. No production mutation is involved.
-- Disposition: **open**, owner Phase 1. Additional startup/locale artifacts may
-  survive local failed reruns; assess their invocation ownership before expanding
-  cleanup. Detailed repair/fault evidence will be appended here.
+- Disposition: **verified repair**; Phase 1 aggregate and full-browser evidence passed in status. Startup
+  and locale artifacts deliberately keep separate invocation ownership: the
+  verification command runs measurement and integration in separate Playwright
+  invocations. They are not consumed as required integration evidence.
+
+### BSE-001 Repair and Fault Evidence
+
+Implementation source: `2138c8897` plus the artifact helper/unit/global-setup
+changes recorded with this finding. Phase 1 changes only test infrastructure.
+Global setup creates a new run ID; partial writers stamp it and the merger
+requires that independently supplied current ID. Schema version remains 1;
+unstamped previous artifacts are diagnostic history, not current evidence.
+
+The required artifact covers exactly small/large × flag-off/on startup, three
+named recovery journeys, denial/takeover, four optional-runtime variants and all
+44 manifest routes in their declared batches. Nested observations must satisfy
+the scenario's actual outcome (including retained mutation identity, single
+revision advance, acknowledgement, or route-local Retry as appropriate).
+Failures preserve partials and remove final JSON/TXT; a successful TXT includes
+its run ID. Focused partial runs return no combined success report.
+
+`pnpm test -- server/fastify/__tests__/fastBootstrapIntegrationArtifact.test.ts`
+passed **67/67** (implementing subagent); strict server and browser-smoke
+TypeScript checks passed. The parent ran six separate justified helper faults
+in the disposable checkout, restoring the helper between runs. Regression
+fixture/test/global-setup files were copied unchanged from the fixed source.
+The common command was `pnpm --config.verify-deps-before-run=false exec vitest
+run --config server/fastify/vitest.config.ts
+server/fastify/__tests__/fastBootstrapIntegrationArtifact.test.ts -t '<selection>'`.
+These are artifact-integrity faults, not claims about faulty product behavior.
+
+| Fault (exact helper edit)                                                                                         | Unchanged test selection                                                                                                             | Intended/observed failure                                                                                                      |
+| ----------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------ |
+| Remove `checkRecoveryCompleteness(recovery, issues)` call.                                                        | `does not promote empty recovery evidence`                                                                                           | 1 selected failure: expected the required merge to throw; it accepted an empty recovery matrix.                                |
+| Remove `checkDirectLinkSemantics(result, expectedCases[caseIndex]!, caseIndex, issues)` call.                     | The six `rejects fabricated direct-link` cases, `requires every declared route resource`, and `rejects using a redirect source key`. | 8 selected failures: fabricated route/path/surfaces/request metadata and incorrect redirect were accepted instead of rejected. |
+| In `validateCurrentRun`, drop the `value.runId !== runId` condition, retaining only `if (!isRecord(value))`.      | Both `rejects stale run provenance` cases, both `rejects legacy evidence` cases, and `complete previous invocation`.                 | 5 selected failures: required merges did not reject stale/unstamped data; optional rerun returned an artifact instead of null. |
+| Remove the `if (!value[field].every(validEntry))` guard and its error throw from recovery validation.             | `rejects empty telemetry when reading and writing partials`                                                                          | 1 selected failure: the partial writer accepted empty telemetry rather than throwing.                                          |
+| Insert `writeFastBootstrapIntegrationArtifact(artifact, outputDir)` immediately before the required-issues throw. | `rejects a missing batch and removes a previously successful final`                                                                  | 1 selected failure: final JSON exists after the incomplete required merge.                                                     |
+| Remove the `for (const name of [finalJsonName, finalTextName]) fs.rmSync(...)` cleanup at merge entry.            | Same missing-batch selection.                                                                                                        | 1 selected failure: previous successful final JSON survives rejection.                                                         |
+
+Every failure was at the contract assertion (`toThrow`, `toBeNull`, or absence
+of the final file), not compilation/import failure. Restore all six edits and
+run the complete unchanged artifact unit: **67/67 pass**, 307ms. The fixture
+writes real temporary partial files and calls the actual merge/write boundaries;
+it never supplies a precomputed merge outcome.
+
+Real browser consumers: `RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED=true pnpm exec
+playwright test -c playwright.fastify-smoke.config.ts
+server/fastify/browser-smoke/startupDirectLinks.spec.ts
+server/fastify/browser-smoke/startupRecoveryIntegrationMatrix.spec.ts`:
+**11/11 pass in 39.7s**, including required global teardown. Inspection of the
+resulting current-run JSON confirms 4 startup, 3 recovery, 1 writer, 4 optional
+runtime and 44 route records with one matching run ID. Final aggregate evidence
+is linked from status; unchanged remaining specs exercise global setup again
+in the phase-ending full suite.
 
 ## BSE-002: Alert presentation is not operation confirmation coverage
 
@@ -300,4 +352,4 @@ server/fastify/browser-smoke/displayPaintCache.spec.ts --workers=1`:
   Limit: this fault proves paint restoration, while the new explicit frame
   barriers prevent vacuous sampler success; it does not claim every browser
   frame on physical devices is observed.
-- Disposition: focused repair verified; Phase 1 aggregate evidence pending.
+- Disposition: verified repair; Phase 1 aggregate and full-browser evidence passed in status.

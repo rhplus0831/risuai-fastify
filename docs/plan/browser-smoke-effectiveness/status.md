@@ -4,14 +4,16 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Phase 0 accepted; Phase 1 is the next implementation slice.
-- Execution source: `711b1d583`; initial worktree clean, now inventory/evidence edits.
-- Current scope: complete discovery/control map and three calibration pilots.
-- Next action: repair BSE-001 artifact completeness/provenance, finish the shared
-  control dispositions, and validate every affected artifact consumer in Phase 1.
-- Confirmed gaps: BSE-001 (artifact completeness, Phase 1), BSE-002 (browser
-  operation confirmation, Phase 2a), BSE-003 (completed normal-send reload, Phase 2c).
-- Blockers: none. Reader implementation and smoke Phases 1–4 remain pending.
+- State: Phases 0–1 accepted; Phase 2 critical journeys are next.
+- Execution source: Phase 0 accepted at `7399389f9` (implementation `711b1d583`);
+  Phase 1 changes are in progress on that source.
+- Current scope: the four critical browser contracts; prioritize normal-send
+  durable reload (2c) and stale-response recovery (2d).
+- Next action: extend the normal composer journey through completed reload and
+  exact durable identities, then finish recovery, confirmation and transcript proof.
+- Confirmed gaps: BSE-002 (browser operation confirmation, Phase 2a) and BSE-003
+  (completed normal-send reload, Phase 2c). BSE-001/004 are verified repairs.
+- Blockers: none. Reader implementation and smoke Phases 2–4 remain pending.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
@@ -118,3 +120,35 @@ run. This verifies the final implementation source `711b1d583`; accompanying
 audit documentation was revalidated after recording results. **Phase 0 accepted.** This phase contains no production/test implementation
 change; the plan's implementation-batch `pnpm test:agent` applies when Phase 1
 repairs land, while Phase 0 still requires the explicitly authorized full suite.
+
+## Phase 1 Execution — 2026-09-07
+
+Source: `2138c8897` (paint-frame repair) plus artifact helper/global-setup/unit
+and owning guide/inventory changes. One bounded subagent implemented the artifact
+repair; parent review, independent faults and real browser consumers are complete.
+
+- [Shared-control dispositions](inventory.md#phase-1-shared-control-dispositions)
+  retain every unchanged owner with per-caller roles and scope limits. No common
+  writer/queue/UI transition was replaced by a test result; narrow direct setters
+  and API/router actions retain explicit setup/action limits.
+- [BSE-001](findings.md#bse-001-repair-and-fault-evidence): **67/67** unit pass;
+  six isolated completeness/semantics/provenance/payload/publication faults fail
+  at their intended assertions; restored complete unit **67/67 pass**. Real
+  direct-link/recovery producer specs plus required merge **11/11 pass**, 39.7s.
+- [BSE-004](findings.md#bse-004-paint-cache-observation-must-sample-every-held-phase):
+  changed browser consumer passes, production cache-restore fault fails the
+  pre-bundle appearance assertion, clean restored consumer **1/1 passes**, 3.7s.
+- Strict server/browser TypeScript, code Prettier and whitespace passed after
+  the artifact implementation. Current guides now distinguish successful
+  required matrices from partial diagnostics and independent artifact families.
+- `pnpm test:agent` **passed all seven lanes in 2m 22.9s**, including 8,348
+  frontend and 4,164 server tests; five existing ordinary-suite skips remain.
+- Required phase-ending `pnpm test:all` **passed all 13 lanes in 5m 39.1s**,
+  including **77/77 browser cases** (2.7m), required current-run artifact merge,
+  compatibility, coverage, scale and performance. No additional skips/exclusions;
+  opt-in transcript cost/profile and the separate pinned differential retain
+  their documented limits. This run covers the final Phase 1 implementation
+  source described above, including all consumers of global setup.
+- Final documentation checks: current guides **49 pass**, both plan bundles plus
+  coordination/index **22 pass**; explicit Markdown Prettier and whitespace pass.
+  **Phase 1 accepted.** No reader changes yet; smoke Phase 2 is the next slice.

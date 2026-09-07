@@ -1,7 +1,19 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import type { StartupCoordinatorSnapshot, StartupReadinessSnapshot } from '@risuai/protocol/startup-telemetry'
-import { directLinkCases, fastBootstrapDirectLinkBatchCount } from './fastBootstrapDirectLinks.js'
+import {
+  isStartupTelemetryEvent,
+  STARTUP_TELEMETRY_MILESTONES,
+  type StartupCoordinatorSnapshot,
+  type StartupReadinessSnapshot,
+} from '@risuai/protocol/startup-telemetry'
+import { routeKey } from '@risuai/shared-core/router-route'
+import {
+  directLinkBatches,
+  directLinkCases,
+  fastBootstrapDirectLinkBatchCount,
+  requiredResourcePaths,
+  resourceSurfacesForRoute,
+} from './fastBootstrapDirectLinks.js'
 
 export interface RolloutStartupCase {
   fixture: 'small' | 'large'
@@ -74,6 +86,7 @@ export interface FastBootstrapRecoveryArtifact {
 }
 
 export interface FastBootstrapIntegrationArtifact extends FastBootstrapRecoveryArtifact {
+  runId: string
   directLinks: DirectLinkCase[]
 }
 
@@ -127,31 +140,36 @@ export function resetFastBootstrapArtifactOutputs(outputDir = fastBootstrapOutpu
 export function writeFastBootstrapRecoveryPartial(
   artifact: FastBootstrapRecoveryArtifact,
   outputDir = fastBootstrapOutputDir(),
+  runId = process.env.RISU_FAST_BOOTSTRAP_ARTIFACT_RUN_ID,
 ): string {
+  requireRunId(runId)
   validateRecoveryArtifact(artifact)
-  return writeJson(path.join(outputDir, recoveryPartialName), artifact)
+  return writeJson(path.join(outputDir, recoveryPartialName), { ...artifact, runId })
 }
 
 export function writeFastBootstrapDirectLinkBatchPartial(
   artifact: FastBootstrapDirectLinkBatchArtifact,
   outputDir = fastBootstrapOutputDir(),
+  runId = process.env.RISU_FAST_BOOTSTRAP_ARTIFACT_RUN_ID,
 ): string {
+  requireRunId(runId)
   validateDirectLinkBatchArtifact(artifact)
   const name = `fast-bootstrap-integration.direct-links-${artifact.batchIndex + 1}-of-${artifact.batchCount}.partial.json`
-  return writeJson(path.join(outputDir, name), artifact)
+  return writeJson(path.join(outputDir, name), { ...artifact, runId })
 }
 
 export function mergeFastBootstrapArtifactOutputs({
   outputDir = fastBootstrapOutputDir(),
   required = false,
+  runId = process.env.RISU_FAST_BOOTSTRAP_ARTIFACT_RUN_ID,
 }: {
   outputDir?: string
   required?: boolean
+  runId?: string
 } = {}): FastBootstrapIntegrationArtifact | null {
+  // A previous successful merge must not survive an incomplete or malformed rerun.
+  for (const name of [finalJsonName, finalTextName]) fs.rmSync(path.join(outputDir, name), { force: true })
   const recoveryPath = path.join(outputDir, recoveryPartialName)
-  const recovery = fs.existsSync(recoveryPath)
-    ? readRecoveryArtifact(recoveryPath)
-    : emptyFastBootstrapRecoveryArtifact()
   const batchPaths = fs.existsSync(outputDir)
     ? fs
         .readdirSync(outputDir)
@@ -163,11 +181,24 @@ export function mergeFastBootstrapArtifactOutputs({
   if (!required && !fs.existsSync(recoveryPath) && batchPaths.length === 0) return null
 
   const issues: string[] = []
+  if (!isNonemptyString(runId)) {
+    if (required) requireRunId(runId)
+    return null
+  }
+  let recovery = emptyFastBootstrapRecoveryArtifact()
   if (!fs.existsSync(recoveryPath)) issues.push(`missing ${recoveryPartialName}`)
+  else {
+    try {
+      recovery = readRecoveryArtifact(recoveryPath, runId)
+    } catch (error) {
+      issues.push(error instanceof Error ? error.message : String(error))
+    }
+  }
+  checkRecoveryCompleteness(recovery, issues)
   const batches: FastBootstrapDirectLinkBatchArtifact[] = []
   for (const batchPath of batchPaths) {
     try {
-      batches.push(readDirectLinkBatchArtifact(batchPath))
+      batches.push(readDirectLinkBatchArtifact(batchPath, runId))
     } catch (error) {
       issues.push(error instanceof Error ? error.message : String(error))
     }
@@ -186,6 +217,7 @@ export function mergeFastBootstrapArtifactOutputs({
   }
 
   const expectedCases = directLinkCases()
+  const expectedBatches = directLinkBatches(expectedCases)
   const byCaseIndex = new Map<number, DirectLinkCase>()
   for (const batch of batches) {
     if (batch.batchCount !== fastBootstrapDirectLinkBatchCount) {
@@ -194,7 +226,12 @@ export function mergeFastBootstrapArtifactOutputs({
     if (batch.totalCaseCount !== expectedCases.length) {
       issues.push(`direct-link batch ${batch.batchIndex + 1} reports totalCaseCount=${batch.totalCaseCount}`)
     }
+    const expectedIndices = new Set(expectedBatches[batch.batchIndex]?.cases.map((entry) => entry.caseIndex))
     for (const entry of batch.directLinks) {
+      if (!expectedCases[entry.caseIndex]) issues.push(`out-of-range direct-link case index ${entry.caseIndex}`)
+      else if (!expectedIndices.has(entry.caseIndex)) {
+        issues.push(`direct-link case index ${entry.caseIndex} belongs to a different batch`)
+      }
       if (byCaseIndex.has(entry.caseIndex)) issues.push(`duplicate direct-link case index ${entry.caseIndex}`)
       else byCaseIndex.set(entry.caseIndex, entry.result)
     }
@@ -207,21 +244,18 @@ export function mergeFastBootstrapArtifactOutputs({
       issues.push(`missing direct-link case index ${caseIndex}`)
       continue
     }
-    if (result.path !== expectedCases[caseIndex]!.path) {
-      issues.push(
-        `direct-link case index ${caseIndex} has path ${JSON.stringify(result.path)} instead of ${JSON.stringify(expectedCases[caseIndex]!.path)}`,
-      )
-    }
+    checkDirectLinkSemantics(result, expectedCases[caseIndex]!, caseIndex, issues)
     directLinks.push(result)
   }
 
-  const artifact: FastBootstrapIntegrationArtifact = { ...recovery, directLinks }
-  if (required || issues.length === 0) writeFastBootstrapIntegrationArtifact(artifact, outputDir)
+  const artifact: FastBootstrapIntegrationArtifact = { ...recovery, runId, directLinks }
   if (issues.length > 0 && required) throw new Error(`Fast-bootstrap artifact merge failed: ${issues.join('; ')}`)
-  return issues.length === 0 ? artifact : null
+  if (issues.length > 0) return null
+  writeFastBootstrapIntegrationArtifact(artifact, outputDir)
+  return artifact
 }
 
-export function writeFastBootstrapIntegrationArtifact(
+function writeFastBootstrapIntegrationArtifact(
   artifact: FastBootstrapIntegrationArtifact,
   outputDir = fastBootstrapOutputDir(),
 ): { json: string; text: string } {
@@ -236,6 +270,7 @@ export function writeFastBootstrapIntegrationArtifact(
 export function formatIntegrationArtifact(artifact: FastBootstrapIntegrationArtifact): string {
   const lines = [
     'Fast-bootstrap integration matrix',
+    `run_id\t${artifact.runId}`,
     'fixture\tobserver\tobserver_before_writer\tobserver_ms\twriter_ms\tbackground_ms',
   ]
   for (const entry of artifact.startupRollout) {
@@ -311,15 +346,20 @@ export function formatIntegrationArtifact(artifact: FastBootstrapIntegrationArti
   return `${lines.join('\n')}\n`
 }
 
-function readRecoveryArtifact(file: string): FastBootstrapRecoveryArtifact {
+function readRecoveryArtifact(file: string, runId: string): FastBootstrapRecoveryArtifact {
   const value = readJson(file)
+  validateCurrentRun(value, runId, file)
   validateRecoveryArtifact(value)
   return value
 }
 
-function readDirectLinkBatchArtifact(file: string): FastBootstrapDirectLinkBatchArtifact {
+function readDirectLinkBatchArtifact(file: string, runId: string): FastBootstrapDirectLinkBatchArtifact {
   const value = readJson(file)
+  validateCurrentRun(value, runId, file)
   validateDirectLinkBatchArtifact(value)
+  const name = `fast-bootstrap-integration.direct-links-${value.batchIndex + 1}-of-${value.batchCount}.partial.json`
+  if (path.basename(file) !== name)
+    throw new Error(`direct-link batch filename does not match payload: ${path.basename(file)}`)
   return value
 }
 
@@ -333,9 +373,233 @@ function readJson(file: string): unknown {
 
 function validateRecoveryArtifact(value: unknown): asserts value is FastBootstrapRecoveryArtifact {
   if (!isRecord(value) || value.schemaVersion !== 1) throw new Error('invalid Fast-bootstrap recovery artifact schema')
-  for (const field of ['startupRollout', 'recoveryJourneys', 'writerJourneys', 'optionalRuntimeJourneys']) {
-    if (!Array.isArray(value[field])) throw new Error(`invalid Fast-bootstrap recovery artifact field ${field}`)
+  const validators = {
+    startupRollout: isRolloutStartupCase,
+    recoveryJourneys: isRecoveryJourney,
+    writerJourneys: isWriterJourney,
+    optionalRuntimeJourneys: isOptionalRuntimeJourney,
   }
+  for (const [field, validEntry] of Object.entries(validators)) {
+    if (!Array.isArray(value[field])) throw new Error(`invalid Fast-bootstrap recovery artifact field ${field}`)
+    if (!value[field].every(validEntry)) throw new Error(`invalid Fast-bootstrap recovery artifact entry in ${field}`)
+  }
+}
+
+function checkRecoveryCompleteness(artifact: FastBootstrapRecoveryArtifact, issues: string[]): void {
+  const identities = [
+    [
+      'startupRollout',
+      artifact.startupRollout.map((entry) => `${entry.fixture}/${entry.observerMode}`),
+      ['small/disabled', 'small/enabled', 'large/disabled', 'large/enabled'],
+    ],
+    [
+      'recoveryJourneys',
+      artifact.recoveryJourneys.map((entry) => entry.scenario),
+      ['event-gap', 'offline-before-send', 'response-lost-after-commit'],
+    ],
+    ['writerJourneys', artifact.writerJourneys.map((entry) => entry.scenario), ['denial-then-takeover']],
+    [
+      'optionalRuntimeJourneys',
+      artifact.optionalRuntimeJourneys.map((entry) => `${entry.runtime}/${entry.mode}`),
+      ['background-resources/slow', 'background-resources/failed', 'inlay-catalog/slow', 'inlay-catalog/failed'],
+    ],
+  ] as const
+  for (const [field, actual, expected] of identities) {
+    if (!sameIdentities(actual, expected))
+      issues.push(`incomplete or duplicate ${field} identities: expected ${expected.join(', ')}`)
+  }
+}
+
+function checkDirectLinkSemantics(
+  result: DirectLinkCase,
+  definition: ReturnType<typeof directLinkCases>[number],
+  caseIndex: number,
+  issues: string[],
+): void {
+  const expected = {
+    path: definition.path,
+    requestedRouteKey: routeKey(definition.route),
+    finalRouteKey: routeKey(definition.finalRoute ?? definition.route),
+  }
+  for (const field of ['path', 'requestedRouteKey', 'finalRouteKey'] as const) {
+    if (result[field] !== expected[field]) issues.push(`direct-link case index ${caseIndex} has incorrect ${field}`)
+  }
+  if (!sameIdentities(result.surfaces, resourceSurfacesForRoute(definition.route))) {
+    issues.push(`direct-link case index ${caseIndex} has incorrect surfaces`)
+  }
+  if (!sameIdentities(result.requiredPaths, requiredResourcePaths(definition.route))) {
+    issues.push(`direct-link case index ${caseIndex} has incorrect requiredPaths`)
+  }
+  if (
+    !['/api/v1/resources/shell', ...result.requiredPaths].every((requested) =>
+      result.requestedPaths.includes(requested),
+    )
+  ) {
+    issues.push(`direct-link case index ${caseIndex} is missing requestedPaths evidence`)
+  }
+}
+
+function isRolloutStartupCase(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  const { startup, coordinator, earlyRequests, telemetry } = value
+  const observerEnabled = value.observerMode === 'enabled'
+  if (
+    (value.fixture !== 'small' && value.fixture !== 'large') ||
+    (value.observerMode !== 'disabled' && value.observerMode !== 'enabled') ||
+    value.observerVisibleBeforeWriter !== observerEnabled ||
+    !isRecord(startup) ||
+    startup.schemaVersion !== 1 ||
+    startup.phase !== 'background-ready' ||
+    !isRecord(startup.timestamps) ||
+    !isRecord(startup.durationsFromEntry) ||
+    !STARTUP_TELEMETRY_MILESTONES.every(
+      (milestone) =>
+        isNonnegativeNumber((startup.timestamps as Record<string, unknown>)[milestone]) &&
+        isNonnegativeNumber((startup.durationsFromEntry as Record<string, unknown>)[milestone]),
+    ) ||
+    (startup.timestamps['observer-ready'] as number) > (startup.timestamps['writer-ready'] as number) ||
+    !Array.isArray(startup.attempts) ||
+    startup.attempts.length === 0 ||
+    !startup.attempts.every(
+      (attempt) =>
+        isRecord(attempt) &&
+        isCount(attempt.attemptId) &&
+        attempt.attemptId > 0 &&
+        isNonnegativeNumber(attempt.startedAtMs) &&
+        isNonnegativeNumber(attempt.completedAtMs) &&
+        attempt.completedAtMs >= attempt.startedAtMs &&
+        attempt.failedAtMs === undefined,
+    ) ||
+    !isRecord(coordinator) ||
+    coordinator.schemaVersion !== 1 ||
+    coordinator.observerShellEnabled !== observerEnabled ||
+    coordinator.writerCapabilitiesRevoked !== false ||
+    !isRecord(coordinator.capabilities) ||
+    coordinator.capabilities.canRenderShell !== true ||
+    coordinator.capabilities.canApplyRoutes !== true ||
+    coordinator.capabilities.canMutate !== true ||
+    typeof coordinator.capabilities.pluginsReady !== 'boolean' ||
+    typeof coordinator.capabilities.canGenerate !== 'boolean' ||
+    !isRecord(coordinator.failures) ||
+    !Object.values(coordinator.failures).every(
+      (failure) =>
+        isRecord(failure) &&
+        isCount(failure.attemptId) &&
+        isNonnegativeNumber(failure.failedAtMs) &&
+        isStartupTelemetryEvent({
+          kind: 'diagnostic-failure',
+          attemptCount: failure.attemptId,
+          observerShellEnabled: observerEnabled,
+          failureCode: failure.failureCode,
+          failureMilestone: failure.failureMilestone,
+        }),
+    ) ||
+    !isStringArray(coordinator.completedSteps) ||
+    coordinator.completedSteps.length === 0 ||
+    !isRecord(earlyRequests) ||
+    earlyRequests.mutationsBeforeWriterReady !== 0 ||
+    earlyRequests.generationsBeforeChatReady !== 0 ||
+    !Array.isArray(telemetry) ||
+    !telemetry.every((entry) => isBrowserStartupTelemetry(entry, observerEnabled))
+  )
+    return false
+  return (
+    sameIdentities(
+      telemetry.filter((entry) => entry.kind === 'phase-ready').map((entry) => entry.milestone),
+      STARTUP_TELEMETRY_MILESTONES,
+    ) && telemetry.filter((entry) => entry.kind === 'attempt-completed').length === 1
+  )
+}
+
+function isBrowserStartupTelemetry(value: unknown, observerEnabled: boolean): boolean {
+  if (!isRecord(value)) return false
+  const { schemaVersion, requestUid, ...event } = value
+  return (
+    schemaVersion === 1 &&
+    event.observerShellEnabled === observerEnabled &&
+    event.kind !== 'attempt-failed' &&
+    (requestUid === undefined || isNonemptyString(requestUid)) &&
+    isStartupTelemetryEvent(event)
+  )
+}
+
+function isRecoveryJourney(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    !isCount(value.initialRevision) ||
+    !isCount(value.finalRevision) ||
+    value.finalRevision !== value.initialRevision + 1 ||
+    !isCount(value.commandAttempts) ||
+    !isCount(value.receiptAcknowledgements) ||
+    !isCount(value.resourceRefreshes)
+  )
+    return false
+  if (value.scenario === 'event-gap') {
+    return value.commandAttempts === 1 && value.receiptAcknowledgements === 0 && value.resourceRefreshes >= 4
+  }
+  return (
+    (value.scenario === 'offline-before-send' || value.scenario === 'response-lost-after-commit') &&
+    isNonemptyString(value.retainedMutationId) &&
+    value.commandAttempts >= 2 &&
+    value.receiptAcknowledgements === 1
+  )
+}
+
+function isWriterJourney(value: unknown): boolean {
+  return (
+    isRecord(value) &&
+    value.scenario === 'denial-then-takeover' &&
+    value.observerCommandsBeforePromotion === 0 &&
+    value.oldWriterCommandsAfterTakeover === 0 &&
+    value.newWriterMutationAccepted === true
+  )
+}
+
+function isOptionalRuntimeJourney(value: unknown): boolean {
+  if (
+    !isRecord(value) ||
+    (value.runtime !== 'background-resources' && value.runtime !== 'inlay-catalog') ||
+    (value.mode !== 'slow' && value.mode !== 'failed')
+  )
+    return false
+  return (
+    value.canRenderShell === true &&
+    value.canMutate === true &&
+    typeof value.canGenerate === 'boolean' &&
+    (value.runtime !== 'background-resources' || value.canGenerate) &&
+    value.localizedFailure === (value.mode === 'failed') &&
+    value.retrySucceeded === (value.runtime === 'inlay-catalog' || value.mode === 'slow')
+  )
+}
+
+function sameIdentities(actual: readonly string[], expected: readonly string[]): boolean {
+  return (
+    actual.length === expected.length &&
+    new Set(actual).size === actual.length &&
+    expected.every((identity) => actual.includes(identity))
+  )
+}
+
+function requireRunId(runId: unknown): asserts runId is string {
+  if (!isNonemptyString(runId)) throw new Error('missing current Fast-bootstrap artifact run ID')
+}
+
+function validateCurrentRun(value: unknown, runId: string, file: string): void {
+  if (!isRecord(value) || value.runId !== runId) {
+    throw new Error(`stale or missing run ID in ${path.basename(file)}`)
+  }
+}
+
+function isNonemptyString(value: unknown): value is string {
+  return typeof value === 'string' && value.trim().length > 0
+}
+
+function isNonnegativeNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0
+}
+
+function isCount(value: unknown): value is number {
+  return isNonnegativeNumber(value) && Number.isSafeInteger(value)
 }
 
 function validateDirectLinkBatchArtifact(value: unknown): asserts value is FastBootstrapDirectLinkBatchArtifact {

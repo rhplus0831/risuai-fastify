@@ -37,14 +37,14 @@ This documentation groups the current suite by protected product behavior. Treat
 The canonical command inventory and lane semantics are in
 [Testing And Operations](../structure/testing-and-operations.md#scripts).
 
-| Goal | Command |
-| ---- | ------- |
-| Agent-focused test or related-source feedback | `pnpm test -- <one-test-or-source-file>` |
-| Current documentation links, indexes, and paths | `pnpm check:docs` |
-| Completed agent-development verification | `pnpm test:agent` |
-| User-owned full local quality aggregate | `pnpm test:all` |
-| Full pinned compatibility differential | `pnpm prepare:compat-baseline && pnpm test:compat-harness` |
-| Startup and bundle verification | `pnpm verify:fast-bootstrap` |
+| Goal                                            | Command                                                    |
+| ----------------------------------------------- | ---------------------------------------------------------- |
+| Agent-focused test or related-source feedback   | `pnpm test -- <one-test-or-source-file>`                   |
+| Current documentation links, indexes, and paths | `pnpm check:docs`                                          |
+| Completed agent-development verification        | `pnpm test:agent`                                          |
+| User-owned full local quality aggregate         | `pnpm test:all`                                            |
+| Full pinned compatibility differential          | `pnpm prepare:compat-baseline && pnpm test:compat-harness` |
+| Startup and bundle verification                 | `pnpm verify:fast-bootstrap`                               |
 
 During implementation, agents use the focused command only when it answers a
 concrete question. It accepts exactly one repository file, rejects directories,
@@ -111,12 +111,12 @@ the workflow at the candidate ref.
 
 ### Frontend capability classification
 
-| Class | File ownership | Runtime | Use and retention rule |
-| ----- | -------------- | ------- | ---------------------- |
-| N | Plain `*.test.ts` by default | Node | Pure TypeScript/JavaScript and injected fakes with no required Svelte client transform or browser behavior. |
-| S | `*.svelte-node.test.ts` | Svelte client transform with Node globals | Svelte modules or runes whose behavior does not require DOM globals, mounting, layout, focus, or browser APIs. |
-| D | `*.svelte.test.ts`, `*.dom.test.ts`, or a reviewed legacy registration | Svelte plus Happy-DOM | Mounted/visible component behavior and browser-shaped contracts, including accessibility, focus, optimistic paint, rollback, real DOM parsing, and transitive eager browser access. |
-| B | Browser-smoke `*.spec.ts` | Built SPA in Chromium against Fastify/SQLite | Cross-layer behavior that requires a real browser, navigation, responsive layout, reload, multi-tab ownership, or durable recovery. |
+| Class | File ownership                                                         | Runtime                                      | Use and retention rule                                                                                                                                                              |
+| ----- | ---------------------------------------------------------------------- | -------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| N     | Plain `*.test.ts` by default                                           | Node                                         | Pure TypeScript/JavaScript and injected fakes with no required Svelte client transform or browser behavior.                                                                         |
+| S     | `*.svelte-node.test.ts`                                                | Svelte client transform with Node globals    | Svelte modules or runes whose behavior does not require DOM globals, mounting, layout, focus, or browser APIs.                                                                      |
+| D     | `*.svelte.test.ts`, `*.dom.test.ts`, or a reviewed legacy registration | Svelte plus Happy-DOM                        | Mounted/visible component behavior and browser-shaped contracts, including accessibility, focus, optimistic paint, rollback, real DOM parsing, and transitive eager browser access. |
+| B     | Browser-smoke `*.spec.ts`                                              | Built SPA in Chromium against Fastify/SQLite | Cross-layer behavior that requires a real browser, navigation, responsive layout, reload, multi-tab ownership, or durable recovery.                                                 |
 
 All Vitest projects reject focused tests. Pre-suffix DOM files that cannot be
 renamed without broad churn are explicitly registered in
@@ -162,7 +162,12 @@ runs flag-off/on startup, offline and response-loss replay, a real
 `event_replay_unavailable` recovery, multi-tab denial/takeover/promotion, and
 slow/failing optional-runtime Retry. Per-worker partials are merged after the
 Playwright run into `fast-bootstrap-results/fast-bootstrap-integration.{json,txt}`, with
-exact batch and route-index coverage validation. The disposable harness owns a
+current-run IDs, exact scenario/batch/route coverage, and nested result/manifest
+validation. Focused partial runs retain diagnostic partials but do not emit a
+successful combined report. Required incomplete, malformed, or stale merges fail
+and remove prior final outputs. Startup-matrix and locale artifacts belong to
+separate producer invocations and are not inputs to this integration merge.
+The disposable harness owns a
 temporary authenticated Fastify/SQLite instance per journey or direct-link
 batch. See
 [Development And Observability](../structure/development-and-observability.md#startup-and-bundle-verification)

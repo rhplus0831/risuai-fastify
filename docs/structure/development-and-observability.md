@@ -212,16 +212,16 @@ failure rate blocks promotion even if background readiness eventually arrives.
 
 ### Startup failure-code taxonomy
 
-| Code | Meaning |
-| --- | --- |
-| `writer-bootstrap-failed` | The writer bootstrap attempt could not establish its required observer/writer boundary. |
-| `push-initialization-failed` | Optional push-notification runtime initialization failed before background readiness. |
-| `plugin-initialization-failed` | Plugin runtime initialization did not reach coherent plugin readiness. |
-| `generation-recovery-failed` | Startup could not reconcile or reattach the active generation projection. |
-| `selected-character-hydration-failed` | The selected character detail needed for chat readiness could not be hydrated. |
-| `selected-chat-hydration-failed` | The selected chat/message projection needed for chat readiness could not be hydrated. |
-| `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated. |
-| `runtime-initialization-failed` | Another optional background runtime failed before background readiness. |
+| Code                                        | Meaning                                                                                 |
+| ------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `writer-bootstrap-failed`                   | The writer bootstrap attempt could not establish its required observer/writer boundary. |
+| `push-initialization-failed`                | Optional push-notification runtime initialization failed before background readiness.   |
+| `plugin-initialization-failed`              | Plugin runtime initialization did not reach coherent plugin readiness.                  |
+| `generation-recovery-failed`                | Startup could not reconcile or reattach the active generation projection.               |
+| `selected-character-hydration-failed`       | The selected character detail needed for chat readiness could not be hydrated.          |
+| `selected-chat-hydration-failed`            | The selected chat/message projection needed for chat readiness could not be hydrated.   |
+| `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated.        |
+| `runtime-initialization-failed`             | Another optional background runtime failed before background readiness.                 |
 
 Telemetry is diagnostic-only on both sides. Browser listener exceptions,
 authentication failures, network errors, and rejected fetch promises are
@@ -256,16 +256,21 @@ production route manifest, and uses isolated fixtures for replay, event-gap,
 takeover, and failure-injection journeys. Direct links run in independently
 isolated batches in `startupDirectLinks.spec.ts`; the remaining journeys stay
 file-serial in `startupRecoveryIntegrationMatrix.spec.ts`. Each worker writes a
-unique partial artifact, and Playwright global teardown validates and merges the
-route batches with the recovery partial into the combined report.
+unique partial artifact stamped with the current Playwright run ID. Global
+teardown requires matching run IDs, all expected startup/recovery/writer/runtime
+scenario identities, valid result payloads, and manifest-correct route batches
+before emitting the combined report. Failed or incomplete merges retain partial
+diagnostics and remove previous final outputs; focused partial execution cannot
+certify a complete matrix. Independent startup-matrix and locale artifacts keep
+their own producer-invocation ownership.
 
 Generated files are local evidence and are ignored by Git:
 
-| Files under `fast-bootstrap-results/` | Contents |
-| --- | --- |
-| `bundle-boundaries.json` / `.txt` | Entry and immediate-startup closures, HTML-preload agreement, protected-boundary violations, and largest chunks. |
-| `initial-preload.json` / `.txt` | Initial JavaScript files, raw/gzip totals, largest file, and both budget comparisons. |
-| `startup-matrix.json` / `.txt` | Small/large cold/warm milestones, payload/cache totals, early mutation/generation counts, request UIDs, and safe trace summaries. |
+| Files under `fast-bootstrap-results/`      | Contents                                                                                                                            |
+| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `bundle-boundaries.json` / `.txt`          | Entry and immediate-startup closures, HTML-preload agreement, protected-boundary violations, and largest chunks.                    |
+| `initial-preload.json` / `.txt`            | Initial JavaScript files, raw/gzip totals, largest file, and both budget comparisons.                                               |
+| `startup-matrix.json` / `.txt`             | Small/large cold/warm milestones, payload/cache totals, early mutation/generation counts, request UIDs, and safe trace summaries.   |
 | `fast-bootstrap-integration.json` / `.txt` | Observer flag-off/on timings, direct links, replay/event-gap results, takeover results, and optional-runtime failure/retry results. |
 
 `util/initial-preload-budgets.json` is authoritative. The ratified hard gates are
@@ -337,55 +342,55 @@ requires the drag/drop workaround.
 
 Server:
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `RISU_API_HOST` | `0.0.0.0` | Fastify listen host. |
-| `RISU_API_PORT` | `6002` | Fastify listen port. |
-| `RISU_API_DATA_DIR` | `<repo>/data` | SQLite, asset bytes, backups, auth files, traces, and legacy import artifacts. |
-| `RISU_API_ALLOW_MISSING_DATABASE` | unset | Set to `1` only to accept creating a fresh `risu.db` when the data directory contains evidence of a prior installation. |
-| `RISU_API_BODY_LIMIT` | `104857600` | JSON/body and multipart file limit. |
-| `RISU_API_IMPORT_MAX_BYTES` | unlimited | Streamed device-backup import limit; positive byte count caps, `0`/`unlimited`/`none`/`infinity` opts out. |
-| `RISU_API_AUTOMATIC_BACKUP_RETENTION` | `3` | Positive count of automatic pre-import/pre-restore safety snapshots to retain; manual backups are never pruned. |
-| `RISU_REALM_IMPORT_MAX_EXPANDED_BYTES` | `325058560` | Expanded payload cap for streamed Realm `charx` imports and Realm-fetched asset totals. |
-| `RISU_API_TRACE_MODE` | unset | Enables API request tracing when `agent` or `human`; `0`/`false`/`off`/`none` disable it. |
-| `RISU_GENERATION_TRACE_FULL_PROMPT` | unset | Set to `1` with protocol metrics enabled to write redacted prompt-emission and OpenAI/Gemini request sidecars. |
-| `RISU_GENERATION_TRACE_FULL_PROMPT_MAX_GZIP_BYTES` | `10485760` | Maximum compressed size for prompt/provider and post-generation Lua trace sidecars. |
-| `RISU_WEB_PUSH_VAPID_PUBLIC_KEY` | unset | Optional Web Push VAPID public key. If both keys are omitted, the server can generate and persist keys under `<data-dir>/__web_push_vapid_keys.json`; supplying only one key disables Web Push. |
-| `RISU_WEB_PUSH_VAPID_PRIVATE_KEY` | unset | Optional Web Push VAPID private key. Must be supplied with the public key when using env-provided keys. |
-| `RISU_WEB_PUSH_CONTACT` | `mailto:risuai@example.invalid` | Web Push contact subject used for VAPID details. |
-| `TRUST_PROXY` | `false` | Fastify trust proxy setting; accepts boolean, integer, or string. |
-| `RISU_API_STATIC_ROOT` | `<repo>/dist` | Static SPA root; empty, `none`, or `off` disables. |
-| `RISU_HUB_URL` | `https://sv.risuai.xyz` | Hub passthrough target. |
-| `RISU_REALM_URL` | `https://realm.risuai.net` | Realm character import target. |
-| `RISU_AGENT_DEV_AUTH_BYPASS` | disabled | Direct-server dev escape hatch; full-stack runners override it as described below. |
-| `LOG_LEVEL` | `info` | Use `silent` to disable Fastify logger. |
-| `RISU_CLIENT_DIAGNOSTICS` | follows API trace mode | Enables the authenticated recent diagnostics viewer/export; explicit `0` disables it even in `agent`/`human` trace mode. |
-| `RISU_PROTOCOL_METRICS` | unset | Enables structured protocol metrics and advertises v1 browser startup collection when `1`, `true`, `yes`, or `on`. |
+| Variable                                           | Default                         | Notes                                                                                                                                                                                           |
+| -------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RISU_API_HOST`                                    | `0.0.0.0`                       | Fastify listen host.                                                                                                                                                                            |
+| `RISU_API_PORT`                                    | `6002`                          | Fastify listen port.                                                                                                                                                                            |
+| `RISU_API_DATA_DIR`                                | `<repo>/data`                   | SQLite, asset bytes, backups, auth files, traces, and legacy import artifacts.                                                                                                                  |
+| `RISU_API_ALLOW_MISSING_DATABASE`                  | unset                           | Set to `1` only to accept creating a fresh `risu.db` when the data directory contains evidence of a prior installation.                                                                         |
+| `RISU_API_BODY_LIMIT`                              | `104857600`                     | JSON/body and multipart file limit.                                                                                                                                                             |
+| `RISU_API_IMPORT_MAX_BYTES`                        | unlimited                       | Streamed device-backup import limit; positive byte count caps, `0`/`unlimited`/`none`/`infinity` opts out.                                                                                      |
+| `RISU_API_AUTOMATIC_BACKUP_RETENTION`              | `3`                             | Positive count of automatic pre-import/pre-restore safety snapshots to retain; manual backups are never pruned.                                                                                 |
+| `RISU_REALM_IMPORT_MAX_EXPANDED_BYTES`             | `325058560`                     | Expanded payload cap for streamed Realm `charx` imports and Realm-fetched asset totals.                                                                                                         |
+| `RISU_API_TRACE_MODE`                              | unset                           | Enables API request tracing when `agent` or `human`; `0`/`false`/`off`/`none` disable it.                                                                                                       |
+| `RISU_GENERATION_TRACE_FULL_PROMPT`                | unset                           | Set to `1` with protocol metrics enabled to write redacted prompt-emission and OpenAI/Gemini request sidecars.                                                                                  |
+| `RISU_GENERATION_TRACE_FULL_PROMPT_MAX_GZIP_BYTES` | `10485760`                      | Maximum compressed size for prompt/provider and post-generation Lua trace sidecars.                                                                                                             |
+| `RISU_WEB_PUSH_VAPID_PUBLIC_KEY`                   | unset                           | Optional Web Push VAPID public key. If both keys are omitted, the server can generate and persist keys under `<data-dir>/__web_push_vapid_keys.json`; supplying only one key disables Web Push. |
+| `RISU_WEB_PUSH_VAPID_PRIVATE_KEY`                  | unset                           | Optional Web Push VAPID private key. Must be supplied with the public key when using env-provided keys.                                                                                         |
+| `RISU_WEB_PUSH_CONTACT`                            | `mailto:risuai@example.invalid` | Web Push contact subject used for VAPID details.                                                                                                                                                |
+| `TRUST_PROXY`                                      | `false`                         | Fastify trust proxy setting; accepts boolean, integer, or string.                                                                                                                               |
+| `RISU_API_STATIC_ROOT`                             | `<repo>/dist`                   | Static SPA root; empty, `none`, or `off` disables.                                                                                                                                              |
+| `RISU_HUB_URL`                                     | `https://sv.risuai.xyz`         | Hub passthrough target.                                                                                                                                                                         |
+| `RISU_REALM_URL`                                   | `https://realm.risuai.net`      | Realm character import target.                                                                                                                                                                  |
+| `RISU_AGENT_DEV_AUTH_BYPASS`                       | disabled                        | Direct-server dev escape hatch; full-stack runners override it as described below.                                                                                                              |
+| `LOG_LEVEL`                                        | `info`                          | Use `silent` to disable Fastify logger.                                                                                                                                                         |
+| `RISU_CLIENT_DIAGNOSTICS`                          | follows API trace mode          | Enables the authenticated recent diagnostics viewer/export; explicit `0` disables it even in `agent`/`human` trace mode.                                                                        |
+| `RISU_PROTOCOL_METRICS`                            | unset                           | Enables structured protocol metrics and advertises v1 browser startup collection when `1`, `true`, `yes`, or `on`.                                                                              |
 
 Local/dev:
 
-| Variable | Default | Notes |
-| --- | --- | --- |
-| `RISU_API_RESTART_FLAG` | `.risu-api-restart` | Flag file watched by `pnpm api:dev:flag`. |
-| `RISU_AGENT_DEV_HOST` | `127.0.0.1` for `dev:agent`; active Tailscale IPv4 or loopback fallback for `dev:human` | Host used by the full-stack runner for both spawned processes. |
-| `RISU_AGENT_DEV_PORT` | `6418` | Frontend port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6002`. |
-| `RISU_AGENT_API_PORT` | `6419` | Fastify port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6001`. |
-| `RISU_AGENT_DEV_AUTH_BYPASS` | `TRUE` for `dev:agent`, `FALSE` for `dev:human` | Protected API routes ignore password auth when enabled. |
-| `RISU_AGENT_DATA_MODE` | `clone` | Agent sandbox reset policy: `clone` snapshots selected state from `data/`, `fresh` starts empty, and `keep` reuses `data-agent/`. |
-| `RISU_TS_AGENT_TSSERVER_LOG` | unset | Set to `1` or a path to capture verbose `pnpm ts:agent` tsserver logs. |
-| `RISU_TS_AGENT_TIMEOUT_MS` | `30000` | Default tsserver request timeout for `pnpm ts:agent`; `--timeout-ms` overrides it. |
-| `RISU_TS_AGENT_DEBUG` | unset | Echo tsserver stderr while debugging `pnpm ts:agent`. |
-| `TSS_LOG` | `-level off` | Low-level tsserver log arguments forwarded by `pnpm ts:agent`; prefer `RISU_TS_AGENT_TSSERVER_LOG` for the supported file-logging workflow. |
-| `VITE_RISU_AGENT_DEV_IGNORE_REALM_TERMS` | `TRUE` in full-stack runners | Set by `pnpm dev:agent` / `pnpm dev:human`; ordinary Vite/build leaves it unset. `alertRealmTerms()` returns accepted when set. |
+| Variable                                 | Default                                                                                 | Notes                                                                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `RISU_API_RESTART_FLAG`                  | `.risu-api-restart`                                                                     | Flag file watched by `pnpm api:dev:flag`.                                                                                                   |
+| `RISU_AGENT_DEV_HOST`                    | `127.0.0.1` for `dev:agent`; active Tailscale IPv4 or loopback fallback for `dev:human` | Host used by the full-stack runner for both spawned processes.                                                                              |
+| `RISU_AGENT_DEV_PORT`                    | `6418`                                                                                  | Frontend port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6002`.                                                                     |
+| `RISU_AGENT_API_PORT`                    | `6419`                                                                                  | Fastify port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6001`.                                                                      |
+| `RISU_AGENT_DEV_AUTH_BYPASS`             | `TRUE` for `dev:agent`, `FALSE` for `dev:human`                                         | Protected API routes ignore password auth when enabled.                                                                                     |
+| `RISU_AGENT_DATA_MODE`                   | `clone`                                                                                 | Agent sandbox reset policy: `clone` snapshots selected state from `data/`, `fresh` starts empty, and `keep` reuses `data-agent/`.           |
+| `RISU_TS_AGENT_TSSERVER_LOG`             | unset                                                                                   | Set to `1` or a path to capture verbose `pnpm ts:agent` tsserver logs.                                                                      |
+| `RISU_TS_AGENT_TIMEOUT_MS`               | `30000`                                                                                 | Default tsserver request timeout for `pnpm ts:agent`; `--timeout-ms` overrides it.                                                          |
+| `RISU_TS_AGENT_DEBUG`                    | unset                                                                                   | Echo tsserver stderr while debugging `pnpm ts:agent`.                                                                                       |
+| `TSS_LOG`                                | `-level off`                                                                            | Low-level tsserver log arguments forwarded by `pnpm ts:agent`; prefer `RISU_TS_AGENT_TSSERVER_LOG` for the supported file-logging workflow. |
+| `VITE_RISU_AGENT_DEV_IGNORE_REALM_TERMS` | `TRUE` in full-stack runners                                                            | Set by `pnpm dev:agent` / `pnpm dev:human`; ordinary Vite/build leaves it unset. `alertRealmTerms()` returns accepted when set.             |
 
 Client/build:
 
-| Variable | Notes |
-| --- | --- |
-| `RISU_API_PROXY_TARGET` | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`. |
-| `VITE_FASTIFY_BROWSER_SMOKE` | Enables browser smoke hook and fixed smoke password setup/login. |
-| `VITE_RISU_LITE` | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell. |
-| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration. |
+| Variable                                                                         | Notes                                                                                                                   |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                  |
+| `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                        |
+| `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell. |
+| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                    |
 
 Test/audit summary variables include `RISU_TEST_INCLUDE_GATES`,
 `UPDATE_FIXTURES`, `RISU_DIRECT_REALM_IMPORT_TEST`,
