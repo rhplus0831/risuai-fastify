@@ -169,6 +169,7 @@ export async function reconcileRecoveredGenerationEffects(
     const updated = await evaluateIgp({
       promptTemplate,
       database,
+      igpEffect: effectContext.igpEffect,
       isCurrent: effectContext.isCurrent,
       abortSignal: effectContext.signal,
       waitForPersistence: true,

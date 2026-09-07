@@ -35,6 +35,7 @@ import {
   type ChatScriptstateValue,
   type ChatSnapshot,
   type DurableMutationReplayResult,
+  type IgpEffectMessageClaim,
   type MessageSnapshot,
   type ServerCommandResult,
   type ServerCommandSequenceEntry,
@@ -6217,6 +6218,7 @@ function dispatchSanitizedUpdateMessageWithOutcome(
     ...(preconditions.expectedGenerationId !== undefined
       ? { expectedGenerationId: preconditions.expectedGenerationId }
       : {}),
+    ...(preconditions.igpEffect ? { igpEffect: preconditions.igpEffect } : {}),
   })
   const intent = durableChatMutationIntent('PATCH', `/messages/${encodeURIComponent(messageId)}`, body)
   const outcome = dispatchCharacterOwnedDurableMutationWithOutcome(characterId, intent, (transport) => {
@@ -6230,6 +6232,7 @@ function dispatchSanitizedUpdateMessageWithOutcome(
           expectedData: body.expectedData,
           expectedChatId: body.expectedChatId,
           expectedGenerationId: body.expectedGenerationId,
+          igpEffect: body.igpEffect,
           optimisticChatId: optimisticProjection?.chatId,
           optimisticChatBodyProjectionEpoch: optimisticProjection?.projectionEpoch,
         }),
@@ -6270,6 +6273,8 @@ export interface MessageUpdatePreconditions {
   expectedChatId?: string
   /** Reject the command if the row no longer belongs to this generation. */
   expectedGenerationId?: string
+  /** Complete this IGP claim in the same transaction as its text update. */
+  igpEffect?: IgpEffectMessageClaim
 }
 
 export interface DispatchUpdateMessageScopedOptions extends MessageUpdatePreconditions {

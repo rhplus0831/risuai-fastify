@@ -101,6 +101,7 @@ vi.mock('./generationEffectLedger', async (importOriginal) => {
       const result = await effect({
         idempotencyKey: `test:${kind}`,
         reclaimed: false,
+        ...(kind === 'igp' ? { igpEffect: { generationId: _ref.generationId, claimId: 'recovered-igp-claim' } } : {}),
         isCurrent: () => true,
         signal: new AbortController().signal,
       })
@@ -209,6 +210,7 @@ describe('late recovered generation effects', () => {
       expect.objectContaining({
         promptTemplate: state.db.igpPrompt,
         database: expect.objectContaining({ characters: state.ownerCharacters }),
+        igpEffect: { generationId: ref.generationId, claimId: 'recovered-igp-claim' },
       }),
     )
   })

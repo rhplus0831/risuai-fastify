@@ -9,7 +9,7 @@ import {
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import type { Message } from '../storage/database.svelte'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../server/activeWriterSession'
-import { SERVER_DATABASE_LINEAGE_HEADER } from '../server/commands'
+import { SERVER_DATABASE_LINEAGE_HEADER, type IgpEffectMessageClaim } from '../server/commands'
 import type { PendingGenerationEffect } from '../server/bootstrap'
 import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
 
@@ -37,6 +37,8 @@ export interface GenerationEffectExecutionContext {
   /** Stable across an expired-lease reclaim; callbacks can use it as their idempotency key. */
   idempotencyKey: string
   reclaimed: boolean
+  /** Present only for an actual IGP lease; legacy live callbacks have no claim. */
+  igpEffect?: IgpEffectMessageClaim
   /** Old claims cannot resume callbacks after writer loss or a later promotion. */
   isCurrent(): boolean
   signal: AbortSignal
@@ -158,13 +160,21 @@ function effectAccessIsCurrent(generation: number): boolean {
   )
 }
 
-function executionContext(generation: number, idempotencyKey: string, reclaimed: boolean) {
+function executionContext(
+  generation: number,
+  idempotencyKey: string,
+  reclaimed: boolean,
+  igpEffect?: IgpEffectMessageClaim,
+) {
   const controller = new AbortController()
   const isCurrent = () => effectAccessIsCurrent(generation)
   const unsubscribe = clientSessionStore.subscribe(() => {
     if (!isCurrent()) controller.abort()
   })
-  return { context: { idempotencyKey, reclaimed, isCurrent, signal: controller.signal }, unsubscribe }
+  return {
+    context: { idempotencyKey, reclaimed, ...(igpEffect ? { igpEffect } : {}), isCurrent, signal: controller.signal },
+    unsubscribe,
+  }
 }
 
 /**
@@ -238,7 +248,12 @@ async function runClaimedGenerationEffect<T>(
   }
 
   if (!effectAccessIsCurrent(sourceGeneration)) return { executed: false, status: 'unavailable' }
-  const lease = executionContext(sourceGeneration, claim.idempotencyKey, claim.reclaimed)
+  const lease = executionContext(
+    sourceGeneration,
+    claim.idempotencyKey,
+    claim.reclaimed,
+    kind === 'igp' ? { generationId: ref.generationId, claimId: claim.claimId } : undefined,
+  )
   const stopLeaseRenewal = startEffectLeaseRenewal(ref, kind, claim, sourceGeneration, lease.context.signal)
   try {
     const result = await effect(lease.context)

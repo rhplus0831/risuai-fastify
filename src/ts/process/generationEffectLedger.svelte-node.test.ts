@@ -25,6 +25,7 @@ import {
   resetGenerationEffectLedgerForTests,
   runLedgeredGenerationEffect,
   setGenerationEffectTimingObserverForTests,
+  type GenerationEffectExecutionContext,
 } from './generationEffectLedger'
 import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
 
@@ -108,6 +109,7 @@ describe('client generation effect ledger', () => {
     expect(effect).toHaveBeenCalledWith({
       idempotencyKey: 'generation-effect-v1:lineage-a:operation:operation-a:igp',
       reclaimed: false,
+      igpEffect: { generationId: 'generation-a', claimId: 'claim-a' },
       isCurrent: expect.any(Function),
       signal: expect.any(AbortSignal),
     })
@@ -117,6 +119,24 @@ describe('client generation effect ledger', () => {
       claimId: 'claim-a',
       status: 'completed',
     })
+  })
+
+  it('does not grant IGP message receipt authority to a legacy or different-kind callback', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+        init?.method === 'POST'
+          ? jsonResponse({ status: 'claimed', claimId: 'plugin-claim' }, 201)
+          : jsonResponse({ effect: { status: 'completed' } }),
+      ),
+    )
+    const effect = vi.fn((_context: GenerationEffectExecutionContext) => completedGenerationEffect(undefined))
+    await runLedgeredGenerationEffect(undefined, 'igp', 'live_terminal', effect)
+    await runLedgeredGenerationEffect(ref, 'plugin_output', 'live_terminal', effect)
+    expect(effect).toHaveBeenCalledTimes(2)
+    for (const [context] of effect.mock.calls) {
+      expect(context).not.toHaveProperty('igpEffect')
+    }
   })
 
   it('does not invoke an ephemeral effect when late recovery records its skip', async () => {

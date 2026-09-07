@@ -780,6 +780,7 @@ describe('sendChat fixtures (/chat route-backed prompt assembly)', () => {
         expectedData: 'route-backed REPLY',
         expectedChatId: 'chat-route-backed',
         expectedGenerationId: expect.any(String),
+        igpEffect: { generationId: expect.any(String), claimId: expect.any(String) },
       })
     } finally {
       await drainRouteBackedCommands()

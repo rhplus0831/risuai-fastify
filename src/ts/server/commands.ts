@@ -1849,12 +1849,19 @@ export interface AppendMessageCommandInput extends ChatCommandInput {
   optimisticChatBodyProjectionEpoch?: number
 }
 
+/** The server commits an IGP append and its exact effect receipt atomically. */
+export interface IgpEffectMessageClaim {
+  generationId: string
+  claimId: string
+}
+
 export interface UpdateMessageCommandInput extends ChatCommandInput {
   messageId: string
   patch: MessageSnapshot
   expectedData?: string
   expectedChatId?: string
   expectedGenerationId?: string
+  igpEffect?: IgpEffectMessageClaim
   optimisticChatId?: string
   optimisticChatBodyProjectionEpoch?: number
 }
@@ -5676,6 +5683,7 @@ export async function updateMessageCommand(
       ...(input.expectedData !== undefined ? { expectedData: input.expectedData } : {}),
       ...(input.expectedChatId !== undefined ? { expectedChatId: input.expectedChatId } : {}),
       ...(input.expectedGenerationId !== undefined ? { expectedGenerationId: input.expectedGenerationId } : {}),
+      ...(input.igpEffect ? { igpEffect: input.igpEffect } : {}),
     },
     signal,
     readLocalEffect: (body, event) =>

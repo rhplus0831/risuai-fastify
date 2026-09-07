@@ -306,6 +306,8 @@ describe('evaluateIgp', () => {
     await evaluateIgp({
       ...baseOpts,
       promptTemplate: CHATML_PROMPT,
+      waitForPersistence: true,
+      igpEffect: { generationId: 'generation-1', claimId: 'claim-1' },
       target: {
         characterId: 'cha-1',
         chatId: 'chat-1',
@@ -322,6 +324,7 @@ describe('evaluateIgp', () => {
       expectedData: 'derived final text',
       expectedChatId: 'chat-1',
       expectedGenerationId: 'generation-1',
+      igpEffect: { generationId: 'generation-1', claimId: 'claim-1' },
     })
   })
 

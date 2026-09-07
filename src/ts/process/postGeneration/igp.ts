@@ -6,6 +6,7 @@ import { requestChatData } from '../request/request'
 import { risuChatParser } from '../scripts'
 import { resolveStablePostGenerationMessage, stablePostGenerationMessageTarget } from './stableTarget'
 import type { Database } from '../../storage/database.svelte'
+import type { IgpEffectMessageClaim } from '../../server/commands'
 
 export interface IgpMessageTarget {
   characterId: string
@@ -18,6 +19,8 @@ export interface IgpMessageTarget {
 export interface EvaluateIgpOptions {
   /** A recovered effect has its own ready chat/model resource view. */
   database?: Database
+  /** Bind a ledgered append to its lease so persistence also completes the effect. */
+  igpEffect?: IgpEffectMessageClaim
   isCurrent?: () => boolean
   promptTemplate: string
   abortSignal: AbortSignal
@@ -91,6 +94,7 @@ export async function evaluateIgp(opts: EvaluateIgpOptions): Promise<boolean> {
       expectedData: opts.target.expectedData,
       expectedChatId: opts.target.chatId,
       expectedGenerationId: opts.target.expectedGenerationId,
+      igpEffect: opts.igpEffect,
     },
   )
   if (!outcome) return false

@@ -678,6 +678,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         errorTargetMessageId = terminalResult.igpTarget.messageId
         const updated = await evaluateIgp({
           promptTemplate,
+          igpEffect: effectContext.igpEffect,
           isCurrent: effectContext.isCurrent,
           abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
           waitForPersistence: !!effectLedger,
