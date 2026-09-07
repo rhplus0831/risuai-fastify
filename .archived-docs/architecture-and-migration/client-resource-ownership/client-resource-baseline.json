@@ -99,7 +99,7 @@
         },
         {
           "file": "src/ts/bootstrap.test.ts",
-          "count": 194
+          "count": 196
         },
         {
           "file": "src/ts/storage/database.svelte.test.ts",
