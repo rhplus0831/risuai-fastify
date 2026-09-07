@@ -55,6 +55,9 @@ const initialState: ClientSessionSnapshot = Object.freeze({
 
 let state = initialState
 let activeOperation: ClientSessionOperation | null = null
+// A coherent shell can precede automatic acquisition. Keep that preview separate
+// from an actual reading/writing disposition, including across interrupted recovery.
+let initialRoleResolved = false
 const stateStore = writable(state)
 const writerLossHandlers = new Set<() => void>()
 
@@ -103,6 +106,11 @@ export function canUseClientReadServices(): boolean {
   return !state.managed || (state.authenticated && state.lifecycle !== 'auth-required')
 }
 
+/** Reader content must not hydrate or parse a prospective writer's shell preview. */
+export function canUseClientReaderContent(): boolean {
+  return canUseClientReadServices() && (!state.managed || initialRoleResolved)
+}
+
 export function assertClientWriteAccess(): void {
   if (!canUseClientWriteAccess()) throw new Error('client_write_access_required')
 }
@@ -125,6 +133,10 @@ export function registerClientWriterLossHandler(handler: () => void): () => void
 }
 
 function publish(next: ClientSessionSnapshot): void {
+  if (!next.authenticated || next.sessionId !== state.sessionId || next.databaseLineage !== state.databaseLineage) {
+    initialRoleResolved = false
+  }
+  if (next.authenticated && (next.lifecycle === 'reading' || next.lifecycle === 'writing')) initialRoleResolved = true
   const losingWriter = state.managed && state.lifecycle === 'writing' && next.lifecycle !== 'writing'
   state = Object.freeze(next)
   if (losingWriter) {
@@ -358,6 +370,7 @@ export function requireClientAuthentication(): void {
 /** Test reset does not own drafts, outbox records, or conservative startup state. */
 export function resetClientSessionForTests(): void {
   activeOperation = null
+  initialRoleResolved = false
   writerLossHandlers.clear()
   state = initialState
   stateStore.set(state)

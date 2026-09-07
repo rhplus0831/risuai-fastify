@@ -18,10 +18,17 @@ import {
 import * as hydration from '../ts/server/chatMessageHydration.svelte'
 import * as resourceReads from '../ts/server/resourceReads'
 import { resetReaderDisplayResourcesForTests } from '../ts/server/readerDisplayResources'
+import * as readerDisplayResources from '../ts/server/readerDisplayResources'
+import * as greetingTranslations from '../ts/server/greetingTranslations.svelte'
 import * as parser from '../ts/parser/parser.svelte'
 import { selectedCharID, SizeStore } from '../ts/stores.svelte'
 import {
   beginClientSession,
+  authenticateClientSessionReadView,
+  authorizeClientWriterRecovery,
+  beginClientPromotion,
+  beginClientWriterResume,
+  getClientSessionSnapshot,
   settleClientReader,
   setClientProjectionReady,
   setClientConnectionState,
@@ -196,6 +203,114 @@ afterEach(async () => {
 })
 
 describe('connected reader transcript', () => {
+  it.each(['resolving', 'recovering', 'resuming'] as const)(
+    'defers body, display, greeting and rendering work for automatic %s startup',
+    async (phase) => {
+      const reader = seedReaderChat(2)
+      withTestDatabaseWrite(() => {
+        reader.firstMessage = 'Raw preview greeting'
+      })
+      let operation = beginClientSession('preview-writer')
+      authenticateClientSessionReadView(operation, {
+        databaseLineage: 'reader-tests',
+        writer: { sessionId: null, epoch: 1 },
+      })
+      setClientProjectionReady(true)
+      setClientConnectionState('live')
+      if (phase !== 'resolving') {
+        const ownership = { databaseLineage: 'reader-tests', writer: { sessionId: 'preview-writer', epoch: 2 } }
+        authorizeClientWriterRecovery(operation, ownership)
+        if (phase === 'resuming') {
+          setClientConnectionState('interrupted')
+          operation = beginClientWriterResume()!
+          authorizeClientWriterRecovery(operation, ownership)
+          setClientConnectionState('live')
+        }
+      }
+      publishReaderFixtures()
+      hydration.resetChatHydration()
+      vi.spyOn(readerDisplayResources, 'readerDisplayResourcesReady').mockReturnValue(false)
+      const display = vi
+        .spyOn(readerDisplayResources, 'ensureReaderDisplayResources')
+        .mockResolvedValue({ status: 'ok' })
+      const greeting = vi
+        .spyOn(greetingTranslations, 'refreshGreetingTranslationProjection')
+        .mockResolvedValue({ status: 'error', error: 'test' })
+      component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+      await settle()
+      expect(hydration.hydrateReaderChatMessageWindow).not.toHaveBeenCalled()
+      expect(display).not.toHaveBeenCalled()
+      expect(greeting).not.toHaveBeenCalled()
+      expect(parser.ParseMarkdown).not.toHaveBeenCalled()
+      expect(target.querySelector('.risu-chat')).toBeNull()
+      expect(target.textContent).not.toContain('Raw preview greeting')
+      const refresh = target.querySelector<HTMLButtonElement>('[data-reader-refresh]')!
+      expect(refresh.disabled).toBe(true)
+      refresh.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+      await settle()
+      expect(hydration.hydrateReaderChatMessageWindow).not.toHaveBeenCalled()
+      expect(display).not.toHaveBeenCalled()
+      expect(observations).toHaveLength(0)
+
+      expect(
+        settleClientReader(operation, { databaseLineage: 'reader-tests', writer: getClientSessionSnapshot().writer! }),
+      ).toBe(true)
+      await settle()
+      expect(hydration.hydrateReaderChatMessageWindow).toHaveBeenCalledOnce()
+      expect(display).toHaveBeenCalledOnce()
+      expect(greeting).toHaveBeenCalledOnce()
+      expect(target.textContent).toContain('Reader message 1')
+      expect(target.textContent).toContain('Raw preview greeting')
+      expect(observations).toHaveLength(1)
+      expect(fetch).not.toHaveBeenCalled()
+    },
+  )
+
+  it('keeps established reader content through promotion and interrupted recovery', async () => {
+    seedReaderChat(2)
+    startReader()
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    const assertReadable = () => expect(target.textContent).toContain('Reader message 1')
+    assertReadable()
+    const promotion = beginClientPromotion()!
+    await settle()
+    assertReadable()
+    const ownership = { databaseLineage: 'reader-tests', writer: { sessionId: 'reader', epoch: 2 } }
+    expect(authorizeClientWriterRecovery(promotion, ownership)).toBe(true)
+    await settle()
+    assertReadable()
+    setClientConnectionState('interrupted')
+    await settle()
+    assertReadable()
+    const resume = beginClientWriterResume()!
+    expect(authorizeClientWriterRecovery(resume, ownership)).toBe(true)
+    setClientConnectionState('live')
+    await settle()
+    assertReadable()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('shows committed content while a previous writer reconnects', async () => {
+    seedReaderChat(2)
+    setManagedWriterForTest()
+    publishReaderFixtures()
+    setClientConnectionState('interrupted')
+    component = mount(ReaderTranscript, { target, props: { characterId: 'reader-character', chatId: 'reader-chat' } })
+    await settle()
+    expect(target.textContent).toContain('Reader message 1')
+    expect(target.querySelector('[data-risu-message-action="edit"]')).toBeNull()
+    const resume = beginClientWriterResume()!
+    const state = getClientSessionSnapshot()
+    expect(
+      authorizeClientWriterRecovery(resume, { databaseLineage: state.databaseLineage!, writer: state.writer! }),
+    ).toBe(true)
+    setClientConnectionState('live')
+    await settle()
+    expect(target.textContent).toContain('Reader message 1')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
   it('keeps writer generation controls hidden while its partial response is loading', async () => {
     seedReaderChat(2)
     setManagedWriterForTest()

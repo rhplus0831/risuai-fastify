@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
   authorizeClientWriterRecovery,
+  authenticateClientSessionReadView,
   beginClientPromotion,
   beginClientSession,
   beginClientWriterResume,
   canRenderClientReadView,
   canUseClientReadServices,
+  canUseClientReaderContent,
   canUseClientRecoveryAccess,
   canUseClientWriteAccess,
   captureClientSessionGeneration,
@@ -48,6 +50,64 @@ function becomeWriter() {
 afterEach(resetClientSessionForTests)
 
 describe('connected client session authority', () => {
+  it.each([null, 'client-a'])(
+    'keeps the coherent shell separate from reader content during automatic startup (owner=%s)',
+    (owner) => {
+      const startup = beginClientSession('client-a')
+      expect(authenticateClientSessionReadView(startup, ownership(owner))).toBe(true)
+      setClientProjectionReady(true)
+      setClientConnectionState('live')
+      expect(canRenderClientReadView()).toBe(true)
+      expect(canUseClientReadServices()).toBe(true)
+      expect(canUseClientReaderContent()).toBe(false)
+      expect(authorizeClientWriterRecovery(startup, ownership('client-a', 2))).toBe(true)
+      expect(canUseClientReaderContent()).toBe(false)
+      setClientConnectionState('interrupted')
+      expect(canRenderClientReadView()).toBe(true)
+      expect(canUseClientReaderContent()).toBe(false)
+      const resume = beginClientWriterResume()!
+      expect(resume.kind).toBe('recovery')
+      expect(canUseClientReaderContent()).toBe(false)
+      expect(authorizeClientWriterRecovery(resume, ownership('client-a', 2))).toBe(true)
+      setClientConnectionState('live')
+      expect(canUseClientReaderContent()).toBe(false)
+      expect(completeClientWriterRecovery(resume)).toBe(true)
+      expect(canUseClientReaderContent()).toBe(true)
+      setClientConnectionState('interrupted')
+      expect(canUseClientReaderContent()).toBe(true)
+    },
+  )
+
+  it('publishes actual reader disposition before subscribers run, preserves it through promotion, and resets a new session', () => {
+    const observed: boolean[] = []
+    const stop = clientSessionStore.subscribe(() => observed.push(canUseClientReaderContent()))
+    const startup = beginClientSession('client-a')
+    expect(settleClientReader(startup, ownership('client-b'))).toBe(true)
+    expect(observed.at(-1)).toBe(true)
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    const promotion = beginClientPromotion()!
+    expect(canUseClientReaderContent()).toBe(true)
+    expect(authorizeClientWriterRecovery(promotion, ownership('client-a', 2))).toBe(true)
+    setClientConnectionState('interrupted')
+    expect(canUseClientReaderContent()).toBe(true)
+    const resume = beginClientWriterResume()!
+    expect(canUseClientReaderContent()).toBe(true)
+    expect(settleClientReader(resume, ownership('client-b', 3))).toBe(true)
+    requireClientAuthentication()
+    expect(observed.at(-1)).toBe(false)
+    const fresh = beginClientSession('client-a')
+    expect(authenticateClientSessionReadView(fresh, ownership('client-a', 1, 'lineage-b'))).toBe(true)
+    setClientProjectionReady(true)
+    expect(canRenderClientReadView()).toBe(true)
+    expect(canUseClientReaderContent()).toBe(false)
+    expect(settleClientReader(fresh, ownership('client-b', 2, 'lineage-b'))).toBe(true)
+    expect(observed.at(-1)).toBe(true)
+    beginClientSession('new-page')
+    expect(canUseClientReaderContent()).toBe(false)
+    stop()
+  })
+
   it('leaves the conservative path under its existing admission policy', () => {
     expect(getClientSessionSnapshot().managed).toBe(false)
     expect(canUseClientWriteAccess()).toBe(true)

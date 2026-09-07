@@ -8,7 +8,7 @@
   import { isServerCharacterShell } from '../ts/storage/database.svelte'
   import { characterRoutePath, currentRoute, navigate } from '../ts/router'
   import { recordObserverRouteIntent } from '../ts/observerRouteIntent'
-  import { canUseClientReadServices, clientSessionStore } from '../ts/clientSession'
+  import { canUseClientReaderContent, clientSessionStore } from '../ts/clientSession'
   import { resolveReaderRoute, uniqueReaderCharacters, uniqueReaderChatIds } from '../ts/readerRouteScope'
   import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
 
@@ -31,6 +31,10 @@
   let shellChatCount = $derived(
     selectedIsShell ? ((selectedCharacter as unknown as { chatCount?: number }).chatCount ?? 0) : selectedChats.length,
   )
+  const readerContentAvailable = $derived.by(() => {
+    void $clientSessionStore
+    return canUseClientReaderContent()
+  })
   const readerScope = $derived(
     resolveReaderRoute(
       $currentRoute,
@@ -55,7 +59,7 @@
   const loadReaderTranscript = () => (readerTranscriptModule ??= import('./ReaderTranscript.svelte'))
 
   $effect(() => {
-    if (!$clientSessionStore.managed || !$clientSessionStore.projectionReady) return
+    if (!$clientSessionStore.managed || !$clientSessionStore.projectionReady || !readerContentAvailable) return
     if (readerScope.status === 'missing-character') {
       readerNotice = language.connectedReaders.characterUnavailable
       readerNoticePath = '/'
@@ -72,7 +76,7 @@
     if (
       !$clientSessionStore.managed ||
       !$clientSessionStore.projectionReady ||
-      !canUseClientReadServices() ||
+      !readerContentAvailable ||
       !target ||
       !isServerCharacterShell(target)
     )
@@ -123,6 +127,7 @@
   }
 
   function loadDetails(characterId: string): void {
+    if (!readerContentAvailable) return
     void hydrateCharacterShell(characterId, { supersede: true })
   }
 
@@ -345,7 +350,9 @@
             data-reader-route-notice>
             {readerNotice}
           </p>{/if}
-        {#if readerScope.status === 'blocked'}
+        {#if !readerContentAvailable}
+          <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
+        {:else if readerScope.status === 'blocked'}
           <p class="p-6" role="status" data-reader-authoring-gate>{language.connectedReaders.writeAccessRequired}</p>
         {:else if readerScope.status === 'ambiguous'}
           <p class="p-6" role="alert" data-reader-ambiguous-target>{language.connectedReaders.ambiguousConversation}</p>

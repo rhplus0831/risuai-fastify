@@ -1,8 +1,10 @@
 import { IDBFactory } from 'fake-indexeddb'
 import {
   authorizeClientWriterRecovery,
+  authenticateClientSessionReadView,
   beginClientPromotion,
   beginClientSession,
+  beginClientWriterResume,
   completeClientWriterRecovery,
   failClientSessionOperation,
   getClientSessionSnapshot,
@@ -197,7 +199,67 @@ function deferredPromotion() {
   return { promise, resolve }
 }
 
+function beginAutomaticPreview(phase: 'resolving' | 'recovering' | 'resuming') {
+  const operation = beginClientSession('preview-writer')
+  authenticateClientSessionReadView(operation, { databaseLineage: 'database-a', writer: { sessionId: null, epoch: 1 } })
+  setClientProjectionReady(true)
+  setClientConnectionState('live')
+  if (phase === 'resolving') return operation
+  const ownership = { databaseLineage: 'database-a', writer: { sessionId: 'preview-writer', epoch: 2 } }
+  authorizeClientWriterRecovery(operation, ownership)
+  if (phase === 'recovering') return operation
+  setClientConnectionState('interrupted')
+  const resumed = beginClientWriterResume()!
+  authorizeClientWriterRecovery(resumed, ownership)
+  setClientConnectionState('live')
+  return resumed
+}
+
 describe('pre-writer ObserverShell', () => {
+  it.each(['resolving', 'recovering', 'resuming'] as const)(
+    'keeps the automatic %s shell visible without detail or transcript work',
+    async (phase) => {
+      const operation = beginAutomaticPreview(phase)
+      publishReaderCharacters()
+      const router = await createRouterMock()
+      router.navigate('/character/char-a/chat-a')
+      await mountObserverShell()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await tick()
+      expect(target.querySelector('[data-observer-shell]')).not.toBeNull()
+      expect(target.textContent).toContain('Character A')
+      expect(observerShellMocks.hydrateCharacterShell).not.toHaveBeenCalled()
+      expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
+      applyCharacterResource({ revision: 3, character: makeDetailedCharacter() })
+      await tick()
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
+      const writer = getClientSessionSnapshot().writer!
+      expect(settleClientReader(operation, { databaseLineage: 'database-a', writer })).toBe(true)
+      await vi.waitFor(() => expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull())
+      expect(get(selectedCharID)).toBe(-1)
+      expect(await countPendingMutationRecords()).toBe(0)
+    },
+  )
+
+  it.each(['/character/char-a/pending-chat', '/character/pending-character/pending-chat'])(
+    'does not repair a provisional startup route %s before reader disposition',
+    async (path) => {
+      for (const phase of ['resolving', 'recovering', 'resuming'] as const) {
+        beginAutomaticPreview(phase)
+        publishReaderCharacters()
+        const router = await createRouterMock()
+        router.navigate(path)
+        observerShellMocks.navigate.mockClear()
+        await mountObserverShell()
+        expect(get(router.currentRoute).path).toBe(path)
+        expect(observerShellMocks.navigate).not.toHaveBeenCalled()
+        expect(observerShellMocks.hydrateCharacterShell).not.toHaveBeenCalled()
+        expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
+      }
+    },
+  )
+
   it('gates an authoring URL while keeping keyboard-focusable reader navigation and honest connection status', async () => {
     const operation = beginClientSession('reader-a')
     settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })

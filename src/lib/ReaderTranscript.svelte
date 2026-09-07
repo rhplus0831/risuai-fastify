@@ -11,7 +11,7 @@
   import { createSimpleCharacter } from '../ts/simpleCharacter'
   import { resolveUserPersonaPresentation } from '../ts/utilState'
   import {
-    canUseClientReadServices,
+    canUseClientReaderContent,
     captureClientSessionGeneration,
     clientSessionStore,
     isClientSessionGenerationCurrent,
@@ -55,6 +55,10 @@
   let displayResourcesFailed = $state(false)
   let initialWindowConfigured = $state(settingsResourceState.groupStatuses.display === 'ready')
   let historyExpanded = false
+  const readerContentAvailable = $derived.by(() => {
+    void $clientSessionStore
+    return canUseClientReaderContent()
+  })
   let displayResourcesRun = 0
   let displayResourceController: AbortController | null = null
   const displayResourcesReady = $derived(readerDisplayResourcesReady())
@@ -69,7 +73,7 @@
   const transcriptScope = $derived(JSON.stringify([characterId, chatId, incarnation, $clientSessionStore.generation]))
   const observationScope = $derived(
     $clientSessionStore.managed &&
-      $clientSessionStore.authenticated &&
+      readerContentAvailable &&
       ['reading', 'promoting'].includes($clientSessionStore.lifecycle) &&
       incarnation !== null
       ? transcriptScope
@@ -89,7 +93,7 @@
     resolveReaderRoute(
       { kind: 'character', path: '', chaId: characterId, chatId },
       { ...charactersResourceState, characters: getReaderTranscriptDisplayCharacters() },
-      $clientSessionStore.projectionReady,
+      $clientSessionStore.projectionReady && readerContentAvailable,
     ),
   )
   const liveChat = $derived(liveScope.status === 'chat' ? liveScope.chat : undefined)
@@ -109,6 +113,7 @@
   const retainedAllowed = $derived(
     Boolean(
       retained &&
+      readerContentAvailable &&
       retained.characterId === characterId &&
       retained.chatId === chatId &&
       retained.lineage === $clientSessionStore.databaseLineage &&
@@ -123,11 +128,13 @@
       get status() {
         return !$clientSessionStore.authenticated
           ? 'idle'
-          : usingRetained
-            ? 'ready'
-            : $clientSessionStore.projectionReady
-              ? charactersResourceState.status
-              : 'loading'
+          : !readerContentAvailable
+            ? 'loading'
+            : usingRetained
+              ? 'ready'
+              : $clientSessionStore.projectionReady
+                ? charactersResourceState.status
+                : 'loading'
       },
       get characters() {
         return usingRetained ? [retained!.character] : getReaderTranscriptDisplayCharacters()
@@ -245,7 +252,7 @@
     if (
       displayResourcesReady ||
       !$clientSessionStore.projectionReady ||
-      !canUseClientReadServices() ||
+      !readerContentAvailable ||
       connection === 'interrupted'
     )
       return
@@ -257,6 +264,7 @@
   })
 
   async function loadDisplayResources(controller: AbortController): Promise<void> {
+    if (!readerContentAvailable) return
     const generation = captureClientSessionGeneration()
     const run = ++displayResourcesRun
     displayResourceController = controller
@@ -279,7 +287,7 @@
   }
 
   async function refreshTranscript(): Promise<void> {
-    if (loading || displayResourcesLoading) return
+    if (!readerContentAvailable || loading || displayResourcesLoading) return
     generationObserver?.refresh()
     await Promise.all([loadDisplayResources(new AbortController()), loadWindow(loadPages, true)])
   }
@@ -295,7 +303,7 @@
   $effect(() => {
     const generation = $clientSessionStore.generation
     const connection = $clientSessionStore.connection
-    if (!canUseClientReadServices() || !liveCharacter || !liveChat || !liveBody || connection === 'interrupted') return
+    if (!readerContentAvailable || !liveCharacter || !liveChat || !liveBody || connection === 'interrupted') return
     if (liveBody.resourceLoaded && liveBodyUsable) return
     const next = {
       character: liveCharacter,
@@ -325,13 +333,13 @@
     const signature = greetingSignature
     const currentCharacter = liveCharacter
     const currentChat = liveChat
-    if (!currentCharacter || !currentChat || !greeting || !canUseClientReadServices()) return
+    if (!currentCharacter || !currentChat || !greeting || !readerContentAvailable) return
     if (!isClientSessionGenerationCurrent(generation)) return
     void refreshGreetingTranslationProjection(characterId, chatId, { clientSettingsSignature: signature })
   })
 
   async function loadWindow(nextPages: number, force = false, expand = false): Promise<void> {
-    if (!canUseClientReadServices() || !liveCharacter || !liveChat) return
+    if (!readerContentAvailable || !liveCharacter || !liveChat) return
     const targetCharacter = liveCharacter
     const targetChat = liveChat
     const targetId = chatId
@@ -342,6 +350,7 @@
     readFailed = false
     const current = () =>
       !destroyed &&
+      readerContentAvailable &&
       run === readRun &&
       chatId === targetId &&
       getReaderChatIncarnation(characterId, targetId) === incarnation &&
@@ -366,7 +375,7 @@
   }
 
   function loadMore(): void {
-    if (loading) return
+    if (!readerContentAvailable || loading) return
     historyExpanded = true
     void loadWindow(loadPages + getAdditionalChatLoadPages(settingsResourceState.value), false, true)
   }
@@ -401,7 +410,7 @@
     </div>
     <button
       class="shrink-0 rounded border border-textcolor/20 px-3 py-2 text-sm disabled:opacity-50"
-      disabled={loading || displayResourcesLoading}
+      disabled={!readerContentAvailable || loading || displayResourcesLoading}
       onclick={() => void refreshTranscript()}
       data-reader-refresh>{language.connectedReaders.refreshConversation}</button>
   </div>
