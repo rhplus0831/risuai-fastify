@@ -76,7 +76,7 @@ function displayCharacter(value: character): character {
         : { generationSettings: pick(chat.generationSettings, ['personaId']) }),
       message: [],
     })),
-  } as character
+  } as unknown as character
 }
 
 export function getReaderTranscriptCharacters(): character[] {
