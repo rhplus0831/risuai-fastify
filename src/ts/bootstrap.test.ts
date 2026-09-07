@@ -374,6 +374,7 @@ import {
   clientSessionStore,
   getClientSessionSnapshot,
   observeClientWriter,
+  requireClientAuthentication,
   setClientConnectionState,
 } from './clientSession'
 import { loadPlugins, startPluginRuntimeSync } from './plugins/plugins.svelte'
@@ -655,6 +656,80 @@ describe('API-backed client bootstrap', () => {
     expect(selection).toHaveBeenNthCalledWith(1, 'en')
     expect(selection).toHaveBeenNthCalledWith(2, 'en')
     expect(backgroundReady()).toBe(true)
+  })
+
+  it.each(['unowned', 'owning'] as const)(
+    'retries a failed initial locale preview before acquiring the %s writer',
+    async (ownership) => {
+      __observerShellFlagTestHooks.setOverride(true)
+      const expectedEpoch = ownership === 'unowned' ? 0 : 1
+      bootstrapApi.fetchReadOnly.mockResolvedValue(
+        runtimeBootstrap({
+          writerEpoch: expectedEpoch,
+          writer: { sessionId: ownership === 'unowned' ? null : getActiveWriterSessionId(), epoch: expectedEpoch },
+        }),
+      )
+      const failure = new Error('initial locale chunk unavailable')
+      vi.spyOn(languageRuntime, 'awaitLanguageReady').mockRejectedValueOnce(failure)
+      let acknowledge!: () => void
+      vi.mocked(waitAlert).mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            acknowledge = resolve
+          }),
+      )
+      const loading = loadData()
+      try {
+        await vi.waitFor(() => expect(waitAlert).toHaveBeenCalledOnce())
+        expect(alertError).toHaveBeenCalledExactlyOnceWith(failure)
+        expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+        expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
+        expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+        expect(readerApi.start).not.toHaveBeenCalled()
+        expect(getClientSessionSnapshot()).toMatchObject({
+          lifecycle: 'resolving',
+          authenticated: true,
+          projectionReady: false,
+        })
+        expect(getStartupCoordinatorSnapshot().capabilities.canRenderShell).toBe(false)
+        expect(backgroundReady()).toBe(false)
+      } finally {
+        acknowledge?.()
+        await loading
+      }
+      expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(2)
+      expect(bootstrapApi.fetch).toHaveBeenCalledExactlyOnceWith(null, {
+        expectedWriter: { epoch: expectedEpoch, databaseLineage: 'database-a' },
+      })
+      expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+      expect(getClientSessionSnapshot().lifecycle).toBe('writing')
+      expect(backgroundReady()).toBe(true)
+    },
+  )
+
+  it('does not retry an initial locale failure after authentication is lost during its alert', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    vi.spyOn(languageRuntime, 'awaitLanguageReady').mockRejectedValueOnce(new Error('initial locale chunk unavailable'))
+    let acknowledge!: () => void
+    vi.mocked(waitAlert).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          acknowledge = resolve
+        }),
+    )
+    const loading = loadData()
+    try {
+      await vi.waitFor(() => expect(waitAlert).toHaveBeenCalledOnce())
+      requireClientAuthentication()
+    } finally {
+      acknowledge?.()
+      await loading
+    }
+    expect(getClientSessionSnapshot().lifecycle).toBe('auth-required')
+    expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+    expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+    expect(readerApi.start).not.toHaveBeenCalled()
   })
 
   it('keeps the conservative writer-first boundary when the observer flag is disabled', async () => {

@@ -460,6 +460,23 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
     }
     if (isClientSessionManaged() && getClientSessionSnapshot().authenticated) {
       const state = getClientSessionSnapshot()
+      if (state.lifecycle === 'resolving' && !state.projectionReady) {
+        // A failed initial shell/locale preview has not established readable
+        // content or attempted writer acquisition. Retry that startup boundary
+        // after acknowledgement instead of silently abandoning it as a reader.
+        failStartupAttempt(startupAttemptId, failureCode, 'observer-ready')
+        alertError(error)
+        await waitAlert()
+        if (
+          !isClientSessionGenerationCurrent(attemptGeneration) ||
+          !getClientSessionSnapshot().authenticated ||
+          getClientSessionSnapshot().lifecycle !== 'resolving' ||
+          error instanceof FatalBootstrapError
+        ) {
+          return null
+        }
+        return startupRetryTargetForMilestone('observer-ready')
+      }
       if (state.lifecycle === 'recovering-writer' && state.connection === 'interrupted') {
         scheduleConnectedWriterResume()
       } else {
