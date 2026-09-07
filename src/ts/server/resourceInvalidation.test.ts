@@ -1,4 +1,5 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { beginClientSession, resetClientSessionForTests } from '../clientSession'
 import type { character } from '../storage/database.svelte'
 import type { CommandEvent } from './commands'
 
@@ -313,6 +314,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   resetServerResourceState()
   lorebookPageOwner.reset()
   resetServerInlayCatalogResource()
@@ -349,7 +351,212 @@ beforeEach(() => {
   promptHydration.ensure.mockResolvedValue(true)
 })
 
+afterEach(() => resetClientSessionForTests())
+
 describe('API-backed resource invalidation', () => {
+  it.each(['full', 'targeted'] as const)(
+    'does not acknowledge a reader %s snapshot superseded by concurrent detail hydration',
+    async (kind) => {
+      seedResources(5)
+      fullReadMocks(6)
+      const held = deferred<any>()
+      if (kind === 'full') api.settings.mockReturnValueOnce(held.promise)
+      else api.character.mockReturnValueOnce(held.promise)
+      const request =
+        kind === 'full'
+          ? refreshAllServerResources({ mode: 'reader' })
+          : refreshInvalidatedServerResources(event(6, 'characterRow', { id: 'char-a' }), {
+              mode: 'reader',
+              appliedRevision: 5,
+            })
+      applyCharacterResource({ revision: 5, character: metadataCharacter('char-a', 'Concurrent detail', 'chat-a') })
+      held.resolve(
+        kind === 'full'
+          ? { status: 'ok', revision: 6, settings: { language: 'ko' } }
+          : { status: 'ok', revision: 6, character: metadataCharacter('char-a', 'New event', 'chat-a') },
+      )
+      expect(await request).toEqual({ status: 'error', error: 'Reader resource refresh was superseded before apply' })
+      expect(getResourceDatabase().characters[0].name).toBe('Concurrent detail')
+    },
+  )
+
+  it('retains the readable reader transcript when an optional full-refresh BardWiki read fails', async () => {
+    seedResources(5)
+    fullReadMocks(6)
+    applyBardWikiChatResource({
+      protocolVersion: BARDWIKI_PROTOCOL_VERSION,
+      revision: 5,
+      chatId: 'chat-a',
+      globalSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      chatSettings: null,
+      effectiveSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      confirmationCandidate: null,
+      documents: [],
+      receipts: [],
+      jobs: [],
+    })
+    api.bardWikiChat.mockResolvedValue({ status: 'error', error: 'offline' })
+    const onFullProjectionApplied = vi.fn()
+    expect(await refreshAllServerResources({ mode: 'reader', onFullProjectionApplied })).toEqual({
+      status: 'error',
+      error: 'offline',
+    })
+    expect(getResourceDatabase().language).toBe('en')
+    expect(getResourceDatabase().characters[0].chats[0].message).toEqual([{ role: 'user', data: 'resident-a' }])
+    expect(onFullProjectionApplied).not.toHaveBeenCalled()
+  })
+
+  it('automatically fences a legacy writer refresh when its managed session is replaced', async () => {
+    seedResources(5)
+    fullReadMocks(6)
+    const held = deferred<any>()
+    api.settings.mockReturnValueOnce(held.promise)
+    const request = refreshAllServerResources({ hooks })
+    beginClientSession('new-reader')
+    held.resolve({ status: 'ok', revision: 6, settings: { language: 'ko' } })
+    expect(await request).toEqual({ status: 'unavailable' })
+    expect(getResourceDatabase().language).toBe('en')
+    expect(sideEffects.reapplyPendingPresets).not.toHaveBeenCalled()
+  })
+
+  it.each(['shell', 'full', 'targeted'] as const)(
+    'rejects a superseded reader %s response before projection apply',
+    async (kind) => {
+      seedResources(5)
+      let current = true
+      const held = deferred<any>()
+      const options = { mode: 'reader' as const, isCurrent: () => current, onFullProjectionApplied: vi.fn() }
+      fullReadMocks(6)
+      if (kind === 'shell') api.shell.mockReturnValueOnce(held.promise)
+      if (kind === 'full') api.settings.mockReturnValueOnce(held.promise)
+      if (kind === 'targeted') api.settingsGroup.mockReturnValueOnce(held.promise)
+      const request =
+        kind === 'shell'
+          ? loadInitialServerResources(options)
+          : kind === 'full'
+            ? refreshAllServerResources(options)
+            : refreshInvalidatedServerResources(event(6, 'settings', { id: 'language' }), {
+                ...options,
+                appliedRevision: 5,
+              })
+      await Promise.resolve()
+      current = false
+      held.resolve(
+        kind === 'shell'
+          ? shellRead(6)
+          : kind === 'full'
+            ? { status: 'ok', revision: 6, settings: { language: 'ko' } }
+            : { status: 'ok', revision: 6, group: 'language', settings: { language: 'ko' } },
+      )
+      expect(await request).toEqual({ status: 'unavailable' })
+      expect(getResourceDatabase().language).toBe('en')
+      expect(getResourceDatabase().characters[0].name).toBe('Ada')
+      expect(options.onFullProjectionApplied).not.toHaveBeenCalled()
+    },
+  )
+
+  it('ignores foreign navigation and leaves reader prompt authoring bodies lazy', async () => {
+    seedResources(5)
+    await expect(
+      refreshInvalidatedServerResources(
+        [
+          event(6, 'characterSelection', { id: 'char-b' }),
+          event(7, 'promptItem', { id: 'item-a', parentId: 'prompt-a' }),
+        ],
+        { mode: 'reader', appliedRevision: 5 },
+      ),
+    ).resolves.toEqual({ status: 'ok', revision: 7, scope: 'targeted' })
+    expect(api.characterSelection).not.toHaveBeenCalled()
+    expect(charactersResourceState.currentChar).toBe(0)
+    expect(promptHydration.invalidate).toHaveBeenCalledWith('prompt-a')
+    expect(promptHydration.ensure).not.toHaveBeenCalled()
+  })
+
+  it('applies committed reader messages without requiring a generation reattachment hook', async () => {
+    seedResources(5)
+    api.chat.mockResolvedValue({
+      status: 'ok',
+      revision: 6,
+      chatId: 'chat-a',
+      message: [{ role: 'char', data: 'committed' }],
+      alternates: [],
+    })
+    await expect(
+      refreshInvalidatedServerResources(event(6, 'message', { id: 'message-a', parentId: 'chat-a' }), {
+        mode: 'reader',
+        appliedRevision: 5,
+        hooks: {
+          applyChatMessages: sideEffects.applyChat,
+          clearActiveMessageTranslation: sideEffects.clearTranslation,
+        },
+      }),
+    ).resolves.toEqual({ status: 'ok', revision: 6, scope: 'targeted' })
+    expect(sideEffects.applyChat).toHaveBeenCalledOnce()
+    expect(sideEffects.reattach).not.toHaveBeenCalled()
+    expect(sideEffects.reapplyPendingPresets).not.toHaveBeenCalled()
+  })
+
+  it('does not apply a BardWiki read after its reader operation was stopped', async () => {
+    seedResources(5)
+    const resident = {
+      protocolVersion: BARDWIKI_PROTOCOL_VERSION,
+      revision: 5,
+      chatId: 'chat-a',
+      globalSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      chatSettings: null,
+      effectiveSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      confirmationCandidate: null,
+      documents: [],
+      receipts: [],
+      jobs: [],
+    }
+    applyBardWikiChatResource(resident)
+    let current = true
+    const held = deferred<any>()
+    api.bardWikiChat.mockReturnValueOnce(held.promise)
+    const request = refreshInvalidatedServerResources(event(6, 'bardWikiChat', { id: 'chat-a' }), {
+      mode: 'reader',
+      appliedRevision: 5,
+      isCurrent: () => current,
+    })
+    await vi.waitFor(() => expect(api.bardWikiChat).toHaveBeenCalledOnce())
+    current = false
+    held.resolve({ status: 'ok', ...resident, revision: 6 })
+    expect(await request).toEqual({ status: 'unavailable' })
+    expect(getBardWikiChatResource('chat-a')?.revision).toBe(5)
+  })
+
+  it.each(['full', 'targeted'] as const)(
+    'does not advance a reader %s cursor over unrelated commits observed by a newer BardWiki read',
+    async (kind) => {
+      seedResources(5)
+      const resident = {
+        protocolVersion: BARDWIKI_PROTOCOL_VERSION,
+        revision: 5,
+        chatId: 'chat-a',
+        globalSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+        chatSettings: null,
+        effectiveSettings: DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+        confirmationCandidate: null,
+        documents: [],
+        receipts: [],
+        jobs: [],
+      }
+      applyBardWikiChatResource(resident)
+      api.bardWikiChat.mockResolvedValue({ status: 'ok', ...resident, revision: 8 })
+      fullReadMocks(6)
+      const result =
+        kind === 'full'
+          ? await refreshAllServerResources({ mode: 'reader' })
+          : await refreshInvalidatedServerResources(event(6, 'bardWikiChat', { id: 'chat-a' }), {
+              mode: 'reader',
+              appliedRevision: 5,
+            })
+      expect(result).toEqual({ status: 'ok', revision: 6, scope: kind })
+      expect(getBardWikiChatResource('chat-a')?.revision).toBe(8)
+    },
+  )
+
   it('loads only the coherent shell at ordinary startup', async () => {
     seedResources(4)
     api.shell.mockResolvedValue(shellRead(5))

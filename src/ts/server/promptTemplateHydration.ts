@@ -5,6 +5,7 @@ import { peekCachedServerCommandRevision } from './commands'
 import { fetchServerPromptPresetTemplate } from './hydrationReads'
 import { collectionsResourceState, settingsResourceState } from './resourceState.svelte'
 import { resolveUniquePromptPreset } from '@risuai/shared-core/effective-prompt-template'
+import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
 
 export interface PromptTemplateHydrationState {
   hydratedOwnerIds: ReadonlySet<string | null>
@@ -160,6 +161,7 @@ export async function ensurePromptTemplateHydrated(
     promptPresetId?: string | null
   } = {},
 ): Promise<boolean> {
+  const sessionGeneration = captureClientSessionGeneration()
   const ownerResolution = resolveRequestedPromptTemplateOwner(options.promptPresetId)
   if (ownerResolution.status !== 'ready') return false
   const ownerId = ownerResolution.ownerId
@@ -187,6 +189,7 @@ export async function ensurePromptTemplateHydrated(
   const inFlight = promptTemplateHydrationInFlight.get(ownerKey)
   if (inFlight) {
     const applied = await inFlight
+    if (!isClientSessionGenerationCurrent(sessionGeneration)) return false
     const appliedRevision = peekPromptTemplateOwnerRevision(ownerId)
     if (applied && (minimumRevision === null || (appliedRevision !== null && appliedRevision >= minimumRevision))) {
       if ((options.applyProjection ?? true) && !applyHydratedOwnerCompatibilityProjection(ownerId)) {
@@ -219,6 +222,7 @@ export async function ensurePromptTemplateHydrated(
   const compatibilitySnapshot = applyProjection ? promptTemplateOwnerSnapshot(null) : null
   const request = (async () => {
     const result = await fetchServerPromptPresetTemplate(ownerId)
+    if (!isClientSessionGenerationCurrent(sessionGeneration)) return false
     if (generation !== promptTemplateHydrationGeneration) return false
     if (hasPromptTemplateOwnerProjectionEpochChanged(ownerId, ownerEpoch)) return false
     const currentOwner = currentPromptTemplateOwnerResolution()

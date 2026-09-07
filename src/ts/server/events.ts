@@ -10,6 +10,13 @@ import type {
 import { activeWriterSessionHeader, isWriterAccessLost } from './activeWriterSession'
 import type { BardWikiJobSummary } from '@risuai/protocol'
 import type { ServerBardWikiJobEvent } from './bardWikiJobEvents'
+import {
+  canUseClientReadServices,
+  canUseClientRecoveryAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  isClientSessionManaged,
+} from '../clientSession'
 
 const EVENTS_ENDPOINT = '/api/v1/events'
 
@@ -48,6 +55,8 @@ export interface ServerWriterEvent {
 export type ServerWriterEventHandler = (event: ServerWriterEvent) => void
 
 export interface SubscribeServerCommandEventsInput {
+  /** Reader streams never register a connected writer session. */
+  mode?: 'reader' | 'writer'
   onCommandEvent: ServerCommandEventHandler
   onMemoryEvent?: ServerMemoryEventHandler
   onBardWikiEvent?: (event: ServerBardWikiJobEvent) => void
@@ -62,7 +71,7 @@ export interface SubscribeServerCommandEventsInput {
 
 export type ServerCommandEventSubscriptionResult =
   | { status: 'ok'; unsubscribe: () => void }
-  | { status: 'error'; error: string }
+  | { status: 'error'; error: string; httpStatus?: number }
   | {
       status: 'replay-unavailable'
       error: string
@@ -79,7 +88,9 @@ export function canUseServerEvents(): boolean {
 export async function subscribeServerCommandEvents(
   input: SubscribeServerCommandEventsInput,
 ): Promise<ServerCommandEventSubscriptionResult> {
-  if (!canUseServerEvents()) return { status: 'unavailable' }
+  const generation = captureClientSessionGeneration()
+  if (input.mode === 'reader' ? !canUseClientReadServices() : !canUseServerEvents() || !canUseClientRecoveryAccess())
+    return { status: 'unavailable' }
 
   const controller = new AbortController()
   let stopped = false
@@ -97,9 +108,13 @@ export async function subscribeServerCommandEvents(
   }
 
   const auth = await getNodeServerProxyAuth()
+  if (stopped || !isClientSessionGenerationCurrent(generation)) {
+    input.signal?.removeEventListener('abort', stop)
+    return { status: 'unavailable' }
+  }
   const headers: Record<string, string> = {
     'risu-auth': auth,
-    ...activeWriterSessionHeader(),
+    ...(input.mode === 'reader' ? {} : activeWriterSessionHeader()),
   }
   const sinceRevision =
     Number.isInteger(input.sinceRevision) && (input.sinceRevision as number) >= 0
@@ -134,7 +149,11 @@ export async function subscribeServerCommandEvents(
 
   if (!response.ok) {
     if (input.signal) input.signal.removeEventListener('abort', stop)
-    return { status: 'error', error: `HTTP ${response.status}` }
+    return {
+      status: 'error',
+      error: `HTTP ${response.status}`,
+      ...(input.mode === 'reader' || isClientSessionManaged() ? { httpStatus: response.status } : {}),
+    }
   }
 
   if (!response.body) {

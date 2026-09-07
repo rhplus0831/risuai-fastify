@@ -1,4 +1,9 @@
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
+import {
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+  requireClientAuthentication,
+} from '../clientSession'
 import { peekCachedServerCommandRevision } from './commands'
 import type { Chat, character } from '../storage/database.svelte'
 import {
@@ -327,6 +332,7 @@ const characterReads = new Map<string, SharedCharacterRead>()
 
 /** Share transport only; each hydration/route owner retains its own apply fences. */
 export async function fetchServerCharacter(characterId: string, signal?: AbortSignal | null): Promise<CharacterRead> {
+  const generation = captureClientSessionGeneration()
   if (!nonEmptyString(characterId)) {
     return { status: 'error', error: 'Character id is required' }
   }
@@ -334,9 +340,9 @@ export async function fetchServerCharacter(characterId: string, signal?: AbortSi
   if (signal?.aborted) return cancelled()
   const revision = peekCachedServerCommandRevision()
   const auth = await getNodeServerProxyAuth()
-  if (signal?.aborted) return cancelled()
+  if (signal?.aborted || !isClientSessionGenerationCurrent(generation)) return cancelled()
   // A newer revision or authentication scope needs a fresh read.
-  const key = JSON.stringify([characterId, revision, auth])
+  const key = JSON.stringify([characterId, revision, auth, generation])
   let request = characterReads.get(key)
   if (!request || request.controller.signal.aborted) {
     const controller = new AbortController()
@@ -495,16 +501,19 @@ async function requestCachedSingularResource(
   signal: AbortSignal | null | undefined,
   validate: (value: unknown, record: Record<string, unknown>) => boolean,
 ): Promise<ServerResourceJsonRequestResult> {
+  const generation = captureClientSessionGeneration()
+  const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
+    requestServerResourceJson(endpoint, signal, options, generation)
   const cacheGeneration = captureResourceCacheGeneration()
   const prepared = await prepareResourceCacheRequest([{ name: resourceName, key: cacheKey }])
-  if (!prepared) return requestServerResourceJson(endpoint, signal)
+  if (!prepared) return request()
 
-  const result = await requestServerResourceJson(endpoint, signal, {
+  const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
-    return shouldFallbackToLegacyGet(result) ? requestServerResourceJson(endpoint, signal) : result
+    return shouldFallbackToLegacyGet(result) ? request() : result
   }
 
   const record = isPlainRecord(result.body) ? result.body : null
@@ -513,20 +522,20 @@ async function requestCachedSingularResource(
     !isResourceCacheMetadata(record.cache) ||
     !Object.prototype.hasOwnProperty.call(record, resourceName)
   ) {
-    return requestServerResourceJson(endpoint, signal)
+    return request()
   }
 
   const snapshot = prepared.snapshots.get(resourceName)
-  if (!snapshot) return requestServerResourceJson(endpoint, signal)
+  if (!snapshot) return request()
   try {
     const resolved = await resolveResourceCacheValue(
       record[resourceName],
       snapshot,
       prepared.hashes[resourceName] ?? [],
     )
-    if (!resolved) return requestServerResourceJson(endpoint, signal)
+    if (!resolved) return request()
     if (!validate(resolved.value, record)) {
-      return requestServerResourceJson(endpoint, signal)
+      return request()
     }
     void persistResourceCache(
       [
@@ -543,7 +552,7 @@ async function requestCachedSingularResource(
       body: { ...record, [resourceName]: resolved.value },
     }
   } catch {
-    return requestServerResourceJson(endpoint, signal)
+    return request()
   }
 }
 
@@ -552,6 +561,9 @@ async function requestCachedCollections(
   requestedName: ServerCollectionName | undefined,
   signal: AbortSignal | null | undefined,
 ): Promise<ServerResourceJsonRequestResult> {
+  const generation = captureClientSessionGeneration()
+  const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
+    requestServerResourceJson(endpoint, signal, options, generation)
   const cacheGeneration = captureResourceCacheGeneration()
   const names: readonly ServerCollectionName[] = requestedName ? [requestedName] : SERVER_COLLECTION_NAMES
   const descriptors = names.map((name) => ({
@@ -559,14 +571,14 @@ async function requestCachedCollections(
     key: collectionCacheKey(name, requestedName === undefined),
   }))
   const prepared = await prepareResourceCacheRequest(descriptors)
-  if (!prepared) return requestServerResourceJson(endpoint, signal)
+  if (!prepared) return request()
 
-  const result = await requestServerResourceJson(endpoint, signal, {
+  const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
-    return shouldFallbackToLegacyGet(result) ? requestServerResourceJson(endpoint, signal) : result
+    return shouldFallbackToLegacyGet(result) ? request() : result
   }
 
   const record = isPlainRecord(result.body) ? result.body : null
@@ -577,7 +589,7 @@ async function requestCachedCollections(
     !isResourceCacheMetadata(record.cache) ||
     !hasExactCollectionNames(Object.keys(mixedCollections), names)
   ) {
-    return requestServerResourceJson(endpoint, signal)
+    return request()
   }
 
   try {
@@ -586,13 +598,13 @@ async function requestCachedCollections(
     for (const descriptor of descriptors) {
       const name = descriptor.name as ServerCollectionName
       const snapshot = prepared.snapshots.get(name)
-      if (!snapshot) return requestServerResourceJson(endpoint, signal)
+      if (!snapshot) return request()
       const sentHashes = prepared.hashes[name] ?? []
       const resolved =
         name === 'pluginCustomStorage'
           ? await resolveResourceCacheValue(mixedCollections[name], snapshot, sentHashes)
           : await resolveResourceCacheArray(mixedCollections[name], snapshot, sentHashes)
-      if (!resolved) return requestServerResourceJson(endpoint, signal)
+      if (!resolved) return request()
 
       collections[name] = resolved.value as never
       updates.push({
@@ -605,7 +617,7 @@ async function requestCachedCollections(
       readRevisionEnvelope(record) === null ||
       !names.every((name) => isValidCollectionValue(name, collections[name]))
     ) {
-      return requestServerResourceJson(endpoint, signal)
+      return request()
     }
     void persistResourceCache(updates, cacheGeneration)
     return {
@@ -613,38 +625,41 @@ async function requestCachedCollections(
       body: { ...record, collections },
     }
   } catch {
-    return requestServerResourceJson(endpoint, signal)
+    return request()
   }
 }
 
 async function requestCachedCharacters(
   signal: AbortSignal | null | undefined,
 ): Promise<ServerResourceJsonRequestResult> {
+  const generation = captureClientSessionGeneration()
+  const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
+    requestServerResourceJson(CHARACTERS_ENDPOINT, signal, options, generation)
   const cacheGeneration = captureResourceCacheGeneration()
   const prepared = await prepareResourceCacheRequest([{ name: 'characters', key: CHARACTERS_CACHE_KEY }])
-  if (!prepared) return requestServerResourceJson(CHARACTERS_ENDPOINT, signal)
+  if (!prepared) return request()
 
-  const result = await requestServerResourceJson(CHARACTERS_ENDPOINT, signal, {
+  const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
-    return shouldFallbackToLegacyGet(result) ? requestServerResourceJson(CHARACTERS_ENDPOINT, signal) : result
+    return shouldFallbackToLegacyGet(result) ? request() : result
   }
 
   const record = isPlainRecord(result.body) ? result.body : null
   if (!record || !isResourceCacheMetadata(record.cache)) {
-    return requestServerResourceJson(CHARACTERS_ENDPOINT, signal)
+    return request()
   }
   const snapshot = prepared.snapshots.get('characters')
-  if (!snapshot) return requestServerResourceJson(CHARACTERS_ENDPOINT, signal)
+  if (!snapshot) return request()
 
   try {
     const resolved = await resolveResourceCacheArray(record.characters, snapshot, prepared.hashes.characters ?? [])
-    if (!resolved) return requestServerResourceJson(CHARACTERS_ENDPOINT, signal)
+    if (!resolved) return request()
     const { cache: _cache, ...responsePayload } = record
     const payload = readCharactersSummaryEnvelope({ ...responsePayload, characters: resolved.value })
-    if (!payload) return requestServerResourceJson(CHARACTERS_ENDPOINT, signal)
+    if (!payload) return request()
     void persistResourceCache(
       [
         {
@@ -660,7 +675,7 @@ async function requestCachedCharacters(
       body: payload,
     }
   } catch {
-    return requestServerResourceJson(CHARACTERS_ENDPOINT, signal)
+    return request()
   }
 }
 
@@ -714,6 +729,7 @@ async function requestServerResourceJson(
   endpoint: string,
   signal?: AbortSignal | null,
   options: { method?: 'GET' | 'POST'; body?: unknown; auth?: string } = {},
+  generation = captureClientSessionGeneration(),
 ): Promise<ServerResourceJsonRequestResult> {
   if (!canUseServerResourceReads()) return { status: 'unavailable' }
 
@@ -735,6 +751,13 @@ async function requestServerResourceJson(
     return { status: 'error', error: `Network error: ${message}` }
   }
 
+  if (response.status === 401 && isClientSessionGenerationCurrent(generation) && !signal?.aborted) {
+    requireClientAuthentication()
+    const authGeneration = captureClientSessionGeneration()
+    const { discardObserverProjectionState } = await import('../observerProjectionLifecycle')
+    if (isClientSessionGenerationCurrent(authGeneration)) await discardObserverProjectionState('auth-loss')
+  }
+
   let body: unknown = null
   try {
     body = await response.json()
@@ -743,10 +766,6 @@ async function requestServerResourceJson(
     // responses fail the resource-specific envelope validation.
   }
   if (!response.ok) {
-    if (response.status === 401) {
-      const { discardObserverProjectionState } = await import('../observerProjectionLifecycle')
-      await discardObserverProjectionState('auth-loss')
-    }
     return {
       status: 'error',
       error: errorMessageFromBody(body, `HTTP ${response.status}`),

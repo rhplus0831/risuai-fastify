@@ -1,4 +1,5 @@
 import type { CommandEvent } from './commands'
+import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
 import { lorebookPageOwner } from './lorebookPageOwner.svelte'
 import {
   SERVER_SETTINGS_GROUP_BY_KEY,
@@ -127,6 +128,23 @@ export interface ServerResourceInvalidationHooks {
 export interface ServerResourceRefreshOptions {
   signal?: AbortSignal | null
   hooks?: Partial<ServerResourceInvalidationHooks>
+  /** Fence the owner operation before applying a completed read. */
+  isCurrent?: () => boolean
+  /** Readers leave authoring bodies lazy and ignore persisted navigation. */
+  mode?: 'reader'
+  onFullProjectionApplied?: () => void
+}
+
+function refreshIsCurrent(options: ServerResourceRefreshOptions): boolean {
+  return !options.signal?.aborted && (options.isCurrent?.() ?? true)
+}
+
+function captureRefreshOptions<T extends ServerResourceRefreshOptions>(options: T): T {
+  const generation = captureClientSessionGeneration()
+  return {
+    ...options,
+    isCurrent: () => isClientSessionGenerationCurrent(generation) && (options.isCurrent?.() ?? true),
+  }
 }
 
 export interface ServerResourceInvalidationOptions extends ServerResourceRefreshOptions {
@@ -235,7 +253,9 @@ type CompletedTargetedRead =
 export async function loadInitialServerResources(
   options: ServerResourceRefreshOptions = {},
 ): Promise<ServerResourceRefreshResult> {
+  options = captureRefreshOptions(options)
   const shell = await fetchServerShell(options.signal)
+  if (!refreshIsCurrent(options)) return { status: 'unavailable' }
   if (shell.status !== 'ok') return failedRead(shell)
   const mergedCharacters = options.hooks?.mergePendingAgentPresetCharacters
     ? options.hooks.mergePendingAgentPresetCharacters(shell.characters.characters)
@@ -265,14 +285,17 @@ export async function loadInitialServerResources(
 export async function refreshAllServerResources(
   options: ServerResourceRefreshOptions = {},
 ): Promise<ServerResourceRefreshResult> {
+  options = captureRefreshOptions(options)
   const requestFences = captureCompleteResourceReadFences()
   for (let attempt = 0; attempt < FULL_RESOURCE_REFRESH_MAX_ATTEMPTS; attempt += 1) {
+    if (!refreshIsCurrent(options)) return { status: 'unavailable' }
     const [settings, collections, characters, inlayCatalog] = await Promise.all([
       fetchServerSettings(options.signal),
       fetchServerCollections(options.signal),
       fetchServerCharacters(options.signal),
       fetchServerInlayCatalog(options.signal),
     ])
+    if (!refreshIsCurrent(options)) return { status: 'unavailable' }
 
     if (settings.status !== 'ok') return failedRead(settings)
     if (collections.status !== 'ok') return failedRead(collections)
@@ -283,6 +306,15 @@ export async function refreshAllServerResources(
     if (revisions.size !== 1) continue
 
     const revision = settings.revision
+    // Reader full refreshes keep their usable transcript until optional loaded
+    // read owners have also succeeded. Do not re-stub chats before a failed
+    // BardWiki read that would leave the refresh unacknowledged.
+    const readerBardWiki =
+      options.mode === 'reader'
+        ? await refreshAllLoadedBardWikiResources(revision, options.signal, options.isCurrent)
+        : null
+    if (!refreshIsCurrent(options)) return { status: 'unavailable' }
+    if (readerBardWiki && readerBardWiki.status !== 'ok') return readerBardWiki
     // Any full-refresh apply attempt can replace optimistic projections, even
     // when a later slice rejects the response. Invalidate local-effect tokens
     // before touching the first slice so partial failures also fail closed.
@@ -295,6 +327,9 @@ export async function refreshAllServerResources(
         settings: requestFences.settings.isSuperseded(),
         collections: requestFences.collections.isSuperseded(),
         characters: requestFences.characters.isSuperseded(),
+      }
+      if (options.mode === 'reader' && Object.values(superseded).some(Boolean)) {
+        return { status: 'error', error: 'Reader resource refresh was superseded before apply' }
       }
       const mergedSettings = withPendingAgentPresetSettings(
         withPendingPluginProvider(settings, options.hooks?.mergePendingPluginProvider),
@@ -310,6 +345,7 @@ export async function refreshAllServerResources(
       // data across a restore. Leave the chats as API-hydration stubs.
       const charactersApplied =
         !superseded.characters && applyCharactersResource(mergedCharacters, { preserveResidentChatBodies: false })
+      if (charactersApplied) options.onFullProjectionApplied?.()
       const inlayCatalogApplied = applyServerInlayCatalogResource(inlayCatalog, { force: true })
       options.hooks?.reapplyPendingPresetProjections?.()
       options.hooks?.reapplyPendingPromptTemplateStructuralProjections?.()
@@ -327,9 +363,15 @@ export async function refreshAllServerResources(
       ) {
         return { status: 'error', error: 'Failed to apply a complete server resource refresh' }
       }
-      const bardWiki = await refreshAllLoadedBardWikiResources(revision, options.signal)
+      const bardWiki =
+        readerBardWiki ?? (await refreshAllLoadedBardWikiResources(revision, options.signal, options.isCurrent))
+      if (!refreshIsCurrent(options)) return { status: 'unavailable' }
       if (bardWiki.status !== 'ok') return bardWiki
-      return { status: 'ok', revision: Math.max(revision, bardWiki.revision), scope: 'full' }
+      return {
+        status: 'ok',
+        revision: options.mode === 'reader' ? revision : Math.max(revision, bardWiki.revision),
+        scope: 'full',
+      }
     } catch (error) {
       return { status: 'error', error: error instanceof Error ? error.message : String(error) }
     }
@@ -350,6 +392,8 @@ export async function refreshInvalidatedServerResources(
   events: CommandEvent | readonly CommandEvent[],
   options: ServerResourceInvalidationOptions = {},
 ): Promise<ServerResourceRefreshResult> {
+  options = captureRefreshOptions(options)
+  if (!refreshIsCurrent(options)) return { status: 'unavailable' }
   const batch = Array.isArray(events) ? [...events] : [events]
   if (batch.length === 0) {
     const revision = normalizeAppliedRevision(options.appliedRevision)
@@ -365,12 +409,13 @@ export async function refreshInvalidatedServerResources(
 
   const plan = createRefreshPlan()
   for (const event of normalized.events) {
+    if (options.mode === 'reader' && event.resource === 'characterSelection') continue
     addEventToRefreshPlan(plan, event)
     if (plan.full) return refreshAllServerResources(options)
   }
   retainLoadedRefreshTargets(plan)
 
-  const missingHook = missingRequiredHook(plan, options.hooks)
+  const missingHook = missingRequiredHook(plan, options.hooks, options.mode)
   if (missingHook) {
     return { status: 'error', error: `Server resource invalidation requires the ${missingHook} hook` }
   }
@@ -388,6 +433,7 @@ export async function refreshServerResourceTargets(
   input: ServerResourceTargetRefreshInput,
   options: ServerResourceRefreshOptions = {},
 ): Promise<ServerResourceRefreshResult> {
+  options = captureRefreshOptions(options)
   const plan = createRefreshPlan()
   for (const characterId of new Set(input.characterIds ?? [])) {
     if (!nonEmptyString(characterId)) return { status: 'error', error: 'Character id is required' }
@@ -423,12 +469,21 @@ async function executeTargetedRefreshPlan(
   reportedRevision?: number,
 ): Promise<ServerResourceRefreshResult> {
   const completed = await runTargetedReads(plan, options.signal)
+  if (!refreshIsCurrent(options)) return { status: 'unavailable' }
   // Snapshot supersession before applying any sibling result. Character-shell
   // applies advance their own projection epochs, but must not make a body read
   // from this same completed batch appear stale.
   const readSupersessions = snapshotTargetedReadSupersessions(completed)
   const failed = firstFailedTargetedRead(completed)
   if (failed) return failed
+  if (
+    options.mode === 'reader' &&
+    (readSupersessions.generic.size > 0 ||
+      readSupersessions.chatIds.size > 0 ||
+      readSupersessions.characterLorebookIds.size > 0)
+  ) {
+    return { status: 'error', error: 'Reader resource refresh was superseded before apply' }
+  }
 
   for (const entry of completed) {
     if (entry.result.status !== 'ok') continue
@@ -444,6 +499,7 @@ async function executeTargetedRefreshPlan(
     try {
       let failedApply: string | null = null
       for (const entry of completed) {
+        if (!refreshIsCurrent(options)) return { status: 'unavailable' }
         if (entry.result.status !== 'ok') continue
         if (!applyTargetedRead(entry, readSupersessions, options.hooks)) {
           failedApply = targetedReadLabel(entry)
@@ -466,7 +522,8 @@ async function executeTargetedRefreshPlan(
       (latest, entry) => (entry.result.status === 'ok' ? Math.max(latest, entry.result.revision) : latest),
       minimumRevision ?? 0,
     )
-  const promptTemplateRefreshError = await refreshInvalidatedPromptTemplateOwners(plan, responseRevision)
+  const promptTemplateRefreshError = await refreshInvalidatedPromptTemplateOwners(plan, responseRevision, options)
+  if (!refreshIsCurrent(options)) return { status: 'unavailable' }
   if (promptTemplateRefreshError) return { status: 'error', error: promptTemplateRefreshError }
   if (plan.promptTemplateOwnerIds.size > 0 || plan.refreshSelectedPromptTemplate) {
     options.hooks?.reapplyPendingPresetProjections?.()
@@ -482,6 +539,7 @@ async function executeTargetedRefreshPlan(
       characterId,
       minimumRevision ?? responseRevision,
     )
+    if (!refreshIsCurrent(options)) return { status: 'unavailable' }
     if (!refreshed) {
       return { status: 'error', error: `Failed to refresh greeting translations for ${characterId}` }
     }
@@ -495,12 +553,14 @@ async function executeTargetedRefreshPlan(
       documentIds ? [...documentIds] : [],
       minimumRevision ?? responseRevision,
       options.signal,
+      options.isCurrent,
     )
+    if (!refreshIsCurrent(options)) return { status: 'unavailable' }
     if (refreshed.status !== 'ok') return refreshed
     bardWikiRevision = Math.max(bardWikiRevision, refreshed.revision)
   }
 
-  return { status: 'ok', revision: bardWikiRevision, scope: 'targeted' }
+  return { status: 'ok', revision: options.mode === 'reader' ? responseRevision : bardWikiRevision, scope: 'targeted' }
 }
 
 function createRefreshPlan(): RefreshPlan {
@@ -1632,6 +1692,7 @@ function hydrateLorebookPageOwnerFromResidentSettings(): void {
 async function refreshInvalidatedPromptTemplateOwners(
   plan: RefreshPlan,
   minimumRevision: number,
+  options: ServerResourceRefreshOptions,
 ): Promise<string | null> {
   const ownerIds = new Set(plan.promptTemplateOwnerIds)
   if (plan.refreshSelectedPromptTemplate) {
@@ -1639,6 +1700,10 @@ async function refreshInvalidatedPromptTemplateOwners(
     if (selectedOwnerId !== null) ownerIds.add(selectedOwnerId)
   }
   if (ownerIds.size === 0) return null
+  if (options.mode === 'reader') {
+    for (const ownerId of ownerIds) invalidatePromptTemplateHydration(ownerId)
+    return null
+  }
 
   const selectedOwnerId = currentPromptTemplateOwnerId()
   // Prompt-item events update an owner whose complete body is still resident.
@@ -1661,6 +1726,7 @@ async function refreshInvalidatedPromptTemplateOwners(
       }),
     ),
   )
+  if (!refreshIsCurrent(options)) return 'Prompt-template refresh was superseded'
   results.forEach((applied, index) => {
     const ownerId = ownerIdList[index]
     if (!applied && retainedOwnerIds.has(ownerId)) invalidatePromptTemplateHydration(ownerId)
@@ -1818,10 +1884,11 @@ function withPendingPluginProvider<T>(
 function missingRequiredHook(
   plan: RefreshPlan,
   hooks: Partial<ServerResourceInvalidationHooks> | undefined,
+  mode?: 'reader',
 ): keyof ServerResourceInvalidationHooks | null {
   const hasChatReads = plan.chatIds.size > 0 || plan.generationChatMessageIds.size > 0
   if (hasChatReads && !hooks?.applyChatMessages) return 'applyChatMessages'
-  if (hasChatReads && !hooks?.triggerOpenChatGenerationReattach) {
+  if (hasChatReads && mode !== 'reader' && !hooks?.triggerOpenChatGenerationReattach) {
     return 'triggerOpenChatGenerationReattach'
   }
   if (plan.translatedMessageIds.size > 0 && !hooks?.clearActiveMessageTranslation) {

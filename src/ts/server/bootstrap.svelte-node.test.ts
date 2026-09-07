@@ -143,7 +143,12 @@ describe('server runtime bootstrap helper', () => {
     )
     await expect(
       fetchServerBootstrap(null, { expectedWriter: { epoch: 1, databaseLineage: 'database-a' } }),
-    ).resolves.toEqual({ status: 'error', error: 'active_writer_changed', requestUid: 'changed-request' })
+    ).resolves.toEqual({
+      status: 'error',
+      error: 'active_writer_changed',
+      requestUid: 'changed-request',
+      httpStatus: 409,
+    })
     expect(peekCachedServerCommandRevision()).toBe(8)
   })
 
@@ -494,7 +499,7 @@ describe('server runtime bootstrap helper', () => {
 
   it('maps HTTP failures and network failures to status:error', async () => {
     stubBootstrapFetch(jsonResponse({ error: 'missing_auth' }, 401))
-    await expect(fetchServerBootstrap()).resolves.toEqual({ status: 'error', error: 'missing_auth' })
+    await expect(fetchServerBootstrap()).resolves.toEqual({ status: 'error', error: 'missing_auth', httpStatus: 401 })
 
     vi.stubGlobal(
       'fetch',

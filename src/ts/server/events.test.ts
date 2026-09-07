@@ -8,6 +8,13 @@ vi.mock('../storage/fastifyStorage', () => ({
 
 import { subscribeServerCommandEvents } from './events'
 import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
+import * as activeWriterSession from './activeWriterSession'
+import {
+  beginClientSession,
+  requireClientAuthentication,
+  resetClientSessionForTests,
+  settleClientReader,
+} from '../clientSession'
 import type { CommandEvent } from './commands'
 import type { ServerMemoryEvent, ServerMemoryJobSnapshot, ServerWriterEvent } from './events'
 import type { ServerBardWikiJobEvent } from './bardWikiJobEvents'
@@ -61,10 +68,57 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 afterEach(() => {
+  resetClientSessionForTests()
+  vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
 
 describe('server command event subscription helper', () => {
+  it('keeps reader transport available after writer loss and omits the writer registration header', async () => {
+    vi.spyOn(activeWriterSession, 'isWriterAccessLost').mockReturnValue(true)
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-a', epoch: 1 } })
+    const calls = stubEventsFetch(
+      'event: writer\ndata: {"sessionId":"writer-a","epoch":1}\n\nevent: command\ndata: {"type":"settings.updated","resource":"settings","revision":8}\n\n',
+    )
+    const onWriterEvent = vi.fn(),
+      onCommandEvent = vi.fn()
+    const subscription = await subscribeServerCommandEvents({
+      mode: 'reader',
+      sinceRevision: 7,
+      onWriterEvent,
+      onCommandEvent,
+    })
+    expect(subscription.status).toBe('ok')
+    await waitFor(() => onCommandEvent.mock.calls.length === 1)
+    expect(calls[0]).toMatchObject({
+      writerSessionHeader: null,
+      authHeader: 'events-auth-token',
+      lastEventIdHeader: '7',
+    })
+    expect(onWriterEvent).toHaveBeenCalledWith({ sessionId: 'writer-a', epoch: 1 })
+    expect(await subscribeServerCommandEvents({ onCommandEvent: vi.fn() })).toEqual({ status: 'unavailable' })
+  })
+
+  it('does not start a reader stream without authenticated read access', async () => {
+    beginClientSession('reader-a')
+    requireClientAuthentication()
+    const calls = stubEventsFetch(': connected\n\n')
+    expect(await subscribeServerCommandEvents({ mode: 'reader', onCommandEvent: vi.fn() })).toEqual({
+      status: 'unavailable',
+    })
+    expect(calls).toHaveLength(0)
+  })
+
+  it('reports reader auth status distinctly for coordinator teardown', async () => {
+    stubEventsFetch('{"error":"missing_auth"}', 401)
+    expect(await subscribeServerCommandEvents({ mode: 'reader', onCommandEvent: vi.fn() })).toEqual({
+      status: 'error',
+      error: 'HTTP 401',
+      httpStatus: 401,
+    })
+  })
+
   it('fetches the event stream with auth and emits command, memory, and writer events', async () => {
     const commandEvent: CommandEvent = {
       type: 'generation.persisted',

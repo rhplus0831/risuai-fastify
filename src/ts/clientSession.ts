@@ -187,6 +187,17 @@ function ownershipFields(ownership: ClientSessionOwnership) {
   }
 }
 
+/** Coherent authenticated startup reads may render while conditional acquisition is pending. */
+export function authenticateClientSessionReadView(
+  operation: ClientSessionOperation,
+  ownership: ClientSessionOwnership,
+): boolean {
+  if (!isClientSessionOperationCurrent(operation) || state.lifecycle !== 'resolving' || !acceptsOwnership(ownership))
+    return false
+  publish({ ...state, ...ownershipFields(ownership) })
+  return true
+}
+
 /** A read may establish reader state, including a reader whose ID appears in a frame. */
 export function settleClientReader(operation: ClientSessionOperation, ownership: ClientSessionOwnership): boolean {
   if (!isClientSessionOperationCurrent(operation) || !acceptsOwnership(ownership)) return false
@@ -329,7 +340,7 @@ export function setClientConnectionState(connection: ClientConnectionState, gene
 }
 
 export function requireClientAuthentication(): void {
-  if (!state.managed) return
+  if (!state.managed || state.lifecycle === 'auth-required') return
   activeOperation = null
   publish({
     ...state,

@@ -1,4 +1,5 @@
 import { get, writable } from 'svelte/store'
+import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
 import type { BardWikiChatResource, BardWikiDocumentResource, BardWikiVersionsResource } from '@risuai/protocol'
 import {
   fetchServerBardWikiChat,
@@ -16,9 +17,21 @@ export interface BardWikiResourceState {
 const initialBardWikiResourceState = (): BardWikiResourceState => ({ chats: {}, documents: {}, versions: {} })
 
 export const bardWikiResource = writable<BardWikiResourceState>(initialBardWikiResourceState())
+let resourceGeneration = 0
 
 export function resetBardWikiResource(): void {
+  resourceGeneration += 1
   bardWikiResource.set(initialBardWikiResourceState())
+}
+
+function captureBardWikiReadFence(signal?: AbortSignal | null, isCurrent: () => boolean = () => true): () => boolean {
+  const generation = resourceGeneration
+  const sessionGeneration = captureClientSessionGeneration()
+  return () =>
+    generation === resourceGeneration &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    !signal?.aborted &&
+    isCurrent()
 }
 
 export function bardWikiDocumentResourceKey(chatId: string, documentId: string): string {
@@ -92,7 +105,9 @@ export async function loadBardWikiChatResource(
   chatId: string,
   signal?: AbortSignal | null,
 ): Promise<ServerResourceReadResult<BardWikiChatResource>> {
+  const current = captureBardWikiReadFence(signal)
   const result = await fetchServerBardWikiChat(chatId, signal)
+  if (!current()) return { status: 'unavailable' }
   if (result.status === 'ok') applyBardWikiChatResource(result)
   return result
 }
@@ -102,7 +117,9 @@ export async function loadBardWikiDocumentResource(
   documentId: string,
   signal?: AbortSignal | null,
 ): Promise<ServerResourceReadResult<BardWikiDocumentResource>> {
+  const current = captureBardWikiReadFence(signal)
   const result = await fetchServerBardWikiDocument(chatId, documentId, signal)
+  if (!current()) return { status: 'unavailable' }
   if (result.status === 'ok') applyBardWikiDocumentResource(result)
   return result
 }
@@ -112,7 +129,9 @@ export async function loadBardWikiVersionsResource(
   documentId: string,
   options: { limit?: number; beforeVersion?: number; signal?: AbortSignal | null } = {},
 ): Promise<ServerResourceReadResult<BardWikiVersionsResource>> {
+  const current = captureBardWikiReadFence(options.signal)
   const result = await fetchServerBardWikiVersions(chatId, documentId, options)
+  if (!current()) return { status: 'unavailable' }
   if (result.status === 'ok') applyBardWikiVersionsResource(result)
   return result
 }
@@ -122,9 +141,13 @@ export async function refreshLoadedBardWikiChat(
   documentIds: readonly string[],
   minimumRevision: number,
   signal?: AbortSignal | null,
+  isCurrent: () => boolean = () => true,
 ): Promise<{ status: 'ok'; revision: number } | { status: 'error'; error: string } | { status: 'unavailable' }> {
+  const current = captureBardWikiReadFence(signal, isCurrent)
+  if (!current()) return { status: 'unavailable' }
   if (!isBardWikiChatResourceLoaded(chatId)) return { status: 'ok', revision: minimumRevision }
   const chat = await fetchServerBardWikiChat(chatId, signal)
+  if (!current()) return { status: 'unavailable' }
   if (chat.status !== 'ok') return chat
   if (chat.revision < minimumRevision) {
     return { status: 'error', error: `BardWiki chat response revision ${chat.revision} is stale` }
@@ -144,6 +167,7 @@ export async function refreshLoadedBardWikiChat(
       continue
     }
     const document = await fetchServerBardWikiDocument(chatId, documentId, signal)
+    if (!current()) return { status: 'unavailable' }
     if (document.status !== 'ok') return document
     if (document.revision < minimumRevision) {
       return { status: 'error', error: `BardWiki document response revision ${document.revision} is stale` }
@@ -154,6 +178,7 @@ export async function refreshLoadedBardWikiChat(
     revision = Math.max(revision, document.revision)
     if (!isBardWikiVersionsResourceLoaded(chatId, documentId)) continue
     const versions = await fetchServerBardWikiVersions(chatId, documentId, { signal })
+    if (!current()) return { status: 'unavailable' }
     if (versions.status !== 'ok') return versions
     if (versions.revision < minimumRevision) {
       return { status: 'error', error: `BardWiki versions response revision ${versions.revision} is stale` }
@@ -169,7 +194,9 @@ export async function refreshLoadedBardWikiChat(
 export async function refreshAllLoadedBardWikiResources(
   minimumRevision: number,
   signal?: AbortSignal | null,
+  isCurrent: () => boolean = () => true,
 ): Promise<{ status: 'ok'; revision: number } | { status: 'error'; error: string } | { status: 'unavailable' }> {
+  const current = captureBardWikiReadFence(signal, isCurrent)
   const snapshot = get(bardWikiResource)
   let revision = minimumRevision
   for (const chatId of Object.keys(snapshot.chats)) {
@@ -177,7 +204,8 @@ export async function refreshAllLoadedBardWikiResources(
     const documentIds = Object.keys(snapshot.documents)
       .filter((key) => key.startsWith(prefix))
       .map((key) => key.slice(prefix.length))
-    const refreshed = await refreshLoadedBardWikiChat(chatId, documentIds, minimumRevision, signal)
+    if (!current()) return { status: 'unavailable' }
+    const refreshed = await refreshLoadedBardWikiChat(chatId, documentIds, minimumRevision, signal, current)
     if (refreshed.status !== 'ok') return refreshed
     revision = Math.max(revision, refreshed.revision)
   }

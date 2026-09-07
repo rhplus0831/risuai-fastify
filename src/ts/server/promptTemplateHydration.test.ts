@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { derived, writable } from 'svelte/store'
 import type { PromptItem } from '../process/prompt'
 import { testDatabaseState } from '../__tests__/resourceDatabaseState'
+import { beginClientSession, resetClientSessionForTests } from '../clientSession'
 
 const projectionState = vi.hoisted(() => ({
   fetchResource: vi.fn(),
@@ -53,6 +54,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   ;(testDatabaseState as { db: unknown }).db = { characters: [], modules: [], enabledModules: [] }
   clearCachedServerCommandRevision()
   resetPromptTemplateHydration()
@@ -61,11 +63,31 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   const database = JSON.parse(JSON.stringify(testDatabaseState.db))
   testDatabaseState.db = database
 })
 
 describe('promptTemplate hydration', () => {
+  it('rejects late owner and joined compatibility applies from an obsolete client session', async () => {
+    ;(testDatabaseState as { db: unknown }).db = {
+      promptPresetsId: 0,
+      promptPresets: [{ id: 'preset-a', name: 'Preset A' }],
+      promptTemplate: [item('resident', 'resident')],
+    }
+    setCachedServerCommandRevision(7)
+    const held = deferred<any>()
+    projectionState.fetchResource.mockReturnValueOnce(held.promise)
+    const owner = ensurePromptTemplateHydrated({ promptPresetId: 'preset-a', force: true })
+    const joined = ensurePromptTemplateHydrated({ promptPresetId: 'preset-a' })
+    beginClientSession('new-reader')
+    held.resolve({ status: 'ok', revision: 7, promptPresetId: 'preset-a', promptTemplate: [item('stale', 'stale')] })
+    expect(await owner).toBe(false)
+    expect(await joined).toBe(false)
+    expect(testDatabaseState.db.promptTemplate).toEqual([item('resident', 'resident')])
+    expect(isPromptTemplateHydrated('preset-a')).toBe(false)
+  })
+
   it('reactively publishes hydration when a second owner becomes ready', async () => {
     ;(testDatabaseState as { db: unknown }).db = {
       promptPresetsId: 0,

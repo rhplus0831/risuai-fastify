@@ -1,4 +1,5 @@
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
+import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
 import type { Message } from '../storage/database.svelte'
 import { activeWriterSessionHeader } from './activeWriterSession'
 import { setCachedServerCommandRevision } from './commands'
@@ -246,7 +247,7 @@ export interface ServerBootstrapRuntime {
 export type ServerBootstrapResult =
   | { status: 'ok'; bootstrap: ServerBootstrapRuntime; requestUid?: string }
   | { status: 'active-writer-connected'; error: 'active_writer_connected'; requestUid?: string }
-  | { status: 'error'; error: string; requestUid?: string }
+  | { status: 'error'; error: string; requestUid?: string; httpStatus?: number }
   | { status: 'unavailable' }
 
 type ServerBootstrapReadOnlyResult = Exclude<ServerBootstrapResult, { status: 'active-writer-connected' }>
@@ -295,9 +296,13 @@ async function fetchServerBootstrapWithMode(input: {
   disconnectExistingWriter: boolean
   expectedWriter?: { epoch: number; databaseLineage: string }
 }): Promise<ServerBootstrapResult> {
+  const generation = captureClientSessionGeneration()
   if (!canUseServerBootstrap()) return { status: 'unavailable' }
 
   const auth = await getNodeServerProxyAuth()
+  if (input.registerActiveWriter && (!isClientSessionGenerationCurrent(generation) || input.signal?.aborted)) {
+    return { status: 'unavailable' }
+  }
   let response: Response
   try {
     response = await fetch(BOOTSTRAP_ENDPOINT, {
@@ -350,6 +355,7 @@ async function fetchServerBootstrapWithMode(input: {
     return {
       status: 'error',
       error: errorMessageFromBody(body, `HTTP ${response.status}`),
+      httpStatus: response.status,
       ...(requestUid ? { requestUid } : {}),
     }
   }
@@ -372,7 +378,7 @@ async function fetchServerBootstrapWithMode(input: {
     return { status: 'error', error: 'Invalid bootstrap writer metadata', ...(requestUid ? { requestUid } : {}) }
   }
 
-  if (input.cacheRevision) {
+  if (input.cacheRevision && isClientSessionGenerationCurrent(generation) && !input.signal?.aborted) {
     setCachedServerCommandRevision(revision as number)
   }
 
@@ -404,8 +410,10 @@ async function fetchServerBootstrapWithMode(input: {
     activeMessageTranslations: parseActiveMessageTranslations(record.activeMessageTranslations),
     activeGreetingTranslations: parseActiveGreetingTranslations(record.activeGreetingTranslations),
   }
-  configureStartupTelemetry(bootstrap.startupTelemetry)
-  configureClientDiagnostics(bootstrap.clientDiagnostics)
+  if (isClientSessionGenerationCurrent(generation) && !input.signal?.aborted) {
+    configureStartupTelemetry(bootstrap.startupTelemetry)
+    configureClientDiagnostics(bootstrap.clientDiagnostics)
+  }
   return {
     status: 'ok',
     bootstrap,

@@ -254,8 +254,13 @@ export function selectMemoryProgress(
   }
 }
 
-export function resetMemoryJobProjectionForTests(): void {
+/** Discard authenticated job projections when their auth or database scope changes. */
+export function resetMemoryJobProjection(): void {
   memoryJobProjectionStore.set(initialState())
+}
+
+export function resetMemoryJobProjectionForTests(): void {
+  resetMemoryJobProjection()
 }
 
 function removeOlderLogicalJobInstances(
