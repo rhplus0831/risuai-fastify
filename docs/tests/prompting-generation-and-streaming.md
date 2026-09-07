@@ -2,7 +2,7 @@
 
 Last audited: 2026-09-04.
 
-Targeted source check: 2026-09-08 (connected-reader boundaries and evidence).
+Targeted source check: 2026-09-08 (reader boundaries, native selection setup and evidence).
 
 This area covers the path from chat intent through prompt construction, provider dispatch orchestration, streaming, persistence, post-processing, cancellation, and reroll recovery. Provider wire formats are assessed in [Providers, Models, and Media](providers-models-and-media.md); scripting engines are assessed in [Scripting, Parsing, and Automation](scripting-parsing-and-automation.md); memory retrieval is assessed in [Memory and Embeddings](memory-and-embeddings.md).
 
@@ -35,6 +35,15 @@ lost acceptance responses, exact Retry, Stop, viewer reconnection, expired repla
 concurrent chats and queued finalization with the same deterministic provider
 boundary. Browser lifecycle events and mobile profiles are controlled Chromium
 conditions; they do not certify physical devices or a live external provider.
+
+The lifecycle fixture shares a server across separate case pages and chat IDs.
+Before its direct generation-settings setup write, it waits for the exact ready
+route, matching local and persisted SQL selection, and completion of that chat's
+native selection intent. It records those read-only observations and leaves
+active jobs in other chats alone. Import deliberately resets `configured` to
+false, so the later configuration PUT remains necessary. This ordering prevents
+fixture writes from creating a revision conflict with real chat navigation;
+background readiness and generic composer visibility alone are insufficient.
 
 ## Connected-reader viewing and writer effects
 

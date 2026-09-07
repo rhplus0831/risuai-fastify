@@ -1624,3 +1624,77 @@ case, all eleven original journey bodies, required configuration/revision retry,
 and actual send/restart/reload/Stop/effect assertions. Focused consumer baseline,
 named production selection fault and restored control, then the mandatory full
 phase gate own acceptance; no extra generation/geometry matrix is required.
+
+### BSE-007 Implemented Guard and Declared Verification
+
+`ee04eacba` adds a single read-only precondition at the start of the shared
+configuration helper, including its already-configured navigation shortcut.
+It compares the actual URL/current route, ready resource key, local chatPage
+identity, read-only SQLite `characters.data_json.chatPage` → `chats.position`
+selection, and zero relevant pending `select:true` PATCHes. Empty outbox alone
+would miss the optimistic-before-enqueue interval; persisted identity closes
+that gap. It does not require a new selection command when the initial target is
+already selected, generation readiness before required configuration, or empty
+jobs in another chat. Every poll observation is attached even on failure.
+
+Root independently verifies that all eleven journey bodies, boot/navigation
+helpers and existing configuration PUT/retry logic are byte-identical. Browser
+TypeScript, Prettier and whitespace checks pass. The test SHA256 is
+`5577b1dc4cbf6fcd3bddf73bb0050a9451bc06f7fdad2169c1c048d30d5fdf9b`,
+replacing
+`440d515b4d7f27a57d4b2a6f83bb5d8f12c01015a617a0ac9f6f28561a4d42b9`.
+
+Freeze application/test/configuration and scan-eligible documents at `6f50eb8e5`
+in one isolated checkout. Unset observer/fallback/artifact/worker overrides;
+use `VITE_FASTIFY_BROWSER_SMOKE=TRUE`. Build normal frontend once with
+`pnpm --config.verify-deps-before-run=false build:smoke`, then run:
+
+```sh
+pnpm --config.verify-deps-before-run=false exec playwright test \
+  -c playwright.fastify-smoke.config.ts \
+  server/fastify/browser-smoke/acceptedSendProtocol.spec.ts \
+  --workers=1 --trace=on
+```
+
+All eleven consumers must pass, including S04 → S05's real selected-route
+acceptance before configuration and concurrent-chat navigation through the
+configured shortcut. Apply only this server fault in
+`server/fastify/src/routes/commands.ts`:
+
+```diff
+           if (selectUpdated) {
+             character.chatPage = chatIndex
+-            writeSingleCharacterRow(innerDb, character.chaId as string, character)
++            Reflect.apply(console.warn, console, [
++              '[smoke-selection-owner-persistence-omitted]',
++              character.chaId,
++              chatId,
++              chatIndex,
++            ])
+           }
+```
+
+Server SHA256 changes from
+`091cff330ddf6b4e0e22a5a17d2efedaff75eaafd4b38745ca088a0eebc56823`
+to `e27625c97a1d671a75c2a93ea80e815ac2054ac52b6b77c88cc3d38d9e582bdf`.
+The in-memory selection, valid real `select:true` request, chat-row write,
+accepted result/event/receipt and revision remain. A proposed `select:false`
+with empty patch was rejected before execution because validation would return
+400, which could not qualify this boundary.
+
+Keep frontend assets frozen and start a fresh server/test process with the
+literal server fault. Use the same command plus
+`--grep 'server restart projects a billing-aware abandoned recovery and exact retry'`.
+Qualification requires healthy startup, actual native selection 200 claiming
+the target, its executed server marker, ready/local target with no pending
+selection, but SQL still pointing to the prior default. The named readiness/
+durability guard must fail before configuration PUT or generation POST. An
+unrelated startup/400/409 failure cannot qualify. This tests the newly required
+selection prerequisite; it does not claim a production restart regression.
+
+Restore the exact server file and all frozen inputs; start another fresh
+process and run all eleven unchanged consumers again with the same fixed frontend
+catalog and no runtime marker. Only the server runtime is faulted, so no emitted
+client marker is claimed. The deliberate fixed-client-assets experiment does not
+assume server source is excluded from Tailwind scanning. Any unexpected outcome
+stops for review, and the mandatory Phase 3 full gate remains required afterward.

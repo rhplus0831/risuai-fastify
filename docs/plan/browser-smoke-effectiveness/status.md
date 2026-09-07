@@ -497,3 +497,12 @@ restored byte proofs remain valid. Required full gates rebuild current source an
 current scanned documentation. The compact audit is
 `/tmp/reader-cross-cwd-emission-audit-ukhdfuih/conclusion.json`. This finding does
 not introduce a build-hygiene workstream or expand the behavioral claim.
+
+BSE-007's guard is committed in `ee04eacba`. It adds only read-only route/local/
+SQLite/selection-outbox evidence before direct configuration and leaves every
+original journey, boot/navigation helper and PUT/retry byte-identical. Browser
+TypeScript, formatting and whitespace pass. The literal server selection-owner
+write omission and frozen all-eleven baseline/negative/restored protocol are
+recorded in [findings](findings.md#bse-007-implemented-guard-and-declared-verification).
+The isolated campaign uses `6f50eb8e5`; main changes only documentation while it
+runs. Final consumer/control and full-gate verification remain pending.
