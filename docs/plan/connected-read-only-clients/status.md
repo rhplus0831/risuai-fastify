@@ -4,20 +4,19 @@ Updated: 2026-09-07
 
 ## Execution Cursor
 
-- State: Stage 1 smoke prerequisite and reader Phase 0 accepted; Phase 1 is in progress.
+- State: Stage 1 smoke prerequisite and reader Phases 0–1 accepted; Phase 2 is ready.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Current task scope: implement the coordinated connected-reader plan after the
-  accepted smoke prerequisite. Reader Phase 0 is accepted.
-- Current slice: [Phase 1](phases/phase-1-capabilities-and-mutation-protection.md),
-  live capability ownership and guarded command/receipt/lifecycle admission,
-  direct operations, plugin/display boundaries and draft/UI protection. The
-  compatible bootstrap wire prerequisite is implemented; reader startup is not
-  exposed and the public rollout default remains disabled.
+  accepted smoke prerequisite. Reader Phases 0–1 are accepted.
+- Current slice: [Phase 2](phases/phase-2-connected-read-only-browsing.md),
+  authenticated reader startup/event services and explicit local transcript
+  read context. Phase 1 guard/read/gate proof and both aggregate gates passed.
+  The public rollout default remains disabled until Phase 5.
 - Production behavior: conservative writer flow remains the default. Additive
   ownership metadata/preconditions are available; connected readers are not
   publicly enabled.
 - Blockers: none. Phase 0 implementation choices and its required baseline gate
-  are accepted below.
+  and Phase 1 protection gates are accepted below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
 [inventory](inventory.md) for source owners and dispositions, and only the
@@ -25,14 +24,14 @@ active [phase](phases/README.md) for detailed execution instructions.
 
 ## Phase Router
 
-| Phase                                                                                             | State       | Next evidence required                                                                  |
-| ------------------------------------------------------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted    | Source/transition/draft contract, 34 dispositions and required full suite passed.       |
-| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | In progress | Guard/read/gate implementation and focused proof for all 34 families, then phase gates. |
-| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending     | Two sessions browse independently and converge on committed data without reader writes. |
-| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending     | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.       |
-| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending     | Streaming continuity; observers execute no writer-only actions or effects.              |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending     | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.          |
+| Phase                                                                                             | State    | Next evidence required                                                                        |
+| ------------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                             | Accepted | Source/transition/draft contract, 34 dispositions and required full suite passed.             |
+| [1. Capabilities and mutation protection](phases/phase-1-capabilities-and-mutation-protection.md) | Accepted | All 34 entry dispositions, focused races, test:agent and all 13 test:all lanes passed.        |
+| [2. Connected read-only browsing](phases/phase-2-connected-read-only-browsing.md)                 | Pending  | Begin reader startup/service separation and scoped transcript; then actual two-session proof. |
+| [3. Explicit writer switching](phases/phase-3-explicit-writer-switching.md)                       | Pending  | UI-driven takeover/demotion; pending work, drafts, and stale-response race proof.             |
+| [4. Live generation observation](phases/phase-4-live-generation-observation.md)                   | Pending  | Streaming continuity; observers execute no writer-only actions or effects.                    |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                         | Pending  | Combined browser/aggregate evidence, rollout disposition, docs, and residuals.                |
 
 ## Verification Ledger
 
@@ -80,7 +79,7 @@ cursor at the top; do not duplicate it in the plan or phase files.
   `pnpm test:all` at the end of every phase without additional user consent,
   before acceptance or handoff. This supersedes the earlier user/CI-only command
   ownership for this workstream. Record final-source results and keep failed or
-  unavailable required checks pending. All implementation phases remain pending.
+  unavailable required checks pending. Later entries record phase implementation and acceptance separately.
 
 Record future scope or sequencing changes here with rationale, affected phase,
 dependency, evidence, and remaining consequence. Update the plan and affected
@@ -264,3 +263,174 @@ accepted response, direct-event draining and batch-flush races, A → B → A
 capability changes, and actual mounted UI/keydown checks. The wider operation,
 plugin, local-owner and draft integration work and phase-ending aggregate/browser
 gates are still pending. No Phase 1 acceptance is implied by this slice.
+
+### Direct operations, local owners and retained fields
+
+`29822f4d0` guards direct provider/media/storage adapters, asset batches,
+external fetch/plugin proxy continuations, translations, push registration and
+local completion notification/audio. The original role generation is checked
+before transport and after asynchronous work; a later promotion cannot revive
+an old operation. Already accepted backup/import results retain their identity
+without adopting stale replacement ownership. Focused operation evidence:
+23 suites, **369 tests passed**, including held auth/provider/file results and
+reader attempts; formatting and whitespace checks passed.
+
+`c84a0b7ea` closes command-unavailable local acceptance and optimistic mutation
+paths for character/chat/module/persona/loadout/preset owners. Debounced
+settings, lorebook, character and script owners keep old intent dormant after
+loss rather than dispatching it on a later role generation. Detached getters
+retain the dirty value and its normalized baseline. Focused evidence:
+19 suites, **856 tests passed**, plus final affected subsets of **97** and
+**72** tests; **28** new reader/delayed-owner cases exercise actual entry points
+and timer continuations. These counts describe the bounded agent runs, not an
+aggregate phase pass.
+
+`1d0add206` adds a separate encrypted local recovery store. Writer-loss capture
+runs synchronously before subscriber teardown; each copy keeps its originating
+lineage/session, immutable generation, field values and optional structured
+baseline. Secret-bearing content and record labels/routes are encrypted at
+rest. Scope/auth changes hide the view without deleting originating drafts;
+late loads and exact-generation discard cannot replace or delete a newer copy.
+The store retains fresh in-memory copies on quota/serialization failures and
+reports reload-persistence failure. **25** focused store tests passed.
+Controlled reload callers must await capture/persistence and handle failure;
+an abrupt process termination during asynchronous page-exit storage is not a
+crash-recovery guarantee.
+
+Mounted editor integration and chat controls are still under final review.
+The new partial-edit regression captures the just-typed range before unmount,
+then rejects a retained Save after demotion and promotion; explicit Cancel
+remains cancellation. The composer regression holds hydration, captures newer
+unsent input on writer loss and proves the old preflight does not append/send
+when hydration resolves after promotion. Their affected suites passed
+**14** and **19** tests respectively. Final outbox/replay/replacement,
+plugin-effect readiness and retained generation-entry continuations remain in
+progress. Phase 1 gates have not run and Phase 2 remains pending.
+
+### Mounted editor and transcript boundaries
+
+`b040edee3` retires writer plugin registrations and fences scripting callbacks;
+`0ca3dcafd` adds explicit read-only Chat/Chats/ChatBody props and cache separation.
+Reader rendering preserves plain copy and existing persisted translation display
+without starting translation, TTS, triggers, rerolls or general browser display
+scripts. The final Chat/parser/ChatBody/Chats focused set passed **162 tests in
+7 files**, including delayed callbacks across demotion and promotion. The earlier
+plugin/display/script set passed **253 tests in 9 files**. Explicit local reader
+read-owner scoping is still a Phase 2 prerequisite; display IDs currently constrain
+writes and server display requests but do not retarget every surrounding read.
+
+`459899b65` mounts the local recovery panel in the ready app shell; its **12**
+mounted cases cover real captures, secret masking/reveal, copy/export, exact
+newer-copy discard protection, safe local navigation, stale DOM actions and auth
+loss. The final App/panel/field-helper group passed **36 tests in 3 files**.
+`6dccc5469` and `484a23885` integrate the character/persona/lore/script/module/
+popup and model/memory/settings/sidebar editor families. Final focused UI checks
+passed for CharConfig, author notes, personas, popup fields, lore rows/settings,
+triggers, regex and modules. The settings/memory/sidebar agent's final combined
+run passed **429 tests in 14 suites**; its final affected baseline/control subset
+passed **63 tests in 2 suites**. Captures include collapsed/nested raw values,
+provider secrets, just-typed fields before child effects, and later input after
+an earlier Save. Pristine and explicitly cancelled forms are not fabricated edits.
+
+`ee504f145` adds composer/partial capture and original-generation continuation
+checks. Five affected parent chat suites passed **149 tests**. `251e98d76` fences
+App drop and runtime-repair callbacks; **24** mounted App tests passed, including
+a preset file read held across a full role cycle with zero import calls.
+
+`18d1c65d0` fixes retained chat projections found during final review. Before the
+fix, three unchanged held-failure cases reproduced old chat names, folder names
+and message text overwriting the current view after demotion and promotion. A
+separate replay-discard case reproduced a stale transcript rebase. Attempt-origin
+checks now cover result and retained-service reapply, rollback and later-attempt
+baseline rebasing while exact terminal settlement remains intact. The complete
+chat-command suite passed **231 tests**, including eight new race cases. A later
+typecheck found a test fixture using a string for structured translation; the
+fixture was corrected to a valid independent message-name field without changing
+the rebase scenario. Final aggregate verification must cover that correction.
+
+### Final continuation review and phase gates
+
+`5490dbd3f` protects generation transport, recovery/finalization, accepted-send,
+request, reroll and input-hook boundaries. Managed effects wait for ordinary
+writing **and** coherent plugins before claiming ledger rows; the real ledger
+regression proves early plugin output remains unclaimed. `0c1d9a067` closes
+historical PNG/CharX/Realm/URL/module import fallbacks, including embedded asset
+batches and held confirmations. The initial generation set passed **380 tests
+in 18 suites**; the final caller/request set passed **109 tests in 8 suites**.
+Import compatibility and new reachable-path checks passed **109 tests**, with
+ordinary-writer positive controls. No production fault was left injected.
+
+`9678be782` preserves caller generation through compatibility accepted-append
+handoffs, slash-command pipelines and display-plugin Retry. A superseded
+accepted or queued-then-accepted append keeps its accepted message identity and
+exact settlement without launching a provider. The final command/chat set
+passed **260 tests in 2 files**. The display Retry file passed **107 tests**,
+including a role-cycle hold followed by a successful fresh explicit Retry.
+
+`0842cf3a7` completes outbox/replacement recovery guards. Reader startup cannot
+adopt/discover a pending writer, stage or replay intent, or perform receipt
+cleanup. Authorized recovery uses origin-stamped handles, lock/transaction
+checks and loop generations. Already-admitted encryption completes under its
+captured scope and recovery waits for it. Same-lineage epoch changes retain
+pending intent and skip destructive owner reset. Late ordinary/replay/predecessor
+results can settle exact local rows while old-generation ACK, notification,
+reload and successor dispatch stay stopped. Writer loss invalidates optimistic
+projection fences even when the same session later resumes the same epoch.
+The final focused set passed **340 tests in 8 suites**; outbox TypeScript,
+formatting and whitespace checks passed. An earlier predecessor timeout was
+isolated and then passed in the final serial focused run; the timeout was not
+counted as passing evidence.
+
+All 34 entry families now have an implemented guard/read disposition or an
+explicit gated surface with a behavioral proof owner in the inventory. Final
+source review was complete before the aggregate attempts recorded below. Their
+passing final results accept Phase 1 and permit Phase 2 implementation.
+The public connected-reader activation remains disabled. Read-only preparation
+for the next phase does not expose its startup, route, or viewer surfaces.
+
+First combined `pnpm test:agent` attempt: **failed** after 2m 27.9s. Frontend
+check, server tests, topology/docs and smoke build passed. The remaining issues
+were Korean translation-path parity, one STScript test expecting the pre-origin
+handoff shape, and architecture baseline drift from reviewed recovery helpers
+and new test fixtures. `1e2dd3b01` supplies Korean strings; the handoff expectation
+and generated inventory bookkeeping were corrected. Inventory review confirms
+**no change** to production aggregate consumers, owner policies, bridges or
+seams: two existing persona probe counts changed and test-fixture references
+increased by 29 to 4,262. Its companion matrix count was updated consistently.
+Focused language/trigger checks passed **37 tests**, architecture inventory tests
+passed **7**, and the complete `pnpm check:server` chain passed, including Fastify
+and browser-smoke TypeScript. The combined aggregate must pass on retry before
+the required full suite is accepted.
+
+Combined `pnpm test:agent` retry at `0b7d40fee` plus these status/inventory
+updates: **all 7 lanes passed in 2m 25.3s**. Frontend TypeScript/Svelte reported
+zero errors and warnings. The separate required phase-ending `pnpm test:all`
+result follows below.
+
+### Phase 1 acceptance
+
+At `0b7d40fee` plus these documentation updates, agent-executed
+`pnpm test:all` **passed all 13 lanes in 5m 53.0s**, including **79/79 browser
+cases** (browser lane with build 3m 2.8s). Frontend normal/UI-map tests passed
+**8,699** cases, server tests passed **4,183**, and the selected Realm scale,
+current compatibility, formatting, coverage and frontend performance gates
+passed. Five existing ordinary-suite skips remain; the scale command retains
+its existing title exclusions. No additional pinned comparison or opt-in
+external-cost lane was run. The preceding final `pnpm test:agent` passed all
+7 lanes in 2m 25.3s. Current-document validation covered 49 files; explicit
+coordinated-plan validation covered all 22 plan/index files.
+
+**Phase 1 is accepted.** Live capabilities, mutation/effect admission, stale
+continuations, local draft capture and the bounded 34-family guard/read/gate
+mapping have their required proof. Public activation is still disabled; this
+acceptance does not claim connected browsing, promotion, or a live viewer.
+
+Phase 2 starts with three source-reviewed concerns: the existing bootstrap and
+event loop still compose writer recovery with reads; Chat/ChatBody module and
+asset reads still follow canonical selected owners; and flag-enabled browser
+fixtures must represent their intended initial owner rather than accidentally
+leaving a foreign import session. Preserve the existing read/cache/cursor and
+scroll/hydration owners, separate their reader policies, and prove actual
+startup and visible two-session convergence before opening Phase 3. The
+read-only source cross-check completed three independent Luna tasks; it added
+no implementation or browser evidence.
