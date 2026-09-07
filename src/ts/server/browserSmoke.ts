@@ -1,4 +1,5 @@
 import { get } from 'svelte/store'
+import { getClientSessionSnapshot } from '../clientSession'
 import { selectedCharID } from '../stores/coreStores.svelte'
 import { composeResourceDatabaseSnapshot } from './resourceState.svelte'
 import { getRerollBuffer, unReroll } from '../process/rerollNavigation.svelte'
@@ -49,6 +50,7 @@ export function installFastifyBrowserSmokeHook() {
     clearResourceCache,
     getAppliedServerResourceRevision: peekAppliedServerResourceRevision,
     getCurrentRoute: () => structuredClone(get(currentRoute)),
+    getClientSessionSnapshot: () => structuredClone(getClientSessionSnapshot()),
     getDatabaseSnapshot: composeResourceDatabaseSnapshot,
     getLifecycleSnapshot: async () => ({
       acceptedSendRecoveries: structuredClone(get(acceptedSendRecoveries)),

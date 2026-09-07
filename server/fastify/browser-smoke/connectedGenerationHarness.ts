@@ -8,6 +8,7 @@ import type {
   GenerationChatRouteOptions,
 } from '../src/routes/generationChat.js'
 import type { StreamJob } from '../src/streamJobs.js'
+import type { BrowserSmokeClientSessionSnapshot } from '@risuai/shared-core/browser-smoke'
 import {
   closeFastBootstrapHarness,
   setObserverShellMode,
@@ -266,6 +267,8 @@ export class HeldReaderGenerationProvider {
 }
 
 interface FetchRecord {
+  id: number
+  at: number
   client: string
   method: string
   path: string
@@ -273,9 +276,13 @@ interface FetchRecord {
   writerSession: string | null
   observerSession: string | null
   transfer: boolean
+  expectedWriterEpoch: string | null
+  expectedLineage: string | null
   canMutate: boolean | null
   revoked: boolean | null
   auditActive: boolean
+  session: BrowserSmokeClientSessionSnapshot | null
+  status?: number
 }
 export interface GenerationClient {
   name: string
@@ -294,6 +301,7 @@ export interface GenerationPair {
   network: Array<{ client: string; method: string; path: string; writerSession: string | null }>
   errors: Array<{ client: string; message: string }>
   evidence: Record<string, unknown>
+  ownerships: ReturnType<typeof readGenerationTruth>['ownership'][]
   finalizationFailureInstalled?: boolean
 }
 
@@ -321,6 +329,7 @@ export async function createGenerationPair(
     network: [],
     errors: [],
     evidence: {},
+    ownerships: [],
   } as unknown as GenerationPair
   try {
     if (options.finalizationFailure) {
@@ -346,8 +355,15 @@ export async function addGenerationClient(
   const context = await browser.newContext({ viewport: { width: 1365, height: 950 } })
   context.setDefaultTimeout(10_000)
   await setObserverShellMode(context, 'enabled')
+  const requests = new Map<number, FetchRecord>()
   await context.exposeBinding('__recordConnectedGenerationFetch', (_source, record: Omit<FetchRecord, 'client'>) => {
-    pair.fetches.push({ ...record, client: name })
+    const existing = requests.get(record.id)
+    if (existing) Object.assign(existing, record)
+    else {
+      const entry = { ...record, client: name }
+      requests.set(record.id, entry)
+      pair.fetches.push(entry)
+    }
   })
   // Observe real calls at dispatch time. No request, response, production store,
   // or callback is replaced; the original fetch promise is returned unchanged.
@@ -357,24 +373,35 @@ export async function addGenerationClient(
       __connectedGenerationAuditActive?: boolean
     }
     const original = window.fetch
+    let requestId = 0
     window.fetch = function (input, init) {
       const url = new URL(input instanceof Request ? input.url : String(input), location.href)
       const snapshot = window.__RISU_FASTIFY_BROWSER_SMOKE__?.getStartupCoordinatorSnapshot()
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
       const record = {
+        id: ++requestId,
+        at: performance.timeOrigin + performance.now(),
         method: (init?.method ?? (input instanceof Request ? input.method : 'GET')).toUpperCase(),
         path: url.pathname,
         query: url.search,
         writerSession: headers.get('risu-writer-session'),
         observerSession: headers.get('risu-writer-observer-session'),
         transfer: headers.get('risu-disconnect-existing-writer') === 'true',
+        expectedWriterEpoch: headers.get('risu-expected-writer-epoch'),
+        expectedLineage: headers.get('risu-expected-database-lineage'),
         canMutate: snapshot?.capabilities.canMutate ?? null,
         revoked: snapshot?.writerCapabilitiesRevoked ?? null,
         auditActive: observedWindow.__connectedGenerationAuditActive === true,
+        session: window.__RISU_FASTIFY_BROWSER_SMOKE__?.getClientSessionSnapshot() ?? null,
       }
-      if (url.origin === location.origin && url.pathname.startsWith('/api/'))
-        void observedWindow.__recordConnectedGenerationFetch(record).catch(() => undefined)
-      return original.call(this, input, init)
+      const observed = url.origin === location.origin && url.pathname.startsWith('/api/')
+      if (observed) void observedWindow.__recordConnectedGenerationFetch(record).catch(() => undefined)
+      const response = original.call(this, input, init)
+      if (observed)
+        void response
+          .then((value) => observedWindow.__recordConnectedGenerationFetch({ ...record, status: value.status }))
+          .catch(() => undefined)
+      return response
     }
   })
   const page = await context.newPage()
@@ -467,6 +494,7 @@ export async function bootGenerationPair(pair: GenerationPair): Promise<void> {
     active_writer_session_id: pair.a.sessionId,
     writer_epoch: 1,
   })
+  pair.ownerships.push(readGenerationTruth(pair.harness.dataDir).ownership)
   // Imported settings are normalized during startup. Configure through the same
   // supported writer command as acceptedSendProtocol, never through SQLite.
   const result = await pair.a.page.evaluate(
@@ -515,9 +543,9 @@ export async function expectReaderPartial(client: GenerationClient): Promise<voi
   await expect(
     client.page.locator('[data-reader-transcript] .chat-message-body').filter({ hasText: PARTIAL }),
   ).toBeVisible()
-  await expect(client.page.locator('[data-reader-transcript] [data-generation-display-projection="send"]')).toHaveCount(
-    1,
-  )
+  await expect(
+    client.page.locator('[data-reader-transcript] .chat-message-container[data-generation-display-projection="send"]'),
+  ).toHaveCount(1)
   await expect(client.page.getByTestId('default-chat-cancel-button')).toHaveCount(0)
 }
 
@@ -574,6 +602,7 @@ export async function promoteGenerationWriter(
 ): Promise<void> {
   const before = readGenerationTruth(pair.harness.dataDir).ownership
   expect(before).toMatchObject({ active_writer_session_id: previous.sessionId, writer_epoch: epoch - 1 })
+  const firstRequest = pair.fetches.length
   await next.page.locator('[data-reader-use-this-device]').click()
   const confirm = next.page.getByRole('button', { name: 'Disconnect existing client', exact: true })
   await expect(confirm).toBeVisible()
@@ -582,8 +611,39 @@ export async function promoteGenerationWriter(
   await expect
     .poll(() => readGenerationTruth(pair.harness.dataDir).ownership, { timeout: 30_000 })
     .toEqual({ ...before, active_writer_session_id: next.sessionId, writer_epoch: epoch })
+  pair.ownerships.push(readGenerationTruth(pair.harness.dataDir).ownership)
   await expectGenerationWriter(next)
   await expectGenerationReader(previous)
+  const acquisitions = () =>
+    pair.fetches.slice(firstRequest).filter((record) => record.client === next.name && isPromotionAcquisition(record))
+  await expect
+    .poll(() => acquisitions().map(({ transfer, status }) => ({ transfer, status })))
+    .toEqual([
+      { transfer: false, status: 423 },
+      { transfer: true, status: 200 },
+    ])
+  for (const request of acquisitions())
+    expect(request).toMatchObject({
+      writerSession: next.sessionId,
+      expectedWriterEpoch: String(epoch - 1),
+      expectedLineage: before.lineage,
+      canMutate: false,
+      session: { lifecycle: 'promoting', recoveryAuthorized: false },
+    })
+  await expect
+    .poll(() =>
+      pair.fetches
+        .slice(firstRequest)
+        .some(
+          (record) =>
+            record.client === next.name &&
+            isAuthorizedRecovery(record) &&
+            record.path === '/api/v1/events' &&
+            record.writerSession === next.sessionId &&
+            record.status === 200,
+        ),
+    )
+    .toBe(true)
   for (const client of [next, previous])
     expect(await client.page.evaluate(() => performance.timeOrigin)).toBe(client.timeOrigin)
 }
@@ -603,19 +663,78 @@ const PURE_POST_PATHS = new Set([
   ...['modules', 'promptPresets', 'modelPresets', 'personas', 'plugins'].map((name) => `/api/v1/collections/${name}`),
 ])
 
+function isPromotionAcquisition(record: FetchRecord): boolean {
+  return (
+    record.session?.lifecycle === 'promoting' &&
+    record.method === 'GET' &&
+    record.path === '/api/v1/bootstrap' &&
+    record.writerSession !== null
+  )
+}
+
+function isAuthorizedRecovery(record: FetchRecord): boolean {
+  const session = record.session
+  // Match the actual canUseClientRecoveryAccess contract. Neither a retained
+  // writer ID nor canMutate=false establishes recovery authority on its own.
+  return (
+    session?.managed === true &&
+    session.lifecycle === 'recovering-writer' &&
+    session.recoveryAuthorized &&
+    session.authenticated &&
+    session.connection !== 'interrupted' &&
+    session.sessionId !== null &&
+    session.writer?.sessionId === session.sessionId
+  )
+}
+
+function isPureRead(record: FetchRecord): boolean {
+  if (/^\/api\/v1\/(?:proxy\/(?:fetch|plugin-fetch)|hub)(?:\/|$)/u.test(record.path)) return false
+  if (['GET', 'HEAD', 'OPTIONS'].includes(record.method)) return true
+  return (
+    record.method === 'POST' &&
+    (PURE_POST_PATHS.has(record.path) || /^\/api\/v1\/chats\/[^/]+\/display-sources$/u.test(record.path))
+  )
+}
+
 export function expectNoReaderControl(pair: GenerationPair): void {
-  const readerCalls = pair.fetches.filter((record) => record.auditActive && record.canMutate === false)
+  const audited = pair.fetches.filter((record) => record.auditActive)
+  expect(
+    audited.every((record) => record.session?.managed === true),
+    'Every audited dispatch has a real managed-session snapshot',
+  ).toBe(true)
+  const recoveries = audited.filter(isAuthorizedRecovery)
+  for (const record of recoveries) {
+    const session = record.session!
+    expect(record.canMutate, 'Authorized recovery keeps ordinary mutation readiness closed').toBe(false)
+    expect(pair.ownerships).toContainEqual({
+      lineage: session.databaseLineage,
+      active_writer_session_id: session.sessionId,
+      writer_epoch: session.writer!.epoch,
+    })
+    if (record.writerSession !== null) expect(record.writerSession).toBe(session.sessionId)
+    // This fixture has no undispatched outbox intent. Recovery may read status,
+    // subscribe as writer, and acknowledge a retained command receipt only.
+    expect(
+      isPureRead(record) || (record.method === 'POST' && record.path === '/api/v1/commands/mutation-receipts/ack'),
+      `Unexpected authority-bearing recovery call: ${JSON.stringify(record)}`,
+    ).toBe(true)
+  }
+  const readerCalls = audited.filter(
+    (record) => record.session?.lifecycle !== 'writing' && !isAuthorizedRecovery(record),
+  )
   expect(readerCalls.length).toBeGreaterThan(0)
   const forbidden = readerCalls.filter((record) => {
-    // Explicitly confirmed ownership bootstrap is the transition under test.
-    if (record.method === 'GET' && record.path === '/api/v1/bootstrap' && record.transfer) return false
+    if (record.canMutate !== false) return true
+    // The real UI performs a conditional ownership probe, then its confirmed
+    // takeover. promoteGenerationWriter asserts both exact requests/statuses.
+    if (isPromotionAcquisition(record))
+      return !(
+        record.writerSession === record.session?.sessionId &&
+        record.expectedWriterEpoch === String(record.session?.writer?.epoch) &&
+        record.expectedLineage === record.session?.databaseLineage
+      )
     if (record.writerSession !== null) return true
-    if (/^\/api\/v1\/(?:proxy\/(?:fetch|plugin-fetch)|hub)(?:\/|$)/u.test(record.path)) return true
-    if (['GET', 'HEAD', 'OPTIONS'].includes(record.method)) return false
-    return !(
-      record.method === 'POST' &&
-      (PURE_POST_PATHS.has(record.path) || /^\/api\/v1\/chats\/[^/]+\/display-sources$/u.test(record.path))
-    )
+    return !isPureRead(record)
   })
   expect(
     forbidden,
@@ -633,6 +752,8 @@ export function expectNoReaderControl(pair: GenerationPair): void {
   })
   expect(uncovered, 'Every mutation transport is covered by the synchronous role recorder').toEqual([])
   pair.evidence.readerCalls = readerCalls
+  pair.evidence.authorizedRecoveryCalls = recoveries
+  pair.evidence.ownerships = pair.ownerships
 }
 
 export async function expectTerminalGeneration(

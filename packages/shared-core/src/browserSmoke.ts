@@ -64,6 +64,20 @@ export interface FastifyBrowserSmokeLifecycleSnapshot {
   }>
 }
 
+/** Read-only authority evidence captured by multi-session browser journeys. */
+export interface BrowserSmokeClientSessionSnapshot {
+  managed: boolean
+  lifecycle: 'resolving' | 'reading' | 'promoting' | 'recovering-writer' | 'writing' | 'auth-required'
+  connection: 'connecting' | 'live' | 'interrupted'
+  generation: number
+  sessionId: string | null
+  databaseLineage: string | null
+  writer: { sessionId: string | null; epoch: number } | null
+  authenticated: boolean
+  projectionReady: boolean
+  recoveryAuthorized: boolean
+}
+
 export interface FastifyBrowserSmokeHook<
   StartupCoordinatorSnapshot,
   StartupReadinessSnapshot,
@@ -74,6 +88,7 @@ export interface FastifyBrowserSmokeHook<
   getAppliedServerResourceRevision: () => number | null
   getDatabaseSnapshot: () => BrowserSmokeDatabaseSnapshot
   getCurrentRoute: () => AppRoute
+  getClientSessionSnapshot: () => BrowserSmokeClientSessionSnapshot
   getLifecycleSnapshot: () => Promise<FastifyBrowserSmokeLifecycleSnapshot>
   getRouteResourceLoadState: () => BrowserSmokeRouteResourceLoadState
   getStartupCoordinatorSnapshot: () => StartupCoordinatorSnapshot
