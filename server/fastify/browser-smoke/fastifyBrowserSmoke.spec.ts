@@ -563,84 +563,77 @@ test('translator preset bindings persist independently across chats', async ({ p
   await expect(presetSelect()).toHaveValue('translator-smoke-b')
 })
 
-test('flagged observer shell survives denial and cross-tab writer takeover without mutation', async ({ browser }) => {
+test('a connected reader keeps receiving updates through a legacy writer takeover', async ({ browser }) => {
   test.setTimeout(60_000)
   await importDatabase(harness.app, browserSmokeAssertion, browserSmokeDatabase())
   const writerContext = await browser.newContext()
-  const observerContext = await browser.newContext()
-  const observerFlagKey = 'risu:fast-bootstrap-observer-shell'
-  await Promise.all([
-    writerContext.addInitScript((key) => {
-      try {
-        sessionStorage.setItem(key, 'enabled')
-      } catch {}
-    }, observerFlagKey),
-    observerContext.addInitScript((key) => {
-      try {
-        sessionStorage.setItem(key, 'enabled')
-      } catch {}
-    }, observerFlagKey),
-  ])
+  const readerContext = await browser.newContext()
+  const takeoverContext = await browser.newContext()
+  const flagKey = 'risu:fast-bootstrap-observer-shell'
+  for (const [context, mode] of [
+    [writerContext, 'disabled'],
+    [readerContext, 'enabled'],
+    [takeoverContext, 'disabled'],
+  ] as const) {
+    await context.addInitScript(({ key, value }) => sessionStorage.setItem(key, value), { key: flagKey, value: mode })
+  }
   const writerPage = await writerContext.newPage()
-  const observerPage = await observerContext.newPage()
-  const observerCommandRequests: string[] = []
-  observerPage.on('request', (request) => {
+  const readerPage = await readerContext.newPage()
+  const takeoverPage = await takeoverContext.newPage()
+  const readerCommandRequests: string[] = []
+  const readerWriterBootstraps: string[] = []
+  readerPage.on('request', (request) => {
     const url = new URL(request.url())
-    if (url.pathname.startsWith('/api/v1/commands/')) {
-      observerCommandRequests.push(`${request.method()} ${url.pathname}`)
-    }
+    if (url.pathname.startsWith('/api/v1/commands/')) readerCommandRequests.push(`${request.method()} ${url.pathname}`)
+    if (url.pathname === '/api/v1/bootstrap' && request.headers()['risu-writer-session'])
+      readerWriterBootstraps.push(url.pathname)
   })
-
   try {
     await writerPage.goto(harness.baseUrl)
     await waitForBrowserSmokeLoaded(writerPage)
-
-    await observerPage.goto(harness.baseUrl)
-    await expect(observerPage.locator('[data-observer-shell]')).toBeVisible()
-    await expect(observerPage.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
-    await observerPage.getByRole('button', { name: 'Cancel', exact: true }).click()
-
-    await expect(observerPage.locator('[data-observer-lifecycle-status]')).toContainText(
-      'Another session still has write access',
+    await readerPage.goto(harness.baseUrl)
+    await expect(readerPage.locator('[data-observer-shell]')).toBeVisible()
+    await expect(readerPage.locator('[data-observer-lifecycle-status]')).toContainText(
+      'Updates from the writer appear here.',
     )
-    expect(
-      await observerPage.evaluate(() =>
-        window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().characters.map((character) => character.chaId),
-      ),
-    ).toContain('char-smoke')
+    await expect(readerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toHaveCount(0)
+    await readerPage.getByRole('button', { name: 'Open Smoke Character', exact: true }).click()
+    await expect(readerPage).toHaveURL(/\/character\/char-smoke$/)
+    expect(readerCommandRequests).toEqual([])
+    expect(readerWriterBootstraps).toEqual([])
 
-    await observerPage.getByRole('button', { name: 'Open Smoke Character', exact: true }).click()
-    await expect(observerPage).toHaveURL(/\/character\/char-smoke$/)
-    expect(observerCommandRequests).toEqual([])
-
-    await observerPage.getByRole('button', { name: 'Retry write access', exact: true }).click()
-    await expect(observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toBeVisible()
-    await observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
-    await waitForBrowserSmokeLoaded(observerPage)
-
-    await expect(observerPage.locator('[data-observer-shell]')).toHaveCount(0)
-    await expect(observerPage.locator('[data-char-id="char-smoke"]')).toBeVisible()
-    expect(observerCommandRequests).toEqual([])
-
-    await expect(writerPage.locator('[data-observer-shell]')).toBeVisible()
-    await expect
-      .poll(() =>
-        writerPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
-      )
-      .toMatchObject({ canApplyRoutes: false, canGenerate: false, canMutate: false })
-    expect(
-      await writerPage.evaluate(() =>
-        window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().characters.map((character) => character.chaId),
-      ),
-    ).toContain('char-smoke')
-
+    await takeoverPage.goto(harness.baseUrl)
+    await expect(takeoverPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toBeVisible()
+    await takeoverPage.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
+    await waitForBrowserSmokeLoaded(takeoverPage)
+    // An unchanged older client keeps its existing frozen-page choice. The new
+    // reader remains connected throughout both foreign-owner frames.
     await writerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true }).click()
-    await expect(writerPage.locator('[data-observer-lifecycle-status]')).toContainText(
-      'This tab is staying in read-only mode',
+    await expect(writerPage.locator('#risu-offline-frozen-banner')).toBeVisible()
+    await expect(readerPage.locator('[data-observer-lifecycle-status]')).toContainText(
+      'Updates from the writer appear here.',
     )
-    await expect(writerPage.getByRole('button', { name: 'Retry write access', exact: true })).toBeVisible()
+    await expect(readerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true })).toHaveCount(0)
+    const committed = await takeoverPage.evaluate(async () => {
+      const headers = await window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders()
+      const bootstrap = await (await fetch('/api/v1/bootstrap', { headers })).json()
+      const response = await fetch('/api/v1/commands/characters/char-smoke', {
+        method: 'PATCH',
+        headers: { ...headers, 'Content-Type': 'application/json', 'risu-database-lineage': bootstrap.databaseLineage },
+        body: JSON.stringify({ baseRevision: bootstrap.revision, patch: { name: 'Updated Smoke Character' } }),
+      })
+      return { status: response.status, body: await response.json() }
+    })
+    expect(committed.status, JSON.stringify(committed.body)).toBe(200)
+    await expect(readerPage.getByRole('button', { name: 'Open Updated Smoke Character', exact: true })).toBeVisible()
+    const denied = await readerPage.evaluate(() =>
+      window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: false }),
+    )
+    expect(denied).toMatchObject({ status: 'unavailable' })
+    expect(readerCommandRequests).toEqual([])
+    expect(readerWriterBootstraps).toEqual([])
   } finally {
-    await Promise.all([writerContext.close(), observerContext.close()])
+    await Promise.all([writerContext.close(), readerContext.close(), takeoverContext.close()])
   }
 })
 

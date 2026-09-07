@@ -342,16 +342,19 @@ test('event-gap recovery performs an authoritative refresh before reconnecting',
   }
 })
 
-test('multi-tab journey denies observer mutation, then safely promotes a takeover writer', async ({ browser }) => {
+test('mixed-client journey denies pre-authority mutation and keeps the old writer connected after legacy takeover', async ({
+  browser,
+}) => {
   const harness = await startFastBootstrapHarness(smallFastBootstrapFixture(), {
     temporaryDirectoryPrefix: 'risu-fast-bootstrap-writer-takeover-',
+    databaseSeedMode: 'unowned-migration',
   })
   const writerContext = await browser.newContext()
   const observerContext = await browser.newContext()
   try {
     await Promise.all([
       setObserverShellMode(writerContext, 'enabled'),
-      setObserverShellMode(observerContext, 'enabled'),
+      setObserverShellMode(observerContext, 'disabled'),
     ])
     const writerPage = await writerContext.newPage()
     const observerPage = await observerContext.newPage()
@@ -368,25 +371,12 @@ test('multi-tab journey denies observer mutation, then safely promotes a takeove
 
     await observerPage.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' })
     await waitForSmokeHook(observerPage)
-    await expect(observerPage.locator('[data-observer-shell]')).toBeVisible()
+    await expect(observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toBeVisible()
     const deniedMutation = await observerPage.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: true }),
     )
     expect(deniedMutation).toMatchObject({ status: 'unavailable' })
     expect(observerCommands).toEqual([])
-    await observerPage.getByRole('button', { name: 'Cancel', exact: true }).click()
-    await expect(observerPage.locator('[data-observer-lifecycle-status]')).toContainText(
-      'Another session still has write access',
-    )
-    expect(observerCommands).toEqual([])
-    expect(
-      await observerPage.evaluate(
-        () => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities.canMutate,
-      ),
-    ).toBe(false)
-
-    await observerPage.getByRole('button', { name: 'Retry write access', exact: true }).click()
-    await expect(observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toBeVisible()
     await observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
     await observerPage.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.waitForStartupMilestone('background-ready', 30_000),
@@ -399,10 +389,10 @@ test('multi-tab journey denies observer mutation, then safely promotes a takeove
       .poll(() =>
         writerPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
       )
-      .toMatchObject({ canApplyRoutes: false, canGenerate: false, canMutate: false })
-    await writerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true }).click()
+      .toMatchObject({ canApplyRoutes: true, canGenerate: false, canMutate: false })
+    await expect(writerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true })).toHaveCount(0)
     await expect(writerPage.locator('[data-observer-lifecycle-status]')).toContainText(
-      'This tab is staying in read-only mode',
+      'Updates from the writer appear here.',
     )
     const revokedMutation = await writerPage.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: true }),
@@ -416,6 +406,11 @@ test('multi-tab journey denies observer mutation, then safely promotes a takeove
     expect(mutation).toMatchObject({ status: 'ok' })
     expect(observerCommands).toEqual(['/api/v1/commands/settings/runtime'])
     expect(writerCommands).toEqual([])
+    await expect
+      .poll(() =>
+        writerPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().streamGeminiThoughts),
+      )
+      .toBe(true)
 
     artifact.writerJourneys.push({
       scenario: 'denial-then-takeover',
@@ -591,6 +586,7 @@ async function runRolloutStartupCase(
 ): Promise<RolloutStartupCase> {
   const harness = await startFastBootstrapHarness(database, {
     temporaryDirectoryPrefix: `risu-fast-bootstrap-${fixture}-${observerMode}-`,
+    ...(observerMode === 'enabled' ? { databaseSeedMode: 'unowned-migration' as const } : {}),
   })
   const telemetry: BrowserStartupTelemetry[] = []
   const unsubscribeMetrics = subscribeProtocolMetrics((metric) => {

@@ -3,8 +3,10 @@ import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
+import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { setupBrowserSmokeAuth } from './auth.js'
 
 export const OBSERVER_SHELL_OVERRIDE_KEY = 'risu:fast-bootstrap-observer-shell'
@@ -20,12 +22,22 @@ export interface FastBootstrapHarness {
 
 export async function startFastBootstrapHarness(
   database: Record<string, unknown>,
-  options: { temporaryDirectoryPrefix?: string } = {},
+  options: {
+    temporaryDirectoryPrefix?: string
+    /** Migrate an initialized fixture before app startup without installing a temporary writer. */
+    databaseSeedMode?: 'writer-import' | 'unowned-migration'
+  } = {},
 ): Promise<FastBootstrapHarness> {
   process.env.LOG_LEVEL = 'silent'
   const dataDir = fs.mkdtempSync(
     path.join(os.tmpdir(), options.temporaryDirectoryPrefix ?? 'risu-fast-bootstrap-matrix-'),
   )
+  if (options.databaseSeedMode === 'unowned-migration') {
+    fs.writeFileSync(
+      path.join(dataDir, 'db.json'),
+      JSON.stringify({ _version: 1, database: normalizeRisuSaveSnapshotDatabase(database), assets: [] }),
+    )
+  }
   const { app } = await buildApp({
     config: {
       host: '127.0.0.1',
@@ -49,7 +61,19 @@ export async function startFastBootstrapHarness(
       throw new Error('Fast-bootstrap browser harness did not bind to a TCP port')
     }
     const assertion = await setupBrowserSmokeAuth(app)
-    await importFastBootstrapDatabase(app, assertion, database)
+    if (options.databaseSeedMode === 'unowned-migration') {
+      const db = new DatabaseSync(path.join(dataDir, 'risu.db'), { readOnly: true })
+      try {
+        expect(
+          db.prepare('SELECT active_writer_session_id, writer_epoch FROM database_metadata WHERE id = 1').get(),
+        ).toMatchObject({ active_writer_session_id: null, writer_epoch: 0 })
+        expect(fs.existsSync(path.join(dataDir, 'db.json.migrated'))).toBe(true)
+      } finally {
+        db.close()
+      }
+    } else {
+      await importFastBootstrapDatabase(app, assertion, database)
+    }
     return { app, assertion, baseUrl: `http://127.0.0.1:${address.port}`, dataDir }
   } catch (error) {
     await app.close().catch(() => undefined)
