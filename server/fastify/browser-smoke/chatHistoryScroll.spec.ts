@@ -148,7 +148,6 @@ for (const { pageDelay, assets, reverse, label } of [
           }
         }
       }
-      if (reverse) expect(anchoredPauses, 'readable rows exercised across pauses').toBeGreaterThan(0)
       samples.push(await historyViewport(page))
 
       // Real wheel input continues across page fetches and progressive row admission.
@@ -218,6 +217,7 @@ for (const { pageDelay, assets, reverse, label } of [
         Math.max(...[...samples, ...pauses.flatMap((pause) => pause.samples)].map((sample) => sample.residentRows)),
       ).toBeLessThanOrEqual(76)
       expect(errors).toEqual([])
+      if (reverse) expect(anchoredPauses, 'readable rows exercised across pauses').toBeGreaterThan(0)
     } finally {
       const observations = testInfo.outputPath('history-scroll-observations.json')
       writeFileSync(observations, JSON.stringify({ assets, pageDelay, olderPageRequests, errors, pauses, samples }))
