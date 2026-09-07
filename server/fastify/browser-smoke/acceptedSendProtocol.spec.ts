@@ -828,6 +828,7 @@ async function navigateToChat(page: Page, chatId: string): Promise<void> {
 }
 
 async function ensureChatGenerationSettingsReady(page: Page, chatId: string): Promise<void> {
+  await waitForChatSelectionBeforeGenerationSettings(page, chatId)
   if (configuredChatIds.has(chatId)) return
   const result = await page.evaluate(async (targetChatId) => {
     const headers = await window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders()
@@ -875,6 +876,77 @@ async function ensureChatGenerationSettingsReady(page: Page, chatId: string): Pr
     )
     .toBe(true)
   configuredChatIds.add(chatId)
+}
+
+async function waitForChatSelectionBeforeGenerationSettings(page: Page, chatId: string): Promise<void> {
+  const observations: Record<string, unknown>[] = []
+  const database = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+  const selectedChat = database.prepare(`
+    SELECT chat.id AS selected_chat_id
+    FROM characters AS owner
+    JOIN chats AS chat
+      ON chat.character_id = owner.id
+      AND chat.position = json_extract(owner.data_json, '$.chatPage')
+    WHERE owner.id = ?
+  `)
+  try {
+    // Writer/background readiness can precede the asynchronous native selection
+    // command. Wait for its actual owner pointer before this fixture writes.
+    await expect
+      .poll(
+        async () => {
+          const local = await page.evaluate(
+            async ({ characterId, targetChatId }) => {
+              const hook = window.__RISU_FASTIFY_BROWSER_SMOKE__!
+              const lifecycle = await hook.getLifecycleSnapshot()
+              const character = hook.getDatabaseSnapshot().characters?.find((owner) => owner.chaId === characterId)
+              const selectionPath = `/chats/${encodeURIComponent(targetChatId)}`
+              return {
+                pathname: location.pathname,
+                route: hook.getCurrentRoute(),
+                routeLoad: hook.getRouteResourceLoadState(),
+                localSelectedChatId: character?.chats?.[character.chatPage]?.id ?? null,
+                pendingTargetSelections: lifecycle.outbox.filter((entry) =>
+                  entry.requests.some((request) => {
+                    if (!request || typeof request !== 'object' || Array.isArray(request)) return false
+                    const record = request as Record<string, unknown>
+                    const body = record.body
+                    return (
+                      record.method === 'PATCH' &&
+                      record.path === selectionPath &&
+                      body !== null &&
+                      typeof body === 'object' &&
+                      !Array.isArray(body) &&
+                      (body as Record<string, unknown>).select === true
+                    )
+                  }),
+                ).length,
+              }
+            },
+            { characterId: CHARACTER_ID, targetChatId: chatId },
+          )
+          const persisted = selectedChat.get(CHARACTER_ID) as { selected_chat_id: string } | undefined
+          const observed = { ...local, authoritativeSelectedChatId: persisted?.selected_chat_id ?? null }
+          observations.push(observed)
+          return observed
+        },
+        { message: 'native chat selection is ready and durable before generation-settings setup', timeout: 15_000 },
+      )
+      .toMatchObject({
+        pathname: `/character/${CHARACTER_ID}/${chatId}`,
+        route: { kind: 'character', chaId: CHARACTER_ID, chatId },
+        routeLoad: { routeKey: `character:${CHARACTER_ID}:${chatId}`, status: 'ready' },
+        localSelectedChatId: chatId,
+        authoritativeSelectedChatId: chatId,
+        pendingTargetSelections: 0,
+      })
+  } finally {
+    database.close()
+    await test.info().attach(`generation-settings-selection-${chatId}.json`, {
+      body: JSON.stringify({ chatId, observations }, null, 2),
+      contentType: 'application/json',
+    })
+  }
 }
 
 async function dispatchLifecycleRecoveryEvents(page: Page): Promise<void> {
