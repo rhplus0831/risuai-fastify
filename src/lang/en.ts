@@ -2132,7 +2132,7 @@ export const languageEnglish = {
     writeAccessRequired: 'You need write access to edit this page.',
     limitedDisplay: 'Some custom display features are unavailable in read-only mode. The original text is shown.',
     messageDraft: 'Message edit',
-    composerDraft: 'Unsent message',
+    composerDraft: 'Message input',
     draftInput: 'Draft input',
     btwInput: 'Additional input',
     attachments: 'Attachments',
