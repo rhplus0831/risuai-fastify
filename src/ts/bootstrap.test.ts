@@ -10,6 +10,7 @@ const bootstrapApi = vi.hoisted(() => ({
 
 const resourceApi = vi.hoisted(() => ({
   loadInitial: vi.fn(),
+  readAll: vi.fn(),
   refreshInvalidated: vi.fn(),
   forceRefresh: vi.fn(),
   forceReplacement: vi.fn(),
@@ -195,6 +196,7 @@ vi.mock('./storage/fastifyStorage', async (importActual) => {
 
 vi.mock('./server/resourceInvalidation', () => ({
   loadInitialServerResources: resourceApi.loadInitial,
+  refreshAllServerResources: resourceApi.readAll,
   refreshInvalidatedServerResources: resourceApi.refreshInvalidated,
 }))
 
@@ -572,6 +574,7 @@ beforeEach(() => {
   bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap())
   bootstrapApi.fetchReadOnly.mockResolvedValue(runtimeBootstrap({ revision: 5 }))
   resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
+  resourceApi.readAll.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
   routeResourceApi.ensure.mockReset().mockResolvedValue(undefined)
   resourceApi.refreshInvalidated.mockImplementation(async (events: TestCommandEvent | TestCommandEvent[]) => {
     const batch = Array.isArray(events) ? events : [events]
@@ -742,7 +745,8 @@ describe('API-backed client bootstrap', () => {
     expect(readerApi.start).toHaveBeenCalledOnce()
     expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
     expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
-    expect(resourceApi.loadInitial).toHaveBeenCalledTimes(2)
+    expect(resourceApi.loadInitial).toHaveBeenCalledOnce()
+    expect(resourceApi.readAll).toHaveBeenCalledOnce()
     expect(loadPlugins).not.toHaveBeenCalled()
   })
 
@@ -781,6 +785,25 @@ describe('API-backed client bootstrap', () => {
     expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
   })
 
+  it('revokes writer dispatch on the browser offline signal and revalidates ownership when online', async () => {
+    __observerShellFlagTestHooks.setOverride(true)
+    await loadData()
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+    window.dispatchEvent(new Event('offline'))
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'recovering-writer', connection: 'interrupted' })
+    expect(getStartupCoordinatorSnapshot().capabilities.canMutate).toBe(false)
+    expect(eventApi.unsubscribe).toHaveBeenCalledOnce()
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+    await vi.waitFor(() => expect(eventApi.subscriptions).toHaveLength(2))
+    await vi.waitFor(() => expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true))
+    expect(getClientSessionSnapshot().lifecycle).toBe('writing')
+    expect(bootstrapApi.fetch).toHaveBeenLastCalledWith(null, {
+      expectedWriter: { epoch: 1, databaseLineage: 'database-a' },
+    })
+    expect(readerApi.start).not.toHaveBeenCalled()
+  })
+
   it('retries a replacement reader read in the new lineage without adopting writer or pending scope', async () => {
     __observerShellFlagTestHooks.setOverride(true)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -797,7 +820,7 @@ describe('API-backed client bootstrap', () => {
     bootstrapApi.fetchReadOnly
       .mockResolvedValueOnce({ status: 'error', error: 'temporary replacement read failure' })
       .mockResolvedValue(runtimeBootstrap({ ...replacement, writerEpoch: 0, revision: 1 }))
-    resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 1, scope: 'shell' })
+    resourceApi.readAll.mockResolvedValue({ status: 'ok', revision: 1, scope: 'full' })
     await callbacks.onLineageChange(replacement)
     expect(getClientSessionSnapshot()).toMatchObject({
       lifecycle: 'reading',

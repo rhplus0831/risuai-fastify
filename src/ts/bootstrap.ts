@@ -109,7 +109,11 @@ import {
   stopActiveGreetingTranslationRefresh,
 } from './server/greetingTranslations.svelte'
 import { applyServerMemoryJobEvent, applyServerMemoryJobSnapshot } from './server/memoryJobProjection.svelte'
-import { loadInitialServerResources, refreshInvalidatedServerResources } from './server/resourceInvalidation'
+import {
+  loadInitialServerResources,
+  refreshAllServerResources,
+  refreshInvalidatedServerResources,
+} from './server/resourceInvalidation'
 import { ensureResourceSurfaces, stopRouteResourceLoader } from './server/routeResourceLoader'
 import {
   forceServerDatabaseReplacementRefresh,
@@ -478,7 +482,7 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
 async function installConnectedReaderProjection(
   runtime: ServerBootstrapRuntime,
   generation: number,
-  options: { subscribe?: boolean } = {},
+  options: { subscribe?: boolean; full?: boolean } = {},
 ): Promise<void> {
   const isCurrent = () => isClientSessionGenerationCurrent(generation) && getClientSessionSnapshot().authenticated
   if (!isCurrent()) return
@@ -491,7 +495,11 @@ async function installConnectedReaderProjection(
   })
   configureGenerationOperationProtocol(runtime.generationOperationProtocol, runtime.databaseLineage)
   configureDisplaySourceProtocol(runtime.displaySourceProtocol, runtime.databaseLineage, runtime.writerEpoch)
-  const resources = await loadInitialServerResources({ isCurrent })
+  // A former writer can retain non-shell optimistic values and loaded flags.
+  // Replace those with a coherent server snapshot before reader synchronization.
+  const resources = options.full
+    ? await refreshAllServerResources({ mode: 'reader', isCurrent })
+    : await loadInitialServerResources({ isCurrent })
   if (!isCurrent()) return
   if (resources.status !== 'ok') {
     throw new Error(resources.status === 'error' ? resources.error : 'Server resources are unavailable')
@@ -565,11 +573,11 @@ function refreshConnectedReader(): Promise<void> {
       const { discardObserverProjectionState } = await import('./observerProjectionLifecycle')
       await discardObserverProjectionState('lineage-change')
       if (!settleClientReader(operation, ownership)) return
-      await installConnectedReaderProjection(result.bootstrap, operation.generation)
+      await installConnectedReaderProjection(result.bootstrap, operation.generation, { full: true })
       return
     }
     observeClientWriter(ownership.writer)
-    await installConnectedReaderProjection(result.bootstrap, generation)
+    await installConnectedReaderProjection(result.bootstrap, generation, { full: true })
     if (isClientSessionGenerationCurrent(generation)) connectedReaderRefreshAttempt = 0
   })()
     .catch((error) => {
@@ -587,7 +595,7 @@ function refreshConnectedReader(): Promise<void> {
 }
 
 function scheduleConnectedReaderRefresh(generation = captureClientSessionGeneration()): void {
-  if (connectedReaderRefreshTimer || getClientSessionSnapshot().lifecycle !== 'reading') return
+  if (connectedReaderRefreshTimer || getClientSessionSnapshot().lifecycle !== 'reading' || browserIsOffline()) return
   connectedReaderRefreshTimer = setTimeout(() => {
     connectedReaderRefreshTimer = null
     if (isClientSessionGenerationCurrent(generation) && getClientSessionSnapshot().lifecycle === 'reading')
@@ -617,6 +625,18 @@ function installConnectedSessionLifecycle(): void {
     }
   })
   if (typeof window !== 'undefined') {
+    const offline = () => {
+      if (!isClientSessionManaged()) return
+      setClientConnectionState('interrupted')
+      if (connectedWriterResumeTimer) clearTimeout(connectedWriterResumeTimer)
+      connectedWriterResumeTimer = null
+    }
+    const online = () => {
+      const state = getClientSessionSnapshot()
+      if (!state.managed) return
+      if (state.lifecycle === 'recovering-writer') void resumeConnectedWriter()
+      else if (state.lifecycle === 'reading' && !connectedReaderSync) void refreshConnectedReader()
+    }
     const pageHide = () => {
       setClientConnectionState('interrupted')
       stopFailedWriterPromotionRuntimes()
@@ -631,15 +651,20 @@ function installConnectedSessionLifecycle(): void {
     }
     window.addEventListener('pagehide', pageHide)
     window.addEventListener('pageshow', pageShow)
+    window.addEventListener('offline', offline)
+    window.addEventListener('online', online)
     stopConnectedPageLifecycle = () => {
       window.removeEventListener('pagehide', pageHide)
       window.removeEventListener('pageshow', pageShow)
+      window.removeEventListener('offline', offline)
+      window.removeEventListener('online', online)
     }
   }
 }
 
 function scheduleConnectedWriterResume(): void {
   if (
+    browserIsOffline() ||
     getClientSessionSnapshot().lifecycle !== 'recovering-writer' ||
     connectedWriterResumeTimer ||
     connectedWriterResume
@@ -653,6 +678,7 @@ function scheduleConnectedWriterResume(): void {
 }
 
 async function resumeConnectedWriter(): Promise<void> {
+  if (browserIsOffline()) return
   if (connectedWriterResume) return connectedWriterResume
   const operation = beginClientWriterResume()
   if (!operation) return
@@ -726,6 +752,10 @@ async function resumeConnectedWriter(): Promise<void> {
     })
   connectedWriterResume = running
   return running
+}
+
+function browserIsOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
 }
 
 /** Idempotent targeted takeover/recovery used by the permanent observer UI. */

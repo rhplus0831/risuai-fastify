@@ -79,6 +79,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
   let unsubscribe: (() => void) | null = null
   let stopLifecycle: (() => void) | null = null
   let stopSession: (() => void) | null = null
+  let stopOffline: (() => void) | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null
   let chain = Promise.resolve()
@@ -121,6 +122,8 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     stopLifecycle = null
     stopSession?.()
     stopSession = null
+    stopOffline?.()
+    stopOffline = null
     resolveReady()
   }
 
@@ -139,7 +142,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     // Fence callbacks already queued by this stream, including completed reads.
     epoch += 1
     setClientConnectionState('interrupted', generation)
-    if (!current() || reconnectTimer) return
+    if (!current() || reconnectTimer || browserIsOffline()) return
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       void connect()
@@ -299,6 +302,11 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
 
   async function connect(): Promise<void> {
     if (!current()) return
+    if (browserIsOffline()) {
+      setClientConnectionState('interrupted', generation)
+      resolveReady()
+      return
+    }
     teardownStream()
     const sourceEpoch = ++epoch
     controller = new AbortController()
@@ -391,7 +399,16 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       else if (!current()) stop()
     })
     stopLifecycle = subscribeBrowserLifecycleRecovery(retry)
+    if (typeof window !== 'undefined') {
+      const offline = () => interrupt(epoch)
+      window.addEventListener('offline', offline)
+      stopOffline = () => window.removeEventListener('offline', offline)
+    }
     void connect()
   } else stop()
   return { stop, retry, ready }
+}
+
+function browserIsOffline(): boolean {
+  return typeof navigator !== 'undefined' && navigator.onLine === false
 }

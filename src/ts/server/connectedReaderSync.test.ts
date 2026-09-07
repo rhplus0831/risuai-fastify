@@ -147,9 +147,42 @@ afterEach(() => {
   resetClientSessionForTests()
   vi.useRealTimers()
   vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('connected reader synchronization', () => {
+  it('reports the browser offline signal immediately and waits for online recovery without acquiring', async () => {
+    const events = new EventTarget()
+    let online = true
+    vi.stubGlobal('window', events)
+    vi.stubGlobal('navigator', {
+      get onLine() {
+        return online
+      },
+    })
+    const { sync } = start()
+    await sync.ready
+    expect(getClientSessionSnapshot().connection).toBe('live')
+    online = false
+    events.dispatchEvent(new Event('offline'))
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'interrupted' })
+    expect(streams[0].stop).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(60_000)
+    expect(api.subscribe).toHaveBeenCalledOnce()
+    expect(api.bootstrap).toHaveBeenCalledOnce()
+    online = true
+    api.lifecycle.mock.calls[0]![0]()
+    await flush()
+    expect(streams).toHaveLength(2)
+    expect(streams[1].input).toMatchObject({ mode: 'reader', sinceRevision: 5 })
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' })
+    expect(canUseClientWriteAccess()).toBe(false)
+    sync.stop()
+    online = false
+    events.dispatchEvent(new Event('offline'))
+    expect(getClientSessionSnapshot().connection).toBe('live')
+  })
+
   it.each(['accepted', 'superseded', 'failed'] as const)(
     'refreshes only the locally viewed greeting projection with a %s result',
     async (outcome) => {
