@@ -107,33 +107,45 @@ for (const { pageDelay, assets, reverse, label } of [
       await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2)
 
       let anchoredPauses = 0
-      for (const delta of reverse ? [-85_000, 35_000, -40_000, 25_000, -35_000, 30_000, -35_000] : []) {
-        await cdp.send('Input.synthesizeScrollGesture', {
-          x: bounds.x + bounds.width / 2,
-          y: bounds.y + bounds.height / 2,
-          yDistance: -delta,
-          speed: 100_000,
-          gestureSourceType: 'mouse',
-        })
-        const pause: Awaited<ReturnType<typeof historyViewport>>[] = []
-        for (let frame = 0; frame < 30; frame++) {
-          const sample = await historyViewport(page)
-          pause.push(sample)
-          await page.waitForTimeout(32)
+      for (const pass of reverse ? [0, 1] : []) {
+        if (pass === 1) {
+          // Revisit the same loaded/measured rows with a fixed warm-return pass.
+          await cdp.send('Input.synthesizeScrollGesture', {
+            x: bounds.x + bounds.width / 2,
+            y: bounds.y + bounds.height / 2,
+            yDistance: -105_000,
+            speed: 100_000,
+            gestureSourceType: 'mouse',
+          })
         }
-        pauses.push({ delta, samples: pause })
-        const anchor = pause[0].visible[0]
-        if (anchor?.readable) {
-          anchoredPauses++
-          const positions = pause.map((sample) => sample.visible.find((row) => row.id === anchor.id))
-          expect(
-            positions.every((row) => row?.readable),
-            `message ${anchor.index} stays visible during pause`,
-          ).toBe(true)
-          expect(
-            Math.max(...positions.map((row) => Math.abs(row!.top - anchor.top))),
-            `message ${anchor.index} stays anchored`,
-          ).toBeLessThanOrEqual(1)
+        for (const delta of [-85_000, 35_000, -40_000, 25_000, -35_000, 30_000, -35_000]) {
+          await cdp.send('Input.synthesizeScrollGesture', {
+            x: bounds.x + bounds.width / 2,
+            y: bounds.y + bounds.height / 2,
+            yDistance: -delta,
+            speed: 100_000,
+            gestureSourceType: 'mouse',
+          })
+          const pause: Awaited<ReturnType<typeof historyViewport>>[] = []
+          for (let frame = 0; frame < 30; frame++) {
+            const sample = await historyViewport(page)
+            pause.push(sample)
+            await page.waitForTimeout(32)
+          }
+          pauses.push({ delta, samples: pause })
+          const anchor = pause[0].visible[0]
+          if (anchor?.readable) {
+            anchoredPauses++
+            const positions = pause.map((sample) => sample.visible.find((row) => row.id === anchor.id))
+            expect(
+              positions.every((row) => row?.readable),
+              `message ${anchor.index} stays visible during pause`,
+            ).toBe(true)
+            expect(
+              Math.max(...positions.map((row) => Math.abs(row!.top - anchor.top))),
+              `message ${anchor.index} stays anchored`,
+            ).toBeLessThanOrEqual(1)
+          }
         }
       }
       if (reverse) expect(anchoredPauses, 'readable rows exercised across pauses').toBeGreaterThan(0)
