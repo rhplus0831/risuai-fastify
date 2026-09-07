@@ -722,3 +722,10 @@ timing difference. Conditional transcript costs/profiles/legacy exclusions,
 compiled-FALSE S90 variant, trace-off geometry specs, 44-route expansion and local/
 CI worker counts remain as listed above. Optional cost/profile and additional
 pinned compatibility lanes were not silently counted as default passes.
+
+Phase 3 focused execution at `1ba2670ae` passes all eight declared critical/scope
+cases against main's unchanged accepted normal build. Fresh discovery and the
+complete ID/source/control map reconcile all 92 cases/22 specs, twelve support
+files and four PNGs. There are no pending or partial current scenario/control
+review owners; the required full phase gate remains in
+[status](status.md#phase-3-focused-proof-and-final-gate).

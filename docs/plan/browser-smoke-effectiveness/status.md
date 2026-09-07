@@ -9,8 +9,8 @@ Updated: 2026-09-08
 - Current implementation: production through `a703b9d4b`, browser through
   `60ac61bde`; reader final gates pass at clean `eb9673942` with 92/92 cases.
 - Current scope: Phase 3 scenario/support review and S38/S57 scope corrections
-  are complete; focused critical browser evidence and its required full gate
-  remain pending.
+  and focused critical browser evidence are complete; its required full gate
+  remains pending.
 - Next action: finish Phase 3 and its required full gate, then execute Phase 4
   verification, final findings and closeout.
 - Confirmed gaps: BSE-001–006 have their named repaired/strengthened controls;
@@ -415,3 +415,29 @@ transitions have the renewed BSE-005/BSE-006 and Reader Phase 5 fault/restored
 proof. No production-fault repair is claimed for either title-only correction.
 Focused execution, fresh discovery and the required Phase 3 full gate remain
 pending before phase acceptance.
+
+### Phase 3 Focused Proof and Final Gate
+
+Fresh discovery after the two title corrections confirms **92 cases in 22
+specs**, twelve TypeScript support files and four PNGs, with all 92 inventory
+identities/source anchors matched and no collection errors. Direct/alias hook
+references in all specs and the new helpers are reconciled; current scenario
+rows contain no pending or partial review disposition.
+
+At clean `1ba2670ae` (only title/documentation changes after the accepted reader
+implementation), the declared eight-case cohort passes **8/8 in 1.0m** with one
+worker and existing per-spec trace settings. S22 passes in 45.4s; both Realm
+answers, normal send/completed reload, conservative and connected import recovery,
+and both renamed narrow cases pass. Main reuses its own normal build from the
+passing Reader final full gate; no build or production change intervenes. Its
+503-file catalog and source/environment are preserved in
+`/tmp/smoke-phase3-critical-source.json`; the log is
+`/tmp/smoke-phase3-critical.log`. Cross-checkout byte identity is not assumed.
+This focused cohort supplements the separately qualified production faults; it
+does not rerun or relabel the unmanifested old geometry candidates.
+
+`pnpm check:docs` passes all 49 current documents; explicit validation passes
+24 active/archived plan, coordination and index documents. Prettier with the
+ignore override and whitespace checks pass. Phase 3's implementing-agent
+`pnpm test:all` now owns its final acceptance evidence at the completed review
+source. No required check is transferred to the user.
