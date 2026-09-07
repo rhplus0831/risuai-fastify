@@ -1236,13 +1236,15 @@ function loadSettingsGroup(db: DatabaseSync, _dataDir: string, group: ReadableSe
   // hypaV3Presets is command-owned by the memory group but persists in its
   // own collection table. Keep this endpoint settings-only; the dedicated
   // cross-resource event invalidates that collection separately.
-  const groupKeys =
-    group === 'language' ? [...SETTINGS_GROUP_KEYS[group], 'translatorPresetId'] : SETTINGS_GROUP_KEYS[group]
+  // Legacy IGP configuration remains round-trip-owned; reading it for a
+  // recovered effect does not introduce a generic settings mutation path.
+  const readOnlyKey = group === 'language' ? 'translatorPresetId' : group === 'advanced' ? 'igpPrompt' : null
+  const groupKeys = readOnlyKey ? [...SETTINGS_GROUP_KEYS[group], readOnlyKey] : SETTINGS_GROUP_KEYS[group]
   const keys = groupKeys.filter(
     (key) =>
       key !== 'hypaV3Presets' &&
       (group === 'models' ||
-        (group === 'language' && key === 'translatorPresetId') ||
+        key === readOnlyKey ||
         READABLE_SETTINGS_GROUPS.find((candidate) => SETTINGS_GROUP_KEYS[candidate].includes(key)) === group),
   )
   const normalizedSettings = normalizeSettingsForRead(db)

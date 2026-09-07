@@ -214,6 +214,18 @@ describe('evaluateIgp', () => {
     expect(command.body.patch.data).toBe('helloIGP-RESULT')
   })
 
+  it('uses the recovered effect resource view for its emotion request', async () => {
+    stubCommandFetch()
+    seed(makeChar())
+    const database = { ...testDatabaseState.db, subModel: 'echo_model', echoMessage: 'Recovered effect' } as Database
+    await evaluateIgp({ ...baseOpts, promptTemplate: CHATML_PROMPT, database })
+    expect(requestChatDataSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ database }),
+      'emotion',
+      baseOpts.abortSignal,
+    )
+  })
+
   it('stringifies non-string IGP result payloads without [object Object]', async () => {
     stubCommandFetch()
     seed(makeChar())

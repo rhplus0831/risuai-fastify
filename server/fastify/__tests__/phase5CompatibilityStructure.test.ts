@@ -51,7 +51,7 @@ const PRESET_DERIVED_DATABASE_FIELDS = [
   'localNetworkTimeoutSec',
 ] as const
 
-/** Imported legacy settings that remain inert but must survive a whole-state round trip. */
+/** Imported legacy settings retained outside generic writes for whole-state round trips. */
 const RETAINED_ROUND_TRIP_DATABASE_FIELDS = [
   'agentContextEnabled',
   'agentContextMaxOutput',
@@ -69,7 +69,7 @@ const RETAINED_ROUND_TRIP_DATABASE_FIELDS = [
   'googleClaudeTokenizing',
   'hubServerType',
   'hypaV3Settings',
-  'igpPrompt',
+  'igpPrompt', // Also read by the retained completion-effect runtime.
   'lastPatchNoteCheckVersion',
   'pluginV2',
   'removePunctuationHypa',
@@ -249,6 +249,7 @@ describe('Phase 5 compatibility structure', () => {
       const serverReadableKeys = [
         ...SETTINGS_GROUP_KEYS[group],
         ...(group === 'language' ? ['translatorPresetId'] : []),
+        ...(group === 'advanced' ? ['igpPrompt'] : []),
       ]
       const browserReadableKeys = SERVER_SETTINGS_KEYS_BY_GROUP[group]
       expect(new Set(serverReadableKeys).size, `${group} server duplicates`).toBe(serverReadableKeys.length)

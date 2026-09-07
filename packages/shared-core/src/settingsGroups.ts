@@ -392,15 +392,14 @@ export const SERVER_SETTINGS_KEYS_BY_GROUP = Object.fromEntries(
       ? ['agents', 'agentPresets', 'agentPresetDefaultId']
       : group === 'models'
         ? [...MODEL_PROFILE_SETTINGS_KEYS]
-        : group === 'language'
+        : group === 'language' || group === 'advanced'
           ? [
               ...Object.entries(SERVER_SETTINGS_GROUP_BY_KEY)
                 .filter(([, owner]) => owner === group)
                 .map(([key]) => key),
-              // Translator Preset commands own this selection pointer. Expose
-              // it through the language read projection without allowing the
-              // generic settings PATCH route to write it.
-              'translatorPresetId',
+              // These compatibility values have separate write/round-trip
+              // ownership. Narrow reads must not silently omit their live use.
+              ...(group === 'language' ? ['translatorPresetId'] : ['igpPrompt']),
             ]
           : Object.entries(SERVER_SETTINGS_GROUP_BY_KEY)
               .filter(([, owner]) => owner === group)

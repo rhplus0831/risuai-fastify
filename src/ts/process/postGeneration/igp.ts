@@ -5,6 +5,7 @@ import { parseChatML } from '../../parser/chatML'
 import { requestChatData } from '../request/request'
 import { risuChatParser } from '../scripts'
 import { resolveStablePostGenerationMessage, stablePostGenerationMessageTarget } from './stableTarget'
+import type { Database } from '../../storage/database.svelte'
 
 export interface IgpMessageTarget {
   characterId: string
@@ -15,6 +16,8 @@ export interface IgpMessageTarget {
 }
 
 export interface EvaluateIgpOptions {
+  /** A recovered effect has its own ready chat/model resource view. */
+  database?: Database
   isCurrent?: () => boolean
   promptTemplate: string
   abortSignal: AbortSignal
@@ -71,7 +74,11 @@ export async function evaluateIgp(opts: EvaluateIgpOptions): Promise<boolean> {
   const parsed = risuChatParser(opts.promptTemplate ?? '')
   if (!parsed) return false
   const formated = parseChatML(parsed)
-  const rq = await requestChatData({ formated, bias: {} }, 'emotion', opts.abortSignal)
+  const rq = await requestChatData(
+    { formated, bias: {}, ...(opts.database ? { database: opts.database } : {}) },
+    'emotion',
+    opts.abortSignal,
+  )
   if (!isCurrent() || opts.abortSignal.aborted) return false
   const appended = formatIgpAppendPayload(rq)
   const previous = captureIgpTargetSnapshot(opts.target)

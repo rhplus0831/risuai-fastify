@@ -8,6 +8,7 @@ describe('settings group parity', () => {
       const endpointKeys = [
         ...SETTINGS_GROUP_KEYS[group].filter((key) => key !== 'hypaV3Presets'),
         ...(group === 'language' ? ['translatorPresetId'] : []),
+        ...(group === 'advanced' ? ['igpPrompt'] : []),
       ]
 
       for (const key of endpointKeys) {
@@ -97,5 +98,10 @@ describe('settings group parity', () => {
       expect(SETTINGS_GROUP_KEYS[group], `server projection for retired ${key}`).not.toContain(key)
       expect(SERVER_SETTINGS_KEYS_BY_GROUP[group], `client projection for retired ${key}`).not.toContain(key)
     }
+  })
+
+  it('exposes retained IGP configuration for effects without a generic write owner', () => {
+    expect(SERVER_SETTINGS_KEYS_BY_GROUP.advanced).toContain('igpPrompt')
+    for (const group of SETTINGS_GROUPS) expect(SETTINGS_GROUP_KEYS[group]).not.toContain('igpPrompt')
   })
 })

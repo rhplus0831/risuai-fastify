@@ -516,6 +516,27 @@ describe('authenticated resource read routes', () => {
     expect(response.json().settings).not.toHaveProperty('modules')
   })
 
+  it('preserves configured IGP through the narrow advanced settings read used after writer transfer', async () => {
+    const prompt = '<|im_start|>system<|im_sep|>Append the configured effect.<|im_end|>'
+    const sqlite = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      const row = sqlite.prepare('SELECT data_json FROM settings WHERE id = 1').get() as { data_json: string }
+      sqlite
+        .prepare('UPDATE settings SET data_json = ? WHERE id = 1')
+        .run(JSON.stringify({ ...JSON.parse(row.data_json), igpPrompt: prompt }))
+    } finally {
+      sqlite.close()
+    }
+    const before = readAllDatabaseRows()
+    const full = await harness.app.inject({ method: 'GET', url: '/api/v1/settings', headers: authHeaders() })
+    expect(full.statusCode).toBe(200)
+    expect(full.json().settings.igpPrompt).toBe(prompt)
+    const narrow = await harness.app.inject({ method: 'GET', url: '/api/v1/settings/advanced', headers: authHeaders() })
+    expect(narrow.statusCode).toBe(200)
+    expect(narrow.json().settings.igpPrompt).toBe(prompt)
+    expect(readAllDatabaseRows()).toEqual(before)
+  })
+
   it('returns an allowlisted, masked settings group without collection-owned memory presets', async () => {
     const providers = await harness.app.inject({
       method: 'GET',

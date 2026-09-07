@@ -61,6 +61,8 @@ const hydration = vi.hoisted(() => ({
     return matches.length === 1 ? { messages: matches[0].message, projectionEpoch: 0 } : undefined
   }),
 }))
+const effectResources = vi.hoisted(() => ({ ensure: vi.fn() }))
+vi.mock('../server/routeResourceLoader', () => ({ ensureResourceSurfaces: effectResources.ensure }))
 vi.mock('../server/chatMessageHydration.svelte', () => hydration)
 vi.mock('./postGeneration/igp', () => ({
   evaluateIgp: vi.fn(async () => {
@@ -116,6 +118,9 @@ import {
   setPendingRecoveredGenerationEffects,
 } from './recoveredGenerationEffects'
 import { charactersResourceState, settingsResourceState } from '../server/resourceState.svelte'
+import { resetClientSessionForTests } from '../clientSession'
+import { demoteAndRepromoteForTest, setManagedWriterForTest } from '../__tests__/managedClientSession'
+import { evaluateIgp } from './postGeneration/igp'
 
 const ref: ServerGenerationEffectLedgerRef = {
   version: 1,
@@ -129,6 +134,8 @@ const ref: ServerGenerationEffectLedgerRef = {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
+  effectResources.ensure.mockReset().mockResolvedValue(undefined)
   state.db.characters = [
     {
       ...state.db.characters[0],
@@ -167,6 +174,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  resetClientSessionForTests()
   charactersResourceState.characters = []
   charactersResourceState.status = 'idle'
   settingsResourceState.value = {}
@@ -175,6 +183,62 @@ afterEach(() => {
 })
 
 describe('late recovered generation effects', () => {
+  it('waits for scoped generation resources before claiming or skipping a configured durable effect', async () => {
+    setManagedWriterForTest()
+    let release!: () => void
+    effectResources.ensure.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+    )
+    settingsResourceState.value = {}
+    settingsResourceState.groupStatuses = {}
+    const pending = reconcileRecoveredGenerationEffects(ref)
+    await Promise.resolve()
+    expect(ledger.calls).toEqual([])
+    expect(effectResources.ensure).toHaveBeenCalledWith(['runtime:chat-generation'])
+    settingsResourceState.value = {
+      igpPrompt: state.db.igpPrompt,
+      emotionProcesser: state.db.emotionProcesser,
+    } as never
+    settingsResourceState.groupStatuses = { advanced: 'ready', media: 'ready' }
+    release()
+    await expect(pending).resolves.toMatchObject({ durableEffectsReconciled: true })
+    expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
+    expect(vi.mocked(evaluateIgp)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        promptTemplate: state.db.igpPrompt,
+        database: expect.objectContaining({ characters: state.ownerCharacters }),
+      }),
+    )
+  })
+
+  it('retains effect work when generation resources fail instead of receipting not-configured', async () => {
+    effectResources.ensure.mockRejectedValueOnce(new Error('Advanced settings unavailable'))
+    await expect(reconcileRecoveredGenerationEffects(ref)).rejects.toThrow('Advanced settings unavailable')
+    expect(ledger.calls).toEqual([])
+    expect(ledger.receipts.size).toBe(0)
+    await expect(reconcileRecoveredGenerationEffects(ref)).resolves.toMatchObject({ allEffectsReconciled: true })
+    expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
+  })
+
+  it('does not claim effects after resource hydration completes under a replaced writer generation', async () => {
+    setManagedWriterForTest()
+    let release!: () => void
+    effectResources.ensure.mockReturnValueOnce(
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = reconcileRecoveredGenerationEffects(ref)
+    await Promise.resolve()
+    demoteAndRepromoteForTest()
+    release()
+    await expect(pending).resolves.toEqual({ durableEffectsReconciled: false, allEffectsReconciled: false })
+    expect(ledger.calls).toEqual([])
+    expect(state.order).toEqual([])
+  })
+
   it('replays durable automation in live order, skips ephemerals, and recomputes emotion state', async () => {
     await expect(reconcileRecoveredGenerationEffects(ref)).resolves.toEqual({
       durableEffectsReconciled: true,

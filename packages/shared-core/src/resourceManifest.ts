@@ -640,6 +640,7 @@ export const RESOURCE_SURFACE_MANIFEST = {
       'src/ts/process/request/request.ts',
       'src/ts/process/prompt.ts',
       'src/ts/process/memory/hypav3.ts',
+      'src/ts/process/recoveredGenerationEffects.ts',
     ],
     requirements: [
       group('providers', ['generate']),

@@ -24,6 +24,7 @@ import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generatio
 import type { ActiveChatTarget } from '../chatCommands'
 import { resolveActiveChatGenerationSettings } from '../activeChatGenerationSettings'
 import { registerRecoveredEffectsRuntime } from './generationRuntimeBridge'
+import { ensureResourceSurfaces } from '../server/routeResourceLoader'
 import {
   charactersResourceState,
   getCharacterResourceOwner,
@@ -118,6 +119,11 @@ export async function reconcileRecoveredGenerationEffects(
   const sourceGeneration = captureClientSessionGeneration()
   if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
   if (!isChatOutputRuntimeReady()) throw new Error('Plugin runtime is not ready for recovered output effects')
+  // Recovery precedes ordinary chat readiness on a returning/promoted writer.
+  // An omitted unloaded setting is not proof that an effect is disabled, and
+  // must never become a permanent not-configured receipt.
+  await ensureResourceSurfaces(['runtime:chat-generation'])
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
   // Late delivery never invokes these callbacks: the server atomically turns
   // each pending ephemeral row into a permanent late_recovery skip.
   const unexpectedEphemeral = () => completedGenerationEffect(undefined)
@@ -158,8 +164,11 @@ export async function reconcileRecoveredGenerationEffects(
     const promptTemplate =
       settingsResourceState.status === 'ready' ? String(settingsResourceState.value.igpPrompt ?? '') : ''
     if (!resolution || !promptTemplate.trim()) return skippedGenerationEffect('not_configured')
+    const database = resolveRecoveredGenerationDatabase(resolution)
+    if (!database) throw new Error('Recovered generation settings are unavailable')
     const updated = await evaluateIgp({
       promptTemplate,
+      database,
       isCurrent: effectContext.isCurrent,
       abortSignal: effectContext.signal,
       waitForPersistence: true,
