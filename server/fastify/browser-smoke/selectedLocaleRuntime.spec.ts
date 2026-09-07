@@ -234,6 +234,9 @@ test('new writer navigation reaches Settings while the initial character route h
     expect(handlerResponses).toEqual([])
     const settingsWhileHeld = await snapshot()
     expect(settingsWhileHeld.route).toMatchObject({ routeKey: 'settings:10:', status: 'ready' })
+    // Settings has no selected chat, so writer access remains usable while
+    // chat-generation readiness is correctly cleared by route application.
+    expect(settingsWhileHeld.capabilities).toMatchObject({ canMutate: true, canGenerate: false })
     evidence.settingsWhileHandlerHeld = settingsWhileHeld
 
     const handlerResponse = page.waitForResponse((response) => matchesHandler(new URL(response.url())))
@@ -254,7 +257,8 @@ test('new writer navigation reaches Settings while the initial character route h
     await expect(select).toHaveAttribute('aria-label', 'UI Language')
     const final = await snapshot()
     expect(final.timeOrigin).toBe(beforeNavigation.timeOrigin)
-    expect(final.capabilities).toMatchObject({ canMutate: true, canGenerate: true })
+    expect(final.capabilities).toMatchObject({ canMutate: true, canGenerate: false })
+    expect(final.role).toMatchObject({ lifecycle: 'writing', writer: beforeNavigation.role.writer })
     expect(handlerRequests).toBe(1)
     expect(handlerResponses).toEqual([{ url: harness.baseUrl + '/' + handlerAsset.file, status: 200 }])
     expect(errors).toEqual([])
