@@ -12,6 +12,7 @@ import {
   createGenerationPair,
   expectEffectReceipts,
   expectGenerationReader,
+  expectGenerationWriter,
   expectNoReaderControl,
   expectReaderPartial,
   expectTerminalGeneration,
@@ -239,6 +240,30 @@ test('writer transfer while a real finalization journal is queued commits one re
     expect(queued.effects).toEqual([])
     expect(queued.persistedEvents).toEqual([])
     pair.evidence.queuedBeforeTransfer = queued
+
+    // The injected storage failure is reported to the current writer. Exercise
+    // its exact real acknowledgement before transferring the still-queued job.
+    await expectGenerationWriter(pair.a)
+    expect(readGenerationTruth(pair.harness.dataDir).ownership).toEqual(queued.ownership)
+    expect(queued.ownership).toMatchObject({ active_writer_session_id: pair.a.sessionId, writer_epoch: 1 })
+    const failureAlert = pair.a.page.getByRole('alertdialog', { name: 'Error', exact: true })
+    await expect(failureAlert).toHaveCount(1)
+    await expect(failureAlert.getByText('browser smoke controlled finalization failure', { exact: true })).toBeVisible()
+    await failureAlert.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(failureAlert).toBeHidden()
+    const acknowledged = readGenerationTruth(pair.harness.dataDir)
+    expect(acknowledged.ownership).toEqual(queued.ownership)
+    expect(acknowledged.operations).toEqual(queued.operations)
+    expect(acknowledged.attempts).toEqual(queued.attempts)
+    // The retry worker may increment failure_count while the user reads the
+    // dialog; all journal identity, payload and pending-state fields stay exact.
+    expect(acknowledged.finalizations.map(({ failure_count: _count, ...journal }) => journal)).toEqual(
+      queued.finalizations.map(({ failure_count: _count, ...journal }) => journal),
+    )
+    expect(acknowledged.messages).toEqual(queued.messages)
+    expect(acknowledged.effects).toEqual([])
+    expect(acknowledged.persistedEvents).toEqual([])
+    pair.evidence.queuedAfterExpectedAlertAcknowledgement = acknowledged
 
     await promoteGenerationWriter(pair, pair.b, pair.a, 2)
     const transferred = readGenerationTruth(pair.harness.dataDir)
