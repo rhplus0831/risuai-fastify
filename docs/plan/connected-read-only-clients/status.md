@@ -10,12 +10,12 @@ Updated: 2026-09-08
   accepted smoke prerequisite. Reader Phases 0–4 are accepted.
 - Current slice: [Phase 5](phases/phase-5-verification-and-rollout.md),
   final combined acceptance, default activation, conservative fallback and guides.
-  Phase 4's five browser journeys, six production faults/restored controls and
-  both final aggregate gates passed. The public default is still disabled;
-  Phase 5 applies the already-authorized default-enabled rollout.
-- Production behavior: conservative writer flow remains the default. Additive
-  ownership metadata/preconditions are available; connected readers are not
-  publicly enabled.
+  The corrected 91-case enabled baseline, five isolated production faults and
+  restored controls passed. The authorized default is enabled in `70a8b18e1`;
+  normal/FALSE builds and final aggregate gates remain pending.
+- Production behavior: normal builds enable connected readers. Exact build-time
+  `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains the conservative writer fallback.
+  Drafts and pending intent keep their originating local scope.
 - Blockers: none. The Phase 2 full-suite S22 coverage failure is repaired and
   verified as BSE-005, with its original failure and source limits retained below.
 
@@ -1012,3 +1012,59 @@ fixture references and 22 reviewed seams, with no new owner allowance. Current
 documentation (49), explicit plan/index validation (22), formatting and whitespace
 pass. Playwright discovery confirms 91 cases in 22 specs. These are preparation
 checks, not acceptance of the pending corrected browser cohort.
+
+### Corrected Enabled Baseline and Qualified Fault Controls
+
+The first corrected run at `88893facd` passes every product oracle in S23/S24/S25
+but times out during harness shutdown: **25/28 affected cases pass**, while those
+three hit their generic teardown deadline. The legacy companion also passes.
+A temporary native diagnostic proves the writer SSE is already closed when the
+page closes; the final asset response finishes, leaving one idle pooled HTTP
+socket and no open response. Closing the owned BrowserContext allows Fastify's
+normal close hook to run. This is a fixture transport-pool lifetime issue, not a
+Reader SSE leak. The diagnostic helper was restored byte-for-byte.
+
+`22da08cd1` changes exactly five owned fixture cleanup sites in four specs from
+page closure to context closure. Product assertions, timeouts and shared server
+shutdown remain unchanged. Browser types, formatting and whitespace pass.
+The fresh TRUE build passes in 12.80s; its 503 emitted files are byte-identical
+to the preceding build. All **28 affected cases**, the **S32 legacy companion**,
+and then the **complete 91-case cohort** pass (full run 193.4s). The three rendering
+cases also pass under four-worker load. The required integration-artifact merge
+passes, frozen inputs are unchanged, and no page errors occur. Across these
+runs, 26,827 successful script URLs map to the emitted catalog. This is URL
+attribution, not independently downloaded-byte hashing.
+
+Five predeclared production faults then qualify at `22da08cd1` with unchanged
+tests, fixtures and configuration: cross-Reader revision deduplication; omitted
+Reader reconnect; premature current-lineage outbox disposal during fallback;
+omitted composer-draft restoration; and omitted guarded sidebar restoration.
+Each reaches its named transition and fails the intended assertion. The clean
+restored four-case cohort passes **4/4 in 18.3s** after a 13.14s build, with no
+emitted/runtime fault markers, no page errors and 1,374 successful script URL
+receipts. Both main and the detached lab retain their exact frozen inputs.
+The [smoke findings](../browser-smoke-effectiveness/findings.md#reader-phase-5-production-fault-evidence)
+contain the literal hunks, commands, hashes, prerequisites and assertion results.
+Accepted Phase 4 controls retain their unchanged generation/effect source limits.
+
+Baseline artifacts are `/tmp/reader-phase5-true-baseline-69qe4gge`; teardown
+observations are `/tmp/reader-phase5-teardown-diagnostic-yvh8b6qn`; the complete
+fault campaign is `/tmp/reader-phase5-fault-campaign-8i60779j`. The checked-in
+reproduction record does not depend on retaining those temporary directories.
+
+### Default Activation and Remaining Phase Gates
+
+With the combined feature baseline and fault/restored evidence passing,
+`70a8b18e1` applies the authorized default. All ten flag tests pass: unset/empty
+values enable connected readers, exact `FALSE` selects conservative startup,
+and smoke storage overrides cannot affect ordinary builds. `a394b1310` updates
+ten shipped guides and three test guides, including initial shell-only preview,
+acknowledged locale/shell retry, authorized reroll hydration after Reader use,
+atomic IGP completion, draft/intent scope, and actual browser evidence limits.
+Current documentation validation passes for 49 files; explicit validation covers
+24 plan, coordination and index documents. Formatting and whitespace pass.
+Original broad audit dates are retained with targeted source-check dates.
+
+The normal no-override build, actual compiled-FALSE fallback, and final
+`pnpm test:agent` / phase-ending `pnpm test:all` are still pending. Phase 5 is
+not accepted and smoke Phases 3–4 remain pending until those checks pass.

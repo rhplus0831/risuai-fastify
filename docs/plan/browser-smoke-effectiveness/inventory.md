@@ -3,7 +3,7 @@
 Initial execution inventory: 2026-09-07 at `711b1d583` (clean worktree).
 Phase 2 discovery: `6f39fb8f0` plus the real-operation Realm browser spec.
 
-Reader Phase 5 discovery at `262385732` contains 91 registered cases in 22 specs, plus twelve local
+The Reader Phase 5 universe at `22da08cd1` contains 91 registered cases in 22 specs, plus twelve local
 TypeScript support owners and four screenshot baselines. The planning snapshot
 was extended by eight viewport/entry/height cases in `chatEntryLayout.spec.ts`
 and two real-operation Realm confirmation cases added during smoke Phase 2.
@@ -14,8 +14,9 @@ Reader Phase 4 adds S84–S88 for live viewing, detach, Stop, queued finalizatio
 and atomic IGP receipt recovery; their final baseline, all six production faults and restored controls pass.
 Reader Phase 5 adds S89/S90 for restart and fallback, strengthens S80 for two
 simultaneous Readers, and adds S91 alongside the retained conservative S77
-lineage-recovery case. The first full TRUE cohort remains 80/90 with integration
-repairs pending verification; discovery of S91 is not a passing result.
+lineage-recovery case. The initial full TRUE cohort was 80/90; the corrected
+cohort passes 91/91 with five qualified faults and restored controls. Normal/FALSE
+rollout builds and final reader aggregate gates remain pending.
 Discovery does not mean execution or acceptance; review states remain explicit.
 The [plan](PLAN.md) defines scope; [status](status.md) owns the execution cursor.
 
@@ -183,7 +184,7 @@ row unless the detailed review states a narrower boundary.
 | S77 | `visibleStateRecovery.spec.ts:147`             | conservative startup preserves the same-character sidebar view through old-lineage recovery reload                    | Retained conservative contract; Reader 5    |
 | S78 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles YES                            | Strengthened; BSE-002                       |
 | S79 | `realmProgressConfirmation.spec.ts:50`         | Realm import moves from actual download progress to low-level confirmation and handles NO                             | Strengthened; BSE-002                       |
-| S80 | `connectedReaderBrowsing.spec.ts:210`          | a mobile connected Reader follows committed updates and browses locally without taking write access                   | Strengthened; Reader Phase 5 pending        |
+| S80 | `connectedReaderBrowsing.spec.ts:210`          | a mobile connected Reader follows committed updates and browses locally without taking write access                   | Strengthened; Reader Phase 5 fault verified |
 | S81 | `connectedWriterSwitching.spec.ts:580`         | Use this device switches A to B to A in place while preserving reader routes and the originating draft                | Added; Reader Phase 3 reconciliation        |
 | S82 | `connectedWriterSwitching.spec.ts:745`         | an accepted server generation keeps its job and durable reply when Use this device transfers the writer               | Added; Reader Phase 3 reconciliation        |
 | S83 | `connectedWriterSwitching.spec.ts:955`         | an empty server without Web Locks initializes only after the explicit setup action with a fresh writer identity       | Added; Reader Phase 3 reconciliation        |
@@ -192,9 +193,9 @@ row unless the detailed review states a narrower boundary.
 | S86 | `connectedReaderGeneration.spec.ts:122`        | writer transfers during streaming and stopping preserve one cancelled partial without completion effects              | Added; Reader Phase 4 verified              |
 | S87 | `connectedReaderGeneration.spec.ts:201`        | writer transfer while a real finalization journal is queued commits one result and settles one effect ledger          | Added; Reader Phase 4 verified              |
 | S88 | `connectedReaderGeneration.spec.ts:363`        | an accepted IGP append is already receipted when its writer loses ownership before the PATCH response                 | Added; Reader Phase 4 verified              |
-| S89 | `connectedReaderRollout.spec.ts:102`           | default connected Reader reconnects after an actual server restart without page reload or write takeover              | Added; Reader Phase 5 pending               |
-| S90 | `connectedReaderRollout.spec.ts:223`           | conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft               | Added; Reader Phase 5 pending               |
-| S91 | `visibleStateRecovery.spec.ts:229`             | connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery           | Added; Reader Phase 5 pending               |
+| S89 | `connectedReaderRollout.spec.ts:102`           | default connected Reader reconnects after an actual server restart without page reload or write takeover              | Added; Reader Phase 5 fault verified        |
+| S90 | `connectedReaderRollout.spec.ts:223`           | conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft               | Added; Reader Phase 5 fault verified        |
+| S91 | `visibleStateRecovery.spec.ts:229`             | connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery           | Added; Reader Phase 5 fault verified        |
 
 ## Conditional and Expanded Execution
 
@@ -597,3 +598,12 @@ retains the original forced-reload contract in conservative mode. Direct SSE
 frame consumption in S91 is inferred from source and subsequent reads; the
 import response's actual `state.imported` event is captured. Final focused,
 full-browser and declared fault/restored verification are still pending.
+
+The corrected source `22da08cd1` supersedes those pending baseline results:
+all 28 affected cases, the legacy companion and full 91-case TRUE suite pass.
+Five isolated production faults qualify, and the unchanged restored S80/S89/S90/
+S91 cohort passes. [Reproduction and source limits](findings.md#reader-phase-5-production-fault-evidence)
+include exact second-Reader, restart, intent replay, draft and sidebar oracles.
+`70a8b18e1` now enables connected readers by default; normal/FALSE build checks
+and the reader phase's final aggregate gates remain pending. This is not the
+Stage 3 handoff or acceptance of the still-pending remaining scenario reviews.

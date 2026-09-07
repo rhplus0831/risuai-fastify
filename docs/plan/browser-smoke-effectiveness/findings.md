@@ -1082,3 +1082,198 @@ establish the named observation, detach, Stop, configured-effect and atomic
 receipt boundaries. Reader Phase 5 owns the final rollout and combined matrix;
 the remaining smoke Phase 3 audit is still pending. Phase-ending aggregate
 acceptance is recorded in reader status.
+
+## Reader Phase 5 Production Fault Evidence
+
+Source: `22da08cd11f400e8fa61e294ed87b32d339b7b03`. The corrected TRUE build
+passes all 28 affected cases, the S32 companion and the full 91-case cohort
+(193.4s). The full run requires and passes the integration-artifact merge.
+The five faults below were declared before execution and applied separately
+in a disposable detached checkout. Tests, fixture controls, dependencies and
+browser configuration stayed unchanged. Every fault had one fresh TRUE build
+and one selected negative run; no retry-until-green or additional matrix was
+used. Each production file was restored byte-for-byte before the next fault.
+
+| Fault / case | Independent path and state prerequisites                                                                                                                                                                                                                                      | Intended and observed failure                                                                                                                                                                                                                                  | Negative / restored case time      |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------- |
+| P5-F1 / S80  | Writer owns epoch one; B and C are distinct, live Readers. Real append is HTTP 200/revision one with its exact SQLite row/event. B's exact-text and revision assertions pass before C's.                                                                                      | Per-instance shared Reader revision deduplication suppresses C; its exact common-message DOM assertion at spec line 347 fails. Server marker identifies revision one.                                                                                          | 37.1s failure / 7.2s restored pass |
+| P5-F2 / S89  | Initial writer/Reader startup and real Fastify/SQLite stop/rebuild pass with unchanged durable state. Reader timer marker executes; rebuilt server has one writer SSE and no Reader SSE.                                                                                      | The post-restart status assertion at spec line 150/helper line 148 remains interrupted for its bounded 30s instead of connected reading. No later edit/teardown assertion is claimed as reached.                                                               | 32.4s failure / 3.5s restored pass |
+| P5-F3 / S90  | Actual UI edit commits once while its response is held; a native encrypted row and newer draft sequence are captured. The cleanup marker names that mutation with equal current/scope lineage and `managed=false`. Fallback writer startup and newer visible draft both pass. | Real current-lineage deletion leaves one original command attempt instead of at least two at line 378; no replay/ACK occurs. SQL retains one committed edit/event/unacknowledged receipt. The real discarded-changes alert is retained as a fault side effect. | 3.5s failure / 3.1s restored pass  |
+| P5-F4 / S90  | Native intent and newer draft exist before reload. Actual fallback reaches writer-ready with empty queues; captured transport independently proves same-ID/body replay, one ACK and one SQL edit/event/receipt.                                                               | The read persisted draft is not restored into the composer; line 368 receives empty text instead of the newer draft. Later test-body receipt assertions are not reached; the stated receipt checks come independently from the captured artifacts.             | 8.5s failure / 3.1s restored pass  |
+| P5-F5 / S91  | Real import produces a new lineage; the old held PATCH receives actual 409 after coherent Reader replacement. Actual Use this device sends conditional bootstrap 200, restores writing with editable composer/empty queues, and preserves owner/epoch one, SQL and document.  | Only then, the guarded route restoration omission leaves the saved character sidebar false at line 470. Original sidebar was true; executed marker identifies the matching route.                                                                              | 2.2s failure / 2.1s restored pass  |
+
+Negative build times are 14.04/13.72/14.21/12.13/12.87s. The shared clean restored
+build passes in 13.14s and its four cases pass **4/4 in 18.3s**. No emitted or
+runtime fault marker remains; no page error occurs. Its 1,374 successful script
+URLs map to the 503-file emitted catalog. Client-fault marker chunks have actual
+successful served URL receipts; their emitted SHA-256 values and executed
+markers were captured. URL attribution is not downloaded-response-byte hashing.
+The following hashes and literal diffs, together with the Git source, preserve
+reproduction independently of temporary artifacts.
+
+| Fault | Production file                                | Baseline SHA-256                                                   | Fault SHA-256                                                      |
+| ----- | ---------------------------------------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
+| P5-F1 | `server/fastify/src/routes/events.ts`          | `e22528b79e8847b103eb94fa03225f0cd4eb9bbe025843f849916a805d12b0a0` | `a5512ff5d596a6722bf07219f0cc5ac2136a3b882dafc5c4ba793d8c72d10773` |
+| P5-F2 | `src/ts/server/connectedReaderSync.ts`         | `bae104468e77ac2139575e376c2ecb822ea7a546bacd9dba804c856cc6751223` | `0d448dda40a3a18634c186f5d1ff66cb7ee7c7b54821cd88a75c05b62da7121c` |
+| P5-F3 | `src/ts/server/pendingMutationOutbox.ts`       | `34161c73478217ceaacb2a9dc1775d14b13432006fa809fccac6d8ba7a49545c` | `dbe25b9317ec2c4f1902e9299fcf176f500a9478d9c5d382d776bccb855808f6` |
+| P5-F4 | `src/lib/ChatScreens/DefaultChatScreen.svelte` | `aecde2a25a17c623679d0d13e49cb122991c297660aa810077cdf8afb9132f30` | `54923ba8b304e72eafe60f1cec2525b49976e923e7769979abf453352d8ec3d1` |
+| P5-F5 | `src/ts/router.ts`                             | `84e40e58fb5cd16a5791826bc5fbd7018caaa0de42bb278a95b2213ded85283c` | `2db509e3900b7fea8d6f408f8025cfb32fee52ba39f94fb318827c197dc7c97b` |
+
+The three affected browser specs are frozen at the following SHA-256 values;
+all other harness/configuration/dependency inputs are fixed by the source commit.
+
+- `server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts`: `2d30cbb274c4dc28fd97f1c051cb875f69c64ac16dcffa3668f77c4d052c4b2f`.
+- `server/fastify/browser-smoke/connectedReaderRollout.spec.ts`: `7b3b765a1aefcacb5fd15ba2cf3a64c3f4d01696687bd95a87bfb02988fd8e8c`.
+- `server/fastify/browser-smoke/visibleStateRecovery.spec.ts`: `2268b2bffe6d76a6ebd659dc9e33eedee131cb49ce85f6ec09fbfe6c63778846`.
+- `server/fastify/browser-smoke/connectedReaderRolloutHarness.ts`: `a66bb56c940fc6871a4339385a6ab201c17868c29ff99235c44aea861beb0a09`.
+
+Reproduce in a fresh detached worktree at the source above. Link the existing
+matching `node_modules`, then use `pnpm --config.verify-deps-before-run=false`
+only in that disposable checkout so pnpm does not replace the linked dependency
+tree. Node v24.19.0, pnpm 11.23.0, Playwright 1.62.1 and Chromium 151.0.7922.34
+are the recorded runtime. For each fault, apply only its literal diff below,
+build with `VITE_FAST_BOOTSTRAP_OBSERVER=TRUE`, and execute its exact test title
+with one worker and tracing. Do not set `RISU_READER_ROLLOUT_COMPILED_FALLBACK`.
+The fixture remains the ordinary default-to-explicit-disabled fallback for S90;
+actual compiled-FALSE verification is a later rollout check.
+
+```sh
+VITE_FAST_BOOTSTRAP_OBSERVER=TRUE pnpm --config.verify-deps-before-run=false build:smoke
+VITE_FAST_BOOTSTRAP_OBSERVER=TRUE pnpm --config.verify-deps-before-run=false exec playwright test --config playwright.fastify-smoke.config.ts SPEC --grep 'EXACT TITLE' --workers=1 --trace=on
+```
+
+Replace `SPEC` and `EXACT TITLE` with the corresponding row below. Restore the
+single changed production file from the recorded Git source between faults.
+After all restorations, rebuild TRUE once and run S80, S89, S90 and S91 unchanged
+with the same one-worker/trace settings as the shared restored control. A build,
+setup or generic timeout failure cannot substitute for the stated assertion and
+independent prerequisites.
+
+| Fault | Spec                                                           | Exact title                                                                                                 |
+| ----- | -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| P5-F1 | `server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts` | a mobile connected Reader follows committed updates and browses locally without taking write access         |
+| P5-F2 | `server/fastify/browser-smoke/connectedReaderRollout.spec.ts`  | default connected Reader reconnects after an actual server restart without page reload or write takeover    |
+| P5-F3 | `server/fastify/browser-smoke/connectedReaderRollout.spec.ts`  | conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft     |
+| P5-F4 | `server/fastify/browser-smoke/connectedReaderRollout.spec.ts`  | conservative fallback reload replays one UI-saved command and preserves the newer unsent composer draft     |
+| P5-F5 | `server/fastify/browser-smoke/visibleStateRecovery.spec.ts`    | connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery |
+
+### P5-F1: Shared Reader revision cursor
+
+```diff
+--- a/server/fastify/src/routes/events.ts
++++ b/server/fastify/src/routes/events.ts
+@@ -109,6 +109,7 @@
+   memoryEvents: MemoryEventBus,
+   activeWriterState: ActiveWriterState,
+ ): void {
++  let lastReaderCommandRevision: number | null = null
+   app.get('/api/v1/events', { exposeHeadRoute: false }, async (req, reply) => {
+     if (!(await requireAuth(authState, req, reply))) return
+
+@@ -164,6 +165,13 @@
+     unsubscribeCommand = commandEvents.subscribe((event) => {
+       if (liveCommandDelivery) {
+         if (!reply.raw.writableEnded) {
++          if (readActiveWriterSessionId(req) === null) {
++            if (lastReaderCommandRevision === event.revision) {
++              console.info('[reader-phase5-f1-shared-reader-revision]', event.revision)
++              return
++            }
++            lastReaderCommandRevision = event.revision
++          }
+           sendFrame('command', formatCommandEvent(event))
+         }
+         return
+```
+
+### P5-F2: Omitted interrupted-reader reconnect
+
+```diff
+--- a/src/ts/server/connectedReaderSync.ts
++++ b/src/ts/server/connectedReaderSync.ts
+@@ -145,7 +145,7 @@
+     if (!current() || reconnectTimer || browserIsOffline()) return
+     reconnectTimer = setTimeout(() => {
+       reconnectTimer = null
+-      void connect()
++      Reflect.apply(console.warn, console, ['[reader-phase5-f2-omitted-reconnect]', lineage, epoch])
+     }, calculateConnectedReaderReconnectDelayMs(attempt++))
+   }
+
+```
+
+### P5-F3: Current-lineage intent disposed during fallback
+
+```diff
+--- a/src/ts/server/pendingMutationOutbox.ts
++++ b/src/ts/server/pendingMutationOutbox.ts
+@@ -574,7 +574,8 @@
+     assertOutboxRecovery(generation)
+     if (managed) adoptScope()
+     for (const mutation of mutations) {
+-      if (mutation.databaseLineage !== scope.databaseLineage) {
++      if (!managed || mutation.databaseLineage !== scope.databaseLineage) {
++        Reflect.apply(console.warn, console, ['[reader-phase5-f3-discard-current-lineage]', mutation.mutationId, mutation.databaseLineage, scope.databaseLineage, managed])
+         mutationStore.delete(mutation.mutationId)
+         discardedMutationIds.push(mutation.mutationId)
+       }
+```
+
+### P5-F4: Persisted composer text not restored
+
+```diff
+--- a/src/lib/ChatScreens/DefaultChatScreen.svelte
++++ b/src/lib/ChatScreens/DefaultChatScreen.svelte
+@@ -1184,7 +1184,8 @@
+
+   function restoreComposerDraft(identity: string | null): void {
+     const draft = identity ? readDefaultChatComposerDraft(identity) : undefined
+-    messageInput = draft?.messageInput ?? ''
++    if (draft?.messageInput) Reflect.apply(console.warn, console, ['[reader-phase5-f4-omitted-composer-restore]', identity])
++    messageInput = ''
+     messageInputTranslate = draft?.messageInputTranslate ?? ''
+     fileInput = [...(draft?.fileInput ?? [])]
+     draftText = draft?.draftText ?? ''
+```
+
+### P5-F5: Guarded character-sidebar restoration omitted
+
+```diff
+--- a/src/ts/router.ts
++++ b/src/ts/router.ts
+@@ -409,7 +409,9 @@
+ ): void {
+   if (!isFresh() || !characterSidebarViewStateMatches(route)) return
+   const selectedCharacter = selectedCharacterForSidebarRestore()
+-  if (selectedCharacter?.chaId === route.chaId) botMakerMode.set(true)
++  if (selectedCharacter?.chaId === route.chaId) {
++    Reflect.apply(console.warn, console, ['[reader-phase5-f5-omitted-sidebar-restore]', routeKey(route)])
++  }
+ }
+
+ function selectedCharacterForSidebarRestore() {
+```
+
+The restored controls verify both Readers' common/independent updates and no
+forbidden calls; server restart followed by a real edit and zero final native
+SSE counts; exact fallback replay/receipt/newer draft; and a true character
+sidebar after same-document, same-owner new-lineage promotion. S91 captures
+actual import and conflict responses, conditional acquisition and downstream
+reads. It does not capture raw `state.imported` SSE frame consumption; that
+causal detail is inferred from production source and observed replacement.
+Mobile profiles and lifecycle controls remain Chromium emulation. The restart
+rebuilds a Fastify instance and reopens SQLite in the test process, not an OS
+process kill. Deterministic local providers and native browser storage preserve
+the named boundaries without certifying physical devices or external providers.
+
+The Phase 5 integration repairs remain separately traceable in
+[reader status](../connected-read-only-clients/status.md#phase-5-enabled-build-baseline-and-integration-repairs):
+initial-preview display gating (`36f0d33ff`), writer reroll hydration after Reader
+residency (`f24d781ae`), initial locale/shell retry (`a9e2ad06e`), per-sample
+fixture ownership (`e8333ffa2`), and owned-context shutdown (`22da08cd1`). The
+mounted/hydration/bootstrap regressions record actual pre-fix failures and
+post-fix passes, while unchanged browser product oracles pass in the corrected
+full cohort. S44 and S77 retain their conservative contracts, with connected
+recovery separately owned by S80 and S91. No second-reader, restart, replay,
+draft or sidebar fault result accepts the pending default/FALSE rollout builds
+or the reader phase's final aggregate gates.

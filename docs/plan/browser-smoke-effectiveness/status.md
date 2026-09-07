@@ -318,3 +318,18 @@ Reader Phase 4 is accepted at `40b3eb516` plus its six evidence documents:
 baseline, six qualified negative controls and a clean five-case restored run.
 Phase 5 now owns final activation and combined acceptance; public default is
 still disabled. Resume the remaining smoke review only after that handoff.
+
+Reader Phase 5's corrected source `22da08cd1` passes all 28 affected cases,
+the S32 legacy companion and the full 91-case TRUE cohort in 193.4s. Five
+production faults qualify and the shared restored S80/S89/S90/S91 cohort passes
+4/4 in 18.3s. The [findings](findings.md#reader-phase-5-production-fault-evidence)
+record the exact unchanged-test failures and restoration. This closes the
+previous integration browser failures, including three fixture shutdown hangs
+whose product oracles had already passed; closing owned BrowserContexts fixes
+the retained idle HTTP socket without changing product assertions or timeouts.
+
+The authorized default is enabled in `70a8b18e1`, with ten passing flag tests;
+`a394b1310` updates shipped and test guides. Normal/FALSE build verification and
+the reader phase's final aggregate checks are still pending. Smoke Phases 3–4
+continue to wait for accepted reader Phase 5 rather than inheriting its partial
+rollout acceptance.
