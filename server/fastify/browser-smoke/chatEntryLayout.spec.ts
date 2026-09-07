@@ -141,7 +141,7 @@ for (const viewport of [
             await page.screenshot({ path: screenshot })
             await testInfo.attach('chat-entry-failure', { path: screenshot, contentType: 'image/png' })
           }
-          await page.close()
+          await page.context().close()
           await closeFastBootstrapHarness(harness)
         }
       })

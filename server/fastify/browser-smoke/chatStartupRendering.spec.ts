@@ -103,7 +103,8 @@ for (const navigation of ['direct', 'refresh'] as const) {
       expect(errors).toEqual([])
     } finally {
       gates.forEach((gate) => gate.release())
-      await page.close()
+      // Late asset responses can retain a context-owned keepalive socket.
+      await page.context().close()
       await closeFastBootstrapHarness(harness)
     }
   })
@@ -174,7 +175,7 @@ test('direct chat startup releases the newest rows before older display work and
     expect(errors).toEqual([])
   } finally {
     releaseOlder()
-    await page.close()
+    await page.context().close()
     await closeFastBootstrapHarness(harness)
   }
 })

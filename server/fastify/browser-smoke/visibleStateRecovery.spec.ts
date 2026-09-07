@@ -55,8 +55,8 @@ test.afterEach(async ({ page }, testInfo) => {
     }
   } finally {
     try {
-      // Release browser subscriptions before shutting down the case's server.
-      await page.close()
+      // Release subscriptions and the context's HTTP pool before server shutdown.
+      await page.context().close()
     } finally {
       if (harness) {
         try {

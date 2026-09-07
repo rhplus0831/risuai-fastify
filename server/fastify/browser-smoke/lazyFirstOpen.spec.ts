@@ -273,7 +273,7 @@ test.beforeEach(async () => {
 })
 
 test.afterEach(async ({ page }) => {
-  await page.close()
+  await page.context().close()
   await harness.app.close()
   fs.rmSync(harness.dataDir, { recursive: true, force: true })
 })
