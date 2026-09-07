@@ -3,6 +3,8 @@
 </script>
 
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import {
     ArrowDownIcon,
     ArrowUpIcon,
@@ -1915,6 +1917,42 @@
     unregisterPendingTranslatorPresetFlush()
     void flushPendingTranslatorPresetUpdates()
   })
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const presets = currentTranslatorPresetCollectionOwner() ?? []
+      const drafts = presets.flatMap((preset) => {
+        const outputKeys = Object.fromEntries(
+          translatorPresetStepsForDisplay(preset).flatMap((step) =>
+            Object.prototype.hasOwnProperty.call(stepOutputKeyDrafts, step.id) &&
+            stepOutputKeyDrafts[step.id] !== (step.outputKey ?? '')
+              ? [[step.id, stepOutputKeyDrafts[step.id]]]
+              : [],
+          ),
+        )
+        const dirty = !!preset.id && (translatorPresetDirtyFieldsById.get(preset.id)?.size ?? 0) > 0
+        const pendingCreate = pendingTranslatorPresetStructuralMutations.some(
+          (pending) => pending.kind === 'create' && pending.attempt.draftPreset.id === preset.id,
+        )
+        if (!dirty && !pendingCreate && Object.keys(outputKeys).length === 0) return []
+        return [
+          {
+            preset,
+            outputKeys,
+            baseline: Object.fromEntries(translatorPresetRollbackBaselinesById.get(preset.id!) ?? []),
+          },
+        ]
+      })
+      if (drafts.length === 0) return null
+      return $state.snapshot({
+        key: 'translator-presets:editor',
+        label: drafts[0].preset.name,
+        fields: drafts.map((draft) => ({ label: draft.preset.name, value: JSON.stringify(draft, null, 2) })),
+        data: { drafts },
+        baseline: drafts.map(({ preset, baseline }) => ({ presetId: preset.id, ...baseline })),
+      })
+    }),
+  )
 </script>
 
 <span class="text-textcolor mt-4">Preset</span>

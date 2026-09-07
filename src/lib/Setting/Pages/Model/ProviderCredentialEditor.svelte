@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { SaveIcon, XIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -205,6 +208,25 @@
       saving = false
     }
   }
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const data = { name, apiKeyDraft, clientEmail, privateKeyDraft }
+      if (JSON.stringify(data) === initialDraft) return null
+      return $state.snapshot({
+        key: `provider-credential:${baseline?.id ?? `new:${credentialType}`}`,
+        label: name || initialName,
+        fields: [
+          { label: language.modelProfiles.credentialName, value: name },
+          { label: language.modelProfiles.apiKeyLabel, value: apiKeyDraft.value, secret: true },
+          { label: language.modelProfiles.vertexClientEmail, value: clientEmail, secret: true },
+          { label: language.modelProfiles.vertexPrivateKey, value: privateKeyDraft.value, secret: true },
+        ],
+        data,
+        baseline: JSON.parse(initialDraft),
+      })
+    }),
+  )
 </script>
 
 <section class="flex flex-col gap-3 rounded-md border border-darkborderc bg-darkbg p-3" data-provider-credential-editor>

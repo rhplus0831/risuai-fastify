@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy, untrack } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, SaveIcon, TrashIcon, XIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -86,7 +89,9 @@
   const initialMetadata = metadataSnapshot(initialPreset)
 
   let selectedAgentId = $state('')
+  let selectedAgentRecoveryBaseline = ''
   let editingUseId = $state<string | null>(null)
+  let useRecoveryBaseline = ''
   let useBusy = $state(false)
   let useError = $state('')
   let useEnabled = $state(true)
@@ -262,7 +267,10 @@
   }
 
   $effect(() => {
-    if (!selectedAgentId && agents[0]) selectedAgentId = agents[0].id
+    if (!selectedAgentId && agents[0]) {
+      selectedAgentId = agents[0].id
+      selectedAgentRecoveryBaseline = selectedAgentId
+    }
   })
 
   function metadataForSave(): AgentPresetSnapshot {
@@ -335,6 +343,7 @@
     maxOutputChars = use.runtimeOverride?.maxOutputChars ?? 1_200
     temperature = (use.runtimeOverride?.temperature ?? 100) / 100
     structuredOutputStrict = use.runtimeOverride?.structuredOutputStrict ?? false
+    useRecoveryBaseline = JSON.stringify(useRecoveryDraft())
     useError = ''
   }
 
@@ -388,7 +397,7 @@
     useError = ''
     const result = await addAgentToPreset(presetId, use)
     useBusy = false
-    handleUseResult(result)
+    if (handleUseResult(result) && selectedAgentId === agent.id) selectedAgentRecoveryBaseline = selectedAgentId
   }
 
   async function saveUse(): Promise<void> {
@@ -506,6 +515,53 @@
     if (metadataDirty && !window.confirm(language.agentPresets.discardChangesConfirm)) return
     onCancel()
   }
+
+  function metadataRecoveryDraft() {
+    return { name, description, moduleIntergration, finalOutputTemplate, enabled, limitConcurrency, maxConcurrency }
+  }
+  function useRecoveryDraft() {
+    return {
+      editingUseId,
+      useEnabled,
+      usePhase,
+      useDependencies,
+      useOutputKey,
+      useDestination,
+      failureMode,
+      fallbackText,
+      overrideModel,
+      modelMode,
+      modelProfileId,
+      overrideRuntime,
+      timeoutMs,
+      maxInputChars,
+      maxOutputChars,
+      temperature,
+      structuredOutputStrict,
+    }
+  }
+  const metadataRecoveryBaseline = untrack(() => JSON.stringify(metadataRecoveryDraft()))
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const metadata = metadataRecoveryDraft()
+      const use = editingUseId ? useRecoveryDraft() : null
+      const metadataChanged = JSON.stringify(metadata) !== metadataRecoveryBaseline
+      const useChanged = use !== null && JSON.stringify(use) !== useRecoveryBaseline
+      if (!metadataChanged && !useChanged && selectedAgentId === selectedAgentRecoveryBaseline) return null
+      const data = { metadata, use, selectedAgentId }
+      return $state.snapshot({
+        key: `agent-preset:${presetId || 'new'}`,
+        label: name || language.agentPresets.newPresetName,
+        fields: [{ label: name || language.agentPresets.newPresetName, value: JSON.stringify(data, null, 2) }],
+        data,
+        baseline: {
+          metadata: JSON.parse(metadataRecoveryBaseline),
+          use: useRecoveryBaseline ? JSON.parse(useRecoveryBaseline) : null,
+          selectedAgentId: selectedAgentRecoveryBaseline,
+        },
+      })
+    }),
+  )
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

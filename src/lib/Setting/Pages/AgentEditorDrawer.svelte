@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy, untrack } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { PlusIcon, SaveIcon, Trash2Icon, XIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Help from 'src/lib/Others/Help.svelte'
@@ -300,6 +303,40 @@
     if (dirty && !window.confirm(language.agentPresets.discardChangesConfirm)) return
     onCancel()
   }
+
+  function agentRecoveryDraft() {
+    return {
+      name,
+      description,
+      instruction,
+      useChatML,
+      modelMode,
+      profileId,
+      outputFormat,
+      timeoutMs,
+      maxInputChars,
+      maxOutputChars,
+      temperature,
+      structuredOutputStrict,
+      inputScopes,
+      toggles,
+      lorebookInputs,
+    }
+  }
+  const agentRecoveryBaseline = untrack(() => JSON.stringify(agentRecoveryDraft()))
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const data = agentRecoveryDraft()
+      if (JSON.stringify(data) === agentRecoveryBaseline) return null
+      return $state.snapshot({
+        key: `agent:${initial?.id ?? 'new'}`,
+        label: name || language.agentPresets.newAgentName,
+        fields: [{ label: name || language.agentPresets.newAgentName, value: JSON.stringify(data, null, 2) }],
+        data,
+        baseline: JSON.parse(agentRecoveryBaseline),
+      })
+    }),
+  )
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events a11y_no_static_element_interactions -->

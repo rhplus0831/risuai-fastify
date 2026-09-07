@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy, untrack } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { SaveIcon, XIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Accordion from 'src/lib/UI/Accordion.svelte'
@@ -391,6 +394,49 @@
     if (!canSave) return
     await onSave(snapshotForSave())
   }
+
+  function profileRecoveryDraft() {
+    return {
+      draftName,
+      providerId,
+      modelId,
+      requestModel,
+      credentialId,
+      baseUrl,
+      extraHeadersRows,
+      additionalParamRows,
+      llmGatewayReasoningEffort,
+      llmGatewayVerbosity,
+      llmGatewayServiceTier,
+      llmGatewayRouting,
+      ollamaRequestFormat,
+      ollamaModelSource,
+      ollamaThinkingMode,
+      vertexProjectId,
+      vertexRegion,
+      customTokenizer,
+      customFlags,
+      runtimeOptions,
+      fallbacks,
+    }
+  }
+  const profileRecoveryBaseline = untrack(() => JSON.stringify(profileRecoveryDraft()))
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const data = profileRecoveryDraft()
+      if (JSON.stringify(data) === profileRecoveryBaseline) return null
+      return $state.snapshot({
+        key: `model-profile:${initialProfile?.id ?? 'new'}`,
+        label: draftName || drawerTitle,
+        fields: [
+          { label: language.modelProfiles.profileNameColumn, value: draftName },
+          { label: language.modelProfiles.modelConnectionTitle, value: JSON.stringify(data, null, 2), secret: true },
+        ],
+        data,
+        baseline: JSON.parse(profileRecoveryBaseline),
+      })
+    }),
+  )
 </script>
 
 {#snippet providerPanel(section: 'setup' | 'advanced')}

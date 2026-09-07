@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { summarize, type SerializableHypaV3Data, type SerializableSummary } from 'src/ts/process/memory/hypav3'
@@ -437,4 +443,26 @@ describe('HypaV3 summary item async ownership', () => {
     await vi.waitFor(() => expect(target.querySelectorAll('textarea[readonly]')).toHaveLength(1))
     expect(target.textContent).not.toContain('Translation for the abandoned selection')
   })
+})
+
+it('retains an unapplied reroll when writer access is lost', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    const summary = { text: 'Original summary', chatMemos: ['message-1'], isImportant: false }
+    mountSummary(summary)
+    await tick()
+    actionButton('reroll').click()
+    await vi.waitFor(() => expect(actionButton('apply-rerolled').disabled).toBe(false))
+    demoteClientSession()
+    expect(capturedWriterDrafts().find((draft) => draft.key.startsWith('memory-reroll:chat-1:'))?.data).toMatchObject({
+      text: 'Rerolled summary',
+    })
+    expect(summary.text).toBe('Original summary')
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

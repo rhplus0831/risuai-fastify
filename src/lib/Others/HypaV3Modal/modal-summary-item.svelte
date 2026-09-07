@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { onDestroy, tick, untrack } from 'svelte'
   import {
     LanguagesIcon,
@@ -564,6 +566,22 @@
     if (!selectedId || categories.some((category) => category.id === selectedId)) return categories
     return [...categories, { id: selectedId, name: selectedId }]
   })
+
+  const recoveryChatId = untrack(() => getCurrentChat()?.id ?? '')
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      if (!rerollReady || !rerolled || isRerolling) return null
+      const summaryId =
+        (summary as SerializableSummary & { serverId?: string }).serverId ?? JSON.stringify(summary.chatMemos)
+      return $state.snapshot({
+        key: `memory-reroll:${recoveryChatId}:${summaryId}`,
+        label: language.hypaV3Modal.summaryNumberLabel.replace('{0}', String(summaryIndex + 1)),
+        fields: [{ label: language.hypaV3Modal.rerolledSummaryLabel, value: rerolled }],
+        data: { summaryId, chatMemos: summary.chatMemos, text: rerolled },
+        baseline: { text: summary.text },
+      })
+    }),
+  )
 </script>
 
 <div

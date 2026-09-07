@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import {
     ArrowDownIcon,
     ArrowUpIcon,
@@ -10,7 +12,7 @@
     PlusIcon,
     TrashIcon,
   } from '@lucide/svelte'
-  import { tick } from 'svelte'
+  import { tick, onDestroy } from 'svelte'
   import { language } from 'src/lang'
   import { alertError, alertNormal } from 'src/ts/alert'
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -48,6 +50,7 @@
   let createTrigger: HTMLButtonElement | undefined
   let renameKey = $state<string | null>(null)
   let renameDraft = $state('')
+  let recoveryRenameBaseline = ''
   let renameInput = $state<HTMLInputElement>()
   let restoreRenameFocus = () => {}
   let detailsKey = $state<string | null>(null)
@@ -181,6 +184,7 @@
     close()
     renameKey = presetMutationKey(presets[index], index)
     renameDraft = presetName(presets[index], index)
+    recoveryRenameBaseline = renameDraft
     restoreRenameFocus = close
     await tick()
     renameInput?.focus()
@@ -372,6 +376,21 @@
     }
     return value as ModelProfileRecord[]
   }
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const creating = createMode !== null && newPresetName !== ''
+      const renaming = renameKey !== null && renameDraft !== recoveryRenameBaseline
+      if (!creating && !renaming) return null
+      return $state.snapshot({
+        key: `model-preset-form:${renameKey ?? 'new'}`,
+        label: language.modelProfiles.defaultPresetName(1),
+        fields: [{ label: language.modelProfiles.profileNameColumn, value: renaming ? renameDraft : newPresetName }],
+        data: { createMode, newPresetName, renameKey, renameDraft },
+        baseline: { renameDraft: recoveryRenameBaseline, newPresetName: '' },
+      })
+    }),
+  )
 </script>
 
 <section class="flex flex-col gap-4">

@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
@@ -2865,4 +2871,31 @@ describe('TranslatorPresetSettings server-backed edits', () => {
     expect(getDatabase().translatorPrompt).toBe('old prompt A')
     expect(getDatabase().translatorMaxResponse).toBe(100)
   })
+})
+
+it('retains an invalid unsubmitted translator output key', async () => {
+  if (component) {
+    await unmount(component)
+    component = undefined
+  }
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(TranslatorPresetSettings, { target })
+    await tick()
+    const input = Array.from(target.querySelectorAll<HTMLInputElement>('input[type="text"]')).find((input) =>
+      input.getAttribute('aria-label')?.startsWith(language.translatorPipeline.outputKey),
+    )!
+    input.value = 'unfinished-output!'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    const draft = capturedWriterDrafts().find((draft) => draft.key === 'translator-presets:editor')!
+    expect(JSON.stringify(draft.data)).toContain('unfinished-output!')
+    expect(getDatabase().translatorPresets[0].steps?.[0]?.outputKey).toBeUndefined()
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

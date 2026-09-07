@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { onDestroy, untrack } from 'svelte'
+  import { getCurrentChat } from 'src/ts/storage/database.svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { PlusIcon, XIcon, SquarePenIcon, Trash2Icon, CheckIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import { modalFocusTrap } from 'src/ts/gui/modalFocusTrap'
@@ -119,6 +123,28 @@
     }
     closeCategoryManager()
   }
+
+  let recoveryChatId = untrack(() => getCurrentChat()?.id ?? '')
+  $effect(() => {
+    if (categoryManagerState.isOpen) recoveryChatId = untrack(() => getCurrentChat()?.id ?? '')
+  })
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const category = categoryManagerState.editingCategory
+      if (!categoryManagerState.isOpen || !category) return null
+      const baseline = category.id
+        ? (hypaV3Data.categories?.find((candidate) => candidate.id === category.id)?.name ?? '')
+        : ''
+      if (category.name === baseline) return null
+      return $state.snapshot({
+        key: `memory-category:${recoveryChatId}:${category.id || 'new'}`,
+        label: language.hypaV3Modal.categoryManager,
+        fields: [{ label: language.hypaV3Modal.categoryName, value: category.name }],
+        data: { category },
+        baseline: { name: baseline },
+      })
+    }),
+  )
 </script>
 
 <!-- Category Manager Modal -->

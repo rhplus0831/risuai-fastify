@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { onDestroy, untrack } from 'svelte'
+  import { getCurrentChat } from 'src/ts/storage/database.svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { XIcon, SquarePenIcon, Trash2Icon, CheckIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import { modalFocusTrap } from 'src/ts/gui/modalFocusTrap'
@@ -112,6 +116,28 @@
     event.stopPropagation()
     closeTagManager()
   }
+
+  let recoveryChatId = untrack(() => getCurrentChat()?.id ?? '')
+  $effect(() => {
+    if (tagManagerState.isOpen) recoveryChatId = untrack(() => getCurrentChat()?.id ?? '')
+  })
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const index = currentSummaryIndex()
+      const summary = hypaV3Data.summaries[index]
+      const baseline =
+        tagManagerState.editingTagIndex >= 0 ? (summary?.tags?.[tagManagerState.editingTagIndex] ?? '') : ''
+      if (!tagManagerState.isOpen || !summary || tagManagerState.editingTag === baseline) return null
+      const summaryId = tagManagerState.currentSummaryId ?? JSON.stringify(summary.chatMemos)
+      return $state.snapshot({
+        key: `memory-tag:${recoveryChatId}:${summaryId}`,
+        label: language.hypaV3Modal.tagManagerTitle.replace('{0}', String(index + 1)),
+        fields: [{ label: language.hypaV3Modal.tagNameLabel, value: tagManagerState.editingTag }],
+        data: { summaryId, tagIndex: tagManagerState.editingTagIndex, tag: tagManagerState.editingTag },
+        baseline: { tag: baseline },
+      })
+    }),
+  )
 </script>
 
 <!-- Tag Manager Modal -->

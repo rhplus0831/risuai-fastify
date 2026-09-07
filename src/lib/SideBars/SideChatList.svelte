@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { onDestroy, tick, untrack } from 'svelte'
   import { get } from 'svelte/store'
   import { v4 } from 'uuid'
@@ -1484,6 +1486,25 @@
     sortableReconcileGeneration += 1
     destroyStb()
   })
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const chats = Object.fromEntries(
+        Object.entries(chatNameDrafts).filter(([id, value]) => value !== chatNameBaselines[id]),
+      )
+      const folders = Object.fromEntries(
+        Object.entries(folderNameDrafts).filter(([id, value]) => value !== folderNameBaselines[id]),
+      )
+      if (Object.keys(chats).length === 0 && Object.keys(folders).length === 0) return null
+      return $state.snapshot({
+        key: `chat-names:${nameDraftOwner ?? chara.chaId}`,
+        label: chara.name,
+        fields: [...Object.entries(chats), ...Object.entries(folders)].map(([id, value]) => ({ label: id, value })),
+        data: { characterId: nameDraftOwner ?? chara.chaId, chats, folders },
+        baseline: { chats: chatNameBaselines, folders: folderNameBaselines },
+      })
+    }),
+  )
 </script>
 
 <div

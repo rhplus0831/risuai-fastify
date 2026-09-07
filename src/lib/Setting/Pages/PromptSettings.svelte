@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import 'src/ts/stores.svelte'
   import { ArrowLeft, PlusIcon, RefreshCcwIcon, TrashIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
@@ -78,7 +80,10 @@
   } from 'src/ts/server/commands'
   import { dispatchDurableMutation } from 'src/ts/server/durableMutationDispatch'
   import { stagePendingMutation, type DurableMutationIntent } from 'src/ts/server/pendingMutationOutbox'
-  import { createPromptPresetModelOverrideDraft } from 'src/ts/promptPresetModelOverrides.svelte'
+  import {
+    createPromptPresetModelOverrideDraft,
+    currentPromptPresetModelOverrideValue,
+  } from 'src/ts/promptPresetModelOverrides.svelte'
   import { promptPresetModelOverrideFieldForDatabaseKey } from 'src/ts/presetSplit'
 
   let sorted = 0
@@ -798,12 +803,25 @@
     return ownerId
   }
 
-  function createPromptSettingsDraft<T>(key: string, fallback: T): { value: T } {
+  function createPromptSettingsDraft<T>(
+    key: string,
+    fallback: T,
+  ): { value: T; captureRecoveryDraft(): { value: T; baseline: T } | null } {
     const settingsDraft = createServerBackedSettingDraft(key, fallback)
     if (!promptPresetModelOverrideFieldForDatabaseKey(key)) return settingsDraft
 
     const promptOverrideDraft = createPromptPresetModelOverrideDraft(key, fallback)
     return {
+      captureRecoveryDraft() {
+        if (!promptPresetModelOverrideMode) return settingsDraft.captureRecoveryDraft()
+        const baseline = currentPromptPresetModelOverrideValue(key, fallback)
+        return snapshotJson(promptOverrideDraft.value) === snapshotJson(baseline)
+          ? null
+          : {
+              value: cloneJsonValue(promptOverrideDraft.value),
+              baseline: cloneJsonValue(baseline),
+            }
+      },
       get value() {
         return promptPresetModelOverrideMode ? promptOverrideDraft.value : settingsDraft.value
       },
@@ -1025,6 +1043,52 @@
     flushPendingSettingsOwnerMutations()
     promptTokenizeDebouncer.cancel()
   })
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const ownerId = currentPromptTemplateOwnerId()
+      const templateBaseline = cloneSelectedPromptPresetTemplate()
+      const templateChanged = snapshotJson(promptTemplateDraft.value) !== snapshotJson(templateBaseline)
+      const settings = Object.fromEntries(
+        Object.entries({
+          promptSettings: promptSettingsDraft,
+          jsonSchemaEnabled: jsonSchemaEnabledDraft,
+          outputImageModal: outputImageModalDraft,
+          strictJsonSchema: strictJsonSchemaDraft,
+          customPromptTemplateToggle: customPromptTemplateToggleDraft,
+          templateDefaultVariables: templateDefaultVariablesDraft,
+          OAIPrediction: OAIPredictionDraft,
+          autoSuggestPrompt: autoSuggestPromptDraft,
+          systemContentReplacement: systemContentReplacementDraft,
+          systemRoleReplacement: systemRoleReplacementDraft,
+          jsonSchema: jsonSchemaDraft,
+          extractJson: extractJsonDraft,
+          fallbackModels: fallbackModelsDraft,
+          fallbackWhenBlankResponse: fallbackWhenBlankResponseDraft,
+          doNotChangeFallbackModels: doNotChangeFallbackModelsDraft,
+        }).flatMap(([key, draft]) => {
+          const capture = draft.captureRecoveryDraft()
+          return capture ? [[key, capture]] : []
+        }),
+      )
+      if (!templateChanged && Object.keys(settings).length === 0) return null
+      const data = { ownerId, ...(templateChanged ? { promptTemplate: promptTemplateDraft.value } : {}), settings }
+      return $state.snapshot({
+        key: `prompt-settings:${ownerId ?? 'legacy'}`,
+        label: language.template,
+        fields: [
+          ...(templateChanged
+            ? [{ label: language.template, value: JSON.stringify(promptTemplateDraft.value, null, 2) }]
+            : []),
+          ...(Object.keys(settings).length
+            ? [{ label: language.settings, value: JSON.stringify(settings, null, 2) }]
+            : []),
+        ],
+        data,
+        baseline: { promptTemplate: templateBaseline },
+      })
+    }),
+  )
 </script>
 
 {#if mode === 'independent'}

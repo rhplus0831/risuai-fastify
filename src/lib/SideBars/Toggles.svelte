@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { MobileGUI, selectedCharID } from 'src/ts/stores.svelte'
   import { language } from 'src/lang'
   import { alertError, alertNormal } from 'src/ts/alert'
@@ -69,6 +72,7 @@
     Record<string, { operation: number; status: 'pending' | 'queued' | 'failed'; attempted: string | boolean }>
   >({})
   let toggleDrafts = $state<Record<string, string>>({})
+  const toggleRecoveryBaselines: Record<string, string> = {}
   let focusedToggleDraftKey = $state<string | null>(null)
 
   let activeGenerationSettings = $derived.by(() =>
@@ -178,7 +182,9 @@
   }
 
   function setToggleDraft(key: string, value: string): void {
-    toggleDrafts[getToggleDraftKey(key)] = value
+    const draftKey = getToggleDraftKey(key)
+    toggleRecoveryBaselines[draftKey] ??= getToggleValue(key)
+    toggleDrafts[draftKey] = value
   }
 
   function commitToggleDraft(key: string): void {
@@ -281,6 +287,29 @@
   function groupedToggleGroupKey(toggle: GroupedSidebarToggleGroup): string {
     return JSON.stringify(groupedToggleIdentity(toggle))
   }
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const drafts = Object.fromEntries(
+        Object.entries(toggleDrafts).filter(([draftKey, value]) => {
+          const [chatId, key] = draftKey.split('\u0000')
+          const baseline =
+            chatId === activeGenerationSettings.identity.chatId
+              ? getToggleValue(key)
+              : toggleRecoveryBaselines[draftKey]
+          return value !== baseline
+        }),
+      )
+      if (Object.keys(drafts).length === 0) return null
+      return $state.snapshot({
+        key: `sidebar-toggles:${chara?.chaId ?? activeGenerationSettings.identity.chatId ?? 'global'}`,
+        label: chara?.name || language.model,
+        fields: Object.entries(drafts).map(([key, value]) => ({ label: key.replace('\u0000', ' / '), value })),
+        data: { drafts },
+        baseline: { drafts: toggleRecoveryBaselines },
+      })
+    }),
+  )
 </script>
 
 {#snippet toggles(items: GroupedSidebarToggle[], reverse: boolean = false)}

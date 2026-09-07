@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS, BARDWIKI_PROTOCOL_VERSION } from '@risuai/protocol'
@@ -682,4 +688,41 @@ describe('BardWiki workspace', () => {
     expect(mutations.vaultImport).toHaveBeenCalledWith('chat-a', 'UEsDBA==', 'skip', [])
     expect(target.textContent).toContain('The BardWiki vault was imported')
   })
+})
+
+it('retains newer document typing while an older Save is pending', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    const saving = deferred<any>()
+    mutations.update.mockReturnValueOnce(saving.promise)
+    component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+    await settle()
+    target.querySelector<HTMLButtonElement>('[aria-label="Open Old Tavern"]')!.click()
+    await settle()
+    const input = target.querySelector<HTMLTextAreaElement>('textarea')!
+    input.value = '# Submitted version'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    target
+      .querySelector<HTMLFormElement>('form')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    await tick()
+    input.value = '# Newer unsaved version'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toMatchObject([
+      { key: 'bardwiki:chat-a:document-a', data: { document: { markdown: '# Newer unsaved version' } } },
+    ])
+    saving.resolve({ status: 'failed', result: { status: 'unavailable' } })
+    await settle()
+    expect(capturedWriterDrafts().find((draft) => draft.key === 'bardwiki:chat-a:document-a')?.data).toMatchObject({
+      document: { markdown: '# Newer unsaved version' },
+    })
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

@@ -1,4 +1,7 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { XIcon, StarIcon, ClockIcon, UserIcon, ListIcon, SaveIcon, TrashIcon } from '@lucide/svelte'
   import {
     charactersResourceState,
@@ -205,6 +208,19 @@
       deletingLoadout = null
     }
   }
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      if (!saveName) return null
+      return $state.snapshot({
+        key: `loadout:new:${readSelectedCharacterId() ?? 'global'}`,
+        label: saveName,
+        fields: [{ label: language.loadoutModal.preset, value: saveName }],
+        data: { saveName, loadOptions },
+        baseline: { saveName: '' },
+      })
+    }),
+  )
 </script>
 
 {#snippet loadoutCard(loadout: Loadout)}

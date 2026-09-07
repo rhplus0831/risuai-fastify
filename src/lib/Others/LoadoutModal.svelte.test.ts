@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -460,4 +466,26 @@ describe('LoadoutModal operations', () => {
 
     expect(target.querySelector('[data-risu-loadout-id]')).toBeNull()
   })
+})
+
+it('retains a typed loadout name before save or unmount', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(LoadoutModal, { target })
+    await tick()
+    const input = target.querySelector<HTMLInputElement>('input[type="text"]')!
+    input.value = 'Unsubmitted loadout'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts().find((draft) => draft.key === 'loadout:new:global')?.data).toMatchObject({
+      saveName: 'Unsubmitted loadout',
+    })
+    expect(loadoutMocks.saveCurrentLoadout).not.toHaveBeenCalled()
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

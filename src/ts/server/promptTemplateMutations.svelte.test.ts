@@ -1,3 +1,8 @@
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from '../__tests__/writerDraftCapture'
 import { demoteClientSession, resetClientSessionForTests } from '../clientSession'
 import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -3635,3 +3640,31 @@ it.each([false, true])(
     expect(textOf(draftItems[0])).toBe('Pending')
   },
 )
+
+it('captures a prompt block before its child update effect stages the edit', async () => {
+  await beginWriterDraftCaptureTest()
+  const target = document.createElement('div')
+  document.body.appendChild(target)
+  let component: MountedComponent | null = null
+  try {
+    const row = promptItemFixture({ ...item('recovery-row', 'Original prompt'), name: 'Recovery row' })
+    seedPromptSettings({ promptTemplate: [row] })
+    component = mount(PromptSettings, { target, props: { mode: 'inline', subMenu: 0 } })
+    await tick()
+    await flushMicrotasks()
+    await tick()
+    promptRowToggle(target, 'Recovery row').click()
+    await tick()
+    const input = target.querySelector<HTMLTextAreaElement>('[data-risu-prompt-item-id="recovery-row"] textarea')!
+    input.value = 'Unsubmitted prompt block'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts().find((draft) => draft.key === 'prompt-settings:legacy')?.data).toMatchObject({
+      promptTemplate: [{ id: 'recovery-row', text: 'Unsubmitted prompt block' }],
+    })
+  } finally {
+    if (component) await unmount(component)
+    target.remove()
+    await endWriterDraftCaptureTest()
+  }
+})

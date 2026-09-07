@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -534,4 +540,81 @@ describe('modular Agent Preset settings', () => {
 
     expect(target.querySelectorAll('[data-risu-agent-preset-step]')).toHaveLength(0)
   })
+})
+
+it('captures an Agent instruction before Save', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const input = target.querySelectorAll<HTMLTextAreaElement>('[data-risu-agent-editor] textarea')[1]
+    input.value = 'Unsubmitted Agent instruction'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts().find((draft) => draft.key === `agent:${agent.id}`)?.data).toMatchObject({
+      instruction: 'Unsubmitted Agent instruction',
+    })
+    expect(agentSpies.updateAgent).not.toHaveBeenCalled()
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('captures Agent Preset metadata and a nested use draft together', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const editor = target.querySelector('[data-risu-agent-preset-editor]')!
+    const name = editor.querySelector<HTMLInputElement>('input[type="text"]')!
+    name.value = 'Unsubmitted orchestration'
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-step]')!, language.agentPresets.edit)
+    await tick()
+    const output = editor.querySelector<HTMLInputElement>('[data-risu-agent-preset-use-form] input[type="text"]')
+    if (!output) throw new Error('Use output key input missing')
+    output.value = 'unfinished_output'
+    output.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts().find((draft) => draft.key === `agent-preset:${preset.id}`)?.data).toMatchObject({
+      metadata: { name: 'Unsubmitted orchestration' },
+      use: { useOutputKey: 'unfinished_output' },
+    })
+    expect(agentSpies.updateAgentPresetUse).not.toHaveBeenCalled()
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('does not capture an untouched Agent Preset with its default Agent selection', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([])
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

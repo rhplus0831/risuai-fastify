@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { get } from 'svelte/store'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -2211,4 +2217,31 @@ describe('sidebar chat generation settings controls', () => {
     expect(activeChat().generationSettings?.sidebarToggles?.note).toBe('updated-note')
     expect(testDatabaseState().globalChatVariables.toggle_note).toBe('global-note')
   })
+})
+
+it('captures textarea toggle input before its change event commits', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    const calls = stubCommandFetch()
+    testDatabaseState().promptPresets[0].customPromptTemplateToggle = 'details=Details=textarea'
+    activeChat().generationSettings!.sidebarToggles = { details: 'before', moduleFlag: '1' }
+    mountToggles()
+    await tick()
+    const input = textareaToggleInput('details') as HTMLTextAreaElement
+    input.value = 'Unsubmitted toggle detail'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(
+      capturedWriterDrafts()
+        .find((draft) => draft.key.startsWith('sidebar-toggles:'))
+        ?.fields.some((field) => field.value === 'Unsubmitted toggle detail'),
+    ).toBe(true)
+    expect(generationSettingsSaves(calls)).toHaveLength(0)
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

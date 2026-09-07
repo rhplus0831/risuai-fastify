@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { onDestroy } from 'svelte'
   import {
     BookOpenIcon,
@@ -118,6 +120,7 @@
   let confirmationPolicyOverrideDraft = $state<'inherit' | 'manual' | 'automatic'>('inherit')
   let canonicalUpdatesOverrideDraft = $state<'inherit' | 'enabled' | 'disabled'>('inherit')
   let totalTokenBudgetOverrideDraft = $state('')
+  let settingsRecoveryBaseline = ''
   let chatRequest = 0
   let documentRequest = 0
   let versionsRequest = 0
@@ -196,6 +199,7 @@
       settings?.totalTokenBudgetOverride === null || settings?.totalTokenBudgetOverride === undefined
         ? ''
         : String(settings.totalTokenBudgetOverride)
+    settingsRecoveryBaseline = JSON.stringify(settingsRecoveryDraft())
   }
 
   function readFailure(result: { status: string; error?: string }): { state: LoadState; error: string } {
@@ -712,6 +716,51 @@
   )
 
   onDestroy(unsubscribeBardWikiJobs)
+
+  function settingsRecoveryDraft() {
+    return {
+      enabledOverrideDraft,
+      memoryModeOverrideDraft,
+      confirmationPolicyOverrideDraft,
+      canonicalUpdatesOverrideDraft,
+      totalTokenBudgetOverrideDraft,
+    }
+  }
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const settings = settingsRecoveryDraft()
+      const settingsChanged = settingsRecoveryBaseline !== '' && JSON.stringify(settings) !== settingsRecoveryBaseline
+      const documentChanged = editorMode !== 'idle' && JSON.stringify(documentDraft) !== documentBaseline
+      if (!documentChanged && !settingsChanged && !importArchiveBase64) return null
+      const data = {
+        chatId,
+        documentId: selectedDocumentId,
+        editorMode,
+        ...(documentChanged ? { document: documentDraft } : {}),
+        ...(settingsChanged ? { settings } : {}),
+        ...(importArchiveBase64 ? { importArchiveBase64, importFilename, importStrategy, importExpectedTargets } : {}),
+      }
+      return $state.snapshot({
+        key: `bardwiki:${chatId}:${selectedDocumentId ?? 'new'}`,
+        label: documentDraft.title || language.bardWiki.markdownSource,
+        fields: [
+          ...(documentChanged
+            ? [
+                { label: documentDraft.title || language.bardWiki.markdownSource, value: documentDraft.markdown },
+                { label: language.settings, value: JSON.stringify(documentDraft, null, 2) },
+              ]
+            : []),
+          ...(settingsChanged ? [{ label: language.settings, value: JSON.stringify(settings, null, 2) }] : []),
+          ...(importArchiveBase64 ? [{ label: importFilename, value: importArchiveBase64 }] : []),
+        ],
+        data,
+        baseline: {
+          document: documentBaseline ? JSON.parse(documentBaseline) : null,
+          settings: settingsRecoveryBaseline ? JSON.parse(settingsRecoveryBaseline) : null,
+        },
+      })
+    }),
+  )
 </script>
 
 <!-- svelte-ignore a11y_click_events_have_key_events -->

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
+
   import { onDestroy, tick, untrack } from 'svelte'
   import { ChevronUpIcon, ChevronDownIcon } from '@lucide/svelte'
   import {
@@ -97,6 +99,7 @@
   const pendingServerSummarySaves = new Set<PendingServerSummarySave>()
   const pendingServerSummaryTextSaves = new Map<string, Promise<boolean>>()
   const dirtyServerSummaryIds = new Set<string>()
+  const recoverySummaryBaselines = new Map<string, ServerSummaryView>()
   const dirtyServerSummaryTextVersions = new Map<string, number>()
   const deletedServerSummaryIds = new Map<string, number>()
   const serverSummaryEditVersions = new Map<string, number>()
@@ -226,6 +229,7 @@
 
     serverMemoryLoading = false
     if (result.status === 'ok') {
+      for (const summary of result.summaries) recoverySummaryBaselines.set(summary.id, serverSummaryView(summary))
       const localSummaries = new Map(
         serverHypaV3Data.summaries.map((summary) => {
           const view = summary as ServerSummaryView
@@ -1327,6 +1331,28 @@
     onMainAction?: () => void
     onAlternativeAction?: () => void
   }
+
+  onDestroy(
+    registerWriterDraftCapture(() => {
+      const summaries = (serverHypaV3Data.summaries as ServerSummaryView[]).filter(
+        (summary) =>
+          dirtyServerSummaryIds.has(summary.serverId) || dirtyServerSummaryTextVersions.has(summary.serverId),
+      )
+      const bulkResult = bulkResummaryState?.result && !bulkResummaryState.isProcessing ? bulkResummaryState : null
+      const recoveryChatId = serverSummaryLoadedChatId ?? bulkResummaryOwner?.chatId ?? currentChatId
+      if (!recoveryChatId || (summaries.length === 0 && !bulkResult)) return null
+      return $state.snapshot({
+        key: `memory-summaries:${recoveryChatId}`,
+        label: language.formating.memory,
+        fields: [
+          ...summaries.map((summary) => ({ label: summary.serverId, value: JSON.stringify(summary, null, 2) })),
+          ...(bulkResult?.result ? [{ label: language.hypaV3Modal.reSummarizeResult, value: bulkResult.result }] : []),
+        ],
+        data: { chatId: recoveryChatId, summaries, bulkResult },
+        baseline: summaries.map((summary) => recoverySummaryBaselines.get(summary.serverId) ?? null),
+      })
+    }),
+  )
 </script>
 
 <!-- Modal Backdrop -->

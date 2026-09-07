@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -2657,5 +2663,33 @@ describe('SideChatList DOM contract harness', () => {
     expect(selectedCharacter().chatPage).toBe(0)
     expect(chatRows().map((row) => row.dataset.risuChatId)).toEqual(['chat-only'])
     expectRowSelected('chat-only', true)
+  })
+
+  it('captures chat and folder name drafts before blur', async () => {
+    await beginWriterDraftCaptureTest()
+    try {
+      const chara = seedSidebarDatabase()
+      component = mount(SideChatListHarness, { target })
+      await tick()
+      editButtonForRow(rowByChatId('chat-foldered')).click()
+      await tick()
+      const chat = inputIn(rowByChatId('chat-root-a'), 'chat name')
+      const folder = inputIn(folderElementById('folder-a'), 'folder name')
+      chat.value = 'Unsubmitted chat name'
+      chat.dispatchEvent(new Event('input', { bubbles: true }))
+      folder.value = 'Unsubmitted folder name'
+      folder.dispatchEvent(new Event('input', { bubbles: true }))
+      demoteClientSession()
+      expect(capturedWriterDrafts().find((draft) => draft.key === `chat-names:${chara.chaId}`)?.data).toMatchObject({
+        chats: { 'chat-root-a': 'Unsubmitted chat name' },
+        folders: { 'folder-a': 'Unsubmitted folder name' },
+      })
+    } finally {
+      if (component) {
+        await unmount(component)
+        component = undefined
+      }
+      await endWriterDraftCaptureTest()
+    }
   })
 })

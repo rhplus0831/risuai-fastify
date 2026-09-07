@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { SvelteMap } from 'svelte/reactivity'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -427,4 +433,102 @@ describe('inline credential creation', () => {
     expect(state.onCancel).not.toHaveBeenCalled()
     expect(getPendingModelMutations('provider-credentials')).toEqual([])
   })
+})
+
+it('captures raw profile edits before blur, including a collapsed connection section', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    const profile = { id: 'profile-draft', name: 'Original', providerId: 'debug-echo', modelId: 'debug-echo' }
+    const onSave = vi.fn()
+    component = mount(ModelProfileEditorDrawer, {
+      target,
+      props: {
+        mode: 'edit',
+        profile,
+        profiles: [profile],
+        credentials: [],
+        statusText: 'Ready',
+        onSave,
+        onCancel: vi.fn(),
+      },
+    })
+    await tick()
+    const input = target.querySelector<HTMLInputElement>('input[type="text"]')!
+    input.value = 'Unsubmitted profile name'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    const draft = capturedWriterDrafts().find((draft) => draft.key === 'model-profile:profile-draft')!
+    expect(draft.data).toMatchObject({ draftName: 'Unsubmitted profile name', runtimeOptions: {}, fallbacks: [] })
+    expect(draft.baseline).toMatchObject({ draftName: 'Original' })
+    expect(onSave).not.toHaveBeenCalled()
+    await unmount(component)
+    component = undefined
+    expect(capturedWriterDrafts().find((draft) => draft.key === 'model-profile:profile-draft')?.data).toMatchObject({
+      draftName: 'Unsubmitted profile name',
+    })
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('captures a new credential secret before Save without exposing it as an ordinary field', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    const { default: ProviderCredentialEditor } = await import('./ProviderCredentialEditor.svelte')
+    component = mount(ProviderCredentialEditor, {
+      target,
+      props: { type: 'apiKey', credentials: [], onComplete: vi.fn(), onCancel: vi.fn() },
+    })
+    await tick()
+    const keyInput = target.querySelector<HTMLInputElement>('input[type="password"]')!
+    keyInput.value = 'draft-secret-that-was-never-saved'
+    keyInput.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    const draft = capturedWriterDrafts().find((draft) => draft.key === 'provider-credential:new:apiKey')!
+    expect(draft.fields).toContainEqual({
+      label: language.modelProfiles.apiKeyLabel,
+      value: 'draft-secret-that-was-never-saved',
+      secret: true,
+    })
+    expect(draft.data).toMatchObject({
+      apiKeyDraft: { value: 'draft-secret-that-was-never-saved', disposition: 'replace' },
+    })
+    expect(credentialMocks.create).not.toHaveBeenCalled()
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
+})
+
+it('does not capture a clean or explicitly cancelled credential editor', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    const { default: ProviderCredentialEditor } = await import('./ProviderCredentialEditor.svelte')
+    const cancel = vi.fn()
+    component = mount(ProviderCredentialEditor, {
+      target,
+      props: { type: 'apiKey', credentials: [], onComplete: vi.fn(), onCancel: cancel },
+    })
+    await tick()
+    target.querySelector<HTMLButtonElement>(`button[aria-label="${language.modelProfiles.cancel}"]`)!.click()
+    await tick()
+    expect(cancel).toHaveBeenCalledOnce()
+    await unmount(component)
+    component = undefined
+    demoteClientSession()
+    expect(capturedWriterDrafts()).toEqual([])
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })

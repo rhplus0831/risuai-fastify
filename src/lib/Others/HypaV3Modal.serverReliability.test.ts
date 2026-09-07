@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { flushSync, mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -632,5 +638,27 @@ describe('Hypa V3 server summary close reliability', () => {
     expect(Array.from(hydratedSelect?.options ?? []).find((option) => option.value === 'story')?.text).toBe('Story')
     expect(serverMocks.listServerMemorySummaries).toHaveBeenCalledTimes(1)
     expect(serverMocks.patchServerMemorySummary).not.toHaveBeenCalled()
+  })
+
+  it('retains summary text before blur and before modal teardown', async () => {
+    await beginWriterDraftCaptureTest()
+    try {
+      component = mount(HypaV3Modal, { target }) as MountedComponent
+      await settle()
+      editSummary(target, 'Unsubmitted memory summary')
+      demoteClientSession()
+      const draft = capturedWriterDrafts().find((draft) => draft.key === 'memory-summaries:chat-a')!
+      expect(draft.data).toMatchObject({ summaries: [{ serverId: 'summary-a', text: 'Unsubmitted memory summary' }] })
+      expect(serverMocks.patchServerMemorySummary).not.toHaveBeenCalled()
+      await unmount(component)
+      component = undefined
+      expect(capturedWriterDrafts().find((draft) => draft.key === 'memory-summaries:chat-a')).toBeDefined()
+    } finally {
+      if (component) {
+        await unmount(component)
+        component = undefined
+      }
+      await endWriterDraftCaptureTest()
+    }
   })
 })

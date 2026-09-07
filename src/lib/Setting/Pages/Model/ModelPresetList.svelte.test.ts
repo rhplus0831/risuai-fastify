@@ -1,3 +1,9 @@
+import { demoteClientSession } from 'src/ts/clientSession'
+import {
+  beginWriterDraftCaptureTest,
+  endWriterDraftCaptureTest,
+  capturedWriterDrafts,
+} from 'src/ts/__tests__/writerDraftCapture'
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -375,4 +381,25 @@ describe('ModelPresetList', () => {
     expect(document.activeElement?.getAttribute('aria-label')).toBe(language.modelProfiles.itemActions('Model A'))
     expect(mutationSpies.updateModelPreset).not.toHaveBeenCalled()
   })
+})
+
+it('retains a model preset rename before the input blurs', async () => {
+  await beginWriterDraftCaptureTest()
+  try {
+    component = mount(ModelPresetList, { target })
+    await tick()
+    const input = await openRename()
+    input.value = 'Unsubmitted preset name'
+    input.dispatchEvent(new Event('input', { bubbles: true }))
+    demoteClientSession()
+    expect(capturedWriterDrafts().find((draft) => draft.key.startsWith('model-preset-form:'))?.data).toMatchObject({
+      renameDraft: 'Unsubmitted preset name',
+    })
+  } finally {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    await endWriterDraftCaptureTest()
+  }
 })
