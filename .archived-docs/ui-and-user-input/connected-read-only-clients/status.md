@@ -4,9 +4,8 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: all reader Phases 0–5 accepted at the recorded source; focused smoke
-  closeout revalidation of the writer-startup repair is complete. Combined final
-  gates remain pending.
+- State: all reader Phases 0–5 accepted; the subsequent writer-startup repair,
+  affected normal/fallback controls and combined final gates are also accepted.
 - Planning source: `696aecef2dd22dc50ebeca47144cad2b8f5c68b0`.
 - Accepted implementation: production through `a703b9d4b`, browser repairs through
   `60ac61bde`, with final agent/full gates at clean `eb9673942`.
@@ -15,14 +14,16 @@ Updated: 2026-09-08
   preserving originating-client drafts and pending intent.
 - Phase 5 evidence: all 92 browser cases and all 13 full-suite lanes pass; normal/
   FALSE builds, named production faults and restored controls are recorded below.
+- Final maintenance validation: production/browser through `7aad1bb37`, focused
+  controls at `985da9bc8`, and both final gates at clean `39356086c` pass.
 - Archive: this intact bundle is preserved under UI/user input. Continue the
-  [smoke workstream](../../../docs/plan/browser-smoke-effectiveness/status.md) at its final Phase 4 gates.
+  [smoke workstream](../../../docs/plan/browser-smoke-effectiveness/status.md) through its final archival action.
 - Follow-up: [BSE-009](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-4-first-full-gate-failure-and-targeted-follow-up)
   changes writer startup when the retained route supersedes pending hydration.
   Focused red/green, two qualified browser negatives, both 18-case normal
   cohorts and two actual compiled-FALSE controls pass at `985da9bc8` as recorded
   in the [follow-up evidence](../../../docs/plan/browser-smoke-effectiveness/status.md#bse-009-writer-startup-and-reader-revalidation).
-  Final-source full verification remains pending before combined completion. Original product
+  Final-source agent/full verification passes at `39356086c`. Original product
   follow-up scope and browser/provider/device limits remain explicit below.
 
 Read [PLAN.md](PLAN.md) for stable behavior and invariants,
@@ -1284,3 +1285,17 @@ This changes test setup only; Reader product acceptance and rollout/fallback
 contracts retain their original source and scope. The receiving
 [smoke status](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-3-acceptance-2026-09-08)
 records the failed run, verified repair and separate Phase 4 closeout requirements.
+
+## Combined Closeout Maintenance Acceptance — 2026-09-08
+
+The smoke closeout's BSE-009 writer-startup repair is fully revalidated at
+`39356086c`: final `pnpm test:agent` passes all seven lanes in 2m 27.7s and
+`pnpm test:all` passes all thirteen lanes in 6m 11.4s, including 92/92 browser
+cases. Its two qualified native-ordering negatives, both eighteen-case normal
+cohorts and two actual compiled-FALSE controls pass at the identical application/
+test implementation. The normal default, explicit switching, generation,
+lineage/recovery and originating draft/pending-intent protections remain intact.
+See the [complete smoke acceptance](../../../docs/plan/browser-smoke-effectiveness/status.md#phase-4-acceptance-2026-09-08)
+for final source, counts, existing skips, no matching CI run and execution limits.
+Earlier Reader phase evidence retains its original source; this maintenance
+record supplies the affected final-source supplement. No Reader work remains.

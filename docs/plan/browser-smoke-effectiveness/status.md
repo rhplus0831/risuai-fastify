@@ -4,37 +4,34 @@ Updated: 2026-09-08
 
 ## Execution Cursor
 
-- State: Smoke Phases 0–3 and all reader Phases 0–5 accepted; Phase 4 final
-  verification and closeout are active.
-- Accepted implementation: production through `a703b9d4b`, browser through
-  `ee04eacba`; final Phase 3 full gate passes at clean `d5b5e5ed7`.
-- Final candidate: writer-startup repair `f87624888`, passive diagnostics and
-  native S81 control `7aad1bb37`, reviewed fixture inventory `985da9bc8`.
+- State: all Smoke Phases 0–4 and Reader Phases 0–5 accepted. Implementation
+  and final verification are complete; archival is the remaining closeout action.
+- Accepted implementation: writer-startup repair `f87624888`, passive diagnostics
+  and native S81 control `7aad1bb37`, reviewed fixture inventory `985da9bc8`.
+  Final agent and all thirteen full-suite lanes pass at clean `39356086c`.
   Focused normal/fault/restored/compiled-FALSE evidence applies at `985da9bc8`.
 - Review universe: all 92 cases/22 specs, twelve support files and four PNGs have
   complete scenario/control dispositions; no pending or partial review owner.
 - Confirmed gaps: BSE-001–009 have verified named controls. Earlier failed runs
   and unqualified candidate faults retain their explicit source limits.
-- Next action: run final `test:agent` and `test:all` at the reconciled clean
-  candidate, then record acceptance and archive.
-- Verification pending: final aggregate/full-suite gates. BSE-008/009's focused
-  browser/fault/restored controls are complete. Earlier
-  [reader acceptance](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
-  retains its source limits; the affected Reader cohort and actual compiled
-  fallback are revalidated below, with combined full verification still pending.
+- Next action: archive this intact bundle and the coordination record under
+  performance/stability, repair links and indexes, and validate moved documents.
+- Blockers and required verification gaps: none. The
+  [Reader workstream](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md)
+  and its affected startup/default/fallback maintenance are fully verified below.
 
 Read [PLAN.md](PLAN.md) for scope and acceptance rules, [inventory](inventory.md)
 for review coverage, and [findings](findings.md) for evidence and dispositions.
 
 ## Phase Router
 
-| Phase                                                                       | State       | Next evidence required                                                                          |
-| --------------------------------------------------------------------------- | ----------- | ----------------------------------------------------------------------------------------------- |
-| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted    | Evidence below; proceed to Phase 1                                                              |
-| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted    | Shared controls, repair faults, agent and full-suite evidence below                             |
-| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted    | Four contract faults, restored browsers and phase gates below                                   |
-| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Accepted    | All scenario/control dispositions, qualified BSE-007 repair and all 13 full-suite lanes passed. |
-| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | In progress | Final discovery/findings, required agent and full gates, CI availability and archive.           |
+| Phase                                                                       | State    | Next evidence required                                                                                                      |
+| --------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------- |
+| [0. Inventory and pilot](phases/phase-0-inventory-and-pilot.md)             | Accepted | Evidence below; proceed to Phase 1                                                                                          |
+| [1. Shared harnesses](phases/phase-1-shared-harnesses.md)                   | Accepted | Shared controls, repair faults, agent and full-suite evidence below                                                         |
+| [2. Critical journeys](phases/phase-2-critical-journeys.md)                 | Accepted | Four contract faults, restored browsers and phase gates below                                                               |
+| [3. Remaining scenarios](phases/phase-3-remaining-scenarios.md)             | Accepted | All scenario/control dispositions, qualified BSE-007 repair and all 13 full-suite lanes passed.                             |
+| [4. Verification and closeout](phases/phase-4-verification-and-closeout.md) | Accepted | Final discovery/findings, both final gates, affected Reader proof and CI availability recorded; archive follows acceptance. |
 
 ## Verification Ledger
 
@@ -737,3 +734,58 @@ all scenario titles remain unchanged. Current guides now state the stable-target
 startup contract and the separate warm-cache prerequisite. The next required
 work is final clean-source `pnpm test:agent`, then `pnpm test:all`; no focused
 repair or supplemental Reader browser work remains pending.
+
+## Phase 4 Acceptance — 2026-09-08
+
+**Phase 4 is accepted at clean `39356086c683331330d862420cfdf79e209cefce`.**
+All implementation, scenario/control review, source reconciliation, qualified
+fault/restored proof and affected Reader validation are complete. The final
+candidate contains production/browser changes through `7aad1bb37` and the two
+reviewed test-fixture inventory counts in `985da9bc8`; both final commands run
+without intervening edits or process-level observer/fallback/worker/artifact
+overrides.
+
+- `pnpm test:agent`: all seven lanes pass in **2m 27.7s**, including 9,087
+  frontend tests, 4,228 server tests, types, topology, current docs, Svelte and
+  the fresh browser build.
+- Required implementing-agent `pnpm test:all`: all thirteen lanes pass in
+  **6m 11.4s**, including **92/92 browser cases** with the default four workers.
+  The browser build/execution lane takes 3m 27.3s (3.2m Playwright execution),
+  including the required current-run integration-artifact merge. S81 passes in
+  7.1s, S51 in 3.2s and S22 in 46.9s; all original and strengthened oracles pass.
+- The full run also passes 8,846 ordinary frontend tests, 241 UI-coverage tests,
+  4,228 server tests, 18 current compatibility cases, the selected Realm scale
+  case and all six performance cases. Formatting, protocol/shared/server/browser
+  types, architecture inventory, topology and documentation pass. Svelte reports
+  zero errors/warnings. Three existing frontend and two existing server skips
+  remain; the scale selector excludes its other 29 cases by design.
+- Both the 18-case restored normal cohort and two actual compiled-FALSE controls
+  remain applicable to the unchanged application/test implementation. They
+  revalidate affected Reader startup, generation, ownership, pending intent and
+  draft protection; BSE-008/009 have no remaining required work. Earlier failed
+  aggregates and unqualified candidate faults retain their explicit source and
+  failure records.
+- The exact-source Quality workflow query completes successfully with no
+  matching CI run. No supplemental CI URL is available, and no required check
+  is transferred to the user. Logs are
+  `/tmp/smoke-phase4-corrected-final-test-agent.log` and
+  `/tmp/smoke-phase4-corrected-final-test-all.log`; source/environment are recorded
+  in `/tmp/smoke-phase4-corrected-final-gate-source.json`.
+
+The accepted universe is 92 cases/22 specs, twelve support files, four PNGs and
+all twenty-four hook owners. Every scenario/control is retained, strengthened
+or accurately reclassified; BSE-001–009 are disposed and no high-risk critical
+gap or required repair is deferred. Current guidance describes the actual
+behavior and limits. The execution envelope remains built Chromium, disposable
+Fastify/SQLite, explicit desktop/mobile/touch/network/lifecycle emulation and
+local deterministic provider/Realm responses. Additional transcript cost/profile
+matrices, physical devices/other engines, live services and the separate pinned
+compatibility differential remain outside this default execution.
+
+Current documentation validation passes all 49 documents; explicit validation
+of both active/archived bundles, coordination and indexes passes all 24 documents
+with empty index specifications and literal-path exemptions. Final acceptance
+records are revalidated with Markdown's Prettier ignore override and whitespace
+checks. Archive the intact smoke bundle and coordination record next, repair
+links/indexes and revalidate the moved documents. That routine documentary
+closeout does not extend the final behavioral evidence to another code change.

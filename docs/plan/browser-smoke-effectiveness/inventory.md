@@ -804,3 +804,10 @@ writer fault, and two current actual compiled-FALSE fallback controls preserve
 native pending intent and the newer draft. No scenario, subjourney or critical
 contract is removed. Only final aggregate/full-gate acceptance and archival
 remain in [status](status.md).
+
+The final source `39356086c` now passes all seven agent lanes and all thirteen
+required full-suite lanes, including 92/92 browser cases with four workers.
+The [Phase 4 acceptance](status.md#phase-4-acceptance-2026-09-08) supersedes the
+remaining final-gate entries above. All scenario/control review and verification
+are complete; no required coverage gap remains. Preserve this inventory and its
+source-limited historical records intact when archiving.
