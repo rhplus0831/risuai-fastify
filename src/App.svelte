@@ -70,6 +70,8 @@
     captureClientSessionGeneration,
     isClientSessionGenerationCurrent,
   } from './ts/clientSession'
+  import { canUseClientWriteAccess } from './ts/clientSession'
+  import { isClientWriteOperationCurrent } from './ts/clientWriteOperation'
   import { loadGrid, loadSettings } from './ts/routeComponentPreload'
   import { pushNotificationCoordinatorState } from './ts/server/pushNotificationState'
   import { pushNotificationWarningDismissed } from './ts/gui/pushNotificationWarningPreference'
@@ -157,14 +159,18 @@
   }
 
   async function retryPlugins(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
+    const clientGeneration = captureClientSessionGeneration()
     if (retryingPluginRuntime) return
     retryingPluginRuntime = true
     try {
       if (pluginStartupFailed) {
         const { retryPluginStartup } = await import('./ts/bootstrap')
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         await retryPluginStartup()
       } else {
         const { retryPluginRuntime } = await import('./ts/plugins/plugins.svelte')
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         await retryPluginRuntime()
       }
     } finally {
@@ -173,10 +179,13 @@
   }
 
   async function retryGenerationRecovery(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
+    const clientGeneration = captureClientSessionGeneration()
     if (generationRecoveryAction !== 'idle') return
     generationRecoveryAction = 'retrying'
     try {
       const { retryGenerationRecoveryStartup } = await import('./ts/bootstrap')
+      if (!isClientWriteOperationCurrent(clientGeneration)) return
       await retryGenerationRecoveryStartup()
     } finally {
       generationRecoveryAction = 'idle'
@@ -184,10 +193,13 @@
   }
 
   async function discardGenerationRecovery(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
+    const clientGeneration = captureClientSessionGeneration()
     if (generationRecoveryAction !== 'idle') return
     generationRecoveryAction = 'discarding'
     try {
       const { discardGenerationRecoveryStartup } = await import('./ts/bootstrap')
+      if (!isClientWriteOperationCurrent(clientGeneration)) return
       await discardGenerationRecoveryStartup()
     } finally {
       generationRecoveryAction = 'idle'
@@ -326,6 +338,7 @@
       e.preventDefault()
       return
     }
+    const clientGeneration = captureClientSessionGeneration()
     const file = e.dataTransfer.files[0]
     if (!file) {
       e.preventDefault()
@@ -337,10 +350,13 @@
 
       if (name.endsWith('.risup')) {
         const data = new Uint8Array(await file.arrayBuffer())
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         const { importPreset } = await import('./ts/storage/database.svelte')
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         await importPreset({ name: file.name, data })
       } else if (name.endsWith('.risum')) {
         const { importModuleFile } = await import('./ts/process/modules')
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         await importModuleFile(file, file.name)
         return
       } else {
@@ -348,11 +364,13 @@
           import('./ts/characterCards'),
           import('./ts/globalApi.svelte'),
         ])
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         await importCharacterFile(file, file.name)
+        if (!isClientWriteOperationCurrent(clientGeneration)) return
         checkCharOrder()
       }
     } catch (error) {
-      alertError(error as Error)
+      if (isClientWriteOperationCurrent(clientGeneration)) alertError(error as Error)
     }
   }}
   onclick={() => {
@@ -376,7 +394,7 @@
   }}>
   <div
     class="pointer-events-none fixed top-3 left-1/2 z-50 flex w-max max-w-[calc(100vw-2rem)] -translate-x-1/2 flex-col gap-3">
-    {#if $startupCoordinatorStore.capabilities.canRenderShell && (pluginStartupFailed || pluginRuntimeFailed)}
+    {#if !connectedReaderView && $startupCoordinatorStore.capabilities.canRenderShell && (pluginStartupFailed || pluginRuntimeFailed)}
       <div
         class="pointer-events-auto flex items-center gap-3 rounded-md border border-yellow-600 bg-bg px-4 py-3 text-sm shadow-lg"
         role="status"
@@ -394,7 +412,7 @@
           {retryingPluginRuntime ? language.pluginRuntime.retrying : language.pluginRuntime.retry}
         </button>
       </div>
-    {:else if $startupCoordinatorStore.capabilities.canRenderShell && generationRecoveryStartupFailed}
+    {:else if !connectedReaderView && $startupCoordinatorStore.capabilities.canRenderShell && generationRecoveryStartupFailed}
       <div
         class="pointer-events-auto flex flex-wrap items-center gap-3 rounded-md border border-yellow-600 bg-bg px-4 py-3 text-sm shadow-lg"
         role="status"
@@ -431,7 +449,7 @@
         </div>
       </div>
     {/if}
-    {#if $startupCoordinatorStore.capabilities.canRenderShell && !$pushNotificationWarningDismissed && $pushNotificationCoordinatorState.desiredEnabled && ($pushNotificationCoordinatorState.setupFailure || $pushNotificationCoordinatorState.operationError)}
+    {#if !connectedReaderView && $startupCoordinatorStore.capabilities.canRenderShell && !$pushNotificationWarningDismissed && $pushNotificationCoordinatorState.desiredEnabled && ($pushNotificationCoordinatorState.setupFailure || $pushNotificationCoordinatorState.operationError)}
       <div class="pointer-events-auto">
         <LazyComponent loader={loadPushNotificationWarning} componentProps={{ banner: true }} />
       </div>

@@ -1,10 +1,12 @@
 import { mount, tick, unmount } from 'svelte'
 import {
   beginClientSession,
+  demoteClientSession,
   settleClientReader,
   setClientProjectionReady,
   setClientConnectionState,
 } from './ts/clientSession'
+import { enterClientWriter, repromoteClientWriter } from './ts/__tests__/clientSession'
 import { get, writable } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initialPushNotificationCoordinatorState, pushNotificationStateWriter } from './ts/server/pushNotificationState'
@@ -1116,6 +1118,26 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(opener.inert).toBe(false)
     expect(document.activeElement).toBe(opener)
     opener.remove()
+  })
+
+  it('does not start a dropped preset import when its file read crosses writer loss and promotion', async () => {
+    enterClientWriter()
+    await tick()
+    const bytes = deferred<ArrayBuffer>()
+    const file = { name: 'held.risup', arrayBuffer: vi.fn(() => bytes.promise) }
+    const event = new Event('drop', { bubbles: true, cancelable: true })
+    Object.defineProperty(event, 'dataTransfer', { value: { files: [file], types: ['Files'] } })
+    target.querySelector('main')!.dispatchEvent(event)
+    expect(file.arrayBuffer).toHaveBeenCalledOnce()
+    demoteClientSession()
+    repromoteClientWriter()
+    bytes.resolve(new Uint8Array([1, 2, 3]).buffer)
+    await tick()
+    await tick()
+    expect(appRouteDomMocks.importPreset).not.toHaveBeenCalled()
+    expect(appRouteDomMocks.importCharacterFile).not.toHaveBeenCalled()
+    expect(appRouteDomMocks.checkCharOrder).not.toHaveBeenCalled()
+    expect(appRouteDomMocks.alertError).not.toHaveBeenCalled()
   })
 
   it('does not report a failed dropped preset import as successful', async () => {
