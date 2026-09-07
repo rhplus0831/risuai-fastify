@@ -150,6 +150,14 @@ async function runFixturePair(
     const cold = await measureNavigation(page, fixture, 'cold', metrics, requests, () =>
       page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' }),
     )
+    // Startup does not wait for the optional IndexedDB write lane. Establish
+    // the warm-cache precondition after capturing cold metrics, without forcing
+    // cache work or changing the measured readiness boundary.
+    await expect
+      .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getPendingResourceCacheWriteCount()), {
+        message: `${fixture} cold cache writes must settle before the warm reload`,
+      })
+      .toBe(0)
     const warm = await measureNavigation(page, fixture, 'warm', metrics, requests, () =>
       page.reload({ waitUntil: 'domcontentloaded' }),
     )
