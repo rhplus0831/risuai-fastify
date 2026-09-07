@@ -1835,6 +1835,48 @@ describe('resource-scoped database state', () => {
     expect(settingsResourceState.revision).toBe(4)
   })
 
+  it('acknowledges a failed optimistic locale selection without retrying its import', async () => {
+    applySettingsResource({ revision: 1, settings: { language: 'en' } })
+    settingsResourceState.value.language = 'ko'
+    const loading = vi.spyOn(languageRuntime, 'changeLanguage').mockRejectedValue(new Error('locale unavailable'))
+    try {
+      await expect(languageRuntime.changeLanguage('ko')).rejects.toThrow('locale unavailable')
+      expect(
+        applySettingsPatchLocalEffect({
+          revision: 2,
+          group: 'language',
+          attemptedPatch: { language: 'ko' },
+          settings: { language: 'ko' },
+        }),
+      ).toBe(true)
+      expect(loading).toHaveBeenCalledExactlyOnceWith('ko')
+      expect(settingsResourceState.value.language).toBe('ko')
+      expect(settingsResourceState.groupRevisions.language).toBe(2)
+    } finally {
+      loading.mockRestore()
+    }
+  })
+
+  it('applies a locale changed by canonical settings acknowledgement', () => {
+    applySettingsResource({ revision: 1, settings: { language: 'en' } })
+    settingsResourceState.value.language = 'ko'
+    const loading = vi.spyOn(languageRuntime, 'changeLanguage').mockResolvedValue(true)
+    try {
+      expect(
+        applySettingsPatchLocalEffect({
+          revision: 2,
+          group: 'language',
+          attemptedPatch: { language: 'ko' },
+          settings: { language: 'en' },
+        }),
+      ).toBe(true)
+      expect(loading).toHaveBeenCalledExactlyOnceWith('en')
+      expect(settingsResourceState.value.language).toBe('en')
+    } finally {
+      loading.mockRestore()
+    }
+  })
+
   it('keeps prompt acknowledgement taint and projection epoch through local effects until an authoritative read', () => {
     applySettingsResource({
       revision: 1,

@@ -1521,6 +1521,7 @@ export function applySettingsPatchLocalEffect(payload: ServerSettingsPatchLocalE
   }
 
   const settingsTarget = settingsResourceState.value as Record<string, unknown>
+  const previousLanguage = settingsTarget.language
   for (const key of attemptedKeys) {
     if (key === 'hypaV3Presets') {
       if (isJsonValueEqual(collectionsResourceState.values.hypaV3Presets, payload.attemptedPatch[key])) {
@@ -1532,7 +1533,11 @@ export function applySettingsPatchLocalEffect(payload: ServerSettingsPatchLocalE
       settingsTarget[key] = cloneJsonValue(payload.settings[key])
     }
   }
-  if (attemptedKeys.includes('language')) applyRuntimeLanguage(settingsTarget.language)
+  // The optimistic setting handler already selected this locale. An unchanged
+  // acknowledgement must not retry a failed import behind its error dialog.
+  if (attemptedKeys.includes('language') && settingsTarget.language !== previousLanguage) {
+    applyRuntimeLanguage(settingsTarget.language)
+  }
   applySettingsRuntimeProjectionEffects(attemptedKeys)
 
   if (knownSettingsRevision < payload.revision) {
