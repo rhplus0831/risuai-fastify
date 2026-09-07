@@ -236,6 +236,17 @@ describe('evaluateIgp', () => {
     expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('hello{"label":"joy"}')
   })
 
+  it('does not append a failed IGP request as generated message text', async () => {
+    const calls = stubCommandFetch()
+    seed(makeChar())
+    requestChatDataSpy.mockResolvedValueOnce({ type: 'fail', result: 'Request settings are not ready.' })
+    await expect(evaluateIgp({ ...baseOpts, promptTemplate: CHATML_PROMPT, waitForPersistence: true })).rejects.toThrow(
+      'Request settings are not ready.',
+    )
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('hello')
+    expect(calls).toEqual([])
+  })
+
   it('appends only to the exact stable message regardless of position', async () => {
     stubCommandFetch()
     const char = makeChar()

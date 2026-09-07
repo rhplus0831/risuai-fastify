@@ -767,6 +767,9 @@ describe('sendChat fixtures (/chat route-backed prompt assembly)', () => {
         {
           arg: expect.objectContaining({
             formated: [expect.objectContaining({ role: 'system', content: 'Append a marker.' })],
+            database: expect.objectContaining({
+              igpPrompt: '<|im_start|>system<|im_sep|>Append a marker.<|im_end|>',
+            }),
           }),
           model: 'emotion',
         },

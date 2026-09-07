@@ -83,6 +83,9 @@ export async function evaluateIgp(opts: EvaluateIgpOptions): Promise<boolean> {
     opts.abortSignal,
   )
   if (!isCurrent() || opts.abortSignal.aborted) return false
+  // Provider failures are diagnostics, never assistant text or a completed
+  // append. The ledger owns recording this failed execution.
+  if (rq.type === 'fail') throw new Error(rq.result)
   const appended = formatIgpAppendPayload(rq)
   const previous = captureIgpTargetSnapshot(opts.target)
   if (!previous) return false
