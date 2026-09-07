@@ -17,6 +17,7 @@
     transcriptRowOffsets,
     TRANSCRIPT_WORKING_ROWS,
     TRANSCRIPT_MAX_RESIDENT_ROWS,
+    type TranscriptResidencyEntry,
   } from './transcriptResidency'
   import { TRANSCRIPT_INTERACTION_CONTEXT } from './transcriptInteraction'
   import { createTranscriptReservations } from './transcriptReservations'
@@ -512,6 +513,7 @@
   let pressedPointerId: number | null = null
   let pressReleaseTimer: ReturnType<typeof setTimeout> | null = null
   let pressedRowSizes: Array<{ element: HTMLElement; height: string }> = []
+  let pressedResidentEntries = $state.raw<TranscriptResidencyEntry<(typeof chatRows)[number]>[] | null>(null)
   const legacyPaging = (() => {
     try {
       return localStorage.getItem('risu-transcript-legacy-paging') === '1'
@@ -551,25 +553,26 @@
     return ids
   })
   const residentEntries = $derived(
-    residencyEntries.reuse(
-      buildTranscriptResidency(
-        chatRows,
-        residencyIds,
-        rowOffsets,
-        residentStart,
-        pinnedIds,
+    pressedResidentEntries ??
+      residencyEntries.reuse(
+        buildTranscriptResidency(
+          chatRows,
+          residencyIds,
+          rowOffsets,
+          residentStart,
+          pinnedIds,
+          fullResidency,
+          admittedResidents === null || chatRows.length <= TRANSCRIPT_WORKING_ROWS
+            ? undefined
+            : new Set(
+                admittedResidents
+                  .filter((id) => !pinnedIds.has(id))
+                  .slice(0, Math.max(0, Math.min(workingRowLimit, TRANSCRIPT_MAX_RESIDENT_ROWS - pinnedIds.size))),
+              ),
+          workingRowLimit,
+        ),
         fullResidency,
-        admittedResidents === null || chatRows.length <= TRANSCRIPT_WORKING_ROWS
-          ? undefined
-          : new Set(
-              admittedResidents
-                .filter((id) => !pinnedIds.has(id))
-                .slice(0, Math.max(0, Math.min(workingRowLimit, TRANSCRIPT_MAX_RESIDENT_ROWS - pinnedIds.size))),
-            ),
-        workingRowLimit,
       ),
-      fullResidency,
-    ),
   )
   const residentRowCount = $derived(residentEntries.filter((entry) => entry.kind === 'row').length)
 
@@ -617,6 +620,10 @@
     if (!event.isPrimary || event.button !== 0 || !rowIdForNode(event.target as Node | null)) return
     if (pressReleaseTimer !== null) clearTimeout(pressReleaseTimer)
     pressReleaseTimer = null
+    // Focus and reservation changes can recompute the resident set without a
+    // reconciliation frame. Retain its rows and gaps through the click so an
+    // evicted, not-yet-measured neighbor cannot move the pressed control.
+    pressedResidentEntries = fullResidency ? null : residentEntries
     pressedPointerId = event.pointerId
     pressedLogicalEnd = chatRows.at(-1)?.idx ?? null
     residencyNavigationEpoch++
@@ -653,6 +660,7 @@
     pressReleaseTimer = null
     pressedPointerId = null
     pressedLogicalEnd = null
+    pressedResidentEntries = null
     restorePressedRowSizes()
     scheduleResidency()
   }
@@ -916,6 +924,7 @@
       residencyAnchor = null
       measuredWidth = 0
       pressedLogicalEnd = null
+      pressedResidentEntries = null
       pressedPointerId = null
       if (pressReleaseTimer !== null) clearTimeout(pressReleaseTimer)
       pressReleaseTimer = null
