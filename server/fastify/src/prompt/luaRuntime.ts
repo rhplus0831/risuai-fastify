@@ -62,6 +62,7 @@ import {
   type ServerLuaRuntimeTraceSink,
 } from './luaPostGenerationTrace.js'
 import type { PostGenerationLuaProgressTracker, ServerLuaRuntimeProgressSink } from './luaPostGenerationProgress.js'
+import { beginLuaDiagnostics, type LuaDiagnosticsRun } from './scriptDiagnostics.js'
 
 /**
  * The Lua runtime only needs the narrow character shape used by edit-trigger
@@ -469,6 +470,7 @@ export async function serverLuaRequest(
   deps: EgressDeps = {},
   rateState: RequestRateState = sharedRateState,
   signal?: AbortSignal,
+  onBlocked?: () => void,
 ): Promise<string> {
   const now = deps.now ? deps.now() : Date.now()
   if (rateState.resetAt + REQUEST_WINDOW_MS < now) {
@@ -476,6 +478,7 @@ export async function serverLuaRequest(
     rateState.resetAt = now
   }
   if (rateState.count >= MAX_REQUESTS_PER_WINDOW) {
+    onBlocked?.()
     return JSON.stringify({
       status: 429,
       data: 'Too many requests. you can request 30 times per minute',
@@ -484,6 +487,7 @@ export async function serverLuaRequest(
 
   const verdict = await validateEgressUrl(url, deps)
   if (!verdict.ok) {
+    onBlocked?.()
     // Narrow explicitly: this file is also type-checked under the root tsconfig
     // (the browser suite imports the server app), whose `strictNullChecks: false`
     // does not narrow `!verdict.ok` on a discriminated union; the server's strict
@@ -758,6 +762,7 @@ interface RuntimeState {
   editDisplayIds: Set<string>
   traceSink?: ServerLuaRuntimeTraceSink
   progressSink?: ServerLuaRuntimeProgressSink
+  diagnostics?: LuaDiagnosticsRun
   stopSending: boolean
   /** Set true the moment an interactive host fn (`alert*Input/Select/Confirm`) is
    * invoked — surfaced so the caller can route the send `unsupported`. */
@@ -1580,15 +1585,21 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
     // Every host fn is the abort checkpoint: once the request signal
     // fires, the next host call throws, terminating the surrounding pcall.
     engine.global.set(name, (...args: Args) => {
+      state.diagnostics?.hostCall()
       if (state.ctx.signal?.aborted) {
+        state.diagnostics?.blockHostCall()
         throw new LuaAbortError('request aborted')
       }
       return fn(...args)
     })
   }
-  const canWrite = (id: string) => state.safeIds.has(id)
-  const canWriteVar = (id: string) => state.safeIds.has(id) || state.editDisplayIds.has(id)
-  const canLowLevel = (id: string) => state.lowLevelIds.has(id)
+  const checkedAccess = (allowed: boolean) => {
+    if (!allowed) state.diagnostics?.blockHostCall()
+    return allowed
+  }
+  const canWrite = (id: string) => checkedAccess(state.safeIds.has(id))
+  const canWriteVar = (id: string) => checkedAccess(state.safeIds.has(id) || state.editDisplayIds.has(id))
+  const canLowLevel = (id: string) => checkedAccess(state.lowLevelIds.has(id))
   const messageCount = () => state.ctx.chat.message?.length ?? 0
 
   // ── Pure: chat vars (bound to the assembler's var engine) ──
@@ -1700,6 +1711,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
       return
     }
     const before = summarizeLuaTraceMessage(message)
+    state.diagnostics?.touchTranscript()
     message.data = value ?? ''
     const after = summarizeLuaTraceMessage(message)
     state.traceSink?.recordHostEvent({
@@ -1741,6 +1753,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
       return
     }
     const before = summarizeLuaTraceMessage(message)
+    state.diagnostics?.touchTranscript()
     message.role = value === 'user' ? 'user' : 'char'
     const after = summarizeLuaTraceMessage(message)
     state.traceSink?.recordHostEvent({
@@ -1769,6 +1782,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
       return
     }
     const beforeCount = messageCount()
+    state.diagnostics?.touchTranscript()
     state.ctx.chat.message = state.ctx.chat.message.slice(start, end)
     const afterCount = messageCount()
     state.traceSink?.recordHostEvent({
@@ -1795,6 +1809,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
     }
     const beforeCount = messageCount()
     const before = summarizeLuaTraceMessage(state.ctx.chat.message?.at(index))
+    state.diagnostics?.touchTranscript()
     state.ctx.chat.message.splice(index, 1)
     const afterCount = messageCount()
     state.traceSink?.recordHostEvent({
@@ -1821,6 +1836,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
       return
     }
     const beforeCount = messageCount()
+    state.diagnostics?.touchTranscript()
     state.ctx.chat.message.push({ role: role === 'user' ? 'user' : 'char', data: value ?? '' })
     state.traceSink?.recordHostEvent({
       type: 'chat',
@@ -1835,6 +1851,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
   })
   declare('insertChat', (id: string, index: number, role: string, value: string) => {
     if (!canWrite(id)) return
+    state.diagnostics?.touchTranscript()
     state.ctx.chat.message.splice(index, 0, {
       role: role === 'user' ? 'user' : 'char',
       data: value ?? '',
@@ -1848,6 +1865,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
     if (!canWrite(id)) return
     const parsed: unknown = JSON.parse(value)
     if (!Array.isArray(parsed)) throw new Error('setFullChat expects an array')
+    state.diagnostics?.touchTranscript()
     state.ctx.chat.message = parsed.map((row: unknown): Message => {
       if (!row || typeof row !== 'object' || !('data' in row) || typeof row.data !== 'string') {
         throw new Error('setFullChat expects text message records')
@@ -2035,6 +2053,7 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
       state.ctx.egress,
       state.ctx.rateState ?? sharedRateState,
       state.ctx.signal,
+      () => state.diagnostics?.blockHostCall(),
     )
   })
 
@@ -2329,6 +2348,39 @@ async function runStringWithTimeout(
  * on the result so callers can act on it.
  */
 export async function runServerLua(opts: RunServerLuaOptions, ctx: ServerLuaRuntimeContext): Promise<ServerLuaResult> {
+  const diagnostics = beginLuaDiagnostics(opts.mode, ctx.chat, opts.data ?? '')
+  let result: ServerLuaResult | undefined
+  try {
+    result = await executeServerLua(opts, ctx, diagnostics)
+    return result
+  } finally {
+    // Edit wrappers reject mismatched concrete output types after this returns.
+    // Count that failure here too without exporting the rejected value.
+    const edit = ['editInput', 'editOutput', 'editRequest', 'editDisplay'].includes(opts.mode)
+    const output = result?.res
+    const invalidOutput =
+      edit &&
+      output !== undefined &&
+      output !== null &&
+      (Array.isArray(opts.data) ? !Array.isArray(output) : typeof output !== 'string')
+    diagnostics?.finish({
+      failed:
+        !result ||
+        !!result.error ||
+        result.timedOut ||
+        result.interactiveInvoked ||
+        result.aborted === true ||
+        invalidOutput,
+      output: invalidOutput ? undefined : output,
+    })
+  }
+}
+
+async function executeServerLua(
+  opts: RunServerLuaOptions,
+  ctx: ServerLuaRuntimeContext,
+  diagnostics?: LuaDiagnosticsRun,
+): Promise<ServerLuaResult> {
   await ensureTokenizerLoadedForDb(ctx.database)
   const execTimeoutMs = opts.execTimeoutMs ?? DEFAULT_EXEC_TIMEOUT_MS
   const data = opts.data ?? ''
@@ -2407,6 +2459,7 @@ export async function runServerLua(opts: RunServerLuaOptions, ctx: ServerLuaRunt
     editDisplayIds: new Set<string>(),
     traceSink: opts.traceSink,
     progressSink: opts.progressSink,
+    diagnostics,
     stopSending: false,
     interactiveInvoked: false,
     sleptMs: 0,
