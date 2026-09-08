@@ -33,8 +33,8 @@ repository root, run `pnpm check:docs` and this explicit plan/index check:
 pnpm exec tsx -e '
 import { readdirSync } from "node:fs";
 import { validateCurrentDocumentation } from "./util/current-documentation-validator.ts";
-const root = "docs/plan/read-only-app-ux";
-const documents = ["docs/plan/README.md", ...[root, `${root}/phases`].flatMap(dir =>
+const root = ".archived-docs/ui-and-user-input/read-only-app-ux";
+const documents = ["docs/plan/README.md", ".archived-docs/README.md", ".archived-docs/ui-and-user-input/README.md", ...[root, `${root}/phases`].flatMap(dir =>
   readdirSync(dir).filter(name => name.endsWith(".md")).map(name => `${dir}/${name}`))];
 const result = validateCurrentDocumentation({
   documentPaths: documents,
@@ -47,7 +47,7 @@ const result = validateCurrentDocumentation({
 console.log(JSON.stringify(result, null, 2));
 if (!result.ok) process.exitCode = 1;
 '
-pnpm exec prettier --ignore-path /dev/null --check docs/plan/README.md 'docs/plan/read-only-app-ux/**/*.md'
+pnpm exec prettier --ignore-path /dev/null --check docs/plan/README.md .archived-docs/README.md .archived-docs/ui-and-user-input/README.md '.archived-docs/ui-and-user-input/read-only-app-ux/**/*.md'
 git diff --check
 ```
 

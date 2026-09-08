@@ -76,7 +76,7 @@ from current source before extraction begins.
   are passive-display and action audit owners. `Chat` already disables recognized
   script buttons when writes are unavailable; verify all alternate invocations.
 - [Plugin runtime](../../../src/ts/plugins/plugins.svelte.ts) and the
-  [scripting guide](../../structure/prompt-assembly-and-scripting.md) locate
+  [scripting guide](../../../docs/structure/prompt-assembly-and-scripting.md) locate
   plugin/custom-GUI lifecycle, Lua callbacks, and isolated display transforms.
   Readers must not execute interactive scripts or mount plugin panels.
 
@@ -93,12 +93,12 @@ from current source before extraction begins.
   and [stream](../../../src/ts/server/readerGenerationStream.ts) own live output;
   this state is distinct from the client session's lifecycle-generation counter.
 - [Composer drafts](../../../src/lib/ChatScreens/DefaultChatScreen.composerDrafts.ts)
-  and the [durable mutation/recovery guide](../../structure/durable-mutations-and-recovery.md)
+  and the [durable mutation/recovery guide](../../../docs/structure/durable-mutations-and-recovery.md)
   locate retained intent that must survive demotion without entering reader display.
 
 ## Focused Test Entry Points
 
-Discover companion tests through the [test index](../../tests/README.md). Extend
+Discover companion tests through the [test index](../../../docs/tests/README.md). Extend
 existing behavioral suites where practical; these paths are starting points,
 not a required command list to rerun after every slice.
 

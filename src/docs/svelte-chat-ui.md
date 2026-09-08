@@ -182,6 +182,18 @@ writers retain content admission through promotion and interrupted recovery.
 `ReaderTranscript.svelte` also guards its own reads and rendering, including
 manual Refresh, so a direct mount cannot bypass this boundary.
 
+`ChatScreenLayout.svelte` owns the shared theme/background/portrait frame;
+writer `ChatScreen` supplies its controllers while `ReaderTranscript` supplies
+its independent read owners and static confirmed portraits. The reader composer
+creates no draft: it explains write access and invokes the same explicit
+Use this device callback as the shell. Mobilechat bubbles expose the same
+reader-safe plain-text copy action as the other built-in layouts.
+`readerPanelAppearance.ts` derives a local text palette from confirmed app colors
+and the translucent chat panel, and passes its tone through the explicit read
+owners. This keeps links, disclosures, headings and composer guidance readable
+across light bubbles and portrait themes; readable custom text colors remain
+applicable without changing the writer palette.
+
 The reader supplies `Chats.svelte` with certified messages
 from `readerTranscriptProjection.svelte.ts` through its own chat-read owners.
 Its character, greeting, persona, and transcript do not borrow pending writer
@@ -194,7 +206,16 @@ plugins or generation recovery. The reader keeps shared sanitized Markdown,
 asset display, stored translation, native selection, and plain-text copy.
 Unsupported display processing reports limited-display status with readable
 source. Its composer is disabled, and mutation, translation-start, generation
-control, and effect actions remain unavailable.
+control, and effect actions remain unavailable. Read-owner settings also carry
+confirmed passive formatting/asset metadata and module activation links. Only
+module assets, backgrounds and icon visibility are certified; scripts and prompts
+are excluded. Compact receipts trigger fresh display reads. Chat/Chats/ChatBody never borrow a
+writer settings, module or selected-owner fallback for that context.
+`ReaderChatBackground.svelte` parses explicit reader character/chat backgrounds
+with `readOnly` and session/source fences. `readerPassiveHtml.ts` disables
+script controls with a localized reason and denies capture/delegated activation;
+static links and native details/summary remain usable. Neither local-only
+interactive scripts nor plugin/custom-GUI panels are available to readers.
 
 `readerGeneration` is an explicit optional presentation input to `Chats.svelte`:
 `undefined` retains the writer path, while `null` means an idle reader. The

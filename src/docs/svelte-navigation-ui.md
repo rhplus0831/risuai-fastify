@@ -1,7 +1,7 @@
 # Svelte Navigation UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-08 (local reader navigation and explicit writer switching).
+Targeted source check: 2026-09-08 (shared reader presentation, committed display and restricted entry).
 
 This guide owns the sidebar, navigation controls, character and chat selection,
 character configuration, and list organization.
@@ -62,14 +62,32 @@ is stored on the exact history entry through `src/ts/router.ts`.
 
 ## Connected Reader Navigation
 
-`ObserverShell.svelte` owns the connected reader's character/chat browser and
-responsive navigation. It renders the authenticated read projection while
-`App.svelte` keeps writer route effects disabled. Home/grid and explicit stable
-character/chat routes remain local to the page; they do not update
-`selectedCharID`, `currentChar`, or persisted `chatPage`. Authoring routes show
-read-only guidance rather than mounting writer controls. The latest local
-route is retained by `observerRouteIntent.ts` for current writer-safe
-application after promotion, without creating an outbox command.
+`ObserverShell.svelte` retains the connected reader controller and uses the
+same presentation primitives as the writer: `NavigationRail.svelte`,
+`NavigationButton.svelte`, `SidebarAvatar.svelte`, `PinnedChatsRail.svelte`,
+`ChatSelectionButton.svelte` and `CharacterCatalogView.svelte`. The writer
+`Sidebar`, `SideChatList` and `GridCatalog` adapters retain organization commands,
+editor owners and pending outcomes. These shared views accept explicit display
+inputs, selected IDs and callbacks; they do not fall back to writer stores.
+
+`ReaderNavigation.svelte` consumes certified rows, character order and display
+settings from `readerTranscriptProjection.svelte.ts`. `readerNavigation.ts`
+filters ambiguous/missing identities, orders active characters and derives pins
+from shell summaries or hydrated details. Folder expansion, character/chat
+search, grid/list presentation and drawer state stay local. Auth/database
+identity changes clear that state; reconnect keeps valid reading navigation.
+The same navigation presentation hosts the conservative shell preview. Narrow
+screens use `modalFocusTrap` with Escape dismissal and focus restoration.
+
+Home/grid and stable character/chat routes do not update `selectedCharID`,
+`currentChar` or persisted `chatPage`. Settings, plugin panels and authoring
+controls are disabled with localized reasons. In-app restricted navigation,
+shortcuts and writer route warming reject reader activation. Direct restricted
+URLs show a shared-shell write-access gate with Home and a valid Return to
+reading action. Only valid reading routes become `observerRouteIntent.ts`
+promotion intent; blocked pages cannot reopen an old restricted surface. The
+writer chat list loads Toggles lazily behind current authority and session
+checks, keeping its Settings renderer dependencies out of reader startup.
 
 While an asynchronous writer route is loading, newer navigation takes precedence
 over a retained reader route with a different semantic route key. App consumes

@@ -233,6 +233,13 @@ The main client boundaries are:
 | `src/ts/server/ownerMutationLifecycle.ts`, `pendingOwnerMutationRegistry.ts`                                                           | Registers and flushes loaded explicit owners at structural and lifecycle boundaries.                       |
 | `src/ts/server/settingsOwner.svelte.ts`, `lorebookOwner.svelte.ts`, `scriptDefinitionOwner.svelte.ts`                                  | Owner-scoped drafts, narrow command dispatch, projection fencing, and field/row rollback.                  |
 
+Reader navigation and passive appearance share the same certification boundary.
+Resource/receipt consumers copy allowlisted order, folders, pins and visual
+settings before applying optimistic writer overlays. Shared presentation has no
+independent rollout flag and does not start writer route warming, composer
+recovery or plugins. Restricted route/overlay/script actions check current
+authority, while explicit takeover retains only valid local reading intent.
+
 Reader transcripts use the separately certified projection in
 `readerTranscriptProjection.svelte.ts`, populated from authoritative resource
 and command results before optimistic writer overlays are reapplied. It retains

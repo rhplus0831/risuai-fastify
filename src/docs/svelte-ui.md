@@ -1,7 +1,7 @@
 # Svelte UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-08 (connected-reader shell, local routes, and writer recovery).
+Targeted source check: 2026-09-08 (shared reader views, access containment and confirmed appearance).
 
 This guide owns the Svelte application shell, routing, shared frontend
 platform behavior, localization, styling, responsive behavior, and Playground.
@@ -98,8 +98,8 @@ for its disposable browser session.
 1. April 1 joke screen.
 2. The managed authentication-required screen with its Sign in action.
 3. Loading while `$startupCoordinatorStore.capabilities.canRenderShell` is false.
-4. `ObserverShell` for a coherent managed read view while the client is not
-   writing, including the initial shell-only preview.
+4. `ObserverShell` with shared navigation and transcript presentation while
+   managed write access is unavailable, including the initial shell-only preview.
 5. `CustomGUISettingMenu` while `$CustomGUISettingMenuStore` is true.
 6. `Settings` for the committed settings route.
 7. `GridCatalog` for the committed grid route.
@@ -140,9 +140,16 @@ may install a reader projection; it does not infer write access from a matching
 session id. The precise recovery/reload boundaries belong in
 [Client Runtime](client-runtime.md#active-writer-loss).
 
-Reader navigation records only the latest memory-only route intent and cannot
-enqueue a command or outbox row. Alerts remain shared; writer overlays and
-`SavePopupIcon.svelte` require `canApplyWriterRoutes`. The saving icon also
+Reader navigation records only the latest valid memory-only reading route and
+cannot enqueue a command or outbox row. Direct Settings/authoring URLs show a
+localized gate with Home and Return to reading; in-app restricted entries leave
+selection unchanged. `routeIntentPrefetch`, component preload and resource
+warming are writer-only, including idle callbacks that outlive their session.
+
+Writer overlays and `SavePopupIcon.svelte` require `canApplyWriterRoutes`.
+Restricted overlay stores are closed synchronously on writer loss and on late
+restoration. `readerAlertPolicy.ts` admits passive/auth feedback and explicit
+client-session takeover selections, while rejecting authoring/plugin dialogs. The saving icon also
 respects `showSavingIcon`. `WriterDraftRecovery.svelte` remains available with
 the readable shell for explicit local-copy recovery.
 
@@ -328,7 +335,12 @@ theme colors. Size and palette stores initialize from the cache;
 `gui/displaySettings.ts` supplies read-only paint hints while the Display group
 loads, without marking any resource ready or enabling mutations. Resident
 server settings take precedence during later refreshes, and shell/group
-projections reconcile the cache without rewriting unchanged styles. Safe Mode
+projections reconcile the cache without rewriting unchanged styles. Managed
+readers use the separately certified display allowlist, including during writer
+recovery; pending writer appearance never becomes reader paint. Writer loss
+repaints palette, font, CSS and dimensions from confirmed values. Both chat
+adapters share `ChatScreenLayout.svelte` with explicit settings/background and
+controller snippets. Safe Mode
 clears only live Custom CSS, not its cache. The visual palette selector and
 durable custom scheme are documented in
 [Settings UI](svelte-settings-ui.md#display-and-theme-controls).

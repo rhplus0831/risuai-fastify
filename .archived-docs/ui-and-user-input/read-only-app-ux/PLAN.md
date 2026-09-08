@@ -18,7 +18,7 @@ This plan owns the stable contract, scope, dependencies, and completion criteria
 define bounded implementation slices. Only `status.md` records execution progress,
 acceptance, and verification results. Creating this package does not complete a phase.
 Current source, [STRUCTURE](../../../STRUCTURE.md), and the
-[architecture guides](../../structure/README.md) remain authoritative for shipped behavior.
+[architecture guides](../../../docs/structure/README.md) remain authoritative for shipped behavior.
 
 ## Product Contract
 

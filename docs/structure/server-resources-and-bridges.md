@@ -112,6 +112,13 @@ capabilities consumed by the shell and protocol adapters:
   switch until both pre-route resources and target code are ready. Only the root
   shell has a cross-field atomic barrier; granular route resources apply
   independently through their explicit owners and revision fences.
+- `readerTranscriptProjection.svelte.ts` certifies navigation order/folders/pins,
+  passive display settings, sanitized module metadata/activation links and transcript
+  metadata from existing resource payloads
+  before optimistic writer overlays. Shared reader views consume explicit IDs and
+  these allowlists. Display-resource reads retain their session/revision/lineage
+  fences; auth or lineage replacement clears reader display identities. Writer
+  route prefetch/component warming never substitutes for reader display readiness.
 - Reader event recovery belongs to `connectedReaderSync.ts`. It checks current
   ownership/lineage, subscribes without writer headers from the applied-resource
   cursor, and performs read-only targeted/full refreshes on events or replay
@@ -153,7 +160,7 @@ capabilities consumed by the shell and protocol adapters:
 | `src/ts/server/bootstrap.ts`                                                | Validates the small runtime bootstrap and exposes writer-intent/read-only variants.                                              |
 | `src/ts/connectedClientStartup.ts`                                          | Discovers ownership and conditionally enters connected reader or authorized writer recovery.                                     |
 | `src/ts/server/connectedReaderSync.ts`                                      | Reader event transport, revision reconciliation, ownership/lineage recovery, and operational snapshots.                          |
-| `src/ts/server/readerTranscriptProjection.svelte.ts`                        | Disposable reader transcript ownership and chat-incarnation fences.                                                              |
+| `src/ts/server/readerTranscriptProjection.svelte.ts`                        | Certified reader navigation/display/transcript ownership and chat-incarnation fences.                                            |
 | `src/ts/server/readerGenerationObservation.ts`, `readerGenerationStream.ts` | Selected generation observation and exact terminal transcript handoff without writer control.                                    |
 | `src/ts/server/resourceReads.ts`                                            | Browser wrappers and response validation for settings, collections, characters, and the inlay catalog.                           |
 | `src/ts/server/shellHydration.ts`                                           | Atomically preflights and applies the exact shell settings plus versioned character summaries at one revision.                   |

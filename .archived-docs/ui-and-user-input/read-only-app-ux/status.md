@@ -2,32 +2,32 @@
 
 ## Current Cursor
 
-- State: Phases 0–1 accepted; implementation complete; final browser and aggregate verification in progress.
-- Next phase: [Phase 5 — verification and rollout](phases/phase-5-verification-and-rollout.md).
-- Next bounded slice: finish final browser and aggregate checks, record acceptance,
-  and archive this package with updated current documentation.
+- State: **Complete — all six phases accepted.**
+- Next action: none; implementation, verification and documentation are complete.
+- Runtime source: `712f1b7df`; browser verification fixture: `ba3d41f9c`.
 - Source baseline reviewed: `982eef6112a407d138ea6a77ebc638c8058edfe2`.
-- Fixed scope: Settings, plugin panels, and interactive scripts are inaccessible
-  to readers through controls, routes, shortcuts, restored UI, and callbacks.
-- No phase is accepted by creating these planning documents.
+- Settings, plugin panels and interactive scripts remain inaccessible to readers.
+- This package is archived as an implementation and verification record. Current
+  architecture/test guides remain authoritative for shipped behavior.
 
 ## Document Map
 
 - [PLAN.md](PLAN.md): stable product contract, invariants, rollout, and completion criteria.
 - [Inventory](inventory.md): source owners, known integration boundaries, and focused test entry points.
 - [Phase index](phases/README.md): bounded work and explicit plan validation.
-- [Active plans](../README.md): repository planning index.
+- [Archive index](../README.md): related completed reader work.
+- [Active plans](../../../docs/plan/README.md): repository planning index.
 
 ## Phase Ledger
 
-| Phase                                                                                        | State        | Acceptance evidence                                                           |
-| -------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                        | Accepted     | Matrix, interfaces and confirmed-field map below; four read-only cross-checks |
-| [1. Reader boundary and navigation data](phases/phase-1-reader-boundary-and-data.md)         | Accepted     | Access, projection and local-navigation focused evidence below                |
-| [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Accepted     | Shared controls, independent browsing and desktop/mobile browser proof        |
-| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Accepted     | Confirmed display, script denial, history/live generation and visual proof    |
-| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Accepted     | Session/draft/replay/deletion/auth/lineage and two-client generation proof    |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Verification | Final aggregate and browser reruns in progress                                |
+| Phase                                                                                        | State    | Acceptance evidence                                                                       |
+| -------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                        | Accepted | Matrix, interfaces and confirmed-field map below; four read-only cross-checks             |
+| [1. Reader boundary and navigation data](phases/phase-1-reader-boundary-and-data.md)         | Accepted | Access, projection and local-navigation focused evidence below                            |
+| [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Accepted | Shared controls, independent browsing and desktop/mobile browser proof                    |
+| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Accepted | Confirmed display, script denial, history/live generation and visual proof                |
+| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Accepted | Session/draft/replay/deletion/auth/lineage and two-client generation proof                |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Accepted | Final aggregate, 19 browser journeys plus visual recheck, current docs and archive checks |
 
 ## Decisions
 
@@ -442,4 +442,19 @@ colors, so arbitrary user-authored background imagery/CSS is not certified by
 this finite fixture matrix.
 
 Phases 2–4 are accepted by this combined component, lifecycle, browser and visual
-evidence. Phase 5's final documentation/archive consistency checks follow below.
+evidence. Phase 5 is accepted with the final documentation validation and archival record below.
+
+### Documentation and archival closeout — 2026-09-08
+
+Updated the current shell, navigation, transcript, runtime/resource and test
+guides for the shipped boundaries. `pnpm check:docs` passed all 49 current
+documents, and explicit active-package/index validation passed all 11 documents
+before archival. No temporary presentation flag or duplicate reader navigation
+remains. The completed package moves to the UI and user input archive, with
+active-plan/category/root indexes and repeatable validation paths updated.
+
+Post-archive explicit validation passed **13 documents**, including the package,
+active-plan index and both archive indexes, with no link/anchor/source/index
+errors. Current-document validation, Prettier with archive exclusions disabled,
+and final whitespace checks complete the closeout. All planned implementation
+and verification work is accepted; the limits above remain the evidence boundary.
