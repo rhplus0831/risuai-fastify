@@ -1,3 +1,12 @@
+import {
+  observeProviderResult,
+  providerDiagnosticFetch,
+  observeProviderStream,
+  providerDiagnosticRead,
+  recordProviderDiagnosticTerminal,
+  recordProviderDiagnosticToken,
+  recordProviderDiagnosticFailure,
+} from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult, CompletionStreamFrame } from './frames.js'
 import {
@@ -215,7 +224,7 @@ interface AnthropicResponse {
   error?: { message?: unknown; type?: unknown }
 }
 
-export async function runAnthropic(req: AnthropicRequest): Promise<CompletionResult> {
+async function runAnthropicCore(req: AnthropicRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -223,7 +232,7 @@ export async function runAnthropic(req: AnthropicRequest): Promise<CompletionRes
   const init = buildRequestInit(req, false)
   let response: Response
   try {
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -375,14 +384,14 @@ async function readAnthropicStreamError(response: Response, url: string): Promis
   }
 }
 
-export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+async function* runAnthropicStreamCore(req: AnthropicRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
   if (req.signal.aborted) return
 
   const init = buildRequestInit(req, true)
   const url = endpoint(req)
   let response: Response
   try {
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -424,7 +433,7 @@ export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator
       if (req.signal.aborted) return
       let readResult: ReadableStreamReadResult<Uint8Array>
       try {
-        readResult = await reader.read()
+        readResult = await providerDiagnosticRead(reader)
       } catch (err) {
         if (req.signal.aborted) return
         const msg = err instanceof Error ? err.message : String(err)
@@ -460,6 +469,7 @@ export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator
         }
 
         if (frame?.type === 'error' || evt.event === 'error') {
+          recordProviderDiagnosticFailure('unknown-error')
           const message =
             typeof frame?.error?.message === 'string' && frame.error.message.length > 0
               ? frame.error.message
@@ -479,6 +489,7 @@ export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator
             typeof t === 'string' &&
             t.length > 0
           ) {
+            recordProviderDiagnosticToken()
             if (thinkingOpen) {
               thinkingOpen = false
               yield { kind: 'token', content: '</Thoughts>\n\n' }
@@ -488,12 +499,14 @@ export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator
             (frame?.delta?.type === 'thinking' || frame?.delta?.type === 'thinking_delta') &&
             typeof frame.delta.thinking === 'string'
           ) {
+            recordProviderDiagnosticToken()
             if (!thinkingOpen) {
               thinkingOpen = true
               yield { kind: 'token', content: '<Thoughts>\n' }
             }
             yield { kind: 'token', content: frame.delta.thinking }
           } else if (frame?.delta?.type === 'redacted_thinking') {
+            recordProviderDiagnosticToken()
             if (!thinkingOpen) {
               thinkingOpen = true
               yield { kind: 'token', content: '<Thoughts>\n' }
@@ -503,9 +516,11 @@ export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator
         } else if (evt.event === 'message_delta') {
           apiMetadata = mergeApiResponseMetadata(apiMetadata, extractApiResponseMetadata(frame, ['delta']))
           if (frame?.delta?.stop_reason !== undefined) {
+            recordProviderDiagnosticTerminal()
             finishReason = mapFinishReason(frame.delta.stop_reason)
           }
         } else if (evt.event === 'message_stop') {
+          recordProviderDiagnosticTerminal()
           sawStop = true
           if (thinkingOpen) yield { kind: 'token', content: '</Thoughts>\n\n' }
           yield { kind: 'done', finishReason, ...(apiMetadata ? { apiMetadata } : {}) }
@@ -535,4 +550,12 @@ export async function* runAnthropicStream(req: AnthropicRequest): AsyncGenerator
     if (thinkingOpen) yield { kind: 'token', content: '</Thoughts>\n\n' }
     yield { kind: 'done', finishReason, ...(apiMetadata ? { apiMetadata } : {}) }
   }
+}
+
+export function runAnthropic(req: AnthropicRequest): Promise<CompletionResult> {
+  return observeProviderResult('anthropic', req.signal, () => runAnthropicCore(req))
+}
+
+export function runAnthropicStream(req: AnthropicRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+  return observeProviderStream('anthropic', req.signal, () => runAnthropicStreamCore(req))
 }

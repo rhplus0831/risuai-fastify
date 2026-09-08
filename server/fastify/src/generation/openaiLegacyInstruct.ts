@@ -1,3 +1,4 @@
+import { observeProviderResult, providerDiagnosticFetch } from './providerDiagnostics.js'
 import { applyAdditionalParameters, setCanonicalHeader } from './additionalParams.js'
 import type { CompletionResult } from './frames.js'
 import { extractApiResponseMetadata } from './apiMetadata.js'
@@ -154,7 +155,7 @@ interface LegacyInstructResponse {
   error?: { message?: unknown }
 }
 
-export async function runOpenAILegacyInstruct(req: OpenAILegacyInstructRequest): Promise<CompletionResult> {
+async function runOpenAILegacyInstructCore(req: OpenAILegacyInstructRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -162,7 +163,7 @@ export async function runOpenAILegacyInstruct(req: OpenAILegacyInstructRequest):
   const init = buildRequestInit(req)
   let response: Response
   try {
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -200,4 +201,8 @@ export async function runOpenAILegacyInstruct(req: OpenAILegacyInstructRequest):
   const apiMetadata = extractApiResponseMetadata(body, ['choices', 'error', 'model'])
   if (apiMetadata) result.apiMetadata = apiMetadata
   return result
+}
+
+export function runOpenAILegacyInstruct(req: OpenAILegacyInstructRequest): Promise<CompletionResult> {
+  return observeProviderResult('openai', req.signal, () => runOpenAILegacyInstructCore(req))
 }

@@ -1,3 +1,4 @@
+import { observeProviderResult, providerDiagnosticFetch } from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult } from './frames.js'
 import { extractApiResponseMetadata } from './apiMetadata.js'
@@ -224,7 +225,7 @@ interface OobaResponse {
   results?: Array<{ text?: unknown }>
 }
 
-export async function runOobaLegacy(req: OobaLegacyRequest): Promise<CompletionResult> {
+async function runOobaLegacyCore(req: OobaLegacyRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -232,7 +233,7 @@ export async function runOobaLegacy(req: OobaLegacyRequest): Promise<CompletionR
   let response: Response
   try {
     const init = buildRequestInit(req)
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -270,4 +271,8 @@ export async function runOobaLegacy(req: OobaLegacyRequest): Promise<CompletionR
   }
   const apiMetadata = extractApiResponseMetadata(body, ['results'])
   return { type: 'success', result: text, ...(apiMetadata ? { apiMetadata } : {}) }
+}
+
+export function runOobaLegacy(req: OobaLegacyRequest): Promise<CompletionResult> {
+  return observeProviderResult('unknown', req.signal, () => runOobaLegacyCore(req))
 }

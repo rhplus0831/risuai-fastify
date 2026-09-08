@@ -1,3 +1,4 @@
+import { observeProviderResult, providerDiagnosticFetch } from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult } from './frames.js'
 import { extractApiResponseMetadata } from './apiMetadata.js'
@@ -246,7 +247,7 @@ interface BedrockResponse {
   error?: { message?: unknown }
 }
 
-export async function runBedrock(req: BedrockRequest): Promise<CompletionResult> {
+async function runBedrockCore(req: BedrockRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -255,7 +256,7 @@ export async function runBedrock(req: BedrockRequest): Promise<CompletionResult>
 
   let response: Response
   try {
-    response = await fetch(built.url, {
+    response = await providerDiagnosticFetch(built.url, {
       method: 'POST',
       headers: built.headers,
       body: built.body,
@@ -332,4 +333,8 @@ export async function runBedrock(req: BedrockRequest): Promise<CompletionResult>
   const apiMetadata = extractApiResponseMetadata(body, ['content', 'error', 'model'])
   if (apiMetadata) result.apiMetadata = apiMetadata
   return result
+}
+
+export function runBedrock(req: BedrockRequest): Promise<CompletionResult> {
+  return observeProviderResult('unknown', req.signal, () => runBedrockCore(req))
 }

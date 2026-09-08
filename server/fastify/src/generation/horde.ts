@@ -1,3 +1,8 @@
+import {
+  observeProviderResult,
+  providerDiagnosticFetch,
+  recordProviderDiagnosticFailure,
+} from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult } from './frames.js'
 import { readBoundedBodyJson, readBoundedBodyText } from './body.js'
@@ -206,7 +211,7 @@ function fireDeleteJob(jobId: string, apiKey: string): void {
   }
 }
 
-export async function runHorde(req: HordeRequest): Promise<CompletionResult> {
+async function runHordeCore(req: HordeRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -219,7 +224,7 @@ export async function runHorde(req: HordeRequest): Promise<CompletionResult> {
   let asyncResp: Response
   try {
     const init = buildAsyncRequestInit(req)
-    asyncResp = await fetch(`${HORDE_BASE_URL}/generate/text/async`, {
+    asyncResp = await providerDiagnosticFetch(`${HORDE_BASE_URL}/generate/text/async`, {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -275,6 +280,7 @@ export async function runHorde(req: HordeRequest): Promise<CompletionResult> {
         return { type: 'fail', result: 'aborted', aborted: true }
       }
       if (Date.now() >= deadline) {
+        recordProviderDiagnosticFailure('timeout')
         fireDeleteJob(jobId, req.apiKey)
         return { type: 'fail', result: 'horde job timed out' }
       }
@@ -287,7 +293,7 @@ export async function runHorde(req: HordeRequest): Promise<CompletionResult> {
       let statusResp: Response
       const statusUrl = `${HORDE_BASE_URL}/generate/text/status/${encodeURIComponent(jobId)}`
       try {
-        statusResp = await fetch(statusUrl, {
+        statusResp = await providerDiagnosticFetch(statusUrl, {
           method: 'GET',
           headers: { apikey: req.apiKey },
           signal: req.signal,
@@ -346,4 +352,8 @@ export async function runHorde(req: HordeRequest): Promise<CompletionResult> {
   } finally {
     req.signal.removeEventListener('abort', onAbort)
   }
+}
+
+export function runHorde(req: HordeRequest): Promise<CompletionResult> {
+  return observeProviderResult('unknown', req.signal, () => runHordeCore(req))
 }

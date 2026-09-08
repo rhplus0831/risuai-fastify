@@ -1,3 +1,5 @@
+import { providerDiagnosticRead, recordProviderDiagnosticFailure } from './providerDiagnostics.js'
+
 /**
  * Bounded buffering for upstream provider bodies.
  *
@@ -22,10 +24,11 @@ export async function readBoundedBodyText(
   let total = 0
   try {
     while (true) {
-      const { value, done } = await reader.read()
+      const { value, done } = await providerDiagnosticRead(reader)
       if (done) break
       total += value.byteLength
       if (total > maxBytes) {
+        recordProviderDiagnosticFailure('invalid-response')
         throw new Error(`upstream body exceeded the ${maxBytes}-byte buffer cap`)
       }
       chunks.push(value)

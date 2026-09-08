@@ -1,3 +1,4 @@
+import { observeProviderResult, providerDiagnosticFetch } from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult } from './frames.js'
 import { extractApiResponseMetadata } from './apiMetadata.js'
@@ -236,7 +237,7 @@ interface CohereResponse {
   message?: { content?: Array<{ text?: unknown }> }
 }
 
-export async function runCohere(req: CohereRequest): Promise<CompletionResult> {
+async function runCohereCore(req: CohereRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -244,7 +245,7 @@ export async function runCohere(req: CohereRequest): Promise<CompletionResult> {
   const init = buildRequestInit(req)
   let response: Response
   try {
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -297,4 +298,8 @@ export async function runCohere(req: CohereRequest): Promise<CompletionResult> {
     }
   }
   return { type: 'fail', result: raw }
+}
+
+export function runCohere(req: CohereRequest): Promise<CompletionResult> {
+  return observeProviderResult('cohere', req.signal, () => runCohereCore(req))
 }

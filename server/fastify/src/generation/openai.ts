@@ -1,3 +1,11 @@
+import {
+  observeProviderResult,
+  providerDiagnosticFetch,
+  observeProviderStream,
+  providerDiagnosticRead,
+  recordProviderDiagnosticTerminal,
+  recordProviderDiagnosticToken,
+} from './providerDiagnostics.js'
 import { applyAdditionalParameters, setCanonicalHeader } from './additionalParams.js'
 import { emitProtocolMetric } from '../protocolMetrics.js'
 import type { CompletionResult, CompletionStreamFrame } from './frames.js'
@@ -369,7 +377,7 @@ function normalizeDeepSeekThinking(content: string): string {
   return reasoning.length > 0 ? `<Thoughts>\n${reasoning}\n</Thoughts>\n${visible}` : visible
 }
 
-export async function runOpenAI(req: OpenAIRequest): Promise<CompletionResult> {
+async function runOpenAICore(req: OpenAIRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -379,7 +387,7 @@ export async function runOpenAI(req: OpenAIRequest): Promise<CompletionResult> {
   let response: Response
   try {
     await emitOpenAIProviderBodyMetric(url, init, false, req.trace)
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -556,7 +564,7 @@ async function readOpenAIStreamError(response: Response, url: string): Promise<C
   }
 }
 
-export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+async function* runOpenAIStreamCore(req: OpenAIRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
   if (req.signal.aborted) return
 
   const init = buildRequestInit(req, true)
@@ -564,7 +572,7 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
   let response: Response
   try {
     await emitOpenAIProviderBodyMetric(url, init, true, req.trace)
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -609,7 +617,7 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
       if (req.signal.aborted) return
       let readResult: ReadableStreamReadResult<Uint8Array>
       try {
-        readResult = await reader.read()
+        readResult = await providerDiagnosticRead(reader)
       } catch (err) {
         if (req.signal.aborted) return
         const msg = err instanceof Error ? err.message : String(err)
@@ -628,6 +636,7 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
         evt = popSseEventBlock(buf)
         if (data === null) continue
         if (data.trim() === '[DONE]') {
+          recordProviderDiagnosticTerminal()
           if (embeddedThinkingPending && embeddedThinkingBuffer.length > 0) {
             yield { kind: 'token', content: normalizeDeepSeekThinking(embeddedThinkingBuffer) }
           }
@@ -647,6 +656,7 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
         const choice = Array.isArray(frame.choices) ? frame.choices[0] : undefined
         const reasoning = choice?.delta?.reasoning_content ?? choice?.delta?.reasoning
         if (typeof reasoning === 'string' && reasoning.length > 0) {
+          recordProviderDiagnosticToken()
           structuredReasoningSeen = true
           if (embeddedThinkingPending && embeddedThinkingBuffer.length > 0) {
             yield { kind: 'token', content: embeddedThinkingBuffer }
@@ -661,6 +671,7 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
         }
         const delta = choice?.delta?.content
         if (typeof delta === 'string' && delta.length > 0) {
+          recordProviderDiagnosticToken()
           let content = delta
           if (delta.length > accumulatedContent.length && delta.startsWith(accumulatedContent)) {
             content = delta.slice(accumulatedContent.length)
@@ -689,6 +700,7 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
           }
         }
         if (choice?.finish_reason) {
+          recordProviderDiagnosticTerminal()
           finishReason = mapFinishReason(choice.finish_reason)
         }
       }
@@ -717,4 +729,16 @@ export async function* runOpenAIStream(req: OpenAIRequest): AsyncGenerator<Compl
     if (reasoningOpen) yield { kind: 'token', content: '\n</Thoughts>\n' }
     yield { kind: 'done', finishReason, ...(apiMetadata ? { apiMetadata } : {}) }
   }
+}
+
+export function runOpenAI(req: OpenAIRequest): Promise<CompletionResult> {
+  return observeProviderResult(req.openRouter === undefined ? 'openai' : 'openrouter', req.signal, () =>
+    runOpenAICore(req),
+  )
+}
+
+export function runOpenAIStream(req: OpenAIRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+  return observeProviderStream(req.openRouter === undefined ? 'openai' : 'openrouter', req.signal, () =>
+    runOpenAIStreamCore(req),
+  )
 }

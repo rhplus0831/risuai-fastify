@@ -1,3 +1,4 @@
+import { observeProviderResult, providerDiagnosticFetch } from './providerDiagnostics.js'
 import { applyAdditionalParameters, setCanonicalHeader } from './additionalParams.js'
 import type { CompletionResult } from './frames.js'
 import { extractApiResponseMetadata } from './apiMetadata.js'
@@ -360,7 +361,7 @@ function responseFailureText(value: unknown): string {
   }
 }
 
-export async function runOpenAIResponses(req: OpenAIResponsesRequest): Promise<CompletionResult> {
+async function runOpenAIResponsesCore(req: OpenAIResponsesRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -368,7 +369,7 @@ export async function runOpenAIResponses(req: OpenAIResponsesRequest): Promise<C
   const init = buildRequestInit(req)
   let response: Response
   try {
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -437,4 +438,8 @@ export async function runOpenAIResponses(req: OpenAIResponsesRequest): Promise<C
   const apiMetadata = extractApiResponseMetadata(body, ['output_text', 'output', 'error', 'model'])
   if (apiMetadata) result.apiMetadata = apiMetadata
   return result
+}
+
+export function runOpenAIResponses(req: OpenAIResponsesRequest): Promise<CompletionResult> {
+  return observeProviderResult('openai', req.signal, () => runOpenAIResponsesCore(req))
 }

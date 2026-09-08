@@ -1,3 +1,11 @@
+import {
+  observeProviderResult,
+  providerDiagnosticFetch,
+  observeProviderStream,
+  providerDiagnosticRead,
+  recordProviderDiagnosticTerminal,
+  recordProviderDiagnosticToken,
+} from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult, CompletionStreamFrame } from './frames.js'
 import { parseOpenAIStyleSseData } from './openai.js'
@@ -207,7 +215,7 @@ interface MistralNonStreamResponse {
   error?: { message?: unknown; code?: unknown }
 }
 
-export async function runMistral(req: MistralRequest): Promise<CompletionResult> {
+async function runMistralCore(req: MistralRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -215,7 +223,7 @@ export async function runMistral(req: MistralRequest): Promise<CompletionResult>
   const init = buildRequestInit(req, false)
   let response: Response
   try {
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -309,14 +317,14 @@ async function readMistralStreamError(response: Response, url: string): Promise<
   }
 }
 
-export async function* runMistralStream(req: MistralRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+async function* runMistralStreamCore(req: MistralRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
   if (req.signal.aborted) return
 
   const init = buildRequestInit(req, true)
   const url = endpoint(req)
   let response: Response
   try {
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -356,7 +364,7 @@ export async function* runMistralStream(req: MistralRequest): AsyncGenerator<Com
       if (req.signal.aborted) return
       let readResult: ReadableStreamReadResult<Uint8Array>
       try {
-        readResult = await reader.read()
+        readResult = await providerDiagnosticRead(reader)
       } catch (err) {
         if (req.signal.aborted) return
         const msg = err instanceof Error ? err.message : String(err)
@@ -375,6 +383,7 @@ export async function* runMistralStream(req: MistralRequest): AsyncGenerator<Com
         evt = popSseEventBlock(buf)
         if (data === null) continue
         if (data.trim() === '[DONE]') {
+          recordProviderDiagnosticTerminal()
           yield { kind: 'done', finishReason, ...(apiMetadata ? { apiMetadata } : {}) }
           return
         }
@@ -390,9 +399,11 @@ export async function* runMistralStream(req: MistralRequest): AsyncGenerator<Com
         const choice = Array.isArray(frame.choices) ? frame.choices[0] : undefined
         const delta = choice?.delta?.content
         if (typeof delta === 'string' && delta.length > 0) {
+          recordProviderDiagnosticToken()
           yield { kind: 'token', content: delta }
         }
         if (choice?.finish_reason) {
+          recordProviderDiagnosticTerminal()
           finishReason = mapFinishReason(choice.finish_reason)
         }
       }
@@ -417,4 +428,12 @@ export async function* runMistralStream(req: MistralRequest): AsyncGenerator<Com
     }
     yield { kind: 'done', finishReason, ...(apiMetadata ? { apiMetadata } : {}) }
   }
+}
+
+export function runMistral(req: MistralRequest): Promise<CompletionResult> {
+  return observeProviderResult('mistral', req.signal, () => runMistralCore(req))
+}
+
+export function runMistralStream(req: MistralRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+  return observeProviderStream('mistral', req.signal, () => runMistralStreamCore(req))
 }

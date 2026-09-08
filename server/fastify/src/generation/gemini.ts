@@ -1,3 +1,12 @@
+import {
+  observeProviderResult,
+  providerDiagnosticFetch,
+  observeProviderStream,
+  providerDiagnosticRead,
+  recordProviderDiagnosticTerminal,
+  recordProviderDiagnosticToken,
+  recordProviderDiagnosticFailure,
+} from './providerDiagnostics.js'
 import type { CompletionResult, CompletionStreamFrame } from './frames.js'
 import { emitProtocolMetric } from '../protocolMetrics.js'
 import { providerBodyMetricFields, summarizeGeminiProviderBody } from './providerBodySummary.js'
@@ -624,7 +633,7 @@ async function readGeminiStreamError(response: Response, url: string): Promise<C
   }
 }
 
-export async function runGemini(req: GeminiRequest): Promise<CompletionResult> {
+async function runGeminiCore(req: GeminiRequest): Promise<CompletionResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -650,7 +659,7 @@ export async function runGemini(req: GeminiRequest): Promise<CompletionResult> {
       stream: false,
       trace: req.trace,
     })
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.bodyText,
@@ -720,7 +729,7 @@ export async function runGemini(req: GeminiRequest): Promise<CompletionResult> {
   return result
 }
 
-export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+async function* runGeminiStreamCore(req: GeminiRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
   if (req.signal.aborted) return
 
   const h = await vertexHeaders(req)
@@ -743,7 +752,7 @@ export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<Compl
       stream: true,
       trace: req.trace,
     })
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.bodyText,
@@ -785,7 +794,7 @@ export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<Compl
       if (req.signal.aborted) return
       let readResult: ReadableStreamReadResult<Uint8Array>
       try {
-        readResult = await reader.read()
+        readResult = await providerDiagnosticRead(reader)
       } catch (err) {
         if (req.signal.aborted) return
         const msg = err instanceof Error ? err.message : String(err)
@@ -818,6 +827,7 @@ export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<Compl
           return
         }
         if (frame.error && typeof frame.error === 'object') {
+          recordProviderDiagnosticFailure('unknown-error')
           const message =
             typeof frame.error.message === 'string' && frame.error.message.length > 0
               ? frame.error.message
@@ -837,6 +847,7 @@ export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<Compl
         apiMetadata = mergeApiResponseMetadata(apiMetadata, extractApiResponseMetadata(frame, ['candidates', 'error']))
         const text = extractText(frame, extractionState, false)
         if (text.length > 0) {
+          recordProviderDiagnosticToken()
           if (req.streamThoughts || hasAnswerText(frame)) {
             const content = bufferedText + text
             bufferedText = ''
@@ -847,6 +858,7 @@ export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<Compl
         }
         const fr = Array.isArray(frame.candidates) ? frame.candidates[0]?.finishReason : undefined
         if (fr !== undefined) {
+          recordProviderDiagnosticTerminal()
           finishReason = mapFinishReason(fr)
         }
       }
@@ -873,4 +885,12 @@ export async function* runGeminiStream(req: GeminiRequest): AsyncGenerator<Compl
     if (bufferedText.length > 0) yield { kind: 'token', content: bufferedText }
     yield { kind: 'done', finishReason, ...(apiMetadata ? { apiMetadata } : {}) }
   }
+}
+
+export function runGemini(req: GeminiRequest): Promise<CompletionResult> {
+  return observeProviderResult('gemini', req.signal, () => runGeminiCore(req))
+}
+
+export function runGeminiStream(req: GeminiRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+  return observeProviderStream('gemini', req.signal, () => runGeminiStreamCore(req))
 }

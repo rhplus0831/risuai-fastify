@@ -1,3 +1,12 @@
+import {
+  observeProviderResult,
+  providerDiagnosticFetch,
+  observeProviderStream,
+  providerDiagnosticRead,
+  recordProviderDiagnosticTerminal,
+  recordProviderDiagnosticToken,
+  recordProviderDiagnosticFailure,
+} from './providerDiagnostics.js'
 import { applyAdditionalParameters } from './additionalParams.js'
 import type { CompletionResult, CompletionStreamFrame } from './frames.js'
 import { STREAM_BUFFER_OVERFLOW_ERROR, streamBufferExceedsCap } from './sse.js'
@@ -300,7 +309,7 @@ function mapDoneReason(raw: unknown): CompletionStreamFrame['finishReason'] {
   return raw
 }
 
-export async function runOllamaRaw(req: OllamaRequest): Promise<OllamaRawResult> {
+async function runOllamaRawCore(req: OllamaRequest): Promise<OllamaRawResult> {
   if (req.signal.aborted) {
     return { type: 'fail', result: 'aborted', aborted: true }
   }
@@ -308,7 +317,7 @@ export async function runOllamaRaw(req: OllamaRequest): Promise<OllamaRawResult>
   let response: Response
   try {
     const init = buildRequestInit(req, false)
-    response = await fetch(endpoint(req), {
+    response = await providerDiagnosticFetch(endpoint(req), {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -355,8 +364,8 @@ export async function runOllamaRaw(req: OllamaRequest): Promise<OllamaRawResult>
   return result
 }
 
-export async function runOllama(req: OllamaRequest): Promise<CompletionResult> {
-  const raw = await runOllamaRaw(req)
+async function runOllamaCore(req: OllamaRequest): Promise<CompletionResult> {
+  const raw = await runOllamaRawCore(req)
   if (raw.type === 'fail') return raw
 
   const body = raw.body
@@ -374,14 +383,14 @@ export async function runOllama(req: OllamaRequest): Promise<CompletionResult> {
   return result
 }
 
-export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+async function* runOllamaStreamCore(req: OllamaRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
   if (req.signal.aborted) return
 
   const url = endpoint(req)
   let response: Response
   try {
     const init = buildRequestInit(req, true)
-    response = await fetch(url, {
+    response = await providerDiagnosticFetch(url, {
       method: 'POST',
       headers: init.headers,
       body: init.body,
@@ -421,6 +430,7 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
   const visibleParts = function* (chunk: OllamaChunk): Generator<string> {
     const thinking = typeof chunk.message?.thinking === 'string' ? chunk.message.thinking : ''
     const content = typeof chunk.message?.content === 'string' ? chunk.message.content : ''
+    if (thinking.length > 0 || content.length > 0) recordProviderDiagnosticToken()
     if (thinking.length > 0) {
       if (!thinkingOpen) {
         thinkingOpen = true
@@ -442,7 +452,7 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
       if (req.signal.aborted) return
       let readResult: ReadableStreamReadResult<Uint8Array>
       try {
-        readResult = await reader.read()
+        readResult = await providerDiagnosticRead(reader)
       } catch (err) {
         if (req.signal.aborted) return
         const msg = err instanceof Error ? err.message : String(err)
@@ -469,6 +479,7 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
           return
         }
         if (typeof chunk.error === 'string' && chunk.error.length > 0) {
+          recordProviderDiagnosticFailure('unknown-error')
           yield { kind: 'error', error: chunk.error }
           return
         }
@@ -478,6 +489,7 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
         )
         for (const content of visibleParts(chunk)) yield { kind: 'token', content }
         if (chunk.done === true) {
+          recordProviderDiagnosticTerminal()
           sawDone = true
           finishReason = mapDoneReason(chunk.done_reason)
         }
@@ -495,6 +507,7 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
       try {
         const chunk = JSON.parse(tail) as OllamaChunk
         if (typeof chunk.error === 'string' && chunk.error.length > 0) {
+          recordProviderDiagnosticFailure('unknown-error')
           yield { kind: 'error', error: chunk.error }
           return
         }
@@ -504,6 +517,7 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
         )
         for (const content of visibleParts(chunk)) yield { kind: 'token', content }
         if (chunk.done === true) {
+          recordProviderDiagnosticTerminal()
           sawDone = true
           finishReason = mapDoneReason(chunk.done_reason)
         }
@@ -527,4 +541,16 @@ export async function* runOllamaStream(req: OllamaRequest): AsyncGenerator<Compl
   } else if (!req.signal.aborted) {
     yield { kind: 'done', finishReason: 'stop', ...(apiMetadata ? { apiMetadata } : {}) }
   }
+}
+
+export function runOllama(req: OllamaRequest): Promise<CompletionResult> {
+  return observeProviderResult('ollama', req.signal, () => runOllamaCore(req))
+}
+
+export function runOllamaStream(req: OllamaRequest): AsyncGenerator<CompletionStreamFrame, void, void> {
+  return observeProviderStream('ollama', req.signal, () => runOllamaStreamCore(req))
+}
+
+export function runOllamaRaw(req: OllamaRequest): Promise<OllamaRawResult> {
+  return observeProviderResult('ollama', req.signal, () => runOllamaRawCore(req))
 }

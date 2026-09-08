@@ -62,6 +62,7 @@ import {
 } from '../requestHistory.js'
 import { persistServerInlayAsset } from '../inlayAssetPersistence.js'
 import { getProfileAdditionalParameters } from '../generation/additionalParams.js'
+import { recordProviderDispatchFailure } from '../generation/providerDiagnostics.js'
 
 export interface ChatDispatchHistoryInput {
   db: DatabaseSync
@@ -1117,6 +1118,15 @@ async function* resultFrames(
 }
 
 export async function dispatchChatProvider(args: ChatDispatchArgs): Promise<AsyncIterable<CompletionStreamFrame>> {
+  try {
+    return await dispatchChatProviderPrepared(args)
+  } catch (error) {
+    recordProviderDispatchFailure(args.signal)
+    throw error
+  }
+}
+
+async function dispatchChatProviderPrepared(args: ChatDispatchArgs): Promise<AsyncIterable<CompletionStreamFrame>> {
   const profile = args.profile ?? resolveModelProfile({ database: args.database })
   const finalizedMessages = reformatMessages(args.database, args.formated, profile.modelInfo.flags)
   const handle = args.history
