@@ -116,4 +116,20 @@ export interface FastifyBrowserSmokeHook<
   showAlert: (message: string) => void
   navigateTo: (path: string) => void
   setQuickSettingsOpen: (open: boolean) => void
+  getReadingBoundarySnapshot: () => {
+    selectedCharacterIndex: number
+    currentCharacterIndex: number | undefined
+    chatPages: Array<{ characterId: string; chatPage: number }>
+    quickSettingsOpen: boolean
+    customGuiSettingsOpen: boolean
+    variableReload: number
+    alert: unknown
+  }
+  restoreRestrictedOverlays: () => void
+  probeInteractiveScriptAction: (input: {
+    characterId: string
+    chatId: string
+    kind: 'trigger' | 'lua'
+    name: string
+  }) => Promise<{ triggerCount: number; sourceUnchanged: boolean; error: string | null }>
 }

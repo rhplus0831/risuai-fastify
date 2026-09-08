@@ -24,9 +24,9 @@
 | -------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
 | [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                        | Accepted     | Matrix, interfaces and confirmed-field map below; four read-only cross-checks |
 | [1. Reader boundary and navigation data](phases/phase-1-reader-boundary-and-data.md)         | Accepted     | Access, projection and local-navigation focused evidence below                |
-| [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Verification | 149 focused checks; actual browser proof pending                              |
-| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Verification | Focused rendering checks pass; browser themes/copy proof pending              |
-| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Verification | Focused session/sync/stream checks and initial browser lifecycle pass         |
+| [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Accepted     | Shared controls, independent browsing and desktop/mobile browser proof        |
+| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Accepted     | Confirmed display, script denial, history/live generation and visual proof    |
+| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Accepted     | Session/draft/replay/deletion/auth/lineage and two-client generation proof    |
 | [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Verification | Final aggregate and browser reruns in progress                                |
 
 ## Decisions
@@ -364,3 +364,82 @@ rerun passed both cases, including a loaded-image occlusion assertion and fresh
 screenshot review. No further runtime change remains; the combined 19 browser
 journeys passed before this isolated image-layer adjustment and all affected
 visual/action assertions passed again afterward.
+
+## Final Browser and Integration Acceptance — 2026-09-08
+
+Runtime source is `712f1b7df` (all implementation commits through the final
+portrait paint-order correction). The browser fixture/probes are committed as
+a separate verification slice immediately after that revision. Shared reader
+presentation is the normal view; there is no temporary presentation switch,
+and the existing reader-authority rollout is unchanged. The duplicate dedicated
+navigation layout is removed; reader controllers, projections and lifecycle
+machinery remain.
+
+### Actual browser evidence
+
+The combined campaign passed **19 tests in 1.2m** with:
+
+```sh
+pnpm exec playwright test -c playwright.fastify-smoke.config.ts server/fastify/browser-smoke/readOnlyAppUx.spec.ts server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts server/fastify/browser-smoke/connectedReaderGeneration.spec.ts server/fastify/browser-smoke/connectedReaderRollout.spec.ts server/fastify/browser-smoke/connectedWriterSwitching.spec.ts server/fastify/browser-smoke/visibleStateRecovery.spec.ts --output=/tmp/read-only-app-browser-final-results
+```
+
+The isolated final portrait CSS correction was rebuilt with `pnpm build:smoke`
+and both affected desktop/mobile journeys passed again (**2 tests, 16.7s**):
+
+```sh
+pnpm exec playwright test -c playwright.fastify-smoke.config.ts server/fastify/browser-smoke/readOnlyAppUx.spec.ts --grep 'shared read-only app' --output=/tmp/read-only-app-browser-portrait-parity
+```
+
+Viewports were desktop **1440 × 1000** and Pixel 7 emulation **412 × 839 CSS
+pixels**. Parent and browser-owner screenshot review confirmed the shared rail,
+folders/search/pins, mobile focus containment, readable transcript/composer and
+visible controls/portraits. Four themes were exercised: mobilechat, waifu,
+waifuMobile and fastify. The fixture measures eight reading/control contrast
+ratios per theme, scroll/composer geometry, horizontal overflow and portrait
+occlusion, alongside screenshots. Minimum observed text contrast was 6.09:1,
+7.48:1, 7.48:1 and 5.49:1 respectively.
+
+The new fixture verifies keyboard and direct handler activation, safe copy and
+links/disclosures, history paging, Home/grid and independent routes/history,
+Settings/plugin no-mount/no-load, local-only trigger and Lua callback denial,
+restored overlay closure, retained search/folders on replay recovery, deleted
+selected-chat fallback, and protected-DOM clearing on auth loss. Native outbox,
+composer drafts, SQL revisions/events/ownership and network assertions distinguish
+authenticated cache reads from domain mutations; reader browsing creates no
+writer selection changes or new domain intent.
+
+Existing connected-reader/writer suites provide real controlled generation,
+finalization/receipt races, takeover, demotion with retained drafts, reconnect,
+and database-import lineage replacement. All disposable harnesses were closed.
+Logs and screenshots are local review artifacts under the output directories
+above; they are not deployment evidence.
+
+### Final integration checks
+
+`pnpm test:agent` passed every lane in **3m 54.0s**:
+
+- Frontend: 721 files, **9,230 passed**, three skipped.
+- Fastify: 235 files, **4,356 passed**, two skipped.
+- Protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory.
+- Svelte check with zero errors/warnings, test topology, current documentation,
+  and the browser-smoke build.
+
+The final browser fixture addition also passed
+`pnpm exec tsc -p tsconfig.browser-smoke.json --noEmit`.
+Prettier and whitespace checks passed for all implementation and fixture slices.
+The aggregate was required because shared routes, state ownership and role
+transitions cross multiple areas. No `pnpm test:all` was run.
+
+### Acceptance limits
+
+This is local Chromium/disposable-data evidence, including mobile emulation,
+controlled generation and injected 409 replay-exhaustion/401 read failures.
+Physical mobile devices and the external production deployment were not tested;
+deployment was not part of the plan. Passive custom HTML retains its documented
+static/readable fallback; executable templates and interactive scripts remain
+excluded. Panel contrast derives translucent-image backing from confirmed app
+colors, so arbitrary user-authored background imagery/CSS is not certified by
+this finite fixture matrix.
+
+Phases 2–4 are accepted by this combined component, lifecycle, browser and visual
+evidence. Phase 5's final documentation/archive consistency checks follow below.

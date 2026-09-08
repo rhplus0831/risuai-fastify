@@ -400,7 +400,7 @@ test('connected-default import recovery preserves the character sidebar after ex
     evidence.reader = { ...reader, sql: afterImport, traffic: readerTraffic }
 
     const promotionTrafficStart = traffic.length
-    await page.getByRole('button', { name: 'Use this device', exact: true }).click()
+    await page.locator('[data-reader-use-this-device]').click()
     await expect
       .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot()), {
         timeout: 30_000,

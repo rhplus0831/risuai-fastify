@@ -1,7 +1,7 @@
 import { get } from 'svelte/store'
 import { getClientSessionSnapshot } from '../clientSession'
-import { selectedCharID } from '../stores/coreStores.svelte'
-import { composeResourceDatabaseSnapshot } from './resourceState.svelte'
+import { alertStore, selectedCharID } from '../stores/coreStores.svelte'
+import { charactersResourceState, composeResourceDatabaseSnapshot } from './resourceState.svelte'
 import { getRerollBuffer, unReroll } from '../process/rerollNavigation.svelte'
 import { acceptedSendRecoveries } from '../process/acceptedSendRecoveryState'
 import { activeChatGenerations } from '../process/generationActivity.svelte'
@@ -13,7 +13,7 @@ import { dispatchDurableServerBackedSettingsPatch } from './settingsOwner.svelte
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { alertNormal } from '../alert'
 import { currentRoute, navigate } from '../router'
-import { QuickSettings } from '../stores.svelte'
+import { CustomGUISettingMenuStore, QuickSettings, VariableReloadGUIPointer } from '../stores.svelte'
 import { generationOperationCancellations, generationOperationProjections } from './generationOperations'
 import { listPendingMutationReceiptAcknowledgements, listPendingMutations } from './pendingMutationOutbox'
 import { clearResourceCache, getPendingResourceCacheWriteCount } from './resourceCache'
@@ -100,6 +100,50 @@ export function installFastifyBrowserSmokeHook() {
     navigateTo: (path) => navigate(path),
     setQuickSettingsOpen: (open) => {
       QuickSettings.open = open
+    },
+    getReadingBoundarySnapshot: () => {
+      return {
+        selectedCharacterIndex: get(selectedCharID),
+        currentCharacterIndex: charactersResourceState.currentChar,
+        chatPages: charactersResourceState.characters.map((character) => ({
+          characterId: character.chaId,
+          chatPage: character.chatPage,
+        })),
+        quickSettingsOpen: QuickSettings.open,
+        customGuiSettingsOpen: get(CustomGUISettingMenuStore),
+        variableReload: get(VariableReloadGUIPointer),
+        alert: structuredClone(get(alertStore)),
+      }
+    },
+    // Reproduce a restored/deferred overlay store write; App owns its denial.
+    restoreRestrictedOverlays: () => {
+      QuickSettings.open = true
+      CustomGUISettingMenuStore.set(true)
+    },
+    // Invoke the actual action owners against the hydrated fixture, bypassing
+    // controls without bypassing authority. Imports do not initialize Lua.
+    probeInteractiveScriptAction: async ({ characterId, chatId, kind, name }) => {
+      const character = charactersResourceState.characters.find((row) => row.chaId === characterId)
+      const chat = character?.chats.find((row) => row.id === chatId)
+      if (!character || !chat) throw new Error('browser_smoke_script_owner_missing')
+      const previous = JSON.stringify(character)
+      let error: string | null = null
+      try {
+        if (kind === 'trigger') {
+          const { runTrigger } = await import('../process/triggers')
+          await runTrigger(character, 'manual', { chat, manualName: name })
+        } else {
+          const { runLuaButtonTrigger } = await import('../process/scriptings')
+          await runLuaButtonTrigger(character, name, { chat })
+        }
+      } catch (caught) {
+        error = caught instanceof Error ? caught.message : String(caught)
+      }
+      return {
+        triggerCount: character.triggerscript?.length ?? 0,
+        sourceUnchanged: JSON.stringify(character) === previous,
+        error,
+      }
     },
   }
 }
