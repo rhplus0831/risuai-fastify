@@ -20,7 +20,7 @@ describe('remote diagnostics finite protocol', () => {
       { limit: ['1', '2'] },
       { from: '0', to: '86400001' },
       { from: '2', to: '1' },
-      { version: '2' },
+      { version: '3' },
       { requestUid: 'PRIVATE' },
       { operationRef: '../PRIVATE' },
       { cursor: 'a'.repeat(32), limit: '50' },

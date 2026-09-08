@@ -1,6 +1,14 @@
 import { Type, type Static } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
 import { DiagnosticEntrySchema, projectDiagnosticEntry } from './diagnostics.js'
+import {
+  DIAGNOSTIC_EVENT_CATEGORIES,
+  DiagnosticJournalRecordSchema,
+  projectDiagnosticJournalRecord,
+  type DiagnosticJournalRecord,
+  projectDiagnosticEventV2,
+} from './diagnosticEvents.js'
+export * from './diagnosticEvents.js'
 
 export const SUPPORT_DIAGNOSTICS_ENDPOINT = '/api/v1/support/diagnostics'
 export const BROWSER_DIAGNOSTICS_ENDPOINT = '/api/v1/diagnostics/browser'
@@ -35,7 +43,7 @@ export const RemoteDiagnosticRecordSchema = Type.Object(
 )
 export type RemoteDiagnosticRecord = Static<typeof RemoteDiagnosticRecordSchema>
 
-export const RemoteDiagnosticsResponseSchema = Type.Object(
+export const RemoteDiagnosticsResponseV1Schema = Type.Object(
   {
     version: Type.Literal(1),
     serverTime: timestamp,
@@ -70,10 +78,41 @@ export const RemoteDiagnosticsResponseSchema = Type.Object(
   },
   { additionalProperties: false },
 )
+export const RemoteDiagnosticsResponseV2Schema = Type.Object(
+  {
+    ...RemoteDiagnosticsResponseV1Schema.properties,
+    version: Type.Literal(2),
+    entries: Type.Array(DiagnosticJournalRecordSchema, { maxItems: 200 }),
+    clock: Type.Object(
+      {
+        ordering: Type.Literal('server-sequence'),
+        browserTime: Type.Literal('client-asserted'),
+        skew: Type.Literal('unknown'),
+      },
+      { additionalProperties: false },
+    ),
+    collection: Type.Object(
+      {
+        pending: Type.Integer({ minimum: 0, maximum: 256 }),
+        operationContinuity: enumOf(['retained', 'process-only']),
+      },
+      { additionalProperties: false },
+    ),
+  },
+  { additionalProperties: false },
+)
+export const RemoteDiagnosticsResponseSchema = Type.Union([
+  RemoteDiagnosticsResponseV1Schema,
+  RemoteDiagnosticsResponseV2Schema,
+])
+export type RemoteDiagnosticsResponseV1 = Static<typeof RemoteDiagnosticsResponseV1Schema>
+export type RemoteDiagnosticsResponseV2 = Static<typeof RemoteDiagnosticsResponseV2Schema>
 export type RemoteDiagnosticsResponse = Static<typeof RemoteDiagnosticsResponseSchema>
 export function isRemoteDiagnosticsResponse(value: unknown): value is RemoteDiagnosticsResponse {
   try {
-    return Value.Check(RemoteDiagnosticsResponseSchema, value)
+    if (!Value.Check(RemoteDiagnosticsResponseSchema, value)) return false
+    if (value.version === 2 && value.entries.some((entry) => !projectDiagnosticJournalRecord(entry))) return false
+    return true
   } catch {
     return false
   }
@@ -96,13 +135,13 @@ export const RemoteDiagnosticsErrorSchema = Type.Object(
 )
 
 export interface RemoteDiagnosticsQuery {
-  version: 1
+  version: 1 | 2
   from: number
   to: number
   limit: number
   requestUid?: string
   operationRef?: string
-  category?: (typeof REMOTE_DIAGNOSTICS_CATEGORIES)[number]
+  category?: (typeof REMOTE_DIAGNOSTICS_CATEGORIES)[number] | (typeof DIAGNOSTIC_EVENT_CATEGORIES)[number]
   cursor?: string
 }
 
@@ -119,7 +158,8 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
     )
       return null
     if (Object.values(values).some((value) => typeof value !== 'string' || value.length > 64)) return null
-    if (values.version !== undefined && values.version !== '1') return null
+    if (values.version !== undefined && values.version !== '1' && values.version !== '2') return null
+    const version = values.version === '2' ? 2 : 1
     const integer = (value: unknown, fallback: number) =>
       value === undefined
         ? fallback
@@ -142,7 +182,9 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
     if (values.operationRef !== undefined && !/^[a-f0-9]{32}$/.test(String(values.operationRef))) return null
     if (
       values.category !== undefined &&
-      !REMOTE_DIAGNOSTICS_CATEGORIES.some((category) => category === values.category)
+      !(version === 2 ? DIAGNOSTIC_EVENT_CATEGORIES : REMOTE_DIAGNOSTICS_CATEGORIES).some(
+        (category) => category === values.category,
+      )
     )
       return null
     if (
@@ -151,7 +193,7 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
     )
       return null
     return {
-      version: 1,
+      version,
       from,
       to,
       limit,
@@ -178,6 +220,95 @@ export function projectRemoteDiagnosticRecord(value: unknown): RemoteDiagnosticR
   } catch {
     return null
   }
+}
+
+/** Existing capture facts enter v2 through an explicit closed representation. */
+export function promoteRemoteDiagnosticRecord(record: RemoteDiagnosticRecord): DiagnosticJournalRecord | null {
+  const base = {
+    timestamp: record.entry.timestamp,
+    source: 'server',
+    level: record.entry.level,
+    correlation: record.entry.requestUid ? 'request' : 'background',
+    requestUid: record.entry.requestUid,
+  }
+  const entry =
+    record.entry.event === 'http'
+      ? projectDiagnosticEventV2({
+          ...base,
+          category: 'http',
+          routeId: record.entry.routeId ?? 'unknown',
+          method: record.entry.method ?? 'GET',
+          statusCode: record.entry.statusCode ?? 0,
+          durationMs: Math.min(86_400_000, record.entry.durationMs ?? 0),
+          requestBytes: 'unknown',
+          responseBytes: 'unknown',
+          outcome:
+            (record.entry.statusCode ?? 0) >= 500
+              ? 'server-error'
+              : (record.entry.statusCode ?? 0) >= 400
+                ? 'client-error'
+                : 'ok',
+        })
+      : ['runtime-error', 'unhandled-rejection', 'console'].includes(record.entry.event)
+        ? projectDiagnosticEventV2({
+            ...base,
+            category: 'runtime',
+            kind: record.entry.event,
+            errorName: record.entry.errorName,
+          })
+        : projectDiagnosticEventV2({ ...base, category: 'legacy', detail: record.entry })
+  return entry ? projectDiagnosticJournalRecord({ ...record, entry, provenance: { kind: 'server' } }) : null
+}
+
+/** V1 gets only facts it already understands; richer events never masquerade as v1. */
+export function downgradeDiagnosticJournalRecord(record: DiagnosticJournalRecord): RemoteDiagnosticRecord | null {
+  if (record.entry.source !== 'server') return null
+  const event = record.entry
+  const base = { timestamp: event.timestamp, source: 'server', level: event.level, requestUid: event.requestUid }
+  let entry: unknown
+  if (event.category === 'legacy') entry = event.detail
+  else if (event.category === 'http')
+    entry = {
+      ...base,
+      event: 'http',
+      routeId: event.routeId,
+      method: event.method,
+      statusCode: event.statusCode,
+      durationMs: event.durationMs,
+    }
+  else if (event.category === 'runtime') entry = { ...base, event: event.kind, errorName: event.errorName }
+  else if (event.category === 'deployment' && event.stage === 'started') entry = { ...base, event: 'server-started' }
+  else if (event.category === 'prompt')
+    entry = {
+      ...base,
+      event: 'protocol',
+      metric: 'generation_prompt_assembly',
+      durationMs: event.durationMs,
+      outcome: event.outcome === 'error' ? 'error' : event.outcome === 'stopped' ? 'cancelled' : 'ok',
+    }
+  else if (event.category === 'persistence')
+    entry = {
+      ...base,
+      event: 'protocol',
+      metric: event.disposition === 'recovered' ? 'generation_persistence_retry' : 'generation_persistence',
+      durationMs: event.durationMs,
+      outcome: event.authoritativeCommitted ? 'committed' : event.disposition === 'failed' ? 'error' : 'pending',
+    }
+  else if (event.category === 'script')
+    entry = {
+      ...base,
+      event: 'protocol',
+      metric: 'generation_lua_runtime',
+      durationMs: event.durationMs,
+      outcome: event.failures ? 'error' : 'ok',
+    }
+  else return null
+  return projectRemoteDiagnosticRecord({
+    sequence: record.sequence,
+    receivedAt: record.receivedAt,
+    instanceId: record.instanceId,
+    entry,
+  })
 }
 
 /** Includes rejected methods and subpaths, before parser/auth/trace hooks. */

@@ -76,7 +76,7 @@ export function registerBootstrapRoutes(
   clientDiagnostics = false,
 ): void {
   app.get('/api/v1/bootstrap', { exposeHeadRoute: false }, async (req, reply) => {
-    const metricStartedAt = protocolMetricsEnabled() ? protocolNowMs() : 0
+    const metricStartedAt = protocolNowMs()
     if (!(await requireAuth(authState, req, reply))) return
     const expectedWriter = readExpectedWriter(req)
     if (expectedWriter === null || (expectedWriter !== undefined && !activeWriterState)) {

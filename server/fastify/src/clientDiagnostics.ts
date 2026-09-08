@@ -14,12 +14,17 @@ import { requireAuth } from './http.js'
 import { ensureRequestTraceUid, readRequestTraceUid } from './requestTrace.js'
 import { findProtocolRouteDecision } from './routeManifest.js'
 import { subscribeProtocolMetrics } from './protocolMetrics.js'
-import { isDiagnosticTransportUrl } from '@risuai/protocol/remote-diagnostics'
+import { diagnosticSizeBucket, isDiagnosticTransportUrl } from '@risuai/protocol/remote-diagnostics'
+import { getDiagnosticContext, diagnosticsContextEnabled } from './diagnosticContext.js'
 
 export function createClientDiagnostics(enabled: boolean) {
   let entries: DiagnosticEntry[] = []
-  const listeners = new Set<(entry: DiagnosticEntry) => void>()
-  const record = (input: Record<string, unknown>) => {
+  type HttpFacts = {
+    requestBytes: ReturnType<typeof diagnosticSizeBucket>
+    responseBytes: ReturnType<typeof diagnosticSizeBucket>
+  }
+  const listeners = new Set<(entry: DiagnosticEntry, http?: HttpFacts) => void>()
+  const record = (input: Record<string, unknown>, http?: HttpFacts) => {
     if (!enabled) return
     const entry = projectDiagnosticEntry({ ...input, timestamp: Date.now(), source: 'server' })
     if (!entry) return
@@ -27,7 +32,7 @@ export function createClientDiagnostics(enabled: boolean) {
     if (entries.length > DIAGNOSTICS_LIMIT) entries.shift()
     for (const listener of listeners) {
       try {
-        listener(projectDiagnosticEntry(entry)!)
+        listener(projectDiagnosticEntry(entry)!, http)
       } catch {
         /* Telemetry is best effort. */
       }
@@ -36,7 +41,7 @@ export function createClientDiagnostics(enabled: boolean) {
   return {
     enabled,
     record,
-    subscribe(listener: (entry: DiagnosticEntry) => void) {
+    subscribe(listener: (entry: DiagnosticEntry, http?: HttpFacts) => void) {
       listeners.add(listener)
       return () => listeners.delete(listener)
     },
@@ -94,25 +99,39 @@ export function registerClientDiagnosticsHooks(app: FastifyInstance, diagnostics
     if (isDiagnosticTransportUrl(request.url)) return
     const route = findProtocolRouteDecision(request.method, request.url.split('?')[0])
     if (route?.id === 'diagnostics-read' || !request.url.startsWith('/api/')) return
-    diagnostics.record({
-      event: 'http',
-      level: reply.statusCode >= 500 ? 'error' : reply.statusCode >= 400 ? 'warn' : 'info',
-      routeId: route?.id ?? 'unknown',
-      method: request.method,
-      statusCode: reply.statusCode,
-      durationMs: Math.round(Math.max(0, performance.now() - (starts.get(request) ?? performance.now()))),
-      requestUid: readRequestTraceUid(request),
-    })
+    const bytes = (value: unknown) =>
+      typeof value === 'number'
+        ? diagnosticSizeBucket(value)
+        : typeof value === 'string' && /^[0-9]{1,16}$/.test(value)
+          ? diagnosticSizeBucket(Number(value))
+          : 'unknown'
+    diagnostics.record(
+      {
+        event: 'http',
+        level: reply.statusCode >= 500 ? 'error' : reply.statusCode >= 400 ? 'warn' : 'info',
+        routeId: route?.id ?? 'unknown',
+        method: request.method,
+        statusCode: reply.statusCode,
+        durationMs: Math.round(Math.max(0, performance.now() - (starts.get(request) ?? performance.now()))),
+        requestUid: readRequestTraceUid(request),
+      },
+      {
+        requestBytes: bytes(request.headers['content-length']),
+        responseBytes: bytes(reply.getHeader('content-length')),
+      },
+    )
   })
   const unsubscribe = subscribeProtocolMetrics(
     (metric) => {
       if (!DIAGNOSTIC_METRICS.some((name) => name === metric.metric)) return
-      if (typeof metric.requestUid !== 'string' || !requestUids.has(metric.requestUid)) return
+      const context = getDiagnosticContext()
+      if (context && (context.owner !== diagnostics || !diagnosticsContextEnabled())) return
+      if (!context && (typeof metric.requestUid !== 'string' || !requestUids.has(metric.requestUid))) return
       diagnostics.record({
         event: 'protocol',
         level: metric.status === 'error' ? 'error' : 'info',
         metric: metric.metric,
-        requestUid: metric.requestUid,
+        requestUid: context?.requestUid ?? metric.requestUid,
         durationMs: metric.durationMs,
         payloadBytes: metric.payloadBytes,
         attemptCount: metric.attemptCount,
