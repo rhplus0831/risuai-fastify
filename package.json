@@ -44,7 +44,8 @@
     "api:dev": "tsx watch server/fastify/src/index.ts",
     "api:dev:flag": "tsx util/api-flag-dev.ts",
     "api:start": "tsx server/fastify/src/index.ts",
-    "diagnostics:credential": "tsx util/diagnostics-credential.ts"
+    "diagnostics:credential": "tsx util/diagnostics-credential.ts",
+    "diagnostics:remote": "tsx util/diagnostics-remote.ts"
   },
   "dependencies": {
     "@adobe/css-tools": "4.4.4",

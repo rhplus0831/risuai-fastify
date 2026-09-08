@@ -177,6 +177,25 @@ Every outcome uses `Cache-Control: no-store`: 401 unauthorized, 400 invalid-quer
 with no entries. Errors contain fixed categories and never echo filters or
 credential material. Restart invalidates volatile cursors and evidence.
 
+In the development environment, set `RISU_DIAGNOSTICS_REMOTE_CONFIG` to the
+private transferred config, then run:
+
+```sh
+pnpm diagnostics:remote --limit=50
+pnpm diagnostics:remote --requestUid=<generated-request-uid>
+pnpm diagnostics:remote --cursor=<returned-cursor>
+```
+
+`util/diagnostics-remote.ts` accepts only the finite query flags above; it has no
+per-request destination/header/output-file override. It verifies TLS, rejects
+redirects and unexpected content types, bounds both compressed and expanded
+responses to 512 KiB, and validates the complete exact schema before printing
+one JSON envelope. Failures print only a fixed category to stderr. Remote HTML,
+headers, stacks, and arbitrary error bodies never become fallback output.
+`util/diagnostics-remote.test.ts` exercises the real CLI with temporary HTTPS
+fixtures, including a trust chain, rejected TLS/redirects, compressed limits,
+timeout, malformed schemas, and credential/content canaries.
+
 Source owners are `server/fastify/src/remoteDiagnostics.ts`,
 `server/fastify/src/supportDiagnosticsAuth.ts`, and the exact contract in
 `packages/protocol/src/remoteDiagnostics.ts`. Focused authorization, paging,

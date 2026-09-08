@@ -94,3 +94,14 @@ families/correlation/journal, browser ingestion/publisher, and combined proof.
 - HTTPS helper tests are complete in a separate pending slice. The cross-layer
   aggregate remains required after implementation/self-review and will be run
   on the completed final feature, together with final-source combined proof.
+
+### Phase 1 helper acceptance
+
+- Read integration committed `6d264ef0c`; real helper and HTTPS tests committed
+  `06cb0ac72`. The helper's full 29-test suite passed, followed by two additional
+  focused regressions (unavailable server and unverified source coordinates).
+  Targeted strict utility TypeScript and Prettier passed.
+- Phase 1 bounded server-only retrieval is locally accepted. Configuration stays
+  opt-in; no production hostname or secret was used. Source coverage remains
+  explicitly volatile/server-only at this phase. Phase 2 begins with exact v2
+  families, correlation/timer fixes, and dedicated bounded persistence.
