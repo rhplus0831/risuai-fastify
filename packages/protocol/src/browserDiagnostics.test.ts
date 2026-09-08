@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { isBrowserDiagnosticEvent, projectDiagnosticJournalRecord } from './diagnosticEvents.js'
 import {
   BROWSER_DIAGNOSTICS_MAX_EVENTS,
   isBrowserDiagnosticsBatch,
@@ -105,6 +106,54 @@ describe('browser diagnostics upload contract', () => {
       expect(
         isBrowserDiagnosticsBatch({ ...input, events: [{ ...input.events[0], entry: { ...entry, detail } }] }),
       ).toBe(false)
+    }
+  })
+
+  it('admits only observed plugin output-listener counts with explicitly unavailable comparison', () => {
+    const input = batch()
+    const entry = {
+      timestamp: 1,
+      source: 'browser',
+      level: 'info',
+      correlation: 'client-asserted',
+      category: 'script',
+      runtime: 'plugin',
+      hook: 'onOutput',
+      runs: 2,
+      failures: 1,
+      durationMs: 12,
+      comparison: 'unavailable',
+    }
+    const record = {
+      sequence: 1,
+      receivedAt: 2,
+      instanceId: 'c'.repeat(32),
+      provenance: { kind: 'browser', sourceId: input.sourceId, eventId: input.events[0].eventId, clientSequence: 1 },
+      entry,
+    }
+    expect(isBrowserDiagnosticEvent(entry)).toBe(true)
+    expect(isBrowserDiagnosticsBatch({ ...input, events: [{ ...input.events[0], entry }] })).toBe(true)
+    expect(projectDiagnosticJournalRecord(record)).toEqual(record)
+    for (const fields of [
+      { runtime: 'lua' },
+      { hook: 'editOutput' },
+      { comparison: 'complete' },
+      { comparison: undefined },
+      { outputChanged: false },
+      { transcriptChanged: false },
+      { allowedCalls: 0 },
+      { blockedCalls: 0 },
+      { runs: -1 },
+      { failures: 1_000_000_001 },
+      { durationMs: Infinity },
+      { operationRef: 'd'.repeat(32) },
+      { attemptRef: 'd'.repeat(32) },
+      { name: 'PRIVATE-CANARY' },
+    ]) {
+      const invalid = { ...entry, ...fields }
+      expect(isBrowserDiagnosticEvent(invalid)).toBe(false)
+      expect(isBrowserDiagnosticsBatch({ ...input, events: [{ ...input.events[0], entry: invalid }] })).toBe(false)
+      expect(projectDiagnosticJournalRecord({ ...record, entry: invalid })).toBeNull()
     }
   })
 })

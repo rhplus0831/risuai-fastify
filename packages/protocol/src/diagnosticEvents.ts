@@ -177,8 +177,8 @@ const eventSchemas = {
     runs: count,
     failures: count,
     durationMs: duration,
-    allowedCalls: count,
-    blockedCalls: count,
+    allowedCalls: Type.Optional(count),
+    blockedCalls: Type.Optional(count),
     outputChanged: Type.Optional(Type.Boolean()),
     transcriptChanged: Type.Optional(Type.Boolean()),
     comparison: Type.Optional(enumOf(['complete', 'unavailable'])),
@@ -232,6 +232,30 @@ export function isDiagnosticEventV2(input: unknown): input is DiagnosticEventV2 
   }
 }
 
+/** Browser assertions may contain only locally observed, content-free families. */
+export function isBrowserDiagnosticEvent(input: unknown): input is DiagnosticEventV2 {
+  if (
+    !isDiagnosticEventV2(input) ||
+    input.source !== 'browser' ||
+    input.correlation !== 'client-asserted' ||
+    input.operationRef !== undefined ||
+    input.attemptRef !== undefined
+  )
+    return false
+  if (input.category === 'script') {
+    return (
+      input.runtime === 'plugin' &&
+      input.hook === 'onOutput' &&
+      input.comparison === 'unavailable' &&
+      input.outputChanged === undefined &&
+      input.transcriptChanged === undefined &&
+      input.allowedCalls === undefined &&
+      input.blockedCalls === undefined
+    )
+  }
+  return ['legacy', 'browser', 'http', 'runtime'].includes(input.category)
+}
+
 /** Local producers select facts; every family has its own exact allowlist. */
 export function projectDiagnosticEventV2(input: unknown): DiagnosticEventV2 | null {
   try {
@@ -266,15 +290,7 @@ export function projectDiagnosticJournalRecord(input: unknown): DiagnosticJourna
   try {
     if (!Value.Check(DiagnosticJournalRecordSchema, input) || !isDiagnosticEventV2(input.entry)) return null
     if (input.provenance.kind === 'server' && input.entry.source !== 'server') return null
-    if (
-      input.provenance.kind === 'browser' &&
-      (input.entry.source !== 'browser' ||
-        input.entry.correlation !== 'client-asserted' ||
-        input.entry.operationRef !== undefined ||
-        input.entry.attemptRef !== undefined ||
-        !['legacy', 'browser', 'http', 'runtime'].includes(input.entry.category))
-    )
-      return null
+    if (input.provenance.kind === 'browser' && !isBrowserDiagnosticEvent(input.entry)) return null
     return structuredClone(input)
   } catch {
     return null

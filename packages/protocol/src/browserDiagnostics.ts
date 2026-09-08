@@ -1,6 +1,6 @@
 import { Type, type Static } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
-import { DiagnosticEventV2Schema, isDiagnosticEventV2 } from './diagnosticEvents.js'
+import { DiagnosticEventV2Schema, isBrowserDiagnosticEvent } from './diagnosticEvents.js'
 
 export const BROWSER_DIAGNOSTICS_VERSION = 1
 export const BROWSER_DIAGNOSTICS_MAX_EVENTS = 32
@@ -50,15 +50,7 @@ export function isBrowserDiagnosticsBatch(value: unknown): value is BrowserDiagn
     if (encoder.encode(JSON.stringify(value)).byteLength > BROWSER_DIAGNOSTICS_MAX_BYTES) return false
     return value.events.every((event) => {
       const entry = event.entry
-      if (
-        !isDiagnosticEventV2(entry) ||
-        entry.source !== 'browser' ||
-        entry.correlation !== 'client-asserted' ||
-        entry.operationRef !== undefined ||
-        entry.attemptRef !== undefined ||
-        !['runtime', 'http', 'browser', 'legacy'].includes(entry.category)
-      )
-        return false
+      if (!isBrowserDiagnosticEvent(entry)) return false
       // Reserve server-controlled metadata widths so a valid upload cannot
       // become oversized when the journal assigns provenance and ordering.
       const record = {

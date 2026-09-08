@@ -163,9 +163,22 @@ describe('browser diagnostics admission', () => {
     }
   })
 
-  it('deduplicates pending and retained browser identities across application restart', async () => {
+  it('deduplicates pending and retained plugin output summaries across application restart', async () => {
     const h = await harness({ bypass: true })
     const input = batch()
+    input.events[0].entry = {
+      timestamp: 1,
+      source: 'browser',
+      level: 'warn',
+      correlation: 'client-asserted',
+      category: 'script',
+      runtime: 'plugin',
+      hook: 'onOutput',
+      runs: 2,
+      failures: 1,
+      durationMs: 12,
+      comparison: 'unavailable',
+    }
     input.events.push(input.events[0])
     expect((await upload(h.app, input)).json()).toEqual({ version: 1, accepted: 1, duplicates: 1, dropped: 0 })
     expect((await upload(h.app, batch())).json()).toEqual({ version: 1, accepted: 0, duplicates: 1, dropped: 0 })
@@ -179,6 +192,7 @@ describe('browser diagnostics admission', () => {
     })
     const records = restarted.diagnostics.journal!.read().entries.filter((entry) => entry.provenance.kind === 'browser')
     expect(records).toHaveLength(1)
+    expect(records[0].entry).toEqual(input.events[0].entry)
   })
 
   it('rejects forged or content-bearing batches atomically before the sink', async () => {
