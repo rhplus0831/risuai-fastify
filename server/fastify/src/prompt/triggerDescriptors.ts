@@ -1066,8 +1066,16 @@ export type triggerV2DeclareLocalVar = {
   indent: number
 }
 
-/** Fastify-owned aliases for the exact persisted trigger descriptor mirror. */
-export type ServerTriggerScript = DeepReadonly<triggerscript>
+/**
+ * Some pre-Fastify module rows encode a trigger mode as a singleton array.
+ * Accept that finite persisted shape without changing the canonical browser
+ * descriptor or treating it as an automatically matching mode at runtime.
+ */
+export type ServerLegacyTriggerMode = readonly [triggerscript['type']]
+export type ServerPersistedTriggerMode = triggerscript['type'] | ServerLegacyTriggerMode
+export type ServerTriggerScript = Omit<DeepReadonly<triggerscript>, 'type'> & {
+  readonly type: ServerPersistedTriggerMode
+}
 export type ServerTriggerCondition = triggerCondition
 export type ServerTriggerEffect = triggerEffect
 export type ServerAdditionalSystemPrompt = additonalSysPrompt

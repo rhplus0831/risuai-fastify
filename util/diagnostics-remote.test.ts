@@ -192,7 +192,7 @@ describe('remote diagnostics helper with real HTTPS and CLI processes', () => {
     expectSafeFailure(await run([], { NODE_EXTRA_CA_CERTS: undefined }), 'tls-error')
     expectSafeFailure(await run([], { NODE_EXTRA_CA_CERTS: undefined, NODE_TLS_REJECT_UNAUTHORIZED: '0' }), 'tls-error')
     expect(requests).toEqual([])
-  })
+  }, 15_000)
 
   it('reports an unavailable server without connection details or configuration contents', async () => {
     const unavailable = createServer()

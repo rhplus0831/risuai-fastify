@@ -1,7 +1,7 @@
 # Prompt Assembly And Scripting
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-05 (selected generation inputs, immutable configuration, and checked scripting boundaries).
+Targeted source check: 2026-09-09 (display-scope validation and persisted trigger compatibility).
 
 This guide owns server prompt construction, CBS and history variables,
 lorebook and memory injection, prompt-template precedence, generation
@@ -260,15 +260,25 @@ same ephemeral principle. Browser `editdisplay` plugins, dynamic fuzzy-asset
 matching, an old server, stale identity/context, and transport failures select
 the complete browser transform instead of reordering stages.
 
-The display route hydrates only the selected character, selected chat and
-transcript, plus the module, prompt-preset, and persona collections required by
-the transform. It does not scan unrelated character/chat payloads or asset
-metadata. A batch canonicalizes and hashes the shared transcript and scripting
-dependencies once, then combines that digest with each target's small identity
-and source digest. Opt-in `display_source_batch` metrics expose queue wait,
-scoped-load, shared-dependency, per-target fingerprint, transcript-size, and
-per-batch cache outcome fields so regressions can be separated from actual
-script execution time.
+The display route hydrates and validates only the selected character, selected
+chat and transcript, selected prompt/persona dependencies, module activation
+identities, and the activation-winning module bodies required by the transform.
+Inactive modules, unrelated prompt/persona rows, and later duplicate module
+bodies stay outside the display decoder. Unrelated character/chat payloads and
+asset metadata are not scanned. A compatible batch canonicalizes and hashes the
+shared transcript and scripting dependencies once, then combines that digest
+with each target's small identity and source digest. Opt-in
+`display_source_batch` metrics expose queue wait, scoped-load,
+shared-dependency, per-target fingerprint, transcript-size, and per-batch cache
+outcome fields so regressions can be separated from actual script execution
+time.
+
+A generation-input shape that the narrow display decoder cannot support is a
+handled compatibility boundary: the route returns HTTP 200 with one
+`client_fallback` / `scope_input_incompatible` entry per target, so the browser
+runs its complete legacy transform. Malformed stored JSON, storage faults,
+invariant failures, and unexpected exceptions remain server errors. The
+fallback is read-only and does not normalize or rewrite the rejected record.
 
 The client submits the newest two mounted messages as a critical batch and
 defers the rest of the transcript window until those results settle. The server
@@ -563,6 +573,15 @@ them. No diff means no state write. Coverage lives in
 variables/local variables, comparisons, loops, safe data helpers, message
 reads/writes, additional system prompts, and server Lua effects under effect,
 loop, recursion, and wall-clock budgets.
+
+Persisted server inputs accept either a canonical scalar trigger mode or an
+exact one-element tuple containing one of the six valid modes. The tuple is a
+finite compatibility shape for legacy/foreign rows, not a new authoring format:
+ordinary automatic selection remains scalar-only and never coerces the tuple.
+The historical first-effect `triggercode`/`triggerlua` and manual-name bypasses
+remain unchanged, while string-only trigger attribution omits tuple values.
+Browser editors, imports, and command writes continue to require scalars, and a
+read/display operation never rewrites a tuple row.
 
 Retained legacy guards can end the whole trigger before later effects. This
 applies to malformed literal-container variable names and display/request-state

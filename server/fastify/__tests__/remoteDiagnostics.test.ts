@@ -217,7 +217,10 @@ describe('remote support diagnostics', () => {
               chats: [
                 {
                   id: 'diagnostic-chat',
-                  message: [{ role: 'char', data: 'hello', chatId: 'diagnostic-message' }],
+                  message: [
+                    { role: 'char', data: 'hello', chatId: 'diagnostic-message' },
+                    { role: 'user', data: 'world', chatId: 'diagnostic-message-2' },
+                  ],
                 },
               ],
             },
@@ -229,7 +232,7 @@ describe('remote support diagnostics', () => {
         data_json: string
       }
       const character = JSON.parse(row.data_json) as Record<string, unknown>
-      character.prebuiltAssetCommand = { privateValue }
+      character.customscript = [{ in: 'hello', out: 'rendered', type: { privateValue } }]
       db.prepare('UPDATE characters SET data_json = ? WHERE id = ?').run(
         JSON.stringify(character),
         'diagnostic-character',
@@ -256,20 +259,50 @@ describe('remote support diagnostics', () => {
           sourceHash: createHash('sha256').update(source).digest('hex'),
           projectionEpoch: 1,
         },
+        {
+          requestKey: 'diagnostic-request-2',
+          characterId: 'diagnostic-character',
+          messageId: 'diagnostic-message-2',
+          index: 1,
+          role: 'user',
+          firstMessage: false,
+          layer: 'original',
+          source: 'world',
+          sourceHash: createHash('sha256').update('world').digest('hex'),
+          projectionEpoch: 2,
+        },
       ],
     }
-    const failure = await h.app.inject({
+    const fallback = await h.app.inject({
       method: 'POST',
       url: '/api/v1/chats/diagnostic-chat/display-sources',
       headers: { 'risu-auth': assertion },
       payload,
     })
-    expect(failure.statusCode).toBe(500)
-    expect(failure.json()).toEqual({ error: 'display_source_transform_failed' })
+    expect(fallback.statusCode).toBe(200)
+    expect(fallback.json()).toMatchObject({
+      protocolVersion: 1,
+      revision,
+      contextFingerprint: expect.stringMatching(/^[a-f0-9]{64}$/u),
+      entries: [
+        {
+          requestKey: 'diagnostic-request',
+          status: 'client_fallback',
+          sourceHash: createHash('sha256').update(source).digest('hex'),
+          reason: 'scope_input_incompatible',
+        },
+        {
+          requestKey: 'diagnostic-request-2',
+          status: 'client_fallback',
+          sourceHash: createHash('sha256').update('world').digest('hex'),
+          reason: 'scope_input_incompatible',
+        },
+      ],
+    })
 
     await vi.waitFor(() => expect(h.diagnostics.journal!.read().pending).toBe(0))
     const evidence = await h.app.inject({
-      url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=2&category=display&requestUid=${failure.headers['x-request-uid']}`,
+      url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=2&requestUid=${fallback.headers['x-request-uid']}`,
       headers: h.headers,
     })
     expect(evidence.statusCode).toBe(200)
@@ -280,17 +313,14 @@ describe('remote support diagnostics', () => {
           source: 'server',
           category: 'display',
           stage: 'scope-decode',
-          outcome: 'failed',
+          outcome: 'handled-fallback',
           failureKind: 'generation-input-validation',
           validationDomain: 'database',
           validationOwner: 'character',
-          validationFieldRef: createHash('sha256')
-            .update('generation-input-field:prebuiltAssetCommand')
-            .digest('hex')
-            .slice(0, 16),
+          validationFieldRef: createHash('sha256').update('generation-input-field:type').digest('hex').slice(0, 16),
           validationRule: 'type',
           valueKind: 'object',
-          requestUid: failure.headers['x-request-uid'],
+          requestUid: fallback.headers['x-request-uid'],
         }),
       }),
     )
@@ -298,6 +328,9 @@ describe('remote support diagnostics', () => {
     expect(evidence.body).not.toContain('diagnostic-character')
     expect(evidence.body).not.toContain('diagnostic-chat')
     expect(evidence.body).not.toContain('diagnostic-message')
+    const correlatedEntries = evidence.json().entries as Array<{ entry: { category: string } }>
+    expect(correlatedEntries.filter((record) => record.entry.category === 'display')).toHaveLength(1)
+    expect(correlatedEntries.filter((record) => record.entry.category === 'runtime')).toHaveLength(0)
 
     const malformedCanary = 'PRIVATE-DISPLAY-MALFORMED-JSON-CANARY'
     const malformedDb = openDatabase(h.dataDir)

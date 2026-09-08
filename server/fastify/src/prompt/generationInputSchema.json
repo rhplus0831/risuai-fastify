@@ -4690,28 +4690,6 @@
         "comment": {
           "type": "string"
         },
-        "type": {
-          "anyOf": [
-            {
-              "const": "manual"
-            },
-            {
-              "const": "start"
-            },
-            {
-              "const": "output"
-            },
-            {
-              "const": "input"
-            },
-            {
-              "const": "display"
-            },
-            {
-              "const": "request"
-            }
-          ]
-        },
         "conditions": {
           "type": "array",
           "items": {
@@ -5095,9 +5073,60 @@
               "const": true
             }
           ]
+        },
+        "type": {
+          "anyOf": [
+            {
+              "const": "manual"
+            },
+            {
+              "const": "start"
+            },
+            {
+              "const": "display"
+            },
+            {
+              "const": "output"
+            },
+            {
+              "const": "input"
+            },
+            {
+              "const": "request"
+            },
+            {
+              "type": "array",
+              "items": [
+                {
+                  "anyOf": [
+                    {
+                      "const": "manual"
+                    },
+                    {
+                      "const": "start"
+                    },
+                    {
+                      "const": "display"
+                    },
+                    {
+                      "const": "output"
+                    },
+                    {
+                      "const": "input"
+                    },
+                    {
+                      "const": "request"
+                    }
+                  ]
+                }
+              ],
+              "minItems": 1,
+              "maxItems": 1
+            }
+          ]
         }
       },
-      "required": ["comment", "type", "conditions", "effect"]
+      "required": ["comment", "conditions", "effect", "type"]
     },
     "record58": {
       "type": "object",
@@ -14597,28 +14626,6 @@
         "comment": {
           "type": "string"
         },
-        "type": {
-          "anyOf": [
-            {
-              "const": "manual"
-            },
-            {
-              "const": "start"
-            },
-            {
-              "const": "output"
-            },
-            {
-              "const": "input"
-            },
-            {
-              "const": "display"
-            },
-            {
-              "const": "request"
-            }
-          ]
-        },
         "conditions": {
           "type": "array",
           "items": {
@@ -15002,9 +15009,60 @@
               "const": true
             }
           ]
+        },
+        "type": {
+          "anyOf": [
+            {
+              "const": "manual"
+            },
+            {
+              "const": "start"
+            },
+            {
+              "const": "display"
+            },
+            {
+              "const": "output"
+            },
+            {
+              "const": "input"
+            },
+            {
+              "const": "request"
+            },
+            {
+              "type": "array",
+              "items": [
+                {
+                  "anyOf": [
+                    {
+                      "const": "manual"
+                    },
+                    {
+                      "const": "start"
+                    },
+                    {
+                      "const": "display"
+                    },
+                    {
+                      "const": "output"
+                    },
+                    {
+                      "const": "input"
+                    },
+                    {
+                      "const": "request"
+                    }
+                  ]
+                }
+              ],
+              "minItems": 1,
+              "maxItems": 1
+            }
+          ]
         }
       },
-      "required": ["comment", "type", "conditions", "effect"]
+      "required": ["comment", "conditions", "effect", "type"]
     },
     "record264": {
       "type": "object",
@@ -20975,19 +21033,134 @@
     "record437": {
       "type": "object",
       "properties": {
-        "database": {
-          "$ref": "#/$defs/record438"
+        "characters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record413"
+          }
         },
         "currentChar": {
+          "type": "number"
+        },
+        "agentPresetDefaultId": {
+          "type": "string"
+        },
+        "agentPresets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record1"
+          }
+        },
+        "dynamicAssets": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "dynamicAssetsEditDisplay": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "enabledModules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "globalChatVariables": {
+          "$ref": "#/$defs/record438"
+        },
+        "globalscript": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record19"
+          }
+        },
+        "moduleIntergration": {
+          "type": "string"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record259"
+          }
+        },
+        "personaPrompt": {
+          "type": "string"
+        },
+        "personas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record399"
+          }
+        },
+        "presetRegex": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record19"
+          }
+        },
+        "promptPresets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record400"
+          }
+        },
+        "selectedPersona": {
+          "type": "number"
+        },
+        "selectedPersonaId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "templateDefaultVariables": {
+          "type": "string"
+        },
+        "username": {
+          "type": "string"
+        }
+      },
+      "required": ["characters"]
+    },
+    "record438": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": {
+        "type": "string"
+      }
+    },
+    "record439": {
+      "type": "object",
+      "properties": {
+        "database": {
           "$ref": "#/$defs/record440"
         },
+        "currentChar": {
+          "$ref": "#/$defs/record442"
+        },
         "currentChat": {
-          "$ref": "#/$defs/record441"
+          "$ref": "#/$defs/record443"
         }
       },
       "required": ["database", "currentChar", "currentChat"]
     },
-    "record438": {
+    "record440": {
       "type": "object",
       "properties": {
         "jailbreak": {
@@ -22275,12 +22448,12 @@
         "modules": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/record439"
+            "$ref": "#/$defs/record441"
           }
         }
       }
     },
-    "record439": {
+    "record441": {
       "type": "object",
       "properties": {
         "id": {
@@ -22295,7 +22468,7 @@
       },
       "required": ["id"]
     },
-    "record440": {
+    "record442": {
       "type": "object",
       "properties": {
         "modules": {
@@ -22320,7 +22493,7 @@
       },
       "required": ["chaId"]
     },
-    "record441": {
+    "record443": {
       "type": "object",
       "properties": {
         "modules": {
@@ -22344,1316 +22517,6 @@
               "const": true
             }
           ]
-        }
-      }
-    },
-    "record442": {
-      "type": "object",
-      "properties": {
-        "jailbreak": {
-          "type": "string"
-        },
-        "globalNote": {
-          "type": "string"
-        },
-        "personaPrompt": {
-          "type": "string"
-        },
-        "openAIKey": {
-          "type": "string"
-        },
-        "additionalParams": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "string"
-              }
-            ],
-            "minItems": 2,
-            "maxItems": 2
-          }
-        },
-        "temperature": {
-          "type": "number"
-        },
-        "maxContext": {
-          "type": "number"
-        },
-        "maxResponse": {
-          "type": "number"
-        },
-        "frequencyPenalty": {
-          "type": "number"
-        },
-        "PresensePenalty": {
-          "type": "number"
-        },
-        "aiModel": {
-          "type": "string"
-        },
-        "subModel": {
-          "type": "string"
-        },
-        "modelRoles": {
-          "$ref": "#/$defs/record208"
-        },
-        "modelProfiles": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record209"
-          }
-        },
-        "modelRoleProfiles": {
-          "$ref": "#/$defs/record225"
-        },
-        "modelRuntimeDefaults": {
-          "$ref": "#/$defs/record212"
-        },
-        "textgenWebUIBlockingURL": {
-          "type": "string"
-        },
-        "forceReplaceUrl": {
-          "type": "string"
-        },
-        "koboldURL": {
-          "type": "string"
-        },
-        "proxyKey": {
-          "type": "string"
-        },
-        "ooba": {
-          "$ref": "#/$defs/record229"
-        },
-        "openrouterRequestModel": {
-          "type": "string"
-        },
-        "localStopStrings": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "type": "string"
-              }
-            }
-          ]
-        },
-        "customProxyRequestModel": {
-          "type": "string"
-        },
-        "reverseProxyOobaArgs": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/record224"
-            }
-          ]
-        },
-        "top_p": {
-          "type": "number"
-        },
-        "repetition_penalty": {
-          "type": "number"
-        },
-        "min_p": {
-          "type": "number"
-        },
-        "top_a": {
-          "type": "number"
-        },
-        "openrouterProvider": {
-          "$ref": "#/$defs/record231"
-        },
-        "top_k": {
-          "type": "number"
-        },
-        "instructChatTemplate": {
-          "type": "string"
-        },
-        "JinjaTemplate": {
-          "type": "string"
-        },
-        "jsonSchemaEnabled": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "jsonSchema": {
-          "type": "string"
-        },
-        "strictJsonSchema": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "extractJson": {
-          "type": "string"
-        },
-        "seperateParametersEnabled": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "seperateParameters": {
-          "$ref": "#/$defs/record232"
-        },
-        "customAPIFormat": {
-          "anyOf": [
-            {
-              "const": 0
-            },
-            {
-              "const": 2
-            },
-            {
-              "const": 4
-            },
-            {
-              "const": 9
-            },
-            {
-              "const": 3
-            },
-            {
-              "const": 1
-            },
-            {
-              "const": 5
-            },
-            {
-              "const": 6
-            },
-            {
-              "const": 7
-            },
-            {
-              "const": 8
-            },
-            {
-              "const": 10
-            },
-            {
-              "const": 11
-            },
-            {
-              "const": 12
-            },
-            {
-              "const": 13
-            },
-            {
-              "const": 14
-            },
-            {
-              "const": 15
-            },
-            {
-              "const": 16
-            },
-            {
-              "const": 17
-            },
-            {
-              "const": 18
-            },
-            {
-              "const": 19
-            },
-            {
-              "const": 20
-            },
-            {
-              "const": 21
-            },
-            {
-              "const": 22
-            },
-            {
-              "const": 23
-            }
-          ]
-        },
-        "systemContentReplacement": {
-          "type": "string"
-        },
-        "systemRoleReplacement": {
-          "anyOf": [
-            {
-              "const": "user"
-            },
-            {
-              "const": "assistant"
-            }
-          ]
-        },
-        "customFlags": {
-          "type": "array",
-          "items": {
-            "anyOf": [
-              {
-                "const": 0
-              },
-              {
-                "const": 2
-              },
-              {
-                "const": 4
-              },
-              {
-                "const": 9
-              },
-              {
-                "const": 3
-              },
-              {
-                "const": 1
-              },
-              {
-                "const": 5
-              },
-              {
-                "const": 6
-              },
-              {
-                "const": 7
-              },
-              {
-                "const": 8
-              },
-              {
-                "const": 10
-              },
-              {
-                "const": 11
-              },
-              {
-                "const": 12
-              },
-              {
-                "const": 13
-              },
-              {
-                "const": 14
-              },
-              {
-                "const": 15
-              },
-              {
-                "const": 16
-              },
-              {
-                "const": 17
-              },
-              {
-                "const": 18
-              },
-              {
-                "const": 19
-              },
-              {
-                "const": 20
-              },
-              {
-                "const": 21
-              },
-              {
-                "const": 22
-              },
-              {
-                "const": 23
-              },
-              {
-                "const": 24
-              },
-              {
-                "const": 25
-              },
-              {
-                "const": 26
-              }
-            ]
-          }
-        },
-        "enableCustomFlags": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "thinkingTokens": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "number"
-            }
-          ]
-        },
-        "thinkingType": {
-          "anyOf": [
-            {
-              "const": "off"
-            },
-            {
-              "const": "budget"
-            },
-            {
-              "const": "adaptive"
-            }
-          ]
-        },
-        "deepseekThinkingType": {
-          "anyOf": [
-            {
-              "const": "off"
-            },
-            {
-              "const": "enabled"
-            }
-          ]
-        },
-        "adaptiveThinkingEffort": {
-          "anyOf": [
-            {
-              "const": "low"
-            },
-            {
-              "const": "medium"
-            },
-            {
-              "const": "high"
-            },
-            {
-              "const": "xhigh"
-            },
-            {
-              "const": "max"
-            }
-          ]
-        },
-        "deepseekReasoningEffort": {
-          "anyOf": [
-            {
-              "const": "high"
-            },
-            {
-              "const": "max"
-            }
-          ]
-        },
-        "outputImageModal": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "seperateModelsForAxModels": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "seperateModels": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/record235"
-            }
-          ]
-        },
-        "modelTools": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "fallbackModels": {
-          "$ref": "#/$defs/record236"
-        },
-        "fallbackWhenBlankResponse": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "verbosity": {
-          "type": "number"
-        },
-        "dynamicOutput": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/record213"
-            }
-          ]
-        },
-        "additionalPrompt": {
-          "type": "string"
-        },
-        "agentPresetDefaultId": {
-          "type": "string"
-        },
-        "agentPresets": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record237"
-          }
-        },
-        "agents": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record249"
-          }
-        },
-        "applyAdditionalParamsToAll": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "autofillRequestUrl": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "automaticCachePoint": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "banCharacterset": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "bardWiki": {
-          "$ref": "#/$defs/record250"
-        },
-        "bias": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "number"
-              }
-            ],
-            "minItems": 2,
-            "maxItems": 2
-          }
-        },
-        "chainOfThought": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "claude1HourCaching": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "claudeAPIKey": {
-          "type": "string"
-        },
-        "cohereAPIKey": {
-          "type": "string"
-        },
-        "complexRegexCompatibilityMode": {
-          "anyOf": [
-            {
-              "const": "strict"
-            },
-            {
-              "const": "worker"
-            }
-          ]
-        },
-        "complexRegexDisplayTimeoutMs": {
-          "type": "number"
-        },
-        "complexRegexInputTimeoutMs": {
-          "type": "number"
-        },
-        "complexRegexOutputTimeoutMs": {
-          "type": "number"
-        },
-        "customModels": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record251"
-          }
-        },
-        "customTokenizer": {
-          "type": "string"
-        },
-        "dallEQuality": {
-          "type": "string"
-        },
-        "descriptionPrefix": {
-          "type": "string"
-        },
-        "dynamicAssets": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "dynamicAssetsEditDisplay": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "echoDelay": {
-          "type": "number"
-        },
-        "echoMessage": {
-          "type": "string"
-        },
-        "enabledModules": {
-          "type": "array",
-          "items": {
-            "type": "string"
-          }
-        },
-        "falLora": {
-          "type": "string"
-        },
-        "falLoraScale": {
-          "type": "number"
-        },
-        "falModel": {
-          "type": "string"
-        },
-        "formatingOrder": {
-          "type": "array",
-          "items": {
-            "anyOf": [
-              {
-                "const": "main"
-              },
-              {
-                "const": "jailbreak"
-              },
-              {
-                "const": "chats"
-              },
-              {
-                "const": "lorebook"
-              },
-              {
-                "const": "globalNote"
-              },
-              {
-                "const": "authorNote"
-              },
-              {
-                "const": "lastChat"
-              },
-              {
-                "const": "description"
-              },
-              {
-                "const": "postEverything"
-              },
-              {
-                "const": "personaPrompt"
-              }
-            ]
-          }
-        },
-        "generationSeed": {
-          "type": "number"
-        },
-        "genTime": {
-          "type": "number"
-        },
-        "globalscript": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record252"
-          }
-        },
-        "google": {
-          "$ref": "#/$defs/record253"
-        },
-        "googleClaudeTokenizing": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "gptVisionQuality": {
-          "type": "string"
-        },
-        "groupOtherBotRole": {
-          "type": "string"
-        },
-        "groupTemplate": {
-          "type": "string"
-        },
-        "halfStreaming": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "hordeConfig": {
-          "$ref": "#/$defs/record254"
-        },
-        "hypaCustomSettings": {
-          "$ref": "#/$defs/record255"
-        },
-        "hypaModel": {
-          "type": "string"
-        },
-        "hypaV3": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "hypaV3Key": {
-          "type": "string"
-        },
-        "hypaV3Presets": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record256"
-          }
-        },
-        "ImagenAspectRatio": {
-          "type": "string"
-        },
-        "ImagenImageSize": {
-          "type": "string"
-        },
-        "ImagenModel": {
-          "type": "string"
-        },
-        "ImagenPersonGeneration": {
-          "type": "string"
-        },
-        "jailbreakToggle": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "loreBookDepth": {
-          "type": "number"
-        },
-        "loreBookToken": {
-          "type": "number"
-        },
-        "mainPrompt": {
-          "type": "string"
-        },
-        "mancerHeader": {
-          "type": "string"
-        },
-        "mistralKey": {
-          "type": "string"
-        },
-        "modelPresets": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record258"
-          }
-        },
-        "modelPresetsId": {
-          "type": "number"
-        },
-        "moduleIntergration": {
-          "type": "string"
-        },
-        "modules": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record259"
-          }
-        },
-        "NAII2I": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "NAIImgConfig": {
-          "$ref": "#/$defs/record386"
-        },
-        "NAIImgModel": {
-          "type": "string"
-        },
-        "nanogptKey": {
-          "type": "string"
-        },
-        "nanogptProvider": {
-          "type": "string"
-        },
-        "nanogptRequestModel": {
-          "type": "string"
-        },
-        "nanogptRequestModelName": {
-          "type": "string"
-        },
-        "nanogptSubscriptionState": {
-          "type": "string"
-        },
-        "nanogptUseSubscriptionEndpoint": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "newOAIHandle": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "OaiCompAPIKeys": {
-          "$ref": "#/$defs/record398"
-        },
-        "OAIPrediction": {
-          "type": "string"
-        },
-        "ollamaApiKey": {
-          "type": "string"
-        },
-        "ollamaCloudModel": {
-          "type": "string"
-        },
-        "ollamaCloudModelName": {
-          "type": "string"
-        },
-        "ollamaModel": {
-          "type": "string"
-        },
-        "ollamaModelName": {
-          "type": "string"
-        },
-        "ollamaModelSource": {
-          "anyOf": [
-            {
-              "const": "local"
-            },
-            {
-              "const": "cloud"
-            }
-          ]
-        },
-        "ollamaRequestFormat": {
-          "anyOf": [
-            {
-              "const": 0
-            },
-            {
-              "const": 2
-            },
-            {
-              "const": 4
-            },
-            {
-              "const": 9
-            },
-            {
-              "const": 3
-            },
-            {
-              "const": 1
-            },
-            {
-              "const": 5
-            },
-            {
-              "const": 6
-            },
-            {
-              "const": 7
-            },
-            {
-              "const": 8
-            },
-            {
-              "const": 10
-            },
-            {
-              "const": 11
-            },
-            {
-              "const": 12
-            },
-            {
-              "const": 13
-            },
-            {
-              "const": 14
-            },
-            {
-              "const": 15
-            },
-            {
-              "const": 16
-            },
-            {
-              "const": 17
-            },
-            {
-              "const": 18
-            },
-            {
-              "const": 19
-            },
-            {
-              "const": 20
-            },
-            {
-              "const": 21
-            },
-            {
-              "const": 22
-            },
-            {
-              "const": 23
-            }
-          ]
-        },
-        "ollamaThinkingMode": {
-          "anyOf": [
-            {
-              "const": "low"
-            },
-            {
-              "const": "medium"
-            },
-            {
-              "const": "high"
-            },
-            {
-              "const": "off"
-            },
-            {
-              "const": "auto"
-            },
-            {
-              "const": "on"
-            }
-          ]
-        },
-        "ollamaURL": {
-          "type": "string"
-        },
-        "openAIFlexProcessing": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "openrouterFallback": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "openrouterKey": {
-          "type": "string"
-        },
-        "openrouterMiddleOut": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "personas": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record399"
-          }
-        },
-        "presetRegex": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record252"
-          }
-        },
-        "promptInfoInsideChat": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "promptPreprocess": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "promptPresets": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record400"
-          }
-        },
-        "promptPresetsId": {
-          "type": "number"
-        },
-        "promptSettings": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "$ref": "#/$defs/record401"
-            }
-          ]
-        },
-        "promptTemplate": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "array",
-              "items": {
-                "anyOf": [
-                  {
-                    "$ref": "#/$defs/record402"
-                  },
-                  {
-                    "$ref": "#/$defs/record403"
-                  },
-                  {
-                    "$ref": "#/$defs/record404"
-                  },
-                  {
-                    "$ref": "#/$defs/record405"
-                  },
-                  {
-                    "$ref": "#/$defs/record406"
-                  },
-                  {
-                    "$ref": "#/$defs/record407"
-                  }
-                ]
-              }
-            }
-          ]
-        },
-        "promptTextInfoInsideChat": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "providerCredentials": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record408"
-          }
-        },
-        "reasoningEffort": {
-          "type": "number"
-        },
-        "regexOutputSizeLimitMiB": {
-          "type": "number"
-        },
-        "removeIncompleteResponse": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "requestHistoryLimit": {
-          "type": "number"
-        },
-        "requestRetrys": {
-          "type": "number"
-        },
-        "reverseProxyOobaMode": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "sdConfig": {
-          "$ref": "#/$defs/record410"
-        },
-        "sdProvider": {
-          "type": "string"
-        },
-        "selectedHypaV3PresetId": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "selectedPersona": {
-          "type": "number"
-        },
-        "selectedPersonaId": {
-          "anyOf": [
-            {
-              "type": "null"
-            },
-            {
-              "type": "string"
-            }
-          ]
-        },
-        "seperateParametersByModel": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "stabilityModel": {
-          "type": "string"
-        },
-        "stabllityStyle": {
-          "type": "string"
-        },
-        "streamGeminiThoughts": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "templateDefaultVariables": {
-          "type": "string"
-        },
-        "ttsAutoSpeech": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "username": {
-          "type": "string"
-        },
-        "useSayNothing": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "useStreaming": {
-          "anyOf": [
-            {
-              "const": false
-            },
-            {
-              "const": true
-            }
-          ]
-        },
-        "vertexClientEmail": {
-          "type": "string"
-        },
-        "vertexPrivateKey": {
-          "type": "string"
-        },
-        "vertexRegion": {
-          "type": "string"
-        },
-        "voyageApiKey": {
-          "type": "string"
-        },
-        "wavespeedImage": {
-          "$ref": "#/$defs/record411"
-        },
-        "language": {
-          "type": "string"
-        },
-        "userIcon": {
-          "type": "string"
-        },
-        "userNote": {
-          "type": "string"
-        },
-        "customPromptTemplateToggle": {
-          "type": "string"
-        },
-        "globalChatVariables": {
-          "$ref": "#/$defs/record32"
-        },
-        "currentChar": {
-          "type": "number"
-        },
-        "characters": {
-          "type": "array",
-          "items": {
-            "$ref": "#/$defs/record443"
-          }
-        }
-      }
-    },
-    "record443": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string"
         }
       }
     },
@@ -24948,6 +23811,9 @@
         "globalChatVariables": {
           "$ref": "#/$defs/record32"
         },
+        "currentChar": {
+          "type": "number"
+        },
         "characters": {
           "type": "array",
           "items": {
@@ -24959,6 +23825,1313 @@
     "record445": {
       "type": "object",
       "properties": {
+        "name": {
+          "type": "string"
+        }
+      }
+    },
+    "record446": {
+      "type": "object",
+      "properties": {
+        "jailbreak": {
+          "type": "string"
+        },
+        "globalNote": {
+          "type": "string"
+        },
+        "personaPrompt": {
+          "type": "string"
+        },
+        "openAIKey": {
+          "type": "string"
+        },
+        "additionalParams": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "string"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "temperature": {
+          "type": "number"
+        },
+        "maxContext": {
+          "type": "number"
+        },
+        "maxResponse": {
+          "type": "number"
+        },
+        "frequencyPenalty": {
+          "type": "number"
+        },
+        "PresensePenalty": {
+          "type": "number"
+        },
+        "aiModel": {
+          "type": "string"
+        },
+        "subModel": {
+          "type": "string"
+        },
+        "modelRoles": {
+          "$ref": "#/$defs/record208"
+        },
+        "modelProfiles": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record209"
+          }
+        },
+        "modelRoleProfiles": {
+          "$ref": "#/$defs/record225"
+        },
+        "modelRuntimeDefaults": {
+          "$ref": "#/$defs/record212"
+        },
+        "textgenWebUIBlockingURL": {
+          "type": "string"
+        },
+        "forceReplaceUrl": {
+          "type": "string"
+        },
+        "koboldURL": {
+          "type": "string"
+        },
+        "proxyKey": {
+          "type": "string"
+        },
+        "ooba": {
+          "$ref": "#/$defs/record229"
+        },
+        "openrouterRequestModel": {
+          "type": "string"
+        },
+        "localStopStrings": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          ]
+        },
+        "customProxyRequestModel": {
+          "type": "string"
+        },
+        "reverseProxyOobaArgs": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/record224"
+            }
+          ]
+        },
+        "top_p": {
+          "type": "number"
+        },
+        "repetition_penalty": {
+          "type": "number"
+        },
+        "min_p": {
+          "type": "number"
+        },
+        "top_a": {
+          "type": "number"
+        },
+        "openrouterProvider": {
+          "$ref": "#/$defs/record231"
+        },
+        "top_k": {
+          "type": "number"
+        },
+        "instructChatTemplate": {
+          "type": "string"
+        },
+        "JinjaTemplate": {
+          "type": "string"
+        },
+        "jsonSchemaEnabled": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "jsonSchema": {
+          "type": "string"
+        },
+        "strictJsonSchema": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "extractJson": {
+          "type": "string"
+        },
+        "seperateParametersEnabled": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "seperateParameters": {
+          "$ref": "#/$defs/record232"
+        },
+        "customAPIFormat": {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "const": 2
+            },
+            {
+              "const": 4
+            },
+            {
+              "const": 9
+            },
+            {
+              "const": 3
+            },
+            {
+              "const": 1
+            },
+            {
+              "const": 5
+            },
+            {
+              "const": 6
+            },
+            {
+              "const": 7
+            },
+            {
+              "const": 8
+            },
+            {
+              "const": 10
+            },
+            {
+              "const": 11
+            },
+            {
+              "const": 12
+            },
+            {
+              "const": 13
+            },
+            {
+              "const": 14
+            },
+            {
+              "const": 15
+            },
+            {
+              "const": 16
+            },
+            {
+              "const": 17
+            },
+            {
+              "const": 18
+            },
+            {
+              "const": 19
+            },
+            {
+              "const": 20
+            },
+            {
+              "const": 21
+            },
+            {
+              "const": 22
+            },
+            {
+              "const": 23
+            }
+          ]
+        },
+        "systemContentReplacement": {
+          "type": "string"
+        },
+        "systemRoleReplacement": {
+          "anyOf": [
+            {
+              "const": "user"
+            },
+            {
+              "const": "assistant"
+            }
+          ]
+        },
+        "customFlags": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "const": 0
+              },
+              {
+                "const": 2
+              },
+              {
+                "const": 4
+              },
+              {
+                "const": 9
+              },
+              {
+                "const": 3
+              },
+              {
+                "const": 1
+              },
+              {
+                "const": 5
+              },
+              {
+                "const": 6
+              },
+              {
+                "const": 7
+              },
+              {
+                "const": 8
+              },
+              {
+                "const": 10
+              },
+              {
+                "const": 11
+              },
+              {
+                "const": 12
+              },
+              {
+                "const": 13
+              },
+              {
+                "const": 14
+              },
+              {
+                "const": 15
+              },
+              {
+                "const": 16
+              },
+              {
+                "const": 17
+              },
+              {
+                "const": 18
+              },
+              {
+                "const": 19
+              },
+              {
+                "const": 20
+              },
+              {
+                "const": 21
+              },
+              {
+                "const": 22
+              },
+              {
+                "const": 23
+              },
+              {
+                "const": 24
+              },
+              {
+                "const": 25
+              },
+              {
+                "const": 26
+              }
+            ]
+          }
+        },
+        "enableCustomFlags": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "thinkingTokens": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "number"
+            }
+          ]
+        },
+        "thinkingType": {
+          "anyOf": [
+            {
+              "const": "off"
+            },
+            {
+              "const": "budget"
+            },
+            {
+              "const": "adaptive"
+            }
+          ]
+        },
+        "deepseekThinkingType": {
+          "anyOf": [
+            {
+              "const": "off"
+            },
+            {
+              "const": "enabled"
+            }
+          ]
+        },
+        "adaptiveThinkingEffort": {
+          "anyOf": [
+            {
+              "const": "low"
+            },
+            {
+              "const": "medium"
+            },
+            {
+              "const": "high"
+            },
+            {
+              "const": "xhigh"
+            },
+            {
+              "const": "max"
+            }
+          ]
+        },
+        "deepseekReasoningEffort": {
+          "anyOf": [
+            {
+              "const": "high"
+            },
+            {
+              "const": "max"
+            }
+          ]
+        },
+        "outputImageModal": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "seperateModelsForAxModels": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "seperateModels": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/record235"
+            }
+          ]
+        },
+        "modelTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fallbackModels": {
+          "$ref": "#/$defs/record236"
+        },
+        "fallbackWhenBlankResponse": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "verbosity": {
+          "type": "number"
+        },
+        "dynamicOutput": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/record213"
+            }
+          ]
+        },
+        "additionalPrompt": {
+          "type": "string"
+        },
+        "agentPresetDefaultId": {
+          "type": "string"
+        },
+        "agentPresets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record237"
+          }
+        },
+        "agents": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record249"
+          }
+        },
+        "applyAdditionalParamsToAll": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "autofillRequestUrl": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "automaticCachePoint": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "banCharacterset": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "bardWiki": {
+          "$ref": "#/$defs/record250"
+        },
+        "bias": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "number"
+              }
+            ],
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "chainOfThought": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "claude1HourCaching": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "claudeAPIKey": {
+          "type": "string"
+        },
+        "cohereAPIKey": {
+          "type": "string"
+        },
+        "complexRegexCompatibilityMode": {
+          "anyOf": [
+            {
+              "const": "strict"
+            },
+            {
+              "const": "worker"
+            }
+          ]
+        },
+        "complexRegexDisplayTimeoutMs": {
+          "type": "number"
+        },
+        "complexRegexInputTimeoutMs": {
+          "type": "number"
+        },
+        "complexRegexOutputTimeoutMs": {
+          "type": "number"
+        },
+        "customModels": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record251"
+          }
+        },
+        "customTokenizer": {
+          "type": "string"
+        },
+        "dallEQuality": {
+          "type": "string"
+        },
+        "descriptionPrefix": {
+          "type": "string"
+        },
+        "dynamicAssets": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "dynamicAssetsEditDisplay": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "echoDelay": {
+          "type": "number"
+        },
+        "echoMessage": {
+          "type": "string"
+        },
+        "enabledModules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "falLora": {
+          "type": "string"
+        },
+        "falLoraScale": {
+          "type": "number"
+        },
+        "falModel": {
+          "type": "string"
+        },
+        "formatingOrder": {
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "const": "main"
+              },
+              {
+                "const": "jailbreak"
+              },
+              {
+                "const": "chats"
+              },
+              {
+                "const": "lorebook"
+              },
+              {
+                "const": "globalNote"
+              },
+              {
+                "const": "authorNote"
+              },
+              {
+                "const": "lastChat"
+              },
+              {
+                "const": "description"
+              },
+              {
+                "const": "postEverything"
+              },
+              {
+                "const": "personaPrompt"
+              }
+            ]
+          }
+        },
+        "generationSeed": {
+          "type": "number"
+        },
+        "genTime": {
+          "type": "number"
+        },
+        "globalscript": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record252"
+          }
+        },
+        "google": {
+          "$ref": "#/$defs/record253"
+        },
+        "googleClaudeTokenizing": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "gptVisionQuality": {
+          "type": "string"
+        },
+        "groupOtherBotRole": {
+          "type": "string"
+        },
+        "groupTemplate": {
+          "type": "string"
+        },
+        "halfStreaming": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "hordeConfig": {
+          "$ref": "#/$defs/record254"
+        },
+        "hypaCustomSettings": {
+          "$ref": "#/$defs/record255"
+        },
+        "hypaModel": {
+          "type": "string"
+        },
+        "hypaV3": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "hypaV3Key": {
+          "type": "string"
+        },
+        "hypaV3Presets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record256"
+          }
+        },
+        "ImagenAspectRatio": {
+          "type": "string"
+        },
+        "ImagenImageSize": {
+          "type": "string"
+        },
+        "ImagenModel": {
+          "type": "string"
+        },
+        "ImagenPersonGeneration": {
+          "type": "string"
+        },
+        "jailbreakToggle": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "loreBookDepth": {
+          "type": "number"
+        },
+        "loreBookToken": {
+          "type": "number"
+        },
+        "mainPrompt": {
+          "type": "string"
+        },
+        "mancerHeader": {
+          "type": "string"
+        },
+        "mistralKey": {
+          "type": "string"
+        },
+        "modelPresets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record258"
+          }
+        },
+        "modelPresetsId": {
+          "type": "number"
+        },
+        "moduleIntergration": {
+          "type": "string"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record259"
+          }
+        },
+        "NAII2I": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "NAIImgConfig": {
+          "$ref": "#/$defs/record386"
+        },
+        "NAIImgModel": {
+          "type": "string"
+        },
+        "nanogptKey": {
+          "type": "string"
+        },
+        "nanogptProvider": {
+          "type": "string"
+        },
+        "nanogptRequestModel": {
+          "type": "string"
+        },
+        "nanogptRequestModelName": {
+          "type": "string"
+        },
+        "nanogptSubscriptionState": {
+          "type": "string"
+        },
+        "nanogptUseSubscriptionEndpoint": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "newOAIHandle": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "OaiCompAPIKeys": {
+          "$ref": "#/$defs/record398"
+        },
+        "OAIPrediction": {
+          "type": "string"
+        },
+        "ollamaApiKey": {
+          "type": "string"
+        },
+        "ollamaCloudModel": {
+          "type": "string"
+        },
+        "ollamaCloudModelName": {
+          "type": "string"
+        },
+        "ollamaModel": {
+          "type": "string"
+        },
+        "ollamaModelName": {
+          "type": "string"
+        },
+        "ollamaModelSource": {
+          "anyOf": [
+            {
+              "const": "local"
+            },
+            {
+              "const": "cloud"
+            }
+          ]
+        },
+        "ollamaRequestFormat": {
+          "anyOf": [
+            {
+              "const": 0
+            },
+            {
+              "const": 2
+            },
+            {
+              "const": 4
+            },
+            {
+              "const": 9
+            },
+            {
+              "const": 3
+            },
+            {
+              "const": 1
+            },
+            {
+              "const": 5
+            },
+            {
+              "const": 6
+            },
+            {
+              "const": 7
+            },
+            {
+              "const": 8
+            },
+            {
+              "const": 10
+            },
+            {
+              "const": 11
+            },
+            {
+              "const": 12
+            },
+            {
+              "const": 13
+            },
+            {
+              "const": 14
+            },
+            {
+              "const": 15
+            },
+            {
+              "const": 16
+            },
+            {
+              "const": 17
+            },
+            {
+              "const": 18
+            },
+            {
+              "const": 19
+            },
+            {
+              "const": 20
+            },
+            {
+              "const": 21
+            },
+            {
+              "const": 22
+            },
+            {
+              "const": 23
+            }
+          ]
+        },
+        "ollamaThinkingMode": {
+          "anyOf": [
+            {
+              "const": "low"
+            },
+            {
+              "const": "medium"
+            },
+            {
+              "const": "high"
+            },
+            {
+              "const": "off"
+            },
+            {
+              "const": "auto"
+            },
+            {
+              "const": "on"
+            }
+          ]
+        },
+        "ollamaURL": {
+          "type": "string"
+        },
+        "openAIFlexProcessing": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "openrouterFallback": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "openrouterKey": {
+          "type": "string"
+        },
+        "openrouterMiddleOut": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "personas": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record399"
+          }
+        },
+        "presetRegex": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record252"
+          }
+        },
+        "promptInfoInsideChat": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "promptPreprocess": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "promptPresets": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record400"
+          }
+        },
+        "promptPresetsId": {
+          "type": "number"
+        },
+        "promptSettings": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "$ref": "#/$defs/record401"
+            }
+          ]
+        },
+        "promptTemplate": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "anyOf": [
+                  {
+                    "$ref": "#/$defs/record402"
+                  },
+                  {
+                    "$ref": "#/$defs/record403"
+                  },
+                  {
+                    "$ref": "#/$defs/record404"
+                  },
+                  {
+                    "$ref": "#/$defs/record405"
+                  },
+                  {
+                    "$ref": "#/$defs/record406"
+                  },
+                  {
+                    "$ref": "#/$defs/record407"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        "promptTextInfoInsideChat": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "providerCredentials": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record408"
+          }
+        },
+        "reasoningEffort": {
+          "type": "number"
+        },
+        "regexOutputSizeLimitMiB": {
+          "type": "number"
+        },
+        "removeIncompleteResponse": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "requestHistoryLimit": {
+          "type": "number"
+        },
+        "requestRetrys": {
+          "type": "number"
+        },
+        "reverseProxyOobaMode": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "sdConfig": {
+          "$ref": "#/$defs/record410"
+        },
+        "sdProvider": {
+          "type": "string"
+        },
+        "selectedHypaV3PresetId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "selectedPersona": {
+          "type": "number"
+        },
+        "selectedPersonaId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "seperateParametersByModel": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "stabilityModel": {
+          "type": "string"
+        },
+        "stabllityStyle": {
+          "type": "string"
+        },
+        "streamGeminiThoughts": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "templateDefaultVariables": {
+          "type": "string"
+        },
+        "ttsAutoSpeech": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "username": {
+          "type": "string"
+        },
+        "useSayNothing": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "useStreaming": {
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
+        },
+        "vertexClientEmail": {
+          "type": "string"
+        },
+        "vertexPrivateKey": {
+          "type": "string"
+        },
+        "vertexRegion": {
+          "type": "string"
+        },
+        "voyageApiKey": {
+          "type": "string"
+        },
+        "wavespeedImage": {
+          "$ref": "#/$defs/record411"
+        },
+        "language": {
+          "type": "string"
+        },
+        "userIcon": {
+          "type": "string"
+        },
+        "userNote": {
+          "type": "string"
+        },
+        "customPromptTemplateToggle": {
+          "type": "string"
+        },
+        "globalChatVariables": {
+          "$ref": "#/$defs/record32"
+        },
+        "characters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/record447"
+          }
+        }
+      }
+    },
+    "record447": {
+      "type": "object",
+      "properties": {
         "chaId": {
           "type": "string"
         },
@@ -24968,12 +25141,12 @@
         "chats": {
           "type": "array",
           "items": {
-            "$ref": "#/$defs/record446"
+            "$ref": "#/$defs/record448"
           }
         }
       }
     },
-    "record446": {
+    "record448": {
       "type": "object",
       "properties": {
         "modules": {
@@ -25010,13 +25183,16 @@
   "FastifyDatabase": {
     "$ref": "#/$defs/record207"
   },
-  "GenerationPreflightInputs": {
+  "DisplaySourceDatabase": {
     "$ref": "#/$defs/record437"
   },
+  "GenerationPreflightInputs": {
+    "$ref": "#/$defs/record439"
+  },
   "ProviderGenerationSettings": {
-    "$ref": "#/$defs/record442"
+    "$ref": "#/$defs/record444"
   },
   "MemoryGenerationSettings": {
-    "$ref": "#/$defs/record444"
+    "$ref": "#/$defs/record446"
   }
 }

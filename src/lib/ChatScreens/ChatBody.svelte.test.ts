@@ -106,6 +106,7 @@ import { createChatReadOwners } from './chatReadOwners.svelte'
 import { CHAT_READ_OWNERS_CONTEXT } from './chatReadOwnersContext'
 import type { character as Character } from 'src/ts/storage/database.svelte'
 import { CHAT_DISPLAY_SCHEDULER, createChatDisplayScheduler } from './chatDisplayScheduler'
+import { CHAT_DISPLAY_COMMIT_COORDINATOR, createChatDisplayCommitCoordinator } from './chatDisplayCommitCoordinator'
 
 vi.mock('./sharedChatReadOwners.svelte', () => ({
   sharedChatReadOwners: {
@@ -611,4 +612,52 @@ describe('ChatBody translation parse bounds', () => {
       scheduler.destroy()
     },
   )
+
+  it('keeps a completed off-screen background body uncommitted until it becomes visible', async () => {
+    chatBodyMocks.ParseMarkdown.mockResolvedValue('held background body')
+    let frame: (() => void) | undefined
+    const coordinator = createChatDisplayCommitCoordinator({
+      applyBatch: (commits) => commits.forEach((commit) => commit()),
+      scheduleIdle: () => () => {},
+      scheduleFrame(run) {
+        frame = run
+        return () => {
+          if (frame === run) frame = undefined
+        }
+      },
+    })
+    coordinator.noteInteraction()
+    const onInitialDisplayParseStart = vi.fn()
+    const onInitialDisplayParseSettled = vi.fn()
+    component = mount(ChatBody, {
+      target,
+      context: new Map([[CHAT_DISPLAY_COMMIT_COORDINATOR, coordinator]]),
+      props: {
+        idx: 0,
+        modelShortName: '',
+        msgDisplay: 'held background body',
+        role: 'char',
+        translated: false,
+        translating: false,
+        retranslate: false,
+        allowClientTranslation: false,
+        transcriptRowKey: 'row-a',
+        onInitialDisplayParseStart,
+        onInitialDisplayParseSettled,
+      },
+    })
+    flushSync()
+    await flushComponentPromises()
+    expect(target.textContent).toBe('')
+    expect(onInitialDisplayParseSettled).not.toHaveBeenCalled()
+    expect(coordinator.pending).toBe(1)
+
+    coordinator.setVisible(['row-a'])
+    frame?.()
+    frame = undefined
+    flushSync()
+    expect(target.textContent).toContain('held background body')
+    expect(onInitialDisplayParseSettled).toHaveBeenCalledOnce()
+    coordinator.destroy()
+  })
 })

@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import {
   validateGenerationSettings as settings,
   validateFastifyDatabase as database,
+  validateDisplaySourceDatabase as displaySourceDatabase,
   validateGenerationPreflightInputs as preflight,
   validateProviderGenerationSettings as provider,
   validateMemoryGenerationSettings as memory,
@@ -10,6 +11,7 @@ import {
 } from './generationInputValidators.js'
 import type {
   FastifyDatabase,
+  DisplaySourceDatabase,
   GenerationSettings,
   GenerationPreflightInputs,
   ProviderGenerationSettings,
@@ -169,6 +171,9 @@ export function decodeGenerationSettings(value: unknown): GenerationSettings {
 }
 export function decodeGenerationDatabase(value: unknown): FastifyDatabase {
   return checked(normalizeLegacyHypaSelection(value), database, 'database')
+}
+export function decodeDisplaySourceDatabase(value: unknown): DisplaySourceDatabase {
+  return checked(normalizeLegacyHypaSelection(value), displaySourceDatabase, 'database')
 }
 export function decodeGenerationPreflightInputs(value: unknown): GenerationPreflightInputs {
   if (value && typeof value === 'object' && 'database' in value) {

@@ -1,7 +1,7 @@
 # Svelte Chat UI Guide
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-08 (reader transcript, live presentation, and read-only display).
+Targeted source check: 2026-09-09 (asynchronous display-body geometry and anchor ownership).
 
 This guide owns the visible chat frame, transcript, message rows, composer
 variants, generation/loading feedback, and in-chat confirmations. Return to the
@@ -125,9 +125,24 @@ residency pass releases a returning row's height after its bodies settle, then
 measures and corrects the viewport in the same frame. An empty remount therefore
 cannot overwrite a known tall row's height and move the working window during
 a pause or direction reversal. Full capture releases these temporary sizes.
+First-mounted background rows use the same geometry ownership: a measured
+height wins, otherwise a deterministic source-only estimate is clamped between
+160 and 960 pixels. The display scheduler prioritizes visible queued rows while
+remaining serial. Completed offscreen bodies wait through active wheel/touch
+scrolling; after 140 milliseconds of scroll idle they commit in batches of at
+most four. Visible or idle commits run through a transcript-owned transaction
+that captures the first stable visible row, applies the HTML and placeholder
+release together, and restores that row's viewport offset before paint. Newly
+mounted pending placeholders are only fallback anchors, so they cannot displace
+the row that was already visible. Both bounded and diagnostic legacy paging use
+this application anchor owner, and the inner transcript disables native scroll
+anchoring to avoid two corrections for one height transition. Chat switches,
+aborts, and teardown discard held work; all uncancelled rows still render.
 Existing start/end anchors still own entry and followed generation. Navigation
 waits for the live chat route/component, mounts and pins its target, then releases
-it after alignment; a navigation epoch fences stale geometry corrections.
+it after alignment; if remounted display bodies are still pending, the explicit
+navigation anchor keeps that target fixed until they settle. A navigation epoch
+fences stale geometry corrections.
 Leaving a visible chat cancels its pending jump even when the same selected
 chat is reopened. Unfolding pins the previous folded target through the logical
 window change and restores its measured offset.

@@ -1,6 +1,6 @@
 export const CHAT_DISPLAY_SCHEDULER = Symbol('chat-display-scheduler')
 
-type Job = { start(): Promise<void>; cancel(): void }
+type Job = { key?: string; start(): Promise<void>; cancel(): void }
 
 /** Older rows run one at a time, yielding to input/paint between parses. */
 export function createChatDisplayScheduler(schedule: (run: () => void) => () => void = scheduleIdleDisplay) {
@@ -11,13 +11,15 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
   let running = false
   let cancelScheduled: (() => void) | undefined
   const jobs: Job[] = []
+  let visible = new Set<string>()
 
   const drain = () => {
     if (destroyed || paused || running || cancelScheduled || jobs.length === 0) return
     cancelScheduled = schedule(() => {
       cancelScheduled = undefined
       if (destroyed || paused) return
-      const job = jobs.shift()
+      const visibleIndex = jobs.findIndex((candidate) => candidate.key && visible.has(candidate.key))
+      const [job] = jobs.splice(visibleIndex >= 0 ? visibleIndex : 0, 1)
       if (!job) return
       running = true
       const startedGeneration = generation
@@ -42,6 +44,7 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
       clear()
       scope = next
       paused = true
+      visible.clear()
     },
     setPaused(next: boolean) {
       paused = next
@@ -50,7 +53,11 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
         cancelScheduled = undefined
       } else drain()
     },
-    run<T>(work: () => Promise<T>, signal: AbortSignal): Promise<T | undefined> {
+    setVisible(keys: readonly string[]) {
+      visible = new Set(keys)
+      drain()
+    },
+    run<T>(work: () => Promise<T>, signal: AbortSignal, key?: string): Promise<T | undefined> {
       if (destroyed || signal.aborted) return Promise.resolve(undefined)
       return new Promise((resolve, reject) => {
         const cancel = () => {
@@ -60,6 +67,7 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
           resolve(undefined)
         }
         const job: Job = {
+          key,
           cancel,
           async start() {
             signal.removeEventListener('abort', cancel)

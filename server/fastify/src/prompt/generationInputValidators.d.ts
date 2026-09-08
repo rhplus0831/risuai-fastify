@@ -2,6 +2,7 @@
 import type {
   GenerationSettings,
   FastifyDatabase,
+  DisplaySourceDatabase,
   GenerationPreflightInputs,
   ProviderGenerationSettings,
   MemoryGenerationSettings,
@@ -17,11 +18,12 @@ export type GenerationInputValidator<T> = {
 }
 export declare const validateGenerationSettings: GenerationInputValidator<GenerationSettings>
 export declare const validateFastifyDatabase: GenerationInputValidator<FastifyDatabase>
+export declare const validateDisplaySourceDatabase: GenerationInputValidator<DisplaySourceDatabase>
 export declare const validateGenerationPreflightInputs: GenerationInputValidator<GenerationPreflightInputs>
 export declare const validateProviderGenerationSettings: GenerationInputValidator<ProviderGenerationSettings>
 export declare const validateMemoryGenerationSettings: GenerationInputValidator<MemoryGenerationSettings>
 export declare const generationInputValidatorMetadata: {
-  readonly schemaDefinitions: 447
-  readonly roots: 5
+  readonly schemaDefinitions: 449
+  readonly roots: 6
   readonly compiledAtBuildTime: true
 }

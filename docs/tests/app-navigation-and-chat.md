@@ -2,7 +2,7 @@
 
 Last audited: 2026-09-04.
 
-Targeted source check: 2026-09-08 (connected-reader boundaries and evidence).
+Targeted source check: 2026-09-09 (deferred display-body scroll stability).
 
 This area covers URL/store routing, history and hotkey ownership, character/chat selection, chat folders and forks, transcript hydration, composer and attachment behavior, message rendering/editing/translation, active-chat generation settings, and the browser journeys that prove visible state survives command settlement and reload. Durable command mechanics are analyzed in [Persistence, Commands, and Events](persistence-commands-and-events.md), browser projection mechanics in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md), and generation internals in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
 
@@ -83,6 +83,13 @@ within one pixel. Preparation and measured frames both count toward the existing
 76-row bound. This guarantees a measured readable pause without choosing a later
 surviving row; it does not make all immediate post-gesture samples readable.
 The cached-parser-owner fault protects direct remount readability separately.
+
+`chatDisplayScrollStability.spec.ts` runs a four-case delayed-success versus
+handled-fallback matrix in bounded and diagnostic legacy paging. Each case uses
+tall custom cards and deterministic data images, completes multiple sequential
+older-row display responses during real CDP wheel input, rejects frame-to-frame
+visible-row discontinuities, and requires the same readable anchor to remain
+within one pixel while the idle commit queue drains.
 
 The lazy-manifest case checks the 60 registered boundaries; separate first-open
 journeys exercise their named route/dialog entries and visible loading/recovery.

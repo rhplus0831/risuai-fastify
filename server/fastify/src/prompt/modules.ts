@@ -15,7 +15,7 @@ import {
 } from '@risuai/shared-core/module-activation'
 import { resolveUniquePromptPreset } from '@risuai/shared-core/effective-prompt-template'
 import { parseModuleIntegration, resolveAgentPresetModuleIntegration } from '@risuai/shared-core/module-integration'
-import { attachTriggerSource } from './triggerSource.js'
+import { attachTriggerSource, triggerTypeAttribution } from './triggerSource.js'
 import { selectedPersonaIndexFromStableId } from '@risuai/shared-core/persona-selection-identity'
 
 type RisuModule = DeepReadonly<ServerModule>
@@ -204,7 +204,7 @@ export function getModuleTriggers(modules: readonly RisuModule[]): triggerscript
           triggerId: t.id,
           triggerIndex: index,
           triggerComment: t.comment,
-          triggerType: t.type,
+          triggerType: triggerTypeAttribution(t),
           lowLevelAccess,
         }),
       )

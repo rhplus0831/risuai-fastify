@@ -2830,57 +2830,194 @@ function loadLegacyGenerationSelectedRows(
   return { ...scope, rows: { database: settings, currentChar: characterMetadata, currentChat: chatMetadata } }
 }
 
-/**
- * Display-projection-scoped database read. Unlike prompt assembly, display
- * transforms only need the selected character/chat, its transcript, and the
- * three collections used to resolve active modules and preset regex. Avoid
- * parsing every character, chat, collection, and asset row each time a chat
- * screen mounts.
- *
- * Pre-extraction or malformed states fall back to the broad assembly loader so
- * legacy embedded collections and transcript arrays retain their historical
- * behavior.
- */
-export function loadPersistedForDisplaySource(db: DatabaseSync, dataDir: string, chatId: string): Persisted {
-  const { fields, settings } = loadDatabaseFieldsFromSqlite(db, ['modules', 'promptPresets', 'personas'])
-  const broadFallback = () => loadPersistedForAssembly(db, dataDir, chatId)
-  if (settings === null) return broadFallback()
+interface DisplaySourceTargetRow {
+  character_json: string
+  chat_json: string
+  prompt_presets_present: number
+  personas_present: number
+  modules_present: number
+}
 
-  const chatRow = db
-    .prepare('SELECT id, character_id, position, data_json FROM chats WHERE id = ?')
-    .get(chatId) as unknown as ChatRow | undefined
-  if (!chatRow) return broadFallback()
-
-  const charRow = db
-    .prepare('SELECT id, position, data_json FROM characters WHERE id = ?')
-    .get(chatRow.character_id) as unknown as CharacterRow | undefined
-  if (!charRow) return broadFallback()
-
-  const character = JSON.parse(charRow.data_json) as unknown
-  const chat = parseStoredChatRow(chatRow.data_json)
-  if (!isRecord(character) || !isRecord(chat)) return broadFallback()
-
-  const messageRows = getChatMessagesGroupedByIds(db, [chatId]).get(chatId)
-  if (messageRows && messageRows.length > 0) {
-    chat.message = messageRows
-  } else if (!Array.isArray(chat.message)) {
-    chat.message = []
+function readDisplayCollectionSelections(
+  db: DatabaseSync,
+  table: 'personas',
+  embedded: unknown,
+  tablePresent: number,
+  ids: readonly string[],
+): JsonRecord[] {
+  if (ids.length === 0) return []
+  const wanted = new Set(ids)
+  if (!tablePresent) {
+    return generationRecords(embedded).filter((record) => typeof record.id === 'string' && wanted.has(record.id))
   }
-  const hypaRows = getChatHypaV3GroupedByIds(db, [chatId])
-  if (hypaRows.has(chatId)) chat.hypaV3Data = hypaRows.get(chatId)
+  const selection = JSON.stringify(ids)
+  const rows = prepareGenerationRead(
+    db,
+    `SELECT data_json FROM ${table}
+    WHERE json_extract(data_json, '$.id') IN (SELECT value FROM json_each(?))
+    ORDER BY position`,
+    [selection],
+  ).all(selection)
+  return rows.flatMap((row) => {
+    const parsed: unknown = typeof row.data_json === 'string' ? JSON.parse(row.data_json) : undefined
+    return isRecord(parsed) && typeof parsed.id === 'string' && wanted.has(parsed.id) ? [parsed] : []
+  })
+}
 
+function displayModulePersonaId(settings: JsonRecord, currentChat: JsonRecord): string | null {
+  const chatSettings = normalizeStoredChatGenerationSettings(currentChat.generationSettings)
+  if (currentChat.generationSettings !== undefined) {
+    return typeof chatSettings?.personaId === 'string' && chatSettings.personaId.trim() ? chatSettings.personaId : null
+  }
+  if (typeof currentChat.bindedPersona === 'string' && currentChat.bindedPersona.trim()) {
+    return currentChat.bindedPersona
+  }
+  return typeof settings.selectedPersonaId === 'string' && settings.selectedPersonaId.trim()
+    ? settings.selectedPersonaId
+    : null
+}
+
+function dedupeDisplayModules(value: unknown): JsonRecord[] {
+  const modules = generationRecords(value)
+  const seenModuleIds = new Set<unknown>()
+  return modules.filter((module) => {
+    if (seenModuleIds.has(module.id)) return false
+    seenModuleIds.add(module.id)
+    return true
+  })
+}
+
+function selectDisplaySourceConfiguration(
+  db: DatabaseSync,
+  settings: JsonRecord,
+  presence: Pick<DisplaySourceTargetRow, 'prompt_presets_present' | 'personas_present' | 'modules_present'>,
+  currentChar: JsonRecord,
+  currentChat: JsonRecord,
+): JsonRecord {
+  const chatSettings = normalizeStoredChatGenerationSettings(currentChat.generationSettings)
+  const promptPresets = readGenerationCollectionSelection(
+    db,
+    'prompt_presets',
+    settings.promptPresets,
+    presence.prompt_presets_present,
+    chatSettings?.promptPresetId,
+    2,
+  )
+  const globalPersonaId =
+    typeof settings.selectedPersonaId === 'string' && settings.selectedPersonaId.trim()
+      ? settings.selectedPersonaId
+      : null
+  const modulePersonaId = displayModulePersonaId(settings, currentChat)
+  const personaIds = [...new Set([globalPersonaId, modulePersonaId].filter((id): id is string => id !== null))]
+  const personas = readDisplayCollectionSelections(
+    db,
+    'personas',
+    settings.personas,
+    presence.personas_present,
+    personaIds,
+  )
+  const agentPresetId = resolveEffectiveAgentPresetId(
+    {
+      agentPresetDefaultId:
+        typeof settings.agentPresetDefaultId === 'string' ? settings.agentPresetDefaultId : undefined,
+    },
+    chatSettings,
+  )
+  const agentPresets = agentPresetId
+    ? generationRecords(settings.agentPresets)
+        .filter((preset) => preset.id === agentPresetId)
+        .slice(0, 1)
+    : []
+  const promptPreset = promptPresets.length === 1 ? promptPresets[0] : undefined
+  const modulePersona = modulePersonaId ? personas.find((persona) => persona.id === modulePersonaId) : undefined
+  const identifiers = [
+    ...new Set([
+      ...generationStringArray(settings.enabledModules),
+      ...generationStringArray(currentChar.modules),
+      ...generationStringArray(currentChat.modules),
+      ...generationStringArray(modulePersona?.modules),
+      ...parseModuleIntegration(promptPreset?.moduleIntergration),
+      ...parseModuleIntegration(resolveAgentPresetModuleIntegration(agentPresets, agentPresetId)),
+    ]),
+  ]
+  const modules = dedupeDisplayModules(
+    readGenerationModules(db, settings.modules, presence.modules_present, identifiers, true),
+  )
+  const database = { ...settings }
+  for (const field of COLLECTION_FIELDS) delete database[field]
+  delete database.characters
+  delete database.pluginCustomStorage
+  Object.assign(database, { promptPresets, personas, modules, agentPresets, agents: [] })
+  database.promptPresetsId = promptPresets.length ? 0 : -1
+  database.selectedPersona = selectedPersonaIndexFromStableId(database)
+  return database
+}
+
+function displaySourcePersistedFromRows(
+  db: DatabaseSync,
+  settings: JsonRecord,
+  presence: Pick<DisplaySourceTargetRow, 'prompt_presets_present' | 'personas_present' | 'modules_present'>,
+  character: JsonRecord,
+  chat: JsonRecord,
+  chatId: string,
+  hydrate: boolean,
+): Persisted {
+  if (hydrate) hydrateGenerationTargetChat(db, chat, chatId)
+  const database = selectDisplaySourceConfiguration(db, settings, presence, character, chat)
   character.chatPage = 0
   character.chats = [chat]
-  return {
-    _version: PERSISTED_VERSION,
-    database: {
-      ...settings,
-      ...fields,
-      currentChar: 0,
-      characters: [character],
-    },
-    assets: [],
+  database.currentChar = 0
+  database.characters = [character]
+  return { _version: PERSISTED_VERSION, database, assets: [] }
+}
+
+/**
+ * Display projection selects its one character/chat, selected prompt/persona
+ * owners and only executable modules that survive activation order/dedup.
+ * Inactive collection bodies never enter the display decoder.
+ */
+export function loadPersistedForDisplaySource(
+  db: DatabaseSync,
+  dataDir: string,
+  target: GenerationLoadTarget,
+): Persisted {
+  const settings = loadSettingsFromSqlite(db)
+  if (settings !== null) {
+    const row = prepareGenerationRead(
+      db,
+      `SELECT character.data_json AS character_json, chat.data_json AS chat_json,
+        EXISTS(SELECT 1 FROM prompt_presets) AS prompt_presets_present,
+        EXISTS(SELECT 1 FROM personas) AS personas_present,
+        EXISTS(SELECT 1 FROM modules) AS modules_present
+      FROM chats AS chat JOIN characters AS character ON character.id = chat.character_id
+      WHERE chat.id = ? AND character.id = ?`,
+      [target.chatId, target.characterId],
+    ).get(target.chatId, target.characterId) as unknown as DisplaySourceTargetRow | undefined
+    if (row) {
+      const character = JSON.parse(row.character_json) as unknown
+      const chat = parseStoredChatRow(row.chat_json)
+      if (
+        isRecord(character) &&
+        character.chaId === target.characterId &&
+        isRecord(chat) &&
+        chat.id === target.chatId
+      ) {
+        return displaySourcePersistedFromRows(db, settings, row, character, chat, target.chatId, true)
+      }
+    }
   }
+
+  const legacy = loadLegacyGenerationSelectedRows(db, dataDir, target, true)
+  if (!legacy.rows) return emptyPersisted()
+  return displaySourcePersistedFromRows(
+    db,
+    legacy.rows.database,
+    { prompt_presets_present: 0, personas_present: 0, modules_present: 0 },
+    legacy.rows.currentChar,
+    legacy.rows.currentChat,
+    target.chatId,
+    false,
+  )
 }
 
 /**

@@ -78,7 +78,7 @@ const examples = [
   {
     category: 'display',
     stage: 'scope-decode',
-    outcome: 'failed',
+    outcome: 'handled-fallback',
     failureKind: 'generation-input-validation',
     validationDomain: 'database',
     validationOwner: 'message',

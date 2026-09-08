@@ -18,6 +18,7 @@ import {
 import {
   decodeGenerationSettings,
   decodeGenerationDatabase,
+  decodeDisplaySourceDatabase,
   decodeGenerationPreflightInputs,
   decodeProviderGenerationSettings,
   decodeMemoryGenerationSettings,
@@ -47,7 +48,7 @@ describe('selected generation persistence decoder', () => {
     expect(fs.readFileSync(generationInputValidatorTypesPath, 'utf8')).toBe(artifacts.declarations)
   }, 60_000)
 
-  it('matches runtime Ajv acceptance and complete errors for all five roots', () => {
+  it('matches runtime Ajv acceptance and complete errors for all six roots', () => {
     const schema: Record<string, unknown> = JSON.parse(fs.readFileSync(generationInputSchemaPath, 'utf8'))
     const compiler = new Ajv(generationInputValidationOptions)
     compiler.addSchema({ $id: generationInputSchemaId, $defs: schema.$defs })
@@ -56,6 +57,13 @@ describe('selected generation persistence decoder', () => {
       validateFastifyDatabase: selectedDatabaseWithMessage({
         role: 'char',
         data: 'reply',
+        name: null,
+        time: null,
+        translation: null,
+      }),
+      validateDisplaySourceDatabase: selectedDatabaseWithMessage({
+        role: 'char',
+        data: 'display reply',
         name: null,
         time: null,
         translation: null,
@@ -85,7 +93,9 @@ describe('selected generation persistence decoder', () => {
         { temperature: Infinity, characters: [] },
         { temperature: NaN, characters: [] },
       ]
-      if (name === 'validateFastifyDatabase') cases.push(selectedDatabaseWithMessage({ role: 'char', data: 42 }))
+      if (name === 'validateFastifyDatabase' || name === 'validateDisplaySourceDatabase') {
+        cases.push(selectedDatabaseWithMessage({ role: 'char', data: 42 }))
+      }
       if (name === 'validateGenerationPreflightInputs')
         cases.push({
           database: { temperature: 'bad' },
@@ -108,6 +118,9 @@ describe('selected generation persistence decoder', () => {
     expect(() => decodeGenerationDatabase(selectedDatabaseWithMessage({ role: 'char', data: 42 }))).toThrow(
       'Invalid database generation input at /characters/0/chats/0/message/0/data',
     )
+    expect(() => decodeDisplaySourceDatabase(selectedDatabaseWithMessage({ role: 'char', data: 42 }))).toThrow(
+      'Invalid database generation input at /characters/0/chats/0/message/0/data',
+    )
     expect(() =>
       decodeGenerationPreflightInputs({ database: {}, currentChar: { chaId: 42 }, currentChat: { id: 'chat' } }),
     ).toThrow('Invalid preflight generation input at /currentChar/chaId')
@@ -117,6 +130,15 @@ describe('selected generation persistence decoder', () => {
     expect(() =>
       decodeMemoryGenerationSettings({ characters: [{ chats: [{ generationSettings: { modelPresetId: 42 } }] }] }),
     ).toThrow('Invalid memory generation input at /characters/0/chats/0/generationSettings/modelPresetId')
+  })
+
+  it('keeps unrelated generation settings outside the display-specific validation boundary', () => {
+    const input = {
+      ...selectedDatabaseWithMessage({ role: 'char', data: 'reply' }),
+      temperature: { futureShape: true },
+    }
+    expect(decodeDisplaySourceDatabase(input)).toBe(input)
+    expect(() => decodeGenerationDatabase(input)).toThrow(GenerationInputValidationError)
   })
 
   it('retains content-free validator diagnostics without retaining the rejected value', () => {
@@ -182,6 +204,62 @@ describe('selected generation persistence decoder', () => {
     const input = { database, currentChar: { chaId: 'character' }, currentChat: { id: 'chat' } }
     expect(decodeGenerationPreflightInputs(input)).toBe(input)
     expect(() => decodeGenerationSettings(database)).toThrow(GenerationInputValidationError)
+  })
+
+  it('accepts finite legacy singleton trigger modes without copying or rewriting them', () => {
+    const database = selectedDatabaseWithMessage({
+      role: 'char',
+      data: 'reply',
+      name: null,
+      time: null,
+      translation: null,
+    })
+    const input = {
+      ...database,
+      modules: [
+        {
+          id: 'legacy-module',
+          name: 'Legacy Module',
+          description: '',
+          trigger: [
+            { comment: 'Input', type: ['input'], conditions: [], effect: [] },
+            { comment: 'Output', type: ['output'], conditions: [], effect: [] },
+          ],
+        },
+      ],
+    }
+
+    expect(decodeGenerationDatabase(input)).toBe(input)
+    expect(input.modules[0].trigger[0].type).toEqual(['input'])
+    expect(input.modules[0].trigger[1].type).toEqual(['output'])
+  })
+
+  it.each([
+    ['empty', []],
+    ['multiple', ['input', 'output']],
+    ['unknown', ['future-mode']],
+    ['non-string', [42]],
+  ])('rejects %s legacy trigger mode arrays', (_name, type) => {
+    const database = selectedDatabaseWithMessage({
+      role: 'char',
+      data: 'reply',
+      name: null,
+      time: null,
+      translation: null,
+    })
+    const input = {
+      ...database,
+      modules: [
+        {
+          id: 'invalid-module',
+          name: 'Invalid Module',
+          description: '',
+          trigger: [{ comment: 'Invalid', type, conditions: [], effect: [] }],
+        },
+      ],
+    }
+
+    expect(() => decodeGenerationDatabase(input)).toThrow(GenerationInputValidationError)
   })
 
   it.each([

@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { onDestroy, setContext, tick, untrack } from 'svelte'
+  import { flushSync, onDestroy, setContext, tick, untrack } from 'svelte'
   import { CHAT_DISPLAY_SCHEDULER, createChatDisplayScheduler } from './chatDisplayScheduler'
+  import { CHAT_DISPLAY_COMMIT_COORDINATOR, createChatDisplayCommitCoordinator } from './chatDisplayCommitCoordinator'
   import { backgroundReady, startupCoordinatorStore } from 'src/ts/startupReadiness'
   import type { character, Database, Message } from 'src/ts/storage/database.svelte'
   import Chat from './Chat.svelte'
@@ -11,6 +12,7 @@
   import {
     advanceTranscriptResidents,
     buildTranscriptResidency,
+    estimatePendingTranscriptRowHeight,
     growTranscriptWorkingRows,
     TranscriptResidencyEntryOwner,
     TranscriptHeightCache,
@@ -228,6 +230,10 @@
   let chatsComponentDestroyed = false
   const displayScheduler = createChatDisplayScheduler()
   setContext(CHAT_DISPLAY_SCHEDULER, displayScheduler)
+  const displayCommitCoordinator = createChatDisplayCommitCoordinator({
+    applyBatch: commitDisplayBodyChanges,
+  })
+  setContext(CHAT_DISPLAY_COMMIT_COORDINATOR, displayCommitCoordinator)
   const initialDisplayReadiness = createInitialDisplayReadiness((pending) => {
     initialDisplayPending = pending
     if (pending || chatsComponentDestroyed) return
@@ -575,11 +581,17 @@
   // Hydration owns chatRows. Only this layer decides which of those rows mount.
   const heights = new TranscriptHeightCache()
   const rowElements = new Map<string, HTMLElement>()
+  const rowKeyElements = new Map<string, { id: string; element: HTMLElement }>()
   const pendingRowParses = new Map<string, Set<symbol>>()
+  type PendingRowEstimate = 'source' | 'spacer' | false
+  const pendingRowGeometryRequests = new Map<string, { source: string; estimate: PendingRowEstimate }>()
   const returningRowHeights = new Map<
     string,
     { element: HTMLElement; height: string; overflow: string; ready: boolean }
   >()
+  let bodyCommitTransaction = false
+  let initialGeometryScope: string | null = null
+  let initialGeometryKeys = new Set<string>()
   let residencyScope = untrack(() => chatId)
   let heightRevision = $state(0)
   let reservationRevision = $state(0)
@@ -595,6 +607,7 @@
   let measuredWidth = 0
   let residencyScrollTop = 0
   let residencyAnchor: { id: string; top: number } | null = null
+  let displayNavigationAnchor: { id: string; top: number } | null = null
   let residencyNavigationEpoch = 0
   let residencyJumpRun = 0
   let pressedLogicalEnd = $state<number | null>(null)
@@ -691,17 +704,89 @@
   function captureResidencyAnchor(): { id: string; top: number } | null {
     if (!scrollContainer) return null
     const viewport = scrollContainer.getBoundingClientRect()
-    let anchor: { id: string; top: number } | null = null
+    let stableAnchor: { id: string; top: number } | null = null
+    let pendingAnchor: { id: string; top: number } | null = null
     for (const [id, element] of rowElements) {
-      const rect = element.getBoundingClientRect()
-      if (rect.height > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom) {
-        const top = rect.top - viewport.top
+      const visual = element.querySelector<HTMLElement>('.risu-chat[data-risu-message-id]')
+      const visualRect = visual?.getBoundingClientRect() ?? element.getBoundingClientRect()
+      if (visualRect.height > 0 && visualRect.bottom > viewport.top && visualRect.top < viewport.bottom) {
+        const top = element.getBoundingClientRect().top - viewport.top
+        const pending = element.hasAttribute('data-transcript-pending-geometry')
+        const anchor = pending ? pendingAnchor : stableAnchor
         // Insertion order changes during progressive admission. Anchor the
-        // first visible row, not a lower neighbor that may finish parsing.
-        if (!anchor || top < anchor.top) anchor = { id, top }
+        // first stable visible row. A newly mounted placeholder is only a
+        // fallback: anchoring it would move the prior visual row when the
+        // placeholder releases to its final parsed height.
+        if (!anchor || top < anchor.top) {
+          if (pending) pendingAnchor = { id, top }
+          else stableAnchor = { id, top }
+        }
       }
     }
-    return anchor
+    return stableAnchor ?? pendingAnchor
+  }
+
+  function transcriptRowAnchor(id: string, preservedTop?: number): { id: string; top: number } | null {
+    if (!scrollContainer) return null
+    const element = rowElements.get(id)
+    if (!element?.isConnected) return null
+    return {
+      id,
+      top: preservedTop ?? element.getBoundingClientRect().top - scrollContainer.getBoundingClientRect().top,
+    }
+  }
+
+  function visibleDisplayRowKeys(): string[] {
+    if (!scrollContainer) return []
+    const viewport = scrollContainer.getBoundingClientRect()
+    const visible: string[] = []
+    for (const [key, { element }] of rowKeyElements) {
+      const rect = element.getBoundingClientRect()
+      if (rect.height > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom) visible.push(key)
+    }
+    return visible
+  }
+
+  function updateDisplayVisibility(): void {
+    const visible = visibleDisplayRowKeys()
+    displayScheduler.setVisible(visible)
+    displayCommitCoordinator.setVisible(visible)
+  }
+
+  function commitDisplayBodyChanges(commits: readonly (() => void)[], preserveAnchor: boolean): void {
+    if (commits.length === 0 || chatsComponentDestroyed) return
+    if (
+      (preserveAnchor || jumpMessageId !== null || displayNavigationAnchor !== null) &&
+      residencyUpdating &&
+      typeof requestAnimationFrame === 'function'
+    ) {
+      requestAnimationFrame(() => commitDisplayBodyChanges(commits, preserveAnchor))
+      return
+    }
+    const container = scrollContainer
+    const anchor =
+      container && currentTranscriptAnchor() === 'free'
+        ? ((jumpMessageId ? transcriptRowAnchor(jumpMessageId) : displayNavigationAnchor) ??
+          (preserveAnchor ? captureResidencyAnchor() : null))
+        : null
+    bodyCommitTransaction = true
+    try {
+      flushSync(() => commits.forEach((commit) => commit()))
+    } finally {
+      bodyCommitTransaction = false
+    }
+    if (container && anchor && currentTranscriptAnchor() === 'free') {
+      const element = rowElements.get(anchor.id)
+      if (element?.isConnected) {
+        const delta = element.getBoundingClientRect().top - container.getBoundingClientRect().top - anchor.top
+        if (Math.abs(delta) > 0.01) container.scrollTop += delta
+        residencyAnchor = anchor
+        residencyScrollTop = container.scrollTop
+      }
+    }
+    updateDisplayVisibility()
+    scheduleResidency()
+    scheduleLatestMessageAlignmentReassert()
   }
 
   function handleResidencyFocusChange(): void {
@@ -771,10 +856,32 @@
     })
   }
 
-  function beginRowParse(key: string, registration: symbol): void {
+  function holdRowGeometry(key: string, source: string, estimate: PendingRowEstimate): void {
+    if (loadPages === Infinity || returningRowHeights.has(key)) return
+    const row = rowKeyElements.get(key)
+    if (!row) return
+    const measuredHeight = heights.measured(row.id)
+    if (measuredHeight === undefined && !estimate) return
+    returningRowHeights.set(key, {
+      element: row.element,
+      height: row.element.style.height,
+      overflow: row.element.style.overflow,
+      ready: false,
+    })
+    const placeholderHeight =
+      measuredHeight ?? (estimate === 'source' ? estimatePendingTranscriptRowHeight(source) : heights.get(row.id))
+    row.element.style.height = `${placeholderHeight}px`
+    row.element.style.overflow = 'clip'
+    row.element.dataset.transcriptPendingGeometry = measuredHeight === undefined ? 'estimated' : 'measured'
+  }
+
+  function beginRowParse(key: string, registration: symbol, source: string, background: boolean): void {
     let pending = pendingRowParses.get(key)
     if (!pending) pendingRowParses.set(key, (pending = new Set()))
     pending.add(registration)
+    const estimate: PendingRowEstimate = background ? (initialGeometryKeys.has(key) ? 'source' : 'spacer') : false
+    pendingRowGeometryRequests.set(key, { source, estimate })
+    holdRowGeometry(key, source, estimate)
     const held = returningRowHeights.get(key)
     if (held) held.ready = false
   }
@@ -783,10 +890,16 @@
     const pending = pendingRowParses.get(key)
     if (!pending?.delete(registration) || pending.size > 0) return
     pendingRowParses.delete(key)
+    pendingRowGeometryRequests.delete(key)
     const held = returningRowHeights.get(key)
     if (held) held.ready = true
-    // The parser's promise commits its HTML before this animation frame. Release
-    // the held height in the same pass that measures and corrects the viewport.
+    if (held) {
+      if (bodyCommitTransaction) restoreReturningRowHeight(key)
+      else displayCommitCoordinator.commit(key, () => restoreReturningRowHeight(key))
+    }
+    if (pendingRowParses.size === 0 && returningRowHeights.size === 0) displayNavigationAnchor = null
+    // Normal completion releases the held height inside the same body commit.
+    // Exceptional/cancelled settlement above still uses the coordinator.
     scheduleResidency()
   }
 
@@ -795,7 +908,9 @@
     if (!held) return
     held.element.style.height = held.height
     held.element.style.overflow = held.overflow
+    delete held.element.dataset.transcriptPendingGeometry
     returningRowHeights.delete(key)
+    if (pendingRowParses.size === 0 && returningRowHeights.size === 0) displayNavigationAnchor = null
   }
 
   async function reconcileResidency(): Promise<void> {
@@ -829,6 +944,7 @@
         changed = heights.set(id, rect.height) || changed
         if (rect.height > 0 && rect.bottom > viewport.top && rect.top < viewport.bottom) visibleRows++
       }
+      updateDisplayVisibility()
       if (changed) heightRevision++
       if (!fullResidency) workingRowLimit = growTranscriptWorkingRows(workingRowLimit, visibleRows)
       const focusedSpacer = document.activeElement?.closest('[data-transcript-spacer]')
@@ -897,8 +1013,11 @@
   function measureTranscriptRow(element: HTMLElement, entry: { id: string; key: string }) {
     let { id, key } = entry
     rowElements.set(id, element)
+    rowKeyElements.set(key, { id, element })
+    const pendingGeometry = pendingRowGeometryRequests.get(key)
+    if (pendingGeometry) holdRowGeometry(key, pendingGeometry.source, pendingGeometry.estimate)
     const measuredHeight = heights.measured(id)
-    if (!fullResidency && measuredHeight !== undefined) {
+    if (loadPages !== Infinity && measuredHeight !== undefined && !returningRowHeights.has(key)) {
       // A remounted ChatBody starts empty. Substituting that shell for a tall
       // spacer would discard its known height and can repeatedly move the
       // working window before the asynchronous body gets a chance to render.
@@ -910,12 +1029,14 @@
       })
       element.style.height = `${measuredHeight}px`
       element.style.overflow = 'clip'
+      element.dataset.transcriptPendingGeometry = 'measured'
       void tick().then(() => {
         const held = returningRowHeights.get(key)
         // Custom layouts without a ChatBody have no parse registration to await.
         if (held?.element === element && !pendingRowParses.has(key)) {
           held.ready = true
-          scheduleResidency()
+          if (legacyPaging) restoreReturningRowHeight(key)
+          else scheduleResidency()
         }
       })
     }
@@ -927,16 +1048,21 @@
       update(next: { id: string; key: string }) {
         if (next.id === id && next.key === key) return
         if (rowElements.get(id) === element) rowElements.delete(id)
+        if (rowKeyElements.get(key)?.element === element) rowKeyElements.delete(key)
         id = next.id
         key = next.key
         rowElements.set(id, element)
+        rowKeyElements.set(key, { id, element })
         scheduleResidency()
       },
       destroy() {
         observer?.disconnect()
         if (rowElements.get(id) === element) rowElements.delete(id)
+        if (rowKeyElements.get(key)?.element === element) rowKeyElements.delete(key)
         if (returningRowHeights.get(key)?.element === element) restoreReturningRowHeight(key)
         pendingRowParses.delete(key)
+        pendingRowGeometryRequests.delete(key)
+        if (displayNavigationAnchor?.id === id) displayNavigationAnchor = null
       },
     }
   }
@@ -956,6 +1082,7 @@
 
     if (position < 0) return null
     releaseTranscriptToUser()
+    displayNavigationAnchor = null
     residencyNavigationEpoch++
     const run = ++residencyJumpRun
     const id = residencyIds[position]
@@ -971,8 +1098,10 @@
     return (preservedTop?: number) => {
       if (jumpMessageId !== id || run !== residencyJumpRun) return
       residencyNavigationEpoch++
+      const anchor = transcriptRowAnchor(id, preservedTop)
       jumpMessageId = null
-      residencyAnchor = preservedTop !== undefined ? { id, top: preservedTop } : captureResidencyAnchor()
+      displayNavigationAnchor = anchor && (pendingRowParses.size > 0 || returningRowHeights.size > 0) ? anchor : null
+      residencyAnchor = anchor ?? captureResidencyAnchor()
       residencyScrollTop = scrollContainer?.scrollTop ?? 0
       scheduleResidency()
     }
@@ -997,9 +1126,18 @@
 
   $effect.pre(() => {
     const scope = chatId
+    const rows = chatRows
     untrack(() => {
+      if (initialGeometryScope !== scope) {
+        initialGeometryScope = scope
+        initialGeometryKeys = new Set()
+      }
+      if (initialGeometryKeys.size === 0 && rows.length > 0) {
+        initialGeometryKeys = new Set(rows.map((row) => row.key))
+      }
       if (residencyScope === scope) return
       residencyScope = scope
+      displayCommitCoordinator.reset()
       residencyEntries.clear()
       workingRowLimit = TRANSCRIPT_WORKING_ROWS
       reservations.reset()
@@ -1008,6 +1146,8 @@
       restorePressedRowSizes()
       for (const key of returningRowHeights.keys()) restoreReturningRowHeight(key)
       pendingRowParses.clear()
+      pendingRowGeometryRequests.clear()
+      rowKeyElements.clear()
       heightRevision++
       residentStart = 0
       admittedResidents = null
@@ -1015,6 +1155,7 @@
       singletonPins = []
       jumpMessageId = null
       residencyAnchor = null
+      displayNavigationAnchor = null
       measuredWidth = 0
       pressedLogicalEnd = null
       pressedResidentEntries = null
@@ -1325,12 +1466,17 @@
   }
 
   export const handleTranscriptUserInteraction = () => {
+    displayNavigationAnchor = null
+    displayCommitCoordinator.noteInteraction()
+    updateDisplayVisibility()
     residencyNavigationEpoch++
     transcriptUserIntentPending = true
     if (currentTranscriptAnchor() === 'start') releaseTranscriptToUser()
   }
 
   export const handleTranscriptScroll = () => {
+    displayCommitCoordinator.noteScroll()
+    updateDisplayVisibility()
     if (
       scrollContainer &&
       Math.abs(scrollContainer.scrollTop - residencyScrollTop) >= 0.5 &&
@@ -1493,7 +1639,10 @@
     restorePressedRowSizes()
     for (const key of returningRowHeights.keys()) restoreReturningRowHeight(key)
     pendingRowParses.clear()
+    pendingRowGeometryRequests.clear()
+    displayNavigationAnchor = null
     displayScheduler.destroy()
+    displayCommitCoordinator.destroy()
     // Reading live chat props during teardown can reconnect parent deriveds
     // to the previous selection. Release the scope captured while mounted.
     releaseDisplaySourceChat(activatedDisplaySourceChatId)
@@ -1649,7 +1798,7 @@
   data-transcript-resident-rows={residentRowCount}
   data-transcript-residency-mode={residencyMode}
   aria-busy={!fullResidency && residencyPending}
-  style:overflow-anchor={legacyPaging ? 'auto' : 'none'}>
+  style:overflow-anchor="none">
   {#if chatRows.length > 0}
     <div
       class="shrink-0"
@@ -1744,7 +1893,16 @@
               consumeAutomaticTranslationEligibility(row.message.chatId ?? '')
           }}
           onInitialDisplayParseStart={(registration) => {
-            beginRowParse(entry.key, registration)
+            beginRowParse(
+              entry.key,
+              registration,
+              row.readerProjection && !row.readerCanonical
+                ? (row.readerProjection.text ?? '')
+                : row.generationDisplayProjection
+                  ? (row.generationDisplayProjection.text ?? '')
+                  : row.message.data,
+              !(row.readerProjection || row.awaitInitialDisplayParse),
+            )
             if (row.awaitInitialDisplayParse) initialDisplayReadiness.start(row.scopeId, registration)
           }}
           onInitialDisplayParseSettled={(registration) => {
@@ -1752,6 +1910,7 @@
             if (row.awaitInitialDisplayParse) initialDisplayReadiness.settle(row.scopeId, registration)
           }}
           displayPriority={row.readerProjection || row.awaitInitialDisplayParse ? 'critical' : 'background'}
+          transcriptRowKey={entry.key}
           generationPersistenceState={row.generationPersistenceState}
           generationPhase={row.readerProjection
             ? row.readerProjection.phase

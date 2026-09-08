@@ -3,6 +3,17 @@ export const TRANSCRIPT_MAX_WORKING_ROWS = 60
 export const TRANSCRIPT_MAX_RESIDENT_ROWS = 76
 export const TRANSCRIPT_HEIGHT_ENTRIES = 2048
 export const TRANSCRIPT_ESTIMATED_ROW_HEIGHT = 360
+export const TRANSCRIPT_MIN_PENDING_ROW_HEIGHT = 160
+export const TRANSCRIPT_MAX_PENDING_ROW_HEIGHT = 960
+
+/** Cheap source-only estimate; display scripts and HTML parsing remain deferred. */
+export function estimatePendingTranscriptRowHeight(source: string): number {
+  const text = source.slice(0, 24_000)
+  const explicitLines = Math.min(24, text.match(/\n|<br\s*\/?>|<\/p>|<\/div>/giu)?.length ?? 0)
+  const wrappedLines = Math.ceil(text.replace(/<[^>]*>/gu, '').length / 64)
+  const contentLines = Math.max(1, explicitLines + 1, wrappedLines)
+  return Math.min(TRANSCRIPT_MAX_PENDING_ROW_HEIGHT, TRANSCRIPT_MIN_PENDING_ROW_HEIGHT + contentLines * 22)
+}
 
 /** Dense custom layouts can need more rows than the normal overscan target. */
 export function growTranscriptWorkingRows(current: number, visibleRows: number): number {

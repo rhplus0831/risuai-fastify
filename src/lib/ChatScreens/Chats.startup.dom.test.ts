@@ -217,101 +217,122 @@ describe('chat startup rendering', () => {
     }
   })
 
-  it.each([false, true])('progressively parses older bodies with its own readiness (readOnly=%s)', async (readOnly) => {
-    resetStartupReadinessForTests()
-    const startupAttempt = beginStartupAttempt()
-    const callbacks = new Map<number, IdleRequestCallback>()
-    let nextId = 0
-    vi.stubGlobal('requestIdleCallback', (run: IdleRequestCallback) => {
-      const id = ++nextId
-      callbacks.set(id, run)
-      return id
-    })
-    vi.stubGlobal('cancelIdleCallback', (id: number) => callbacks.delete(id))
-    const frame = async () => {
-      const current = [...callbacks.values()]
-      callbacks.clear()
-      current.forEach((run) => run({ didTimeout: false, timeRemaining: () => 10 }))
-      await flush()
-    }
-    seedRenderCostMessages(6)
-    const character = charactersResourceState.characters[0]
-    const chat = character.chats[0]
-    withTestDatabaseWrite(() => {
-      charactersResourceState.characters.push({
-        ...character,
-        chaId: 'background-character',
-        chats: [],
+  it.each([
+    { readOnly: false, legacyPaging: false },
+    { readOnly: true, legacyPaging: false },
+    { readOnly: false, legacyPaging: true },
+    { readOnly: true, legacyPaging: true },
+  ])(
+    'progressively parses older bodies with retained geometry (readOnly=$readOnly, legacyPaging=$legacyPaging)',
+    async ({ readOnly, legacyPaging }) => {
+      if (legacyPaging) localStorage.setItem('risu-transcript-legacy-paging', '1')
+      resetStartupReadinessForTests()
+      const startupAttempt = beginStartupAttempt()
+      const callbacks = new Map<number, IdleRequestCallback>()
+      let nextId = 0
+      vi.stubGlobal('requestIdleCallback', (run: IdleRequestCallback) => {
+        const id = ++nextId
+        callbacks.set(id, run)
+        return id
       })
-    })
-    const parse = vi.spyOn(parser, 'ParseMarkdown').mockImplementation(async (html) => `<p>${html}</p>`)
-    const sanitize = vi.spyOn(DOMPurify, 'sanitize')
-    const target = document.createElement('div')
-    document.body.appendChild(target)
-    if (readOnly) replaceAutomaticTranslationMessageIds(['writer-only-id'])
-    const component = mount(ChatsHarness, {
-      target,
-      props: { chatId: chat.id, characterId: character.chaId, readOnly },
-    })
-    try {
-      flushSync()
-      await flush()
-      expect(target.querySelectorAll('.risu-chat')).toHaveLength(6)
-      expect(parse).toHaveBeenCalledTimes(2)
-      expect(target.textContent).toContain(chat.message[5].data)
-      expect(target.textContent).not.toContain(chat.message[0].data)
-      await frame()
-      expect(parse).toHaveBeenCalledTimes(readOnly ? 3 : 2)
-      if (!readOnly) {
-        recordStartupMilestone('background-ready')
-        completeStartupAttempt(startupAttempt)
+      vi.stubGlobal('cancelIdleCallback', (id: number) => callbacks.delete(id))
+      const frame = async () => {
+        const current = [...callbacks.values()]
+        callbacks.clear()
+        current.forEach((run) => run({ didTimeout: false, timeRemaining: () => 10 }))
+        await flush()
       }
-      await flush()
-      for (let count = readOnly ? 4 : 3; count <= 6; count++) {
-        await frame()
-        expect(parse).toHaveBeenCalledTimes(count)
-      }
-      for (const message of chat.message) expect(target.textContent).toContain(message.data)
-      if (readOnly) expect(get(automaticTranslationMessageIds)).toEqual(['writer-only-id'])
-
-      parse.mockClear()
-      sanitize.mockClear()
-      scheduledDisplay.mockClear()
+      seedRenderCostMessages(6)
+      const character = charactersResourceState.characters[0]
+      const chat = character.chats[0]
       withTestDatabaseWrite(() => {
-        applyCharacterResource({
-          revision: 1,
-          character: {
-            ...charactersResourceState.characters[1],
-            name: 'Hydrated background',
-            desc: 'Unrelated detail',
-          },
+        charactersResourceState.characters.push({
+          ...character,
+          chaId: 'background-character',
+          chats: [],
         })
       })
-      await flush()
-      await frame()
-      expect(parse).not.toHaveBeenCalled()
-      expect(sanitize).not.toHaveBeenCalled()
-      expect(scheduledDisplay).not.toHaveBeenCalled()
+      const parse = vi.spyOn(parser, 'ParseMarkdown').mockImplementation(async (html) => `<p>${html}</p>`)
+      const sanitize = vi.spyOn(DOMPurify, 'sanitize')
+      const target = document.createElement('div')
+      document.body.appendChild(target)
+      if (readOnly) replaceAutomaticTranslationMessageIds(['writer-only-id'])
+      const component = mount(ChatsHarness, {
+        target,
+        props: { chatId: chat.id, characterId: character.chaId, readOnly },
+      })
+      try {
+        flushSync()
+        await flush()
+        expect(target.querySelectorAll('.risu-chat')).toHaveLength(6)
+        expect(parse).toHaveBeenCalledTimes(2)
+        expect(target.textContent).toContain(chat.message[5].data)
+        expect(target.textContent).not.toContain(chat.message[0].data)
+        const estimatedRows = [
+          ...target.querySelectorAll<HTMLElement>('[data-transcript-pending-geometry="estimated"]'),
+        ]
+        expect(estimatedRows).toHaveLength(4)
+        expect(
+          estimatedRows.every((row) => {
+            const height = Number.parseFloat(row.style.height)
+            return height >= 160 && height <= 960
+          }),
+        ).toBe(true)
+        await frame()
+        expect(parse).toHaveBeenCalledTimes(readOnly ? 3 : 2)
+        if (!readOnly) {
+          recordStartupMilestone('background-ready')
+          completeStartupAttempt(startupAttempt)
+        }
+        await flush()
+        for (let count = readOnly ? 4 : 3; count <= 6; count++) {
+          await frame()
+          expect(parse).toHaveBeenCalledTimes(count)
+        }
+        for (const message of chat.message) expect(target.textContent).toContain(message.data)
+        expect(target.querySelector('[data-transcript-pending-geometry]')).toBeNull()
+        if (readOnly) expect(get(automaticTranslationMessageIds)).toEqual(['writer-only-id'])
 
-      expect(
-        applyServerChatMessagesResource(
-          chat.id,
-          getChatMessageOwnerState(chat.id)!.messages.map((message, index) =>
-            index === 0 ? { ...message, data: 'Edited older message' } : message,
+        parse.mockClear()
+        sanitize.mockClear()
+        scheduledDisplay.mockClear()
+        withTestDatabaseWrite(() => {
+          applyCharacterResource({
+            revision: 1,
+            character: {
+              ...charactersResourceState.characters[1],
+              name: 'Hydrated background',
+              desc: 'Unrelated detail',
+            },
+          })
+        })
+        await flush()
+        await frame()
+        expect(parse).not.toHaveBeenCalled()
+        expect(sanitize).not.toHaveBeenCalled()
+        expect(scheduledDisplay).not.toHaveBeenCalled()
+
+        expect(
+          applyServerChatMessagesResource(
+            chat.id,
+            getChatMessageOwnerState(chat.id)!.messages.map((message, index) =>
+              index === 0 ? { ...message, data: 'Edited older message' } : message,
+            ),
+            undefined,
+            [],
           ),
-          undefined,
-          [],
-        ),
-      ).toBe(true)
-      expect(getChatMessageOwnerState(chat.id)!.messages[0].data).toBe('Edited older message')
-      await flush()
-      await frame()
-      await frame()
-      expect(parse).toHaveBeenCalledTimes(1)
-      expect(scheduledDisplay).toHaveBeenCalledTimes(1)
-      expect(target.textContent).toContain('Edited older message')
-    } finally {
-      await unmount(component)
-    }
-  })
+        ).toBe(true)
+        expect(getChatMessageOwnerState(chat.id)!.messages[0].data).toBe('Edited older message')
+        await flush()
+        await frame()
+        await frame()
+        expect(parse).toHaveBeenCalledTimes(1)
+        expect(scheduledDisplay).toHaveBeenCalledTimes(1)
+        expect(target.textContent).toContain('Edited older message')
+      } finally {
+        await unmount(component)
+        if (legacyPaging) localStorage.removeItem('risu-transcript-legacy-paging')
+      }
+    },
+  )
 })

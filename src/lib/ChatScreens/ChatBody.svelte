@@ -24,6 +24,7 @@
   import { pruneEmptyBilingualPairs } from '../../ts/translator/bilingualInterleave'
   import { createChatBodyRenderMemo } from './ChatBodyRenderMemo'
   import { CHAT_DISPLAY_SCHEDULER, type ChatDisplayScheduler } from './chatDisplayScheduler'
+  import { CHAT_DISPLAY_COMMIT_COORDINATOR, type ChatDisplayCommitCoordinator } from './chatDisplayCommitCoordinator'
   import { getFileSrc } from 'src/ts/globalApi.svelte'
   import {
     RegexDisplayReloadPointer,
@@ -53,6 +54,7 @@
     displayLayer?: DisplaySourceLayer
     streaming?: boolean
     displayPriority?: DisplaySourcePriority
+    transcriptRowKey?: string
     parseRevision?: string
     role: string | null
     translated: boolean
@@ -77,6 +79,7 @@
     displayLayer = 'original',
     streaming = false,
     displayPriority = 'normal',
+    transcriptRowKey = undefined,
     parseRevision = '',
     role,
     translated = $bindable(false),
@@ -95,6 +98,7 @@
   })
   const parseOwners = createChatBodyParseOwnerReaders(getChatReadOwnersContext())
   const displayScheduler = getContext<ChatDisplayScheduler | undefined>(CHAT_DISPLAY_SCHEDULER)
+  const displayCommitCoordinator = getContext<ChatDisplayCommitCoordinator | undefined>(CHAT_DISPLAY_COMMIT_COORDINATOR)
   let queuedDisplay: AbortController | undefined
 
   let lastParsed = $state('')
@@ -119,6 +123,18 @@
     if (!initialDisplayParseStarted || initialDisplayParseSettled) return
     initialDisplayParseSettled = true
     onInitialDisplayParseSettled(initialDisplayParseRegistration)
+  }
+
+  function commitParsedBody(html: string, settle: boolean): void {
+    const apply = () => {
+      lastParsed = html
+      if (settle) settleInitialDisplayParse()
+    }
+    if (displayCommitCoordinator && transcriptRowKey) {
+      displayCommitCoordinator.commit(transcriptRowKey, apply, queuedDisplay?.signal)
+    } else {
+      apply()
+    }
   }
 
   onDestroy(() => {
@@ -306,7 +322,10 @@
       if (canTranslateForRun() && (retranslate || translated)) {
         const settings = parseOwners.settingsOwner()
         if (settings.showTranslationLoading) {
-          lastParsed = `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid #3b82f6; border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`
+          commitParsedBody(
+            `<div style="display:flex;justify-content:center;align-items:center;height:48px;"><div style="animation: spin 1s linear infinite; border-radius: 50%; height: 32px; width: 32px; border: 2px solid #3b82f6; border-top: 2px solid transparent;"></div></div><style>@keyframes spin { to { transform: rotate(360deg); } }</style>`,
+            false,
+          )
         }
 
         if (settings.translatorType === 'llm' && settings.translateBeforeHTMLFormatting) {
@@ -619,7 +638,11 @@
       if (!displayScheduler || parseDisplayPriority !== 'background') {
         return markParsing(parseData, parseCharacter, parseIndex)
       }
-      return displayScheduler.run(() => markParsing(parseData, parseCharacter, parseIndex), controller.signal)
+      return displayScheduler.run(
+        () => markParsing(parseData, parseCharacter, parseIndex),
+        controller.signal,
+        transcriptRowKey,
+      )
     })
     return previousParse
   })
@@ -629,10 +652,9 @@
     let cancelled = false
     void result.then((html) => {
       if (cancelled || html === undefined) return
-      lastParsed = html
       // Translation detection can queue another parse without producing HTML.
       // Keep the initial registration until a body is actually committed.
-      settleInitialDisplayParse()
+      commitParsedBody(html, true)
     })
     return () => {
       cancelled = true

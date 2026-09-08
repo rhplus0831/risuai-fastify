@@ -15,6 +15,11 @@ export interface TriggerSourceAttribution {
   lowLevelAccess?: boolean
 }
 
+/** Diagnostic/progress contracts remain scalar-only for legacy tuple modes. */
+export function triggerTypeAttribution(trigger: triggerscript): string | undefined {
+  return typeof trigger.type === 'string' ? trigger.type : undefined
+}
+
 type AttributedTrigger = triggerscript & {
   [TRIGGER_SOURCE]?: TriggerSourceAttribution
 }

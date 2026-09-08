@@ -6,9 +6,12 @@ import type { FastifyInstance } from 'fastify'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { buildApp } from '../src/app.js'
 import { getSchemaState, openDatabase } from '../src/db.js'
-import { applyImport } from '../src/repository.js'
+import { applyImport, loadPersistedForGenerationAssembly } from '../src/repository.js'
 import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { subscribeProtocolMetrics } from '../src/protocolMetrics.js'
+import { decodeGenerationDatabase } from '../src/prompt/generationInputDecoder.js'
+import { getActiveModules } from '../src/prompt/modules.js'
+import { runTrigger } from '../src/prompt/triggers.js'
 import { assertScopedLoadOnHotPath } from './helpers/loadCostHarness.js'
 
 const subtle = webcrypto.subtle
@@ -93,6 +96,132 @@ afterEach(async () => {
 })
 
 describe('POST /api/v1/chats/:chatId/display-sources', () => {
+  it('accepts a production-shaped singleton-tuple module without rewriting or enabling its automatic triggers', async () => {
+    const assertion = await setupAuthedClient(harness.app)
+    const tupleTriggers = Array.from({ length: 10 }, (_, index) => ({
+      comment: `legacy tuple ${index}`,
+      type: [index < 3 || index === 6 ? 'input' : 'output'],
+      conditions: [],
+      effect: [{ type: 'setvar', operator: '=', var: `legacy-${index}`, value: 'unexpected' }],
+    }))
+    const canonicalTrigger = {
+      comment: 'canonical input',
+      type: 'input',
+      conditions: [],
+      effect: [{ type: 'setvar', operator: '=', var: 'canonical', value: 'ran' }],
+    }
+    const db = openDatabase(harness.dataDir)
+    let revision: number
+    let persistedModule: string
+    try {
+      const seeded = await applyImport(
+        db,
+        harness.dataDir,
+        normalizeRisuSaveSnapshotDatabase({
+          enabledModules: ['production-shaped-module'],
+          modules: [
+            {
+              id: 'production-shaped-module',
+              name: 'Production-shaped legacy triggers',
+              description: '',
+              regex: [{ in: 'hello', out: 'rendered', type: 'editdisplay' }],
+              trigger: [...tupleTriggers.map((trigger) => ({ ...trigger, type: trigger.type[0] })), canonicalTrigger],
+            },
+          ],
+          characters: [
+            {
+              chaId: 'char-1',
+              name: 'Character',
+              chats: [{ id: 'chat-1', message: [{ role: 'char', data: 'hello', chatId: 'message-1' }] }],
+            },
+          ],
+        }),
+      )
+      revision = seeded.revision
+      const importedModule = (
+        db
+          .prepare("SELECT data_json FROM modules WHERE json_extract(data_json, '$.id') = ?")
+          .get('production-shaped-module') as {
+          data_json: string
+        }
+      ).data_json
+      const productionShapedModule = JSON.parse(importedModule) as Record<string, unknown>
+      productionShapedModule.trigger = [...tupleTriggers, canonicalTrigger]
+      persistedModule = JSON.stringify(productionShapedModule)
+      db.prepare("UPDATE modules SET data_json = ? WHERE json_extract(data_json, '$.id') = ?").run(
+        persistedModule,
+        'production-shaped-module',
+      )
+    } finally {
+      db.close()
+    }
+
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/chats/chat-1/display-sources',
+      headers: { 'risu-auth': assertion },
+      payload: {
+        protocolVersion: 1,
+        baseRevision: revision,
+        context: { pageSessionId: 'production-shaped' },
+        targets: [
+          {
+            requestKey: 'production-shaped',
+            characterId: 'char-1',
+            messageId: 'message-1',
+            index: 0,
+            role: 'char',
+            firstMessage: false,
+            layer: 'original',
+            source: 'hello',
+            sourceHash: sourceHash('hello'),
+            projectionEpoch: 1,
+          },
+        ],
+      },
+    })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().entries).toEqual([
+      expect.objectContaining({ requestKey: 'production-shaped', status: 'ok', displaySource: 'rendered' }),
+    ])
+
+    const persistedDb = openDatabase(harness.dataDir)
+    try {
+      const after = (
+        persistedDb
+          .prepare("SELECT data_json FROM modules WHERE json_extract(data_json, '$.id') = ?")
+          .get('production-shaped-module') as {
+          data_json: string
+        }
+      ).data_json
+      expect(after).toBe(persistedModule)
+      const loaded = loadPersistedForGenerationAssembly(persistedDb, harness.dataDir, {
+        characterId: 'char-1',
+        chatId: 'chat-1',
+      })
+      const database = decodeGenerationDatabase(loaded.database)
+      const character = database.characters[0]
+      const chat = character.chats[0]
+      const triggerResult = await runTrigger(
+        {
+          modules: getActiveModules(database, character, chat),
+          database,
+          selectedCharID: 0,
+          chatPage: 0,
+        },
+        character,
+        'input',
+        { chat },
+      )
+      expect(triggerResult?.chat.scriptstate?.['$canonical']).toBe('ran')
+      for (const index of tupleTriggers.keys()) {
+        expect(triggerResult?.chat.scriptstate).not.toHaveProperty(`$legacy-${index}`)
+      }
+    } finally {
+      persistedDb.close()
+    }
+  })
+
   it('renders imported messages when optional generation settings and lore metadata are null', async () => {
     const assertion = await setupAuthedClient(harness.app)
     const db = openDatabase(harness.dataDir)
@@ -161,6 +290,110 @@ describe('POST /api/v1/chats/:chatId/display-sources', () => {
       revision,
       entries: [{ requestKey: 'nullable', status: 'ok', displaySource: 'rendered' }],
     })
+  })
+
+  it('preserves selected prompt, persona, and module activation inputs in the narrow display scope', async () => {
+    const assertion = await setupAuthedClient(harness.app)
+    const db = openDatabase(harness.dataDir)
+    let revision: number
+    try {
+      const module = (id: string, namespace: string, marker: string) => ({
+        id,
+        namespace,
+        name: marker,
+        description: '',
+        regex: [{ in: 'hello', out: `hello[${marker}]`, type: 'editdisplay' }],
+      })
+      const seeded = await applyImport(
+        db,
+        harness.dataDir,
+        normalizeRisuSaveSnapshotDatabase({
+          selectedPersonaId: 'global-persona',
+          selectedPersona: 0,
+          personas: [
+            { id: 'global-persona', name: 'Global user', personaPrompt: 'Global prompt', modules: [] },
+            { id: 'chat-persona', name: 'Chat user', personaPrompt: 'Chat prompt', modules: ['persona-ns'] },
+          ],
+          enabledModules: ['global-ns'],
+          agentPresetDefaultId: 'agent-preset',
+          agentPresets: [{ id: 'agent-preset', name: 'Agent preset', agentUses: [], moduleIntergration: 'agent-ns' }],
+          promptPresets: [
+            {
+              id: 'prompt-preset',
+              name: 'Prompt preset',
+              moduleIntergration: 'prompt-ns',
+              regex: [{ in: 'hello', out: 'hello[preset]', type: 'editdisplay' }],
+            },
+          ],
+          modules: [
+            module('global-module', 'global-ns', 'global'),
+            module('character-module', 'character-ns', 'character'),
+            module('chat-module', 'chat-ns', 'chat'),
+            module('persona-module', 'persona-ns', 'persona'),
+            module('prompt-module', 'prompt-ns', 'prompt'),
+            module('agent-module', 'agent-ns', 'agent'),
+          ],
+          characters: [
+            {
+              chaId: 'char-1',
+              name: 'Character',
+              modules: ['character-ns'],
+              chats: [
+                {
+                  id: 'chat-1',
+                  modules: ['chat-ns'],
+                  generationSettings: {
+                    configured: true,
+                    personaId: 'chat-persona',
+                    promptPresetId: 'prompt-preset',
+                    jailbreakToggle: false,
+                    sidebarToggles: {},
+                  },
+                  message: [{ role: 'char', data: 'hello', chatId: 'message-1' }],
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      revision = seeded.revision
+      db.prepare(
+        "UPDATE personas SET data_json = json_set(data_json, '$.modules', json(?)) WHERE json_extract(data_json, '$.id') = ?",
+      ).run('["persona-ns"]', 'chat-persona')
+    } finally {
+      db.close()
+    }
+
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/chats/chat-1/display-sources',
+      headers: { 'risu-auth': assertion },
+      payload: {
+        protocolVersion: 1,
+        baseRevision: revision,
+        context: { pageSessionId: 'selected-scope' },
+        targets: [
+          {
+            requestKey: 'selected-scope',
+            characterId: 'char-1',
+            messageId: 'message-1',
+            index: 0,
+            role: 'char',
+            firstMessage: false,
+            layer: 'original',
+            source: 'hello',
+            sourceHash: sourceHash('hello'),
+            projectionEpoch: 1,
+          },
+        ],
+      },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    const displaySource = response.json().entries[0].displaySource as string
+    for (const marker of ['preset', 'global', 'character', 'chat', 'persona', 'prompt', 'agent']) {
+      expect(displaySource).toContain(`[${marker}]`)
+    }
   })
 
   it('keeps Lua scriptstate ephemeral within each target and never persists display-time state', async () => {
@@ -458,5 +691,141 @@ describe('POST /api/v1/chats/:chatId/display-sources', () => {
       },
     })
     expect(malformed.statusCode).toBe(400)
+  })
+
+  it('loads only activation-winning module bodies and keeps their display fingerprint stable', async () => {
+    const assertion = await setupAuthedClient(harness.app)
+    const db = openDatabase(harness.dataDir)
+    let revision: number
+    try {
+      const seeded = await applyImport(
+        db,
+        harness.dataDir,
+        normalizeRisuSaveSnapshotDatabase({
+          enabledModules: ['active-module'],
+          modules: [
+            {
+              id: 'active-module',
+              name: 'Active module',
+              description: '',
+              regex: [{ in: 'hello', out: 'module rendered', type: 'editdisplay' }],
+            },
+          ],
+          characters: [
+            {
+              chaId: 'char-1',
+              name: 'Character',
+              chats: [{ id: 'chat-1', message: [{ role: 'char', data: 'hello', chatId: 'message-1' }] }],
+            },
+          ],
+        }),
+      )
+      revision = seeded.revision
+    } finally {
+      db.close()
+    }
+
+    const request = (pageSessionId: string) =>
+      harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/chats/chat-1/display-sources',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          protocolVersion: 1,
+          baseRevision: revision,
+          context: { pageSessionId },
+          targets: [
+            {
+              requestKey: `request-${pageSessionId}`,
+              characterId: 'char-1',
+              messageId: 'message-1',
+              index: 0,
+              role: 'char',
+              firstMessage: false,
+              layer: 'original',
+              source: 'hello',
+              sourceHash: sourceHash('hello'),
+              projectionEpoch: 1,
+            },
+          ],
+        },
+      })
+
+    const baseline = await request('baseline')
+    expect(baseline.statusCode, baseline.body).toBe(200)
+    const baselineEntry = baseline.json().entries[0]
+    expect(baselineEntry).toMatchObject({ status: 'ok', displaySource: 'module rendered' })
+
+    const incompatibleTrigger = {
+      comment: 'incompatible body',
+      type: ['input', 'output'],
+      conditions: [],
+      effect: [],
+    }
+    const persistedDb = openDatabase(harness.dataDir)
+    try {
+      persistedDb.prepare('INSERT INTO modules (position, data_json) VALUES (?, ?)').run(
+        1,
+        JSON.stringify({
+          id: 'active-module',
+          name: 'Ignored later duplicate',
+          description: '',
+          trigger: [incompatibleTrigger],
+        }),
+      )
+      persistedDb.prepare('INSERT INTO modules (position, data_json) VALUES (?, ?)').run(
+        2,
+        JSON.stringify({
+          id: 'inactive-module',
+          name: 'Inactive module',
+          description: '',
+          trigger: [incompatibleTrigger],
+        }),
+      )
+      persistedDb
+        .prepare(
+          'INSERT INTO prompt_presets (position, data_json) SELECT COALESCE(MAX(position), -1) + 1, ? FROM prompt_presets',
+        )
+        .run(
+          JSON.stringify({
+            id: 'inactive-prompt',
+            regex: [{ in: 'hello', out: 'unused', type: { incompatible: true } }],
+          }),
+        )
+      persistedDb
+        .prepare('INSERT INTO personas (position, data_json) SELECT COALESCE(MAX(position), -1) + 1, ? FROM personas')
+        .run(JSON.stringify({ id: 'inactive-persona', name: { incompatible: true } }))
+    } finally {
+      persistedDb.close()
+    }
+
+    const narrowed = await request('narrowed')
+    expect(narrowed.statusCode, narrowed.body).toBe(200)
+    expect(narrowed.json().entries[0]).toMatchObject({
+      status: 'ok',
+      displaySource: 'module rendered',
+      dependencyFingerprint: baselineEntry.dependencyFingerprint,
+    })
+
+    const activeIncompatibleDb = openDatabase(harness.dataDir)
+    try {
+      const row = activeIncompatibleDb.prepare('SELECT data_json FROM settings WHERE id = 1').get() as {
+        data_json: string
+      }
+      const settings = JSON.parse(row.data_json) as Record<string, unknown>
+      settings.enabledModules = ['inactive-module']
+      activeIncompatibleDb.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(settings))
+    } finally {
+      activeIncompatibleDb.close()
+    }
+    const activeIncompatible = await request('active-incompatible')
+    expect(activeIncompatible.statusCode, activeIncompatible.body).toBe(200)
+    expect(activeIncompatible.json().entries).toEqual([
+      expect.objectContaining({
+        requestKey: 'request-active-incompatible',
+        status: 'client_fallback',
+        reason: 'scope_input_incompatible',
+      }),
+    ])
   })
 })

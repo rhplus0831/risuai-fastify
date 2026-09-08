@@ -1,7 +1,7 @@
 # Development And Observability
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-08 (remote diagnostics, browser collection, and operator boundaries).
+Targeted source check: 2026-09-09 (handled display fallbacks and operator evidence).
 
 Use this guide for local/full-stack servers, request and generation tracing,
 browser startup telemetry, startup and bundle verification,
@@ -169,16 +169,19 @@ delivery loss remains unknown, with client sequence gaps showing possible
 omissions. No v2 payload is labeled v1. The ordinary version-1 manual report
 stays intact.
 
-Failed display-source batches emit one request-correlated, v2-only `display`
-event. Its fixed fields distinguish revision, namespace, scoped persistence
-load, strict decode, scope resolution, shared dependency, target preparation,
-and postcondition failures. Strict generation-input failures additionally carry
-only a finite owner category, validation rule, rejected value kind, and a
-16-hex reference derived from the schema field name. The reference is intended
-to be resolved against the deployed generation-input schema; the event never
-contains the field name, JSON instance path, array index, persisted value, or
-character/chat/message identifiers. Other failure kinds cannot carry validator
-metadata, and browser uploads cannot publish this server-only family.
+Failed display-source batches and handled display-scope incompatibilities emit
+one request-correlated, v2-only `display` event. Its fixed fields distinguish
+revision, namespace, scoped persistence load, strict decode, scope resolution,
+shared dependency, target preparation, and postcondition failures. A narrow
+scope decode that returns HTTP 200 browser fallback uses outcome
+`handled-fallback`; it does not also emit a generic runtime error. Strict
+generation-input failures additionally carry only a finite owner category,
+validation rule, rejected value kind, and a 16-hex reference derived from the
+schema field name. The reference is intended to be resolved against the
+deployed generation-input schema; the event never contains the field name,
+JSON instance path, array index, persisted value, or character/chat/message
+identifiers. Other failure kinds cannot carry validator metadata, and browser
+uploads cannot publish this server-only family.
 
 Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
 hour), limit (default 50, maximum 200), generated requestUid/operationRef,

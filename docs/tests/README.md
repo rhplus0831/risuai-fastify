@@ -187,7 +187,10 @@ parser, scripting, Lua, trigger, bounded-regex, bootstrap, route-protection, and
 generation suites remain companion parity coverage. The server route cases pin
 the per-target ephemeral scriptstate contract: same-target reads see temporary
 writes, sibling targets start from the authoritative baseline, and SQLite plus
-the response revision remain unchanged. The route test also places the SQL
+the response revision remain unchanged. They also cover the production-shaped
+ten-trigger singleton-tuple module, scalar-only automatic matching, narrow
+active-module validation, and one-entry-per-target handled fallback. The route
+test also places the SQL
 load-cost harness around cold and warm display batches, allowing only the three
 required transform collections while rejecting whole-character, whole-chat,
 asset, and unrelated-collection payload scans. Its metric assertions distinguish
@@ -196,6 +199,10 @@ dimensions.
 The browser bridge cases also prove that critical newest-message targets settle
 before deferred background rows enter the revision lane, and that changing the
 visible chat aborts an obsolete fetch before the replacement batch starts.
+`chatDisplayScrollStability.spec.ts` holds sequential older-row responses while
+real CDP wheel input continues, then checks visible-row identity and pixel
+displacement for delayed success and handled fallback in bounded and legacy
+paging.
 Cache cases cover exact-namespace reuse after a context switch, isolation
 between namespace identities, least-recent namespace retirement, stale
 in-flight completion rejection, and entry/byte bounds aggregated across all

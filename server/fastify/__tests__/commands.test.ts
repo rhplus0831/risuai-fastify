@@ -15041,6 +15041,18 @@ describe('script and trigger definition commands', () => {
     expect(badTrigger.statusCode).toBe(400)
     expect(badTrigger.json().error).toBe('triggers[0].conditions must be an array')
 
+    const legacyTupleWrite = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/v1/commands/characters/char-a/triggers',
+      headers: { 'risu-auth': assertion },
+      payload: {
+        baseRevision: revision,
+        triggers: [{ id: 'trigger-a', comment: 'Legacy', type: ['start'], conditions: [], effect: [] }],
+      },
+    })
+    expect(legacyTupleWrite.statusCode).toBe(400)
+    expect(legacyTupleWrite.json().error).toBe('triggers[0].type must be a string')
+
     const missingTriggerId = await harness.app.inject({
       method: 'PUT',
       url: '/api/v1/commands/characters/char-a/triggers',

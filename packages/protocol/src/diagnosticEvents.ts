@@ -137,7 +137,7 @@ const eventSchemas = {
     ...base,
     category: Type.Literal('display'),
     stage: enumOf(DIAGNOSTIC_DISPLAY_STAGES),
-    outcome: Type.Literal('failed'),
+    outcome: enumOf(['failed', 'handled-fallback']),
     failureKind: enumOf(DIAGNOSTIC_DISPLAY_FAILURE_KINDS),
     validationDomain: Type.Optional(enumOf(DIAGNOSTIC_GENERATION_INPUT_DOMAINS)),
     validationOwner: Type.Optional(enumOf(DIAGNOSTIC_GENERATION_INPUT_OWNERS)),

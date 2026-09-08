@@ -22,6 +22,7 @@ import { resolvePromptModelId } from './promptScope.js'
 import {
   attachTriggerSource,
   getTriggerSource,
+  triggerTypeAttribution,
   triggerSourceMetricFields,
   withTriggerEffectSource,
   type TriggerSourceAttribution,
@@ -568,7 +569,7 @@ export function collectTriggers(char: character, modules: ReturnType<typeof getA
         triggerId: (v as { id?: string }).id,
         triggerIndex: index,
         triggerComment: v.comment,
-        triggerType: v.type,
+        triggerType: triggerTypeAttribution(v),
         lowLevelAccess: characterLowLevelAccess,
       },
     ),
@@ -685,7 +686,7 @@ export function matchesTrigger(trigger: triggerscript, mode: TriggerMode, manual
   if (manualName) {
     return trigger.comment === manualName
   }
-  return mode === trigger.type
+  return typeof trigger.type === 'string' && mode === trigger.type
 }
 
 /**

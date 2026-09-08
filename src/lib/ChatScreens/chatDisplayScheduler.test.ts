@@ -93,4 +93,28 @@ describe('progressive chat display', () => {
     await expect(last).resolves.toBeUndefined()
     expect(started).toEqual(['current'])
   })
+
+  it('promotes a newly visible queued row ahead of older background work', async () => {
+    const h = harness()
+    h.scheduler.setPaused(false)
+    const started: string[] = []
+    const queued = ['oldest', 'visible', 'middle'].map((key) =>
+      h.scheduler.run(
+        async () => {
+          started.push(key)
+          return key
+        },
+        new AbortController().signal,
+        key,
+      ),
+    )
+    h.scheduler.setVisible(['visible'])
+    await h.frame()
+    expect(started).toEqual(['visible'])
+    await h.frame()
+    await h.frame()
+    await h.frame()
+    await Promise.all(queued)
+    expect(started).toEqual(['visible', 'oldest', 'middle'])
+  })
 })

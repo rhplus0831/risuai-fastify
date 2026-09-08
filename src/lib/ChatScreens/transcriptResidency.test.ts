@@ -2,16 +2,27 @@ import { describe, expect, it } from 'vitest'
 import {
   advanceTranscriptResidents,
   buildTranscriptResidency,
+  estimatePendingTranscriptRowHeight,
   growTranscriptWorkingRows,
   TranscriptResidencyEntryOwner,
   TranscriptHeightCache,
   TRANSCRIPT_HEIGHT_ENTRIES,
+  TRANSCRIPT_MAX_PENDING_ROW_HEIGHT,
   TRANSCRIPT_MAX_RESIDENT_ROWS,
+  TRANSCRIPT_MIN_PENDING_ROW_HEIGHT,
   transcriptRowAtOffset,
   transcriptRowOffsets,
 } from './transcriptResidency'
 
 describe('transcript residency geometry', () => {
+  it('uses a deterministic bounded source-only estimate for first-mounted pending rows', () => {
+    expect(estimatePendingTranscriptRowHeight('')).toBeGreaterThanOrEqual(TRANSCRIPT_MIN_PENDING_ROW_HEIGHT)
+    expect(estimatePendingTranscriptRowHeight('short')).toBe(estimatePendingTranscriptRowHeight('short'))
+    expect(estimatePendingTranscriptRowHeight(`${'wrapped words '.repeat(2_000)}\n`.repeat(40))).toBe(
+      TRANSCRIPT_MAX_PENDING_ROW_HEIGHT,
+    )
+  })
+
   it('uses thirty rows normally and grows sticky overscan only for dense visible layouts', () => {
     expect(growTranscriptWorkingRows(30, 4)).toBe(30)
     expect(growTranscriptWorkingRows(30, 25)).toBe(30)

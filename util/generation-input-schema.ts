@@ -10,6 +10,7 @@ export type JsonSchema = Record<string, unknown>
 const roots = [
   'GenerationSettings',
   'FastifyDatabase',
+  'DisplaySourceDatabase',
   'GenerationPreflightInputs',
   'ProviderGenerationSettings',
   'MemoryGenerationSettings',
@@ -31,6 +32,7 @@ export const generationInputSchemaId = 'risu-generation-inputs-v1'
 export const generationInputValidatorRoots = {
   validateGenerationSettings: 'GenerationSettings',
   validateFastifyDatabase: 'FastifyDatabase',
+  validateDisplaySourceDatabase: 'DisplaySourceDatabase',
   validateGenerationPreflightInputs: 'GenerationPreflightInputs',
   validateProviderGenerationSettings: 'ProviderGenerationSettings',
   validateMemoryGenerationSettings: 'MemoryGenerationSettings',

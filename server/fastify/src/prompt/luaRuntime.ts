@@ -51,6 +51,7 @@ import { emitProtocolMetric, protocolMetricsEnabled } from '../protocolMetrics.j
 import {
   attachTriggerSource,
   getTriggerSource,
+  triggerTypeAttribution,
   triggerSourceMetricFields,
   withTriggerEffectSource,
   type TriggerSourceAttribution,
@@ -2724,7 +2725,7 @@ export async function runLuaEditTrigger(
           triggerId: trigger.id,
           triggerIndex: index,
           triggerComment: trigger.comment,
-          triggerType: trigger.type,
+          triggerType: triggerTypeAttribution(trigger),
           lowLevelAccess,
         },
       )

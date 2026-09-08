@@ -253,6 +253,32 @@ export type GenerationSettings = {
 
 /** A request-local selected-owner view, never the persistence authority. */
 export type FastifyDatabase = WorkingGenerationSettings & { characters: FastifyCharacter[]; currentChar?: number }
+/**
+ * Display projection validates a separately selected graph. Its collections
+ * contain only the prompt/persona owners and executable modules that can
+ * affect the selected chat; unrelated collection rows never enter this view.
+ */
+export type DisplaySourceDatabase = {
+  characters: FastifyCharacter[]
+  currentChar?: number
+  agentPresetDefaultId?: string
+  agentPresets?: AgentPresetRecord[]
+  dynamicAssets?: boolean
+  dynamicAssetsEditDisplay?: boolean
+  enabledModules?: string[]
+  globalChatVariables?: { [key: string]: string }
+  globalscript?: ServerModuleRegexScript[]
+  moduleIntergration?: string
+  modules?: DeepReadonly<ServerModule>[]
+  personaPrompt?: string
+  personas?: DeepReadonly<ServerPersona>[]
+  presetRegex?: ServerModuleRegexScript[]
+  promptPresets?: DeepReadonly<ServerPromptPreset>[]
+  selectedPersona?: number
+  selectedPersonaId?: string | null
+  templateDefaultVariables?: string
+  username?: string
+}
 export type ServerModelPreset = Pick<
   GenerationSettings,
   Extract<(typeof MODEL_PRESET_FIELDS)[number], keyof GenerationSettings>

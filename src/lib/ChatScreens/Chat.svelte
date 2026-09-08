@@ -318,6 +318,7 @@
     onInitialDisplayParseStart?: (registration: symbol) => void
     onInitialDisplayParseSettled?: (registration: symbol) => void
     displayPriority?: DisplaySourcePriority
+    transcriptRowKey?: string
     displayChatId?: string | null
     displayMessageId?: string | null
   }
@@ -399,6 +400,7 @@
     onInitialDisplayParseStart = () => {},
     onInitialDisplayParseSettled = () => {},
     displayPriority = 'normal',
+    transcriptRowKey = undefined,
     displayChatId = null,
     displayMessageId = null,
   }: Props = $props()
@@ -2738,6 +2740,7 @@
             displayLayer={displaySourceLayer}
             streaming={isChatGenerating && idx === totalLength - 1 && role === 'char'}
             {displayPriority}
+            {transcriptRowKey}
             parseRevision={`${totalLengthPointer}|${chatReloadPointer}`}
             {bodyRoot}
             modelShortName={messageGenerationInfo ? getModelInfo(messageGenerationInfo?.model).shortName : ''}
@@ -2761,6 +2764,7 @@
             displayLayer={displaySourceLayer}
             streaming={isChatGenerating && idx === totalLength - 1 && role === 'char'}
             {displayPriority}
+            {transcriptRowKey}
             parseRevision={`${totalLengthPointer}|${chatReloadPointer}`}
             {bodyRoot}
             modelShortName={messageGenerationInfo ? getModelInfo(messageGenerationInfo?.model).shortName : ''}

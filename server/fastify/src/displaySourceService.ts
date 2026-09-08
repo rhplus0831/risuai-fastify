@@ -1,4 +1,4 @@
-import { decodeGenerationDatabase, GenerationInputValidationError } from './prompt/generationInputDecoder.js'
+import { decodeDisplaySourceDatabase, GenerationInputValidationError } from './prompt/generationInputDecoder.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
@@ -6,7 +6,7 @@ import type {
   FastifyChat as Chat,
   FastifyCharacter as character,
   FastifyCustomScript as customscript,
-  FastifyDatabase as Database,
+  DisplaySourceDatabase as Database,
   FastifyMessage as Message,
 } from './prompt/serverTypes.js'
 import type { CbsConditions } from '@risuai/shared-core/risuchat-parser-helpers'
@@ -37,6 +37,7 @@ import { emitProtocolMetric, protocolDurationMs, protocolNowMs } from './protoco
 import { DisplaySourceCache } from './displaySourceCache.js'
 import { resolvePromptModelId } from './prompt/promptScope.js'
 import type { DiagnosticEventV2 } from '@risuai/protocol/remote-diagnostics'
+import { recordDiagnosticEvent } from './diagnosticContext.js'
 
 type DisplayDiagnosticEvent = Extract<DiagnosticEventV2, { category: 'display' }>
 type DisplaySourceFailureStage = DisplayDiagnosticEvent['stage']
@@ -59,7 +60,10 @@ function runDisplaySourceStage<T>(stage: DisplaySourceFailureStage, operation: (
   }
 }
 
-export function displaySourceFailureDiagnostic(error: unknown): DisplaySourceFailureDiagnostic {
+export function displaySourceFailureDiagnostic(
+  error: unknown,
+  outcome: DisplayDiagnosticEvent['outcome'] = 'failed',
+): DisplaySourceFailureDiagnostic {
   const stage =
     (error !== null && (typeof error === 'object' || typeof error === 'function')
       ? displaySourceFailureStages.get(error)
@@ -67,7 +71,7 @@ export function displaySourceFailureDiagnostic(error: unknown): DisplaySourceFai
   if (error instanceof GenerationInputValidationError) {
     return {
       stage: 'scope-decode',
-      outcome: 'failed',
+      outcome,
       failureKind: 'generation-input-validation',
       validationDomain: error.domain,
       validationOwner: error.validationOwner,
@@ -76,14 +80,14 @@ export function displaySourceFailureDiagnostic(error: unknown): DisplaySourceFai
       valueKind: error.valueKind,
     }
   }
-  if (error instanceof SyntaxError) return { stage, outcome: 'failed', failureKind: 'malformed-persistence' }
+  if (error instanceof SyntaxError) return { stage, outcome, failureKind: 'malformed-persistence' }
   const code =
     error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined
-  if (code?.startsWith('SQLITE_')) return { stage, outcome: 'failed', failureKind: 'storage' }
+  if (code?.startsWith('SQLITE_')) return { stage, outcome, failureKind: 'storage' }
   if (error instanceof TypeError || error instanceof RangeError) {
-    return { stage, outcome: 'failed', failureKind: 'runtime' }
+    return { stage, outcome, failureKind: 'runtime' }
   }
-  return { stage, outcome: 'failed', failureKind: 'unknown' }
+  return { stage, outcome, failureKind: 'unknown' }
 }
 
 interface DisplaySourceServiceOptions {
@@ -332,10 +336,49 @@ export class DisplaySourceService {
       return { databaseLineage, activeWriterEpoch, contextFingerprint }
     })
 
-    const scopeLoadStartedAt = protocolNowMs()
-    const database = this.loadScopeDatabase(chatId)
-    const scopeLoadMs = protocolDurationMs(scopeLoadStartedAt)
     const primaryTarget = request.targets[0]
+    if (!primaryTarget) throw new ValidationError('Display source request has no targets')
+    const scopeLoadStartedAt = protocolNowMs()
+    let database: Database
+    try {
+      database = this.loadScopeDatabase(chatId, primaryTarget.characterId)
+    } catch (error) {
+      throwIfAborted(signal)
+      if (!(error instanceof GenerationInputValidationError)) throw error
+      recordDiagnosticEvent({
+        category: 'display',
+        level: 'warn',
+        ...displaySourceFailureDiagnostic(error, 'handled-fallback'),
+      })
+      const stale = this.postconditionResponse(
+        request,
+        initialRevision,
+        databaseLineage,
+        activeWriterEpoch,
+        contextFingerprint,
+      )
+      if (stale) return stale
+      const entries = request.targets.map((target) => errorEntry(target, 'client_fallback', 'scope_input_incompatible'))
+      emitProtocolMetric('display_source_batch', {
+        status: 'client_fallback',
+        targetCount: request.targets.length,
+        okCount: 0,
+        fallbackCount: entries.length,
+        durationMs: protocolDurationMs(startedAt),
+        queueWaitMs,
+        queueDepth,
+        scopeLoadMs: protocolDurationMs(scopeLoadStartedAt),
+        revision: initialRevision,
+        cache: this.cache.stats(),
+      })
+      return {
+        protocolVersion: DISPLAY_SOURCE_PROTOCOL_VERSION,
+        revision: initialRevision,
+        contextFingerprint,
+        entries,
+      }
+    }
+    const scopeLoadMs = protocolDurationMs(scopeLoadStartedAt)
     const scope = runDisplaySourceStage('scope-resolution', () =>
       primaryTarget ? displayScope(database, primaryTarget.characterId, chatId) : null,
     )
@@ -432,25 +475,14 @@ export class DisplaySourceService {
     }
 
     const revision = initialRevision
-    if (runDisplaySourceStage('postcondition', () => getSchemaState(this.db).revision) !== initialRevision) {
-      return this.staleResponse(request, contextFingerprint, 'revision_changed_during_transform')
-    }
-
-    const { currentLineage, currentWriterEpoch } = runDisplaySourceStage('postcondition', () => ({
-      currentLineage: getDatabaseLineage(this.db),
-      currentWriterEpoch: getDatabaseWriterMetadata(this.db).epoch,
-    }))
-    if (currentLineage !== databaseLineage || currentWriterEpoch !== activeWriterEpoch) {
-      const currentNamespace = sha256(
-        displaySourceNamespaceJson({
-          databaseLineage: currentLineage,
-          activeWriterEpoch: currentWriterEpoch,
-          context: request.context,
-        }),
-      )
-      this.cache.activate(currentNamespace)
-      return this.staleResponse(request, contextFingerprint, 'display_namespace_retired')
-    }
+    const stale = this.postconditionResponse(
+      request,
+      initialRevision,
+      databaseLineage,
+      activeWriterEpoch,
+      contextFingerprint,
+    )
+    if (stale) return stale
 
     emitProtocolMetric('display_source_batch', {
       status: 'ok',
@@ -474,14 +506,14 @@ export class DisplaySourceService {
     return { protocolVersion: DISPLAY_SOURCE_PROTOCOL_VERSION, revision, contextFingerprint, entries }
   }
 
-  private loadScopeDatabase(chatId: string): Database {
+  private loadScopeDatabase(chatId: string, characterId: string): Database {
     const persisted = runDisplaySourceStage('scope-load', () =>
-      loadPersistedForDisplaySource(this.db, this.dataDir, chatId),
+      loadPersistedForDisplaySource(this.db, this.dataDir, { chatId, characterId }),
     )
     if (!persisted.database || typeof persisted.database !== 'object') {
       throw new ValidationError('Server database is not initialized')
     }
-    return runDisplaySourceStage('scope-decode', () => decodeGenerationDatabase(persisted.database))
+    return runDisplaySourceStage('scope-decode', () => decodeDisplaySourceDatabase(persisted.database))
   }
 
   private async transformTarget(
@@ -625,5 +657,31 @@ export class DisplaySourceService {
       contextFingerprint,
       entries: request.targets.map((target) => errorEntry(target, 'stale', reason)),
     }
+  }
+
+  private postconditionResponse(
+    request: DisplaySourceRequest,
+    initialRevision: number,
+    databaseLineage: string,
+    activeWriterEpoch: number,
+    contextFingerprint: string,
+  ): DisplaySourceResponse | null {
+    if (runDisplaySourceStage('postcondition', () => getSchemaState(this.db).revision) !== initialRevision) {
+      return this.staleResponse(request, contextFingerprint, 'revision_changed_during_transform')
+    }
+    const { currentLineage, currentWriterEpoch } = runDisplaySourceStage('postcondition', () => ({
+      currentLineage: getDatabaseLineage(this.db),
+      currentWriterEpoch: getDatabaseWriterMetadata(this.db).epoch,
+    }))
+    if (currentLineage === databaseLineage && currentWriterEpoch === activeWriterEpoch) return null
+    const currentNamespace = sha256(
+      displaySourceNamespaceJson({
+        databaseLineage: currentLineage,
+        activeWriterEpoch: currentWriterEpoch,
+        context: request.context,
+      }),
+    )
+    this.cache.activate(currentNamespace)
+    return this.staleResponse(request, contextFingerprint, 'display_namespace_retired')
   }
 }

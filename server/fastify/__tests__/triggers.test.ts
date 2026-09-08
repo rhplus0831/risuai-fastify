@@ -136,6 +136,15 @@ describe('getModuleTriggers', () => {
     expect(getTriggerSource(trigger)).toBeUndefined()
   })
 
+  it('omits legacy tuple modes from scalar-only module attribution', () => {
+    const trigger = makeTrigger({ type: ['output'] })
+    const [collected] = getModuleTriggers([makeModule({ trigger: [trigger] })])
+
+    expect(collected.type).toEqual(['output'])
+    expect(getTriggerSource(collected)).not.toHaveProperty('triggerType')
+    expect(trigger.type).toEqual(['output'])
+  })
+
   it('flattens triggers across multiple modules in order', () => {
     const a = makeModule({
       id: 'a',
@@ -180,6 +189,14 @@ describe('collectTriggers', () => {
     expect(getTriggerSource(own)).toBeUndefined()
   })
 
+  it('omits legacy tuple modes from scalar-only character attribution', () => {
+    const own = makeTrigger({ type: ['input'] })
+    const [collected] = collectTriggers(makeChar({ triggerscript: [own] }), [])
+
+    expect(collected.type).toEqual(['input'])
+    expect(getTriggerSource(collected)).not.toHaveProperty('triggerType')
+  })
+
   it('appends module triggers after the character triggers', () => {
     const own = makeTrigger({ comment: 'own' })
     const char = makeChar({ triggerscript: [own] })
@@ -205,6 +222,10 @@ describe('matchesTrigger', () => {
     expect(matchesTrigger(makeTrigger({ type: 'output' }), 'start')).toBe(false)
   })
 
+  it('does not automatically match a persisted singleton tuple mode', () => {
+    expect(matchesTrigger(makeTrigger({ type: ['output'] }), 'output')).toBe(false)
+  })
+
   it('filters by manualName comment when one is supplied', () => {
     const named = makeTrigger({ comment: 'go', type: 'manual' })
     expect(matchesTrigger(named, 'manual', 'go')).toBe(true)
@@ -220,6 +241,17 @@ describe('matchesTrigger', () => {
       type: 'output',
       effect: [{ type: 'triggerlua', code: '' }],
     })
+    expect(matchesTrigger(code, 'start')).toBe(true)
+    expect(matchesTrigger(lua, 'input')).toBe(true)
+  })
+
+  it('preserves manual-name and code/Lua bypasses for singleton tuple modes', () => {
+    const manual = makeTrigger({ comment: 'go', type: ['output'] })
+    const code = makeTrigger({ type: ['output'], effect: [{ type: 'triggercode', code: '' }] })
+    const lua = makeTrigger({ type: ['output'], effect: [{ type: 'triggerlua', code: '' }] })
+
+    expect(matchesTrigger(manual, 'manual', 'go')).toBe(true)
+    expect(matchesTrigger(manual, 'manual', 'other')).toBe(false)
     expect(matchesTrigger(code, 'start')).toBe(true)
     expect(matchesTrigger(lua, 'input')).toBe(true)
   })
