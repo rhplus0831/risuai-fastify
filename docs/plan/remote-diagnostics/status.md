@@ -2,26 +2,23 @@
 
 Date: 2026-09-08
 
+Stable scope: [plan](PLAN.md). Source owners: [inventory](inventory.md).
+
 ## Current Cursor
 
-Planning baseline prepared. Implementation has not started; no phase is
-accepted. Source anchor: `5dc64f6f239b6dc1c95cd3f86d3c05b8802831d5`.
-
-Next implementation action: read [PLAN.md](PLAN.md), confirm the
-[inventory](inventory.md) against current source, and execute
-[Phase 0](phases/phase-0-contract-and-inventory.md). Freeze the credential/API
-matrix, event field policy, compatibility approach, and bounded operational
-defaults before the first Phase 1 implementation slice.
+Phase 0 source cross-check and implementation contract are complete. Phase 1
+is implementing isolated credential lifecycle, versioned remote reads, and the
+fixed-origin helper. See the Phase 0 document for defaults and authority matrix.
 
 ## Phase Router
 
-| Phase                                     | Status  | Acceptance evidence                                                             |
-| ----------------------------------------- | ------- | ------------------------------------------------------------------------------- |
-| 0. Contract and inventory                 | Pending | Planning source observations only; implementation decisions remain to be closed |
-| 1. Remote access                          | Pending | None                                                                            |
-| 2. Diagnostic depth and durability        | Pending | None                                                                            |
-| 3. Browser evidence                       | Pending | None                                                                            |
-| 4. Verification and operational readiness | Pending | None                                                                            |
+| Phase                                     | Status      | Acceptance evidence                                                                  |
+| ----------------------------------------- | ----------- | ------------------------------------------------------------------------------------ |
+| 0. Contract and inventory                 | Accepted    | Four successful Luna source reviews reconciled; bounded contract recorded in Phase 0 |
+| 1. Remote access                          | In progress | Credential and remote read slices underway                                           |
+| 2. Diagnostic depth and durability        | Pending     | None                                                                                 |
+| 3. Browser evidence                       | Pending     | None                                                                                 |
+| 4. Verification and operational readiness | Pending     | None                                                                                 |
 
 ## Decisions and Scope
 
@@ -56,15 +53,22 @@ boundaries, exact commands/results, acceptance criteria satisfied, residual
 limits, and the next action. Update stable contracts in the plan and phase
 documents when a decision changes them; do not duplicate execution logs there.
 
-## Outstanding Implementation Decisions
+## Implementation Decisions and Evidence
 
-- Finite retention, byte/count/queue/query/rate limits and expiry defaults.
-- Credential provisioning/revocation owner and protected storage layout.
-- Version negotiation preserving the current exact v1 browser contract.
-- Diagnostic journal placement, cursor semantics, data-replacement cleanup,
-  and restart-safe operation correlation.
-- Browser batch identity, opt-in advertisement, provenance and deduplication.
+- The implementation request authorizes feature work; the planning-only scope
+  above is historical. No production connection, deployment, or real access
+  provisioning is needed for local acceptance.
+- Four read-only Luna reviews completed successfully (auth/trace,
+  journal/correlation, browser contracts, coverage producers). Source confirmed
+  separate app auth, trace capture before validation, explicit route limits,
+  UID eviction/background gaps, and sentinel-zero timing in bootstrap and prompt
+  assembly. Browser worker suggestions for manual-only upload and content-digest
+  identity were rejected: the approved plan requires opted-in automatic uploads
+  and independent generated event identities.
+- Phase 0 freezes authority, schema negotiation, retention/query/queue limits,
+  credential placement/lifecycle, and first source/test owners. Journal snapshot
+  pages use sequence ordering and bounded immutable snapshots; no clock-causality
+  claim. No phase implementation is accepted solely from the source review.
 
-Phase 0 resolves these through source and synthetic evidence within the plan's
-invariants. Production hostname, plaintext credentials, deployment flags, and
-an actual incident sample are not needed to write or implement the plan locally.
+Next: finish and validate Phase 1 credential/read/helper, then durable safe
+families/correlation/journal, browser ingestion/publisher, and combined proof.

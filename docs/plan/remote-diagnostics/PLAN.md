@@ -3,7 +3,7 @@
 Date: 2026-09-08
 
 Read [status](status.md) for the current phase, next action, decisions, and
-verification evidence. Implementation has not started at the planning baseline.
+verification evidence. The implementation request supersedes the planning-only baseline.
 
 ## Objective and Document Ownership
 
@@ -20,9 +20,8 @@ phase does not complete it. Current source, [STRUCTURE](../../../STRUCTURE.md),
 and [architecture guides](../../structure/README.md) remain authoritative for
 shipped behavior.
 
-The current request authorizes these planning documents. Feature implementation,
-production deployment, and real credential provisioning are not performed by
-this planning task. Routine implementation choices listed in Phase 0 are work
+The current request authorizes completing all implementation phases. Production
+deployment and real credential provisioning remain separate operations. Routine implementation choices listed in Phase 0 are work
 to resolve from source and synthetic evidence, not new approval gates.
 
 ## Planning Baseline
