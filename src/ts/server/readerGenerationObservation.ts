@@ -168,10 +168,15 @@ export function startReaderGenerationObservation(
     previous?.controller.abort()
   }
 
-  function suspend(): void {
+  function suspend(announce = true): void {
     paused = true
     cancelProbe()
     detach()
+    // Losing a viewer while the document is hidden is expected and the old
+    // presentation is not visible. Preserve it until the foreground probe can
+    // replace it, so returning to the page does not briefly insert an
+    // interruption banner or remove the in-row generation indicator.
+    if (!announce) return
     if (projection) projection = { ...projection, status: 'interrupted' }
     publish('interrupted')
   }
@@ -585,14 +590,16 @@ export function startReaderGenerationObservation(
   stopLifecycle = subscribeBrowserLifecycleRecovery(refresh)
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     const hidden = () => {
-      if (document.visibilityState === 'hidden') suspend()
+      if (document.visibilityState === 'hidden') suspend(false)
     }
-    window.addEventListener('offline', suspend)
-    window.addEventListener('pagehide', suspend)
+    const offline = () => suspend()
+    window.addEventListener('offline', offline)
+    const pageHide = () => suspend(false)
+    window.addEventListener('pagehide', pageHide)
     document.addEventListener('visibilitychange', hidden)
     stopBrowser = () => {
-      window.removeEventListener('offline', suspend)
-      window.removeEventListener('pagehide', suspend)
+      window.removeEventListener('offline', offline)
+      window.removeEventListener('pagehide', pageHide)
       document.removeEventListener('visibilitychange', hidden)
     }
   }

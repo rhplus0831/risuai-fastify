@@ -69,6 +69,7 @@ import {
   beginClientPromotion,
   beginClientSession,
   canUseClientWriteAccess,
+  clientSessionStore,
   getClientSessionSnapshot,
   requireClientAuthentication,
   resetClientSessionForTests,
@@ -430,17 +431,20 @@ describe('connected reader synchronization', () => {
     expect(streams[0].stop).toHaveBeenCalledOnce()
   })
 
-  it('fences a held response across a lifecycle reconnect and ignores callbacks from the old stream', async () => {
+  it('silently refreshes a live stream on focus while fencing held responses and old callbacks', async () => {
     const held = deferred<any>()
     api.targeted.mockReturnValueOnce(held.promise)
     const { sync } = start()
     await sync.ready
+    const connections: string[] = []
+    cleanups.push(clientSessionStore.subscribe((state) => connections.push(state.connection)))
     streams[0].input.onCommandEvent(command(6))
     await flush()
     const read = api.targeted.mock.calls[0][1]
     api.lifecycle.mock.calls[0][0]('focus')
     await flush()
     expect(streams[1].input.sinceRevision).toBe(5)
+    expect(connections).toEqual(['live'])
     expect(read.isCurrent()).toBe(false)
     held.resolve({ status: 'ok', scope: 'targeted', revision: 6 })
     streams[0].input.onCommandEvent(command(99))

@@ -160,9 +160,12 @@ Reopen resets the accumulator, replay gaps suppress incomplete suffix display,
 and half-streaming withholds token text while exposing token counts. Continue
 extension uses the immutable server-supplied base, never a displayed partial.
 Prompt frames, stream message patches, and effect-bearing callbacks do not
-modify the reader transcript. Hidden/offline pages suspend observation;
-visibility/reconnect and the transcript's Refresh action retry reads. Changing
-chat, incarnation, session, or lineage retires the old viewer and callbacks.
+modify the reader transcript. Hidden/page-hidden pages detach observation while
+retaining their last presentation until the foreground probe succeeds or fails,
+so an ordinary return does not flash an interruption state. Offline pages and
+actual viewer failures surface interruption immediately. Visibility/reconnect
+and the transcript's Refresh action retry reads. Changing chat, incarnation,
+session, or lineage retires the old viewer and callbacks.
 
 Before attaching to an unloaded Continue/regenerate target, the coordinator
 uses `hydrateReaderGenerationMessages()` to read the authoritative suffix

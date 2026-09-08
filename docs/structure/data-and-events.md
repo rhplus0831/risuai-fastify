@@ -487,6 +487,9 @@ ownership checks, an event subscription without writer headers, serialized
 resource invalidation, and full read refresh after a revision gap or unavailable
 replay. Their known-server and applied-resource cursors fence reads but grant no
 mutation authority. Reconnect does not replay outbox work or acquire a writer.
+Foreground recovery can replace an already-live reader stream without changing
+the visible connection status; a failed replacement still publishes the
+interrupted state.
 Memory/Hypa/BardWiki snapshots and progress use their independent stream/version
 ordering and never advance the command revision. Promotion still performs its
 post-replay shell read and installs the writer subscription from that revision;

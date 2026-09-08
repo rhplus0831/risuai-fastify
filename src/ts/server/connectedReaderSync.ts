@@ -300,7 +300,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     return true
   }
 
-  async function connect(): Promise<void> {
+  async function connect(connectionOptions: { preserveLiveStatus?: boolean } = {}): Promise<void> {
     if (!current()) return
     if (browserIsOffline()) {
       setClientConnectionState('interrupted', generation)
@@ -311,7 +311,9 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     const sourceEpoch = ++epoch
     controller = new AbortController()
     const signal = controller.signal
-    setClientConnectionState('connecting', generation)
+    const preserveLiveStatus =
+      connectionOptions.preserveLiveStatus === true && getClientSessionSnapshot().connection === 'live'
+    if (!preserveLiveStatus) setClientConnectionState('connecting', generation)
     try {
       if (!(await checkOwnership(sourceEpoch, signal))) return
       const result = await subscribeServerCommandEvents({
@@ -392,13 +394,24 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     void connect()
   }
 
+  function recoverForeground(): void {
+    if (!current()) return
+    if (reconnectTimer) clearTimeout(reconnectTimer)
+    reconnectTimer = null
+    // Foreground probes deliberately replace a possibly discarded browser
+    // stream. While the established connection is still healthy, keep that
+    // transport refresh out of the reader's visible lifecycle status. A failed
+    // replacement still enters `interrupted` through interrupt().
+    void connect({ preserveLiveStatus: true })
+  }
+
   if (current() && lineage) {
     stopSession = clientSessionStore.subscribe((state) => {
       if (stopped) return
       if (state.lifecycle === 'auth-required') notifyAuthLoss()
       else if (!current()) stop()
     })
-    stopLifecycle = subscribeBrowserLifecycleRecovery(retry)
+    stopLifecycle = subscribeBrowserLifecycleRecovery(recoverForeground)
     if (typeof window !== 'undefined') {
       const offline = () => interrupt(epoch)
       window.addEventListener('offline', offline)

@@ -677,7 +677,7 @@ describe('selected reader generation observation', () => {
     },
   )
 
-  it('detaches while hidden or offline and reattaches through the shared foreground lifecycle', async () => {
+  it('silently detaches while hidden, reports offline failure, and reattaches in the foreground', async () => {
     const browser = new EventTarget()
     const documentEvents = new EventTarget()
     let visibility = 'visible'
@@ -696,7 +696,10 @@ describe('selected reader generation observation', () => {
     visibility = 'hidden'
     documentEvents.dispatchEvent(new Event('visibilitychange'))
     expect(streams[0]!.input.signal.aborted).toBe(true)
-    expect(view()?.status).toBe('interrupted')
+    expect(view()).toMatchObject({
+      status: 'watching',
+      projection: { status: 'streaming', text: 'Live partial' },
+    })
     expect(vi.getTimerCount()).toBe(0)
     visibility = 'visible'
     api.lifecycle.mock.calls[0]![0]('visibility')
@@ -705,6 +708,7 @@ describe('selected reader generation observation', () => {
     online = false
     browser.dispatchEvent(new Event('offline'))
     expect(streams[1]!.input.signal.aborted).toBe(true)
+    expect(view()?.status).toBe('interrupted')
     await vi.advanceTimersByTimeAsync(60_000)
     expect(streams).toHaveLength(2)
     online = true
