@@ -41,12 +41,12 @@ function collector(enabled = true, fail = false) {
 }
 
 /** A scripted upstream reader makes observation time and cleanup exact without extra reads. */
-function providerResponse(chunks: Array<string | Error>, status = 200) {
+function providerResponse(chunks: Array<string | Error>, status = 200, errorReadDelayMs = 20) {
   let cursor = 0
   const reader = {
     read: vi.fn(async (): Promise<ReadableStreamReadResult<Uint8Array>> => {
-      clock += 20
       const chunk = chunks[cursor++]
+      clock += chunk instanceof Error ? errorReadDelayMs : 20
       if (chunk instanceof Error) throw chunk
       return chunk === undefined ? { done: true, value: undefined } : { done: false, value: encoder.encode(chunk) }
     }),
@@ -212,7 +212,7 @@ describe('safe provider attempt diagnostics', () => {
   })
 
   it('retains partial content and distinguishes a thrown stream disconnect', async () => {
-    const fixture = providerResponse([openAIChunk(), new Error(canary)])
+    const fixture = providerResponse([openAIChunk(), new Error(canary)], 200, 2000)
     const scope = collector()
     const frames = await scope.run(() => consume(runOpenAIStream(openAIRequest())))
     expect(frames[0]).toMatchObject({ kind: 'token', content: canary })
@@ -222,6 +222,7 @@ describe('safe provider attempt diagnostics', () => {
       providerMayHaveRun: true,
       cancellationOrigin: 'disconnect',
       chunkCount: 1,
+      maxStreamGapMs: 2000,
     })
     expect(fixture.reader.cancel).toHaveBeenCalledTimes(1)
     expectSafe(scope.events)

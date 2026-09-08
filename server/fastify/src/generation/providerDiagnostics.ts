@@ -157,9 +157,6 @@ export async function providerDiagnosticRead(
   const startedAt = performance.now()
   try {
     const result = await reader.read()
-    if (attempt.transport === 'stream') {
-      attempt.maxStreamGapMs = Math.max(attempt.maxStreamGapMs, performance.now() - startedAt)
-    }
     if (!result.done) {
       attempt.receivedBytes = Math.min(Number.MAX_SAFE_INTEGER, attempt.receivedBytes + result.value.byteLength)
       attempt.chunkCount = Math.min(1_000_000_000, attempt.chunkCount + 1)
@@ -168,6 +165,10 @@ export async function providerDiagnosticRead(
   } catch (error) {
     attempt.failed(error, 'disconnected')
     throw error
+  } finally {
+    if (attempt.transport === 'stream') {
+      attempt.maxStreamGapMs = Math.max(attempt.maxStreamGapMs, performance.now() - startedAt)
+    }
   }
 }
 
