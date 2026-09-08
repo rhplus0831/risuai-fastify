@@ -1,7 +1,7 @@
 # Development And Observability
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-08 (connected-reader rollout setting).
+Targeted source check: 2026-09-08 (remote diagnostics, browser collection, and operator boundaries).
 
 Use this guide for local/full-stack servers, request and generation tracing,
 browser startup telemetry, startup and bundle verification,
@@ -156,11 +156,18 @@ logging and raw tracing; bounded access outcomes contain fixed categories only.
 The route policy is `diagnostics-read`, separate from application `required`.
 Existing deliberately public routes keep their public behavior.
 
-The version-1 envelope is exact and includes sequenced entries, validated build
+The version-1 envelope remains exact and includes sequenced entries, validated build
 identity (`RISU_BUILD_ID`, otherwise unknown), random process identity, capture
-bounds, source availability, loss, truncation, and pagination. Its current
-coverage is server-only and volatile (300 entries); stack coordinates are
-omitted from remote output. The ordinary version-1 manual report stays intact.
+bounds, source availability, loss, truncation, and pagination. V1 projects known
+server facts from the journal; it excludes browser uploads and rich-only fields.
+Stack coordinates are omitted from all remote output. Request `version=2` for
+exact deployment, HTTP, runtime, generation, prompt, provider, persistence,
+script, browser, and compatible legacy event families. V2 adds stamped
+provenance, pending work, operation continuity, and explicit browser clock
+semantics. Journal loss counters describe server admission/retention; browser
+delivery loss remains unknown, with client sequence gaps showing possible
+omissions. No v2 payload is labeled v1. The ordinary version-1 manual report
+stays intact.
 Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
 hour), limit (default 50, maximum 200), generated requestUid/operationRef,
 category, and cursor. V1 has no operation references and returns no matching
@@ -175,15 +182,17 @@ Every outcome uses `Cache-Control: no-store`: 401 unauthorized, 400 invalid-quer
 429 rate-limited, 503 disabled/storage-unavailable, 409 collection-disabled,
 410 cursor-expired, and 500 internal-error. Successful empty windows return 200
 with no entries. Errors contain fixed categories and never echo filters or
-credential material. Restart invalidates volatile cursors and evidence.
+credential material. Restart invalidates cursor snapshots while retained journal
+evidence and sequence numbers survive within the limits below.
 
 In the development environment, set `RISU_DIAGNOSTICS_REMOTE_CONFIG` to the
 private transferred config, then run:
 
 ```sh
 pnpm diagnostics:remote --limit=50
-pnpm diagnostics:remote --requestUid=<generated-request-uid>
-pnpm diagnostics:remote --cursor=<returned-cursor>
+pnpm diagnostics:remote --version=2 --requestUid=<generated-request-uid>
+pnpm diagnostics:remote --version=2 --operationRef=<opaque-operation-reference>
+pnpm diagnostics:remote --version=2 --cursor=<returned-cursor>
 ```
 
 `util/diagnostics-remote.ts` accepts only the finite query flags above; it has no
@@ -202,6 +211,85 @@ Source owners are `server/fastify/src/remoteDiagnostics.ts`,
 privacy, limits, and lifecycle tests are in `remoteDiagnostics.test.ts` and
 `supportDiagnosticsAuth.test.ts` under the server test directory.
 
+### Retention, Correlation, And Failure Isolation
+
+When collection and either support reads or browser upload are enabled, safe
+records go to `<data-dir>/diagnostics/journal.sqlite` in a dedicated worker.
+The private directory is mode 0700 and files are mode 0600. Its independent
+random `correlation.key` creates opaque operation/attempt references; neither
+the key nor its domain-ID mapping is exported. Static serving cannot encompass
+this directory. Asset/legacy-storage routes and domain backup/export producers
+use their own bounded roots and do not include it.
+
+Hard limits are 24 hours, 10,000 retained events, 8 MiB of retained JSON, 4 KiB
+per record, and 256 queued/in-flight records. SQLite is capped at 16 MiB with
+DELETE rollback journaling, which can temporarily require another bounded file.
+The worker processes at most one request at a time, writes up to 32 records per
+batch, and has a one-second request deadline. Startup revalidates every record,
+purges invalid rows, and prunes age/count/bytes before exposing evidence.
+Unavailable, corrupt, full, or stalled storage yields fixed unavailable/loss
+outcomes. Collection never writes to domain tables or waits in generation,
+command acceptance, recovery, or writer transitions. Close is bounded.
+
+Server receive sequence orders retained records. Browser timestamp and request
+associations are client assertions with unknown skew. Async operation scope
+survives request-UID eviction and covers background finalization and restart
+recovery. Operation references survive restart when the private key is retained;
+key failures explicitly report `process-only` continuity. Authoritative data
+replacement changes the journal epoch, clears old records/provenance and local
+collector state, and invalidates cursors and stale operation contexts.
+
+Provider events distinguish dispatch, response headers, and terminal outcomes;
+an ambiguous disconnect after dispatch does not establish safe replay. Timing
+uses monotonic clocks. Byte sizes are buckets; first-token timing is measured
+at the parsed provider boundary where supported. Stream gaps measure awaited
+upstream reads, excluding local consumer work. Missing measurements stay absent.
+Prompt events contain role/media/selection counts and token budget/truncation
+facts. Persistence events distinguish journal, authoritative commit, cleanup,
+retry, and recovery. Server Lua events count hooks and host permissions and
+compare output/transcripts locally with fixed work budgets; unavailable
+comparisons are explicit. Browser V3 output listeners emit only invoked/failed
+counts and duration under client provenance; host-call counts and content-change
+comparisons remain explicitly unmeasured. They never import Lua/plugin logs,
+hashes, or sidecars.
+
+To roll back remote collection, disable `RISU_SUPPORT_DIAGNOSTICS` and
+`RISU_BROWSER_DIAGNOSTICS`, and revoke the support credential. Keep
+`RISU_CLIENT_DIAGNOSTICS=1` for the original manual workflow. No chats, presets,
+domain revisions, or writer state need changing. Stop the server before removing
+the dedicated diagnostics directory. Unsupported newer journal formats fail
+closed; do not attempt an in-place downgrade. Archive or remove that telemetry
+directory under operator control if an older version must start fresh.
+
+### Browser Upload
+
+`RISU_BROWSER_DIAGNOSTICS=1` separately opts in to ordinary authenticated
+bootstrap `browserDiagnostics: { version: 1 }`; collection must also be enabled.
+Support reads may be disabled independently. `POST /api/v1/diagnostics/browser`
+accepts ordinary authenticated readers and writers without acquiring ownership.
+A support bearer is never app authentication and cannot upload. Complete exact
+batches are validated before any storage: up to 32 events, 64 KiB per request,
+and 4 KiB per stamped record. The server assigns receive time and provenance;
+clients cannot submit server families, server origin, or trusted operation IDs.
+Unknown or content-bearing fields reject the batch without echoing them.
+
+The publisher buffers pre-bootstrap safe evidence, sends only after compatible
+opt-in, and retains at most 256 pending events for five minutes with finite
+retry/backoff. Auth loss, opt-out, and data/session changes abort stale work and
+clear the pending context. Tab/event identities support reload-safe deduplication;
+distinct tabs use separate identities. Diagnostic transport is excluded from
+capture, so upload failures do not recursively create events. New clients
+disable the older startup publisher while the richer upload is enabled; old
+client/server combinations preserve the existing startup/manual behavior.
+
+V2 reads report browser `available` only when matching uploaded evidence is
+present; `none` means enabled without matching evidence and `not-supported`
+means uploads are disabled/unsupported. Authenticated manual reads negotiate
+`GET /api/v1/diagnostics?version=2&limit=200` and combine local history with
+uploaded evidence by source/event identity. The panel preserves offline export,
+clipboard and selectable-text fallback, marks partial/lost evidence, and falls
+back to exact v1 responses from older servers.
+
 ## Client Diagnostics
 
 `RISU_CLIENT_DIAGNOSTICS=1` enables a content-free recent-event viewer in
@@ -218,8 +306,8 @@ Disabled servers return an empty, disabled response. The server collector is
 owned by the Fastify app and resets on restart. It records HTTP status/timing,
 runtime errors, warning/error logger calls, and selected correlated protocol
 metrics. It generates `X-Request-UID` even when body-capable tracing is off.
-Metric subscriptions are restricted to request UIDs from that app and are
-removed on close.
+Metric subscriptions use app/history-scoped operation context where available,
+with a bounded recognized-request fallback, and are removed on close.
 
 Browser capture starts before bootstrap, retaining a bounded pending queue until
 the server's opt-in arrives. Missing/unsupported opt-in discards it. Enabled
@@ -465,6 +553,10 @@ Server:
 | `RISU_AGENT_DEV_AUTH_BYPASS`                       | disabled                        | Direct-server dev escape hatch; full-stack runners override it as described below.                                                                                                              |
 | `LOG_LEVEL`                                        | `info`                          | Use `silent` to disable Fastify logger.                                                                                                                                                         |
 | `RISU_CLIENT_DIAGNOSTICS`                          | follows API trace mode          | Enables the authenticated recent diagnostics viewer/export; explicit `0` disables it even in `agent`/`human` trace mode.                                                                        |
+| `RISU_SUPPORT_DIAGNOSTICS` | disabled | Exact `1` enables separately authenticated support reads; requires collection and a protected verifier file. |
+| `RISU_SUPPORT_DIAGNOSTICS_VERIFIER` | unset | Absolute operator-owned verifier path outside repository/data/static roots. |
+| `RISU_BROWSER_DIAGNOSTICS` | disabled | Exact `1` opts in to ordinary-auth browser upload when client collection is enabled. |
+| `RISU_BUILD_ID` | `unknown` | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics. |
 | `RISU_PROTOCOL_METRICS`                            | unset                           | Enables structured protocol metrics and advertises v1 browser startup collection when `1`, `true`, `yes`, or `on`.                                                                              |
 
 Local/dev:
@@ -489,6 +581,7 @@ Client/build:
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                                                                                                                                                   |
 | `VITE_FAST_BOOTSTRAP_OBSERVER`                                                   | Connected readers are enabled by default; exact `FALSE` selects the conservative writer-first fallback. This is a build-time setting: rebuild the SPA and reload clients. The flag itself does not clear originating drafts or encrypted pending intent. |
+| `VITE_RISU_BUILD_ID` | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed. |
 | `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                                                                                                                                                         |
 | `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell.                                                                                                                                  |
 | `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                                                                                                                                                     |

@@ -6,6 +6,17 @@ Targeted source check: 2026-09-08 (reader boundaries, native selection setup and
 
 This area covers the path from chat intent through prompt construction, provider dispatch orchestration, streaming, persistence, post-processing, cancellation, and reroll recovery. Provider wire formats are assessed in [Providers, Models, and Media](providers-models-and-media.md); scripting engines are assessed in [Scripting, Parsing, and Automation](scripting-parsing-and-automation.md); memory retrieval is assessed in [Memory and Embeddings](memory-and-embeddings.md).
 
+The content-free diagnostic path is exercised by
+`server/fastify/__tests__/diagnosticsGeneration.test.ts`,
+`server/fastify/__tests__/providerDiagnostics.test.ts`, and
+`server/fastify/__tests__/scriptDiagnostics.test.ts`. They validate prompt shape,
+real provider transport timing/outcomes, Lua execution summaries, failed commit
+disposition, and restart recovery without prompt/response text. The real HTTPS
+helper journey joins a partial stream disconnect and failed commit to recovery
+using stable operation/attempt references, and confirms recovery does not resend
+the provider request. Privacy/access and artifact-boundary ownership remains in
+[Remote Support Diagnostics](api-security-and-runtime.md#remote-support-diagnostics).
+
 ## Test groups
 
 | Logical group                                                      | Relevant test locations and included cases                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Behavior and regression importance                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | Effectiveness and value                                                                                                                                                                                                                                                                                                                             |

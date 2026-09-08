@@ -80,3 +80,32 @@ owners. Phase 0 chooses their exact paths and verifies normal test discovery.
    captures chat before/after values when protocol metrics enable its collector.
    Add independent safe counters; do not enable that content-bearing collector
    as a shortcut for diagnostics-only Lua visibility.
+
+## Implemented Source and Verification Owners
+
+- D01: `packages/protocol/src/remoteDiagnostics.ts`, `diagnosticEvents.ts`, and
+  `browserDiagnostics.ts` own exact negotiated envelopes, families, provenance,
+  and upload admission.
+- D02/D06: `server/fastify/src/diagnosticsRuntime.ts`, `diagnosticContext.ts`,
+  `diagnosticsJournal.ts`, `diagnosticsJournalWorker.ts`, and
+  `diagnosticsJournalProtocol.ts` own scoped collection, bounded worker storage,
+  stable references, lineage reset, and format/readiness isolation.
+- D03/D10: `server/fastify/src/supportDiagnosticsAuth.ts`,
+  `util/diagnostics-credential.ts`, and `util/diagnostics-remote.ts` own the
+  operator-only lifecycle and real verified HTTPS helper.
+- D04/D05: `server/fastify/src/routes/browserDiagnostics.ts` owns authenticated
+  reader ingestion; `server/fastify/src/diagnosticsStaticFiles.ts` protects
+  journal/key/verifier targets reached through static symlinks.
+- D07: `server/fastify/src/generation/providerDiagnostics.ts` and
+  `server/fastify/src/prompt/scriptDiagnostics.ts` own independent provider/Lua
+  measurements. `src/ts/plugins/chatOutputListeners.ts` owns the narrow browser
+  output-listener summary.
+- D08/D09: `src/ts/server/browserDiagnostics.ts` owns browser identity, queue,
+  lifecycle, restoration, and delivery; `src/ts/clientSession.ts`,
+  `src/ts/server/protocolDiagnostics.ts`, hydration/cache readers and
+  `src/ts/server/pendingMutationOutbox.ts` supply approved state facts.
+- D11: `server/fastify/__tests__/remoteDiagnosticsJourney.test.ts`,
+  `server/fastify/__tests__/diagnosticsArtifactBoundary.test.ts`, and
+  `server/fastify/browser-smoke/remoteDiagnostics.spec.ts` own combined real
+  provider/HTTPS/browser and artifact-placement proof. Owning unit/route/DOM
+  suites remain separate; results are recorded only in status.

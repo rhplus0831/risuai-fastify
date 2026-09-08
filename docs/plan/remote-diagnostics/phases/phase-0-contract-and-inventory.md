@@ -117,8 +117,8 @@ cap; small 300-byte events make the count cap tighter. No config can disable
 these hard bounds.
 
 Browser upload is separately enabled and versioned. Use generated per-tab
-source identity and stable per-event identity, bounded batches of 50 events and
-64 KiB, at most 300 pending events, a 5-second cadence, a 5-minute pending age,
+source identity and stable per-event identity, bounded batches of 32 events and
+64 KiB, at most 256 pending events, a 5-second cadence, a 5-minute pending age,
 and three attempts with bounded backoff. Server provenance and receive time
 are authoritative; browser time and request associations remain assertions.
 Deduplication is bounded by journal retention. Missing/incompatible capability,

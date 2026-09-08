@@ -1,7 +1,7 @@
 # Testing And Operations
 
 Last audited: 2026-09-03.
-Targeted source check: 2026-09-05 (test routing, lane ownership, shared-core checks).
+Targeted source check: 2026-09-08 (diagnostic helpers, focused browser proof, and aggregate ownership).
 
 Use `pnpm` for package scripts. Node.js is declared as `>=24.0.0`. The package
 is root-only; there is no `server/fastify/package.json`. `package.json` pins
@@ -46,6 +46,17 @@ environment variables live in
 | `pnpm coverage:all`                | Run frontend and backend coverage, preserving a failing exit code if either side fails.                                                                                                    |
 
 There is no ESLint config or `lint` script.
+
+Remote diagnostics operator tools are `pnpm diagnostics:credential` for local
+mint/rotate/revoke and `pnpm diagnostics:remote` for fixed-origin verified HTTPS
+reads. Setup and rollback live in
+[Remote Support Diagnostics](development-and-observability.md#remote-support-diagnostics).
+Focused diagnostics suites cover exact schemas, separate authority, journal
+limits/restarts, generation/provider/recovery evidence, and browser publishing.
+`server/fastify/browser-smoke/remoteDiagnostics.spec.ts` is the focused real
+browser/auth/upload/HTTPS-helper journey; it uses a fresh disposable database
+and temporary test CA. Run it through the focused test runner after a smoke
+build. The agent aggregate builds the smoke client but does not run Playwright.
 
 ## Tests And Checks
 

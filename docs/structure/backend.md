@@ -1,7 +1,7 @@
 # Backend Map
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-06 (maintenance workers, cancellation/drain and client diagnostics lifecycle).
+Targeted source check: 2026-09-08 (diagnostic authority, isolated journal, and browser ingestion lifecycle).
 
 The backend is the Fastify server under `server/fastify`. This guide owns its
 composition root, route policy, request-path boundaries, process-local jobs,
@@ -100,8 +100,14 @@ flag. Shutdown ordering is described under
 
 `buildApp()` creates the client-diagnostics collector, installs its hooks,
 passes its enablement to bootstrap, and registers its authenticated read route.
-Entries are bounded in memory; close unsubscribes metrics and clears the
-collector. Configuration, browser capture/export, and the content-free contract
+Entries are bounded in memory. Opted-in remote/browser collection additionally
+uses `diagnosticsRuntime.ts`, `diagnosticContext.ts`, and the isolated
+`diagnosticsJournal.ts` worker to retain exact safe events without domain writes
+or blocking startup recovery. App/history scope carries request and opaque
+operation/attempt associations into lazy streams and background work. Close
+unsubscribes metrics, clears the collector, and bounds journal drain. Browser
+ingestion uses ordinary app authentication without writer ownership; support
+reads use an independent digest verifier. Configuration, browser capture/export, and the content-free contract
 are owned by [Client Diagnostics](development-and-observability.md#client-diagnostics).
 
 The active-writer guard is registered after health/auth/bootstrap and before
