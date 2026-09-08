@@ -14,8 +14,19 @@ import { requireAuth } from './http.js'
 import { ensureRequestTraceUid, readRequestTraceUid } from './requestTrace.js'
 import { findProtocolRouteDecision } from './routeManifest.js'
 import { subscribeProtocolMetrics } from './protocolMetrics.js'
-import { diagnosticSizeBucket, isDiagnosticTransportUrl } from '@risuai/protocol/remote-diagnostics'
+import {
+  diagnosticSizeBucket,
+  isDiagnosticTransportUrl,
+  parseRemoteDiagnosticsQuery,
+  type RemoteDiagnosticsResponse,
+} from '@risuai/protocol/remote-diagnostics'
 import { getDiagnosticContext, diagnosticsContextEnabled } from './diagnosticContext.js'
+import {
+  createRemoteDiagnosticsReader,
+  SUPPORT_DIAGNOSTIC_STATUS,
+  type RemoteDiagnosticsSource,
+} from './remoteDiagnostics.js'
+import { supportDiagnosticsRateLimit } from './routeRateLimits.js'
 
 export function createClientDiagnostics(enabled: boolean) {
   let entries: DiagnosticEntry[] = []
@@ -154,10 +165,39 @@ export function registerClientDiagnosticsRoutes(
   app: FastifyInstance,
   auth: AuthState,
   diagnostics: ClientDiagnostics,
+  source?: RemoteDiagnosticsSource,
+  identity?: RemoteDiagnosticsResponse['identity'],
 ): void {
-  app.get(DIAGNOSTICS_ENDPOINT, { exposeHeadRoute: false }, async (request, reply) => {
-    reply.header('cache-control', 'no-store')
-    if (!(await requireAuth(auth, request, reply))) return
-    return { version: DIAGNOSTICS_VERSION, enabled: diagnostics.enabled, entries: diagnostics.snapshot() }
-  })
+  const reader = source && identity ? createRemoteDiagnosticsReader(source, identity) : undefined
+  app.addHook('onClose', async () => reader?.clear())
+  app.get(
+    DIAGNOSTICS_ENDPOINT,
+    {
+      exposeHeadRoute: false,
+      bodyLimit: 1024,
+      config: { rateLimit: supportDiagnosticsRateLimit },
+      errorHandler: (error, _request, reply) => {
+        const category =
+          error.statusCode === 429
+            ? 'rate-limited'
+            : error.statusCode && error.statusCode < 500
+              ? 'invalid-query'
+              : 'internal-error'
+        reply.header('cache-control', 'no-store').code(SUPPORT_DIAGNOSTIC_STATUS[category]).send({ error: category })
+      },
+    },
+    async (request, reply) => {
+      reply.header('cache-control', 'no-store')
+      if (!(await requireAuth(auth, request, reply))) return
+      if (diagnostics.enabled && reader && (request.query as Record<string, unknown>)?.version !== undefined) {
+        const query =
+          request.url.length <= DIAGNOSTICS_ENDPOINT.length + 2048 ? parseRemoteDiagnosticsQuery(request.query) : null
+        if (!query || query.version !== 2) return reply.code(400).send({ error: 'invalid-query' })
+        const result = reader.read(query)
+        if (typeof result === 'string') return reply.code(SUPPORT_DIAGNOSTIC_STATUS[result]).send({ error: result })
+        return result
+      }
+      return { version: DIAGNOSTICS_VERSION, enabled: diagnostics.enabled, entries: diagnostics.snapshot() }
+    },
+  )
 }
