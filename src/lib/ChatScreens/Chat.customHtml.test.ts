@@ -3355,6 +3355,47 @@ describe('connected reader message authority', () => {
     },
   )
 
+  it.each([
+    { width: 320, role: 'char' },
+    { width: 320, role: 'user' },
+    { width: 900, role: 'char' },
+    { width: 900, role: 'user' },
+  ])(
+    'exposes only plain-text copy in reader mobilechat bubbles (width=$width, role=$role)',
+    async ({ width, role }) => {
+      seedDatabase(1)
+      testDatabaseState.db.theme = 'mobilechat'
+      testDatabaseState.db.useChatCopy = true
+      testDatabaseState.db.enableBookmark = true
+      testDatabaseState.db.swipe = true
+      testDatabaseState.db.characters[0].ttsMode = 'browser'
+      SizeStore.set({ w: width, h: 700 })
+      const clipboard = { writeText: vi.fn(async () => undefined), write: vi.fn(async () => undefined) }
+      const descriptor = Object.getOwnPropertyDescriptor(window.navigator, 'clipboard')
+      Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: clipboard })
+      try {
+        mountCustomHtmlRows(1, role, { readOnly: true, rerollIcon: true })
+        await settle()
+        const actions = Array.from(target.querySelectorAll('[data-risu-message-action]'))
+        expect(actions.map((button) => button.getAttribute('data-risu-message-action'))).toEqual(['copy'])
+        const copy = target.querySelector<HTMLButtonElement>('[data-risu-message-action="copy"]')!
+        expect(copy.disabled).toBe(false)
+        expect(copy.getAttribute('aria-label')).toBeTruthy()
+        copy.click()
+        await settle()
+        expect(clipboard.writeText).toHaveBeenCalledExactlyOnceWith('visible message 0')
+        expect(clipboard.write).not.toHaveBeenCalled()
+        expect(customHtmlMocks.ParseMarkdown).not.toHaveBeenCalled()
+        expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+        expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+        expect(dispatchUpdateMessageScoped).not.toHaveBeenCalled()
+      } finally {
+        if (descriptor) Object.defineProperty(window.navigator, 'clipboard', descriptor)
+        else Reflect.deleteProperty(window.navigator, 'clipboard')
+      }
+    },
+  )
+
   it('keeps safe custom-template disclosures and denies non-native and inline script controls', async () => {
     seedDatabase(
       1,

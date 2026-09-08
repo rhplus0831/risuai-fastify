@@ -267,7 +267,7 @@ templates retain the existing readable limited-display fallback.
 
 Focused transcript/rendering validation passed (186 tests) across
 `ReaderTranscript.svelte.test.ts`, `Chat.customHtml.test.ts`,
-`ChatBody.svelte.test.ts`, `ChatBodyParseMemo.test.ts`,
+`ChatBody.svelte.test.ts`, `ChatBody.parseMemo.test.ts`,
 `ChatScreen.characterOwner.test.ts`, `readerPassiveHtml.dom.test.ts`,
 `characterImage.owner.test.ts`, and parser `renderFastPaths.test.ts`.
 Prettier and whitespace checks passed. Actual desktop/mobile and streaming
@@ -297,3 +297,10 @@ required complete Korean locale. Added `읽던 대화로 돌아가기`;
 shared-control inventory source moves and broad reads in new smoke-only probes.
 Those are being repaired and verified before final acceptance; no production
 aggregate-read allowance or relaxed ownership gate is introduced.
+
+Browser acceptance exposed a missing copy affordance in the existing mobilechat
+bubble branch. Readers now receive the existing guarded copy action there;
+writer controls remain unavailable. Four DOM regressions cover character/user
+bubbles at 320px and 900px, plain-text clipboard output and absent authoring
+controls. `pnpm test -- src/lib/ChatScreens/Chat.customHtml.test.ts` passed
+(86 tests). Browser recheck follows the rebuild.

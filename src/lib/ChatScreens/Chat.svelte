@@ -3801,6 +3801,11 @@
               }).format(ownerMessage.time)}
             </span>
           {/if}
+          {#if !writeActionsAllowed}
+            <div class="mt-2 text-gray-600">
+              {@render iconButtons({ applyTextColors: false })}
+            </div>
+          {/if}
         </div>
         {#if role === 'user'}
           {@render senderIcon({ rounded: true })}
