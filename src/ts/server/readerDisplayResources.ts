@@ -6,7 +6,7 @@ import {
   isClientSessionGenerationCurrent,
 } from '../clientSession'
 import { resolveResourceRequirements, type ResourceRequirement } from './resourceManifest'
-import { isReaderPersonaReadRequired } from './readerTranscriptProjection.svelte'
+import { isReaderModuleReadRequired, isReaderPersonaReadRequired } from './readerTranscriptProjection.svelte'
 import { SERVER_SETTINGS_KEYS_BY_GROUP } from './settingsGroups'
 import { peekAppliedServerResourceRevision } from './commands'
 import { refreshServerResourceTargets, type ServerResourceTargetRefreshInput } from './resourceInvalidation'
@@ -36,22 +36,26 @@ function readerRequirements(): readonly ReadRequirement[] {
     : requirements
 }
 
+function requiresCommittedRead(key: string): boolean {
+  return isReaderPersonaReadRequired(key) || isReaderModuleReadRequired(key)
+}
+
 function ready(requirement: ReadRequirement): boolean {
   switch (requirement.kind) {
     case 'settings-group':
       return (
         settingsResourceState.groupStatuses[requirement.group] === 'ready' &&
-        !SERVER_SETTINGS_KEYS_BY_GROUP[requirement.group].some(isReaderPersonaReadRequired)
+        !SERVER_SETTINGS_KEYS_BY_GROUP[requirement.group].some(requiresCommittedRead)
       )
     case 'collection':
       return (
         collectionsResourceState.statuses[requirement.collection] === 'ready' &&
-        !isReaderPersonaReadRequired(requirement.collection)
+        !requiresCommittedRead(requirement.collection)
       )
     case 'standalone-setting':
       return (
         settingsResourceState.standaloneStatuses[requirement.setting] === 'ready' &&
-        !isReaderPersonaReadRequired(requirement.setting)
+        !requiresCommittedRead(requirement.setting)
       )
   }
 }

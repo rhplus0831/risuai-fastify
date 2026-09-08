@@ -3,14 +3,14 @@ import { settingsResourceState } from '../server/resourceState.svelte'
 import { SERVER_SHELL_SETTINGS_KEYS } from '@risuai/protocol/shell-resource'
 import { DISPLAY_PAINT_SETTING_KEYS, readDisplaySettingsCache } from './displaySettingsCache'
 import { fromStore } from 'svelte/store'
-import { clientSessionStore } from '../clientSession'
+import { canUseClientWriteAccess, clientSessionStore } from '../clientSession'
 import { getReaderNavigationSettings } from '../server/readerTranscriptProjection.svelte'
 
 const startupPaintSettings = readDisplaySettingsCache().settings
 const session = fromStore(clientSessionStore)
 
 function readerSettings(): Partial<Database> | undefined {
-  return session.current.managed && session.current.lifecycle !== 'writing' ? getReaderNavigationSettings() : undefined
+  return session.current.managed && !canUseClientWriteAccess() ? getReaderNavigationSettings() : undefined
 }
 
 function hasResidentDisplaySettings(): boolean {

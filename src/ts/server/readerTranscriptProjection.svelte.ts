@@ -7,7 +7,7 @@ import { SERVER_UNLOADED_CHAT_MESSAGE_MARKER } from './chatMessagePlaceholders'
 import { DISPLAY_PAINT_SETTING_KEYS } from '../gui/displaySettingsCache'
 
 // Only display inputs belong here. In particular, no prompts, credentials,
-// editor drafts, module definitions, or optimistic transcript bodies are copied.
+// editor drafts, executable module definitions, or optimistic transcript bodies are copied.
 const characterKeys = [
   'chaId',
   'chatIds',
@@ -28,6 +28,9 @@ const characterKeys = [
   'alternateGreetings',
   'additionalAssets',
   'emotionImages',
+  'modules',
+  'prebuiltAssetStyle',
+  'hideChatIcon',
   SERVER_CHARACTER_SHELL_MARKER,
 ] as const
 const chatKeys = [
@@ -43,8 +46,10 @@ const chatKeys = [
   'lastMemory',
   'bookmarks',
   'bookmarkNames',
+  'modules',
 ] as const
-const personaKeys = ['id', 'name', 'displayName', 'icon', 'largePortrait'] as const
+const personaKeys = ['id', 'name', 'displayName', 'icon', 'largePortrait', 'modules'] as const
+const chatGenerationDisplayKeys = ['personaId', 'promptPresetId', 'agentPresetId'] as const
 const personaSettingKeys = ['selectedPersonaId', 'selectedPersona', 'username', 'userIcon'] as const
 
 // Explicit passive display inputs, not the Display/Sidebar groups wholesale:
@@ -74,6 +79,9 @@ export const READER_NAVIGATION_SETTING_KEYS = [
   'useChatSticker',
   'showTranslationLoading',
   'translateBeforeHTMLFormatting',
+  'legacyMediaFindings',
+  'assetMaxDifference',
+  'newImageHandlingBeta',
 ] as const satisfies readonly (keyof Database)[]
 let navigationSettings = $state.raw<Partial<Database>>({})
 let characterOrder = $state.raw<Database['characterOrder']>([])
@@ -101,6 +109,98 @@ export function recordReaderNavigationSettings(
   navigationSettings = next as Partial<Database>
 }
 
+/** Passive module metadata and activation inputs, with no mutable writer fallback. */
+export function getReaderModuleDisplayDatabase(): Partial<Database> {
+  return {
+    modules: displayModules,
+    promptPresets: displayPromptPresets,
+    enabledModules: [],
+    moduleIntergration: '',
+    agentPresets: [],
+    agentPresetDefaultId: null,
+    ...moduleSettings,
+  }
+}
+
+/** Accepted collections are copied before any pending writer projection is restored. */
+export function recordReaderModuleCollection(name: string, source: unknown): void {
+  if (name === 'modules') {
+    displayModules = Array.isArray(source)
+      ? (source.map((module) => pick(module, moduleDisplayKeys)) as unknown as Database['modules'])
+      : []
+  } else if (name === 'promptPresets') {
+    displayPromptPresets = Array.isArray(source)
+      ? (source.map((preset) => pick(preset, presetModuleKeys)) as Database['promptPresets'])
+      : []
+  } else return
+  requiredModuleReads.delete(name)
+}
+
+export function recordReaderModuleSettings(source: object, keys: readonly string[] = READER_MODULE_SETTING_KEYS): void {
+  if (!READER_MODULE_SETTING_KEYS.some((key) => keys.includes(key))) return
+  const next = { ...moduleSettings } as Record<string, unknown>
+  for (const key of READER_MODULE_SETTING_KEYS) {
+    if (!keys.includes(key)) continue
+    const value = (source as Record<string, unknown>)[key]
+    if (!Object.hasOwn(source, key)) delete next[key]
+    else if (key === 'agentPresets') {
+      next[key] = Array.isArray(value) ? value.map((preset) => pick(preset, agentPresetModuleKeys)) : []
+    } else next[key] = clone(value)
+    requiredModuleReads.delete(key)
+  }
+  moduleSettings = next as Partial<Database>
+}
+
+/** Compact mutation acknowledgements cannot certify the resident optimistic fields. */
+export function requireReaderModuleRefresh(keys: readonly string[]): void {
+  for (const key of keys) requiredModuleReads.add(key)
+}
+
+export function isReaderModuleReadRequired(key: string): boolean {
+  return requiredModuleReads.has(key)
+}
+
+/** Response PATCH fields certify only this attempted preset, never its live siblings. */
+export function recordReaderPromptPresetModulePatch(presetId: string, patch: object): void {
+  const certified = pick(
+    patch,
+    presetModuleKeys.filter((key) => key !== 'id'),
+  )
+  if (Object.keys(certified).length === 0) return
+  if (displayPromptPresets.filter((preset) => preset.id === presetId).length !== 1) {
+    requireReaderModuleRefresh(['promptPresets'])
+    return
+  }
+  displayPromptPresets = displayPromptPresets.map((preset) =>
+    preset.id === presetId ? { ...preset, ...certified } : preset,
+  )
+}
+
+export function recordReaderAgentPresetModuleFields(
+  presetId: string,
+  fields: Record<string, { canonical: { present: boolean; value?: unknown } }>,
+): void {
+  const entries = Object.entries(fields).filter(([key]) => ['moduleIntergration', 'enabled'].includes(key))
+  if (entries.length === 0) return
+  const presets = moduleSettings.agentPresets ?? []
+  if (presets.filter((preset) => preset.id === presetId).length !== 1) {
+    requireReaderModuleRefresh(['agentPresets'])
+    return
+  }
+  moduleSettings = {
+    ...moduleSettings,
+    agentPresets: presets.map((preset) => {
+      if (preset.id !== presetId) return preset
+      const next = { ...preset } as Record<string, unknown>
+      for (const [key, field] of entries) {
+        if (field.canonical.present) next[key] = clone(field.canonical.value)
+        else delete next[key]
+      }
+      return next as unknown as Database['agentPresets'][number]
+    }),
+  }
+}
+
 export function recordReaderCharacterOrder(source: Database['characterOrder']): void {
   characterOrder = source.map((entry) =>
     typeof entry === 'string'
@@ -122,6 +222,19 @@ let characters = $state.raw<character[]>([])
 let personas = $state.raw<Database['personas']>([])
 let personaSettings = $state.raw<Record<string, unknown>>({})
 const requiredPersonaReads = new SvelteSet<string>()
+const requiredModuleReads = new SvelteSet<string>()
+const moduleDisplayKeys = ['id', 'name', 'namespace', 'assets', 'backgroundEmbedding', 'hideIcon'] as const
+const presetModuleKeys = ['id', 'moduleIntergration'] as const
+const agentPresetModuleKeys = [...presetModuleKeys, 'enabled'] as const
+export const READER_MODULE_SETTING_KEYS = [
+  'enabledModules',
+  'moduleIntergration',
+  'agentPresets',
+  'agentPresetDefaultId',
+] as const satisfies readonly (keyof Database)[]
+let displayModules = $state.raw<Database['modules']>([])
+let displayPromptPresets = $state.raw<Database['promptPresets']>([])
+let moduleSettings = $state.raw<Partial<Database>>({})
 const characterRevisions = new Map<string, number | null>()
 const details = new SvelteMap<string, character>()
 const chatIncarnations = new SvelteMap<string, { characterId: string; value: number }>()
@@ -157,7 +270,7 @@ function displayCharacter(value: character): character {
       // Presence changes persona fallback semantics, even without a bound id.
       ...(chat.generationSettings === undefined
         ? {}
-        : { generationSettings: pick(chat.generationSettings, ['personaId']) }),
+        : { generationSettings: pick(chat.generationSettings, chatGenerationDisplayKeys) }),
       message: [],
     })),
   } as unknown as character
@@ -361,16 +474,20 @@ export function recordReaderChatPatch(characterId: string, chatId: string, patch
 
 export function recordReaderChatPersona(characterId: string, chatId: string, settings: object): void {
   if (uniqueChat(chatId)?.characterId !== characterId) return
-  characters = characters.map((character) =>
+  const update = (character: character): character =>
     character.chaId === characterId
       ? {
           ...character,
           chats: character.chats.map((chat) =>
-            chat.id === chatId ? ({ ...chat, generationSettings: pick(settings, ['personaId']) } as Chat) : chat,
+            chat.id === chatId
+              ? ({ ...chat, generationSettings: pick(settings, chatGenerationDisplayKeys) } as Chat)
+              : chat,
           ),
         }
-      : character,
-  )
+      : character
+  characters = characters.map(update)
+  const detail = details.get(characterId)
+  if (detail) details.set(characterId, update(detail))
 }
 
 /** Merge only certified rows; never use the mutable writer message graph as a prefix. */
@@ -455,6 +572,10 @@ export function clearReaderTranscriptProjection(): void {
   navigationSettings = {}
   characterOrder = []
   requiredPersonaReads.clear()
+  requiredModuleReads.clear()
+  displayModules = []
+  displayPromptPresets = []
+  moduleSettings = {}
   characterRevisions.clear()
   details.clear()
   chatIncarnations.clear()

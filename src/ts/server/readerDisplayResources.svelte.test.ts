@@ -15,7 +15,7 @@ import {
 import * as reads from './resourceReads'
 import { refreshInvalidatedServerResources } from './resourceInvalidation'
 import { setManagedWriterForTest } from '../__tests__/managedClientSession'
-import { getReaderTranscriptPersona } from './readerTranscriptProjection.svelte'
+import { getReaderModuleDisplayDatabase, getReaderTranscriptPersona } from './readerTranscriptProjection.svelte'
 import {
   resetServerResourceState,
   settingsResourceState,
@@ -23,6 +23,8 @@ import {
   replaceResourceDatabase,
   updatePersonaOwnerState,
   applyPersonaMutationLocalEffect,
+  applyModuleCollectionMutationLocalEffect,
+  applyModuleEnabledLocalEffect,
 } from './resourceState.svelte'
 import {
   peekAppliedServerResourceRevision,
@@ -164,6 +166,70 @@ afterEach(() => {
 })
 
 describe('reader display resources', () => {
+  it('refreshes compact module and activation receipts without exposing newer optimistic fields', async () => {
+    setManagedWriterForTest()
+    replaceResourceDatabase(
+      {
+        characters: [],
+        modules: [{ id: 'module-a', name: 'Module A', description: '', backgroundEmbedding: 'Confirmed before' }],
+        enabledModules: ['module-a'],
+        promptPresets: [],
+        personas: [],
+      } as never,
+      7,
+    )
+    collectionsResourceState.values.modules![0].backgroundEmbedding = 'Newer pending background'
+    settingsResourceState.value.enabledModules = ['newer-pending-module']
+    expect(applyModuleCollectionMutationLocalEffect({ revision: 8, operation: 'update', moduleId: 'module-a' })).toBe(
+      true,
+    )
+    expect(applyModuleEnabledLocalEffect({ revision: 9, moduleId: 'module-a', enabled: false })).toBe(true)
+    setAppliedServerResourceRevision(9)
+    setCachedServerCommandRevision(9)
+    demoteClientSession()
+    expect(readerDisplayResourcesReady()).toBe(false)
+    const held = deferred<Awaited<ReturnType<typeof reads.fetchServerCollection>>>()
+    vi.mocked(reads.fetchServerCollection).mockImplementationOnce(() => held.promise)
+    vi.mocked(reads.fetchServerSettingsGroup).mockImplementation(async (group) => ({
+      status: 'ok',
+      revision: 9,
+      group,
+      settings: { enabledModules: [] },
+    }))
+    const loading = ensureReaderDisplayResources()
+    await vi.waitFor(() => expect(reads.fetchServerCollection).toHaveBeenCalledWith('modules', expect.any(AbortSignal)))
+    expect(getReaderModuleDisplayDatabase()).toMatchObject({
+      modules: [{ backgroundEmbedding: 'Confirmed before' }],
+      enabledModules: ['module-a'],
+    })
+    held.resolve({
+      status: 'ok',
+      revision: 9,
+      collections: {
+        modules: [
+          {
+            id: 'module-a',
+            name: 'Module A',
+            description: '',
+            backgroundEmbedding: 'Accepted after',
+            cjs: 'private executable',
+          },
+        ],
+      },
+    })
+    await expect(loading).resolves.toEqual({ status: 'ok' })
+    expect(getReaderModuleDisplayDatabase()).toMatchObject({
+      modules: [{ backgroundEmbedding: 'Accepted after' }],
+      enabledModules: [],
+    })
+    expect(getReaderModuleDisplayDatabase().modules![0]).not.toHaveProperty('cjs')
+    expect(vi.mocked(reads.fetchServerSettingsGroup).mock.calls.map(([group]) => group)).toEqual(['modules'])
+    expect(vi.mocked(reads.fetchServerCollection).mock.calls.map(([name]) => name)).toEqual(['modules'])
+    expect(reads.fetchServerStandaloneSetting).not.toHaveBeenCalled()
+    expect(readerDisplayResourcesReady()).toBe(true)
+    expect(peekAppliedServerResourceRevision()).toBe(9)
+  })
+
   it.each(['create', 'delete', 'select'] as const)(
     'explicitly refreshes accepted persona %s while holding newer pending values out of the reader',
     async (operation) => {

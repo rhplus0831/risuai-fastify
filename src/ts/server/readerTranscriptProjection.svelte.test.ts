@@ -8,7 +8,7 @@ import {
   resetClientSessionForTests,
   settleClientReader,
 } from '../clientSession'
-import type { character } from '../storage/database.svelte'
+import type { character, Database } from '../storage/database.svelte'
 import {
   applyCharacterResource,
   applyCharactersResource,
@@ -18,6 +18,12 @@ import {
   applySettingsPatchLocalEffect,
   applyChatGenerationSettingsLocalEffect,
   applyPersonaPatchLocalEffect,
+  applyCollectionsResource,
+  applySettingsGroupResource,
+  applyModuleCollectionMutationLocalEffect,
+  applyModuleEnabledLocalEffect,
+  applySplitPresetPatchLocalEffect,
+  applyAgentPresetPatchLocalEffect,
   replaceResourceDatabase,
   updatePersonaOwnerState,
   collectionsResourceState,
@@ -25,6 +31,8 @@ import {
   charactersResourceState,
   resetServerResourceState,
 } from './resourceState.svelte'
+import { resolveActiveModuleStates } from '../moduleActivation'
+import { registerPendingSettingsProjectionOverlay } from './settingsPendingProjection'
 import { clearRetainedChatProjections, registerRetainedChatProjection } from './chatRetainedProjection'
 import {
   getReaderTranscriptCharacters,
@@ -32,6 +40,8 @@ import {
   getReaderNavigationSettings,
   getReaderCharacterOrder,
   isReaderPersonaReadRequired,
+  getReaderModuleDisplayDatabase,
+  isReaderModuleReadRequired,
 } from './readerTranscriptProjection.svelte'
 
 function characterRow(): character {
@@ -79,6 +89,284 @@ afterEach(() => {
 })
 
 describe('authoritative reader display metadata', () => {
+  it('records raw accepted module resources before registered writer overlays are restored', () => {
+    setManagedWriterForTest()
+    const stop = registerPendingSettingsProjectionOverlay((target) => {
+      if (Object.hasOwn(target, 'enabledModules')) target.enabledModules = ['pending-module']
+      if (Object.hasOwn(target, 'modules')) target.modules = [{ id: 'pending-module', name: 'Pending' }]
+    })
+    try {
+      expect(applySettingsResource({ revision: 1, settings: { enabledModules: ['confirmed-module'] } })).toBe(true)
+      expect(
+        applyCollectionsResource(
+          {
+            revision: 1,
+            collections: { modules: [{ id: 'confirmed-module', name: 'Confirmed', description: '' }] },
+          },
+          'modules',
+        ),
+      ).toBe(true)
+      expect(settingsResourceState.value.enabledModules).toEqual(['pending-module'])
+      expect(collectionsResourceState.values.modules).toEqual([{ id: 'pending-module', name: 'Pending' }])
+      expect(getReaderModuleDisplayDatabase()).toMatchObject({
+        enabledModules: ['confirmed-module'],
+        modules: [{ id: 'confirmed-module', name: 'Confirmed' }],
+      })
+    } finally {
+      stop()
+    }
+  })
+
+  it('isolates passive module metadata and resolves activation from the reader chat instead of writer selection', () => {
+    setManagedWriterForTest()
+    const row = characterRow()
+    row.modules = ['character-module']
+    row.prebuiltAssetStyle = 'border-radius: 8px;'
+    row.hideChatIcon = true
+    row.chatPage = 0
+    row.chats = [
+      { id: 'writer-chat', message: [], modules: ['writer-module'] },
+      {
+        id: 'reader-chat',
+        message: [],
+        modules: ['chat-module'],
+        generationSettings: {
+          personaId: 'reader-persona',
+          promptPresetId: 'reader-prompt',
+          agentPresetId: 'reader-agent',
+        },
+      },
+    ] as never
+    const moduleIds = [
+      'global-module',
+      'character-module',
+      'chat-module',
+      'persona-module',
+      'prompt-module',
+      'agent-module',
+      'writer-module',
+    ]
+    replaceResourceDatabase(
+      {
+        characters: [row],
+        currentChar: 0,
+        modules: moduleIds.map((id) => ({
+          id,
+          name: id,
+          namespace: id === 'prompt-module' ? 'prompt-namespace' : id,
+          assets: [['asset', `${id}.png`, 'png']],
+          backgroundEmbedding: `<p>${id}</p>`,
+          hideIcon: true,
+          cjs: 'private executable',
+          regex: [{ out: 'private transform' }],
+          trigger: [{ effect: 'private' }],
+          mcp: [{ key: 'private' }],
+        })),
+        enabledModules: ['global-module'],
+        moduleIntergration: 'writer-module',
+        promptPresets: [
+          { id: 'reader-prompt', moduleIntergration: 'prompt-namespace', promptTemplate: [{ text: 'private prompt' }] },
+        ],
+        agentPresets: [
+          {
+            id: 'reader-agent',
+            enabled: true,
+            moduleIntergration: 'agent-module',
+            steps: [{ instruction: 'private agent prompt' }],
+          },
+        ],
+        agentPresetDefaultId: 'writer-agent',
+        personas: [
+          {
+            id: 'reader-persona',
+            name: 'Reader',
+            modules: ['persona-module'],
+            personaPrompt: 'private persona prompt',
+          },
+        ],
+        selectedPersonaId: 'writer-persona',
+        legacyMediaFindings: true,
+        assetMaxDifference: 5,
+        newImageHandlingBeta: true,
+      } as never,
+      1,
+    )
+    collectionsResourceState.values.modules![0].assets![0][1] = 'pending.png'
+    collectionsResourceState.values.modules![0].backgroundEmbedding = 'Pending background'
+    settingsResourceState.value.enabledModules = ['writer-module']
+    charactersResourceState.characters[0].modules = ['writer-module']
+    charactersResourceState.characters[0].chats[1].modules = ['writer-module']
+    demoteClientSession()
+
+    const projected = getReaderTranscriptCharacters()[0]
+    const database = { ...getReaderModuleDisplayDatabase(), ...getReaderTranscriptPersona() } as Database
+    const active = resolveActiveModuleStates(database, projected, projected.chats[1])
+    expect(active.map(({ module }) => module.id)).toEqual(moduleIds.filter((id) => id !== 'writer-module'))
+    expect(database.modules[0]).toEqual({
+      id: 'global-module',
+      name: 'global-module',
+      namespace: 'global-module',
+      assets: [['asset', 'global-module.png', 'png']],
+      backgroundEmbedding: '<p>global-module</p>',
+      hideIcon: true,
+    })
+    expect(database.promptPresets).toEqual([{ id: 'reader-prompt', moduleIntergration: 'prompt-namespace' }])
+    expect(database.agentPresets).toEqual([{ id: 'reader-agent', enabled: true, moduleIntergration: 'agent-module' }])
+    expect(database.personas[0]).not.toHaveProperty('personaPrompt')
+    expect(projected).toMatchObject({ prebuiltAssetStyle: 'border-radius: 8px;', hideChatIcon: true })
+    expect(getReaderNavigationSettings()).toMatchObject({
+      legacyMediaFindings: true,
+      assetMaxDifference: 5,
+      newImageHandlingBeta: true,
+    })
+  })
+
+  it('certifies prompt/agent integration patches and reader chat preset bindings without copying later writer edits', () => {
+    replaceResourceDatabase(
+      {
+        characters: [characterRow()],
+        modules: [],
+        promptPresets: [{ id: 'prompt-a', moduleIntergration: 'before' }],
+        agentPresets: [{ id: 'agent-a', name: 'Agent', enabled: true, steps: [], moduleIntergration: 'before' }],
+      } as never,
+      1,
+    )
+    settingsResourceState.value.agentPresets![0].moduleIntergration = 'newer-pending-agent'
+    collectionsResourceState.values.promptPresets![0].moduleIntergration = 'newer-pending-prompt'
+    expect(
+      applyAgentPresetPatchLocalEffect({
+        revision: 2,
+        presetId: 'agent-a',
+        updatedAt: 2,
+        fields: {
+          moduleIntergration: {
+            attempted: { present: true, value: 'accepted-agent' },
+            canonical: { present: true, value: 'accepted-agent' },
+          },
+        },
+      }),
+    ).toBe(true)
+    expect(
+      applySplitPresetPatchLocalEffect({
+        revision: 3,
+        presetKind: 'prompt',
+        presetId: 'prompt-a',
+        attemptedPatch: { moduleIntergration: 'accepted-prompt' },
+        preset: { moduleIntergration: 'accepted-prompt' },
+        attemptedSettings: {},
+        settings: {},
+        selectedProjectionApplied: false,
+        ownerProjectionApplied: false,
+      }),
+    ).toBe(true)
+    charactersResourceState.characters[0].chats[0].generationSettings = {
+      agentPresetId: 'pending-agent',
+      promptPresetId: 'pending-prompt',
+    }
+    expect(
+      applyChatGenerationSettingsLocalEffect({
+        revision: 4,
+        characterId: 'character-a',
+        chatId: 'chat-a',
+        attemptedGenerationSettings: { agentPresetId: 'agent-a', promptPresetId: 'prompt-a' },
+        generationSettings: {
+          agentPresetId: 'agent-a',
+          promptPresetId: 'prompt-a',
+          sidebarToggles: { private: 'private generation toggle' },
+        },
+      }),
+    ).toBe(true)
+    expect(getReaderModuleDisplayDatabase()).toMatchObject({
+      promptPresets: [{ id: 'prompt-a', moduleIntergration: 'accepted-prompt' }],
+      agentPresets: [{ id: 'agent-a', moduleIntergration: 'accepted-agent' }],
+    })
+    expect(getReaderTranscriptCharacters()[0].chats[0].generationSettings).toEqual({
+      agentPresetId: 'agent-a',
+      promptPresetId: 'prompt-a',
+    })
+    expect(settingsResourceState.value.agentPresets![0].moduleIntergration).toBe('newer-pending-agent')
+    expect(collectionsResourceState.values.promptPresets![0].moduleIntergration).toBe('newer-pending-prompt')
+  })
+
+  it('keeps certified module values until compact receipts receive sufficiently new authoritative reads', () => {
+    setManagedWriterForTest()
+    replaceResourceDatabase(
+      {
+        characters: [],
+        modules: [{ id: 'module-a', name: 'Module A', description: '', backgroundEmbedding: 'Before' }],
+        enabledModules: ['module-a'],
+        promptPresets: [],
+      } as never,
+      3,
+    )
+    collectionsResourceState.values.modules![0].backgroundEmbedding = 'Newer pending background'
+    settingsResourceState.value.enabledModules = ['newer-pending-module']
+    expect(applyModuleCollectionMutationLocalEffect({ revision: 4, operation: 'update', moduleId: 'module-a' })).toBe(
+      true,
+    )
+    expect(applyModuleEnabledLocalEffect({ revision: 5, moduleId: 'module-a', enabled: false })).toBe(true)
+    demoteClientSession()
+    expect(isReaderModuleReadRequired('modules')).toBe(true)
+    expect(isReaderModuleReadRequired('enabledModules')).toBe(true)
+    expect(getReaderModuleDisplayDatabase()).toMatchObject({
+      modules: [{ backgroundEmbedding: 'Before' }],
+      enabledModules: ['module-a'],
+    })
+    expect(applySettingsResource({ revision: 4, settings: { enabledModules: ['stale-module'] } })).toBe(true)
+    expect(isReaderModuleReadRequired('enabledModules')).toBe(true)
+    expect(getReaderModuleDisplayDatabase().enabledModules).toEqual(['module-a'])
+    expect(applyCollectionsResource({ revision: 3, collections: { modules: [] } }, 'modules')).toBe(false)
+    expect(
+      applyCollectionsResource(
+        {
+          revision: 5,
+          collections: {
+            modules: [{ id: 'module-a', name: 'Confirmed', description: '', backgroundEmbedding: 'Accepted' }],
+          },
+        },
+        'modules',
+      ),
+    ).toBe(true)
+    expect(
+      applySettingsGroupResource({ revision: 5, group: 'modules', settings: { enabledModules: [] } }, [
+        'enabledModules',
+      ]),
+    ).toBe(true)
+    expect(isReaderModuleReadRequired('modules')).toBe(false)
+    expect(isReaderModuleReadRequired('enabledModules')).toBe(false)
+    expect(getReaderModuleDisplayDatabase()).toMatchObject({
+      modules: [{ backgroundEmbedding: 'Accepted' }],
+      enabledModules: [],
+    })
+  })
+
+  it('clears module metadata and required reads on authentication or database identity loss', () => {
+    for (const clear of [() => requireClientAuthentication(), () => beginClientSession('replacement-session')]) {
+      setManagedWriterForTest()
+      replaceResourceDatabase(
+        {
+          characters: [],
+          modules: [{ id: 'module-a', name: 'Module', description: '' }],
+          enabledModules: ['module-a'],
+        } as never,
+        1,
+      )
+      expect(applyModuleCollectionMutationLocalEffect({ revision: 2, operation: 'update', moduleId: 'module-a' })).toBe(
+        true,
+      )
+      clear()
+      expect(getReaderModuleDisplayDatabase()).toEqual({
+        modules: [],
+        promptPresets: [],
+        enabledModules: [],
+        moduleIntergration: '',
+        agentPresets: [],
+        agentPresetDefaultId: null,
+      })
+      expect(isReaderModuleReadRequired('modules')).toBe(false)
+    }
+  })
+
   it('certifies folders, pins, order and visual settings without optimistic or prompt fields', () => {
     setManagedWriterForTest()
     const row = characterRow()

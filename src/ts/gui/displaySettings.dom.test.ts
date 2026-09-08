@@ -38,7 +38,8 @@ afterEach(async () => {
 describe('read-only display paint settings', () => {
   it('switches immediately from pending writer appearance to confirmed reader values and clears protected hints', async () => {
     const { setManagedWriterForTest } = await import('../__tests__/managedClientSession')
-    const { demoteClientSession, requireClientAuthentication } = await import('../clientSession')
+    const { demoteClientSession, requireClientAuthentication, setClientProjectionReady } =
+      await import('../clientSession')
     const { recordReaderNavigationSettings } = await import('../server/readerTranscriptProjection.svelte')
     const { displaySettingsForPaint, displaySettingForPaint, runtimeDisplaySettingsOwner } =
       await import('./displaySettings')
@@ -47,6 +48,9 @@ describe('read-only display paint settings', () => {
     resource.groupStatuses.display = 'ready'
     resource.value = { theme: 'pending-theme', customFont: 'pending-font', sideBarSize: 3 }
     expect(displaySettingForPaint('theme')).toBe('pending-theme')
+    setClientProjectionReady(false)
+    expect(displaySettingForPaint('theme')).toBe('waifu')
+    setClientProjectionReady(true)
     demoteClientSession()
     expect(displaySettingsForPaint()).toMatchObject({ theme: 'waifu', customFont: 'serif', sideBarSize: 1 })
     expect(runtimeDisplaySettingsOwner()?.theme).toBe('waifu')

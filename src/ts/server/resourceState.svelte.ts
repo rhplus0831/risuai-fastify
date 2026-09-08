@@ -37,6 +37,12 @@ import {
   recordReaderPersonaPatch,
   requireReaderPersonaRefresh,
   recordReaderPersonaSettings,
+  recordReaderModuleCollection,
+  recordReaderModuleSettings,
+  recordReaderPromptPresetModulePatch,
+  recordReaderAgentPresetModuleFields,
+  requireReaderModuleRefresh,
+  READER_MODULE_SETTING_KEYS,
 } from './readerTranscriptProjection.svelte'
 import {
   SERVER_CHARACTER_SHELL_MARKER,
@@ -1330,6 +1336,10 @@ export function applySettingsResource(payload: ServerSettingsResourcePayload): b
   const liveLoreBookPage = preserveLoreBookPage ? cloneJsonValue(liveSettings.loreBookPage) : undefined
   recordReaderPersonaSettings(payload.settings)
   recordReaderNavigationSettings(payload.settings)
+  recordReaderModuleSettings(
+    payload.settings,
+    READER_MODULE_SETTING_KEYS.filter((key) => !preserveEnabledModules || key !== 'enabledModules'),
+  )
   settingsResourceState.value = cloneJsonValue(payload.settings)
   if (preserveEnabledModules) {
     ;(settingsResourceState.value as Record<string, unknown>).enabledModules = liveEnabledModules
@@ -1406,6 +1416,7 @@ export function applyShellSettingsResource(payload: ServerShellSettingsResourceP
   const target = settingsResourceState.value as Record<string, unknown>
   recordReaderPersonaSettings(payload.settings, SERVER_SHELL_SETTINGS_KEYS)
   recordReaderNavigationSettings(payload.settings, SERVER_SHELL_SETTINGS_KEYS)
+  recordReaderModuleSettings(payload.settings, SERVER_SHELL_SETTINGS_KEYS)
   for (const key of SERVER_SHELL_SETTINGS_KEYS) target[key] = cloneJsonValue(payload.settings[key])
   applyPendingSettingsProjectionOverlays(target, new Set(SERVER_SHELL_SETTINGS_KEYS))
   settingsResourceState.shellRevision = payload.revision
@@ -1450,6 +1461,7 @@ export function applyStandaloneSettingResource(payload: ServerStandaloneSettingP
   else delete target[payload.setting]
   recordReaderPersonaSettings(target, [payload.setting])
   recordReaderNavigationSettings(target, [payload.setting])
+  recordReaderModuleSettings(target, [payload.setting])
   applyPendingSettingsProjectionOverlays(target, new Set([payload.setting]))
   settingsResourceState.standaloneRevisions[payload.setting] = payload.revision
   settingsResourceState.standaloneStatuses[payload.setting] = 'ready'
@@ -1491,6 +1503,7 @@ export function applySettingsGroupResource(
   }
   recordReaderPersonaSettings(incoming, groupKeys)
   recordReaderNavigationSettings(incoming, groupKeys)
+  recordReaderModuleSettings(incoming, groupKeys)
   applyPendingSettingsProjectionOverlays(target, new Set(groupKeys))
   settingsResourceState.groupRevisions[payload.group] = payload.revision
   settingsResourceState.groupStatuses[payload.group] = 'ready'
@@ -1544,6 +1557,7 @@ export function applySettingsPatchLocalEffect(payload: ServerSettingsPatchLocalE
 
   recordReaderPersonaSettings(payload.settings, canonicalKeys)
   recordReaderNavigationSettings(payload.settings, canonicalKeys)
+  recordReaderModuleSettings(payload.settings, canonicalKeys)
   const settingsTarget = settingsResourceState.value as Record<string, unknown>
   const previousLanguage = settingsTarget.language
   for (const key of attemptedKeys) {
@@ -1674,6 +1688,7 @@ export function applyModuleCollectionMutationLocalEffect(
     return false
   }
 
+  requireReaderModuleRefresh(['modules'])
   collectionsResourceState.revisions.modules = payload.revision
   collectionsResourceState.revision = maxRevision(collectionsResourceState.revision, payload.revision)
   collectionsResourceState.statuses.modules = 'ready'
@@ -1808,6 +1823,7 @@ export function applyModuleEnabledLocalEffect(payload: ServerModuleEnabledLocalE
     return false
   }
 
+  requireReaderModuleRefresh(['enabledModules'])
   settingsResourceState.enabledModulesRevision = payload.revision
   settingsResourceState.revision = maxRevision(settingsResourceState.revision, payload.revision)
   settingsResourceState.status = 'ready'
@@ -1900,6 +1916,16 @@ export function applySplitPresetPatchLocalEffect(payload: ServerSplitPresetPatch
     ) {
       return false
     }
+  }
+
+  if (
+    payload.presetKind === 'prompt' &&
+    payload.revision >
+      Math.max(collectionsResourceState.fullRevision ?? -1, collectionsResourceState.revisions.promptPresets ?? -1)
+  )
+    recordReaderPromptPresetModulePatch(payload.presetId, payload.preset)
+  if (payload.selectedProjectionApplied && payload.revision > (settingsResourceState.fullRevision ?? -1)) {
+    recordReaderModuleSettings(payload.settings, Object.keys(payload.settings))
   }
 
   const preset = matches[0]
@@ -2082,6 +2108,7 @@ export function applyCollectionsResource(
   for (const name of names) {
     if (isOlderRevision(payload.revision, collectionsResourceState.revisions[name] ?? null)) continue
     if (name === 'personas') recordReaderPersonas(payload.collections.personas)
+    recordReaderModuleCollection(name, payload.collections[name])
     collectionsResourceState.values[name] = cloneJsonValue(payload.collections[name]) as never
     collectionsResourceState.revisions[name] = payload.revision
     collectionsResourceState.statuses[name] = 'ready'
@@ -2505,6 +2532,7 @@ export function applyAgentPresetCollectionMutationLocalEffect(
   const currentDefaultId = rawDefaultId === undefined ? null : nonEmptyString(rawDefaultId) ? rawDefaultId : undefined
   if (currentDefaultId === undefined || currentDefaultId !== payload.agentPresetDefaultId) return false
 
+  requireReaderModuleRefresh(['agentPresets', 'agentPresetDefaultId'])
   settingsResourceState.groupRevisions.agents = payload.revision
   settingsResourceState.revision = maxRevision(settingsResourceState.revision, payload.revision)
   settingsResourceState.status = 'ready'
@@ -2622,6 +2650,7 @@ function applyAgentPresetFieldPatchLocalEffect(
   }
   nextPreset.updatedAt = payload.updatedAt
   if (isStepPatch && !isCanonicalValidAgentPreset(nextPreset)) return false
+  if (!isStepPatch) recordReaderAgentPresetModuleFields(payload.presetId, payload.fields)
   presets[presetIndex] = nextPreset
   settingsResourceState.groupRevisions.agents = payload.revision
   settingsResourceState.revision = maxRevision(settingsResourceState.revision, payload.revision)
@@ -3254,6 +3283,9 @@ export function replaceResourceDatabase(database: Database, revision?: number): 
   recordReaderPersonas(collections.personas)
   recordReaderPersonaSettings(settings)
   recordReaderNavigationSettings(settings)
+  recordReaderModuleSettings(settings)
+  recordReaderModuleCollection('modules', collections.modules)
+  recordReaderModuleCollection('promptPresets', collections.promptPresets)
   recordReaderCharacterOrder(
     Array.isArray(databaseRecord.characterOrder) ? (databaseRecord.characterOrder as Database['characterOrder']) : [],
   )

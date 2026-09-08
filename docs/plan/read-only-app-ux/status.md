@@ -4,8 +4,8 @@
 
 - State: Phases 0–1 accepted; shared navigation implemented and transcript/browser verification in progress.
 - Next phase: [Phase 3 — shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md).
-- Next bounded slice: establish route/action denial and certify navigation/display
-  fields before mounting shared reader navigation.
+- Next bounded slice: finish passive transcript integration and run actual
+  two-client browser acceptance before accepting Phases 2–4.
 - Source baseline reviewed: `982eef6112a407d138ea6a77ebc638c8058edfe2`.
 - Fixed scope: Settings, plugin panels, and interactive scripts are inaccessible
   to readers through controls, routes, shortcuts, restored UI, and callbacks.
@@ -233,3 +233,19 @@ Counts were 29, 19, 68, 23, 6 and 4 respectively. Existing writer and conservati
 preview regressions are retained. Prettier and whitespace checks passed.
 Reader transcript live-generation status remains owned by its selected-chat
 observer; shared navigation does not start a second generation runtime.
+
+### Phase 3 confirmed passive-module slice — 2026-09-08
+
+Reader display now certifies module asset/background/icon metadata and the
+character/chat/persona/preset activation links needed to choose it. It excludes
+prompts, script definitions and plugin runtime state. Raw accepted inputs are
+copied before pending writer overlays; compact acknowledgements demand a fresh
+read instead of certifying the resident optimistic graph. Database/auth reset
+clears the projection. Paint also switches to confirmed values whenever writer
+projection readiness is revoked, including recovery while authority is retained.
+
+Projection, display-resource and resource-state suites passed (105 tests); the
+final projection suite passed 13 tests after adding a real pending-overlay
+regression. `pnpm test -- src/ts/gui/displaySettings.dom.test.ts` passed (5).
+`pnpm check` passed with zero errors and warnings. Prettier and whitespace
+checks passed. Shared transcript and browser acceptance follow in separate slices.
