@@ -21,6 +21,11 @@ import {
 
 import { clearRetainedChatProjections } from './chatRetainedProjection'
 import { beginPersistenceActivity, setPendingMutationOutboxActive } from './persistenceActivity.svelte'
+import {
+  captureBrowserDiagnosticsGeneration,
+  isBrowserDiagnosticsGenerationCurrent,
+  recordBrowserDiagnostic,
+} from './browserDiagnostics'
 
 export type DurableMutationRequestMethod = 'DELETE' | 'PATCH' | 'POST' | 'PUT'
 
@@ -141,6 +146,8 @@ interface StoredPendingMutation {
   writerEpoch: number
   databaseLineage: string
   updatedAt: number
+  /** Original queue admission time; legacy rows fall back to their last persisted update. */
+  queuedAt?: number
   /** Missing on legacy rows, which always use the WebCrypto key. */
   keyKind?: OutboxKeyKind
   iv: ArrayBuffer
@@ -184,6 +191,9 @@ let nextSequenceOffset = 0
 let nextProjectionGenerationOrdinal = 0
 let persistenceWarningReported = false
 let pendingMutationScope: PendingMutationScope | null = null
+let lastQueueDiagnostic:
+  | { scope: PendingMutationScope; generation: number; count: number; oldest: number | null }
+  | undefined
 let handleSessionGenerations = new WeakMap<PendingMutationHandle, number>()
 const pendingMutationStageLockTails = new Map<string, Promise<void>>()
 const admittedPendingMutationWrites = new Set<Promise<PendingMutationPersistenceStatus>>()
@@ -940,6 +950,7 @@ export async function listPendingMutations(): Promise<PendingMutationOutboxEntry
  */
 export async function countPendingMutationRecords(): Promise<number | null> {
   const generation = captureClientSessionGeneration()
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
   if (!outboxRecoveryIsCurrent(generation)) return 0
   const scope = pendingMutationScope
   if (scope && !canRecoverPendingOwner(scope.writerSessionId, scope.databaseLineage)) return 0
@@ -954,13 +965,58 @@ export async function countPendingMutationRecords(): Promise<number | null> {
     const stored = await requestResult<StoredPendingMutation[]>(transaction.objectStore(OUTBOX_MUTATION_STORE).getAll())
     await transactionDone(transaction)
     if (!outboxRecoveryIsCurrent(generation)) return null
-    return stored.filter(
+    const current = stored.filter(
       (candidate) =>
         candidate.ownerWriterSessionId === scope.writerSessionId && candidate.databaseLineage === scope.databaseLineage,
-    ).length
+    )
+    recordPendingQueueDiagnostic(current, scope, diagnosticGeneration)
+    return current.length
   } catch (error) {
     reportPersistenceWarning('Unable to count pending server mutations', error)
     return null
+  }
+}
+
+/** Reuse already-read raw metadata; never decrypt intents for telemetry. */
+function recordPendingQueueDiagnostic(
+  rows: readonly StoredPendingMutation[],
+  scope: PendingMutationScope,
+  generation: number,
+): void {
+  try {
+    if (pendingMutationScope !== scope || !isBrowserDiagnosticsGenerationCurrent(generation)) return
+    let oldest: number | null = rows.length === 0 ? 0 : null
+    if (rows.length > 0 && rows.length <= 8192) {
+      oldest = Number.MAX_SAFE_INTEGER
+      for (const row of rows) {
+        const queuedAt = row.queuedAt ?? row.updatedAt
+        if (!Number.isSafeInteger(queuedAt) || queuedAt < 0) {
+          oldest = null
+          break
+        }
+        oldest = Math.min(oldest, queuedAt)
+      }
+    }
+    if (
+      lastQueueDiagnostic?.scope === scope &&
+      lastQueueDiagnostic.generation === generation &&
+      lastQueueDiagnostic.count === rows.length &&
+      lastQueueDiagnostic.oldest === oldest
+    )
+      return
+    lastQueueDiagnostic = { scope, generation, count: rows.length, oldest }
+    recordBrowserDiagnostic({
+      category: 'browser',
+      level: 'info',
+      stage: 'queue',
+      outcome: rows.length > 0 ? 'pending' : 'ready',
+      queuedCount: Math.min(1_000_000_000, rows.length),
+      ...(oldest !== null
+        ? { queueAgeMs: rows.length === 0 ? 0 : Math.min(86_400_000, Math.max(0, Date.now() - oldest)) }
+        : {}),
+    })
+  } catch {
+    // Reading or measuring diagnostics must not affect durable queue admission.
   }
 }
 
@@ -1173,6 +1229,7 @@ export function resetPendingMutationOutboxForTests(): void {
   nextProjectionGenerationOrdinal = 0
   persistenceWarningReported = false
   pendingMutationScope = null
+  lastQueueDiagnostic = undefined
   handleSessionGenerations = new WeakMap()
   pendingMutationStageLockTails.clear()
   admittedPendingMutationWrites.clear()
@@ -1399,6 +1456,7 @@ function commitPendingMutationOrderAndRow(input: CommitPendingMutationInput): Pr
           writerEpoch: input.scope.writerEpoch,
           databaseLineage: input.scope.databaseLineage,
           updatedAt: Date.now(),
+          queuedAt: replacementDeleted && replaced ? (replaced.queuedAt ?? replaced.updatedAt) : Date.now(),
           keyKind: input.encryptionKey.keyKind,
           iv: input.iv.buffer,
           ciphertext: input.ciphertext,
@@ -1572,6 +1630,7 @@ async function replacePendingMutationIntentExact(
       sequence,
       dispatchStarted: false,
       updatedAt: Date.now(),
+      queuedAt: current.queuedAt ?? current.updatedAt,
       keyKind: encryptionKey.keyKind,
       iv: iv.buffer,
       ciphertext,

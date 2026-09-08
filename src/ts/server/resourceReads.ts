@@ -1,3 +1,4 @@
+import { beginCacheDiagnostic } from './protocolDiagnostics'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import {
   captureClientSessionGeneration,
@@ -501,18 +502,27 @@ async function requestCachedSingularResource(
   signal: AbortSignal | null | undefined,
   validate: (value: unknown, record: Record<string, unknown>) => boolean,
 ): Promise<ServerResourceJsonRequestResult> {
+  const finishCache = beginCacheDiagnostic()
   const generation = captureClientSessionGeneration()
   const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
     requestServerResourceJson(endpoint, signal, options, generation)
+  const fallback = () => {
+    finishCache('failed')
+    return request()
+  }
   const cacheGeneration = captureResourceCacheGeneration()
   const prepared = await prepareResourceCacheRequest([{ name: resourceName, key: cacheKey }])
-  if (!prepared) return request()
+  if (!prepared) {
+    finishCache('unknown')
+    return request()
+  }
 
   const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
+    finishCache(signal?.aborted ? 'cancelled' : 'failed')
     return shouldFallbackToLegacyGet(result) ? request() : result
   }
 
@@ -522,20 +532,20 @@ async function requestCachedSingularResource(
     !isResourceCacheMetadata(record.cache) ||
     !Object.prototype.hasOwnProperty.call(record, resourceName)
   ) {
-    return request()
+    return fallback()
   }
 
   const snapshot = prepared.snapshots.get(resourceName)
-  if (!snapshot) return request()
+  if (!snapshot) return fallback()
   try {
     const resolved = await resolveResourceCacheValue(
       record[resourceName],
       snapshot,
       prepared.hashes[resourceName] ?? [],
     )
-    if (!resolved) return request()
+    if (!resolved) return fallback()
     if (!validate(resolved.value, record)) {
-      return request()
+      return fallback()
     }
     void persistResourceCache(
       [
@@ -547,12 +557,13 @@ async function requestCachedSingularResource(
       ],
       cacheGeneration,
     )
+    finishCache('ready')
     return {
       status: 'ok',
       body: { ...record, [resourceName]: resolved.value },
     }
   } catch {
-    return request()
+    return fallback()
   }
 }
 
@@ -561,9 +572,14 @@ async function requestCachedCollections(
   requestedName: ServerCollectionName | undefined,
   signal: AbortSignal | null | undefined,
 ): Promise<ServerResourceJsonRequestResult> {
+  const finishCache = beginCacheDiagnostic()
   const generation = captureClientSessionGeneration()
   const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
     requestServerResourceJson(endpoint, signal, options, generation)
+  const fallback = () => {
+    finishCache('failed')
+    return request()
+  }
   const cacheGeneration = captureResourceCacheGeneration()
   const names: readonly ServerCollectionName[] = requestedName ? [requestedName] : SERVER_COLLECTION_NAMES
   const descriptors = names.map((name) => ({
@@ -571,13 +587,17 @@ async function requestCachedCollections(
     key: collectionCacheKey(name, requestedName === undefined),
   }))
   const prepared = await prepareResourceCacheRequest(descriptors)
-  if (!prepared) return request()
+  if (!prepared) {
+    finishCache('unknown')
+    return request()
+  }
 
   const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
+    finishCache(signal?.aborted ? 'cancelled' : 'failed')
     return shouldFallbackToLegacyGet(result) ? request() : result
   }
 
@@ -589,7 +609,7 @@ async function requestCachedCollections(
     !isResourceCacheMetadata(record.cache) ||
     !hasExactCollectionNames(Object.keys(mixedCollections), names)
   ) {
-    return request()
+    return fallback()
   }
 
   try {
@@ -598,13 +618,13 @@ async function requestCachedCollections(
     for (const descriptor of descriptors) {
       const name = descriptor.name as ServerCollectionName
       const snapshot = prepared.snapshots.get(name)
-      if (!snapshot) return request()
+      if (!snapshot) return fallback()
       const sentHashes = prepared.hashes[name] ?? []
       const resolved =
         name === 'pluginCustomStorage'
           ? await resolveResourceCacheValue(mixedCollections[name], snapshot, sentHashes)
           : await resolveResourceCacheArray(mixedCollections[name], snapshot, sentHashes)
-      if (!resolved) return request()
+      if (!resolved) return fallback()
 
       collections[name] = resolved.value as never
       updates.push({
@@ -617,49 +637,59 @@ async function requestCachedCollections(
       readRevisionEnvelope(record) === null ||
       !names.every((name) => isValidCollectionValue(name, collections[name]))
     ) {
-      return request()
+      return fallback()
     }
     void persistResourceCache(updates, cacheGeneration)
+    finishCache('ready')
     return {
       status: 'ok',
       body: { ...record, collections },
     }
   } catch {
-    return request()
+    return fallback()
   }
 }
 
 async function requestCachedCharacters(
   signal: AbortSignal | null | undefined,
 ): Promise<ServerResourceJsonRequestResult> {
+  const finishCache = beginCacheDiagnostic()
   const generation = captureClientSessionGeneration()
   const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
     requestServerResourceJson(CHARACTERS_ENDPOINT, signal, options, generation)
+  const fallback = () => {
+    finishCache('failed')
+    return request()
+  }
   const cacheGeneration = captureResourceCacheGeneration()
   const prepared = await prepareResourceCacheRequest([{ name: 'characters', key: CHARACTERS_CACHE_KEY }])
-  if (!prepared) return request()
+  if (!prepared) {
+    finishCache('unknown')
+    return request()
+  }
 
   const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
+    finishCache(signal?.aborted ? 'cancelled' : 'failed')
     return shouldFallbackToLegacyGet(result) ? request() : result
   }
 
   const record = isPlainRecord(result.body) ? result.body : null
   if (!record || !isResourceCacheMetadata(record.cache)) {
-    return request()
+    return fallback()
   }
   const snapshot = prepared.snapshots.get('characters')
-  if (!snapshot) return request()
+  if (!snapshot) return fallback()
 
   try {
     const resolved = await resolveResourceCacheArray(record.characters, snapshot, prepared.hashes.characters ?? [])
-    if (!resolved) return request()
+    if (!resolved) return fallback()
     const { cache: _cache, ...responsePayload } = record
     const payload = readCharactersSummaryEnvelope({ ...responsePayload, characters: resolved.value })
-    if (!payload) return request()
+    if (!payload) return fallback()
     void persistResourceCache(
       [
         {
@@ -670,12 +700,13 @@ async function requestCachedCharacters(
       ],
       cacheGeneration,
     )
+    finishCache('ready')
     return {
       status: 'ok',
       body: payload,
     }
   } catch {
-    return request()
+    return fallback()
   }
 }
 

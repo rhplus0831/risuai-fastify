@@ -1,5 +1,18 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+const browserEvidence = vi.hoisted(() => ({ entries: [] as Record<string, unknown>[], generation: 0 }))
+vi.mock('./browserDiagnostics', () => ({
+  recordBrowserDiagnostic: (entry: Record<string, unknown>) => browserEvidence.entries.push(entry),
+  resetBrowserDiagnosticsSession: () => {
+    browserEvidence.generation++
+    browserEvidence.entries = []
+  },
+  captureBrowserDiagnosticsGeneration: () => browserEvidence.generation,
+  isBrowserDiagnosticsGenerationCurrent: (generation: number) => generation === browserEvidence.generation,
+}))
+beforeEach(() => {
+  browserEvidence.entries = []
+})
 import {
   authorizeClientWriterRecovery,
   beginClientPromotion,
@@ -1609,6 +1622,10 @@ describe('chat message hydration owner', () => {
       revision: 1,
     })
     await expect(pendingOlder).resolves.toBe(false)
+    expect(browserEvidence.entries).toContainEqual(
+      expect.objectContaining({ stage: 'stale-response', outcome: 'stale-rejected' }),
+    )
+    expect(JSON.stringify(browserEvidence.entries)).not.toMatch(/older overlap|newer overlap|chat-1|m1-old/)
 
     const messages = db().characters[0].chats[0].message as Message[]
     expect(isServerChatMessagePlaceholder(messages[1])).toBe(true)
@@ -1885,6 +1902,10 @@ describe('isChatMessageHydrationPending', () => {
       expect(isChatMessageHydrationPending('chat-1', 0)).toBe(false)
       expect(hasChatMessageHydrationFailed('chat-1', 0)).toBe(true)
       expect(warn).toHaveBeenCalledWith('chat chat-1 hydration failed: boom')
+      expect(browserEvidence.entries).toContainEqual(
+        expect.objectContaining({ stage: 'hydration', outcome: 'failed', durationMs: expect.any(Number) }),
+      )
+      expect(JSON.stringify(browserEvidence.entries)).not.toContain('boom')
 
       const retry = deferred<ReturnType<typeof okResult>>()
       projectionState.fetchChat.mockReturnValueOnce(retry.promise)
@@ -1920,6 +1941,24 @@ describe('isChatMessageHydrationPending', () => {
       warn.mockRestore()
     }
   })
+
+  it.each(['ready', 'failed'] as const)(
+    'discards late %s hydration evidence after the browser session resets',
+    async (outcome) => {
+      const response = deferred<ReturnType<typeof okResult> | { status: 'error'; error: string }>()
+      projectionState.fetchChat.mockReturnValueOnce(response.promise)
+      const hydration = hydrateActiveChat()
+      expect(browserEvidence.entries).toContainEqual(
+        expect.objectContaining({ stage: 'hydration', outcome: 'pending' }),
+      )
+      resetChatHydration()
+      browserEvidence.generation++
+      browserEvidence.entries = []
+      response.resolve(outcome === 'ready' ? okResult('chat-1', []) : { status: 'error', error: 'OLD_SESSION_CANARY' })
+      await hydration
+      expect(browserEvidence.entries).toEqual([])
+    },
+  )
 
   it('is never pending when messages are already present', () => {
     expect(isChatMessageHydrationPending('chat-1', 3)).toBe(false)

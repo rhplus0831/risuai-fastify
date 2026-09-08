@@ -1,3 +1,4 @@
+import { beginCacheDiagnostic } from './protocolDiagnostics'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import {
   captureClientSessionGeneration,
@@ -570,30 +571,40 @@ async function requestCacheNegotiatedHydrationJson(
     prepared: PreparedResourceCacheRequest,
   ) => Promise<ReconstructedHydrationCacheResponse | null>,
 ): Promise<HydrationJsonRequestResult> {
+  const finishCache = beginCacheDiagnostic()
   const generation = captureClientSessionGeneration()
   const cacheGeneration = captureResourceCacheGeneration()
   const auth = await getNodeServerProxyAuth()
   const request = (options: { method?: 'GET' | 'POST'; body?: unknown } = {}) =>
     requestHydrationJson(url, auth, signal, options, generation)
+  const fallback = () => {
+    finishCache('failed')
+    return request()
+  }
   const prepared = await prepareResourceCacheRequest(descriptors)
-  if (!prepared) return request()
+  if (!prepared) {
+    finishCache('unknown')
+    return request()
+  }
 
   const result = await request({
     method: 'POST',
     body: resourceCacheRequestBody(prepared.hashes),
   })
   if (result.status !== 'ok') {
+    finishCache(signal?.aborted ? 'cancelled' : 'failed')
     return shouldFallbackHydrationCachePost(result) ? request() : result
   }
 
-  if (!isRecord(result.body)) return request()
+  if (!isRecord(result.body)) return fallback()
   try {
     const reconstructed = await reconstruct(result.body, prepared)
-    if (!reconstructed) return request()
+    if (!reconstructed) return fallback()
     void persistResourceCache(reconstructed.updates, cacheGeneration)
+    finishCache('ready')
     return { status: 'ok', body: reconstructed.body }
   } catch {
-    return request()
+    return fallback()
   }
 }
 

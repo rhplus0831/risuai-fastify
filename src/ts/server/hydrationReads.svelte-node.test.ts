@@ -1,6 +1,17 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
 
+const browserEvidence = vi.hoisted(() => ({ entries: [] as Record<string, unknown>[], generation: 0 }))
+vi.mock('./browserDiagnostics', () => ({
+  recordBrowserDiagnostic: (entry: Record<string, unknown>) => browserEvidence.entries.push(entry),
+  resetBrowserDiagnosticsSession: () => {
+    browserEvidence.generation++
+    browserEvidence.entries = []
+  },
+  captureBrowserDiagnosticsGeneration: () => browserEvidence.generation,
+  isBrowserDiagnosticsGenerationCurrent: (generation: number) => generation === browserEvidence.generation,
+}))
+
 vi.mock('../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'resource-auth-token',
 }))
@@ -65,10 +76,36 @@ function parsedCallUrl(call: CapturedFetch): URL {
 }
 
 afterEach(() => {
+  browserEvidence.entries = []
   vi.unstubAllGlobals()
 })
 
 describe('server hydration read clients', () => {
+  it('discards a late cache result from the previous browser diagnostics session', async () => {
+    vi.stubGlobal('indexedDB', new IDBFactory())
+    await clearResourceCache()
+    let resolve!: (response: Response) => void
+    const response = new Promise<Response>((done) => {
+      resolve = done
+    })
+    const fetch = vi.fn(() => response)
+    vi.stubGlobal('fetch', fetch)
+    const request = fetchServerLegacyPreset('private-preset-canary')
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(1))
+    browserEvidence.generation++
+    browserEvidence.entries = []
+    resolve(
+      jsonResponse({
+        revision: 1,
+        cache: { version: 2, algorithm: 'sha256' },
+        preset: { id: 'private-preset-canary', name: 'Private preset', prompt: 'PRIVATE_PROMPT_CANARY' },
+      }),
+    )
+    await expect(request).resolves.toMatchObject({ status: 'ok' })
+    await flushResourceCacheMaintenanceForTests()
+    expect(browserEvidence.entries).toEqual([])
+  })
+
   it('fetches legacy preset detail through the resource endpoint', async () => {
     const controller = new AbortController()
     const responses = [

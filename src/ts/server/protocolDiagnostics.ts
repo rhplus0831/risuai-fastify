@@ -1,4 +1,9 @@
 import { recordClientDiagnostic } from '../diagnostics'
+import {
+  captureBrowserDiagnosticsGeneration,
+  isBrowserDiagnosticsGenerationCurrent,
+  recordBrowserDiagnostic,
+} from './browserDiagnostics'
 
 type HydrationKind = 'chat' | 'characterLorebook'
 
@@ -148,7 +153,13 @@ export function recordBulkHydration(kind: HydrationKind, idCount: number): void 
   debugProtocol('bulk-hydration', { kind, idCount })
 }
 
-export function beginHydrationRequest(kind: HydrationKind): () => void {
+export function beginHydrationRequest(
+  kind: HydrationKind,
+  generation = captureBrowserDiagnosticsGeneration(),
+): (outcome?: 'ready' | 'failed' | 'cancelled') => void {
+  const startedAt = performance.now()
+  if (isBrowserDiagnosticsGenerationCurrent(generation))
+    recordBrowserDiagnostic({ category: 'browser', level: 'info', stage: 'hydration', outcome: 'pending' })
   const target = diagnostics.hydration[kind]
   target.requestsStarted += 1
   target.activeRequests += 1
@@ -160,17 +171,50 @@ export function beginHydrationRequest(kind: HydrationKind): () => void {
     maxConcurrentRequests: target.maxConcurrentRequests,
   })
   let ended = false
-  return () => {
+  return (outcome = 'failed') => {
     if (ended) return
     ended = true
     target.activeRequests = Math.max(0, target.activeRequests - 1)
+    if (isBrowserDiagnosticsGenerationCurrent(generation)) {
+      recordBrowserDiagnostic({
+        category: 'browser',
+        level: outcome === 'failed' ? 'warn' : 'info',
+        stage: 'hydration',
+        outcome,
+        durationMs: Math.min(86_400_000, Math.max(0, performance.now() - startedAt)),
+      })
+    }
     debugProtocol('hydration-end', { kind, activeRequests: target.activeRequests })
   }
 }
 
-export function recordHydrationStaleDrop(kind: HydrationKind, reason: string): void {
+export function recordHydrationStaleDrop(
+  kind: HydrationKind,
+  reason: string,
+  generation = captureBrowserDiagnosticsGeneration(),
+): void {
   diagnostics.hydration[kind].staleResponseDrops += 1
+  if (isBrowserDiagnosticsGenerationCurrent(generation))
+    recordBrowserDiagnostic({ category: 'browser', level: 'warn', stage: 'stale-response', outcome: 'stale-rejected' })
   debugProtocol('hydration-stale-drop', { kind, reason })
+}
+
+/** Cache negotiation/storage failures remain optional and never disclose cache keys or hashes. */
+export function beginCacheDiagnostic(): (outcome: 'ready' | 'failed' | 'cancelled' | 'unknown') => void {
+  const generation = captureBrowserDiagnosticsGeneration()
+  const startedAt = performance.now()
+  let finished = false
+  return (outcome) => {
+    if (finished || !isBrowserDiagnosticsGenerationCurrent(generation)) return
+    finished = true
+    recordBrowserDiagnostic({
+      category: 'browser',
+      level: outcome === 'failed' ? 'warn' : 'info',
+      stage: 'cache',
+      outcome,
+      durationMs: Math.min(86_400_000, Math.max(0, performance.now() - startedAt)),
+    })
+  }
 }
 
 /**

@@ -1,6 +1,16 @@
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureJsonWork } from '../__tests__/browserWorkProbe'
+const browserEvidence = vi.hoisted(() => ({ entries: [] as Record<string, unknown>[], generation: 0 }))
+vi.mock('./browserDiagnostics', () => ({
+  recordBrowserDiagnostic: (entry: Record<string, unknown>) => browserEvidence.entries.push(entry),
+  resetBrowserDiagnosticsSession: () => {
+    browserEvidence.generation++
+    browserEvidence.entries = []
+  },
+  captureBrowserDiagnosticsGeneration: () => browserEvidence.generation,
+  isBrowserDiagnosticsGenerationCurrent: (generation: number) => generation === browserEvidence.generation,
+}))
 
 import {
   acceptPendingMutationLocalProjectionToken,
@@ -67,6 +77,7 @@ function settingsIntent(value: string): DurableMutationIntent {
 }
 
 beforeEach(async () => {
+  browserEvidence.entries = []
   vi.stubGlobal('indexedDB', new IDBFactory())
   resetPendingMutationOutboxForTests()
   resetPersistenceActivityForTests()
@@ -420,6 +431,32 @@ describe('pending mutation outbox', () => {
     await expect(countPendingMutationRecords()).resolves.toBe(0)
   })
 
+  it('reports durable queue count and age without decrypting contents or changing the staged row', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
+    const handle = stagePendingMutation('settings:private-canary', settingsIntent('PRIVATE_CREDENTIAL_CANARY'))
+    await expect(handle.ready).resolves.toBe('persisted')
+    await countPendingMutationRecords()
+    expect(browserEvidence.entries).toContainEqual(
+      expect.objectContaining({ stage: 'queue', queuedCount: 1, queueAgeMs: 0 }),
+    )
+    const rowBefore = await readRawMutation(handle.mutationId)
+    clock.mockReturnValue(1_700_000_012_000)
+    browserEvidence.generation++
+    await countPendingMutationRecords()
+    expect(browserEvidence.entries).toContainEqual(
+      expect.objectContaining({ stage: 'queue', outcome: 'pending', queuedCount: 1, queueAgeMs: 12_000 }),
+    )
+    expect(await readRawMutation(handle.mutationId)).toEqual(rowBefore)
+    clock.mockReturnValue(1_700_000_000_000 + 2 * 86_400_000)
+    browserEvidence.generation++
+    await countPendingMutationRecords()
+    expect(browserEvidence.entries.at(-1)).toMatchObject({ queueAgeMs: 86_400_000 })
+    expect(JSON.stringify(browserEvidence.entries)).not.toMatch(
+      /PRIVATE_CREDENTIAL_CANARY|private-canary|writer-a|database-a|mutationId|ciphertext/,
+    )
+    clock.mockRestore()
+  })
+
   it('retains and counts subtle-key intents when subtle becomes unavailable', async () => {
     const handle = stagePendingMutation('settings:runtime', settingsIntent('subtle-key-retained'))
     await expect(handle.ready).resolves.toBe('persisted')
@@ -485,11 +522,13 @@ describe('pending mutation outbox', () => {
   })
 
   it('atomically replaces an unstarted staged payload under a fresh mutation id', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
     const first = stagePendingMutation('settings:runtime', settingsIntent('first'))
     await first.ready
     const remoteReady = deferred<'persisted'>()
     const remoteHandle = { ...(await listPendingMutations())[0]!.handle, ready: remoteReady.promise }
     const remoteBegin = beginPendingMutationDispatch(remoteHandle)
+    clock.mockReturnValue(1_700_000_005_000)
     const latest = stagePendingMutation('settings:runtime', settingsIntent('latest'), first)
 
     expect(latest.mutationId).not.toBe(first.mutationId)
@@ -502,6 +541,10 @@ describe('pending mutation outbox', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]?.intent).toEqual(settingsIntent('latest'))
     expect(entries[0]?.handle.sequence).toBe(latest.sequence)
+    expect(await readRawMutation(latest.mutationId)).toMatchObject({
+      queuedAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+    })
   })
 
   it('keeps both fresh-id generations when another tab marks the predecessor first', async () => {
@@ -679,6 +722,7 @@ describe('pending mutation outbox', () => {
   })
 
   it('exactly replaces an unstarted placeholder without changing its id or durable order', async () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
     const placeholder = stagePendingMutation('settings:runtime', settingsIntent('fallback'))
     await placeholder.ready
     const staleReady = deferred<'persisted'>()
@@ -686,6 +730,7 @@ describe('pending mutation outbox', () => {
     const staleBegin = beginPendingMutationDispatch(staleReplayHandle)
     const before = await readRawMutation(placeholder.mutationId)
 
+    clock.mockReturnValue(1_700_000_005_000)
     const replacement = await replaceStagedPendingMutationIntent(placeholder, settingsIntent('exact'))
     expect(replacement.status).toBe('replaced')
     if (replacement.status !== 'replaced') throw new Error('Expected an exact replacement')
@@ -693,7 +738,12 @@ describe('pending mutation outbox', () => {
 
     expect(exact.mutationId).toBe(placeholder.mutationId)
     expect(exact.sequence).not.toBe(placeholder.sequence)
-    expect(await readRawMutation(exact.mutationId)).toMatchObject({ order: before?.order, dispatchStarted: false })
+    expect(await readRawMutation(exact.mutationId)).toMatchObject({
+      order: before?.order,
+      dispatchStarted: false,
+      queuedAt: 1_700_000_000_000,
+      updatedAt: 1_700_000_005_000,
+    })
     expect((await listPendingMutations()).map((entry) => entry.intent)).toEqual([settingsIntent('exact')])
     staleReady.resolve('persisted')
     await expect(staleBegin).resolves.toBe('superseded')

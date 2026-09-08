@@ -1,4 +1,12 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
+// The shared setup imports startup readiness, which already imports this session.
+vi.hoisted(() => vi.resetModules())
+import { recordBrowserDiagnostic, resetBrowserDiagnosticsSession } from './server/browserDiagnostics'
+
+vi.mock('./server/browserDiagnostics', () => ({
+  recordBrowserDiagnostic: vi.fn(),
+  resetBrowserDiagnosticsSession: vi.fn(),
+}))
 import {
   authorizeClientWriterRecovery,
   authenticateClientSessionReadView,
@@ -48,8 +56,48 @@ function becomeWriter() {
 }
 
 afterEach(resetClientSessionForTests)
+afterEach(() => {
+  vi.mocked(recordBrowserDiagnostic).mockReset()
+  vi.mocked(resetBrowserDiagnosticsSession).mockReset()
+})
 
 describe('connected client session authority', () => {
+  it('records only role and reconnect facts through real reader, promotion and interruption transitions', () => {
+    becomeReader()
+    const promotion = beginClientPromotion()!
+    authorizeClientWriterRecovery(promotion, ownership('client-a', 2))
+    expect(completeClientWriterRecovery(promotion)).toBe(true)
+    setClientConnectionState('interrupted')
+    setClientConnectionState('connecting')
+    setClientConnectionState('live')
+    const events = vi.mocked(recordBrowserDiagnostic).mock.calls.map(([entry]) => entry)
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ stage: 'ownership', outcome: 'reader' }),
+        expect.objectContaining({ stage: 'ownership', outcome: 'writer' }),
+        expect.objectContaining({ stage: 'reconnect', outcome: 'offline', durationMs: expect.any(Number) }),
+        expect.objectContaining({ stage: 'reconnect', outcome: 'online', durationMs: expect.any(Number) }),
+      ]),
+    )
+    expect(JSON.stringify(events)).not.toMatch(/client-a|client-b|lineage-a|sessionId|databaseLineage|writerEpoch/)
+    expect(resetBrowserDiagnosticsSession).not.toHaveBeenCalled()
+    requireClientAuthentication()
+    expect(resetBrowserDiagnosticsSession).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps authority changes independent of diagnostic failures and clears a replaced session', () => {
+    becomeReader()
+    vi.mocked(recordBrowserDiagnostic).mockImplementationOnce(() => {
+      throw new Error('diagnostic failure')
+    })
+    const promotion = beginClientPromotion()!
+    authorizeClientWriterRecovery(promotion, ownership('client-a', 2))
+    expect(completeClientWriterRecovery(promotion)).toBe(true)
+    expect(canUseClientWriteAccess()).toBe(true)
+    beginClientSession('new-private-session')
+    expect(resetBrowserDiagnosticsSession).toHaveBeenCalledTimes(1)
+    expect(canUseClientWriteAccess()).toBe(false)
+  })
   it.each([null, 'client-a'])(
     'keeps the coherent shell separate from reader content during automatic startup (owner=%s)',
     (owner) => {

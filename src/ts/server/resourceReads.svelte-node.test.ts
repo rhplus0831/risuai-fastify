@@ -1,5 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { IDBFactory } from 'fake-indexeddb'
+const browserEvidence = vi.hoisted(() => ({ entries: [] as Record<string, unknown>[], generation: 0 }))
+vi.mock('./browserDiagnostics', () => ({
+  recordBrowserDiagnostic: (entry: Record<string, unknown>) => browserEvidence.entries.push(entry),
+  resetBrowserDiagnosticsSession: () => {
+    browserEvidence.generation++
+    browserEvidence.entries = []
+  },
+  captureBrowserDiagnosticsGeneration: () => browserEvidence.generation,
+  isBrowserDiagnosticsGenerationCurrent: (generation: number) => generation === browserEvidence.generation,
+}))
 
 const observerProjectionLifecycle = vi.hoisted(() => ({
   discard: vi.fn(async () => undefined),
@@ -161,6 +171,7 @@ function shellEnvelope(revision: number) {
 }
 
 afterEach(() => {
+  browserEvidence.entries = []
   observerProjectionLifecycle.discard.mockClear()
   vi.unstubAllGlobals()
 })
@@ -541,6 +552,10 @@ describe('server resource read clients', () => {
     await expect(fetchServerCollections()).resolves.toMatchObject({ status: 'ok', revision: 8 })
     expect(calls).toHaveLength(1)
     expect(calls[0]?.method).toBe('GET')
+    expect(browserEvidence.entries).toContainEqual(
+      expect.objectContaining({ stage: 'cache', outcome: 'failed', durationMs: expect.any(Number) }),
+    )
+    expect(JSON.stringify(browserEvidence.entries)).not.toMatch(/IndexedDB disabled|resource-auth-token|collections/)
   })
 
   it('falls back to full GETs when cache POST envelopes are malformed', async () => {

@@ -31,6 +31,7 @@ import {
 } from './hydrationReads'
 import { canUseServerResourceReads } from './resourceReads'
 import { beginHydrationRequest, recordBulkHydration, recordHydrationStaleDrop } from './protocolDiagnostics'
+import { captureBrowserDiagnosticsGeneration } from './browserDiagnostics'
 import { DEFAULT_CHAT_LOAD_INITIAL_PAGES, getInitialChatLoadPages } from '@risuai/shared-core/chat-load-pages'
 import { setChatStructureHydrationHooks } from './chatStructureHydrationHooks'
 import {
@@ -546,6 +547,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
   failedChatIds.delete(chatId)
 
   const generation = chatHydrationGeneration
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
   const baselineRevision = peekCachedServerCommandRevision()
   const freshness = beginChatHydrationFreshness(chatId, {
     trackRerollState: request.seedReroll !== false,
@@ -555,14 +557,25 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
   let requestPromise: Promise<boolean>
   requestPromise = (async (): Promise<boolean> => {
     try {
-      const endRequest = beginHydrationRequest('chat')
+      const endRequest = beginHydrationRequest('chat', diagnosticGeneration)
       const read = request.generationMessageId
         ? fetchServerGenerationChatMessages(chatId, request.generationMessageId, { signal: request.signal })
         : fetchServerChatMessages(chatId, {
             ...(request.range ?? {}),
             ...(request.signal ? { signal: request.signal } : {}),
           })
-      const settled = await awaitUntilAborted(read, request.signal).finally(endRequest)
+      const settled = await awaitUntilAborted(read, request.signal)
+        .then((settled) => {
+          endRequest(
+            settled.status === 'aborted' || request.signal?.aborted
+              ? 'cancelled'
+              : settled.value.status === 'ok'
+                ? 'ready'
+                : 'failed',
+          )
+          return settled
+        })
+        .finally(endRequest)
       if (settled.status === 'aborted' || request.signal?.aborted) {
         shouldMarkAttempted = false
         return false
@@ -573,6 +586,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         recordHydrationStaleDrop(
           'chat',
           generation !== chatHydrationGeneration ? 'generation-reset' : 'reader-session-changed',
+          diagnosticGeneration,
         )
         return false
       }
@@ -588,13 +602,13 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
       }
       if (isOlderThanBaselineRevision(result.revision, baselineRevision)) {
         shouldMarkAttempted = false
-        recordHydrationStaleDrop('chat', 'older-than-applied-revision')
+        recordHydrationStaleDrop('chat', 'older-than-applied-revision', diagnosticGeneration)
         return false
       }
       const staleReason = chatHydrationStaleReason(chatId, freshness)
       if (staleReason) {
         shouldMarkAttempted = false
-        recordHydrationStaleDrop('chat', staleReason)
+        recordHydrationStaleDrop('chat', staleReason, diagnosticGeneration)
         return false
       }
       if (
@@ -617,7 +631,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         (!range || rangedHydrationOverlapsResidentMessages(chatId, range, result.message.length, request.reader))
       ) {
         shouldMarkAttempted = false
-        recordHydrationStaleDrop('chat', 'newer-overlapping-range')
+        recordHydrationStaleDrop('chat', 'newer-overlapping-range', diagnosticGeneration)
         return false
       }
       const applied = hydrateServerChatMessages(chatId, result.message, result.hypaV3Data, range, {
@@ -654,6 +668,7 @@ async function hydrateChat(chatId: string, request: ChatHydrationRequest = {}): 
         recordHydrationStaleDrop(
           'chat',
           generation !== chatHydrationGeneration ? 'generation-reset' : 'reader-session-changed',
+          diagnosticGeneration,
         )
         return false
       }
@@ -679,14 +694,20 @@ async function hydrateChatsBulk(chatIds: readonly string[], options: BulkHydrati
   if (!canUseServerResourceReads() || chatIds.length === 0) return
 
   const generation = chatHydrationGeneration
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
   const freshnessByChat = new Map(
     chatIds.map((chatId) => [chatId, beginChatHydrationFreshness(chatId, { trackRerollState: true })]),
   )
   try {
     for (const batch of bulkHydrationBatches(chatIds)) {
       const baselineRevision = peekCachedServerCommandRevision()
-      const endRequest = beginHydrationRequest('chat')
-      const result = await fetchServerBulkChatMessages(batch).finally(endRequest)
+      const endRequest = beginHydrationRequest('chat', diagnosticGeneration)
+      const result = await fetchServerBulkChatMessages(batch)
+        .then((result) => {
+          endRequest(result.status === 'ok' ? 'ready' : 'failed')
+          return result
+        })
+        .finally(endRequest)
       if (result.status !== 'ok') {
         const message = resultError(result, 'server projection unavailable')
         hydrationWarning('bulk chat', message)
@@ -694,12 +715,12 @@ async function hydrateChatsBulk(chatIds: readonly string[], options: BulkHydrati
         continue
       }
       if (generation !== chatHydrationGeneration) {
-        recordHydrationStaleDrop('chat', 'generation-reset')
+        recordHydrationStaleDrop('chat', 'generation-reset', diagnosticGeneration)
         if (options.strict) throw new Error('Bulk chat hydration result was stale after a reset')
         return
       }
       if (isOlderThanBaselineRevision(result.revision, baselineRevision)) {
-        recordHydrationStaleDrop('chat', 'older-than-applied-revision')
+        recordHydrationStaleDrop('chat', 'older-than-applied-revision', diagnosticGeneration)
         if (options.strict) throw new Error('Bulk chat hydration result was older than local state')
         continue
       }
@@ -719,7 +740,7 @@ async function hydrateChatsBulk(chatIds: readonly string[], options: BulkHydrati
         const freshness = freshnessByChat.get(chatId)
         const staleReason = freshness ? chatHydrationStaleReason(chatId, freshness) : 'missing-freshness-token'
         if (staleReason) {
-          recordHydrationStaleDrop('chat', staleReason)
+          recordHydrationStaleDrop('chat', staleReason, diagnosticGeneration)
           missingIds.push(chatId)
           continue
         }
@@ -1021,11 +1042,12 @@ export async function reconcileAcceptedSendCompletion(
     return { status: 'not_reconciled', reason: 'target_missing' }
   }
 
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
   const baselineRevision = peekCachedServerCommandRevision()
   const projectionEpoch = captureChatBodyProjectionEpoch(chatId)
   const freshness = beginChatHydrationFreshness(chatId, { trackRerollState: true })
   try {
-    const endRequest = beginHydrationRequest('chat')
+    const endRequest = beginHydrationRequest('chat', diagnosticGeneration)
     let fetched: Awaited<ReturnType<typeof fetchServerGenerationChatMessages>>
     try {
       const settled = await awaitUntilAborted(
@@ -1033,9 +1055,11 @@ export async function reconcileAcceptedSendCompletion(
         options.signal,
       )
       if (settled.status === 'aborted') {
+        endRequest('cancelled')
         return { status: 'not_reconciled', reason: 'authority_unavailable' }
       }
       fetched = settled.value
+      endRequest(fetched.status === 'ok' ? 'ready' : 'failed')
     } finally {
       endRequest()
     }
@@ -1051,14 +1075,14 @@ export async function reconcileAcceptedSendCompletion(
     const staleReason = chatHydrationStaleReason(chatId, freshness)
     const newerAuthoritativeProjection = hasNewerChatBodyResourceRevision(chatId, fetched.revision)
     if (projectionChanged || staleReason || newerAuthoritativeProjection) {
-      recordHydrationStaleDrop('chat', staleReason ?? 'newer-targeted-chat-projection')
+      recordHydrationStaleDrop('chat', staleReason ?? 'newer-targeted-chat-projection', diagnosticGeneration)
       if (newerAuthoritativeProjection && residentHasAcceptedSendReply(target, messageId, options)) {
         return { status: 'reconciled', source: 'newer_resident_projection' }
       }
       return { status: 'not_reconciled', reason: 'superseded' }
     }
     if (isOlderThanBaselineRevision(fetched.revision, baselineRevision)) {
-      recordHydrationStaleDrop('chat', 'older-than-applied-revision')
+      recordHydrationStaleDrop('chat', 'older-than-applied-revision', diagnosticGeneration)
       return { status: 'not_reconciled', reason: 'older_revision' }
     }
 
@@ -1230,13 +1254,19 @@ async function hydrateCharacterLorebook(characterId: string, force: boolean): Pr
 
   beginCharacterLorebookHydrationState(characterId)
   const generation = charLorebookHydrationGeneration
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
   const baselineRevision = peekCachedServerCommandRevision()
   const projectionEpoch = captureCharacterLorebookBodyProjectionEpoch(characterId)
   let request: Promise<void>
   request = (async () => {
     try {
-      const endRequest = beginHydrationRequest('characterLorebook')
-      const result = await fetchServerCharacterLorebook(characterId).finally(endRequest)
+      const endRequest = beginHydrationRequest('characterLorebook', diagnosticGeneration)
+      const result = await fetchServerCharacterLorebook(characterId)
+        .then((result) => {
+          endRequest(result.status === 'ok' ? 'ready' : 'failed')
+          return result
+        })
+        .finally(endRequest)
       if (result.status !== 'ok') {
         hydrationWarning(`character lorebook ${characterId}`, resultError(result, 'server projection unavailable'))
         return
@@ -1246,15 +1276,15 @@ async function hydrateCharacterLorebook(characterId: string, force: boolean): Pr
         return
       }
       if (generation !== charLorebookHydrationGeneration) {
-        recordHydrationStaleDrop('characterLorebook', 'generation-reset')
+        recordHydrationStaleDrop('characterLorebook', 'generation-reset', diagnosticGeneration)
         return
       }
       if (isOlderThanBaselineRevision(result.revision, baselineRevision)) {
-        recordHydrationStaleDrop('characterLorebook', 'older-than-applied-revision')
+        recordHydrationStaleDrop('characterLorebook', 'older-than-applied-revision', diagnosticGeneration)
         return
       }
       if (hasCharacterLorebookBodyProjectionEpochChanged(characterId, projectionEpoch)) {
-        recordHydrationStaleDrop('characterLorebook', 'newer-character-lorebook-body-projection')
+        recordHydrationStaleDrop('characterLorebook', 'newer-character-lorebook-body-projection', diagnosticGeneration)
         return
       }
 
@@ -1288,6 +1318,7 @@ async function hydrateCharacterLorebooksBulk(
   }
 
   const generation = charLorebookHydrationGeneration
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
   for (const characterId of characterIds) {
     beginCharacterLorebookHydrationState(characterId)
   }
@@ -1296,8 +1327,13 @@ async function hydrateCharacterLorebooksBulk(
   )
   for (const batch of bulkHydrationBatches(characterIds)) {
     const baselineRevision = peekCachedServerCommandRevision()
-    const endRequest = beginHydrationRequest('characterLorebook')
-    const result = await fetchServerBulkCharacterLorebooks(batch).finally(endRequest)
+    const endRequest = beginHydrationRequest('characterLorebook', diagnosticGeneration)
+    const result = await fetchServerBulkCharacterLorebooks(batch)
+      .then((result) => {
+        endRequest(result.status === 'ok' ? 'ready' : 'failed')
+        return result
+      })
+      .finally(endRequest)
     if (result.status !== 'ok') {
       const message = resultError(result, 'server projection unavailable')
       hydrationWarning('bulk character lorebook', message)
@@ -1308,14 +1344,14 @@ async function hydrateCharacterLorebooksBulk(
       continue
     }
     if (generation !== charLorebookHydrationGeneration) {
-      recordHydrationStaleDrop('characterLorebook', 'generation-reset')
+      recordHydrationStaleDrop('characterLorebook', 'generation-reset', diagnosticGeneration)
       if (options.strict) {
         throw new Error('Bulk character lorebook hydration result was stale after a reset')
       }
       return
     }
     if (isOlderThanBaselineRevision(result.revision, baselineRevision)) {
-      recordHydrationStaleDrop('characterLorebook', 'older-than-applied-revision')
+      recordHydrationStaleDrop('characterLorebook', 'older-than-applied-revision', diagnosticGeneration)
       for (const characterId of batch) {
         finishCharacterLorebookHydrationState(characterId, generation)
       }
@@ -1344,7 +1380,7 @@ async function hydrateCharacterLorebooksBulk(
         projectionEpoch === undefined ||
         hasCharacterLorebookBodyProjectionEpochChanged(characterId, projectionEpoch)
       ) {
-        recordHydrationStaleDrop('characterLorebook', 'newer-character-lorebook-body-projection')
+        recordHydrationStaleDrop('characterLorebook', 'newer-character-lorebook-body-projection', diagnosticGeneration)
         finishCharacterLorebookHydrationState(characterId, generation)
         continue
       }

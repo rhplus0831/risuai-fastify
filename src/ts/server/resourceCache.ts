@@ -1,3 +1,5 @@
+import { beginCacheDiagnostic } from './protocolDiagnostics'
+
 export const RESOURCE_CACHE_VERSION = 2 as const
 export const RESOURCE_CACHE_ALGORITHM = 'sha256' as const
 export const RESOURCE_CACHE_MAX_REQUEST_HASHES = 8_192
@@ -461,6 +463,7 @@ async function openResourceCacheDatabase(generation: number): Promise<IDBDatabas
   )
     return null
   if (resourceCacheDatabasePromise) return resourceCacheDatabasePromise
+  const finishCache = beginCacheDiagnostic()
 
   const operation = new Promise<IDBDatabase | null>((resolve) => {
     let abandoned = false
@@ -468,6 +471,7 @@ async function openResourceCacheDatabase(generation: number): Promise<IDBDatabas
     try {
       request = globalThis.indexedDB.open(RESOURCE_CACHE_DATABASE, RESOURCE_CACHE_DATABASE_VERSION)
     } catch {
+      finishCache('failed')
       resolve(null)
       return
     }
@@ -499,9 +503,13 @@ async function openResourceCacheDatabase(generation: number): Promise<IDBDatabas
       }
       resolve(database)
     }
-    request.onerror = () => resolve(null)
+    request.onerror = () => {
+      finishCache('failed')
+      resolve(null)
+    }
     request.onblocked = () => {
       abandoned = true
+      finishCache('failed')
       resolve(null)
     }
   })

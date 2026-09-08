@@ -1,4 +1,5 @@
 import { writable } from 'svelte/store'
+import { recordBrowserDiagnostic, resetBrowserDiagnosticsSession } from './server/browserDiagnostics'
 
 export type ClientSessionLifecycle =
   | 'resolving'
@@ -58,6 +59,7 @@ let activeOperation: ClientSessionOperation | null = null
 // A coherent shell can precede automatic acquisition. Keep that preview separate
 // from an actual reading/writing disposition, including across interrupted recovery.
 let initialRoleResolved = false
+let connectionStartedAt = 0
 const stateStore = writable(state)
 const writerLossHandlers = new Set<() => void>()
 
@@ -133,6 +135,7 @@ export function registerClientWriterLossHandler(handler: () => void): () => void
 }
 
 function publish(next: ClientSessionSnapshot): void {
+  const previous = state
   if (!next.authenticated || next.sessionId !== state.sessionId || next.databaseLineage !== state.databaseLineage) {
     initialRoleResolved = false
   }
@@ -149,7 +152,51 @@ function publish(next: ClientSessionSnapshot): void {
       }
     }
   }
+  try {
+    if (
+      (previous.authenticated && !next.authenticated) ||
+      (previous.sessionId !== null && previous.sessionId !== next.sessionId) ||
+      (previous.databaseLineage !== null && previous.databaseLineage !== next.databaseLineage)
+    )
+      resetBrowserDiagnosticsSession()
+  } catch {
+    // Diagnostic cleanup must not prevent authority subscribers from running.
+  }
   stateStore.set(state)
+  try {
+    if (state !== next) return
+    if (!next.managed) return
+    const now = performance.now()
+    if (previous.sessionId !== next.sessionId || (previous.connection === 'live' && next.connection !== 'live')) {
+      connectionStartedAt = now
+    }
+    if (previous.lifecycle !== next.lifecycle || !previous.managed) {
+      recordBrowserDiagnostic({
+        category: 'browser',
+        level: next.lifecycle === 'auth-required' ? 'warn' : 'info',
+        stage: 'ownership',
+        outcome:
+          next.lifecycle === 'reading'
+            ? 'reader'
+            : next.lifecycle === 'writing'
+              ? 'writer'
+              : next.lifecycle === 'auth-required'
+                ? 'failed'
+                : 'pending',
+      })
+    }
+    if (previous.connection !== next.connection) {
+      recordBrowserDiagnostic({
+        category: 'browser',
+        level: next.connection === 'interrupted' ? 'warn' : 'info',
+        stage: 'reconnect',
+        outcome: next.connection === 'live' ? 'online' : next.connection === 'interrupted' ? 'offline' : 'pending',
+        durationMs: Math.min(86_400_000, Math.max(0, now - connectionStartedAt)),
+      })
+    }
+  } catch {
+    // Diagnostics cannot affect authority or state subscribers.
+  }
 }
 
 function beginOperation(kind: ClientSessionOperation['kind'], next: ClientSessionSnapshot): ClientSessionOperation {
@@ -371,6 +418,7 @@ export function requireClientAuthentication(): void {
 export function resetClientSessionForTests(): void {
   activeOperation = null
   initialRoleResolved = false
+  connectionStartedAt = 0
   writerLossHandlers.clear()
   state = initialState
   stateStore.set(state)
