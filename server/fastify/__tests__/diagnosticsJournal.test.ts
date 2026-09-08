@@ -129,7 +129,10 @@ describe('bounded diagnostics journal', () => {
       {
         cwd: fileURLToPath(new URL('../../../', import.meta.url)),
         env: { PATH: process.env.PATH, TEST_DIAGNOSTICS_DIRECTORY: directory },
-        timeout: 3000,
+        // This envelope includes a cold Node/tsx launch competing with the
+        // aggregate suite's worker forks. Journal deadlines are independently
+        // tested below; this case proves awaited completion and process exit.
+        timeout: 10_000,
         maxBuffer: 4096,
       },
     )
