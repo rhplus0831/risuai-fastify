@@ -72,6 +72,7 @@ export interface GenerationFinalizationRetryReceipt {
 export interface PendingGenerationFinalizationRetry {
   attempt: GenerationFinalizationAttempt
   replayability: 'replayable' | 'legacy_snapshot_missing'
+  createdAt: string
   failureCount: number
   nextAttemptAt: string
 }
@@ -437,6 +438,7 @@ export function listPendingGenerationFinalizationRetries(
             : {}),
         },
         replayability: legacySnapshotMissing ? ('legacy_snapshot_missing' as const) : ('replayable' as const),
+        createdAt: row.created_at,
         failureCount: row.failure_count,
         nextAttemptAt,
       }

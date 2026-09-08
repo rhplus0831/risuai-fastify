@@ -113,6 +113,7 @@ import type { GenerationJobRegistry } from '../generationJobs.js'
 import { isStreamDeadlineActivityFrame, type JobClient, type StreamJob } from '../streamJobs.js'
 import { getWritableBufferedBytes, writeBoundedRaw } from '../streamBackpressure.js'
 import { emitProtocolMetric, protocolDurationMs, protocolMetricsEnabled, protocolNowMs } from '../protocolMetrics.js'
+import { diagnosticsContextEnabled, recordDiagnosticEvent, runWithDiagnosticContext } from '../diagnosticContext.js'
 import {
   DEFAULT_GENERATION_TRACE_MAX_GZIP_BYTES,
   generationTraceSidecarMetricField,
@@ -455,6 +456,13 @@ function dispatchProviderWithPolicies(
         }
         let iterable: AsyncIterable<CompletionStreamFrame> | null | undefined
         attemptContext.beforeProviderDispatch?.()
+        recordDiagnosticEvent({
+          category: 'generation',
+          level: 'info',
+          stage: 'dispatch',
+          outcome: 'pending',
+          providerMayHaveRun: true,
+        })
         try {
           iterable = await dispatcher(attemptContext)
         } catch (error) {
@@ -1043,7 +1051,14 @@ async function assemblePromptWithMetrics(
     promptMemoryPrefetchMs: 0,
     stageTimingsMs: {},
   }
-  const metricStartedAt = protocolMetricsEnabled() ? protocolNowMs() : 0
+  const metricStartedAt = protocolNowMs()
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: 'info',
+    stage: 'assembly',
+    outcome: 'pending',
+    providerMayHaveRun: false,
+  })
   const startedAt = Date.now()
   const deps = loadDatabaseDeps(dataDir, db, input, measurement, signal, agentPresetProgress)
   deps.onPromptMemoryJobEnqueued = options.onPromptMemoryJobEnqueued
@@ -1073,6 +1088,7 @@ async function assemblePromptWithMetrics(
       result.state?.promptMemoryChunkPlanningDiagnostics?.attempted === true
         ? Math.max(0, Math.round(measurement.promptMemoryPrefetchMs + (measurement.stageTimingsMs.memory_bridge ?? 0)))
         : 0
+    recordPromptDiagnostic(result, protocolDurationMs(metricStartedAt))
     emitProtocolMetric('generation_prompt_assembly', {
       status: result.stopSending ? 'stopped' : 'ok',
       ...context,
@@ -1089,6 +1105,21 @@ async function assemblePromptWithMetrics(
     })
     return { result, deps, promptMs, stage2Ms }
   } catch (err) {
+    recordDiagnosticEvent({
+      category: 'prompt',
+      level: 'error',
+      outcome: 'error',
+      durationMs: protocolDurationMs(metricStartedAt),
+      truncation: 'unknown',
+    })
+    recordDiagnosticEvent({
+      category: 'generation',
+      level: 'error',
+      stage: 'assembly',
+      outcome: 'failed',
+      providerMayHaveRun: false,
+      durationMs: protocolDurationMs(metricStartedAt),
+    })
     emitProtocolMetric('generation_prompt_assembly', {
       status: 'error',
       ...context,
@@ -1103,6 +1134,41 @@ async function assemblePromptWithMetrics(
       error: errorMessage(err, 'prompt assembly failed'),
     })
     throw err
+  }
+}
+
+/** Select structural facts directly; raw prompt summaries also contain content hashes. */
+function recordPromptDiagnostic(result: AssembleResult, durationMs: number): void {
+  if (!diagnosticsContextEnabled()) return
+  try {
+    const rows = result.formated ?? result.prompt?.formated
+    const roles = { system: 0, user: 0, assistant: 0, tool: 0, other: 0 }
+    const media = { image: 0, audio: 0, video: 0, other: 0 }
+    for (const row of rows ?? []) {
+      if (row.role === 'system' || row.role === 'user' || row.role === 'assistant') roles[row.role] += 1
+      else if (row.role === 'function') roles.tool += 1
+      else roles.other += 1
+      for (const modal of row.multimodals ?? []) {
+        if (modal.type === 'image' || modal.type === 'audio' || modal.type === 'video') media[modal.type] += 1
+        else media.other += 1
+      }
+    }
+    recordDiagnosticEvent({
+      category: 'prompt',
+      level: result.stopSending ? 'warn' : 'info',
+      outcome: result.stopSending ? 'stopped' : 'ok',
+      durationMs,
+      ...(rows ? { rows: rows.length, roles, media } : {}),
+      inputTokens: result.inputTokens,
+      budgetTokens: result.state?.database.maxContext,
+      truncation: result.state ? (result.state.historyTruncated === true ? 'applied' : 'none') : 'unknown',
+      selectedMemoryCount:
+        result.state?.bardWikiPromptDiagnostics?.selectedCount ??
+        result.state?.promptMemoryRowAssemblyDiagnostics?.inputSummaries,
+      loreEntryCount: result.state?.report?.actives.length,
+    })
+  } catch {
+    // Shape inspection must never affect prompt assembly or expose a text fallback.
   }
 }
 
@@ -1156,6 +1222,13 @@ function preflightChatGenerationSettings(
 ): AssemblyPreflightResult {
   const result = inspectChatGenerationSettings(input, dataDir, db)
   if (result.status === 'rejected') {
+    recordDiagnosticEvent({
+      category: 'generation',
+      level: 'warn',
+      stage: 'accepted',
+      outcome: 'rejected',
+      providerMayHaveRun: false,
+    })
     reply.code(result.statusCode).send(result.body)
     return { status: 'handled' }
   }
@@ -1169,6 +1242,15 @@ export function preflightGenerationOperationSettings(
   db: DatabaseSync,
 ): { status: 'ready' } | { status: 'rejected'; statusCode: number; body: unknown } {
   const result = inspectChatGenerationSettings(input, dataDir, db)
+  if (result.status === 'rejected') {
+    recordDiagnosticEvent({
+      category: 'generation',
+      level: 'warn',
+      stage: 'accepted',
+      outcome: 'rejected',
+      providerMayHaveRun: false,
+    })
+  }
   return result.status === 'rejected' ? result : { status: 'ready' }
 }
 
@@ -1812,6 +1894,17 @@ function persistAssemblyMutations(args: {
       hasLocalLoreWrite,
       durationMs: protocolDurationMs(persistStartedAt),
     })
+    recordDiagnosticEvent({
+      category: 'persistence',
+      level: 'info',
+      phase: 'assembly',
+      disposition: 'committed',
+      durationMs: protocolDurationMs(persistStartedAt),
+      authoritativeCommitted: true,
+      ...(typeof args.input.expectedRevision === 'number'
+        ? { revisionGap: Math.max(0, baseRevision - args.input.expectedRevision) }
+        : {}),
+    })
     const messageMutations: AssembleMutationPayload['messageMutations'] = replacement
       ? [
           {
@@ -1857,6 +1950,15 @@ function persistAssemblyMutations(args: {
       hasLocalLoreWrite,
       durationMs: protocolDurationMs(persistStartedAt),
       error: errorMessage(err, 'failed to persist assembly mutations'),
+    })
+    recordDiagnosticEvent({
+      category: 'persistence',
+      level: 'error',
+      phase: 'assembly',
+      disposition: 'failed',
+      durationMs: protocolDurationMs(persistStartedAt),
+      authoritativeCommitted: false,
+      contention: sqliteContention(err),
     })
     throw err
   }
@@ -2472,6 +2574,14 @@ async function buildPostGenerationFrame(args: {
   generationTrace?: GenerationTraceOptions
   metricContext?: PromptAssemblyMetricContext
 }): Promise<ProviderPostGenerationResult | undefined> {
+  const diagnosticStartedAt = protocolNowMs()
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: 'info',
+    stage: 'post-generation',
+    outcome: 'pending',
+    providerMayHaveRun: true,
+  })
   const completedAt = Date.now()
   const {
     postGen,
@@ -2497,6 +2607,14 @@ async function buildPostGenerationFrame(args: {
     emit: args.emit,
     generationTrace: args.generationTrace,
     metricContext: args.metricContext,
+  })
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: postGenError ? 'warn' : 'info',
+    stage: 'post-generation',
+    outcome: postGenError ? 'failed' : 'completed',
+    providerMayHaveRun: true,
+    durationMs: protocolDurationMs(diagnosticStartedAt),
   })
   const alternateMessages = buildProviderAlternateMessages({
     primaryMessage: message,
@@ -3950,12 +4068,68 @@ function recordConfirmedGenerationFinalizationFailure(args: {
   }
 }
 
+function recordFinalizationDiagnostic(
+  outcome: GenerationFinalizationOutcome,
+  startedAt: number,
+  phase?: 'journal' | 'bookkeeping',
+): void {
+  recordDiagnosticEvent({
+    category: 'persistence',
+    level:
+      outcome.kind === 'persisted'
+        ? outcome.persistence.bookkeepingErrors.length > 0
+          ? 'warn'
+          : 'info'
+        : outcome.kind === 'rejected' || outcome.kind === 'unconfirmed'
+          ? 'error'
+          : 'warn',
+    phase:
+      phase ??
+      (outcome.kind === 'persisted'
+        ? outcome.persistence.bookkeepingErrors.length > 0
+          ? 'bookkeeping'
+          : 'complete'
+        : outcome.kind === 'committed_cleanup_pending'
+          ? 'cleanup'
+          : outcome.kind === 'unconfirmed'
+            ? 'journal'
+            : outcome.bookkeepingError
+              ? 'bookkeeping'
+              : 'authoritative_commit'),
+    disposition:
+      outcome.kind === 'persisted'
+        ? 'committed'
+        : outcome.kind === 'committed_cleanup_pending'
+          ? 'cleanup-pending'
+          : outcome.kind === 'rejected'
+            ? 'terminal'
+            : outcome.kind === 'unconfirmed'
+              ? 'failed'
+              : 'retryable',
+    durationMs: protocolDurationMs(startedAt),
+    journalConfirmed: outcome.journalConfirmed,
+    authoritativeCommitted: outcome.authoritativeCommitted,
+    cleanupComplete: outcome.cleanupComplete,
+    ...('error' in outcome ? { contention: sqliteContention(outcome.error) } : {}),
+  })
+}
+
+function sqliteContention(error: unknown): boolean {
+  // SQLite BUSY/LOCKED are numeric driver facts, never message matching.
+  return !!error && typeof error === 'object' && 'errcode' in error && (error.errcode === 5 || error.errcode === 6)
+}
+
 function persistConfirmedGenerationFinalization(args: {
   db: DatabaseSync
   dataDir: string
   eventSink: CommandEventSink
   attempt: GenerationFinalizationAttempt
 }): Exclude<GenerationFinalizationOutcome, { kind: 'unconfirmed' }> {
+  const diagnosticStartedAt = protocolNowMs()
+  const finish = <T extends Exclude<GenerationFinalizationOutcome, { kind: 'unconfirmed' }>>(outcome: T): T => {
+    recordFinalizationDiagnostic(outcome, diagnosticStartedAt)
+    return outcome
+  }
   let persistence: GenerationFinalizationPersistenceResult
   try {
     persistence = persistGenerationFinalizationAttempt(args)
@@ -3985,35 +4159,35 @@ function persistConfirmedGenerationFinalization(args: {
         })
       }
     }
-    return {
+    return finish({
       kind: isTerminalGenerationFinalizationError(err) ? 'rejected' : 'queued',
       error: err,
       ...(bookkeepingError ? { bookkeepingError } : {}),
       journalConfirmed: true,
       authoritativeCommitted: false,
       cleanupComplete: false,
-    }
+    })
   }
 
   try {
     deleteGenerationFinalizationRetry(args.db, args.attempt.generationId)
   } catch (cleanupError) {
-    return {
+    return finish({
       kind: 'committed_cleanup_pending',
       persistence,
       cleanupError,
       journalConfirmed: true,
       authoritativeCommitted: true,
       cleanupComplete: false,
-    }
+    })
   }
-  return {
+  return finish({
     kind: 'persisted',
     persistence,
     journalConfirmed: true,
     authoritativeCommitted: true,
     cleanupComplete: true,
-  }
+  })
 }
 
 function queueAndPersistGenerationFinalization(args: {
@@ -4022,6 +4196,14 @@ function queueAndPersistGenerationFinalization(args: {
   eventSink: CommandEventSink
   attempt: GenerationFinalizationAttempt
 }): GenerationFinalizationOutcome {
+  const diagnosticStartedAt = protocolNowMs()
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: 'info',
+    stage: 'finalization',
+    outcome: 'pending',
+    providerMayHaveRun: true,
+  })
   try {
     // Shutdown guard an aborted runner's cancel-persist can land
     // after `onClose` closed the SQLite handle (the runner-settle wait covers
@@ -4032,13 +4214,15 @@ function queueAndPersistGenerationFinalization(args: {
     }
     enqueueGenerationFinalizationRetry(args.db, args.attempt)
   } catch (err) {
-    return {
+    const outcome = {
       kind: 'unconfirmed',
       error: err,
       journalConfirmed: false,
       authoritativeCommitted: false,
       cleanupComplete: false,
-    }
+    } as const
+    recordFinalizationDiagnostic(outcome, diagnosticStartedAt, 'journal')
+    return outcome
   }
   if (args.attempt.databaseLineage && args.attempt.operationId && args.attempt.terminalOutcome) {
     try {
@@ -4064,13 +4248,15 @@ function queueAndPersistGenerationFinalization(args: {
         throw new Error('generation operation is not eligible for finalization')
       }
     } catch (err) {
-      return {
+      const outcome = {
         kind: 'queued',
         error: err,
         journalConfirmed: true,
         authoritativeCommitted: false,
         cleanupComplete: false,
-      }
+      } as const
+      recordFinalizationDiagnostic(outcome, diagnosticStartedAt, 'bookkeeping')
+      return outcome
     }
   }
   return persistConfirmedGenerationFinalization(args)
@@ -4101,171 +4287,249 @@ export function retryQueuedGenerationFinalizations(args: {
     baseDelayMs: args.baseDelayMs,
     maxDelayMs: args.maxDelayMs,
   })
+  if (retries.length === 0) return { attempted: 0, persisted: 0, terminal: 0, retryable: 0 }
+  let queueDepth: number | undefined
+  try {
+    queueDepth = (
+      args.db
+        .prepare("SELECT COUNT(*) AS count FROM generation_finalization_retries WHERE status = 'pending'")
+        .get() as { count: number }
+    ).count
+  } catch {
+    // Queue measurement never changes retry selection or execution.
+  }
   let persisted = 0
   let terminal = 0
   let retryable = 0
   for (const retry of retries) {
     const { attempt } = retry
-    const startedAt = protocolNowMs()
-    if (retry.replayability === 'legacy_snapshot_missing') {
-      try {
-        markGenerationFinalizationRetryFailure(
-          args.db,
-          attempt.generationId,
-          GENERATION_FINALIZATION_LEGACY_SNAPSHOT_ERROR,
-          true,
-        )
-        terminal += 1
-        args.logger?.warn(
-          {
-            generationId: attempt.generationId,
-            chatId: attempt.chatId,
-            mode: attempt.mode,
-            phase: 'replay_fence',
-          },
-          'legacy generation finalization retry quarantined without replay',
-        )
-        emitProtocolMetric('generation_persistence_retry', {
-          status: GENERATION_FINALIZATION_LEGACY_SNAPSHOT_ERROR,
-          generationId: attempt.generationId,
-          chatId: attempt.chatId,
-          mode: attempt.mode,
-          phase: 'replay_fence',
-          journalConfirmed: true,
-          authoritativeCommitted: false,
-          durationMs: protocolDurationMs(startedAt),
+    runWithDiagnosticContext(
+      args.db,
+      {
+        databaseLineage: attempt.databaseLineage,
+        operationId: attempt.operationId ?? attempt.generationId,
+        attemptId: attempt.generationId,
+        background: true,
+      },
+      () => {
+        const startedAt = protocolNowMs()
+        recordDiagnosticEvent({
+          category: 'generation',
+          level: 'info',
+          stage: 'recovery',
+          outcome: 'pending',
+          providerMayHaveRun: true,
         })
-      } catch (err) {
-        retryable += 1
-        args.logger?.error(
-          { err, generationId: attempt.generationId, chatId: attempt.chatId, phase: 'bookkeeping' },
-          'failed to quarantine a legacy generation finalization retry',
-        )
-        emitProtocolMetric('generation_persistence_retry', {
-          status: 'bookkeeping_error',
-          generationId: attempt.generationId,
-          chatId: attempt.chatId,
-          phase: 'bookkeeping',
+        const createdAt = Date.parse(retry.createdAt)
+        recordDiagnosticEvent({
+          category: 'persistence',
+          level: 'info',
+          phase: 'journal',
+          disposition: 'queued',
+          durationMs: 0,
           journalConfirmed: true,
-          authoritativeCommitted: false,
-          durationMs: protocolDurationMs(startedAt),
-          error: errorMessage(err, 'failed to quarantine a legacy generation finalization retry'),
+          retryCount: retry.failureCount,
+          queueDepth,
+          ...(Number.isFinite(createdAt)
+            ? { queueAgeMs: Math.min(86_400_000, Math.max(0, Date.now() - createdAt)) }
+            : {}),
         })
-      }
-      continue
-    }
+        if (retry.replayability === 'legacy_snapshot_missing') {
+          try {
+            markGenerationFinalizationRetryFailure(
+              args.db,
+              attempt.generationId,
+              GENERATION_FINALIZATION_LEGACY_SNAPSHOT_ERROR,
+              true,
+            )
+            terminal += 1
+            recordDiagnosticEvent({
+              category: 'persistence',
+              level: 'error',
+              phase: 'replay_fence',
+              disposition: 'terminal',
+              durationMs: protocolDurationMs(startedAt),
+              journalConfirmed: true,
+              authoritativeCommitted: false,
+              cleanupComplete: false,
+              retryCount: retry.failureCount,
+            })
+            args.logger?.warn(
+              {
+                generationId: attempt.generationId,
+                chatId: attempt.chatId,
+                mode: attempt.mode,
+                phase: 'replay_fence',
+              },
+              'legacy generation finalization retry quarantined without replay',
+            )
+            emitProtocolMetric('generation_persistence_retry', {
+              status: GENERATION_FINALIZATION_LEGACY_SNAPSHOT_ERROR,
+              generationId: attempt.generationId,
+              chatId: attempt.chatId,
+              mode: attempt.mode,
+              phase: 'replay_fence',
+              journalConfirmed: true,
+              authoritativeCommitted: false,
+              durationMs: protocolDurationMs(startedAt),
+            })
+          } catch (err) {
+            retryable += 1
+            recordDiagnosticEvent({
+              category: 'persistence',
+              level: 'warn',
+              phase: 'bookkeeping',
+              disposition: 'retryable',
+              durationMs: protocolDurationMs(startedAt),
+              journalConfirmed: true,
+              authoritativeCommitted: false,
+              cleanupComplete: false,
+              retryCount: retry.failureCount,
+            })
+            args.logger?.error(
+              { err, generationId: attempt.generationId, chatId: attempt.chatId, phase: 'bookkeeping' },
+              'failed to quarantine a legacy generation finalization retry',
+            )
+            emitProtocolMetric('generation_persistence_retry', {
+              status: 'bookkeeping_error',
+              generationId: attempt.generationId,
+              chatId: attempt.chatId,
+              phase: 'bookkeeping',
+              journalConfirmed: true,
+              authoritativeCommitted: false,
+              durationMs: protocolDurationMs(startedAt),
+              error: errorMessage(err, 'failed to quarantine a legacy generation finalization retry'),
+            })
+          }
+          return
+        }
 
-    const outcome = persistConfirmedGenerationFinalization({
-      db: args.db,
-      dataDir: args.dataDir,
-      eventSink: args.eventSink,
-      attempt,
-    })
-    if (outcome.kind === 'persisted' || outcome.kind === 'committed_cleanup_pending') {
-      const { persistence } = outcome
-      persisted += 1
-      if (persistence.bardWikiJobEnqueued) args.onBardWikiJobEnqueued?.(persistence.bardWikiJobEnqueued)
-      void handlePersistedGenerationCompletion({
-        db: args.db,
-        dataDir: args.dataDir,
-        eventSink: args.eventSink,
-        messageTranslationJobs: args.messageTranslationJobs,
-        message: attempt.message,
-        targetMessageId: attempt.targetMessageId,
-        chatId: attempt.chatId,
-        generationId: attempt.generationId,
-        completedAt: Date.now(),
-        pushNotifications: args.pushNotifications,
-        runMessageTranslation: args.runMessageTranslation,
-      }).catch(() => {
-        // Persistence already succeeded; follow-up translation/notification is best-effort.
-      })
-      emitProtocolMetric('generation_persistence_retry', {
-        status:
-          outcome.kind === 'committed_cleanup_pending'
-            ? 'cleanup_pending'
-            : persistence.bookkeepingErrors.length > 0
-              ? 'bookkeeping_error'
-              : 'persisted',
-        generationId: attempt.generationId,
-        chatId: attempt.chatId,
-        revision: persistence.revision,
-        phase:
-          outcome.kind === 'committed_cleanup_pending'
-            ? 'cleanup'
-            : persistence.bookkeepingErrors.length > 0
-              ? 'bookkeeping'
-              : 'complete',
-        journalConfirmed: true,
-        authoritativeCommitted: true,
-        cleanupComplete: outcome.cleanupComplete,
-        durationMs: protocolDurationMs(startedAt),
-        ...(outcome.kind === 'committed_cleanup_pending'
-          ? { cleanupError: errorMessage(outcome.cleanupError, 'failed to clean up the finalization journal') }
-          : {}),
-        ...(persistence.bookkeepingErrors.length > 0 ? { bookkeepingErrors: persistence.bookkeepingErrors } : {}),
-        ...droppedGenerationScriptMutationMetricFields(persistence),
-      })
-      if (persistence.droppedScriptMutations.length > 0) {
-        args.logger?.warn(
-          {
+        const outcome = persistConfirmedGenerationFinalization({
+          db: args.db,
+          dataDir: args.dataDir,
+          eventSink: args.eventSink,
+          attempt,
+        })
+        if (outcome.kind === 'persisted' || outcome.kind === 'committed_cleanup_pending') {
+          const { persistence } = outcome
+          persisted += 1
+          recordDiagnosticEvent({
+            category: 'persistence',
+            level: 'info',
+            phase: 'complete',
+            disposition: 'recovered',
+            durationMs: protocolDurationMs(startedAt),
+            journalConfirmed: true,
+            authoritativeCommitted: true,
+            cleanupComplete: outcome.cleanupComplete,
+            retryCount: retry.failureCount,
+          })
+          if (persistence.bardWikiJobEnqueued) args.onBardWikiJobEnqueued?.(persistence.bardWikiJobEnqueued)
+          void handlePersistedGenerationCompletion({
+            db: args.db,
+            dataDir: args.dataDir,
+            eventSink: args.eventSink,
+            messageTranslationJobs: args.messageTranslationJobs,
+            message: attempt.message,
+            targetMessageId: attempt.targetMessageId,
+            chatId: attempt.chatId,
+            generationId: attempt.generationId,
+            completedAt: Date.now(),
+            pushNotifications: args.pushNotifications,
+            runMessageTranslation: args.runMessageTranslation,
+          }).catch(() => {
+            // Persistence already succeeded; follow-up translation/notification is best-effort.
+          })
+          emitProtocolMetric('generation_persistence_retry', {
+            status:
+              outcome.kind === 'committed_cleanup_pending'
+                ? 'cleanup_pending'
+                : persistence.bookkeepingErrors.length > 0
+                  ? 'bookkeeping_error'
+                  : 'persisted',
             generationId: attempt.generationId,
             chatId: attempt.chatId,
-            droppedScriptMutations: persistence.droppedScriptMutations,
-          },
-          'generation finalization retry dropped stale script mutations',
-        )
-      }
-      if (outcome.kind === 'committed_cleanup_pending') {
-        args.logger?.warn(
-          {
-            err: outcome.cleanupError,
+            revision: persistence.revision,
+            phase:
+              outcome.kind === 'committed_cleanup_pending'
+                ? 'cleanup'
+                : persistence.bookkeepingErrors.length > 0
+                  ? 'bookkeeping'
+                  : 'complete',
+            journalConfirmed: true,
+            authoritativeCommitted: true,
+            cleanupComplete: outcome.cleanupComplete,
+            durationMs: protocolDurationMs(startedAt),
+            ...(outcome.kind === 'committed_cleanup_pending'
+              ? { cleanupError: errorMessage(outcome.cleanupError, 'failed to clean up the finalization journal') }
+              : {}),
+            ...(persistence.bookkeepingErrors.length > 0 ? { bookkeepingErrors: persistence.bookkeepingErrors } : {}),
+            ...droppedGenerationScriptMutationMetricFields(persistence),
+          })
+          if (persistence.droppedScriptMutations.length > 0) {
+            args.logger?.warn(
+              {
+                generationId: attempt.generationId,
+                chatId: attempt.chatId,
+                droppedScriptMutations: persistence.droppedScriptMutations,
+              },
+              'generation finalization retry dropped stale script mutations',
+            )
+          }
+          if (outcome.kind === 'committed_cleanup_pending') {
+            args.logger?.warn(
+              {
+                err: outcome.cleanupError,
+                generationId: attempt.generationId,
+                chatId: attempt.chatId,
+                phase: 'cleanup',
+              },
+              'generation finalization committed but journal cleanup remains pending',
+            )
+          }
+        } else {
+          if (outcome.kind === 'rejected') {
+            terminal += 1
+            args.logger?.warn(
+              {
+                err: outcome.error,
+                generationId: attempt.generationId,
+                chatId: attempt.chatId,
+                ...(outcome.bookkeepingError ? { bookkeepingError: outcome.bookkeepingError } : {}),
+              },
+              'generation finalization retry reached a terminal failure',
+            )
+          } else {
+            retryable += 1
+            args.logger?.warn(
+              {
+                err: outcome.error,
+                generationId: attempt.generationId,
+                chatId: attempt.chatId,
+                ...(outcome.bookkeepingError ? { bookkeepingError: outcome.bookkeepingError } : {}),
+              },
+              'generation finalization retry failed; it remains queued',
+            )
+          }
+          emitProtocolMetric('generation_persistence_retry', {
+            status: outcome.kind === 'rejected' ? 'terminal_error' : 'retryable_error',
             generationId: attempt.generationId,
             chatId: attempt.chatId,
-            phase: 'cleanup',
-          },
-          'generation finalization committed but journal cleanup remains pending',
-        )
-      }
-    } else {
-      if (outcome.kind === 'rejected') {
-        terminal += 1
-        args.logger?.warn(
-          {
-            err: outcome.error,
-            generationId: attempt.generationId,
-            chatId: attempt.chatId,
-            ...(outcome.bookkeepingError ? { bookkeepingError: outcome.bookkeepingError } : {}),
-          },
-          'generation finalization retry reached a terminal failure',
-        )
-      } else {
-        retryable += 1
-        args.logger?.warn(
-          {
-            err: outcome.error,
-            generationId: attempt.generationId,
-            chatId: attempt.chatId,
-            ...(outcome.bookkeepingError ? { bookkeepingError: outcome.bookkeepingError } : {}),
-          },
-          'generation finalization retry failed; it remains queued',
-        )
-      }
-      emitProtocolMetric('generation_persistence_retry', {
-        status: outcome.kind === 'rejected' ? 'terminal_error' : 'retryable_error',
-        generationId: attempt.generationId,
-        chatId: attempt.chatId,
-        phase: outcome.bookkeepingError ? 'bookkeeping' : 'authoritative_commit',
-        journalConfirmed: true,
-        authoritativeCommitted: false,
-        cleanupComplete: false,
-        durationMs: protocolDurationMs(startedAt),
-        error: errorMessage(outcome.error, 'failed to persist the generation result'),
-        ...(outcome.bookkeepingError
-          ? { bookkeepingError: errorMessage(outcome.bookkeepingError, 'failed to update finalization retry state') }
-          : {}),
-      })
-    }
+            phase: outcome.bookkeepingError ? 'bookkeeping' : 'authoritative_commit',
+            journalConfirmed: true,
+            authoritativeCommitted: false,
+            cleanupComplete: false,
+            durationMs: protocolDurationMs(startedAt),
+            error: errorMessage(outcome.error, 'failed to persist the generation result'),
+            ...(outcome.bookkeepingError
+              ? {
+                  bookkeepingError: errorMessage(outcome.bookkeepingError, 'failed to update finalization retry state'),
+                }
+              : {}),
+          })
+        }
+      },
+    )
   }
   return { attempted: retries.length, persisted, terminal, retryable }
 }
@@ -4285,20 +4549,30 @@ export async function retryPendingGenerationCompletionEffects(args: {
       (candidate) => candidate.chatId === effect.messageId,
     ) as unknown as Message | undefined
     if (!message || message.role !== 'char') continue
-    await handlePersistedGenerationCompletion({
-      db: args.db,
-      dataDir: args.dataDir,
-      eventSink: args.eventSink,
-      messageTranslationJobs: args.messageTranslationJobs,
-      message,
-      targetMessageId: effect.messageId,
-      chatId: effect.chatId,
-      characterId: effect.characterId,
-      completedAt: Date.now(),
-      pushNotifications: false,
-      runMessageTranslation: args.runMessageTranslation,
-      generationId: effect.generationId,
-    })
+    await runWithDiagnosticContext(
+      args.db,
+      {
+        databaseLineage: effect.databaseLineage,
+        operationId: effect.operationId ?? effect.generationId,
+        attemptId: effect.generationId,
+        background: true,
+      },
+      () =>
+        handlePersistedGenerationCompletion({
+          db: args.db,
+          dataDir: args.dataDir,
+          eventSink: args.eventSink,
+          messageTranslationJobs: args.messageTranslationJobs,
+          message,
+          targetMessageId: effect.messageId,
+          chatId: effect.chatId,
+          characterId: effect.characterId,
+          completedAt: Date.now(),
+          pushNotifications: false,
+          runMessageTranslation: args.runMessageTranslation,
+          generationId: effect.generationId,
+        }),
+    )
     settled += 1
   }
   return settled
@@ -4341,6 +4615,14 @@ async function buildDurablePostGeneration(args: {
   generationTrace?: GenerationTraceOptions
   metricContext?: PromptAssemblyMetricContext
 }): Promise<ProviderPostGenerationResult | undefined> {
+  const diagnosticStartedAt = protocolNowMs()
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: 'info',
+    stage: 'post-generation',
+    outcome: 'pending',
+    providerMayHaveRun: true,
+  })
   const completedAt = Date.now()
   const operationLineage = generationOperationLineageForJob(args.job)
   if (operationLineage) {
@@ -4377,6 +4659,14 @@ async function buildDurablePostGeneration(args: {
     emit: args.emit,
     generationTrace: args.generationTrace,
     metricContext: args.metricContext,
+  })
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: postGenError ? 'warn' : 'info',
+    stage: 'post-generation',
+    outcome: postGenError ? 'failed' : 'completed',
+    providerMayHaveRun: true,
+    durationMs: protocolDurationMs(diagnosticStartedAt),
   })
   const alternateMessages = buildProviderAlternateMessages({
     primaryMessage: message,
@@ -4935,10 +5225,35 @@ async function runGenerationJob(args: {
     deferredFailure,
     metricContext = {},
   } = args
+  const diagnosticStartedAt = protocolNowMs()
+  let providerMayHaveRun = false
+  recordDiagnosticEvent({
+    category: 'generation',
+    level: 'info',
+    stage: 'accepted',
+    outcome: 'pending',
+    providerMayHaveRun: false,
+  })
   let lastTerminalError: string | undefined
   const emit = (event: PromptChatEvent): void => {
     if (event.type === 'error') lastTerminalError = event.error
     if (event.type === 'done') {
+      recordDiagnosticEvent({
+        category: 'generation',
+        level: lastTerminalError ? 'warn' : 'info',
+        stage: event.outcome === 'cancelled' ? 'cancellation' : 'complete',
+        outcome:
+          event.outcome === 'cancelled'
+            ? 'cancelled'
+            : lastTerminalError
+              ? providerMayHaveRun
+                ? 'ambiguous'
+                : 'failed'
+              : 'completed',
+        providerMayHaveRun,
+        durationMs: protocolDurationMs(diagnosticStartedAt),
+        ...(event.outcome === 'cancelled' ? { cancellationOrigin: 'unknown' } : {}),
+      })
       settleGenerationOperationWithoutResult({
         db,
         job,
@@ -5148,6 +5463,7 @@ async function runGenerationJob(args: {
                         assertGenerationOperationTargetCurrent(db, job)
                         const operation = markGenerationOperationProviderDispatchStarted(db, operationLineage)
                         updateJobOperationProjection(job, operation)
+                        providerMayHaveRun = true
                       },
                     }
                   : {}),
@@ -5540,27 +5856,38 @@ export function launchGenerationOperation(args: LaunchGenerationOperationArgs): 
 
     args.attachInitialViewer?.(job)
     args.generationJobs.trackRunner(
-      runGenerationJob({
-        registry: args.generationJobs,
-        job,
-        db: args.db,
-        input: args.input,
-        dataDir: args.dataDir,
-        eventSink: args.eventSink,
-        clientCapabilities: args.clientCapabilities,
-        options: args.options,
-        generationTrace: args.generationTrace,
-        messageTranslationJobs: args.messageTranslationJobs,
-        preparedAssembly: args.preparedAssembly,
-        deferredFailure: args.deferredFailure,
-        metricContext: {
-          ...args.metricContext,
-          generationId: job.id,
-          durableJobId: job.id,
+      runWithDiagnosticContext(
+        args.db,
+        {
+          databaseLineage: job.databaseLineage,
+          requestUid: typeof args.metricContext.requestUid === 'string' ? args.metricContext.requestUid : undefined,
           operationId: job.operationId,
-          operationAttemptNo: job.attemptNo,
+          attemptId: job.id,
+          background: false,
         },
-      }),
+        () =>
+          runGenerationJob({
+            registry: args.generationJobs,
+            job,
+            db: args.db,
+            input: args.input,
+            dataDir: args.dataDir,
+            eventSink: args.eventSink,
+            clientCapabilities: args.clientCapabilities,
+            options: args.options,
+            generationTrace: args.generationTrace,
+            messageTranslationJobs: args.messageTranslationJobs,
+            preparedAssembly: args.preparedAssembly,
+            deferredFailure: args.deferredFailure,
+            metricContext: {
+              ...args.metricContext,
+              generationId: job.id,
+              durableJobId: job.id,
+              operationId: job.operationId,
+              operationAttemptNo: job.attemptNo,
+            },
+          }),
+      ),
     )
     args.options.onDurableLifecycleTransition?.('runner_tracked', job)
     return owned.operation

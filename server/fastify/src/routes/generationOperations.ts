@@ -60,6 +60,7 @@ import {
 } from './generationChat.js'
 import type { GenerationTraceOptions } from '../generation/generationTraceSidecar.js'
 import { findUncommittedGenerationFinalizationForChat } from '../generationFinalizationRetry.js'
+import { readRequestTraceUid } from '../requestTrace.js'
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
@@ -546,6 +547,7 @@ function launchCommittedOperation(args: {
       messageTranslationJobs: args.dependencies.messageTranslationJobs,
       metricContext: {
         requestId: String(args.req.id),
+        requestUid: readRequestTraceUid(args.req),
         chatId: input.chatId,
         characterId: input.characterId,
         mode: input.mode,
