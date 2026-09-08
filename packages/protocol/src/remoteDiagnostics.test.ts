@@ -55,6 +55,12 @@ describe('remote diagnostics finite protocol', () => {
       '/api/v1/diagnostics/browser',
       '/api/v1/diagnostics/%',
       '/api/v1/%73upport/diagnostics',
+      '/api/v1/%73upport/diagnostics%CANARY',
+      '/api/v1/%64iagnostics/browser%CANARY',
+      '/api/v1/%64iagnostics/%E0%A4%A',
+      '/api/v1/%64iagnostics%',
+      '/api/v1/%73upport%',
+      '/api/v1/%73upport%E0%A4',
     ]) {
       expect(isDiagnosticTransportUrl(url)).toBe(true)
     }

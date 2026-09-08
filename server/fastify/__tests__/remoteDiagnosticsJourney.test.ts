@@ -396,6 +396,15 @@ it('diagnoses a real provider disconnect and failed commit through the HTTPS hel
     expect(failedCommit.entry.requestUid).toBe(providerFailure!.entry.requestUid)
 
     const rejected = [
+      ...[
+        '/api/v1/diagnostics/%',
+        '/api/v1/%64iagnostics/browser%',
+        '/api/v1/%73upport/diagnostics%',
+        '/api/v1/%73upport%',
+      ].map((prefix) => ({
+        url: `${prefix}${encodeURIComponent(canaries.rejected)}?private=${encodeURIComponent(canaries.rejected)}`,
+        headers: { authorization: `Bearer ${supportConfig.token}`, 'x-private': canaries.rejected },
+      })),
       {
         url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?raw=${encodeURIComponent(canaries.rejected)}`,
         headers: { authorization: `Bearer ${supportConfig.token}`, 'x-private': canaries.rejected },
@@ -426,6 +435,9 @@ it('diagnoses a real provider disconnect and failed commit through the HTTPS hel
       expect(response.headers['cache-control']).toBe('no-store')
       assertNoEncodedCanaries(response.body, secrets)
     }
+    const unrelatedBadUrl = await current.app.inject('/ordinary/%')
+    expect(unrelatedBadUrl.statusCode).toBe(400)
+    expect(unrelatedBadUrl.json()).toMatchObject({ error: 'Bad Request', code: 'FST_ERR_BAD_URL', statusCode: 400 })
     const invalidArguments = await runHelper([`--raw=${canaries.rejected}`])
     expect(invalidArguments).toEqual({ code: 1, stdout: '', stderr: 'invalid-query\n' })
     const invalidConfig = path.join(privateDir, 'invalid-remote.json')
