@@ -234,7 +234,7 @@ export function observeProviderStream(
             ? iterator.return(value as void)
             : iterator.throw(value),
       )
-      if (next.done) {
+      if (next.done === true) {
         attempt.terminal(
           method === 'return' ? 'cancelled' : attempt.dispatchedAt === undefined ? 'unknown-error' : 'disconnected',
         )
