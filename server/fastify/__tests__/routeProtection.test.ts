@@ -131,6 +131,7 @@ describe('route protection (table-wide auth enforcement)', () => {
       'auth-setup:auth-session',
       'auth-login:auth-session',
       'auth-crypto:stateless-helper',
+      'browser-diagnostics-upload:stateless-helper',
       'startup-telemetry:stateless-helper',
       'settings-cache-read:read-only-post',
       'settings-group-cache-read:read-only-post',

@@ -140,6 +140,17 @@ export const PROTOCOL_ROUTE_POLICIES = [
     },
   },
   {
+    id: 'browser-diagnostics-upload',
+    auth: {
+      decision: 'required',
+      reason: 'Only ordinary authenticated browsers may submit sanitized browser diagnostics.',
+    },
+    activeWriter: {
+      decision: 'stateless-helper',
+      reason: 'Writes bounded operational telemetry without changing authoritative user state or writer ownership.',
+    },
+  },
+  {
     id: 'startup-telemetry',
     auth: {
       decision: 'required',

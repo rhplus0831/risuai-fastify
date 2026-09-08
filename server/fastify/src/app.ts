@@ -105,7 +105,12 @@ import {
   transitionGenerationOperation,
 } from './generationOperations.js'
 import { reconcileGenerationEffectsAtStartup } from './generationEffects.js'
-import { isDiagnosticTransportUrl, SUPPORT_DIAGNOSTICS_ENDPOINT } from '@risuai/protocol/remote-diagnostics'
+import {
+  isDiagnosticTransportUrl,
+  SUPPORT_DIAGNOSTICS_ENDPOINT,
+  BROWSER_DIAGNOSTICS_ENDPOINT,
+} from '@risuai/protocol/remote-diagnostics'
+import { registerBrowserDiagnosticsRoutes } from './routes/browserDiagnostics.js'
 import { registerRemoteDiagnosticsRoutes } from './remoteDiagnostics.js'
 import { createDiagnosticsRuntime } from './diagnosticsRuntime.js'
 
@@ -199,6 +204,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     if (!isDiagnosticTransportUrl(request.url)) return
     reply.header('cache-control', 'no-store')
     const pathname = request.url.split('?')[0]
+    if (request.method === 'POST' && pathname === BROWSER_DIAGNOSTICS_ENDPOINT) return
     if (request.method !== 'GET' || !['/api/v1/diagnostics', SUPPORT_DIAGNOSTICS_ENDPOINT].includes(pathname)) {
       return reply.code(404).send({ error: 'invalid-query' })
     }
@@ -446,12 +452,23 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     messageTranslationJobRegistry,
     greetingTranslationJobRegistry,
     diagnostics.enabled,
+    diagnosticsRuntime.browserEnabled,
   )
   registerActiveWriterGuard(app, activeWriterState)
-  registerClientDiagnosticsRoutes(app, authState, diagnostics)
-  registerRemoteDiagnosticsRoutes(app, diagnosticsRuntime.source, config.supportDiagnostics ?? { enabled: false }, {
+  const diagnosticIdentity = {
     instanceId: diagnosticInstanceId,
     build: /^[a-f0-9]{40,64}$/.test(process.env.RISU_BUILD_ID ?? '') ? process.env.RISU_BUILD_ID! : 'unknown',
+  }
+  registerClientDiagnosticsRoutes(app, authState, diagnostics, diagnosticsRuntime.source, diagnosticIdentity)
+  registerRemoteDiagnosticsRoutes(
+    app,
+    diagnosticsRuntime.source,
+    config.supportDiagnostics ?? { enabled: false },
+    diagnosticIdentity,
+  )
+  registerBrowserDiagnosticsRoutes(app, authState, {
+    enabled: diagnosticsRuntime.browserEnabled,
+    ingest: diagnosticsRuntime.ingestBrowser,
   })
   registerStartupTelemetryRoutes(app, authState)
   registerResourceReadRoutes(app, db, authState, config.dataDir)

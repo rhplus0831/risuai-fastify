@@ -13,7 +13,7 @@ type Owner = {
 
 const CLOSED_STRING_VOCABULARIES = {
   'server/fastify/src/routeManifest.ts': {
-    ProtocolRouteAuthDecision: ['conditional', 'public', 'required'],
+    ProtocolRouteAuthDecision: ['conditional', 'diagnostics-read', 'public', 'required'],
     ProtocolRouteActiveWriterDecision: [
       'active-writer',
       'auth-session',
@@ -107,6 +107,11 @@ const PROPERTY_VOCABULARIES = {
 } as const
 
 const RATE_LIMIT_OWNERS: Record<string, Owner> = {
+  supportDiagnosticsRateLimit: rateOwner('server/fastify/src/remoteDiagnostics.ts', 'supportDiagnosticsRateLimit'),
+  browserDiagnosticsRateLimit: rateOwner(
+    'server/fastify/src/routes/browserDiagnostics.ts',
+    'browserDiagnosticsRateLimit',
+  ),
   authSetupRateLimit: rateOwner('server/fastify/src/routes/auth.ts', 'authSetupRateLimit'),
   authLoginRateLimit: rateOwner('server/fastify/src/routes/auth.ts', 'authLoginRateLimit'),
   authCryptoRateLimit: rateOwner('server/fastify/src/routes/legacyStorage.ts', 'authCryptoRateLimit'),

@@ -7,6 +7,11 @@ export const supportDiagnosticsRateLimit: RateLimitOptions = {
   timeWindow: MINUTE,
 }
 
+export const browserDiagnosticsRateLimit: RateLimitOptions = {
+  max: 60,
+  timeWindow: MINUTE,
+}
+
 export const authSetupRateLimit: RateLimitOptions = {
   max: 5,
   timeWindow: MINUTE,

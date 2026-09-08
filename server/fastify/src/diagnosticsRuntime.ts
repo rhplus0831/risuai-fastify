@@ -5,6 +5,9 @@ import type { FastifyInstance } from 'fastify'
 import {
   promoteRemoteDiagnosticRecord,
   projectDiagnosticEventV2,
+  isBrowserDiagnosticsBatch,
+  type BrowserDiagnosticsBatch,
+  type BrowserDiagnosticsUploadResponse,
   type DiagnosticEventV2,
 } from '@risuai/protocol/remote-diagnostics'
 import type { AppConfig } from './config.js'
@@ -31,10 +34,18 @@ export function createDiagnosticsRuntime(
   collector: ClientDiagnostics,
   instanceId: string,
 ) {
-  const enabled = collector.enabled && config.supportDiagnostics?.enabled === true
+  const browserEnabled = collector.enabled && config.browserDiagnostics?.enabled === true
+  const enabled = collector.enabled && (config.supportDiagnostics?.enabled === true || browserEnabled)
   if (!enabled) {
     const source = createVolatileRemoteDiagnostics(collector, instanceId)
-    return { source, ready: Promise.resolve(), close: async () => {}, journal: undefined }
+    return {
+      source,
+      ready: Promise.resolve(),
+      close: async () => {},
+      journal: undefined,
+      browserEnabled: false,
+      ingestBrowser: (_batch: BrowserDiagnosticsBatch): BrowserDiagnosticsUploadResponse | null => null,
+    }
   }
   const directory = path.join(config.dataDir, 'diagnostics')
   let lineage = getDatabaseLineage(db)
@@ -72,6 +83,12 @@ export function createDiagnosticsRuntime(
       startup.length = 0
       startupDropped = 0
       journal.reset(current)
+      recordDiagnosticEventForDatabase(db, {
+        category: 'deployment',
+        stage: 'history-reset',
+        flags: flags(),
+        journal: 'starting',
+      })
     }
     return current
   }
@@ -80,7 +97,7 @@ export function createDiagnosticsRuntime(
     rawMetrics: protocolMetricsEnabled(),
     rawTrace: Boolean(config.requestTrace),
     fullPrompt: config.generationTrace?.fullPrompt === true,
-    browserUpload: false,
+    browserUpload: browserEnabled,
   })
   // Register before synchronous startup recovery. Only the bounded telemetry
   // queue waits for the key; commands/generation/recovery keep running.
@@ -167,6 +184,7 @@ export function createDiagnosticsRuntime(
         ...snapshot,
         source: keyReady ? snapshot.source : 'unavailable',
         operationContinuity,
+        browserSupported: browserEnabled,
         dropped: Math.min(Number.MAX_SAFE_INTEGER, snapshot.dropped + startupDropped),
         pending: Math.min(256, (snapshot.pending ?? 0) + startup.length),
       }
@@ -176,6 +194,31 @@ export function createDiagnosticsRuntime(
     source,
     ready,
     journal,
+    browserEnabled,
+    ingestBrowser(batch: BrowserDiagnosticsBatch): BrowserDiagnosticsUploadResponse | null {
+      if (!browserEnabled || closed || !isBrowserDiagnosticsBatch(batch)) return null
+      try {
+        history()
+        if (journal.read().source !== 'journal') return null
+        const result: BrowserDiagnosticsUploadResponse = { version: 1, accepted: 0, duplicates: 0, dropped: 0 }
+        for (const event of batch.events) {
+          if (journal.hasBrowserEvent(batch.sourceId, event.eventId)) result.duplicates++
+          else if (
+            journal.record(event.entry, {
+              kind: 'browser',
+              sourceId: batch.sourceId,
+              eventId: event.eventId,
+              clientSequence: event.clientSequence,
+            })
+          )
+            result.accepted++
+          else result.dropped++
+        }
+        return result
+      } catch {
+        return null
+      }
+    },
     async close() {
       if (closed) return
       recordDiagnosticEventForDatabase(db, {

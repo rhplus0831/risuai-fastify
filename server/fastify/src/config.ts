@@ -8,6 +8,7 @@ export interface AppConfig {
   /** Client-visible content-free diagnostics; trace modes enable this by default. */
   clientDiagnostics?: boolean
   supportDiagnostics?: { enabled: boolean; verifierFile?: string }
+  browserDiagnostics?: { enabled: boolean }
   host: string
   port: number
   dataDir: string
@@ -169,26 +170,48 @@ export function assertAgentDevAuthBypassHost(config: Pick<AppConfig, 'agentDevAu
   }
 }
 
-/** Reject secret locations that application file/static/backup surfaces can own. */
+function canonicalDiagnosticsPath(input: string, depth = 0): string {
+  if (depth > 64 || input.length > 4096) throw new Error('Invalid diagnostics configuration')
+  const absolute = path.resolve(input)
+  try {
+    const info = fs.lstatSync(absolute)
+    if (info.isSymbolicLink())
+      return canonicalDiagnosticsPath(path.resolve(path.dirname(absolute), fs.readlinkSync(absolute)), depth + 1)
+    return fs.realpathSync(absolute)
+  } catch (cause) {
+    if (!cause || typeof cause !== 'object' || !('code' in cause) || cause.code !== 'ENOENT')
+      throw new Error('Invalid diagnostics configuration')
+    const parent = path.dirname(absolute)
+    return parent === absolute
+      ? absolute
+      : path.join(canonicalDiagnosticsPath(parent, depth + 1), path.basename(absolute))
+  }
+}
+
+function isSameOrDescendant(parent: string, candidate: string): boolean {
+  const relative = path.relative(parent, candidate)
+  return !relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+/** Reject secret/journal locations exposed by application file, static or backup surfaces. */
 export function assertSupportDiagnosticsConfig(
-  config: Pick<AppConfig, 'supportDiagnostics' | 'dataDir' | 'staticRoot'>,
+  config: Pick<AppConfig, 'supportDiagnostics' | 'browserDiagnostics' | 'dataDir' | 'staticRoot'>,
 ): void {
   const support = config.supportDiagnostics
+  if ((support?.enabled || config.browserDiagnostics?.enabled) && config.staticRoot) {
+    const journal = canonicalDiagnosticsPath(path.join(config.dataDir, 'diagnostics'))
+    if (isSameOrDescendant(canonicalDiagnosticsPath(config.staticRoot), journal)) {
+      throw new Error('Invalid diagnostics configuration')
+    }
+  }
   if (!support?.enabled) return
   if (!support.verifierFile || !path.isAbsolute(support.verifierFile))
     throw new Error('Invalid support diagnostics configuration')
-  const canonical = (input: string): string => {
-    const absolute = path.resolve(input)
-    if (fs.existsSync(absolute)) return fs.realpathSync(absolute)
-    const parent = path.dirname(absolute)
-    return parent === absolute ? absolute : path.join(canonical(parent), path.basename(absolute))
-  }
-  const verifier = canonical(support.verifierFile)
+  const verifier = canonicalDiagnosticsPath(support.verifierFile)
   for (const root of [process.cwd(), config.dataDir, config.staticRoot].filter((root): root is string =>
     Boolean(root),
   )) {
-    const relative = path.relative(canonical(root), verifier)
-    if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) {
+    if (isSameOrDescendant(canonicalDiagnosticsPath(root), verifier)) {
       throw new Error('Invalid support diagnostics configuration')
     }
   }
@@ -233,6 +256,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       enabled: env.RISU_SUPPORT_DIAGNOSTICS === '1',
       verifierFile: env.RISU_SUPPORT_DIAGNOSTICS_VERIFIER,
     },
+    browserDiagnostics: { enabled: env.RISU_BROWSER_DIAGNOSTICS === '1' },
     generationTrace: {
       fullPrompt: generationTraceFullPrompt,
       maxGzipBytes: generationTraceMaxGzipBytes,
@@ -241,6 +265,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   assertAgentDevAuthBypassHost(config)
   if (env.RISU_SUPPORT_DIAGNOSTICS !== undefined && !['0', '1'].includes(env.RISU_SUPPORT_DIAGNOSTICS))
     throw new Error('Invalid support diagnostics configuration')
+  if (env.RISU_BROWSER_DIAGNOSTICS !== undefined && !['0', '1'].includes(env.RISU_BROWSER_DIAGNOSTICS))
+    throw new Error('Invalid browser diagnostics configuration')
   assertSupportDiagnosticsConfig(config)
   return config
 }
