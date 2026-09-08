@@ -8,6 +8,7 @@ import { requireAuth } from '../http.js'
 import { authCryptoRateLimit } from '../routeRateLimits.js'
 import { getMaintenanceCoordinator, MaintenanceBusyError } from '../maintenanceCoordinator.js'
 import { attachMaintenanceAbort } from '../maintenanceRequest.js'
+import { allowApplicationFileRead } from '../diagnosticsStaticFiles.js'
 
 const HEX_RE = /^[0-9a-fA-F]+$/
 const LEGACY_STORAGE_TEMP_PREFIX = '.legacy-storage-'
@@ -114,7 +115,12 @@ interface CryptoBody {
   data?: unknown
 }
 
-export function registerLegacyStorageRoutes(app: FastifyInstance, authState: AuthState, dataDir: string): void {
+export function registerLegacyStorageRoutes(
+  app: FastifyInstance,
+  authState: AuthState,
+  dataDir: string,
+  canReadFile: (file: string) => boolean = (file) => allowApplicationFileRead({ dataDir }, file),
+): void {
   app.register(async (instance) => {
     instance.removeAllContentTypeParsers()
     instance.addContentTypeParser('*', { parseAs: 'buffer' }, (_req, body, done) => {
@@ -165,6 +171,7 @@ export function registerLegacyStorageRoutes(app: FastifyInstance, authState: Aut
         reply.header('content-type', 'application/octet-stream')
         return reply.send()
       }
+      if (!canReadFile(onDisk)) return reply.code(404).send({ error: 'not found' })
       reply.header('content-type', 'application/octet-stream')
       return reply.send(fs.createReadStream(onDisk))
     })

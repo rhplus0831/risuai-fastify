@@ -16,10 +16,18 @@ export function allowDiagnosticStaticFile(
   pathname: string,
   root: string,
 ): boolean {
+  // @fastify/static supplies its literal filename, then encodes it for send's
+  // single decode. Decoding here would check a different target for `%` names.
+  return allowApplicationFileRead(config, path.join(root, pathname))
+}
+
+/** File API aliases and retained artifacts use the same boundary as static files. */
+export function allowApplicationFileRead(
+  config: Pick<AppConfig, 'dataDir' | 'supportDiagnostics'>,
+  pathname: string,
+): boolean {
   try {
-    // @fastify/static supplies its literal filename, then encodes it for send's
-    // single decode. Decoding here would check a different target for `%` names.
-    const file = fs.realpathSync(path.join(root, pathname))
+    const file = fs.realpathSync(pathname)
     const directory = path.join(fs.realpathSync(config.dataDir), 'diagnostics')
     const privateDirectory = canonicalExistingPath(directory) ?? directory
     const relative = path.relative(privateDirectory, file)

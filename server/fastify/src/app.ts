@@ -7,7 +7,7 @@ import fastifyMultipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import fastifyStatic from '@fastify/static'
 import fastifyWebsocket from '@fastify/websocket'
-import { allowDiagnosticStaticFile } from './diagnosticsStaticFiles.js'
+import { allowApplicationFileRead, allowDiagnosticStaticFile } from './diagnosticsStaticFiles.js'
 import { onDiagnosticBadUrl } from './diagnosticsRequestRouting.js'
 import { createActiveWriterState, registerActiveWriterGuard } from './activeWriter.js'
 import { registerBardWikiReadRoutes } from './routes/bardWiki.js'
@@ -509,7 +509,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   registerDisplaySourceRoutes(app, authState, displaySourceService)
   registerLoreTokenCountRoutes(app, db, config.dataDir, authState)
   registerEventsRoutes(app, db, authState, commandEventSink, memoryEventBus, activeWriterState)
-  registerAssetsRoutes(app, db, authState, config.dataDir, activeWriterState)
+  const canReadApplicationFile = (file: string) => allowApplicationFileRead(config, file)
+  registerAssetsRoutes(app, db, authState, config.dataDir, activeWriterState, canReadApplicationFile)
   registerStorageUsageRoutes(app, authState, config.dataDir)
   registerBackupRoutes(app, db, authState, config.dataDir, commandEventSink, {
     automaticBackupRetention: config.automaticBackupRetention ?? DEFAULT_AUTOMATIC_BACKUP_RETENTION,
@@ -529,7 +530,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   registerProxyRoutes(app, authState)
   registerStreamJobRoutes(app, authState, streamJobRegistry)
   registerHubRoutes(app, db, authState, config.hubUrl)
-  registerLegacyStorageRoutes(app, authState, config.dataDir)
+  registerLegacyStorageRoutes(app, authState, config.dataDir, canReadApplicationFile)
   registerGenerationRoutes(app, db, authState, config.dataDir)
   registerGenerationChatRoutes(
     app,

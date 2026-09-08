@@ -17,6 +17,7 @@ import {
 } from '../repository.js'
 import { assetExistsRateLimit } from '../routeRateLimits.js'
 import { emitProtocolMetric } from '../protocolMetrics.js'
+import { allowApplicationFileRead } from '../diagnosticsStaticFiles.js'
 
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable'
 const BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
@@ -208,6 +209,7 @@ export function registerAssetsRoutes(
   authState: AuthState,
   dataDir: string,
   activeWriterState: ActiveWriterState,
+  canReadFile: (file: string) => boolean = (file) => allowApplicationFileRead({ dataDir }, file),
 ): void {
   const requireUploadAccess = async (req: Parameters<typeof requireAuth>[1], reply: FastifyReply) => {
     if (!(await requireAuth(authState, req, reply))) return
@@ -285,7 +287,7 @@ export function registerAssetsRoutes(
       return
     }
     const file = assetPath(dataDir, entry)
-    if (!fs.existsSync(file)) {
+    if (!fs.existsSync(file) || !canReadFile(file)) {
       emitAssetByteReadMetric(req.log, req.params.id, false)
       reply.code(404).send({ error: 'not found' })
       return
@@ -304,7 +306,7 @@ export function registerAssetsRoutes(
       return
     }
     const file = assetPath(dataDir, entry)
-    if (!fs.existsSync(file)) {
+    if (!fs.existsSync(file) || !canReadFile(file)) {
       reply.code(404).send()
       return
     }
