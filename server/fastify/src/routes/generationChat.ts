@@ -4262,6 +4262,39 @@ function queueAndPersistGenerationFinalization(args: {
   return persistConfirmedGenerationFinalization(args)
 }
 
+function withGenerationRecoveryDiagnostics<T>(
+  db: DatabaseSync,
+  refs: { databaseLineage?: string; operationId?: string; generationId: string },
+  callback: () => T,
+): T {
+  return runWithDiagnosticContext(
+    db,
+    { databaseLineage: refs.databaseLineage, attemptId: refs.generationId, background: true },
+    () => {
+      if (!diagnosticsContextEnabled()) return callback()
+      let operationId = refs.operationId
+      if (!operationId) {
+        try {
+          // Failed partials deliberately omit finalization lineage to keep the
+          // operation failed. Its authoritative attempt still binds the job to
+          // the original diagnostic operation across a process restart.
+          operationId = (
+            db
+              .prepare(
+                `SELECT operation_id FROM generation_operation_attempts
+                 WHERE database_lineage = ? AND job_id = ?`,
+              )
+              .get(getDatabaseLineage(db), refs.generationId) as { operation_id: string } | undefined
+          )?.operation_id
+        } catch {
+          // Diagnostic correlation must never prevent persistence recovery.
+        }
+      }
+      return runWithDiagnosticContext(db, { operationId: operationId ?? refs.generationId }, callback)
+    },
+  )
+}
+
 export function retryQueuedGenerationFinalizations(args: {
   db: DatabaseSync
   dataDir: string
@@ -4303,13 +4336,12 @@ export function retryQueuedGenerationFinalizations(args: {
   let retryable = 0
   for (const retry of retries) {
     const { attempt } = retry
-    runWithDiagnosticContext(
+    withGenerationRecoveryDiagnostics(
       args.db,
       {
         databaseLineage: attempt.databaseLineage,
-        operationId: attempt.operationId ?? attempt.generationId,
-        attemptId: attempt.generationId,
-        background: true,
+        operationId: attempt.operationId,
+        generationId: attempt.generationId,
       },
       () => {
         const startedAt = protocolNowMs()
@@ -4549,29 +4581,21 @@ export async function retryPendingGenerationCompletionEffects(args: {
       (candidate) => candidate.chatId === effect.messageId,
     ) as unknown as Message | undefined
     if (!message || message.role !== 'char') continue
-    await runWithDiagnosticContext(
-      args.db,
-      {
-        databaseLineage: effect.databaseLineage,
-        operationId: effect.operationId ?? effect.generationId,
-        attemptId: effect.generationId,
-        background: true,
-      },
-      () =>
-        handlePersistedGenerationCompletion({
-          db: args.db,
-          dataDir: args.dataDir,
-          eventSink: args.eventSink,
-          messageTranslationJobs: args.messageTranslationJobs,
-          message,
-          targetMessageId: effect.messageId,
-          chatId: effect.chatId,
-          characterId: effect.characterId,
-          completedAt: Date.now(),
-          pushNotifications: false,
-          runMessageTranslation: args.runMessageTranslation,
-          generationId: effect.generationId,
-        }),
+    await withGenerationRecoveryDiagnostics(args.db, effect, () =>
+      handlePersistedGenerationCompletion({
+        db: args.db,
+        dataDir: args.dataDir,
+        eventSink: args.eventSink,
+        messageTranslationJobs: args.messageTranslationJobs,
+        message,
+        targetMessageId: effect.messageId,
+        chatId: effect.chatId,
+        characterId: effect.characterId,
+        completedAt: Date.now(),
+        pushNotifications: false,
+        runMessageTranslation: args.runMessageTranslation,
+        generationId: effect.generationId,
+      }),
     )
     settled += 1
   }

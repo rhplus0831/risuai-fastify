@@ -351,6 +351,43 @@ describe('safe generation evidence', () => {
     if (rawMetrics === '0') expect(existsSync(path.join(h.dataDir, 'trace'))).toBe(false)
   })
 
+  it.each(['generate', 'generateOperation'] as const)(
+    'retains the original operation when a failed partial from %s is recovered after restart',
+    async (submit) => {
+      vi.stubEnv('RISU_PROTOCOL_METRICS', '0')
+      const dispatch = vi.fn(() =>
+        (async function* (): AsyncGenerator<CompletionStreamFrame> {
+          yield { kind: 'token', content: responseText }
+          throw new Error(failureText)
+        })(),
+      )
+      const h = await harness(dispatch)
+      h.db.exec(`CREATE TRIGGER fail_partial_commit BEFORE INSERT ON messages
+        WHEN NEW.role = 'char' BEGIN SELECT RAISE(FAIL, '${failureText}'); END`)
+      await h[submit]()
+      const failed = await h.read()
+      const persistence = failed.find((entry) => entry.category === 'persistence' && entry.disposition === 'retryable')
+      expect(persistence?.operationRef).toMatch(/^[a-f0-9]{32}$/)
+      const readOperationState = () =>
+        (h.db.prepare('SELECT state FROM generation_operations').get() as { state: string }).state
+      const operationState = readOperationState()
+      expect(operationState).toBe('retryable')
+      h.db.exec('DROP TRIGGER fail_partial_commit')
+      await h.restart()
+      const recovered = await h.read()
+      expect(
+        recovered.find((entry) => entry.category === 'persistence' && entry.disposition === 'recovered'),
+      ).toMatchObject({
+        operationRef: persistence?.operationRef,
+        attemptRef: persistence?.attemptRef,
+        authoritativeCommitted: true,
+        cleanupComplete: true,
+      })
+      expect(dispatch).toHaveBeenCalledTimes(1)
+      expect(readOperationState()).toBe(operationState)
+    },
+  )
+
   it('distinguishes assembly before dispatch from an ambiguous provider failure after partial output', async () => {
     vi.stubEnv('RISU_PROTOCOL_METRICS', '0')
     const h = await harness(() =>
