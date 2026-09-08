@@ -43,7 +43,8 @@
     "ts:agent": "tsx util/ts-agent.ts",
     "api:dev": "tsx watch server/fastify/src/index.ts",
     "api:dev:flag": "tsx util/api-flag-dev.ts",
-    "api:start": "tsx server/fastify/src/index.ts"
+    "api:start": "tsx server/fastify/src/index.ts",
+    "diagnostics:credential": "tsx util/diagnostics-credential.ts"
   },
   "dependencies": {
     "@adobe/css-tools": "4.4.4",

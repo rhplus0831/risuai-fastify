@@ -1,11 +1,13 @@
 import path from 'node:path'
 import process from 'node:process'
 import net from 'node:net'
+import fs from 'node:fs'
 import { DEFAULT_GENERATION_TRACE_MAX_GZIP_BYTES } from './generation/generationTraceSidecar.js'
 
 export interface AppConfig {
   /** Client-visible content-free diagnostics; trace modes enable this by default. */
   clientDiagnostics?: boolean
+  supportDiagnostics?: { enabled: boolean; verifierFile?: string }
   host: string
   port: number
   dataDir: string
@@ -167,6 +169,31 @@ export function assertAgentDevAuthBypassHost(config: Pick<AppConfig, 'agentDevAu
   }
 }
 
+/** Reject secret locations that application file/static/backup surfaces can own. */
+export function assertSupportDiagnosticsConfig(
+  config: Pick<AppConfig, 'supportDiagnostics' | 'dataDir' | 'staticRoot'>,
+): void {
+  const support = config.supportDiagnostics
+  if (!support?.enabled) return
+  if (!support.verifierFile || !path.isAbsolute(support.verifierFile))
+    throw new Error('Invalid support diagnostics configuration')
+  const canonical = (input: string): string => {
+    const absolute = path.resolve(input)
+    if (fs.existsSync(absolute)) return fs.realpathSync(absolute)
+    const parent = path.dirname(absolute)
+    return parent === absolute ? absolute : path.join(canonical(parent), path.basename(absolute))
+  }
+  const verifier = canonical(support.verifierFile)
+  for (const root of [process.cwd(), config.dataDir, config.staticRoot].filter((root): root is string =>
+    Boolean(root),
+  )) {
+    const relative = path.relative(canonical(root), verifier)
+    if (!relative || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))) {
+      throw new Error('Invalid support diagnostics configuration')
+    }
+  }
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const dataDir = env.RISU_API_DATA_DIR ? path.resolve(env.RISU_API_DATA_DIR) : path.join(repoRoot(), 'data')
   const requestTraceMode = parseRequestTraceMode(env.RISU_API_TRACE_MODE)
@@ -202,11 +229,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     requestTrace: requestTraceMode ? { mode: requestTraceMode } : undefined,
     clientDiagnostics:
       env.RISU_CLIENT_DIAGNOSTICS === undefined ? Boolean(requestTraceMode) : parseBoolean(env.RISU_CLIENT_DIAGNOSTICS),
+    supportDiagnostics: {
+      enabled: env.RISU_SUPPORT_DIAGNOSTICS === '1',
+      verifierFile: env.RISU_SUPPORT_DIAGNOSTICS_VERIFIER,
+    },
     generationTrace: {
       fullPrompt: generationTraceFullPrompt,
       maxGzipBytes: generationTraceMaxGzipBytes,
     },
   }
   assertAgentDevAuthBypassHost(config)
+  if (env.RISU_SUPPORT_DIAGNOSTICS !== undefined && !['0', '1'].includes(env.RISU_SUPPORT_DIAGNOSTICS))
+    throw new Error('Invalid support diagnostics configuration')
+  assertSupportDiagnosticsConfig(config)
   return config
 }

@@ -14,19 +14,32 @@ import { requireAuth } from './http.js'
 import { ensureRequestTraceUid, readRequestTraceUid } from './requestTrace.js'
 import { findProtocolRouteDecision } from './routeManifest.js'
 import { subscribeProtocolMetrics } from './protocolMetrics.js'
+import { isDiagnosticTransportUrl } from '@risuai/protocol/remote-diagnostics'
 
 export function createClientDiagnostics(enabled: boolean) {
   let entries: DiagnosticEntry[] = []
+  const listeners = new Set<(entry: DiagnosticEntry) => void>()
   const record = (input: Record<string, unknown>) => {
     if (!enabled) return
     const entry = projectDiagnosticEntry({ ...input, timestamp: Date.now(), source: 'server' })
     if (!entry) return
     entries.push(entry)
     if (entries.length > DIAGNOSTICS_LIMIT) entries.shift()
+    for (const listener of listeners) {
+      try {
+        listener(projectDiagnosticEntry(entry)!)
+      } catch {
+        /* Telemetry is best effort. */
+      }
+    }
   }
   return {
     enabled,
     record,
+    subscribe(listener: (entry: DiagnosticEntry) => void) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
     snapshot: () => entries.map((entry) => projectDiagnosticEntry(entry)!),
     clear: () => {
       entries = []
@@ -61,12 +74,14 @@ export function registerClientDiagnosticsHooks(app: FastifyInstance, diagnostics
   // Scope the process-wide metric subscription to requests belonging to this app.
   const requestUids = new Set<string>()
   app.addHook('onRequest', async (request, reply) => {
+    if (isDiagnosticTransportUrl(request.url)) return
     const uid = ensureRequestTraceUid(request, reply)
     starts.set(request, performance.now())
     requestUids.add(uid)
     if (requestUids.size > 2_000) requestUids.delete(requestUids.values().next().value!)
   })
   app.addHook('onError', async (request, _reply, error) => {
+    if (isDiagnosticTransportUrl(request.url)) return
     diagnostics.record({
       event: 'runtime-error',
       level: 'error',
@@ -76,6 +91,7 @@ export function registerClientDiagnosticsHooks(app: FastifyInstance, diagnostics
     })
   })
   app.addHook('onResponse', async (request, reply) => {
+    if (isDiagnosticTransportUrl(request.url)) return
     const route = findProtocolRouteDecision(request.method, request.url.split('?')[0])
     if (route?.id === 'diagnostics-read' || !request.url.startsWith('/api/')) return
     diagnostics.record({

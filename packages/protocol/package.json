@@ -29,7 +29,8 @@
     "./standalone-settings": "./src/standaloneSettings.ts",
     "./startup-telemetry": "./src/startupTelemetry.ts",
     "./storage-usage": "./src/storageUsage.ts",
-    "./tts-synthesis": "./src/ttsSynthesis.ts"
+    "./tts-synthesis": "./src/ttsSynthesis.ts",
+    "./remote-diagnostics": "./src/remoteDiagnostics.ts"
   },
   "dependencies": {
     "@sinclair/typebox": "0.34.52"

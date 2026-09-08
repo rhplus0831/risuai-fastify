@@ -3,6 +3,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import fs from 'node:fs/promises'
 import type { OutgoingHttpHeader, OutgoingHttpHeaders } from 'node:http'
 import path from 'node:path'
+import { isDiagnosticTransportUrl } from '@risuai/protocol/remote-diagnostics'
 import { performance } from 'node:perf_hooks'
 import { promisify } from 'node:util'
 import { gzip } from 'node:zlib'
@@ -184,6 +185,7 @@ export function registerRequestTrace(app: FastifyInstance, opts: RegisterRequest
   let writeQueue = Promise.resolve()
 
   app.addHook('onRequest', async (request, reply) => {
+    if (isDiagnosticTransportUrl(request.raw.url ?? request.url)) return
     const state: RequestTraceState = {
       uid: ensureRequestTraceUid(request, reply),
       startedAtMs: performance.now(),

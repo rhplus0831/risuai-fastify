@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { randomUUID } from 'node:crypto'
+import { randomUUID, randomBytes } from 'node:crypto'
 import Fastify, { type FastifyInstance } from 'fastify'
 import fastifyCompress from '@fastify/compress'
 import fastifyMultipart from '@fastify/multipart'
@@ -12,6 +12,7 @@ import { registerBardWikiReadRoutes } from './routes/bardWiki.js'
 import { registerBardWikiJobRoutes } from './routes/bardWikiJobs.js'
 import {
   assertAgentDevAuthBypassHost,
+  assertSupportDiagnosticsConfig,
   DEFAULT_AUTOMATIC_BACKUP_RETENTION,
   DEFAULT_REALM_IMPORT_MAX_EXPANDED_BYTES,
   type AppConfig,
@@ -104,6 +105,8 @@ import {
   transitionGenerationOperation,
 } from './generationOperations.js'
 import { reconcileGenerationEffectsAtStartup } from './generationEffects.js'
+import { isDiagnosticTransportUrl, SUPPORT_DIAGNOSTICS_ENDPOINT } from '@risuai/protocol/remote-diagnostics'
+import { createVolatileRemoteDiagnostics, registerRemoteDiagnosticsRoutes } from './remoteDiagnostics.js'
 
 /**
  * Node `server.requestTimeout` backstop the wall-clock bound for
@@ -161,8 +164,12 @@ function isPathWithin(parent: string, child: string): boolean {
 export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   const config = opts.config ?? loadConfig()
   assertAgentDevAuthBypassHost(config)
+  assertSupportDiagnosticsConfig(config)
   const diagnostics = createClientDiagnostics(config.clientDiagnostics ?? Boolean(config.requestTrace))
+  const diagnosticInstanceId = randomBytes(16).toString('hex')
+  const remoteDiagnostics = createVolatileRemoteDiagnostics(diagnostics, diagnosticInstanceId)
   const app = Fastify({
+    disableRequestLogging: (request) => isDiagnosticTransportUrl(request.url),
     logger:
       process.env.LOG_LEVEL === 'silent'
         ? false
@@ -185,10 +192,24 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     requestTimeout: REQUEST_RECEIVE_TIMEOUT_MS,
   })
 
+  // This guard precedes body parsers and trace/collector hooks, including invalid
+  // methods and subpaths. Diagnostic errors never echo raw URL or input.
+  app.addHook('onRequest', async (request, reply) => {
+    if (!isDiagnosticTransportUrl(request.url)) return
+    reply.header('cache-control', 'no-store')
+    const pathname = request.url.split('?')[0]
+    if (request.method !== 'GET' || !['/api/v1/diagnostics', SUPPORT_DIAGNOSTICS_ENDPOINT].includes(pathname)) {
+      return reply.code(404).send({ error: 'invalid-query' })
+    }
+    if (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0) {
+      return reply.code(400).send({ error: 'invalid-query' })
+    }
+  })
+
+  registerClientDiagnosticsHooks(app, diagnostics)
   if (config.requestTrace) {
     registerRequestTrace(app, { dataDir: config.dataDir, ...config.requestTrace })
   }
-  registerClientDiagnosticsHooks(app, diagnostics)
 
   await app.register(fastifyCompress, {
     global: true,
@@ -425,6 +446,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   )
   registerActiveWriterGuard(app, activeWriterState)
   registerClientDiagnosticsRoutes(app, authState, diagnostics)
+  registerRemoteDiagnosticsRoutes(app, remoteDiagnostics, config.supportDiagnostics ?? { enabled: false }, {
+    instanceId: diagnosticInstanceId,
+    build: /^[a-f0-9]{40,64}$/.test(process.env.RISU_BUILD_ID ?? '') ? process.env.RISU_BUILD_ID! : 'unknown',
+  })
   registerStartupTelemetryRoutes(app, authState)
   registerResourceReadRoutes(app, db, authState, config.dataDir)
   registerBardWikiReadRoutes(app, db, authState)

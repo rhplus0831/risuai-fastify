@@ -18,7 +18,7 @@ export {
   type ProtocolRouteStreamingShape,
 }
 
-export type ProtocolRouteAuthDecision = 'required' | 'public' | 'conditional'
+export type ProtocolRouteAuthDecision = 'required' | 'public' | 'conditional' | 'diagnostics-read'
 
 export type ProtocolRouteActiveWriterDecision =
   | 'active-writer'
@@ -126,6 +126,17 @@ export const PROTOCOL_ROUTE_POLICIES = [
     activeWriter: {
       decision: 'not-applicable',
       reason: 'Read-only bounded diagnostic metadata.',
+    },
+  },
+  {
+    id: 'support-diagnostics-read',
+    auth: {
+      decision: 'diagnostics-read',
+      reason: 'Independent support credential authorizes only sanitized diagnostics reads.',
+    },
+    activeWriter: {
+      decision: 'not-applicable',
+      reason: 'Support access grants no application or writer authority.',
     },
   },
   {

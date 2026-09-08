@@ -72,3 +72,25 @@ documents when a decision changes them; do not duplicate execution logs there.
 
 Next: finish and validate Phase 1 credential/read/helper, then durable safe
 families/correlation/journal, browser ingestion/publisher, and combined proof.
+
+### Phase 1 credential and read slices
+
+- Credential lifecycle committed as `8baed4751`; 31 focused synthetic tests and
+  targeted strict TypeScript passed. No real credentials provisioned.
+- Independent support GET, v1 envelope, finite shared query parser, immutable
+  cursor pages, 300-event volatile source, fixed errors/access outcomes, and
+  diagnostic namespace trace/log exclusions implemented. Auth denial derives
+  from every registered protected route; deliberate public behavior is retained.
+- `pnpm test -- server/fastify/__tests__/remoteDiagnostics.test.ts`: 6 passed.
+  Protocol grammar/privacy: 3 passed. Reviewed route catalog: 5 passed.
+  Existing route protection, collector, tracing, and config suites: 55 passed.
+  `pnpm exec tsc -p server/fastify/tsconfig.json --noEmit` passed.
+- Architecture inventory update contains only the reviewed 108→109 route/policy
+  counts; inventory validation passed. Current docs (49), explicit plan docs
+  (10), and relevant Prettier checks passed.
+- Validation exposed and fixed delayed HTTP collection behind asynchronous raw
+  trace writes and a rate-limit error mapping that initially returned 500.
+  The denial test now enumerates live routes rather than abstract route families.
+- HTTPS helper tests are complete in a separate pending slice. The cross-layer
+  aggregate remains required after implementation/self-review and will be run
+  on the completed final feature, together with final-source combined proof.

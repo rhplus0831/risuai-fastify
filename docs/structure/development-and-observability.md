@@ -108,6 +108,81 @@ Lua sidecars require protocol metrics but not the full-prompt flag; they use the
 same compressed-size cap. These files can retain redacted user prompt/chat
 content and should not be shared casually.
 
+## Remote Support Diagnostics
+
+Remote access is explicitly enabled with `RISU_SUPPORT_DIAGNOSTICS=1` and
+`RISU_SUPPORT_DIAGNOSTICS_VERIFIER=/private/operator/directory/verifier.json`.
+Collection also requires `RISU_CLIENT_DIAGNOSTICS=1`. The verifier must be outside
+the repository, data directory, and static root. Its directory must be private,
+its file mode 0600, and symlinked paths are rejected. Missing, invalid, revoked,
+or expired credentials fail closed. The dedicated bearer credential never
+enters the ordinary application auth registry or bootstrap. Readers/writers,
+uninitialized servers, and development auth bypass do not grant support access.
+
+Operator provisioning uses the local `pnpm diagnostics:credential` script:
+
+```sh
+# Create private directories first, then choose fixed operator-owned paths.
+export RISU_SUPPORT_DIAGNOSTICS_VERIFIER=/private/operator/directory/verifier.json
+export RISU_DIAGNOSTICS_REMOTE_CONFIG=/private/transfer/directory/production.json
+export RISU_DIAGNOSTICS_REMOTE_ORIGIN=https://your-risu-host.example
+pnpm diagnostics:credential mint
+```
+
+The tool writes an exclusive mode-0600 config containing a random 32-byte hex
+token and the fixed HTTPS origin; it prints only a fixed success category. The
+verifier retains only SHA-256 digests, random credential IDs, and bounded
+lifecycle times. Move the plaintext config to the development environment over
+an operator-controlled secure channel, keep it outside Git, and remove the
+transfer copy. Provision a separate credential for each environment. A private
+file reduces accidental exposure; it cannot hide its token from unrestricted
+shell access. Server-side authority is the access boundary.
+
+Default expiry is 30 days, with a hard 90-day maximum and at most 16 credentials.
+Operators can inspect credential IDs and expiry metadata in the verifier without
+printing plaintext credentials. To rotate, select a new exclusive output config
+path and run `pnpm diagnostics:credential rotate <credential-id>`; old-token
+overlap is at most 24 hours. `pnpm diagnostics:credential revoke <credential-id>`
+revokes immediately for subsequent reads. Remove an abandoned `.lock` only after
+confirming no lifecycle command is running. Disabling support reads does not
+change application data, revisions, writer state, or the manual workflow below.
+
+`GET /api/v1/support/diagnostics` accepts the token only in
+`Authorization: Bearer`. Serve it through verified HTTPS. It reads only the
+sanitized collector, never request history, raw trace files, logs, bodies,
+sidecars, assets, backups, or domain records. All diagnostic namespace traffic,
+including rejected bodies/methods/subpaths, is excluded from automatic request
+logging and raw tracing; bounded access outcomes contain fixed categories only.
+The route policy is `diagnostics-read`, separate from application `required`.
+Existing deliberately public routes keep their public behavior.
+
+The version-1 envelope is exact and includes sequenced entries, validated build
+identity (`RISU_BUILD_ID`, otherwise unknown), random process identity, capture
+bounds, source availability, loss, truncation, and pagination. Its current
+coverage is server-only and volatile (300 entries); stack coordinates are
+omitted from remote output. The ordinary version-1 manual report stays intact.
+Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
+hour), limit (default 50, maximum 200), generated requestUid/operationRef,
+category, and cursor. V1 has no operation references and returns no matching
+records for that filter. No raw/free-text/file/query-language options exist.
+Continuation accepts only cursor and version. Immutable sequence pages expire
+after 5 minutes and are bounded to 32 snapshots, 2,000 events/2 MiB per snapshot.
+Concurrent recording does not move events between pages. Clocks do not establish
+causal order. Responses are capped at 512 KiB; access is capped at 30 reads per
+minute per IP and a 10-second request deadline.
+
+Every outcome uses `Cache-Control: no-store`: 401 unauthorized, 400 invalid-query,
+429 rate-limited, 503 disabled/storage-unavailable, 409 collection-disabled,
+410 cursor-expired, and 500 internal-error. Successful empty windows return 200
+with no entries. Errors contain fixed categories and never echo filters or
+credential material. Restart invalidates volatile cursors and evidence.
+
+Source owners are `server/fastify/src/remoteDiagnostics.ts`,
+`server/fastify/src/supportDiagnosticsAuth.ts`, and the exact contract in
+`packages/protocol/src/remoteDiagnostics.ts`. Focused authorization, paging,
+privacy, limits, and lifecycle tests are in `remoteDiagnostics.test.ts` and
+`supportDiagnosticsAuth.test.ts` under the server test directory.
+
 ## Client Diagnostics
 
 `RISU_CLIENT_DIAGNOSTICS=1` enables a content-free recent-event viewer in

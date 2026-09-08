@@ -83,3 +83,15 @@ This area covers the Fastify composition boundary: authentication, single-writer
 | Streaming and tracing       | `generationBodyCap.test.ts`; `generationTraceSidecar.test.ts`; `requestAbort.test.ts`; `requestTrace.test.ts`; `streamBackpressure.test.ts`; `streamJobs.test.ts`; `streamJobsRoutes.test.ts`                                                                                              |
 | Web Push and teardown       | server `pushNotifications.test.ts`; browser `process/__tests__/notification.test.ts`, `process/index.svelte.stop.test.ts`, `server/pushNotificationRetryStorage.test.ts`, `server/pushNotificationSetting.test.ts`, `server/pushNotifications.test.ts`, and `server/serviceWorker.test.ts` |
 | Telemetry counterparts      | `src/ts/server/startupTelemetryProtocol.test.ts`; `src/ts/server/startupTelemetry.test.ts`; `server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts`; `startupRecoveryIntegrationMatrix.spec.ts`                                                                                |
+
+## Remote Support Diagnostics
+
+`server/fastify/__tests__/supportDiagnosticsAuth.test.ts` covers the independent
+32-byte bearer verifier, expiry/rotation/revocation, private file placement and
+permissions, bounded lifecycle storage, and fixed operator output.
+`server/fastify/__tests__/remoteDiagnostics.test.ts` checks every registered
+protected route with a valid support token, opt-in/auth states, useful sanitized
+failure metadata, query/rate limits, no raw diagnostic transport artifacts,
+volatile loss, and immutable cursor pages. The protocol grammar/privacy suite is
+`packages/protocol/src/remoteDiagnostics.test.ts`. Manual Diagnostics remains
+covered by the existing client collector and panel tests.

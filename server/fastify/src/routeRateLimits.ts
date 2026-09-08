@@ -2,6 +2,11 @@ import type { RateLimitOptions } from '@fastify/rate-limit'
 
 const MINUTE = '1 minute'
 
+export const supportDiagnosticsRateLimit: RateLimitOptions = {
+  max: 30,
+  timeWindow: MINUTE,
+}
+
 export const authSetupRateLimit: RateLimitOptions = {
   max: 5,
   timeWindow: MINUTE,
