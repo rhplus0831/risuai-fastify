@@ -2,6 +2,11 @@ import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clie
 import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import type { character, Chat } from '../storage/database.svelte'
 import { safeStructuredClone } from '../safeStructuredClone'
+import {
+  captureBrowserDiagnosticsGeneration,
+  isBrowserDiagnosticsGenerationCurrent,
+  recordBrowserDiagnostic,
+} from '../server/browserDiagnostics'
 
 export type ChatOutputListenerArg = {
   char: character
@@ -53,14 +58,37 @@ export async function runChatOutputListeners(
     messageIndex: arg.messageIndex,
     ...(arg.effectIdempotencyKey ? { effectIdempotencyKey: arg.effectIdempotencyKey } : {}),
   }
+  const diagnosticGeneration = captureBrowserDiagnosticsGeneration()
+  const startedAt = performance.now()
+  let runs = 0
+  let failures = 0
   for (const listener of chatOutputListeners) {
     if (!isCurrent()) return
+    runs = Math.min(1_000_000_000, runs + 1)
     try {
       await listener(snapshot)
       if (!isCurrent()) return
     } catch (error) {
       if (!isCurrent()) return
+      failures = Math.min(1_000_000_000, failures + 1)
       console.error(error)
     }
+  }
+  try {
+    if (runs === 0 || !isBrowserDiagnosticsGenerationCurrent(diagnosticGeneration)) return
+    recordBrowserDiagnostic({
+      category: 'script',
+      level: failures > 0 ? 'warn' : 'info',
+      runtime: 'plugin',
+      hook: 'onOutput',
+      runs,
+      failures,
+      durationMs: Math.min(86_400_000, Math.max(0, performance.now() - startedAt)),
+      // Plugin callbacks can write through several APIs. Do not inspect their
+      // arguments or claim that an unmeasured transcript/host call was unchanged.
+      comparison: 'unavailable',
+    })
+  } catch {
+    // Evidence cannot affect output effects or their durable acknowledgement.
   }
 }
