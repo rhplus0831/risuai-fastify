@@ -203,6 +203,9 @@
               type="button"
               class="flex items-center gap-2 p-2 rounded-md text-left"
               style:background-color={folder.color ? `var(--reader-folder-${folder.color})` : undefined}
+              style:color={['red', 'yellow', 'green', 'blue', 'indigo', 'purple', 'pink'].includes(folder.color ?? '')
+                ? '#ffffff'
+                : undefined}
               aria-expanded={folderOpen(folder.id, folder.folded) || !!chatSearch}
               aria-controls={`reader-chat-folder-${index}`}
               onclick={() => {

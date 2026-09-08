@@ -335,3 +335,9 @@ Settings-renderer dependency from reader startup. SideChatList passed 70 tests,
 including no reader import and no mount after a deferred import crosses demotion;
 the control inventory still passed five tests. Formatting and whitespace checks
 passed. Actual emitted-chunk denial is being rechecked in the browser.
+
+Visual review also corrected reader light-bubble typography and colored-folder
+foregrounds. Reader mobilechat uses dark message/disclosure text and blue links,
+while known dark folder colors use white labels. Custom HTML/reader action tests
+passed (86), and ObserverShell passed 29 after the folder-style adjustment.
+The browser fixture now checks actual computed colors as well as screenshots.

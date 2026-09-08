@@ -1887,6 +1887,7 @@
   let blankMessage = $derived(
     ((message === '{{none}}' || message === '{{blank}}' || message === '') && idx === -1) || isComment,
   )
+  const readerLightBubble = $derived(!writeActionsAllowed && displaySettings.theme === 'mobilechat')
   let showSenderIdentity = $derived(!isComment)
   const hideSenderIdentity = $derived(
     renderOwners.settings
@@ -2712,7 +2713,8 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <span
       class="text chat-width chat-message-body chattext prose minw-0"
-      class:prose-invert={$ColorSchemeTypeStore}
+      class:prose-invert={!readerLightBubble && $ColorSchemeTypeStore}
+      class:reader-light-bubble={readerLightBubble}
       bind:this={bodyRoot}
       onclick={handleMessageBodyClick}
       style:font-size="{0.875 * ((displaySettings.zoomsize ?? 100) / 100)}rem"
@@ -3917,6 +3919,27 @@
 {/if}
 
 <style>
+  /* Mobilechat uses a fixed light bubble independently of the surrounding app palette. */
+  .reader-light-bubble {
+    --FontColorStandard: #1f2937;
+    --FontColorBold: #111827;
+    --FontColorItalic: #4b5563;
+    --FontColorItalicBold: #374151;
+    --FontColorQuote1: #374151;
+    --FontColorQuote2: #374151;
+    color: #1f2937;
+    color-scheme: light;
+  }
+
+  .reader-light-bubble :global(details),
+  .reader-light-bubble :global(summary) {
+    color: #1f2937;
+  }
+
+  .reader-light-bubble :global(a) {
+    color: #1d4ed8;
+  }
+
   .generation-persistence-indicator {
     align-self: center;
     max-width: min(42rem, 100%);
