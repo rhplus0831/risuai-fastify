@@ -28,6 +28,11 @@ function invalidAsset(message: string): never {
   throw Object.assign(new Error(message), { name: 'BackupAssetError', code: 'backup_asset_invalid' })
 }
 
+function copyAssetFile(from: string, to: string, id: string): void {
+  if (fs.lstatSync(from).isSymbolicLink()) invalidAsset(`Backup asset symbolic links are not supported: ${id}`)
+  fs.copyFileSync(from, to)
+}
+
 function verifyAsset(file: string, asset: Extract<BackupCopyEntry, { kind: 'asset' }>): void {
   const descriptor = fs.openSync(file, 'r')
   try {
@@ -53,14 +58,14 @@ function copy(entry: BackupCopyEntry): void {
     else fs.copyFileSync(entry.from, entry.to)
   } else {
     try {
-      fs.copyFileSync(entry.from, entry.to)
+      copyAssetFile(entry.from, entry.to, entry.id)
     } catch (error) {
       if (!isMissing(error)) throw error
       if (!entry.required) return
       if (!entry.fallback) invalidAsset(`Required backup asset is missing: ${entry.id}`)
       checkCancellation()
       try {
-        fs.copyFileSync(entry.fallback, entry.to)
+        copyAssetFile(entry.fallback, entry.to, entry.id)
       } catch (fallbackError) {
         if (!isMissing(fallbackError)) throw fallbackError
         invalidAsset(`Required backup asset is missing from live and restore source: ${entry.id}`)
