@@ -358,12 +358,15 @@ describe('browser diagnostics configuration', () => {
     expect(() => assertSupportDiagnosticsConfig({ ...config, staticRoot: linkedStatic })).toThrow(
       'Invalid diagnostics configuration',
     )
+    expect(() =>
+      assertSupportDiagnosticsConfig({ ...config, staticRoot: dataDir, browserDiagnostics: { enabled: false } }),
+    ).not.toThrow()
     mkdirSync(path.join(dataDir, 'diagnostics'))
     expect(() => assertSupportDiagnosticsConfig({ ...config, staticRoot: linkedStatic })).toThrow(
       'Invalid diagnostics configuration',
     )
     expect(() =>
       assertSupportDiagnosticsConfig({ ...config, staticRoot: dataDir, browserDiagnostics: { enabled: false } }),
-    ).not.toThrow()
+    ).toThrow('Invalid diagnostics configuration')
   })
 })
