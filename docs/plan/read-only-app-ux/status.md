@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: Phase 0 accepted; Phase 1 access and committed-data boundaries in progress.
-- Next phase: [Phase 1 — reader boundary and data](phases/phase-1-reader-boundary-and-data.md).
+- State: Phases 0–1 accepted; shared navigation implemented and transcript/browser verification in progress.
+- Next phase: [Phase 3 — shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md).
 - Next bounded slice: establish route/action denial and certify navigation/display
   fields before mounting shared reader navigation.
 - Source baseline reviewed: `982eef6112a407d138ea6a77ebc638c8058edfe2`.
@@ -20,14 +20,14 @@
 
 ## Phase Ledger
 
-| Phase                                                                                        | State    | Acceptance evidence                                                           |
-| -------------------------------------------------------------------------------------------- | -------- | ----------------------------------------------------------------------------- |
-| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                        | Accepted | Matrix, interfaces and confirmed-field map below; four read-only cross-checks |
-| [1. Reader boundary and navigation data](phases/phase-1-reader-boundary-and-data.md)         | Pending  | —                                                                             |
-| [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Pending  | —                                                                             |
-| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Pending  | —                                                                             |
-| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Pending  | —                                                                             |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Pending  | —                                                                             |
+| Phase                                                                                        | State        | Acceptance evidence                                                           |
+| -------------------------------------------------------------------------------------------- | ------------ | ----------------------------------------------------------------------------- |
+| [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                        | Accepted     | Matrix, interfaces and confirmed-field map below; four read-only cross-checks |
+| [1. Reader boundary and navigation data](phases/phase-1-reader-boundary-and-data.md)         | Accepted     | Access, projection and local-navigation focused evidence below                |
+| [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Verification | 149 focused checks; actual browser proof pending                              |
+| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Pending      | —                                                                             |
+| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Pending      | —                                                                             |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Pending      | —                                                                             |
 
 ## Decisions
 
@@ -199,3 +199,37 @@ After the committed-paint integration, `pnpm test -- src/ts/bootstrap.test.ts`
 passed (217) and `pnpm test -- src/App.routeEffect.dom.test.ts` passed (29).
 Prettier and slice whitespace checks passed. Phase 1 navigation adapter proof
 and later combined browser acceptance remain outstanding.
+
+### Phase 1 acceptance and Phase 2 shared-navigation slice — 2026-09-08
+
+Shared explicit-prop rail, native avatar controls, pinned shortcuts, chat
+selection buttons and character cards now serve writer adapters and the reader.
+`ReaderNavigation` handles confirmed order/folders/pins/search; `ObserverShell`
+retains local stable routes, fenced hydration and takeover. Both the connected
+reader and conservative shell preview use the shared navigation. The duplicate
+dedicated navigation layout is removed. Restricted direct URLs offer Home and
+Return to reading, and only valid reading routes become takeover intent.
+
+Folder/search/drawer/unread presentation clears on auth/database identity changes
+and stays local across ordinary browsing. Mobile navigation traps/restores focus,
+and confirmed sidebar width leaves room for the close control. Writer adapters
+retain command settlement and drafts while rejecting stale activation/Sortable
+work after authority loss. Navigation neither starts the writer controller nor
+falls back to its selected stores. Phase 1 route/data/navigation boundaries are
+accepted; Phase 2's actual two-client browser proof remains pending.
+
+Focused commands passed (149 tests):
+
+```sh
+pnpm test -- src/lib/ObserverShell.svelte.test.ts
+pnpm test -- src/lib/Others/GridCatalog.svelte.test.ts
+pnpm test -- src/lib/SideBars/SideChatList.svelte.test.ts
+pnpm test -- src/lib/SideBars/Sidebar.keyboard.dom.test.ts
+pnpm test -- src/lib/SideBars/Sidebar.charList.test.ts
+pnpm test -- src/lib/SideBars/PinnedChatsRail.svelte.test.ts
+```
+
+Counts were 29, 19, 68, 23, 6 and 4 respectively. Existing writer and conservative
+preview regressions are retained. Prettier and whitespace checks passed.
+Reader transcript live-generation status remains owned by its selected-chat
+observer; shared navigation does not start a second generation runtime.

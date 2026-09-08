@@ -13,6 +13,7 @@ import {
   setClientProjectionReady,
   setClientConnectionState,
   resetClientSessionForTests,
+  requireClientAuthentication,
 } from '../ts/clientSession'
 import { changeLanguage, language } from '../lang'
 import { mount, tick, unmount } from 'svelte'
@@ -275,7 +276,7 @@ describe('pre-writer ObserverShell', () => {
     expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.connected,
     )
-    expect(target.querySelector('input, textarea, [contenteditable="true"]')).toBeNull()
+    expect(target.querySelector('input:not([type="search"]), textarea, [contenteditable="true"]')).toBeNull()
     const home = target.querySelector<HTMLButtonElement>('nav button')!
     home.focus()
     expect(document.activeElement).toBe(home)
@@ -768,5 +769,124 @@ describe('pre-writer ObserverShell', () => {
     expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
     expect(target.textContent).not.toContain('Pending character name')
     expect(target.textContent).not.toContain('Pending chat name')
+  })
+  it('shares committed folders, pins, search and cards while retaining independent reader selection', async () => {
+    const first = makeDetailedCharacter()
+    first.chatFolders = [{ id: 'chat-folder', name: 'Stories', color: 'blue', folded: true }]
+    first.chats[0].folderId = 'chat-folder'
+    first.chats[0].pinned = true
+    const second = {
+      ...makeDetailedCharacter(),
+      chaId: 'char-b',
+      name: 'Character B',
+      displayName: 'Character B',
+      chats: [{ ...first.chats[0], id: 'chat-b', name: 'Other conversation', folderId: undefined, pinned: false }],
+    }
+    const order = [{ id: 'character-folder', name: 'Favorites', color: 'green', data: ['char-b', 'char-a'] }]
+    replaceResourceDatabase({
+      characters: [first, second],
+      characterOrder: order,
+      currentChar: 1,
+    } as unknown as Database)
+    const operation = beginClientSession('reader-a')
+    settleClientReader(operation, { databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 1 } })
+    applyCharactersResource({
+      version: SERVER_CHARACTER_SUMMARY_VERSION,
+      revision: 3,
+      characters: [first, second] as never,
+      characterOrder: order,
+      currentChar: 1,
+    })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    const router = await createRouterMock()
+    router.navigate('/character/char-a')
+    await tick()
+    const folder = target.querySelector<HTMLButtonElement>('[data-reader-character-folder] button')!
+    expect(folder.getAttribute('aria-expanded')).toBe('false')
+    folder.click()
+    await tick()
+    expect(folder.getAttribute('aria-expanded')).toBe('true')
+    expect(
+      Array.from(target.querySelectorAll('[data-reader-character]')).map((row) =>
+        row.getAttribute('data-reader-character'),
+      ),
+    ).toEqual(['char-b', 'char-a'])
+    expect(target.querySelector('[data-risu-pinned-chat="chat-a"]')).not.toBeNull()
+    const chatFolder = target.querySelector<HTMLButtonElement>('[data-risu-chat-folder-id="chat-folder"] button')!
+    chatFolder.click()
+    await tick()
+    expect(chatFolder.getAttribute('aria-expanded')).toBe('true')
+    expect(charactersResourceState.characters[0].chatFolders[0].folded).toBe(true)
+    const search = target.querySelector<HTMLInputElement>('input[aria-label="Search: Character"]')!
+    search.value = 'Character B'
+    search.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    expect(target.querySelector('[data-reader-character="char-a"]')).toBeNull()
+    setClientConnectionState('interrupted')
+    setClientConnectionState('live')
+    await tick()
+    expect(search.value).toBe('Character B')
+    expect(chatFolder.getAttribute('aria-expanded')).toBe('true')
+    target.querySelector<HTMLButtonElement>('[data-reader-navigation] button[aria-label="Home"]')!.click()
+    await tick()
+    expect(target.querySelectorAll('[data-risu-grid-character-row]')).toHaveLength(2)
+    const settings = target.querySelector<HTMLButtonElement>('button[aria-label^="Settings:"]')!
+    expect(settings.disabled).toBe(true)
+    settings.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(get(router.currentRoute).path).toBe('/')
+    expect(charactersResourceState.currentChar).toBe(1)
+    expect(await countPendingMutationRecords()).toBe(0)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('retains the latest valid reading route through direct restricted URLs and clears it on authentication loss', async () => {
+    await showConnectedReaderChat()
+    const router = await createRouterMock()
+    router.navigate('/character/char-a/chat-b')
+    await tick()
+    router.navigate('/settings/persona')
+    await tick()
+    expect(peekObserverRouteIntent()?.route.path).toBe('/character/char-a/chat-b')
+    const back = target.querySelector<HTMLButtonElement>('[data-reader-return-to-reading]')!
+    expect(back).not.toBeNull()
+    back.click()
+    await tick()
+    expect(get(router.currentRoute).path).toBe('/character/char-a/chat-b')
+    router.navigate('/settings/persona')
+    await tick()
+    const staleHome = target.querySelector<HTMLButtonElement>('[data-reader-navigation] button[aria-label="Home"]')!
+    requireClientAuthentication()
+    staleHome.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    await tick()
+    expect(get(router.currentRoute).path).toBe('/settings/persona')
+    expect(target.querySelector('[data-reader-return-to-reading]')).toBeNull()
+    expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
+    expect(await countPendingMutationRecords()).toBe(0)
+  })
+
+  it('opens one focus-trapped mobile navigation drawer and restores focus when Escape closes it', async () => {
+    await showConnectedReaderChat()
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
+    )
+    await mountObserverShell()
+    const toggle = target.querySelector<HTMLButtonElement>('[data-reader-navigation-toggle]')!
+    const drawer = target.querySelector<HTMLElement>('#reader-navigation')!
+    expect(drawer.hidden).toBe(true)
+    toggle.focus()
+    toggle.click()
+    await tick()
+    expect(drawer.hidden).toBe(false)
+    expect(drawer.getAttribute('aria-modal')).toBe('true')
+    expect(drawer.contains(document.activeElement)).toBe(true)
+    expect(target.querySelectorAll('[data-reader-navigation]')).toHaveLength(1)
+    drawer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
+    await tick()
+    expect(drawer.hidden).toBe(true)
+    expect(document.activeElement).toBe(toggle)
+    expect(get((await createRouterMock()).currentRoute).path).toBe('/character/char-a/chat-a')
+    expect(await countPendingMutationRecords()).toBe(0)
   })
 })

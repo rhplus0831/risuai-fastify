@@ -6,14 +6,17 @@
     src: string | Promise<string>
     name: string
     size?: string
-    onClick?: any
+    onClick: () => void
+    ariaLabel?: string
+    ariaExpanded?: boolean
+    ariaControls?: string
     bordered?: boolean
     color?: string
     backgroundimg?: string | Promise<string>
     children?: import('svelte').Snippet
     oncontextmenu?: (
       event: MouseEvent & {
-        currentTarget: EventTarget & HTMLSpanElement
+        currentTarget: EventTarget & HTMLButtonElement
       },
     ) => any
     chaId?: string
@@ -25,7 +28,10 @@
     src,
     name,
     size = '22',
-    onClick = () => {},
+    onClick,
+    ariaLabel,
+    ariaExpanded,
+    ariaControls,
     bordered = false,
     color = '',
     backgroundimg = '',
@@ -36,7 +42,8 @@
   }: Props = $props()
 </script>
 
-<span
+<button
+  type="button"
   class="flex shrink-0 items-center justify-center avatar"
   class:border={bordered}
   class:border-selected={bordered}
@@ -49,9 +56,10 @@
     event.currentTarget.click()
   }}
   use:tooltipRight={name}
-  role="button"
   tabindex="0"
-  aria-label={name}
+  aria-label={ariaLabel ?? name}
+  aria-expanded={ariaExpanded}
+  aria-controls={ariaControls}
   aria-current={isCurrent ? 'page' : undefined}
   data-char-id={chaId}>
   {#if src}
@@ -141,4 +149,4 @@
       class:rounded-full={rounded}>
     </div>
   {/if}
-</span>
+</button>

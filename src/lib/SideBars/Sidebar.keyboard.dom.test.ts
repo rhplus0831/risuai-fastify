@@ -179,7 +179,7 @@ function seedFolderSidebarDatabase(
 }
 
 function openFolderContextMenu(folderName: string) {
-  const folder = target.querySelector<HTMLElement>(`[role="button"][aria-label="${folderName}"]`)
+  const folder = target.querySelector<HTMLElement>(`button[aria-label="${folderName}"]`)
   expect(folder).toBeTruthy()
   folder!.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))
 }
@@ -323,7 +323,7 @@ describe('Sidebar character keyboard activation', () => {
     expect(avatar).toBeTruthy()
     const row = avatar!.closest<HTMLElement>('[draggable="true"]')
     expect(row).toBeTruthy()
-    expect(row!.querySelectorAll('[role="button"][tabindex="0"]')).toHaveLength(1)
+    expect(row!.querySelectorAll('button[tabindex="0"]')).toHaveLength(1)
 
     const space = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
     avatar!.dispatchEvent(space)
@@ -371,7 +371,7 @@ describe('Sidebar character keyboard activation', () => {
     const menuButton = target.querySelector<HTMLButtonElement>('button[aria-label="Menu"]')
     const pinnedRail = target.querySelector<HTMLElement>('[data-risu-pinned-chats]')
     const pinnedChat = target.querySelector<HTMLElement>('[data-risu-pinned-chat="chat-a"]')
-    const pinnedAvatar = pinnedChat?.querySelector<HTMLElement>('[role="button"]')
+    const pinnedAvatar = pinnedChat?.querySelector<HTMLElement>('button')
     expect(menuButton).toBeTruthy()
     expect(pinnedRail).toBeTruthy()
     expect(pinnedAvatar).toBeTruthy()
@@ -565,7 +565,7 @@ describe('Sidebar character folder context menu', () => {
     component = mount(Sidebar, { target })
     await tick()
 
-    const folder = target.querySelector<HTMLElement>('[role="button"][aria-label="Folder A"]')
+    const folder = target.querySelector<HTMLElement>('button[aria-label="Folder A"]')
     expect(folder).toBeTruthy()
     expect(target.querySelector('[data-char-id="char-a"]')).toBeNull()
 
@@ -620,7 +620,7 @@ describe('Sidebar character folder context menu', () => {
 
     seedFolderSidebarDatabase(['folder-b', 'folder-a'])
     await tick()
-    expect(target.querySelector('[role="button"][aria-label="Folder B"]')).toBeTruthy()
+    expect(target.querySelector('button[aria-label="Folder B"]')).toBeTruthy()
 
     outerSelection.resolve('1')
 
@@ -642,7 +642,7 @@ describe('Sidebar character folder context menu', () => {
     await vi.waitFor(() => expect(sidebarKeyboardMocks.updateCharacterOrderFolderWithOutcome).toHaveBeenCalledTimes(1))
     await tick()
 
-    const folderAvatar = target.querySelector<HTMLElement>('[role="button"][aria-label="Folder A"]')
+    const folderAvatar = target.querySelector<HTMLElement>('button[aria-label="Folder A"]')
     const folderRow = folderAvatar?.closest<HTMLElement>('[role="listitem"]')
     expect(folderRow?.getAttribute('aria-busy')).toBe('true')
     expect(folderRow?.getAttribute('draggable')).toBe('false')

@@ -1,4 +1,5 @@
 import { mount, tick, unmount } from 'svelte'
+import { fromStore } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('src/ts/gui/tooltip', () => ({
@@ -21,6 +22,7 @@ vi.mock('src/ts/router', async () => {
 
 import PinnedChatsRail from './PinnedChatsRail.svelte'
 import { currentRoute } from 'src/ts/router'
+const routeView = fromStore(currentRoute)
 import type { PinnedChatItem } from './sidebarMultitasking'
 import { language } from 'src/lang'
 
@@ -64,7 +66,7 @@ function pinnedRow(chatId: string): HTMLElement {
 }
 
 function pinnedAction(chatId: string): HTMLElement {
-  const action = pinnedRow(chatId).querySelector<HTMLElement>('[role="button"]')
+  const action = pinnedRow(chatId).querySelector<HTMLElement>('button')
   expect(action).toBeTruthy()
   return action!
 }
@@ -105,6 +107,14 @@ describe('PinnedChatsRail current route', () => {
       target,
       props: {
         items: pinnedChats,
+        get selectedCharacterId() {
+          return routeView.current.kind === 'character' ? routeView.current.chaId : null
+        },
+        get selectedChatId() {
+          return routeView.current.kind === 'character' ? (routeView.current.chatId ?? null) : null
+        },
+        resolveImage: (image: string) => image,
+        onPrefetch: vi.fn(),
         generatingChatIds: new Set<string>(),
         rounded: false,
         onOpen: vi.fn(),
@@ -133,6 +143,14 @@ describe('PinnedChatsRail current route', () => {
       target,
       props: {
         items: pinnedChats,
+        get selectedCharacterId() {
+          return routeView.current.kind === 'character' ? routeView.current.chaId : null
+        },
+        get selectedChatId() {
+          return routeView.current.kind === 'character' ? (routeView.current.chatId ?? null) : null
+        },
+        resolveImage: (image: string) => image,
+        onPrefetch: vi.fn(),
         generatingChatIds: new Set(['chat-a', 'chat-b']),
         warningChatIds: new Set(['chat-a']),
         rounded: false,
@@ -160,6 +178,13 @@ describe('PinnedChatsRail current route', () => {
       target,
       props: {
         items: pinnedChats,
+        get selectedCharacterId() {
+          return routeView.current.kind === 'character' ? routeView.current.chaId : null
+        },
+        get selectedChatId() {
+          return routeView.current.kind === 'character' ? (routeView.current.chatId ?? null) : null
+        },
+        resolveImage: (image: string) => image,
         generatingChatIds: new Set<string>(),
         rounded: false,
         onOpen: vi.fn(),
@@ -181,6 +206,14 @@ describe('PinnedChatsRail current route', () => {
       target,
       props: {
         items: pinnedChats,
+        get selectedCharacterId() {
+          return routeView.current.kind === 'character' ? routeView.current.chaId : null
+        },
+        get selectedChatId() {
+          return routeView.current.kind === 'character' ? (routeView.current.chatId ?? null) : null
+        },
+        resolveImage: (image: string) => image,
+        onPrefetch: vi.fn(),
         generatingChatIds: new Set<string>(),
         unreadChatIds: new Set(['chat-b']),
         rounded: false,

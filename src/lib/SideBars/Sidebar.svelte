@@ -28,6 +28,14 @@
   import { getCharImage } from '../../ts/characterImage'
   import { language } from '../../lang'
   import SidebarAvatar from './SidebarAvatar.svelte'
+  import NavigationRail from './NavigationRail.svelte'
+  import NavigationButton from './NavigationButton.svelte'
+  import { currentRoute } from 'src/ts/router'
+  import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
+  const navigationEnabled = $derived.by(() => {
+    void $clientSessionStore
+    return canUseClientWriteAccess()
+  })
   import BaseRoundedButton from '../UI/BaseRoundedButton.svelte'
   import { selectSingleFile } from 'src/ts/filePicker'
   import { getFileSrc, saveAsset } from 'src/ts/globalApi.svelte'
@@ -201,6 +209,7 @@
   }
 
   async function openFolderActions(folderId: string, folderName: string, askBeforeOpening: boolean): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (
       isCharacterOrganizationActionPending('order') ||
       isCharacterOrganizationActionPending(characterFolderActionKey(folderId))
@@ -275,11 +284,13 @@
   }
 
   function openHomeRoute() {
+    if (!canUseClientWriteAccess()) return
     reseter()
     navigate('/')
   }
 
   function openSettingsRoute() {
+    if (!canUseClientWriteAccess()) return
     if ($settingsOpen) {
       closeSettingsRoute()
       return
@@ -289,6 +300,7 @@
   }
 
   function openPlaygroundRoute() {
+    if (!canUseClientWriteAccess()) return
     reseter()
     navigate($selectedCharID === -1 && $PlaygroundStore !== 0 ? '/' : '/playground')
   }
@@ -357,6 +369,7 @@
   }
 
   async function openCharacterRoute(index: number) {
+    if (!canUseClientWriteAccess()) return
     const character = characterOwnerAt(index)
     if (!character?.chaId) {
       changeChar(index, { reseter })
@@ -376,6 +389,8 @@
   }
 
   const characterRows = $derived.by((): readonly character[] => {
+    void $clientSessionStore
+    if (!canUseClientWriteAccess()) return []
     const status = charactersResourceState.status
     if (status === 'error') return []
     if (status !== 'ready' && status !== 'idle' && status !== 'loading') return []
@@ -390,7 +405,7 @@
   })
 
   function characterRowsOwner(): readonly character[] {
-    return characterRows
+    return canUseClientWriteAccess() ? characterRows : []
   }
 
   function characterOwnerAt(index: number) {
@@ -429,6 +444,7 @@
   }
 
   function characterOrderOwner() {
+    if (!canUseClientWriteAccess()) return []
     const status = charactersResourceState.status
     if (status === 'error') return []
     if (status !== 'ready' && status !== 'idle' && status !== 'loading') return []
@@ -519,6 +535,7 @@
   }
 
   function openPinnedChat(item: PinnedChatItem): void {
+    if (!canUseClientWriteAccess()) return
     markChatRead(item.chatId)
     reseter()
     navigate(characterRoutePath(item.characterId, item.chatId))
@@ -719,67 +736,68 @@
 </script>
 
 {#if menuSideBar}
-  <div
-    class="h-full w-20 min-w-20 flex-col items-center bg-bgcolor text-textcolor shadow-lg relative rs-sidebar"
-    class:editMode
-    class:risu-sub-sidebar={$sideBarClosing}
-    class:risu-sub-sidebar-close={$sideBarClosing}
-    class:hidden
-    class:flex={!hidden}>
-    <button
-      class="flex items-center justify-center py-2 flex-col gap-1 w-full mt-4"
-      class:text-textcolor2={!($selectedCharID < 0 && $PlaygroundStore === 0 && !$settingsOpen)}
-      onclick={openHomeRoute}>
-      <HomeIcon />
-      <span class="text-xs">{language.home}</span>
-    </button>
-    <button
-      class="flex items-center justify-center py-2 flex-col gap-1 w-full"
-      class:text-textcolor2={!$settingsOpen}
-      onpointerenter={preloadSettingsRoute}
-      onfocus={preloadSettingsRoute}
-      onclick={openSettingsRoute}>
-      <Settings />
-      <span class="text-xs">{language.settings}</span>
-    </button>
-    <button
-      class="flex items-center justify-center py-2 flex-col gap-1 w-full"
-      class:text-textcolor2={!($selectedCharID >= 0)}
-      onpointerenter={preloadGridRoute}
-      onfocus={preloadGridRoute}
-      onclick={() => {
-        reseter()
-        openGrid()
-      }}>
-      <User2Icon />
-      <span class="text-xs">{language.character}</span>
-    </button>
-    <button
-      class="flex items-center justify-center py-2 flex-col gap-1 w-full"
-      class:text-textcolor2={!($selectedCharID < 0 && $PlaygroundStore !== 0)}
-      onpointerenter={preloadPlaygroundRoute}
-      onfocus={preloadPlaygroundRoute}
-      onclick={openPlaygroundRoute}>
-      <ShellIcon />
-      <span class="text-xs">{language.playground.playground}</span>
-    </button>
+  <NavigationRail {hidden} closing={$sideBarClosing} {editMode}>
+    <NavigationButton
+      label={language.home}
+      selected={$selectedCharID < 0 && $PlaygroundStore === 0 && !$settingsOpen}
+      enabled={navigationEnabled}
+      disabledReason={language.connectedReaders.writeAccessRequired}
+      onActivate={() => {
+        if (canUseClientWriteAccess()) openHomeRoute()
+      }}
+      onIntent={() => {}}><HomeIcon /></NavigationButton>
+    <NavigationButton
+      label={language.settings}
+      selected={$settingsOpen}
+      enabled={navigationEnabled}
+      disabledReason={language.connectedReaders.writeAccessRequired}
+      onActivate={() => {
+        if (canUseClientWriteAccess()) openSettingsRoute()
+      }}
+      onIntent={() => {
+        if (canUseClientWriteAccess()) preloadSettingsRoute()
+      }}><Settings /></NavigationButton>
+    <NavigationButton
+      label={language.character}
+      selected={$selectedCharID >= 0}
+      enabled={navigationEnabled}
+      disabledReason={language.connectedReaders.writeAccessRequired}
+      onActivate={() => {
+        if (canUseClientWriteAccess()) {
+          reseter()
+          openGrid()
+        }
+      }}
+      onIntent={() => {
+        if (canUseClientWriteAccess()) preloadGridRoute()
+      }}><User2Icon /></NavigationButton>
+    <NavigationButton
+      label={language.playground.playground}
+      selected={$selectedCharID < 0 && $PlaygroundStore !== 0}
+      enabled={navigationEnabled}
+      disabledReason={language.connectedReaders.writeAccessRequired}
+      onActivate={() => {
+        if (canUseClientWriteAccess()) openPlaygroundRoute()
+      }}
+      onIntent={() => {
+        if (canUseClientWriteAccess()) preloadPlaygroundRoute()
+      }}><ShellIcon /></NavigationButton>
     <PinnedChatsRail
       items={pinnedChats}
+      selectedCharacterId={$currentRoute.kind === 'character' ? $currentRoute.chaId : null}
+      selectedChatId={$currentRoute.kind === 'character' ? ($currentRoute.chatId ?? null) : null}
+      resolveImage={(image) => getCharImage(image, 'plain') ?? ''}
       {generatingChatIds}
       {warningChatIds}
       unreadChatIds={$unreadChatIds}
       rounded={IconRounded}
       onOpen={openPinnedChat}
-      onPrefetch={(item) => prefetchCharacter(item.characterId)} />
-  </div>
+      onPrefetch={(item) => {
+        if (canUseClientWriteAccess()) prefetchCharacter(item.characterId)
+      }} />
+  </NavigationRail>
 {:else}
-  <div
-    class="h-full w-20 min-w-20 flex-col items-center bg-bgcolor text-textcolor shadow-lg relative rs-sidebar"
-    class:editMode
-    class:risu-sub-sidebar={$sideBarClosing}
-    class:risu-sub-sidebar-close={$sideBarClosing}
-    class:hidden
-    class:flex={!hidden}>
+  <NavigationRail {hidden} closing={$sideBarClosing} {editMode}>
     {#if !hamburgerButtonBottom}
       <button
         aria-label={language.menu}
@@ -810,7 +828,7 @@
                   ariaLabel={menu.name}
                   onClick={() => {
                     reseter()
-                    menu.callback()
+                    if (canUseClientWriteAccess()) menu.callback()
                   }}>
                   <PluginDefinedIcon ico={menu} />
                 </BarIcon>
@@ -830,12 +848,17 @@
     {/if}
     <PinnedChatsRail
       items={pinnedChats}
+      selectedCharacterId={$currentRoute.kind === 'character' ? $currentRoute.chaId : null}
+      selectedChatId={$currentRoute.kind === 'character' ? ($currentRoute.chatId ?? null) : null}
+      resolveImage={(image) => getCharImage(image, 'plain') ?? ''}
       {generatingChatIds}
       {warningChatIds}
       unreadChatIds={$unreadChatIds}
       rounded={IconRounded}
       onOpen={openNarrowPinnedChat}
-      onPrefetch={(item) => prefetchCharacter(item.characterId)}
+      onPrefetch={(item) => {
+        if (canUseClientWriteAccess()) prefetchCharacter(item.characterId)
+      }}
       isInert={menuMode === 1} />
     <div
       class="flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto pr-0"
@@ -1130,7 +1153,7 @@
                   ariaLabel={menu.name}
                   onClick={() => {
                     reseter()
-                    menu.callback()
+                    if (canUseClientWriteAccess()) menu.callback()
                   }}>
                   <PluginDefinedIcon ico={menu} />
                 </BarIcon>
@@ -1157,7 +1180,7 @@
         ><ListIcon />
       </button>
     {/if}
-  </div>
+  </NavigationRail>
 {/if}
 <div
   class="setting-area h-full flex-col overflow-y-auto overflow-x-hidden bg-darkbg py-6 text-textcolor max-h-full"
@@ -1267,9 +1290,6 @@
 {/if}
 
 <style>
-  .editMode {
-    min-width: 6rem;
-  }
   @keyframes sidebar-transition {
     from {
       width: 0rem;
@@ -1310,30 +1330,6 @@
       right: 3rem;
     }
   }
-  @keyframes sub-sidebar-transition {
-    from {
-      width: 0rem;
-      min-width: 0rem;
-    }
-    to {
-      width: 5rem;
-      min-width: 5rem;
-    }
-  }
-  @keyframes sub-sidebar-transition-close {
-    from {
-      width: 5rem;
-      min-width: 5rem;
-      max-width: 5rem;
-      right: 0rem;
-    }
-    to {
-      width: 0rem;
-      min-width: 0rem;
-      max-width: 0rem;
-      right: 10rem;
-    }
-  }
   @keyframes sidebar-dark-animation {
     from {
       background-color: rgba(0, 0, 0, 0) !important;
@@ -1371,15 +1367,6 @@
     right: 3rem;
   }
 
-  .risu-sub-sidebar {
-    animation-name: sub-sidebar-transition;
-    animation-duration: var(--risu-animation-speed);
-  }
-  .risu-sub-sidebar-close {
-    animation-name: sub-sidebar-transition-close;
-    animation-duration: var(--risu-animation-speed);
-    position: relative;
-  }
   .sidebar-dark-animation {
     animation-name: sidebar-dark-transition;
     animation-duration: var(--risu-animation-speed);

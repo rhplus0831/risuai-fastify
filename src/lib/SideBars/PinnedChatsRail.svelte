@@ -1,7 +1,5 @@
 <script lang="ts">
   import { language } from 'src/lang'
-  import { getCharImage } from 'src/ts/characterImage'
-  import { currentRoute } from 'src/ts/router'
   import GenerationIndicator from './GenerationIndicator.svelte'
   import UnreadIndicator from './UnreadIndicator.svelte'
   import SidebarAvatar from './SidebarAvatar.svelte'
@@ -14,7 +12,10 @@
     unreadChatIds?: ReadonlySet<string>
     rounded: boolean
     onOpen: (item: PinnedChatItem) => void
-    onPrefetch?: (item: PinnedChatItem) => void
+    selectedCharacterId: string | null
+    selectedChatId: string | null
+    resolveImage: (image: string) => string | Promise<string>
+    onPrefetch: (item: PinnedChatItem) => void
     isInert?: boolean
   }
 
@@ -25,7 +26,10 @@
     unreadChatIds = new Set(),
     rounded,
     onOpen,
-    onPrefetch = () => {},
+    onPrefetch,
+    selectedCharacterId,
+    selectedChatId,
+    resolveImage,
     isInert = false,
   }: Props = $props()
 </script>
@@ -37,10 +41,7 @@
     inert={isInert}
     data-risu-pinned-chats>
     {#each items as item (`${item.characterId}:${item.chatId}`)}
-      {@const isCurrent =
-        $currentRoute.kind === 'character' &&
-        $currentRoute.chaId === item.characterId &&
-        $currentRoute.chatId === item.chatId}
+      {@const isCurrent = selectedCharacterId === item.characterId && selectedChatId === item.chatId}
       <div
         class="relative flex w-full flex-col items-center rounded-md"
         class:bg-selected={isCurrent}
@@ -50,7 +51,7 @@
         onpointerenter={() => onPrefetch(item)}
         onfocusin={() => onPrefetch(item)}>
         <SidebarAvatar
-          src={item.characterImage ? getCharImage(item.characterImage, 'plain') : '/none.webp'}
+          src={item.characterImage ? resolveImage(item.characterImage) : '/none.webp'}
           size="42"
           {rounded}
           name={`${item.characterName} · ${item.chatName}`}

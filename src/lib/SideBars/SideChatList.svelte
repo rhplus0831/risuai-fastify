@@ -1,4 +1,6 @@
 <script lang="ts">
+  import ChatSelectionButton from './ChatSelectionButton.svelte'
+  import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
   import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
 
   import { onDestroy, tick, untrack } from 'svelte'
@@ -120,7 +122,7 @@
   }
 
   function uniqueSidebarChat(chatId: string | undefined): Chat | undefined {
-    if (!chatId) return undefined
+    if (!canUseClientWriteAccess() || !chatId) return undefined
     const ownerCount = identityCharacterRows().reduce(
       (count, character) => count + (character.chats ?? []).filter((candidate) => candidate.id === chatId).length,
       0,
@@ -131,7 +133,7 @@
   }
 
   function uniqueSidebarFolder(folderId: string | undefined): ChatFolder | undefined {
-    if (!folderId) return undefined
+    if (!canUseClientWriteAccess() || !folderId) return undefined
     const ownerCount = identityCharacterRows().reduce(
       (count, character) =>
         count + (character.chatFolders ?? []).filter((candidate) => candidate.id === folderId).length,
@@ -393,7 +395,7 @@
   }
 
   function activateChatRow(index: number): void {
-    if (editMode) return
+    if (!canUseClientWriteAccess() || editMode) return
     const chat = uniqueSidebarChat(chara.chats[index]?.id)
     if (!chat?.id) return
     markChatRead(chat.id)
@@ -431,6 +433,7 @@
   }
 
   function recoverRejectedProvisionalChatRoute(characterId: string, provisionalChatId: string): void {
+    if (!canUseClientWriteAccess()) return
     const route = get(currentRoute)
     if (route.kind !== 'character' || route.chaId !== characterId || route.chatId !== provisionalChatId) return
     const character = sidebarCharacter?.chaId === characterId ? sidebarCharacter : undefined
@@ -440,6 +443,7 @@
   }
 
   function isExpectedSidebarChatSelected(characterId: string, chatId: string): boolean {
+    if (!canUseClientWriteAccess()) return false
     const selectedCharacter = sidebarCharacter
     return Boolean(
       selectedCharacter?.chaId === characterId &&
@@ -475,7 +479,7 @@
   }
 
   function isCurrentOrganizerOwner(characterId: string): boolean {
-    return sidebarCharacter?.chaId === characterId
+    return canUseClientWriteAccess() && sidebarCharacter?.chaId === characterId
   }
 
   function isCurrentBranchGraphOwner(
@@ -483,6 +487,7 @@
     selectedCharacterIndex: number,
     characterReference: character,
   ): boolean {
+    if (!canUseClientWriteAccess()) return false
     const selectedCharacter = sidebarCharacter
     if (characterId) return selectedCharacter?.chaId === characterId
     const selectedIndex =
@@ -777,6 +782,7 @@
   }
 
   async function createChat(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (!sidebarCharacter) return
     if (hasConflictingStructureMutation([chatOrderConflictKey()])) return
     const len = chara.chats.length
@@ -872,12 +878,14 @@
   }
 
   function applyDirectOptimisticChatMetadata(chatId: string, patch: Partial<Chat>): boolean {
+    if (!canUseClientWriteAccess()) return false
     const characterId = sidebarCharacter?.chaId
     if (!characterId || !uniqueSidebarChat(chatId)) return false
     return applyChatMetadataOwnerPatch(characterId, chatId, patch)
   }
 
   function applyDirectOptimisticFolderMetadata(folderId: string, patch: Partial<ChatFolder>): boolean {
+    if (!canUseClientWriteAccess()) return false
     const characterId = sidebarCharacter?.chaId
     if (!characterId || !uniqueSidebarFolder(folderId)) return false
     return applyChatFolderMetadataOwnerPatch(characterId, folderId, patch)
@@ -1069,15 +1077,21 @@
   }
 
   async function exportAllAndMaybeResetChats(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     const characterId = chara.chaId
     if (!characterId) return
     const exportResult = await exportAllChats(characterId)
-    if (!exportResult.success) return
+    if (!canUseClientWriteAccess() || !exportResult.success) return
 
     const firstConfirmed = await alertConfirm(language.chatListDeleteAllAfterExportConfirm)
-    if (!firstConfirmed) return
+    if (!canUseClientWriteAccess() || !firstConfirmed) return
     const secondConfirmed = await alertConfirm(language.chatListDeleteAllSecondConfirm)
-    if (!secondConfirmed || hasConflictingStructureMutation([chatOrderConflictKey(characterId)])) return
+    if (
+      !canUseClientWriteAccess() ||
+      !secondConfirmed ||
+      hasConflictingStructureMutation([chatOrderConflictKey(characterId)])
+    )
+      return
 
     const liveCharacter = sidebarCharacter?.chaId === characterId ? sidebarCharacter : undefined
     if (!liveCharacter) return
@@ -1121,6 +1135,7 @@
   }
 
   async function exportChatOnDemand(chatId: string): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (!chara.chaId || !uniqueSidebarChat(chatId)) return
     try {
       await exportChat({ characterId: chara.chaId, chatId })
@@ -1130,6 +1145,7 @@
   }
 
   async function importChatOnDemand(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (!sidebarCharacter) return
     try {
       await importChat()
@@ -1168,6 +1184,7 @@
   }
 
   async function createChatFolder(): Promise<void> {
+    if (!canUseClientWriteAccess()) return
     if (!sidebarCharacter) return
     if (hasConflictingStructureMutation([folderOrderConflictKey()])) return
     const length = chara.chatFolders?.length ?? 0
@@ -1344,12 +1361,14 @@
   }
 
   const createStb = () => {
+    if (!canUseClientWriteAccess()) return
     if (!listEle || !folderEles) return
     for (const chat of listEle.querySelectorAll('[data-risu-sidebar-chat-sortable-list]')) {
       chatsStb.push(
         new Sortable(chat, {
           group: 'chats',
           onEnd: async () => {
+            if (!canUseClientWriteAccess()) return
             if (hasConflictingStructureMutation([chatOrderConflictKey()])) {
               await resetSortableProjection()
               return
@@ -1405,6 +1424,7 @@
     folderStb = Sortable.create(folderEles, {
       group: 'folders',
       onEnd: async (event) => {
+        if (!canUseClientWriteAccess()) return
         if (hasConflictingStructureMutation([chatOrderConflictKey(), folderOrderConflictKey()])) {
           await resetSortableProjection()
           return
@@ -1462,6 +1482,13 @@
   }
 
   $effect(() => {
+    void $clientSessionStore
+    if (!canUseClientWriteAccess()) {
+      sortableStructureSignature = ''
+      sortableReconcileGeneration += 1
+      destroyStb()
+      return
+    }
     const signature = chatRouteOpen
       ? 'chat-open'
       : `chat-list:${(chara.chatFolders ?? []).map((folder) => folder.id).join('\u0000')}`
@@ -1469,13 +1496,13 @@
     sortableStructureSignature = signature
     const generation = ++sortableReconcileGeneration
 
-    if (chatRouteOpen) {
+    if (!canUseClientWriteAccess() || chatRouteOpen) {
       destroyStb()
       return
     }
 
     void tick().then(() => {
-      if (generation !== sortableReconcileGeneration || chatRouteOpen) return
+      if (!canUseClientWriteAccess() || generation !== sortableReconcileGeneration || chatRouteOpen) return
       destroyStb()
       createStb()
     })
@@ -1681,17 +1708,11 @@
                           onchange={() => void updateChatName(chat, chatNameDrafts[chat.id ?? ''])}
                           padding={false} />
                       {:else}
-                        <button
-                          type="button"
-                          data-risu-chat-action="select"
-                          aria-current={index === chara.chatPage ? 'page' : undefined}
-                          class="min-w-0 grow cursor-pointer text-left"
-                          onclick={(event) => {
-                            event.stopPropagation()
-                            activateChatRow(index)
-                          }}>
-                          <span>{renderedChatName(chat)}</span>
-                        </button>
+                        <ChatSelectionButton
+                          name={renderedChatName(chat)}
+                          selected={index === chara.chatPage}
+                          pinned={chat.pinned === true}
+                          onActivate={() => activateChatRow(index)} />
                       {/if}
                       {#if chat.id && reattachWarningChatIds.has(chat.id)}
                         <GenerationIndicator
@@ -1819,17 +1840,11 @@
                   onchange={() => void updateChatName(chat, chatNameDrafts[chat.id ?? ''])}
                   padding={false} />
               {:else}
-                <button
-                  type="button"
-                  data-risu-chat-action="select"
-                  aria-current={index === chara.chatPage ? 'page' : undefined}
-                  class="min-w-0 grow cursor-pointer text-left"
-                  onclick={(event) => {
-                    event.stopPropagation()
-                    activateChatRow(index)
-                  }}>
-                  <span>{renderedChatName(chat)}</span>
-                </button>
+                <ChatSelectionButton
+                  name={renderedChatName(chat)}
+                  selected={index === chara.chatPage}
+                  pinned={chat.pinned === true}
+                  onActivate={() => activateChatRow(index)} />
               {/if}
               {#if chat.id && reattachWarningChatIds.has(chat.id)}
                 <GenerationIndicator

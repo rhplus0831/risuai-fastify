@@ -1,11 +1,23 @@
 <script lang="ts">
-  import { tick } from 'svelte'
+  import { tick, onMount } from 'svelte'
   import { language } from '../lang'
   import { observerShellLifecycleStore, type ObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
   import { hydrateCharacterShell, characterShellHydrationState } from '../ts/server/characterShellHydration.svelte'
-  import { getReaderTranscriptCharacters } from '../ts/server/readerTranscriptProjection.svelte'
+  import {
+    getReaderTranscriptCharacters,
+    getReaderNavigationSettings,
+    getReaderCharacterOrder,
+  } from '../ts/server/readerTranscriptProjection.svelte'
+  import ReaderNavigation from './SideBars/ReaderNavigation.svelte'
+  import CharacterCatalogView from './SideBars/CharacterCatalogView.svelte'
+  import { readerCharacterOrder, readerPinnedChats } from './SideBars/readerNavigation'
+  import { getFileSrc } from '../ts/fileSource'
+  import { getCharacterDisplayName, getCharacterDisplaySearchText } from '../ts/characterDisplayName'
+  import { modalFocusTrap } from '../ts/gui/modalFocusTrap'
+  import { unreadChatIds, markChatRead } from '../ts/process/chatUnread.svelte'
+  import { type AppRoute } from '../ts/routerRoute'
   import { charactersResourceState } from '../ts/server/resourceState.svelte'
-  import { isServerCharacterShell } from '../ts/storage/database.svelte'
+  import { isServerCharacterShell, type Chat } from '../ts/storage/database.svelte'
   import { characterRoutePath, currentRoute, navigate } from '../ts/router'
   import { recordObserverRouteIntent } from '../ts/observerRouteIntent'
   import { canUseClientReaderContent, clientSessionStore } from '../ts/clientSession'
@@ -53,6 +65,90 @@
       : [],
   )
   let readerNavigationOpen = $state(false)
+  let narrowScreen = $state(false)
+  let catalogSearch = $state('')
+  let catalogMode = $state<'list' | 'grid'>('list')
+  let latestReadingRoute = $state<AppRoute | null>(null)
+  const readerSettings = $derived(getReaderNavigationSettings())
+  const readerOrder = $derived(getReaderCharacterOrder())
+  const navigationCharacters = $derived(
+    $clientSessionStore.managed ? readerCharacters : uniqueReaderCharacters(characters),
+  )
+  const navigationCharacter = $derived($clientSessionStore.managed ? readerCharacter : selectedCharacter)
+  const navigationChats = $derived(
+    $clientSessionStore.managed ? readerChats : selectedIsShell ? (shellPinnedChats as Chat[]) : selectedChats,
+  )
+  const navigationOrder = $derived($clientSessionStore.managed ? readerOrder : charactersResourceState.characterOrder)
+  const navigationPins = $derived(
+    readerPinnedChats($clientSessionStore.managed ? getReaderTranscriptCharacters() : characters, navigationOrder),
+  )
+  const readerIdentity = $derived(`${$clientSessionStore.authenticated}:${$clientSessionStore.databaseLineage}`)
+  const catalogRows = $derived.by(() => {
+    const order = readerCharacterOrder(navigationCharacters, navigationOrder).flatMap((entry) =>
+      typeof entry === 'string' ? [entry] : entry.data,
+    )
+    return order
+      .map((id) => navigationCharacters.find((row) => row.chaId === id)!)
+      .filter((row) =>
+        getCharacterDisplaySearchText(row).toLocaleLowerCase().includes(catalogSearch.toLocaleLowerCase()),
+      )
+      .map((row, index) => ({
+        key: row.chaId,
+        id: row.chaId,
+        index,
+        name: getCharacterDisplayName(row),
+        description: row.creatorNotes ?? '',
+        selected: routeCharacterId === row.chaId,
+        hasImage: !!row.image && !readerSettings.hideAllImages,
+        imageStyle:
+          row.image && !readerSettings.hideAllImages
+            ? getFileSrc(row.image).then((url) =>
+                url ? `background-image: url(${JSON.stringify(url)}); background-size: cover;` : '',
+              )
+            : '',
+      }))
+  })
+  const returnReadingPath = $derived.by(() => {
+    if (!latestReadingRoute || !readerContentAvailable) return null
+    const resolved = resolveReaderRoute(
+      latestReadingRoute,
+      { ...charactersResourceState, characters: getReaderTranscriptCharacters() },
+      $clientSessionStore.projectionReady,
+    )
+    return ['character', 'chat'].includes(resolved.status) ? latestReadingRoute.path : null
+  })
+  $effect(() => {
+    void readerIdentity
+    latestReadingRoute = null
+    unreadChatIds.set(new Set())
+    catalogSearch = ''
+    readerNavigationOpen = false
+  })
+  onMount(() => {
+    const media = window.matchMedia?.('(max-width: 767px)')
+    if (!media) return
+    const update = () => {
+      narrowScreen = media.matches
+    }
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  })
+  function readerDrawerTrap(node: HTMLElement, enabled: boolean) {
+    let trap = enabled ? modalFocusTrap(node) : undefined
+    return {
+      update(active: boolean) {
+        if (active && !trap) trap = modalFocusTrap(node)
+        else if (!active && trap) {
+          trap.destroy()
+          trap = undefined
+        }
+      },
+      destroy() {
+        trap?.destroy()
+      },
+    }
+  }
   let readerNotice = $state('')
   let readerNoticePath = $state('')
   let readerTranscriptModule: Promise<typeof import('./ReaderTranscript.svelte')> | undefined
@@ -107,21 +203,47 @@
   )
 
   $effect(() => {
-    recordObserverRouteIntent($currentRoute)
+    const route = $currentRoute
+    if (!$clientSessionStore.managed) {
+      recordObserverRouteIntent(route)
+      return
+    }
+    if (!readerContentAvailable || !$clientSessionStore.projectionReady) return
+    if (readerScope.status === 'character' || readerScope.status === 'chat') {
+      latestReadingRoute = { ...route }
+      recordObserverRouteIntent(route)
+    } else if (readerScope.status === 'home') recordObserverRouteIntent(route)
   })
 
   function showRoute(path: string): void {
+    if ($clientSessionStore.managed && !canUseClientReaderContent()) return
     readerNotice = ''
     readerNoticePath = ''
     navigate(path)
+    if (path === '/' || path === '/grid') readerNavigationOpen = false
   }
 
   function showCharacter(characterId: string): void {
+    if (
+      $clientSessionStore.managed &&
+      (!canUseClientReaderContent() || !readerCharacters.some((row) => row.chaId === characterId))
+    )
+      return
     readerNavigationOpen = true
     showRoute(characterRoutePath(characterId))
   }
 
   function showChat(characterId: string, chatId: string): void {
+    if ($clientSessionStore.managed) {
+      const owner = readerCharacters.find((row) => row.chaId === characterId)
+      if (
+        !canUseClientReaderContent() ||
+        !owner ||
+        !uniqueReaderChatIds(getReaderTranscriptCharacters(), owner).includes(chatId)
+      )
+        return
+    }
+    markChatRead(chatId)
     readerNavigationOpen = false
     showRoute(characterRoutePath(characterId, chatId))
   }
@@ -181,10 +303,20 @@
 
   async function useThisDevice(): Promise<void> {
     if (writerSwitchDisabled || !$clientSessionStore.managed) return
+    const sessionGeneration = $clientSessionStore.generation
     writerSwitchPending = true
     writerSwitchResult = null
     try {
       const { promoteConnectedReader } = await import('../ts/bootstrap')
+      if (
+        sessionGeneration !== $clientSessionStore.generation ||
+        !canUseClientReaderContent() ||
+        $clientSessionStore.lifecycle !== 'reading' ||
+        $clientSessionStore.connection !== 'live'
+      ) {
+        writerSwitchResult = { status: 'superseded' }
+        return
+      }
       writerSwitchResult = await promoteConnectedReader()
     } catch {
       writerSwitchResult = {
@@ -207,27 +339,27 @@
 </script>
 
 <div class="flex h-full w-full flex-col overflow-hidden bg-bg text-textcolor" data-observer-shell>
-  <header class="border-b border-textcolor/15 px-4 py-3 sm:px-6">
+  <header class="border-b border-textcolor/15 px-3 py-2">
     <div
-      class="mx-auto flex w-full max-w-6xl flex-col gap-2 sm:flex-row sm:items-center sm:justify-between"
+      class="flex w-full flex-wrap items-center justify-between gap-2"
       role="status"
       aria-live="polite"
       data-observer-read-only-status>
-      <div>
-        <h1 class="text-lg font-semibold">
+      <div class={$clientSessionStore.managed ? 'flex flex-wrap items-center gap-x-3 gap-y-1' : ''}>
+        <h1 class="text-sm font-semibold">
           {$clientSessionStore.managed ? language.connectedReaders.title : language.observerShell.title}
         </h1>
         <p class="text-sm text-textcolor2" data-observer-lifecycle-status>
           {lifecycleStatus($observerShellLifecycleStore.mode)}
         </p>
         {#if $clientSessionStore.managed}
-          <p id="reader-writer-switch-help" class="mt-2 max-w-2xl text-sm text-textcolor2">
+          <p id="reader-writer-switch-help" class="sr-only">
             {language.connectedReaders.useThisDeviceHelp}
           </p>
           <button
             bind:this={useThisDeviceButton}
             type="button"
-            class="mt-2 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+            class="rounded-md border border-textcolor/30 px-3 py-1 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
             aria-describedby="reader-writer-switch-help"
             aria-busy={writerSwitchInProgress}
             data-reader-use-this-device
@@ -267,281 +399,234 @@
     </div>
   </header>
 
-  {#if $clientSessionStore.managed}
-    <div
-      class="flex min-h-0 flex-1 flex-col md:grid md:grid-cols-[minmax(13rem,18rem)_minmax(0,1fr)]"
-      data-reader-layout>
+  <div class="flex min-h-0 flex-1 flex-col" data-reader-layout>
+    {#if narrowScreen}
       <button
         type="button"
-        class="shrink-0 border-b border-textcolor/15 px-4 py-2 text-left text-sm md:hidden"
+        class="shrink-0 border-b border-textcolor/15 px-4 py-2 text-left text-sm"
         aria-controls="reader-navigation"
-        aria-expanded={readerNavigationOpen || !routeChatId}
+        aria-expanded={readerNavigationOpen}
         onclick={() => {
           readerNavigationOpen = !readerNavigationOpen
         }}
-        data-reader-navigation-toggle>
-        {language.connectedReaders.browseConversations}
-      </button>
-      <nav
+        data-reader-navigation-toggle>{language.connectedReaders.browseConversations}</button>
+    {/if}
+    <div class="flex min-h-0 flex-1">
+      <!-- The dialog semantics and focus trap are enabled together only at mobile widths. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
         id="reader-navigation"
-        class="max-h-64 shrink-0 overflow-y-auto border-b border-textcolor/15 p-3 md:max-h-none md:min-h-0 md:border-b-0 md:border-r {readerNavigationOpen ||
-        !routeChatId
-          ? ''
-          : 'hidden md:block'}"
-        aria-label={language.observerShell.navigationLabel}>
-        <button
-          type="button"
-          class="mb-3 w-full rounded border border-textcolor/20 px-3 py-2 text-left"
-          aria-current={$currentRoute.kind === 'home' ? 'page' : undefined}
-          onclick={() => showRoute('/')}>{language.home}</button>
-        <h2 class="mb-2 text-sm font-semibold text-textcolor2">{language.observerShell.charactersLabel}</h2>
-        {#if readerCharacters.length === 0}<p class="text-sm text-textcolor2">
-            {language.observerShell.noCharacters}
-          </p>{/if}
-        <ul class="flex flex-col gap-1">
-          {#each readerCharacters as character (character.chaId)}
-            <li>
-              <button
-                type="button"
-                class="w-full rounded px-3 py-2 text-left hover:bg-textcolor/5 {routeCharacterId === character.chaId
-                  ? 'bg-textcolor/10'
-                  : ''}"
-                aria-current={routeCharacterId === character.chaId ? 'page' : undefined}
-                aria-label={language.observerShell.openCharacter(character.displayName || character.name)}
-                onclick={() => showCharacter(character.chaId)}>{character.displayName || character.name}</button>
-            </li>
-          {/each}
-        </ul>
-        {#if readerCharacter}
-          <h2 class="mb-2 mt-5 text-sm font-semibold text-textcolor2">{language.observerShell.chatsLabel}</h2>
-          {#if readerChats.length > 0}
-            <ul class="flex flex-col gap-1">
-              {#each readerChats as chat (chat.id)}
-                <li>
-                  <button
-                    type="button"
-                    class="w-full rounded px-3 py-2 text-left hover:bg-textcolor/5 {routeChatId === chat.id
-                      ? 'bg-textcolor/10'
-                      : ''}"
-                    aria-current={routeChatId === chat.id ? 'page' : undefined}
-                    aria-label={language.observerShell.openChat(chat.name)}
-                    onclick={() => showChat(readerCharacter.chaId, chat.id)}>{chat.name}</button>
-                </li>
-              {/each}
-            </ul>
-          {:else if isServerCharacterShell(readerCharacter)}<p class="text-sm text-textcolor2">
-              {language.loadingChatData}
-            </p>
-          {:else}<p class="text-sm text-textcolor2">{language.connectedReaders.noConversations}</p>{/if}
-        {/if}
-      </nav>
+        class={narrowScreen ? 'fixed inset-0 z-30 flex bg-black/50' : 'flex min-h-0 shrink-0'}
+        hidden={narrowScreen && !readerNavigationOpen}
+        data-modal-root={narrowScreen ? '' : undefined}
+        role={narrowScreen ? 'dialog' : undefined}
+        aria-modal={narrowScreen ? 'true' : undefined}
+        aria-label={language.observerShell.navigationLabel}
+        tabindex={narrowScreen ? -1 : undefined}
+        use:readerDrawerTrap={narrowScreen && readerNavigationOpen}
+        onkeydown={(event) => {
+          if (narrowScreen && event.key === 'Escape') {
+            event.preventDefault()
+            readerNavigationOpen = false
+          }
+        }}>
+        {#key readerIdentity}
+          <ReaderNavigation
+            characters={navigationCharacters}
+            characterOrder={navigationOrder}
+            settings={readerSettings}
+            character={navigationCharacter}
+            chats={navigationChats}
+            selectedCharacterId={routeCharacterId}
+            selectedChatId={routeChatId}
+            homeSelected={$currentRoute.kind === 'home'}
+            gridSelected={$currentRoute.kind === 'grid'}
+            loadingChats={$clientSessionStore.managed && !!readerCharacter && isServerCharacterShell(readerCharacter)}
+            unreadChatIds={$unreadChatIds}
+            pins={navigationPins}
+            onHome={() => showRoute('/')}
+            onGrid={() => showRoute('/grid')}
+            onCharacter={showCharacter}
+            onChat={showChat} />
+        {/key}
+        {#if narrowScreen}<button
+            type="button"
+            class="self-start rounded-full bg-bgcolor p-3 text-textcolor"
+            aria-label={language.close}
+            onclick={() => {
+              readerNavigationOpen = false
+            }}>×</button
+          >{/if}
+      </div>
       <section class="flex min-h-0 min-w-0 flex-1 flex-col" data-reader-route>
-        {#if charactersResourceState.status === 'error' || (routeCharacterId && charactersResourceState.rowStatuses[routeCharacterId] === 'error')}
-          <p
-            class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm text-textcolor2"
-            role="alert"
-            data-reader-resource-read-failed>
-            {language.connectedReaders.readFailed}
-          </p>
-        {/if}
-        {#if readerNotice && readerNoticePath === $currentRoute.path}<p
-            class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm"
-            role="status"
-            data-reader-route-notice>
-            {readerNotice}
-          </p>{/if}
-        {#if !readerContentAvailable}
-          <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
-        {:else if readerScope.status === 'blocked'}
-          <p class="p-6" role="status" data-reader-authoring-gate>{language.connectedReaders.writeAccessRequired}</p>
-        {:else if readerScope.status === 'ambiguous'}
-          <p class="p-6" role="alert" data-reader-ambiguous-target>{language.connectedReaders.ambiguousConversation}</p>
-        {:else if routeCharacterId && routeChatId}
-          {#if selectedHydration?.status === 'error'}
-            <div class="shrink-0 px-4 py-3 text-sm" role="alert">
-              <p>{language.connectedReaders.readFailed}</p>
-              <button
-                type="button"
-                class="mt-2 rounded border border-textcolor/20 px-3 py-2"
-                onclick={() => loadDetails(routeCharacterId)}>{language.retry}</button>
-            </div>
+        {#if $clientSessionStore.managed}
+          {#if charactersResourceState.status === 'error' || (routeCharacterId && charactersResourceState.rowStatuses[routeCharacterId] === 'error')}
+            <p
+              class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm text-textcolor2"
+              role="alert"
+              data-reader-resource-read-failed>
+              {language.connectedReaders.readFailed}
+            </p>
           {/if}
-          {#key `${routeCharacterId}:${routeChatId}`}
-            {#await loadReaderTranscript()}
-              <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
-            {:then module}
-              <module.default characterId={routeCharacterId} chatId={routeChatId} />
-            {:catch}
-              <p class="p-6 text-textcolor2" role="alert">{language.connectedReaders.readFailed}</p>
-            {/await}
-          {/key}
-        {:else if readerCharacter}
-          <div class="overflow-y-auto p-5 sm:p-8">
-            <h2 class="text-xl font-semibold">{readerCharacter.displayName || readerCharacter.name}</h2>
-            <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.chooseConversation}</p>
-            {#if selectedHydration?.status === 'error'}
-              <p class="mt-4 text-sm" role="alert">{language.connectedReaders.readFailed}</p>
-              <button
-                class="mt-2 rounded border border-textcolor/20 px-3 py-2"
-                type="button"
-                onclick={() => loadDetails(readerCharacter.chaId)}>{language.retry}</button>
-            {:else if isServerCharacterShell(readerCharacter)}<p class="mt-4 text-sm text-textcolor2" role="status">
-                {language.loadingChatData}
-              </p>{/if}
-          </div>
-        {:else if readerScope.status === 'loading'}
-          <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
-        {:else}
-          <div class="m-auto max-w-md p-6 text-center">
-            <h2 class="text-xl font-semibold">{language.observerShell.chooseCharacter}</h2>
-            <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.chooseCharacterHelp}</p>
-          </div>
-        {/if}
-      </section>
-    </div>
-  {:else}
-    <div class="mx-auto grid min-h-0 w-full max-w-6xl flex-1 grid-cols-1 md:grid-cols-[minmax(15rem,20rem)_1fr]">
-      <nav
-        class="min-h-0 overflow-y-auto border-b border-textcolor/15 p-4 md:border-b-0 md:border-r"
-        aria-label={language.observerShell.navigationLabel}>
-        <button
-          type="button"
-          class="mb-4 w-full rounded-md border border-textcolor/20 px-3 py-2 text-left hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-          aria-current={$currentRoute.kind === 'home' ? 'page' : undefined}
-          onclick={() => showRoute('/')}>
-          {language.home}
-        </button>
-
-        <h2 class="mb-2 text-sm font-semibold uppercase tracking-wide text-textcolor2">
-          {language.observerShell.charactersLabel}
-        </h2>
-        {#if characters.length === 0}
-          <p class="text-sm text-textcolor2">{language.observerShell.noCharacters}</p>
-        {:else}
-          <ul class="flex flex-col gap-2">
-            {#each characters as character (character.chaId)}
-              <li>
-                <button
-                  type="button"
-                  class="w-full rounded-md border border-textcolor/15 px-3 py-2 text-left hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 {routeCharacterId ===
-                  character.chaId
-                    ? 'bg-textcolor/10'
-                    : ''}"
-                  aria-current={routeCharacterId === character.chaId ? 'page' : undefined}
-                  aria-label={language.observerShell.openCharacter(character.displayName || character.name)}
-                  onclick={() => showCharacter(character.chaId)}>
-                  <span class="block truncate font-medium">{character.displayName || character.name}</span>
-                  <span class="block text-xs text-textcolor2">
-                    {isServerCharacterShell(character)
-                      ? language.observerShell.summaryLabel
-                      : language.observerShell.detailsLabel}
-                  </span>
-                </button>
-              </li>
-            {/each}
-          </ul>
-        {/if}
-      </nav>
-
-      <section class="min-h-0 overflow-y-auto p-5 sm:p-8" aria-labelledby="observer-detail-heading">
-        {#if authoringRouteBlocked}
-          <p id="observer-detail-heading" role="status" data-reader-authoring-gate>
-            {language.connectedReaders.writeAccessRequired}
-          </p>
-        {:else if selectedCharacter}
-          <div class="mx-auto flex max-w-2xl flex-col gap-5">
-            <div>
-              <p class="mb-1 text-sm text-textcolor2">
-                {selectedIsShell ? language.observerShell.summaryLabel : language.observerShell.detailsLabel}
-              </p>
-              <h2 id="observer-detail-heading" class="text-2xl font-semibold">
-                {selectedCharacter.displayName || selectedCharacter.name}
-              </h2>
-              {#if selectedCharacter.creatorNotes}
-                <p class="mt-3 whitespace-pre-wrap text-sm text-textcolor2">{selectedCharacter.creatorNotes}</p>
-              {/if}
+          {#if readerNotice && readerNoticePath === $currentRoute.path}<p
+              class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm"
+              role="status"
+              data-reader-route-notice>
+              {readerNotice}
+            </p>{/if}
+          {#if !readerContentAvailable}
+            <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
+          {:else if readerScope.status === 'blocked'}
+            <div class="p-6">
+              <p role="status" data-reader-authoring-gate>{language.connectedReaders.writeAccessRequired}</p>
+              <div class="mt-4 flex gap-3">
+                <button type="button" class="rounded-md border border-selected px-3 py-2" onclick={() => showRoute('/')}
+                  >{language.home}</button>
+                {#if returnReadingPath}<button
+                    type="button"
+                    class="rounded-md border border-selected px-3 py-2"
+                    data-reader-return-to-reading
+                    onclick={() => {
+                      if (returnReadingPath) showRoute(returnReadingPath)
+                    }}>{language.connectedReaders.returnToReading}</button
+                  >{/if}
+              </div>
             </div>
-
-            <p class="text-sm text-textcolor2">{language.observerShell.chatCount(shellChatCount)}</p>
-
-            {#if selectedIsShell}
-              <div class="rounded-md border border-textcolor/15 p-4" data-observer-character-summary>
-                <p class="text-sm text-textcolor2">{language.observerShell.summaryHelp}</p>
+          {:else if readerScope.status === 'ambiguous'}
+            <p class="p-6" role="alert" data-reader-ambiguous-target>
+              {language.connectedReaders.ambiguousConversation}
+            </p>
+          {:else if routeCharacterId && routeChatId}
+            {#if selectedHydration?.status === 'error'}
+              <div class="shrink-0 px-4 py-3 text-sm" role="alert">
+                <p>{language.connectedReaders.readFailed}</p>
                 <button
                   type="button"
-                  class="mt-3 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-60"
-                  disabled={selectedHydration?.status === 'loading'}
-                  aria-label={language.observerShell.loadDetailsFor(
-                    selectedCharacter.displayName || selectedCharacter.name,
-                  )}
-                  onclick={() => loadDetails(selectedCharacter.chaId)}>
-                  {selectedHydration?.status === 'loading'
-                    ? language.observerShell.loadingDetails
-                    : selectedHydration?.status === 'error'
-                      ? language.observerShell.retryDetails
-                      : language.observerShell.loadDetails}
-                </button>
-                {#if selectedHydration?.status === 'error'}
-                  <p class="mt-2 text-sm text-red-500" role="alert">{language.observerShell.detailsError}</p>
-                {/if}
+                  class="mt-2 rounded border border-textcolor/20 px-3 py-2"
+                  onclick={() => loadDetails(routeCharacterId)}>{language.retry}</button>
               </div>
             {/if}
-
-            <div>
-              <h3 class="mb-2 font-semibold">{language.observerShell.chatsLabel}</h3>
-              {#if selectedChats.length > 0}
-                <ul class="flex flex-col gap-2">
-                  {#each selectedChats as chat (chat.id)}
-                    <li>
-                      <button
-                        type="button"
-                        class="w-full rounded-md border border-textcolor/15 px-3 py-2 text-left hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 {routeChatId ===
-                        chat.id
-                          ? 'bg-textcolor/10'
-                          : ''}"
-                        aria-current={routeChatId === chat.id ? 'page' : undefined}
-                        aria-label={language.observerShell.openChat(chat.name)}
-                        onclick={() => showChat(selectedCharacter.chaId, chat.id)}>
-                        {chat.name}
-                      </button>
-                    </li>
-                  {/each}
-                </ul>
-              {:else if shellPinnedChats.length > 0}
-                <p class="mb-2 text-sm text-textcolor2">{language.observerShell.pinnedChatsHelp}</p>
-                <ul class="flex flex-col gap-2">
-                  {#each shellPinnedChats as chat (chat.id)}
-                    <li>
-                      <button
-                        type="button"
-                        class="w-full rounded-md border border-textcolor/15 px-3 py-2 text-left hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 {routeChatId ===
-                        chat.id
-                          ? 'bg-textcolor/10'
-                          : ''}"
-                        aria-current={routeChatId === chat.id ? 'page' : undefined}
-                        aria-label={language.observerShell.openChat(chat.name)}
-                        onclick={() => showChat(selectedCharacter.chaId, chat.id)}>
-                        {chat.name}
-                      </button>
-                    </li>
-                  {/each}
-                </ul>
-              {:else}
-                <p class="text-sm text-textcolor2">{language.observerShell.noChats}</p>
-              {/if}
+            {#key `${routeCharacterId}:${routeChatId}`}
+              {#await loadReaderTranscript()}
+                <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
+              {:then module}
+                <module.default
+                  characterId={routeCharacterId}
+                  chatId={routeChatId}
+                  onUseThisDevice={() => void useThisDevice()}
+                  takeoverDisabled={writerSwitchDisabled} />
+              {:catch}
+                <p class="p-6 text-textcolor2" role="alert">{language.connectedReaders.readFailed}</p>
+              {/await}
+            {/key}
+          {:else if readerCharacter}
+            <div class="overflow-y-auto p-5 sm:p-8">
+              <h2 class="text-xl font-semibold">{readerCharacter.displayName || readerCharacter.name}</h2>
+              <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.chooseConversation}</p>
+              {#if selectedHydration?.status === 'error'}
+                <p class="mt-4 text-sm" role="alert">{language.connectedReaders.readFailed}</p>
+                <button
+                  class="mt-2 rounded border border-textcolor/20 px-3 py-2"
+                  type="button"
+                  onclick={() => loadDetails(readerCharacter.chaId)}>{language.retry}</button>
+              {:else if isServerCharacterShell(readerCharacter)}<p class="mt-4 text-sm text-textcolor2" role="status">
+                  {language.loadingChatData}
+                </p>{/if}
             </div>
-          </div>
+          {:else if readerScope.status === 'loading'}
+            <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
+          {:else}
+            {@render catalog()}
+          {/if}
         {:else}
-          <div class="flex h-full min-h-48 items-center justify-center text-center">
-            <div class="max-w-md">
-              <h2 id="observer-detail-heading" class="text-xl font-semibold">
-                {language.observerShell.chooseCharacter}
-              </h2>
-              <p class="mt-2 text-sm text-textcolor2">{language.observerShell.chooseCharacterHelp}</p>
-            </div>
+          <div class="min-h-0 overflow-y-auto p-5 sm:p-8" aria-labelledby="observer-detail-heading">
+            {#if authoringRouteBlocked}
+              <p id="observer-detail-heading" role="status" data-reader-authoring-gate>
+                {language.connectedReaders.writeAccessRequired}
+              </p>
+            {:else if selectedCharacter}
+              <div class="mx-auto flex max-w-2xl flex-col gap-5">
+                <div>
+                  <p class="mb-1 text-sm text-textcolor2">
+                    {selectedIsShell ? language.observerShell.summaryLabel : language.observerShell.detailsLabel}
+                  </p>
+                  <h2 id="observer-detail-heading" class="text-2xl font-semibold">
+                    {selectedCharacter.displayName || selectedCharacter.name}
+                  </h2>
+                  {#if selectedCharacter.creatorNotes}
+                    <p class="mt-3 whitespace-pre-wrap text-sm text-textcolor2">{selectedCharacter.creatorNotes}</p>
+                  {/if}
+                </div>
+
+                <p class="text-sm text-textcolor2">{language.observerShell.chatCount(shellChatCount)}</p>
+
+                {#if selectedIsShell}
+                  <div class="rounded-md border border-textcolor/15 p-4" data-observer-character-summary>
+                    <p class="text-sm text-textcolor2">{language.observerShell.summaryHelp}</p>
+                    <button
+                      type="button"
+                      class="mt-3 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-60"
+                      disabled={selectedHydration?.status === 'loading'}
+                      aria-label={language.observerShell.loadDetailsFor(
+                        selectedCharacter.displayName || selectedCharacter.name,
+                      )}
+                      onclick={() => loadDetails(selectedCharacter.chaId)}>
+                      {selectedHydration?.status === 'loading'
+                        ? language.observerShell.loadingDetails
+                        : selectedHydration?.status === 'error'
+                          ? language.observerShell.retryDetails
+                          : language.observerShell.loadDetails}
+                    </button>
+                    {#if selectedHydration?.status === 'error'}
+                      <p class="mt-2 text-sm text-red-500" role="alert">{language.observerShell.detailsError}</p>
+                    {/if}
+                  </div>
+                {/if}
+              </div>
+            {:else}
+              {@render catalog()}
+            {/if}
           </div>
         {/if}
       </section>
     </div>
-  {/if}
+  </div>
 </div>
+
+{#snippet catalog()}
+  <div
+    class="h-full w-full flex justify-center overflow-y-auto"
+    data-risu-grid-catalog
+    data-risu-list-kind={catalogMode}>
+    <div class="h-full p-6 bg-darkbg max-w-full w-2xl flex flex-col">
+      <h2 class="text-xl font-semibold mb-3">{language.observerShell.chooseCharacter}</h2>
+      <input
+        type="search"
+        class="mb-3 rounded-md border border-darkborderc bg-bgcolor px-3 py-2"
+        aria-label={language.search}
+        placeholder={language.search}
+        bind:value={catalogSearch} />
+      <div class="mb-4 flex gap-2">
+        <button
+          type="button"
+          class="rounded-md border border-selected px-3 py-1"
+          aria-pressed={catalogMode === 'grid'}
+          onclick={() => {
+            catalogMode = 'grid'
+          }}>{language.grid}</button>
+        <button
+          type="button"
+          class="rounded-md border border-selected px-3 py-1"
+          aria-pressed={catalogMode === 'list'}
+          onclick={() => {
+            catalogMode = 'list'
+          }}>{language.list}</button>
+      </div>
+      <CharacterCatalogView
+        rows={catalogRows}
+        mode={catalogMode}
+        onOpen={(row) => showCharacter(row.id)}
+        onPrefetch={() => {}} />
+    </div>
+  </div>
+{/snippet}
