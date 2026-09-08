@@ -29,7 +29,7 @@ vi.mock('../util', () => ({
   saveKeypairStore: vi.fn(async () => undefined),
 }))
 
-import { FastifyStorage } from './fastifyStorage'
+import { FastifyStorage, getNodeServerDiagnosticsAuth, invalidateNodeServerProxyAuth } from './fastifyStorage'
 
 interface CapturedFetch {
   url: string
@@ -96,6 +96,14 @@ describe('FastifyStorage client', () => {
     vi.unstubAllGlobals()
     vi.restoreAllMocks()
     alertState.alertInput.mockClear()
+  })
+
+  it('does not start authentication or prompt for credentials on an optional diagnostics read', async () => {
+    invalidateNodeServerProxyAuth()
+    const calls = captureFetch(() => jsonResponse({ noPassword: true }))
+    await expect(getNodeServerDiagnosticsAuth()).resolves.toBeNull()
+    expect(calls).toEqual([])
+    expect(alertState.alertInput).not.toHaveBeenCalled()
   })
 
   it('uses only Fastify storage endpoints for persisted app data', async () => {

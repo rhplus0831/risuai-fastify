@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'bootstrap-auth-token',
+  getNodeServerDiagnosticsAuth: async () => 'bootstrap-auth-token',
 }))
+
+const telemetry = vi.hoisted(() => ({ configure: vi.fn() }))
+vi.mock('./startupTelemetry', () => ({ configureStartupTelemetry: telemetry.configure }))
 
 import {
   DISCONNECT_EXISTING_WRITER_HEADER,
@@ -13,6 +17,11 @@ import {
 } from './bootstrap'
 import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
 import { clearCachedServerCommandRevision, peekCachedServerCommandRevision } from './commands'
+import {
+  __browserDiagnosticsTestHooks,
+  getBrowserDiagnosticsSnapshot,
+  resetBrowserDiagnosticsSession,
+} from './browserDiagnostics'
 
 interface CapturedFetch {
   url: string
@@ -57,13 +66,41 @@ function stubBootstrapFetch(body: unknown | (() => unknown)): CapturedFetch[] {
 
 beforeEach(() => {
   clearCachedServerCommandRevision()
+  telemetry.configure.mockClear()
 })
 
 afterEach(() => {
+  resetBrowserDiagnosticsSession()
   vi.unstubAllGlobals()
 })
 
 describe('server runtime bootstrap helper', () => {
+  it('negotiates browser uploads independently and suppresses the legacy startup transport only when supported', async () => {
+    stubBootstrapFetch({
+      initialized: true,
+      revision: 1,
+      databaseLineage: 'synthetic-lineage',
+      browserDiagnostics: { version: 1 },
+      startupTelemetry: { version: 1, sampleRate: 1 },
+    })
+    const current = await fetchServerBootstrapReadOnly()
+    expect(current).toMatchObject({ status: 'ok', bootstrap: { browserDiagnostics: { version: 1 } } })
+    expect(telemetry.configure).toHaveBeenLastCalledWith(undefined)
+    await __browserDiagnosticsTestHooks.settled()
+    expect(getBrowserDiagnosticsSnapshot().enabled).toBe(true)
+
+    stubBootstrapFetch({
+      initialized: true,
+      revision: 1,
+      browserDiagnostics: { version: 2 },
+      startupTelemetry: { version: 1, sampleRate: 1 },
+    })
+    const older = await fetchServerBootstrapReadOnly()
+    expect(older.status).toBe('ok')
+    if (older.status === 'ok') expect(older.bootstrap).not.toHaveProperty('browserDiagnostics')
+    expect(telemetry.configure).toHaveBeenLastCalledWith({ version: 1, sampleRate: 1 })
+    expect(getBrowserDiagnosticsSnapshot().enabled).toBe(false)
+  })
   it.each([
     { sessionId: null, epoch: 0 },
     { sessionId: 'writer-a', epoch: 3 },

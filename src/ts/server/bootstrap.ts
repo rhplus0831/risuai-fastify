@@ -1,10 +1,15 @@
-import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
+import { getNodeServerProxyAuth, getNodeServerDiagnosticsAuth } from '../storage/fastifyStorage'
 import { captureClientSessionGeneration, isClientSessionGenerationCurrent } from '../clientSession'
 import type { Message } from '../storage/database.svelte'
 import { activeWriterSessionHeader } from './activeWriterSession'
 import { setCachedServerCommandRevision } from './commands'
 import { configureStartupTelemetry } from './startupTelemetry'
 import { configureClientDiagnostics } from '../diagnostics'
+import { configureBrowserDiagnostics, resetBrowserDiagnosticsSession } from './browserDiagnostics'
+import {
+  isBrowserDiagnosticsConfiguration,
+  type BrowserDiagnosticsConfiguration,
+} from '@risuai/protocol/remote-diagnostics'
 import { isDiagnosticsConfiguration, type DiagnosticsConfiguration } from '@risuai/protocol/diagnostics'
 import { isStartupTelemetryConfiguration, type StartupTelemetryConfiguration } from '@risuai/protocol/startup-telemetry'
 
@@ -242,6 +247,7 @@ export interface ServerBootstrapRuntime {
   activeGreetingTranslations?: ActiveGreetingTranslation[]
   startupTelemetry?: StartupTelemetryConfiguration
   clientDiagnostics?: DiagnosticsConfiguration
+  browserDiagnostics?: BrowserDiagnosticsConfiguration
 }
 
 export type ServerBootstrapResult =
@@ -352,6 +358,12 @@ async function fetchServerBootstrapWithMode(input: {
   }
 
   if (!response.ok) {
+    if (
+      (response.status === 401 || response.status === 403) &&
+      isClientSessionGenerationCurrent(generation) &&
+      !input.signal?.aborted
+    )
+      resetBrowserDiagnosticsSession()
     return {
       status: 'error',
       error: errorMessageFromBody(body, `HTTP ${response.status}`),
@@ -396,6 +408,9 @@ async function fetchServerBootstrapWithMode(input: {
     displaySourceProtocol: parseGenerationOperationProtocol(record.displaySourceProtocol),
     ...(isStartupTelemetryConfiguration(record.startupTelemetry) ? { startupTelemetry: record.startupTelemetry } : {}),
     ...(isDiagnosticsConfiguration(record.clientDiagnostics) ? { clientDiagnostics: record.clientDiagnostics } : {}),
+    ...(isBrowserDiagnosticsConfiguration(record.browserDiagnostics)
+      ? { browserDiagnostics: record.browserDiagnostics }
+      : {}),
     generationOperationProjectionEpoch: isNonNegativeSafeInteger(record.generationOperationProjectionEpoch)
       ? (record.generationOperationProjectionEpoch as number)
       : undefined,
@@ -411,7 +426,11 @@ async function fetchServerBootstrapWithMode(input: {
     activeGreetingTranslations: parseActiveGreetingTranslations(record.activeGreetingTranslations),
   }
   if (isClientSessionGenerationCurrent(generation) && !input.signal?.aborted) {
-    configureStartupTelemetry(bootstrap.startupTelemetry)
+    const browserUpload = configureBrowserDiagnostics(bootstrap.browserDiagnostics, {
+      auth: () => getNodeServerDiagnosticsAuth(),
+      databaseLineage: bootstrap.databaseLineage,
+    })
+    configureStartupTelemetry(browserUpload ? undefined : bootstrap.startupTelemetry)
     configureClientDiagnostics(bootstrap.clientDiagnostics)
   }
   return {

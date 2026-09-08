@@ -3,6 +3,7 @@ import { language } from 'src/lang'
 import { alertError, alertInput, waitAlert } from '../alert'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../server/activeWriterSession'
 import { base64url, getKeypairStore, saveKeypairStore } from '../util'
+import { resetBrowserDiagnosticsSession } from '../server/browserDiagnostics'
 
 const ROUTES = {
   write: '/api/v1/storage/write',
@@ -59,6 +60,7 @@ function storedSessionAuth(): string | null {
     if (!token?.startsWith(SESSION_AUTH_PREFIX)) return null
     if (isCurrentSessionAuth(token)) return token
     sessionStorage.removeItem('risuauth')
+    resetBrowserDiagnosticsSession()
     return null
   } catch {
     return null
@@ -338,8 +340,16 @@ export async function getNodeServerProxyAuth() {
   return await sharedStorage.getProxyAuth()
 }
 
+/** Optional diagnostics never initiate setup/login, renew authority, or acquire writer ownership. */
+export async function getNodeServerDiagnosticsAuth(): Promise<string | null> {
+  if (!sharedStorage.authChecked) return null
+  if (!subtleCrypto() && !storedSessionAuth()) return null
+  return sharedStorage.createAuth()
+}
+
 /** Explicit reauthentication after authenticated reader resources were cleared. */
 export function invalidateNodeServerProxyAuth(): void {
+  resetBrowserDiagnosticsSession()
   sharedStorage.authChecked = false
   clearSessionAuth()
 }
