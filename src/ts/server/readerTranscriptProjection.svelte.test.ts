@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { SERVER_CHARACTER_SUMMARY_VERSION } from '@risuai/protocol/character-summary-resource'
 import { setManagedWriterForTest } from '../__tests__/managedClientSession'
-import { demoteClientSession, requireClientAuthentication, resetClientSessionForTests } from '../clientSession'
+import {
+  beginClientSession,
+  demoteClientSession,
+  requireClientAuthentication,
+  resetClientSessionForTests,
+  settleClientReader,
+} from '../clientSession'
 import type { character } from '../storage/database.svelte'
 import {
   applyCharacterResource,
   applyCharactersResource,
+  applyCharacterOrderResource,
+  applyCharacterOrderLocalEffect,
+  applySettingsResource,
+  applySettingsPatchLocalEffect,
   applyChatGenerationSettingsLocalEffect,
   applyPersonaPatchLocalEffect,
   replaceResourceDatabase,
@@ -19,6 +29,8 @@ import { clearRetainedChatProjections, registerRetainedChatProjection } from './
 import {
   getReaderTranscriptCharacters,
   getReaderTranscriptPersona,
+  getReaderNavigationSettings,
+  getReaderCharacterOrder,
   isReaderPersonaReadRequired,
 } from './readerTranscriptProjection.svelte'
 
@@ -67,6 +79,76 @@ afterEach(() => {
 })
 
 describe('authoritative reader display metadata', () => {
+  it('certifies folders, pins, order and visual settings without optimistic or prompt fields', () => {
+    setManagedWriterForTest()
+    const row = characterRow()
+    row.chatFolders = [{ id: 'folder-a', name: 'Confirmed folder', color: 'blue', folded: true }]
+    row.chats[0].folderId = 'folder-a'
+    row.chats[0].pinned = true
+    row.backgroundHTML = '<p>Confirmed background</p>'
+    applyRows([row], 1)
+    const order = [{ id: 'characters', name: 'Confirmed group', data: ['character-a'], color: 'green' }]
+    expect(applyCharacterOrderResource({ revision: 2, characterOrder: order })).toBe(true)
+    expect(
+      applySettingsResource({
+        revision: 2,
+        settings: { theme: 'waifu', customFont: 'serif', zoomsize: 115, translatorPrompt: 'private' },
+      }),
+    ).toBe(true)
+    order[0].name = 'Changed caller input'
+    charactersResourceState.characterOrder = ['optimistic-character']
+    charactersResourceState.characters[0].chatFolders[0].name = 'Pending folder'
+    charactersResourceState.characters[0].chats[0].pinned = false
+    settingsResourceState.value.theme = 'pending-theme'
+    demoteClientSession()
+    expect(getReaderCharacterOrder()).toMatchObject([{ name: 'Confirmed group', data: ['character-a'] }])
+    expect(getReaderTranscriptCharacters()[0]).toMatchObject({
+      chatFolders: [{ name: 'Confirmed folder', folded: true }],
+      chats: [{ folderId: 'folder-a', pinned: true }],
+      backgroundHTML: '<p>Confirmed background</p>',
+    })
+    expect(getReaderNavigationSettings()).toMatchObject({ theme: 'waifu', customFont: 'serif', zoomsize: 115 })
+    expect(getReaderNavigationSettings()).not.toHaveProperty('translatorPrompt')
+  })
+
+  it('updates only accepted display fields and order while rejecting older reads and preserving newer drafts', () => {
+    applyRows([characterRow()], 1)
+    applySettingsResource({ revision: 1, settings: { theme: 'standard', customFont: 'serif' } })
+    settingsResourceState.value.theme = 'newer-pending-theme'
+    expect(
+      applySettingsPatchLocalEffect({
+        revision: 3,
+        group: 'display',
+        attemptedPatch: { theme: 'waifu' },
+        settings: { theme: 'waifu' },
+      }),
+    ).toBe(true)
+    expect(applyCharacterOrderLocalEffect({ revision: 3, attemptedOrder: ['character-a'] })).toBe(true)
+    expect(applyCharacterOrderResource({ revision: 2, characterOrder: [] })).toBe(false)
+    expect(applySettingsResource({ revision: 2, settings: { theme: 'stale' } })).toBe(false)
+    expect(getReaderNavigationSettings()).toMatchObject({ theme: 'waifu', customFont: 'serif' })
+    expect(settingsResourceState.value.theme).toBe('newer-pending-theme')
+    expect(getReaderCharacterOrder()).toEqual(['character-a'])
+  })
+
+  it('clears navigation identities and visual values on authentication loss and database replacement', () => {
+    setManagedWriterForTest()
+    applyRows([characterRow()], 1)
+    applySettingsResource({ revision: 1, settings: { theme: 'waifu' } })
+    applyCharacterOrderResource({ revision: 1, characterOrder: ['character-a'] })
+    requireClientAuthentication()
+    expect(getReaderNavigationSettings()).toEqual({})
+    expect(getReaderCharacterOrder()).toEqual([])
+    setManagedWriterForTest()
+    applySettingsResource({ revision: 2, settings: { theme: 'cardboard' } })
+    applyCharacterOrderResource({ revision: 2, characterOrder: ['character-a'] })
+    const operation = beginClientSession('replacement-reader')
+    settleClientReader(operation, { databaseLineage: 'replacement-database', writer: { sessionId: 'other', epoch: 1 } })
+    expect(getReaderNavigationSettings()).toEqual({})
+    expect(getReaderCharacterOrder()).toEqual([])
+    expect(getReaderTranscriptCharacters()).toEqual([])
+  })
+
   it('captures raw server metadata before retained owner overlays and omits unrelated prompt/body state', () => {
     applyRows([characterRow()], 1)
     registerRetainedChatProjection({ kind: 'character', characterId: 'character-a' }, () => {

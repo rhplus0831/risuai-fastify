@@ -28,12 +28,33 @@ beforeEach(() => {
     }),
   )
 })
-afterEach(() => {
+afterEach(async () => {
+  const { resetClientSessionForTests } = await import('../clientSession')
+  resetClientSessionForTests()
   localStorage.clear()
   vi.resetModules()
 })
 
 describe('read-only display paint settings', () => {
+  it('switches immediately from pending writer appearance to confirmed reader values and clears protected hints', async () => {
+    const { setManagedWriterForTest } = await import('../__tests__/managedClientSession')
+    const { demoteClientSession, requireClientAuthentication } = await import('../clientSession')
+    const { recordReaderNavigationSettings } = await import('../server/readerTranscriptProjection.svelte')
+    const { displaySettingsForPaint, displaySettingForPaint, runtimeDisplaySettingsOwner } =
+      await import('./displaySettings')
+    setManagedWriterForTest()
+    recordReaderNavigationSettings({ theme: 'waifu', customFont: 'serif', sideBarSize: 1 })
+    resource.groupStatuses.display = 'ready'
+    resource.value = { theme: 'pending-theme', customFont: 'pending-font', sideBarSize: 3 }
+    expect(displaySettingForPaint('theme')).toBe('pending-theme')
+    demoteClientSession()
+    expect(displaySettingsForPaint()).toMatchObject({ theme: 'waifu', customFont: 'serif', sideBarSize: 1 })
+    expect(runtimeDisplaySettingsOwner()?.theme).toBe('waifu')
+    expect(displaySettingForPaint('theme')).toBe('waifu')
+    requireClientAuthentication()
+    expect(displaySettingsForPaint()).toEqual({})
+    expect(displaySettingForPaint('theme')).toBeUndefined()
+  })
   it('restores layout and sizes without hydrating or authorizing a resource owner', async () => {
     const { displaySettingsForPaint, displaySettingForPaint, runtimeDisplaySettingsOwner } =
       await import('./displaySettings')

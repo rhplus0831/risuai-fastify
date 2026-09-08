@@ -21,6 +21,7 @@ import { language } from 'src/lang'
 import { settingsResourceState } from '../server/resourceState.svelte'
 import { cacheCustomCSS } from './customCSSCache'
 import { runtimeDisplaySettingsOwner } from './displaySettings'
+import { canUseClientWriteAccess } from '../clientSession'
 import {
   applyDisplayStyles,
   cacheDisplaySettings,
@@ -332,7 +333,7 @@ export function updateColorScheme() {
     const migratedColorScheme = migrateLegacyBuiltInColorScheme(db.colorSchemeName, colorScheme)
     if (migratedColorScheme !== colorScheme) {
       colorScheme = migratedColorScheme
-      applyServerBackedSettingsPatch({ colorScheme })
+      if (canUseClientWriteAccess()) applyServerBackedSettingsPatch({ colorScheme })
     }
 
     if (get(isLite)) {

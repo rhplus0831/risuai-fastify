@@ -27,6 +27,8 @@ import { reapplyRetainedCharacterProjections } from './chatRetainedProjection'
 import {
   clearReaderTranscriptProjection,
   recordReaderCharacters,
+  recordReaderCharacterOrder,
+  recordReaderNavigationSettings,
   recordReaderCharacter,
   recordReaderCharacterPatch,
   recordReaderChatPatch,
@@ -1327,6 +1329,7 @@ export function applySettingsResource(payload: ServerSettingsResourcePayload): b
   const hasLiveLoreBookPage = Object.prototype.hasOwnProperty.call(liveSettings, 'loreBookPage')
   const liveLoreBookPage = preserveLoreBookPage ? cloneJsonValue(liveSettings.loreBookPage) : undefined
   recordReaderPersonaSettings(payload.settings)
+  recordReaderNavigationSettings(payload.settings)
   settingsResourceState.value = cloneJsonValue(payload.settings)
   if (preserveEnabledModules) {
     ;(settingsResourceState.value as Record<string, unknown>).enabledModules = liveEnabledModules
@@ -1402,6 +1405,7 @@ export function applyShellSettingsResource(payload: ServerShellSettingsResourceP
 
   const target = settingsResourceState.value as Record<string, unknown>
   recordReaderPersonaSettings(payload.settings, SERVER_SHELL_SETTINGS_KEYS)
+  recordReaderNavigationSettings(payload.settings, SERVER_SHELL_SETTINGS_KEYS)
   for (const key of SERVER_SHELL_SETTINGS_KEYS) target[key] = cloneJsonValue(payload.settings[key])
   applyPendingSettingsProjectionOverlays(target, new Set(SERVER_SHELL_SETTINGS_KEYS))
   settingsResourceState.shellRevision = payload.revision
@@ -1445,6 +1449,7 @@ export function applyStandaloneSettingResource(payload: ServerStandaloneSettingP
   if (payload.state.present) target[payload.setting] = cloneJsonValue(payload.state.value)
   else delete target[payload.setting]
   recordReaderPersonaSettings(target, [payload.setting])
+  recordReaderNavigationSettings(target, [payload.setting])
   applyPendingSettingsProjectionOverlays(target, new Set([payload.setting]))
   settingsResourceState.standaloneRevisions[payload.setting] = payload.revision
   settingsResourceState.standaloneStatuses[payload.setting] = 'ready'
@@ -1485,6 +1490,7 @@ export function applySettingsGroupResource(
     }
   }
   recordReaderPersonaSettings(incoming, groupKeys)
+  recordReaderNavigationSettings(incoming, groupKeys)
   applyPendingSettingsProjectionOverlays(target, new Set(groupKeys))
   settingsResourceState.groupRevisions[payload.group] = payload.revision
   settingsResourceState.groupStatuses[payload.group] = 'ready'
@@ -1537,6 +1543,7 @@ export function applySettingsPatchLocalEffect(payload: ServerSettingsPatchLocalE
   }
 
   recordReaderPersonaSettings(payload.settings, canonicalKeys)
+  recordReaderNavigationSettings(payload.settings, canonicalKeys)
   const settingsTarget = settingsResourceState.value as Record<string, unknown>
   const previousLanguage = settingsTarget.language
   for (const key of attemptedKeys) {
@@ -2778,6 +2785,7 @@ export function applyCharactersResource(
     markCharacterLorebookBodyResourceRevision(characterId, payload.revision)
     if (preserveResidentChatBodies) advanceCharacterLorebookBodyProjectionEpoch(characterId)
   }
+  recordReaderCharacterOrder(payload.characterOrder)
   charactersResourceState.characterOrder = cloneJsonValue(payload.characterOrder)
   charactersResourceState.currentChar = payload.currentChar
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
@@ -2925,6 +2933,7 @@ export function applyCharacterOrderResource(payload: ServerCharacterOrderResourc
   if (isOlderRevision(payload.revision, charactersResourceState.listRevision)) return false
   if (isOlderRevision(payload.revision, charactersResourceState.orderRevision)) return false
 
+  recordReaderCharacterOrder(payload.characterOrder)
   charactersResourceState.characterOrder = cloneJsonValue(payload.characterOrder)
   charactersResourceState.orderRevision = payload.revision
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
@@ -2940,6 +2949,7 @@ export function applyCharacterOrderLocalEffect(payload: ServerCharacterOrderLoca
   if (knownRevision >= payload.revision) return true
   if (!Array.isArray(payload.attemptedOrder)) return false
 
+  recordReaderCharacterOrder(payload.attemptedOrder)
   charactersResourceState.orderRevision = payload.revision
   charactersResourceState.revision = maxRevision(charactersResourceState.revision, payload.revision)
   return true
@@ -3243,6 +3253,10 @@ export function replaceResourceDatabase(database: Database, revision?: number): 
   recordReaderCharacters(characters, nextRevision)
   recordReaderPersonas(collections.personas)
   recordReaderPersonaSettings(settings)
+  recordReaderNavigationSettings(settings)
+  recordReaderCharacterOrder(
+    Array.isArray(databaseRecord.characterOrder) ? (databaseRecord.characterOrder as Database['characterOrder']) : [],
+  )
   charactersResourceState.characters = characters
   charactersResourceState.characterOrder = Array.isArray(databaseRecord.characterOrder)
     ? (databaseRecord.characterOrder as Database['characterOrder'])

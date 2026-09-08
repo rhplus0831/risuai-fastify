@@ -4,6 +4,7 @@ import type { character, Chat, Database, Message } from '../storage/database.sve
 import { SERVER_CHARACTER_SHELL_MARKER } from '@risuai/protocol/character-summary-resource'
 import { mergeChatMessageRange, type ChatMessageRangeMergeInput } from './chatMessageRangeMerge'
 import { SERVER_UNLOADED_CHAT_MESSAGE_MARKER } from './chatMessagePlaceholders'
+import { DISPLAY_PAINT_SETTING_KEYS } from '../gui/displaySettingsCache'
 
 // Only display inputs belong here. In particular, no prompts, credentials,
 // editor drafts, module definitions, or optimistic transcript bodies are copied.
@@ -13,6 +14,14 @@ const characterKeys = [
   'type',
   'name',
   'displayName',
+  'creatorNotes',
+  'trashTime',
+  'chatCount',
+  'pinnedChats',
+  'chatFolders',
+  'backgroundHTML',
+  'viewScreen',
+  'inlayViewScreen',
   'image',
   'largePortrait',
   'firstMessage',
@@ -25,6 +34,9 @@ const chatKeys = [
   'id',
   'name',
   'fmIndex',
+  'pinned',
+  'folderId',
+  'lastDate',
   'bindedPersona',
   'bilingualDisplay',
   'autoTranslate',
@@ -34,6 +46,77 @@ const chatKeys = [
 ] as const
 const personaKeys = ['id', 'name', 'displayName', 'icon', 'largePortrait'] as const
 const personaSettingKeys = ['selectedPersonaId', 'selectedPersona', 'username', 'userIcon'] as const
+
+// Explicit passive display inputs, not the Display/Sidebar groups wholesale:
+// those groups also contain executable UI and authoring preferences.
+export const READER_NAVIGATION_SETTING_KEYS = [
+  ...DISPLAY_PAINT_SETTING_KEYS,
+  'language',
+  'customCSS',
+  'menuSideBar',
+  'showFolderName',
+  'hamburgerButtonBottom',
+  'chatLoadInitialPages',
+  'chatLoadAdditionalPages',
+  'chatDisplayTailCount',
+  'autoScrollToNewMessage',
+  'alwaysScrollToNewMessage',
+  'showMemoryLimit',
+  'useChatCopy',
+  'paragraphBreakBySentences',
+  'paragraphBreakSentenceCount',
+  'hideAllImages',
+  'blockquoteStyling',
+  'unformatQuotes',
+  'customQuotes',
+  'customQuotesData',
+  'showFirstMessagePages',
+  'useChatSticker',
+  'showTranslationLoading',
+  'translateBeforeHTMLFormatting',
+] as const satisfies readonly (keyof Database)[]
+let navigationSettings = $state.raw<Partial<Database>>({})
+let characterOrder = $state.raw<Database['characterOrder']>([])
+
+export function getReaderNavigationSettings(): Partial<Database> {
+  return navigationSettings
+}
+
+export function getReaderCharacterOrder(): Database['characterOrder'] {
+  return characterOrder
+}
+
+/** Called only by accepted resource/receipt consumers before pending overlays. */
+export function recordReaderNavigationSettings(
+  source: object,
+  keys: readonly string[] = READER_NAVIGATION_SETTING_KEYS,
+): void {
+  if (!READER_NAVIGATION_SETTING_KEYS.some((key) => keys.includes(key))) return
+  const next = { ...navigationSettings } as Record<string, unknown>
+  for (const key of READER_NAVIGATION_SETTING_KEYS) {
+    if (!keys.includes(key)) continue
+    if (Object.hasOwn(source, key)) next[key] = clone((source as Record<string, unknown>)[key])
+    else delete next[key]
+  }
+  navigationSettings = next as Partial<Database>
+}
+
+export function recordReaderCharacterOrder(source: Database['characterOrder']): void {
+  characterOrder = source.map((entry) =>
+    typeof entry === 'string'
+      ? entry
+      : (pick(entry, [
+          'id',
+          'name',
+          'data',
+          'color',
+          'img',
+          'imgFile',
+          'expanded',
+          'askBeforeOpening',
+        ]) as unknown as Database['characterOrder'][number]),
+  )
+}
 
 let characters = $state.raw<character[]>([])
 let personas = $state.raw<Database['personas']>([])
@@ -68,6 +151,7 @@ function pick(value: unknown, keys: readonly string[]): Record<string, unknown> 
 function displayCharacter(value: character): character {
   return {
     ...pick(value, characterKeys),
+    chatFolders: (value.chatFolders ?? []).map((folder) => pick(folder, ['id', 'name', 'color', 'folded'])),
     chats: (value.chats ?? []).map((chat) => ({
       ...pick(chat, chatKeys),
       // Presence changes persona fallback semantics, even without a bound id.
@@ -253,22 +337,26 @@ export function recordReaderCharacter(source: character, revision: number): void
 }
 
 export function recordReaderCharacterPatch(characterId: string, patch: object): void {
+  const certified = pick(patch, characterKeys)
   characters = characters.map((character) =>
-    character.chaId === characterId ? ({ ...character, ...pick(patch, characterKeys) } as character) : character,
+    character.chaId === characterId ? ({ ...character, ...certified } as character) : character,
   )
+  const detail = details.get(characterId)
+  if (detail) details.set(characterId, { ...detail, ...certified })
 }
 
 export function recordReaderChatPatch(characterId: string, chatId: string, patch: object): void {
-  characters = characters.map((character) =>
+  const certified = pick(patch, chatKeys)
+  const update = (character: character): character =>
     character.chaId === characterId
       ? {
           ...character,
-          chats: character.chats.map((chat) =>
-            chat.id === chatId ? ({ ...chat, ...pick(patch, chatKeys) } as Chat) : chat,
-          ),
+          chats: character.chats.map((chat) => (chat.id === chatId ? ({ ...chat, ...certified } as Chat) : chat)),
         }
-      : character,
-  )
+      : character
+  characters = characters.map(update)
+  const detail = details.get(characterId)
+  if (detail) details.set(characterId, update(detail))
 }
 
 export function recordReaderChatPersona(characterId: string, chatId: string, settings: object): void {
@@ -364,6 +452,8 @@ export function clearReaderTranscriptProjection(): void {
   characters = []
   personas = []
   personaSettings = {}
+  navigationSettings = {}
+  characterOrder = []
   requiredPersonaReads.clear()
   characterRevisions.clear()
   details.clear()

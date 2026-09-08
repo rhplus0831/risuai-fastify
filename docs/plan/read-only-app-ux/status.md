@@ -159,3 +159,20 @@ presentation is exposed. No runtime acceptance is claimed by this inventory.
 Phase 0 documentation checks: `pnpm check:docs` passed (49 files), explicit
 plan/index validation passed (11 documents), Prettier and documentation-scoped
 whitespace validation passed. Concurrent runtime edits are validated per slice.
+
+### Phase 1 committed-data slice — 2026-09-08
+
+The reader projection now retains allowlisted character/chat folders, pins,
+labels and background metadata, certified character order, and passive display
+settings. Resource reads and accepted receipts record these before optimistic
+writer overlays. Auth/lineage replacement clears the new projection; demotion
+selects confirmed paint values. No wire schema or database migration changed.
+
+Validation: `pnpm test -- src/ts/server/readerTranscriptProjection.svelte.test.ts`
+passed (8 tests), `pnpm test -- src/ts/gui/displaySettings.dom.test.ts` passed
+(5), `pnpm test -- src/ts/gui/colorscheme.test.ts` passed (36), and
+`pnpm test -- src/ts/server/resourceState.svelte.test.ts` passed (79). The initial
+attempt to give multiple files to the focused wrapper was rejected before any
+tests ran; each target was then run through its supported single-file interface.
+Prettier and slice-scoped whitespace checks passed. Shared UI and browser
+acceptance remain in progress.

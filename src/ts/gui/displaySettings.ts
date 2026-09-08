@@ -2,8 +2,16 @@ import type { Database } from '../storage/databaseTypes'
 import { settingsResourceState } from '../server/resourceState.svelte'
 import { SERVER_SHELL_SETTINGS_KEYS } from '@risuai/protocol/shell-resource'
 import { DISPLAY_PAINT_SETTING_KEYS, readDisplaySettingsCache } from './displaySettingsCache'
+import { fromStore } from 'svelte/store'
+import { clientSessionStore } from '../clientSession'
+import { getReaderNavigationSettings } from '../server/readerTranscriptProjection.svelte'
 
 const startupPaintSettings = readDisplaySettingsCache().settings
+const session = fromStore(clientSessionStore)
+
+function readerSettings(): Partial<Database> | undefined {
+  return session.current.managed && session.current.lifecycle !== 'writing' ? getReaderNavigationSettings() : undefined
+}
 
 function hasResidentDisplaySettings(): boolean {
   return (
@@ -15,6 +23,8 @@ function hasResidentDisplaySettings(): boolean {
 
 /** Only server-backed values may drive the live style/cache updaters. */
 export function runtimeDisplaySettingsOwner(): Partial<Database> | undefined {
+  const reader = readerSettings()
+  if (reader !== undefined) return reader
   if (settingsResourceState.groupStatuses.display === 'ready') return settingsResourceState.value
   if (settingsResourceState.status === 'ready' && typeof settingsResourceState.shellRevision === 'number') {
     return Object.fromEntries(SERVER_SHELL_SETTINGS_KEYS.map((key) => [key, settingsResourceState.value[key]]))
@@ -24,6 +34,8 @@ export function runtimeDisplaySettingsOwner(): Partial<Database> | undefined {
 
 /** Read-only appearance fallback while the full Display group is still loading. */
 export function displaySettingsForPaint(): Partial<Database> {
+  const reader = readerSettings()
+  if (reader !== undefined) return reader
   const status = settingsResourceState.groupStatuses.display ?? 'idle'
   if (hasResidentDisplaySettings()) {
     if (status !== 'error') return settingsResourceState.value
@@ -39,6 +51,8 @@ export function cachedDisplaySize(key: 'textAreaSize' | 'textAreaTextSize' | 'si
 }
 
 export function displaySettingForPaint<Key extends keyof Database>(key: Key): Database[Key] | undefined {
+  const reader = readerSettings()
+  if (reader !== undefined) return reader[key] as Database[Key] | undefined
   if (hasResidentDisplaySettings()) {
     if (
       settingsResourceState.groupStatuses.display === 'error' &&
