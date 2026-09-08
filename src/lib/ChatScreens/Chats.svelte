@@ -4,6 +4,7 @@
   import { backgroundReady, startupCoordinatorStore } from 'src/ts/startupReadiness'
   import type { character, Database, Message } from 'src/ts/storage/database.svelte'
   import Chat from './Chat.svelte'
+  import { getChatReadOwnersContext } from './chatReadOwnersContext'
   import { getCharImage } from 'src/ts/characterImage'
   import { ReloadChatPointer, popupStore } from 'src/ts/stores.svelte'
   import { language } from 'src/lang'
@@ -72,6 +73,8 @@
   import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
   import type { ReaderGenerationProjection } from 'src/ts/server/readerGenerationTypes'
   import { readerGenerationKey, readerGenerationRow } from './readerGenerationRows'
+
+  const readOwners = getChatReadOwnersContext()
 
   const getCurrentChatRoomId = () => chatId ?? null
 
@@ -176,6 +179,10 @@
 
   let currentChatMetadata = $derived.by(() => {
     if (!chatId) return undefined
+    if (readOnly || readerPresentation) {
+      const chat = readOwners.chat()
+      return chat?.id === chatId ? projectChatMetadata(chatId, chat) : undefined
+    }
     if (charactersResourceState.status === 'ready') {
       const characterId = currentCharacter.chaId
       if (typeof characterId !== 'string' || characterId.trim().length === 0) return undefined
@@ -189,6 +196,7 @@
   })
 
   function readSettingsGroup(group: 'display' | 'sidebar'): Partial<Database> {
+    if (readOwners.settings) return readOwners.settings()
     const status = settingsResourceState.groupStatuses[group] ?? 'idle'
     if (status === 'ready') return settingsResourceState.value as Partial<Database>
     if (status === 'idle' || status === 'loading') return settingsResourceState.value as Partial<Database>
@@ -197,7 +205,7 @@
 
   let showMemoryLimit = $derived(readSettingsGroup('display').showMemoryLimit === true)
   let autoScrollToNewMessage = $derived(
-    settingsResourceState.groupStatuses.sidebar === 'error'
+    !readOwners.settings && settingsResourceState.groupStatuses.sidebar === 'error'
       ? false
       : readSettingsGroup('sidebar').autoScrollToNewMessage !== false,
   )

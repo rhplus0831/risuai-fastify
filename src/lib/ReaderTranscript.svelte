@@ -3,6 +3,9 @@
   import { getAdditionalChatLoadPages, getInitialChatLoadPages } from '@risuai/shared-core/chat-load-pages'
   import { language } from '../lang'
   import Chat from './ChatScreens/Chat.svelte'
+  import ChatScreenLayout from './ChatScreens/ChatScreenLayout.svelte'
+  import ReaderChatBackground from './ChatScreens/ReaderChatBackground.svelte'
+  import { getCustomBackground } from '../ts/characterState'
   import Chats from './ChatScreens/Chats.svelte'
   import { createChatReadOwners } from './ChatScreens/chatReadOwners.svelte'
   import { CHAT_READ_OWNERS_CONTEXT } from './ChatScreens/chatReadOwnersContext'
@@ -23,6 +26,8 @@
   } from '../ts/server/chatMessageHydration.svelte'
   import {
     getReaderChatIncarnation,
+    getReaderNavigationSettings,
+    getReaderModuleDisplayDatabase,
     getReaderTranscriptDisplayCharacters,
     getReaderTranscriptPersona,
   } from '../ts/server/readerTranscriptProjection.svelte'
@@ -45,8 +50,39 @@
     type Message,
   } from '../ts/storage/database.svelte'
 
-  let { characterId, chatId }: { characterId: string; chatId: string } = $props()
-  let loadPages = $state(getInitialChatLoadPages(settingsResourceState.value))
+  let {
+    characterId,
+    chatId,
+    onUseThisDevice,
+    takeoverDisabled,
+  }: {
+    characterId: string
+    chatId: string
+    onUseThisDevice: () => void
+    takeoverDisabled: boolean
+  } = $props()
+  const displaySettings = $derived(getReaderNavigationSettings())
+  let backgroundStyle = $state('')
+  $effect(() => {
+    const source = displaySettings.hideAllImages ? '' : (displaySettings.customBackground ?? '')
+    void $clientSessionStore.generation
+    backgroundStyle = ''
+    if (!canUseClientReaderContent()) return
+    const generation = captureClientSessionGeneration()
+    let cancelled = false
+    untrack(() => {
+      void getCustomBackground(source)
+        .then((style) => {
+          if (!cancelled && isClientSessionGenerationCurrent(generation) && canUseClientReaderContent())
+            backgroundStyle = style
+        })
+        .catch(() => {})
+    })
+    return () => {
+      cancelled = true
+    }
+  })
+  let loadPages = $state(getInitialChatLoadPages(getReaderNavigationSettings()))
   let scrollContainer: HTMLDivElement | null = $state(null)
   let chatsInstance: ReturnType<typeof Chats> | undefined = $state()
   let loading = $state(false)
@@ -145,6 +181,7 @@
     },
     (id) => (usingRetained && id === chatId ? retained!.messages : getReaderChatMessageOwnerState(id)?.messages),
     () => ({ characterId, chatId }),
+    () => ({ ...getReaderNavigationSettings(), ...getReaderModuleDisplayDatabase(), ...getReaderTranscriptPersona() }),
   )
   setContext(CHAT_READ_OWNERS_CONTEXT, readOwners)
   const displayCharacter = $derived(readOwners.character())
@@ -242,7 +279,7 @@
   $effect(() => {
     if (initialWindowConfigured || settingsResourceState.groupStatuses.display !== 'ready') return
     initialWindowConfigured = true
-    if (!historyExpanded) loadPages = getInitialChatLoadPages(settingsResourceState.value)
+    if (!historyExpanded) loadPages = getInitialChatLoadPages(getReaderNavigationSettings())
   })
   $effect(() => {
     void $clientSessionStore.generation
@@ -377,7 +414,7 @@
   function loadMore(): void {
     if (!readerContentAvailable || loading) return
     historyExpanded = true
-    void loadWindow(loadPages + getAdditionalChatLoadPages(settingsResourceState.value), false, true)
+    void loadWindow(loadPages + getAdditionalChatLoadPages(getReaderNavigationSettings()), false, true)
   }
   function handleScroll(): void {
     chatsInstance?.handleTranscriptScroll()
@@ -394,139 +431,190 @@
   })
 </script>
 
-<div
-  class="flex h-full min-h-0 flex-col"
-  data-reader-transcript
-  data-reader-character-id={characterId}
-  data-reader-chat-id={chatId}>
-  <div class="flex shrink-0 items-center justify-between gap-3 border-b border-textcolor/15 px-4 py-3">
-    <div class="min-w-0">
-      <h2 id="reader-chat-heading" class="truncate text-lg font-semibold">
-        {displayChat?.name ?? language.connectedReaders.conversation}
-      </h2>
-      {#if displayCharacter}<p class="truncate text-sm text-textcolor2">
-          {getCharacterDisplayName(displayCharacter)}
-        </p>{/if}
-    </div>
-    <button
-      class="shrink-0 rounded border border-textcolor/20 px-3 py-2 text-sm disabled:opacity-50"
-      disabled={!readerContentAvailable || loading || displayResourcesLoading}
-      onclick={() => void refreshTranscript()}
-      data-reader-refresh>{language.connectedReaders.refreshConversation}</button>
-  </div>
-  {#if readFailed || displayResourcesFailed || liveBody?.hydrationFailed}
-    <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="alert" data-reader-read-failed>
-      {language.connectedReaders.readFailed}
-    </p>
-  {:else if usingRetained}
-    <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="status">
-      {language.connectedReaders.refreshingConversation}
-    </p>
-  {/if}
-  {#if $readerDisplayLimitedStore}<p
-      class="shrink-0 px-4 py-2 text-sm text-textcolor2"
-      role="status"
-      data-reader-limited-display>
-      {language.connectedReaders.limitedDisplay}
-    </p>{/if}
-  {#if generationView.status === 'interrupted'}
-    <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="status" data-reader-generation-interrupted>
-      {language.connectedReaders.generationInterrupted}
-    </p>
-  {/if}
-  {#if loading && messages.length === 0}<p class="px-4 py-3 text-sm text-textcolor2" role="status">
-      {language.loadingChatData}
-    </p>{/if}
-  <!-- This focusable scroll region retains native keyboard scrolling and records user scroll intent. -->
-  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
-  <div
-    bind:this={scrollContainer}
-    class="reader-transcript-scroll relative flex min-h-0 flex-1 flex-col-reverse overflow-y-auto"
-    aria-labelledby="reader-chat-heading"
-    role="region"
-    tabindex="0"
-    data-reader-scroll
-    onwheel={() => chatsInstance?.handleTranscriptUserInteraction()}
-    ontouchstart={() => chatsInstance?.handleTranscriptUserInteraction()}
-    onpointerdown={(event) => {
-      if (event.target === event.currentTarget) chatsInstance?.handleTranscriptUserInteraction()
-    }}
-    onkeydown={(event) => {
-      if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key))
-        chatsInstance?.handleTranscriptUserInteraction()
-    }}
-    onscroll={handleScroll}>
-    {#if displayCharacter && displayChat}
-      {#key transcriptScope}
-        <Chats
-          bind:this={chatsInstance}
-          {messages}
-          {chatId}
-          currentCharacter={displayCharacter}
-          {loadPages}
-          {scrollContainer}
-          readOnly={true}
-          readerGeneration={generationView.projection}
-          rerollTarget={null}
-          onReroll={noWrite}
-          unReroll={noWrite}
-          onNewReroll={noWrite}
-          onSelectRerollCandidate={noWrite}
-          currentUsername={presentation.currentUsername}
-          userIcon={presentation.userIcon}
-          userIconPortrait={presentation.userIconPortrait}
-          initialRowsPending={loading && messages.length === 0}
-          bind:initialDisplayPending
-          bind:hasNewUnreadMessage />
-      {/key}
-      {#if messages.length <= loadPages && greeting}
-        <Chat
-          character={simpleCharacter}
-          displayChatId={chatId}
-          readOnly={true}
-          idx={-1}
-          firstMessage={true}
-          isLastMemory={false}
-          name={getCharacterDisplayName(displayCharacter)}
-          message={greeting}
-          role="char"
-          img={getCharImage(displayCharacter.image, 'css')}
-          largePortrait={displayCharacter.largePortrait}
-          translation={greetingTranslation}
-          greetingTarget={{
-            characterId,
-            chatId,
-            greetingIndex,
-            source: greeting,
-            clientSettingsSignature: greetingSignature,
-          }} />
-      {/if}
-      {#if messages.length > loadPages}
+<ChatScreenLayout
+  settings={displaySettings}
+  {backgroundStyle}
+  stackPortraitOnSmallScreens
+  minimumContentHeight="min(100%, 22rem)"
+  showPortrait={!!displayCharacter && displayCharacter.viewScreen !== 'none' && !displaySettings.hideAllImages}>
+  {#snippet background()}
+    <ReaderChatBackground character={displayCharacter} chat={displayChat} userIcon={presentation.userIcon} />
+  {/snippet}
+  {#snippet portrait()}
+    {#if displayCharacter?.image && !displaySettings.hideAllImages}
+      {#await getCharImage(displayCharacter.image, 'plain') then src}
+        {#if src}<img {src} alt={getCharacterDisplayName(displayCharacter)} class="h-full w-full object-contain" />{/if}
+      {/await}
+    {/if}
+  {/snippet}
+  {#snippet classicPortrait()}
+    {#if displayCharacter && displayCharacter.viewScreen !== 'none' && !displayCharacter.inlayViewScreen && displayCharacter.image && !displaySettings.hideAllImages}
+      <div
+        class="pointer-events-none absolute right-0 top-0 z-5 h-48 w-48 max-h-[35%] max-w-[35%] border-b border-l border-borderc bg-darkbg/70"
+        data-reader-portrait>
+        {@render portrait('waifu')}
+      </div>
+    {/if}
+  {/snippet}
+  {#snippet content(customStyle: string)}
+    <div
+      class="reader-chat-screen flex h-full min-h-0 min-w-0 flex-col relative"
+      style={customStyle}
+      style:--chat-screen-width="{displaySettings.chatScreenWidth ?? 900}px"
+      data-reader-transcript
+      data-reader-character-id={characterId}
+      data-reader-chat-id={chatId}>
+      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-textcolor/15 px-4 py-3">
+        <div class="min-w-0">
+          <h2 id="reader-chat-heading" class="truncate text-lg font-semibold">
+            {displayChat?.name ?? language.connectedReaders.conversation}
+          </h2>
+          {#if displayCharacter}<p class="truncate text-sm text-textcolor2">
+              {getCharacterDisplayName(displayCharacter)}
+            </p>{/if}
+        </div>
         <button
-          class="mx-auto my-3 shrink-0 rounded border border-textcolor/20 px-4 py-2 disabled:opacity-50"
-          data-reader-load-more
-          disabled={loading}
-          onclick={loadMore}>{loading ? language.loadingChatData : language.loadMore}</button>
-      {:else if messages.length === 0 && !greeting && !loading}
-        <p class="m-auto px-4 py-8 text-center text-sm text-textcolor2">
-          {language.connectedReaders.emptyConversation}
+          class="shrink-0 rounded border border-textcolor/20 px-3 py-2 text-sm disabled:opacity-50"
+          disabled={!readerContentAvailable || loading || displayResourcesLoading}
+          onclick={() => void refreshTranscript()}
+          data-reader-refresh>{language.connectedReaders.refreshConversation}</button>
+      </div>
+      {#if readFailed || displayResourcesFailed || liveBody?.hydrationFailed}
+        <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="alert" data-reader-read-failed>
+          {language.connectedReaders.readFailed}
+        </p>
+      {:else if usingRetained}
+        <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="status">
+          {language.connectedReaders.refreshingConversation}
         </p>
       {/if}
-    {/if}
-  </div>
-  {#if hasNewUnreadMessage}<button
-      class="mx-auto my-2 rounded border border-textcolor/20 px-4 py-2 text-sm"
-      data-reader-new-messages
-      onclick={() => chatsInstance?.scrollToLatestMessage()}>{language.connectedReaders.newMessages}</button
-    >{/if}
-  <div class="shrink-0 border-t border-textcolor/15 p-3" data-reader-composer>
-    <textarea
-      rows="1"
-      disabled
-      readonly
-      aria-label={language.messageInput}
-      placeholder={language.connectedReaders.composerReadOnly}
-      class="block w-full resize-none rounded-md border border-textcolor/15 bg-textcolor/5 px-3 py-3 text-sm text-textcolor2"
-    ></textarea>
-  </div>
-</div>
+      {#if $readerDisplayLimitedStore}<p
+          class="shrink-0 px-4 py-2 text-sm text-textcolor2"
+          role="status"
+          data-reader-limited-display>
+          {language.connectedReaders.limitedDisplay}
+        </p>{/if}
+      {#if generationView.status === 'interrupted'}
+        <p class="shrink-0 px-4 py-2 text-sm text-textcolor2" role="status" data-reader-generation-interrupted>
+          {language.connectedReaders.generationInterrupted}
+        </p>
+      {/if}
+      {#if loading && messages.length === 0}<p class="px-4 py-3 text-sm text-textcolor2" role="status">
+          {language.loadingChatData}
+        </p>{/if}
+      <!-- This focusable scroll region retains native keyboard scrolling and records user scroll intent. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions -->
+      <div
+        bind:this={scrollContainer}
+        class="reader-transcript-scroll relative flex min-h-0 flex-1 flex-col-reverse overflow-y-auto"
+        aria-labelledby="reader-chat-heading"
+        role="region"
+        tabindex="0"
+        data-reader-scroll
+        onwheel={() => chatsInstance?.handleTranscriptUserInteraction()}
+        ontouchstart={() => chatsInstance?.handleTranscriptUserInteraction()}
+        onpointerdown={(event) => {
+          if (event.target === event.currentTarget) chatsInstance?.handleTranscriptUserInteraction()
+        }}
+        onkeydown={(event) => {
+          if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(event.key))
+            chatsInstance?.handleTranscriptUserInteraction()
+        }}
+        onscroll={handleScroll}>
+        {#if displayCharacter && displayChat}
+          {#key transcriptScope}
+            <Chats
+              bind:this={chatsInstance}
+              {messages}
+              {chatId}
+              currentCharacter={displayCharacter}
+              {loadPages}
+              {scrollContainer}
+              readOnly={true}
+              readerGeneration={generationView.projection}
+              rerollTarget={null}
+              onReroll={noWrite}
+              unReroll={noWrite}
+              onNewReroll={noWrite}
+              onSelectRerollCandidate={noWrite}
+              currentUsername={presentation.currentUsername}
+              userIcon={presentation.userIcon}
+              userIconPortrait={presentation.userIconPortrait}
+              initialRowsPending={loading && messages.length === 0}
+              bind:initialDisplayPending
+              bind:hasNewUnreadMessage />
+          {/key}
+          {#if messages.length <= loadPages && greeting}
+            <Chat
+              character={simpleCharacter}
+              displayChatId={chatId}
+              readOnly={true}
+              idx={-1}
+              firstMessage={true}
+              isLastMemory={false}
+              name={getCharacterDisplayName(displayCharacter)}
+              message={greeting}
+              role="char"
+              img={getCharImage(displayCharacter.image, 'css')}
+              largePortrait={displayCharacter.largePortrait}
+              translation={greetingTranslation}
+              greetingTarget={{
+                characterId,
+                chatId,
+                greetingIndex,
+                source: greeting,
+                clientSettingsSignature: greetingSignature,
+              }} />
+          {/if}
+          {#if messages.length > loadPages}
+            <button
+              class="mx-auto my-3 shrink-0 rounded border border-textcolor/20 px-4 py-2 disabled:opacity-50"
+              data-reader-load-more
+              disabled={loading}
+              onclick={loadMore}>{loading ? language.loadingChatData : language.loadMore}</button>
+          {:else if messages.length === 0 && !greeting && !loading}
+            <p class="m-auto px-4 py-8 text-center text-sm text-textcolor2">
+              {language.connectedReaders.emptyConversation}
+            </p>
+          {/if}
+        {/if}
+      </div>
+      {#if hasNewUnreadMessage}<button
+          class="mx-auto my-2 rounded border border-textcolor/20 px-4 py-2 text-sm"
+          data-reader-new-messages
+          onclick={() => chatsInstance?.scrollToLatestMessage()}>{language.connectedReaders.newMessages}</button
+        >{/if}
+      <div class="reader-composer shrink-0 border-t border-textcolor/15 p-3" data-reader-composer>
+        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
+          <p id="reader-composer-reason" class="text-sm text-textcolor2">
+            {language.connectedReaders.composerReadOnly}
+          </p>
+          <button
+            class="rounded-md border border-textcolor/20 px-3 py-2 text-sm disabled:opacity-50"
+            disabled={takeoverDisabled}
+            onclick={() => {
+              if (!takeoverDisabled) onUseThisDevice()
+            }}
+            data-reader-composer-takeover>{language.connectedReaders.useThisDevice}</button>
+        </div>
+        <textarea
+          rows="1"
+          disabled
+          readonly
+          aria-label={language.messageInput}
+          aria-describedby="reader-composer-reason"
+          placeholder={language.connectedReaders.composerReadOnly}
+          class="block w-full resize-none rounded-md border border-textcolor/15 bg-textcolor/5 px-3 py-3 text-sm text-textcolor2"
+        ></textarea>
+      </div>
+    </div>
+  {/snippet}
+</ChatScreenLayout>
+
+<style>
+  .reader-chat-screen :global(.risu-chat),
+  .reader-composer {
+    width: min(var(--chat-screen-width, 900px), 100%);
+    margin-inline: auto;
+  }
+</style>

@@ -6,6 +6,8 @@
 <script lang="ts">
   import { getContext, onDestroy, untrack } from 'svelte'
   import { getChatReadOwnersContext } from './chatReadOwnersContext'
+  import { resolveActiveModuleStates } from 'src/ts/moduleActivation'
+  import { denyReaderScriptActivation, hasExecutableMarkupAction } from './readerPassiveHtml'
   import {
     canUseClientWriteAccess,
     captureClientSessionGeneration,
@@ -262,6 +264,7 @@
   }
 
   function readSettingsGroup(group: SettingsGroup): Partial<Database> {
+    if (renderOwners.settings) return renderOwners.settings()
     if (group === 'display') return displaySettingsForPaint()
     const status = settingsResourceState.groupStatuses[group] ?? 'idle'
     if (status === 'ready') return settingsResourceState.value as Partial<Database>
@@ -1885,6 +1888,14 @@
     ((message === '{{none}}' || message === '{{blank}}' || message === '') && idx === -1) || isComment,
   )
   let showSenderIdentity = $derived(!isComment)
+  const hideSenderIdentity = $derived(
+    renderOwners.settings
+      ? renderCharacter?.hideChatIcon === true ||
+          resolveActiveModuleStates(renderOwners.settings() as Database, renderCharacter, renderOwners.chat()).some(
+            ({ module }) => module.hideIcon,
+          )
+      : $HideIconStore,
+  )
   let currentChatId = $derived(currentLiveChat()?.id ?? '')
   let currentDisplayChatId = $derived(displayChatId ?? (idx < 0 ? currentChatId : ''))
   let ownerMessage = $derived(currentLiveMessage() ?? undefined)
@@ -2211,6 +2222,17 @@
     return typeof html === 'string' && html.trim().length > 0
   }
 
+  function readerMarkupAttributes(dom: HTMLElement) {
+    if (writeActionsAllowed || !hasExecutableMarkupAction(dom)) return {}
+    return {
+      'data-reader-script-control': '',
+      'aria-disabled': 'true' as const,
+      title: language.connectedReaders.writeAccessRequired,
+      'aria-description': language.connectedReaders.writeAccessRequired,
+      tabindex: -1,
+    }
+  }
+
   function getRisuButtonAttributes(dom: HTMLElement) {
     const attributes: Record<string, string> = {}
 
@@ -2326,8 +2348,9 @@
   }
 
   async function handleButtonTriggerWithin(event: UIEvent) {
-    const target = event.target as HTMLElement
-    const origin = target.closest('[risu-trigger], [risu-btn]')
+    if (denyReaderScriptActivation(event, canChatWrite())) return
+    const target = event.target instanceof Element ? event.target : null
+    const origin = target?.closest('[risu-trigger], [risu-btn]')
     if (!origin) return
     return runChatWriteAction(async (generation) => {
       const triggerName = origin.getAttribute('risu-trigger')
@@ -3447,7 +3470,7 @@
 {/snippet}
 
 {#snippet senderIcon(options: { rounded?: boolean; styleFix?: string } = {})}
-  {#if showSenderIdentity && !$HideIconStore}
+  {#if showSenderIdentity && !hideSenderIdentity}
     {#if writeActionsAllowed && renderCharacter?.chaId === '§playground'}
       <div
         class="shadow-lg border-textcolor2 border flex justify-center items-center text-textcolor2"
@@ -3496,121 +3519,213 @@
 {/snippet}
 
 {#snippet renderGuiHtmlPart(dom: HTMLElement)}
-  {#if dom.tagName === 'IMG'}
+  {#if ['SCRIPT', 'IFRAME', 'OBJECT', 'EMBED'].includes(dom.tagName)}
+    <!-- Executable template nodes have no presentation surface. -->
+  {:else if dom.tagName === 'DETAILS'}
+    <details
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}
+      open={dom.hasAttribute('open')}>
+      {@render renderChilds(dom)}
+    </details>
+  {:else if dom.tagName === 'SUMMARY'}
+    <summary
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
+      {@render renderChilds(dom)}
+    </summary>
+  {:else if dom.tagName === 'IMG'}
     <img
+      {...readerMarkupAttributes(dom)}
       class={dom.getAttribute('class') ?? ''}
       src={dom.getAttribute('src') ?? ''}
       alt={dom.getAttribute('alt') ?? ''}
       style={dom.getAttribute('style') ?? ''} />
   {:else if dom.tagName === 'A'}
     <a
+      {...readerMarkupAttributes(dom)}
       target="_blank"
       rel="noreferrer"
-      href={dom.getAttribute('href') && dom.getAttribute('href').startsWith('https') ? dom.getAttribute('href') : ''}
+      href={dom.getAttribute('href') && /^https?:\/\//i.test(dom.getAttribute('href')) ? dom.getAttribute('href') : ''}
       class={dom.getAttribute('class') ?? ''}
       style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </a>
   {:else if dom.tagName === 'SPAN'}
-    <span class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <span
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </span>
   {:else if dom.tagName === 'DIV'}
-    <div class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <div
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </div>
   {:else if dom.tagName === 'P'}
-    <p class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <p {...readerMarkupAttributes(dom)} class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </p>
   {:else if dom.tagName === 'H1'}
-    <h1 class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <h1
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </h1>
   {:else if dom.tagName === 'H2'}
-    <h2 class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <h2
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </h2>
   {:else if dom.tagName === 'H3'}
-    <h3 class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <h3
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </h3>
   {:else if dom.tagName === 'H4'}
-    <h4 class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <h4
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </h4>
   {:else if dom.tagName === 'H5'}
-    <h5 class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <h5
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </h5>
   {:else if dom.tagName === 'H6'}
-    <h6 class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <h6
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </h6>
   {:else if dom.tagName === 'UL'}
-    <ul class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <ul
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </ul>
   {:else if dom.tagName === 'OL'}
-    <ol class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <ol
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </ol>
   {:else if dom.tagName === 'LI'}
-    <li class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <li
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </li>
   {:else if dom.tagName === 'TABLE'}
-    <table class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <table
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </table>
   {:else if dom.tagName === 'TR'}
-    <tr class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <tr
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </tr>
   {:else if dom.tagName === 'TD'}
-    <td class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <td
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </td>
   {:else if dom.tagName === 'TH'}
-    <th class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <th
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </th>
   {:else if dom.tagName === 'HR'}
-    <hr class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''} />
+    <hr
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''} />
   {:else if dom.tagName === 'BR'}
-    <br class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''} />
+    <br
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''} />
   {:else if dom.tagName === 'CODE'}
-    <code class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <code
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </code>
   {:else if dom.tagName === 'PRE'}
-    <pre class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <pre
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
             {@render renderChilds(dom)}
         </pre>
   {:else if dom.tagName === 'BLOCKQUOTE'}
-    <blockquote class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <blockquote
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </blockquote>
   {:else if dom.tagName === 'EM'}
-    <em class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <em
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </em>
   {:else if dom.tagName === 'STRONG'}
-    <strong class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <strong
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </strong>
   {:else if dom.tagName === 'U'}
-    <u class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <u {...readerMarkupAttributes(dom)} class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </u>
   {:else if dom.tagName === 'DEL'}
-    <del class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <del
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </del>
   {:else if dom.tagName === 'BUTTON'}
     <button
       {...writeActionsAllowed ? getRisuButtonAttributes(dom) : {}}
-      disabled={!writeActionsAllowed && (dom.hasAttribute('risu-trigger') || dom.hasAttribute('risu-btn'))}
+      disabled={!writeActionsAllowed && hasExecutableMarkupAction(dom)}
+      aria-disabled={!writeActionsAllowed && hasExecutableMarkupAction(dom) ? 'true' : undefined}
+      title={!writeActionsAllowed && hasExecutableMarkupAction(dom)
+        ? language.connectedReaders.writeAccessRequired
+        : undefined}
       class={dom.getAttribute('class') ?? ''}
       style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
@@ -3628,7 +3743,10 @@
       {dom.innerHTML}
     </svelte:element>
   {:else}
-    <div class={dom.getAttribute('class') ?? ''} style={dom.getAttribute('style') ?? ''}>
+    <div
+      {...readerMarkupAttributes(dom)}
+      class={dom.getAttribute('class') ?? ''}
+      style={dom.getAttribute('style') ?? ''}>
       {@render renderChilds(dom)}
     </div>
   {/if}
@@ -3655,7 +3773,10 @@
   data-risu-message-id={messageRowId}
   data-generation-display-projection={isGenerationProjection ? generationPresentationMode : undefined}
   style={isLastMemory ? `border-top:${displaySettings.memoryLimitThickness ?? 1}px solid rgba(98, 114, 164, 0.7);` : ''}
-  onclickcapture={handleButtonTriggerWithin}>
+  onclickcapture={handleButtonTriggerWithin}
+  onkeydowncapture={(event) => {
+    if (event.key === 'Enter' || event.key === ' ') denyReaderScriptActivation(event, canChatWrite())
+  }}>
   <div
     class="text-textcolor mt-1 ml-4 mr-4 mb-1 p-2 bg-transparent grow border-t-gray-900 border-opacity/30 border-transparent flexium items-start max-w-full">
     {#if displaySettings.theme === 'mobilechat' && !blankMessage}
@@ -3756,7 +3877,7 @@
                   })
                 }}><ArrowLeftRightIcon size="18" /></button>
             </span>
-          {:else if showSenderIdentity && !$HideIconStore}
+          {:else if showSenderIdentity && !hideSenderIdentity}
             <div class="chat-width text-xl unmargin text-textcolor flex items-center">
               <span>{name}</span>
             </div>

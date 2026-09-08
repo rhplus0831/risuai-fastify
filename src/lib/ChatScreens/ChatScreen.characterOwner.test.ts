@@ -19,7 +19,7 @@ describe('ChatScreen selected character ownership', () => {
 
   it('reads display settings and selected chat validity through explicit owners', () => {
     const displaySource = fs.readFileSync(path.resolve('src/ts/gui/displaySettings.ts'), 'utf8')
-    expect(source).toContain('return displaySettingsForPaint()')
+    expect(source).toContain('$derived(displaySettingsForPaint())')
     expect(displaySource).toContain('settingsResourceState.groupStatuses.display')
     expect(displaySource).toContain('DISPLAY_PAINT_SETTING_KEYS')
     expect(source).toContain('getChatMetadataOwnerState(chatId)')

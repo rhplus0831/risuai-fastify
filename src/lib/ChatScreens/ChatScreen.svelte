@@ -18,12 +18,12 @@
     selectCharacterOwner,
   } from '../../ts/characterState'
 
-  import { isServerCharacterShell, type Database, type character } from 'src/ts/storage/database.svelte'
+  import { isServerCharacterShell, type character } from 'src/ts/storage/database.svelte'
   import { charactersResourceState, getChatMetadataOwnerState } from 'src/ts/server/resourceState.svelte'
   import { CharEmotion, selectedCharID } from '../../ts/stores.svelte'
   import ResizeBox from './ResizeBox.svelte'
   import DefaultChatScreen from './DefaultChatScreen.svelte'
-  import defaultWallpaper from '../../etc/bg.jpg'
+  import ChatScreenLayout from './ChatScreenLayout.svelte'
   import TransitionImage from './TransitionImage.svelte'
   import BackgroundDom from './BackgroundDom.svelte'
   import SideBarArrow from '../UI/GUI/SideBarArrow.svelte'
@@ -107,27 +107,7 @@
     if (bardWikiChatId !== selectedChatId) openBardWiki = false
   })
 
-  const wallPaper = `background: url(${defaultWallpaper})`
-  function readDisplaySettings(): Partial<Database> {
-    return displaySettingsForPaint()
-  }
-
-  let displaySettings = $derived(readDisplaySettings())
-  let theme = $derived(typeof displaySettings.theme === 'string' ? displaySettings.theme : 'fastify')
-  let waifuWidth = $derived(typeof displaySettings.waifuWidth === 'number' ? displaySettings.waifuWidth : 100)
-  let waifuWidth2 = $derived(typeof displaySettings.waifuWidth2 === 'number' ? displaySettings.waifuWidth2 : 100)
-  let classicMaxWidth = $derived(displaySettings.classicMaxWidth === true)
-  const externalStyles = $derived.by(() => {
-    const settings = displaySettings
-    return (
-      'background: ' +
-      (settings.textScreenColor ? settings.textScreenColor + '80' : 'rgba(0,0,0,0.8)') +
-      ';\n' +
-      (settings.textBorder ? 'text-shadow: -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 1px 1px 0 #000;' : '') +
-      (settings.textScreenRounded ? 'border-radius: 2rem; padding: 1rem;' : '') +
-      (settings.textScreenBorder ? `border: 0.3rem solid ${settings.textScreenBorder};` : '')
-    )
-  })
+  let displaySettings = $derived(displaySettingsForPaint())
   let bgImg = $state('')
   let lastBg = $state('')
   const loadLatestBackground = createLatestBackgroundLoader(getCustomBackground)
@@ -148,70 +128,27 @@
 
 {#if selectedCharacterShellId}
   <CharacterShellHydrationGate characterId={selectedCharacterShellId} />
-{:else if theme === 'waifu'}
-  <div class="grow h-full flex justify-center relative" style={bgImg.length < 4 ? wallPaper : bgImg}>
-    <SideBarArrow />
-    <BackgroundDom />
-    {#if selectedCharacter}
-      {#if selectedCharacter?.viewScreen !== 'none'}
-        <div class="h-full mr-10 flex justify-end halfw" style:width="{42 * (waifuWidth2 / 100)}rem">
-          <TransitionImage classType="waifu" src={getEmotionForCharacter(selectedCharacter, $CharEmotion, 'plain')} />
-        </div>
-      {/if}
-    {/if}
-    <div
-      class="h-full w-2xl"
-      style:width="{42 * (waifuWidth / 100)}rem"
-      class:halfwp={selectedCharacter !== undefined && selectedCharacter?.viewScreen !== 'none'}>
-      <DefaultChatScreen
-        route={visibleRoute}
-        customStyle={`${externalStyles}backdrop-filter: blur(4px);`}
-        bind:openChatList
-        bind:openModuleList
-        bind:openBardWiki />
-    </div>
-  </div>
-{:else if theme === 'waifuMobile'}
-  <div class="grow h-full relative" style={bgImg.length < 4 ? wallPaper : bgImg}>
-    <SideBarArrow />
-    <BackgroundDom />
-    <div
-      class="w-full absolute z-10 bottom-0 left-0"
-      class:per33={selectedCharacter !== undefined && selectedCharacter?.viewScreen !== 'none'}
-      class:h-full={!(selectedCharacter !== undefined && selectedCharacter?.viewScreen !== 'none')}>
-      <DefaultChatScreen
-        route={visibleRoute}
-        customStyle={`${externalStyles}backdrop-filter: blur(4px);`}
-        bind:openChatList
-        bind:openModuleList
-        bind:openBardWiki />
-    </div>
-    {#if selectedCharacter}
-      {#if selectedCharacter?.viewScreen !== 'none'}
-        <div class="h-full w-full absolute bottom-0 left-0 max-w-full">
-          <TransitionImage classType="mobile" src={getEmotionForCharacter(selectedCharacter, $CharEmotion, 'plain')} />
-        </div>
-      {/if}
-    {/if}
-  </div>
 {:else}
-  <div class="grow h-full min-w-0 relative justify-center flex">
-    <SideBarArrow />
-    <BackgroundDom />
-    <div style={bgImg} class="h-full w-full" class:max-w-6xl={classicMaxWidth}>
+  <ChatScreenLayout
+    settings={displaySettings}
+    backgroundStyle={bgImg}
+    showPortrait={selectedCharacter !== undefined && selectedCharacter.viewScreen !== 'none'}>
+    {#snippet navigation()}<SideBarArrow />{/snippet}
+    {#snippet background()}<BackgroundDom />{/snippet}
+    {#snippet portrait(classType: 'waifu' | 'mobile')}
       {#if selectedCharacter}
-        {#if selectedCharacter?.viewScreen !== 'none' && !selectedCharacter?.inlayViewScreen}
-          <ResizeBox />
-        {/if}
+        <TransitionImage {classType} src={getEmotionForCharacter(selectedCharacter, $CharEmotion, 'plain')} />
       {/if}
-      <DefaultChatScreen
-        route={visibleRoute}
-        customStyle={bgImg.length > 2 ? `${externalStyles}` : ''}
-        bind:openChatList
-        bind:openModuleList
-        bind:openBardWiki />
-    </div>
-  </div>
+    {/snippet}
+    {#snippet classicPortrait()}
+      {#if selectedCharacter && selectedCharacter.viewScreen !== 'none' && !selectedCharacter.inlayViewScreen}
+        <ResizeBox />
+      {/if}
+    {/snippet}
+    {#snippet content(customStyle: string)}
+      <DefaultChatScreen route={visibleRoute} {customStyle} bind:openChatList bind:openModuleList bind:openBardWiki />
+    {/snippet}
+  </ChatScreenLayout>
 {/if}
 {#if openChatList}
   <LazyComponent
@@ -236,15 +173,3 @@
     onDismiss={() => (openBardWiki = false)}
     testId="bardwiki-workspace" />
 {/if}
-
-<style>
-  .halfw {
-    max-width: calc(50% - 5rem);
-  }
-  .halfwp {
-    max-width: calc(50% - 5rem);
-  }
-  .per33 {
-    height: 33.333333%;
-  }
-</style>

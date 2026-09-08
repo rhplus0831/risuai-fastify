@@ -1,5 +1,10 @@
 import { captureClientSessionGeneration, isClientReadOnly, isClientSessionGenerationCurrent } from '../clientSession'
 import DOMPurify from 'dompurify'
+import {
+  getReaderNavigationSettings,
+  getReaderModuleDisplayDatabase,
+  getReaderTranscriptPersona,
+} from '../server/readerTranscriptProjection.svelte'
 import markdownit from 'markdown-it'
 import { sha256Hex } from '../sha256Fallback'
 import {
@@ -259,6 +264,7 @@ function parserSettingOwnerStatus(key: keyof Database): ServerResourceStatus {
 }
 
 function parserSettingsProjection(): Partial<Database> {
+  if (isClientReadOnly()) return { ...getReaderNavigationSettings(), ...getReaderTranscriptPersona() }
   if (settingsResourceState.status === 'error') return {}
   const ownerValues = settingsResourceState.value as Partial<Database>
   const settings: Partial<Database> = {}
@@ -270,6 +276,12 @@ function parserSettingsProjection(): Partial<Database> {
 
 function parserRuntimeDatabase(): Database {
   const database = parserSettingsProjection()
+  if (isClientReadOnly())
+    return {
+      ...database,
+      ...getReaderModuleDisplayDatabase(),
+      characters: [],
+    } as Database
 
   for (const collectionName of SERVER_COLLECTION_NAMES) {
     const status = collectionsResourceState.statuses[collectionName]
@@ -299,6 +311,7 @@ function parserRuntimeDatabase(): Database {
 }
 
 function parserSetting<K extends keyof Database>(key: K): Database[K] | undefined {
+  if (isClientReadOnly()) return getReaderNavigationSettings()[key] as Database[K] | undefined
   const status = parserSettingOwnerStatus(key)
   if (status === 'ready') {
     return (settingsResourceState.value as Partial<Database>)[key] as Database[K] | undefined

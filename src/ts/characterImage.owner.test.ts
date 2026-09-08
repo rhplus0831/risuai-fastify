@@ -13,8 +13,11 @@ vi.mock('./fileSource', () => ({ getFileSrc: imageState.getFileSrc }))
 vi.mock('./server/resourceState.svelte', () => ({ settingsResourceState: imageState.settingsResourceState }))
 
 import { getCharImage } from './characterImage'
+import { beginClientSession, settleClientReader, resetClientSessionForTests } from './clientSession'
+import { recordReaderNavigationSettings } from './server/readerTranscriptProjection.svelte'
 
 beforeEach(() => {
+  resetClientSessionForTests()
   imageState.getFileSrc.mockClear()
   imageState.settingsResourceState.value = { hideAllImages: false }
   imageState.settingsResourceState.status = 'ready'
@@ -22,6 +25,19 @@ beforeEach(() => {
 })
 
 describe('character image settings ownership', () => {
+  it('uses confirmed image visibility after reader entry while pending writer settings remain intact', async () => {
+    const operation = beginClientSession('image-reader')
+    settleClientReader(operation, { databaseLineage: 'image-tests', writer: { sessionId: 'other', epoch: 1 } })
+    recordReaderNavigationSettings({ hideAllImages: true }, ['hideAllImages'])
+    imageState.settingsResourceState.value.hideAllImages = false
+    await expect(getCharImage('avatar', 'plain')).resolves.toBe('/none.webp')
+    expect(imageState.getFileSrc).not.toHaveBeenCalled()
+    recordReaderNavigationSettings({ hideAllImages: false }, ['hideAllImages'])
+    imageState.settingsResourceState.value.hideAllImages = true
+    await expect(getCharImage('avatar', 'plain')).resolves.toBe('file:avatar')
+    expect(imageState.settingsResourceState.value.hideAllImages).toBe(true)
+  })
+
   it('resolves images from the ready settings owner', async () => {
     await expect(getCharImage('avatar', 'plain')).resolves.toBe('file:avatar')
     expect(imageState.getFileSrc).toHaveBeenCalledWith('avatar')

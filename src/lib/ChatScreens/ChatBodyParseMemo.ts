@@ -25,6 +25,7 @@ import {
 import type { DisplaySourceLayer } from '@risuai/protocol/display-source'
 import type { DisplaySourcePriority } from '../../ts/server/displaySources'
 import { displaySettingForPaint } from '../../ts/gui/displaySettings'
+import { resolveActiveModuleStates } from '../../ts/moduleActivation'
 
 export type ChatBodyParseMode = 'normal' | 'back' | 'pretranslate' | 'notrim'
 
@@ -51,18 +52,28 @@ export function createChatBodyParseOwnerReaders(
     },
     activeCharacterOwner: owners.character,
     activeChatOwner: owners.chat,
-    settingsOwner: () => settingsResourceState.value as Partial<Database>,
-    assetWidthForPaint: () => displaySettingForPaint('assetWidth'),
-    promptPresetOwners: () => collectionsResourceState.values.promptPresets,
-    moduleOwners: owners === sharedChatReadOwners ? readChatBodyModules : createChatBodyModuleReads(owners),
+    settingsOwner: () => (owners.settings ? owners.settings() : (settingsResourceState.value as Partial<Database>)),
+    assetWidthForPaint: () => (owners.settings ? owners.settings().assetWidth : displaySettingForPaint('assetWidth')),
+    promptPresetOwners: () =>
+      owners.settings ? (owners.settings().promptPresets ?? []) : collectionsResourceState.values.promptPresets,
+    moduleOwners: owners.settings
+      ? () =>
+          resolveActiveModuleStates(owners.settings!() as Database, owners.character(), owners.chat()).map(
+            (state) => state.module,
+          )
+      : owners === sharedChatReadOwners
+        ? readChatBodyModules
+        : createChatBodyModuleReads(owners),
     userIconOwner: () =>
       resolveUserPersonaPresentation(
-        {
-          personas: collectionsResourceState.values.personas ?? [],
-          selectedPersonaId: settingsResourceState.value.selectedPersonaId,
-          username: settingsResourceState.value.username,
-          userIcon: settingsResourceState.value.userIcon,
-        } as Database,
+        owners.settings
+          ? (owners.settings() as Database)
+          : ({
+              personas: collectionsResourceState.values.personas ?? [],
+              selectedPersonaId: settingsResourceState.value.selectedPersonaId,
+              username: settingsResourceState.value.username,
+              userIcon: settingsResourceState.value.userIcon,
+            } as Database),
         owners.chat(),
       ).userIcon,
   }

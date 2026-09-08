@@ -1,5 +1,8 @@
 <script lang="ts">
   import { getContext, onDestroy, untrack } from 'svelte'
+  import { language } from 'src/lang'
+  import { getModuleAssets } from 'src/ts/process/modules'
+  import { disableReaderScriptControls } from './readerPassiveHtml'
   import {
     canUseClientWriteAccess,
     captureClientSessionGeneration,
@@ -21,7 +24,6 @@
   import { pruneEmptyBilingualPairs } from '../../ts/translator/bilingualInterleave'
   import { createChatBodyRenderMemo } from './ChatBodyRenderMemo'
   import { CHAT_DISPLAY_SCHEDULER, type ChatDisplayScheduler } from './chatDisplayScheduler'
-  import { getModuleAssets } from 'src/ts/process/modules'
   import { getFileSrc } from 'src/ts/globalApi.svelte'
   import {
     RegexDisplayReloadPointer,
@@ -145,11 +147,12 @@
     alertError(`Error while parsing chat message: ${translated}, ${parsingError.message}, ${parsingError.stack}`)
   }
 
-  const finalizeBody = createChatBodyRenderMemo((html, model) =>
-    addMetadataToElement(pruneEmptyBilingualPairs(trimMarkdown(html)), model),
-  )
+  const finalizeBody = createChatBodyRenderMemo((html, model) => {
+    const body = addMetadataToElement(pruneEmptyBilingualPairs(trimMarkdown(html)), model)
+    return effectiveReadOnly ? disableReaderScriptControls(body, language.connectedReaders.writeAccessRequired) : body
+  })
   function renderParsedChatBody(html: string): string {
-    const policy = chatHtmlRenderPolicyKey()
+    const policy = `${chatHtmlRenderPolicyKey()}|${effectiveReadOnly}|${language.connectedReaders.writeAccessRequired}`
     const model = modelShortName
     return untrack(() => finalizeBody(html ?? '', model, policy))
   }
@@ -486,9 +489,15 @@
       const currentCharacter = parseOwners.activeCharacterOwner()
       if (!currentCharacter) return
       const styl = currentCharacter.prebuiltAssetStyle
-      const assets = getModuleAssets({ character: currentCharacter, chat: parseOwners.activeChatOwner() }).concat(
-        currentCharacter.additionalAssets ?? [],
-      )
+      const root = bodyRoot
+      const currentChat = parseOwners.activeChatOwner()
+      const generation = captureClientSessionGeneration()
+      const parseRun = markParsingRun
+      const assets = (
+        effectiveReadOnly
+          ? (parseOwners.moduleOwners?.() ?? []).flatMap((module) => module.assets ?? [])
+          : getModuleAssets({ character: currentCharacter, chat: currentChat })
+      ).concat(currentCharacter.additionalAssets ?? [])
       const normalizedAssets = assets.map((asset) => {
         return {
           name: asset[0].toLocaleLowerCase(),
@@ -499,6 +508,15 @@
 
       imgs.forEach(async (img) => {
         const name = img.getAttribute('src')?.toLocaleLowerCase() || ''
+        const current = () =>
+          isClientSessionGenerationCurrent(generation) &&
+          parseRun === markParsingRun &&
+          root === bodyRoot &&
+          img.isConnected &&
+          root.contains(img) &&
+          parseOwners.activeCharacterOwner() === currentCharacter &&
+          parseOwners.activeChatOwner() === currentChat &&
+          (img.getAttribute('src')?.toLocaleLowerCase() || '') === name
 
         if (name.length > 200 || name.includes(':')) {
           img.setAttribute('noimage', 'true')
@@ -507,9 +525,11 @@
 
         const foundAsset = exactAssets.get(name)
         if (foundAsset) {
+          const source = await getFileSrc(foundAsset)
+          if (!current()) return
           img.classList.add('root-loaded-image')
           img.classList.add('root-loaded-image-' + styl)
-          img.src = await getFileSrc(foundAsset)
+          img.src = source
           return
         }
 
@@ -533,10 +553,8 @@
         }
         if (currentFound) {
           const got = await getFileSrc(currentFound)
-          const name2 = img.getAttribute('src')?.toLocaleLowerCase() || ''
-          if (name === name2) {
-            img.setAttribute('src', got)
-          }
+          if (!current()) return
+          img.setAttribute('src', got)
 
           if (img.classList.length === 0) {
             img.classList.add('root-loaded-image')

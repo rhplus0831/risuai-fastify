@@ -7,4 +7,4 @@
   }
 </script>
 
-<ReaderTranscript {characterId} {chatId} />
+<ReaderTranscript {characterId} {chatId} onUseThisDevice={() => {}} takeoverDisabled />

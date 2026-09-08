@@ -249,3 +249,42 @@ final projection suite passed 13 tests after adding a real pending-overlay
 regression. `pnpm test -- src/ts/gui/displaySettings.dom.test.ts` passed (5).
 `pnpm check` passed with zero errors and warnings. Prettier and whitespace
 checks passed. Shared transcript and browser acceptance follow in separate slices.
+
+### Phase 3 shared-transcript slice — 2026-09-08
+
+`ChatScreenLayout` now supplies common theme/background geometry to the writer
+adapter and `ReaderTranscript`. Reader rendering uses explicit confirmed
+settings, persona and module owners; the composer creates no draft and invokes
+the existing takeover controller. Static portraits and passive character/module
+backgrounds avoid writer display runtimes. Narrow waifu layouts remain readable,
+and waifuMobile reserves usable transcript/composer height.
+
+Ordinary and custom markup keep safe links/disclosures while executable controls
+are disabled with a localized reason. Capture handlers and existing action-owner
+guards deny click, keyboard and direct script invocation. Deferred image work
+checks session, owner, parse and DOM freshness. Unsupported executable custom
+templates retain the existing readable limited-display fallback.
+
+Focused transcript/rendering validation passed (186 tests) across
+`ReaderTranscript.svelte.test.ts`, `Chat.customHtml.test.ts`,
+`ChatBody.svelte.test.ts`, `ChatBodyParseMemo.test.ts`,
+`ChatScreen.characterOwner.test.ts`, `readerPassiveHtml.dom.test.ts`,
+`characterImage.owner.test.ts`, and parser `renderFastPaths.test.ts`.
+Prettier and whitespace checks passed. Actual desktop/mobile and streaming
+acceptance remains pending.
+
+### Phase 4 focused lifecycle verification — 2026-09-08
+
+The combined session/demotion/local-mutation/route suites passed (42 tests),
+reader generation observation/stream/row suites passed (95), and connected-reader
+synchronization passed (20). Commands:
+
+```sh
+pnpm exec vitest run src/ts/server/readerDemotion.dom.test.ts src/ts/readerLocalMutations.svelte.test.ts src/ts/readerRouteScope.test.ts src/ts/clientSession.test.ts src/ts/server/commands.clientSession.test.ts --bail=1
+pnpm exec vitest run src/ts/server/readerGenerationObservation.test.ts src/ts/server/readerGenerationStream.test.ts src/lib/ChatScreens/readerGenerationRows.test.ts --bail=1
+pnpm test -- src/ts/server/connectedReaderSync.test.ts
+```
+
+Together with the earlier bootstrap/access suites these cover retained writer
+intent, current capability checks, promotion races, generation reconciliation,
+and session/lineage fences. Browser lifecycle acceptance remains pending.

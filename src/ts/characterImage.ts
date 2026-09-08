@@ -1,7 +1,10 @@
 import { getFileSrc } from './fileSource'
+import { isClientReadOnly } from './clientSession'
+import { getReaderNavigationSettings } from './server/readerTranscriptProjection.svelte'
 import { settingsResourceState } from './server/resourceState.svelte'
 
 function shouldHideAllImages(): boolean {
+  if (isClientReadOnly()) return getReaderNavigationSettings().hideAllImages === true
   const status = settingsResourceState.groupStatuses.display ?? 'idle'
   if (settingsResourceState.status === 'error' || status === 'error') return true
   return settingsResourceState.value.hideAllImages === true

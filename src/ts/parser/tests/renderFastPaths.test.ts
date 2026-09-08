@@ -21,6 +21,7 @@ import {
 import { createChatBodyRenderMemo } from '../../../lib/ChatScreens/ChatBodyRenderMemo'
 import { pruneEmptyBilingualPairs } from '../../translator/bilingualInterleave'
 import { charactersResourceState, settingsResourceState } from '../../server/resourceState.svelte'
+import { recordReaderNavigationSettings } from '../../server/readerTranscriptProjection.svelte'
 import { CurrentTriggerIdStore } from '../../stores.svelte'
 
 const mocks = vi.hoisted(() => ({
@@ -258,6 +259,28 @@ describe('connected reader ParseMarkdown fallback', () => {
     charactersResourceState.currentChar = 0
     charactersResourceState.status = 'ready'
   })
+  it('uses confirmed formatting and image policy while pending writer settings remain', async () => {
+    const operation = beginClientSession('reader')
+    settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })
+    recordReaderNavigationSettings(
+      { paragraphBreakBySentences: true, paragraphBreakSentenceCount: 1, hideAllImages: true },
+      ['paragraphBreakBySentences', 'paragraphBreakSentenceCount', 'hideAllImages'],
+    )
+    settingsResourceState.value.paragraphBreakBySentences = false
+    settingsResourceState.value.hideAllImages = false
+    const html = await ParseMarkdown(
+      'First sentence. Second sentence.\n\n<img src="https://example.com/image.png">',
+      null,
+      'normal',
+    )
+    expect(html).toContain('<p>First sentence.</p>')
+    expect(html).toContain('<p>Second sentence.</p>')
+    expect(html).toContain('/none.webp')
+    expect(html).not.toContain('https://example.com/image.png')
+    expect(settingsResourceState.value.paragraphBreakBySentences).toBe(false)
+    expect(settingsResourceState.value.hideAllImages).toBe(false)
+  })
+
   it('keeps sanitized source readable on isolated display failure without invoking scripts', async () => {
     const operation = beginClientSession('reader')
     settleClientReader(operation, { databaseLineage: 'lineage', writer: { sessionId: 'other', epoch: 1 } })

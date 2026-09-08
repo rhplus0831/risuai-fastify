@@ -3334,6 +3334,12 @@ describe('connected reader message authority', () => {
         expect(target.querySelector<HTMLButtonElement>('.reader-lua')?.disabled).toBe(true)
         target.querySelector<HTMLButtonElement>('.reader-trigger')?.click()
         target.querySelector<HTMLButtonElement>('.reader-lua')?.click()
+        target
+          .querySelector<HTMLButtonElement>('.reader-trigger')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
+        target
+          .querySelector<HTMLButtonElement>('.reader-lua')
+          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
         target.querySelector<HTMLButtonElement>('.button-icon-copy')?.click()
         await settle()
         expect(clipboard.writeText).toHaveBeenCalledWith('visible message 0')
@@ -3348,6 +3354,31 @@ describe('connected reader message authority', () => {
       }
     },
   )
+
+  it('keeps safe custom-template disclosures and denies non-native and inline script controls', async () => {
+    seedDatabase(
+      1,
+      '<details><summary>Show more</summary><a href="https://example.com">Safe link</a></details><span class="script-link" role="button" risu-btn="local-only">Local script</span><button class="inline-script" onclick="window.localEffect = true">Inline script</button><script>window.localEffect = true</script>',
+    )
+    mountCustomHtmlRows(1, 'char', { readOnly: true })
+    await settle()
+    expect(target.querySelector('details summary')?.textContent).toBe('Show more')
+    expect(target.querySelector('a')?.getAttribute('href')).toBe('https://example.com')
+    expect(target.querySelector('script')).toBeNull()
+    expect(target.querySelector<HTMLButtonElement>('.inline-script')?.disabled).toBe(true)
+    const control = target.querySelector<HTMLElement>('.script-link')!
+    expect(control.getAttribute('aria-disabled')).toBe('true')
+    expect(control.getAttribute('title')).toBeTruthy()
+    const clicked = new MouseEvent('click', { bubbles: true, cancelable: true })
+    const keyed = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    control.dispatchEvent(clicked)
+    control.dispatchEvent(keyed)
+    expect(clicked.defaultPrevented).toBe(true)
+    expect(keyed.defaultPrevented).toBe(true)
+    expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+    expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+    expect(customHtmlMocks.risuChatParser).not.toHaveBeenCalled()
+  })
 
   it('does not request automatic translation as a managed reader', async () => {
     seedDatabase(1, null as unknown as string)

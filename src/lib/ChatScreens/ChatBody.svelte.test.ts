@@ -382,12 +382,12 @@ describe('ChatBody translation parse bounds', () => {
     expect(bodyRoot.querySelector('img')?.classList.contains('root-loaded-image-contain')).toBe(true)
   })
 
-  it('passes the local reader chat into parser and image-module reads while canonical owners stay selected', async () => {
+  it('passes the local reader chat into parser and confirmed image-module reads while canonical owners stay selected', async () => {
     setChatBodyDatabase({ newImageHandlingBeta: true })
     const local = {
       chaId: 'reader-character',
       chatPage: 0,
-      additionalAssets: [['portrait.png', 'reader-asset-id', 'png']],
+      additionalAssets: [],
       prebuiltAssetStyle: 'contain',
       chats: [
         { id: 'reader-canonical-chat', message: [], modules: ['canonical-module'] },
@@ -399,6 +399,23 @@ describe('ChatBody translation parse bounds', () => {
       { status: 'ready', currentChar: 0, characters: [local] },
       () => [],
       () => ({ characterId: local.chaId, chatId: localChat.id! }),
+      () => ({
+        newImageHandlingBeta: true,
+        modules: [
+          {
+            id: 'reader-module',
+            name: 'Reader module',
+            description: '',
+            assets: [['portrait.png', 'reader-asset-id', 'png']],
+          },
+          {
+            id: 'canonical-module',
+            name: 'Writer module',
+            description: '',
+            assets: [['portrait.png', 'writer-asset-id', 'png']],
+          },
+        ],
+      }),
     )
     chatBodyMocks.getFileSrc.mockResolvedValue('/api/v1/assets/reader-asset-id')
     const bodyRoot = document.createElement('span')
@@ -424,7 +441,8 @@ describe('ChatBody translation parse bounds', () => {
     })
     flushSync()
     await flushComponentPromises()
-    expect(chatBodyMocks.getModuleAssets).toHaveBeenCalledWith({ character: local, chat: localChat })
+    expect(chatBodyMocks.getModuleAssets).not.toHaveBeenCalled()
+    expect(chatBodyMocks.getFileSrc).not.toHaveBeenCalledWith('writer-asset-id')
     expect(chatBodyMocks.getFileSrc).toHaveBeenCalledWith('reader-asset-id')
     expect((chatBodyMocks.ParseMarkdown.mock.calls[0] as unknown[])[5]).toMatchObject({
       chatId: localChat.id,
