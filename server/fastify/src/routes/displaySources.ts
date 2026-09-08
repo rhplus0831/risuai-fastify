@@ -12,6 +12,8 @@ import {
   type DisplaySourceTarget,
 } from '@risuai/protocol/display-source'
 import type { DisplaySourceService } from '../displaySourceService.js'
+import { displaySourceFailureDiagnostic } from '../displaySourceService.js'
+import { recordDiagnosticEvent } from '../diagnosticContext.js'
 
 const DISPLAY_SOURCE_LAYERS: ReadonlySet<DisplaySourceLayer> = new Set([
   'original',
@@ -156,7 +158,9 @@ export function registerDisplaySourceRoutes(
           ...(isRevisionConflict ? { currentRevision: service.currentRevision() } : {}),
         })
       }
-      req.log.error({ err: error }, 'display source transform failed')
+      const diagnostic = displaySourceFailureDiagnostic(error)
+      recordDiagnosticEvent({ category: 'display', level: 'error', ...diagnostic })
+      req.log.error({ err: error, displaySourceFailure: diagnostic }, 'display source transform failed')
       return reply.code(500).send({ error: 'display_source_transform_failed' })
     } finally {
       req.raw.off('aborted', abortRequest)

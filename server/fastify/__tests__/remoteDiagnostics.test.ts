@@ -9,6 +9,9 @@ import {
   SUPPORT_DIAGNOSTICS_ENDPOINT,
 } from '@risuai/protocol/remote-diagnostics'
 import { buildApp } from '../src/app.js'
+import { openDatabase } from '../src/db.js'
+import { applyImport } from '../src/repository.js'
+import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { assertSupportDiagnosticsConfig, loadConfig } from '../src/config.js'
 import { createClientDiagnostics } from '../src/clientDiagnostics.js'
 import { createRemoteDiagnosticsReader, createVolatileRemoteDiagnostics } from '../src/remoteDiagnostics.js'
@@ -194,6 +197,142 @@ describe('remote support diagnostics', () => {
     expect(trace).not.toContain('/api/v1/diagnostics/browser')
     expect(trace).not.toContain(h.token)
     expect(readdirSync(path.join(h.dataDir, 'trace'))).not.toContain('bodies')
+  })
+
+  it('reports content-free display scope decode details for remote diagnosis', async () => {
+    const h = await harness()
+    const { assertion } = await setupAuthedClient(h.app)
+    const db = openDatabase(h.dataDir)
+    const privateValue = 'PRIVATE-DISPLAY-VALIDATION-CANARY'
+    let revision: number
+    try {
+      const imported = await applyImport(
+        db,
+        h.dataDir,
+        normalizeRisuSaveSnapshotDatabase({
+          characters: [
+            {
+              chaId: 'diagnostic-character',
+              name: 'Diagnostic character',
+              chats: [
+                {
+                  id: 'diagnostic-chat',
+                  message: [{ role: 'char', data: 'hello', chatId: 'diagnostic-message' }],
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      revision = imported.revision
+      const row = db.prepare('SELECT data_json FROM characters WHERE id = ?').get('diagnostic-character') as {
+        data_json: string
+      }
+      const character = JSON.parse(row.data_json) as Record<string, unknown>
+      character.prebuiltAssetCommand = { privateValue }
+      db.prepare('UPDATE characters SET data_json = ? WHERE id = ?').run(
+        JSON.stringify(character),
+        'diagnostic-character',
+      )
+    } finally {
+      db.close()
+    }
+
+    const source = 'hello'
+    const payload = {
+      protocolVersion: 1,
+      baseRevision: revision,
+      context: { pageSessionId: 'diagnostic-page' },
+      targets: [
+        {
+          requestKey: 'diagnostic-request',
+          characterId: 'diagnostic-character',
+          messageId: 'diagnostic-message',
+          index: 0,
+          role: 'char',
+          firstMessage: false,
+          layer: 'original',
+          source,
+          sourceHash: createHash('sha256').update(source).digest('hex'),
+          projectionEpoch: 1,
+        },
+      ],
+    }
+    const failure = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/chats/diagnostic-chat/display-sources',
+      headers: { 'risu-auth': assertion },
+      payload,
+    })
+    expect(failure.statusCode).toBe(500)
+    expect(failure.json()).toEqual({ error: 'display_source_transform_failed' })
+
+    await vi.waitFor(() => expect(h.diagnostics.journal!.read().pending).toBe(0))
+    const evidence = await h.app.inject({
+      url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=2&category=display&requestUid=${failure.headers['x-request-uid']}`,
+      headers: h.headers,
+    })
+    expect(evidence.statusCode).toBe(200)
+    expect(isRemoteDiagnosticsResponse(evidence.json())).toBe(true)
+    expect(evidence.json().entries).toContainEqual(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          source: 'server',
+          category: 'display',
+          stage: 'scope-decode',
+          outcome: 'failed',
+          failureKind: 'generation-input-validation',
+          validationDomain: 'database',
+          validationOwner: 'character',
+          validationFieldRef: createHash('sha256')
+            .update('generation-input-field:prebuiltAssetCommand')
+            .digest('hex')
+            .slice(0, 16),
+          validationRule: 'type',
+          valueKind: 'object',
+          requestUid: failure.headers['x-request-uid'],
+        }),
+      }),
+    )
+    expect(evidence.body).not.toContain(privateValue)
+    expect(evidence.body).not.toContain('diagnostic-character')
+    expect(evidence.body).not.toContain('diagnostic-chat')
+    expect(evidence.body).not.toContain('diagnostic-message')
+
+    const malformedCanary = 'PRIVATE-DISPLAY-MALFORMED-JSON-CANARY'
+    const malformedDb = openDatabase(h.dataDir)
+    try {
+      malformedDb.exec('PRAGMA ignore_check_constraints = ON')
+      malformedDb
+        .prepare('UPDATE characters SET data_json = ? WHERE id = ?')
+        .run(`{"private":"${malformedCanary}"`, 'diagnostic-character')
+    } finally {
+      malformedDb.close()
+    }
+    const malformedFailure = await h.app.inject({
+      method: 'POST',
+      url: '/api/v1/chats/diagnostic-chat/display-sources',
+      headers: { 'risu-auth': assertion },
+      payload,
+    })
+    expect(malformedFailure.statusCode).toBe(500)
+    await vi.waitFor(() => expect(h.diagnostics.journal!.read().pending).toBe(0))
+    const malformedEvidence = await h.app.inject({
+      url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=2&category=display&requestUid=${malformedFailure.headers['x-request-uid']}`,
+      headers: h.headers,
+    })
+    expect(malformedEvidence.json().entries).toContainEqual(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          category: 'display',
+          stage: 'scope-load',
+          outcome: 'failed',
+          failureKind: 'malformed-persistence',
+          requestUid: malformedFailure.headers['x-request-uid'],
+        }),
+      }),
+    )
+    expect(malformedEvidence.body).not.toContain(malformedCanary)
   })
 
   it('distinguishes bad query, empty result, expired cursor and effective throttling', async () => {

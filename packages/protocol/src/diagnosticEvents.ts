@@ -29,6 +29,63 @@ export const DIAGNOSTIC_CANCELLATION_ORIGINS = [
   'server-shutdown',
   'unknown',
 ] as const
+export const DIAGNOSTIC_DISPLAY_STAGES = [
+  'revision',
+  'namespace',
+  'scope-load',
+  'scope-decode',
+  'scope-resolution',
+  'shared-dependencies',
+  'target-preparation',
+  'postcondition',
+  'unknown',
+] as const
+export const DIAGNOSTIC_DISPLAY_FAILURE_KINDS = [
+  'generation-input-validation',
+  'malformed-persistence',
+  'storage',
+  'runtime',
+  'unknown',
+] as const
+export const DIAGNOSTIC_GENERATION_INPUT_DOMAINS = ['settings', 'database', 'preflight', 'provider', 'memory'] as const
+export const DIAGNOSTIC_GENERATION_INPUT_OWNERS = [
+  'settings',
+  'character',
+  'chat',
+  'message',
+  'memory',
+  'lorebook',
+  'module',
+  'prompt-preset',
+  'persona',
+  'model-preset',
+  'model-profile',
+  'provider-credential',
+  'agent-preset',
+  'custom-model',
+  'unknown',
+] as const
+export const DIAGNOSTIC_VALIDATION_RULES = [
+  'type',
+  'required',
+  'const',
+  'any-of',
+  'not',
+  'items',
+  'min-items',
+  'max-items',
+  'other',
+] as const
+export const DIAGNOSTIC_VALUE_KINDS = [
+  'undefined',
+  'null',
+  'array',
+  'object',
+  'string',
+  'number',
+  'boolean',
+  'other',
+] as const
 const size = enumOf(DIAGNOSTIC_SIZE_BUCKETS)
 const base = {
   timestamp,
@@ -75,6 +132,18 @@ const eventSchemas = {
     category: Type.Literal('runtime'),
     kind: enumOf(['console', 'runtime-error', 'unhandled-rejection']),
     errorName: Type.Optional(DiagnosticEntrySchema.properties.errorName),
+  }),
+  display: object({
+    ...base,
+    category: Type.Literal('display'),
+    stage: enumOf(DIAGNOSTIC_DISPLAY_STAGES),
+    outcome: Type.Literal('failed'),
+    failureKind: enumOf(DIAGNOSTIC_DISPLAY_FAILURE_KINDS),
+    validationDomain: Type.Optional(enumOf(DIAGNOSTIC_GENERATION_INPUT_DOMAINS)),
+    validationOwner: Type.Optional(enumOf(DIAGNOSTIC_GENERATION_INPUT_OWNERS)),
+    validationFieldRef: Type.Optional(Type.String({ pattern: '^[a-f0-9]{16}$' })),
+    validationRule: Type.Optional(enumOf(DIAGNOSTIC_VALIDATION_RULES)),
+    valueKind: Type.Optional(enumOf(DIAGNOSTIC_VALUE_KINDS)),
   }),
   generation: object({
     ...base,
@@ -226,6 +295,25 @@ export function isDiagnosticEventV2(input: unknown): input is DiagnosticEventV2 
       (input.detail.source !== input.source || input.detail.timestamp !== input.timestamp)
     )
       return false
+    if (input.category === 'display') {
+      const validationFields = [
+        input.validationDomain,
+        input.validationOwner,
+        input.validationFieldRef,
+        input.validationRule,
+        input.valueKind,
+      ]
+      if (input.failureKind === 'generation-input-validation') {
+        if (
+          input.stage !== 'scope-decode' ||
+          input.validationDomain === undefined ||
+          input.validationOwner === undefined ||
+          input.validationRule === undefined ||
+          input.valueKind === undefined
+        )
+          return false
+      } else if (validationFields.some((field) => field !== undefined)) return false
+    }
     return true
   } catch {
     return false

@@ -1,4 +1,5 @@
 import Ajv from 'ajv'
+import { createHash } from 'node:crypto'
 import * as standalone from '../src/prompt/generationInputValidators.js'
 import { DatabaseSync } from 'node:sqlite'
 import { createMessageTable, getChatMessages } from '../src/messageStore.js'
@@ -116,6 +117,26 @@ describe('selected generation persistence decoder', () => {
     expect(() =>
       decodeMemoryGenerationSettings({ characters: [{ chats: [{ generationSettings: { modelPresetId: 42 } }] }] }),
     ).toThrow('Invalid memory generation input at /characters/0/chats/0/generationSettings/modelPresetId')
+  })
+
+  it('retains content-free validator diagnostics without retaining the rejected value', () => {
+    const privateValue = 'PRIVATE-GENERATION-INPUT-CANARY'
+    try {
+      decodeGenerationDatabase(selectedDatabaseWithMessage({ role: 'char', data: { privateValue }, chatId: 'message' }))
+      throw new Error('Expected generation input validation to fail')
+    } catch (error) {
+      expect(error).toBeInstanceOf(GenerationInputValidationError)
+      expect(error).toMatchObject({
+        domain: 'database',
+        instancePath: '/characters/0/chats/0/message/0/data',
+        validationOwner: 'message',
+        validationFieldRef: createHash('sha256').update('generation-input-field:data').digest('hex').slice(0, 16),
+        validationRule: 'type',
+        valueKind: 'object',
+      })
+      expect(JSON.stringify(error)).not.toContain(privateValue)
+      expect(String(error)).not.toContain(privateValue)
+    }
   })
 
   it('preserves sparse supported settings, imported extensions, and source identity without defaults or copies', () => {

@@ -92,6 +92,7 @@ permissions, bounded lifecycle storage, and fixed operator output.
 `server/fastify/__tests__/remoteDiagnostics.test.ts` checks every registered
 protected route with a valid support token, opt-in/auth states, useful sanitized
 failure metadata, query/rate limits, no raw diagnostic transport artifacts,
+display-source load/decode stage metadata without persisted values or IDs,
 volatile loss, and immutable cursor pages. The protocol grammar/privacy suite is
 `packages/protocol/src/remoteDiagnostics.test.ts`. Manual Diagnostics remains
 covered by the existing client collector and panel tests.

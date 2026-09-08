@@ -155,7 +155,12 @@ export async function generateGenerationInputArtifacts() {
     `import type {${roots.join(',')}} from './serverTypes.js';
 export type GenerationInputValidator<T> = {
   (value:unknown):value is T;
-  errors?:ReadonlyArray<{readonly instancePath:string}> | null;
+  errors?:ReadonlyArray<{
+    readonly instancePath:string;
+    readonly schemaPath:string;
+    readonly keyword:string;
+    readonly params:Readonly<Record<string,unknown>>;
+  }> | null;
 };
 ${Object.entries(generationInputValidatorRoots)
   .map(([name, type]) => `export declare const ${name}:GenerationInputValidator<${type}>;`)

@@ -8,7 +8,12 @@ import type {
 } from './serverTypes.js'
 export type GenerationInputValidator<T> = {
   (value: unknown): value is T
-  errors?: ReadonlyArray<{ readonly instancePath: string }> | null
+  errors?: ReadonlyArray<{
+    readonly instancePath: string
+    readonly schemaPath: string
+    readonly keyword: string
+    readonly params: Readonly<Record<string, unknown>>
+  }> | null
 }
 export declare const validateGenerationSettings: GenerationInputValidator<GenerationSettings>
 export declare const validateFastifyDatabase: GenerationInputValidator<FastifyDatabase>

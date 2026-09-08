@@ -36,6 +36,7 @@ const errorNames = [
   'NetworkError',
   'SecurityError',
   'QuotaExceededError',
+  'GenerationInputValidationError',
   'UnknownError',
 ] as const
 

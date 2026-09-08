@@ -1,4 +1,4 @@
-import { decodeGenerationDatabase } from './prompt/generationInputDecoder.js'
+import { decodeGenerationDatabase, GenerationInputValidationError } from './prompt/generationInputDecoder.js'
 import { createHash } from 'node:crypto'
 import { isDeepStrictEqual } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
@@ -36,6 +36,55 @@ import { isBoundedRegexError } from './prompt/boundedRegex.js'
 import { emitProtocolMetric, protocolDurationMs, protocolNowMs } from './protocolMetrics.js'
 import { DisplaySourceCache } from './displaySourceCache.js'
 import { resolvePromptModelId } from './prompt/promptScope.js'
+import type { DiagnosticEventV2 } from '@risuai/protocol/remote-diagnostics'
+
+type DisplayDiagnosticEvent = Extract<DiagnosticEventV2, { category: 'display' }>
+type DisplaySourceFailureStage = DisplayDiagnosticEvent['stage']
+export type DisplaySourceFailureDiagnostic = Omit<
+  DisplayDiagnosticEvent,
+  'timestamp' | 'source' | 'level' | 'correlation' | 'requestUid' | 'operationRef' | 'attemptRef' | 'category'
+>
+
+const displaySourceFailureStages = new WeakMap<object, DisplaySourceFailureStage>()
+
+/** Attach a content-free stage without wrapping the error or changing route status classification. */
+function runDisplaySourceStage<T>(stage: DisplaySourceFailureStage, operation: () => T): T {
+  try {
+    return operation()
+  } catch (error) {
+    if ((typeof error === 'object' && error !== null) || typeof error === 'function') {
+      if (!displaySourceFailureStages.has(error)) displaySourceFailureStages.set(error, stage)
+    }
+    throw error
+  }
+}
+
+export function displaySourceFailureDiagnostic(error: unknown): DisplaySourceFailureDiagnostic {
+  const stage =
+    (error !== null && (typeof error === 'object' || typeof error === 'function')
+      ? displaySourceFailureStages.get(error)
+      : undefined) ?? 'unknown'
+  if (error instanceof GenerationInputValidationError) {
+    return {
+      stage: 'scope-decode',
+      outcome: 'failed',
+      failureKind: 'generation-input-validation',
+      validationDomain: error.domain,
+      validationOwner: error.validationOwner,
+      ...(error.validationFieldRef ? { validationFieldRef: error.validationFieldRef } : {}),
+      validationRule: error.validationRule,
+      valueKind: error.valueKind,
+    }
+  }
+  if (error instanceof SyntaxError) return { stage, outcome: 'failed', failureKind: 'malformed-persistence' }
+  const code =
+    error && typeof error === 'object' && 'code' in error && typeof error.code === 'string' ? error.code : undefined
+  if (code?.startsWith('SQLITE_')) return { stage, outcome: 'failed', failureKind: 'storage' }
+  if (error instanceof TypeError || error instanceof RangeError) {
+    return { stage, outcome: 'failed', failureKind: 'runtime' }
+  }
+  return { stage, outcome: 'failed', failureKind: 'unknown' }
+}
 
 interface DisplaySourceServiceOptions {
   db: DatabaseSync
@@ -265,34 +314,47 @@ export class DisplaySourceService {
   ): Promise<DisplaySourceResponse> {
     const startedAt = protocolNowMs()
     throwIfAborted(signal)
-    const initialRevision = getSchemaState(this.db).revision
+    const initialRevision = runDisplaySourceStage('revision', () => getSchemaState(this.db).revision)
     if (request.baseRevision !== initialRevision) {
       throw new ValidationError(`Display source base revision is stale; current revision is ${initialRevision}`)
     }
 
-    const databaseLineage = getDatabaseLineage(this.db)
-    const activeWriterEpoch = getDatabaseWriterMetadata(this.db).epoch
-    const namespaceJson = displaySourceNamespaceJson({
-      databaseLineage,
-      activeWriterEpoch,
-      context: request.context,
+    const { databaseLineage, activeWriterEpoch, contextFingerprint } = runDisplaySourceStage('namespace', () => {
+      const databaseLineage = getDatabaseLineage(this.db)
+      const activeWriterEpoch = getDatabaseWriterMetadata(this.db).epoch
+      const namespaceJson = displaySourceNamespaceJson({
+        databaseLineage,
+        activeWriterEpoch,
+        context: request.context,
+      })
+      const contextFingerprint = sha256(namespaceJson)
+      this.cache.activate(contextFingerprint)
+      return { databaseLineage, activeWriterEpoch, contextFingerprint }
     })
-    const contextFingerprint = sha256(namespaceJson)
-    this.cache.activate(contextFingerprint)
 
     const scopeLoadStartedAt = protocolNowMs()
     const database = this.loadScopeDatabase(chatId)
     const scopeLoadMs = protocolDurationMs(scopeLoadStartedAt)
     const primaryTarget = request.targets[0]
-    const scope = primaryTarget ? displayScope(database, primaryTarget.characterId, chatId) : null
+    const scope = runDisplaySourceStage('scope-resolution', () =>
+      primaryTarget ? displayScope(database, primaryTarget.characterId, chatId) : null,
+    )
     if (!scope) throw new ValidationError('Display source chat or character was not found')
     const entries: DisplaySourceResponseEntry[] = []
-    const luaExecBudget = createLuaExecBudget()
-    const triggerBudget = createTriggerExecutionBudget()
-    const modules = getActiveModules(scope.database, scope.character, scope.chat)
-    const dynamicAssetFallback = dynamicAssetFallbackRequired(scope, modules)
+    const { luaExecBudget, triggerBudget, modules, dynamicAssetFallback } = runDisplaySourceStage(
+      'shared-dependencies',
+      () => {
+        const luaExecBudget = createLuaExecBudget()
+        const triggerBudget = createTriggerExecutionBudget()
+        const modules = getActiveModules(scope.database, scope.character, scope.chat)
+        const dynamicAssetFallback = dynamicAssetFallbackRequired(scope, modules)
+        return { luaExecBudget, triggerBudget, modules, dynamicAssetFallback }
+      },
+    )
     const sharedDependencyStartedAt = protocolNowMs()
-    const sharedDependencyFingerprint = sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules)))
+    const sharedDependencyFingerprint = runDisplaySourceStage('shared-dependencies', () =>
+      sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules))),
+    )
     const sharedDependencyMs = protocolDurationMs(sharedDependencyStartedAt)
     let targetFingerprintMs = 0
     let batchCacheHitCount = 0
@@ -306,7 +368,7 @@ export class DisplaySourceService {
         entries.push(errorEntry(target, 'stale', 'target_identity_changed'))
         continue
       }
-      const actualSourceHash = sha256(target.source)
+      const actualSourceHash = runDisplaySourceStage('target-preparation', () => sha256(target.source))
       if (actualSourceHash !== target.sourceHash) {
         entries.push(errorEntry(target, 'error', 'source_hash_mismatch'))
         continue
@@ -317,8 +379,10 @@ export class DisplaySourceService {
       }
 
       const targetFingerprintStartedAt = protocolNowMs()
-      const dependencyFingerprint = sha256(
-        stableDisplayDependencyJson(targetDependencyValue(sharedDependencyFingerprint, target, actualSourceHash)),
+      const dependencyFingerprint = runDisplaySourceStage('target-preparation', () =>
+        sha256(
+          stableDisplayDependencyJson(targetDependencyValue(sharedDependencyFingerprint, target, actualSourceHash)),
+        ),
       )
       targetFingerprintMs += protocolDurationMs(targetFingerprintStartedAt)
       try {
@@ -368,12 +432,14 @@ export class DisplaySourceService {
     }
 
     const revision = initialRevision
-    if (getSchemaState(this.db).revision !== initialRevision) {
+    if (runDisplaySourceStage('postcondition', () => getSchemaState(this.db).revision) !== initialRevision) {
       return this.staleResponse(request, contextFingerprint, 'revision_changed_during_transform')
     }
 
-    const currentLineage = getDatabaseLineage(this.db)
-    const currentWriterEpoch = getDatabaseWriterMetadata(this.db).epoch
+    const { currentLineage, currentWriterEpoch } = runDisplaySourceStage('postcondition', () => ({
+      currentLineage: getDatabaseLineage(this.db),
+      currentWriterEpoch: getDatabaseWriterMetadata(this.db).epoch,
+    }))
     if (currentLineage !== databaseLineage || currentWriterEpoch !== activeWriterEpoch) {
       const currentNamespace = sha256(
         displaySourceNamespaceJson({
@@ -409,11 +475,13 @@ export class DisplaySourceService {
   }
 
   private loadScopeDatabase(chatId: string): Database {
-    const persisted = loadPersistedForDisplaySource(this.db, this.dataDir, chatId)
+    const persisted = runDisplaySourceStage('scope-load', () =>
+      loadPersistedForDisplaySource(this.db, this.dataDir, chatId),
+    )
     if (!persisted.database || typeof persisted.database !== 'object') {
       throw new ValidationError('Server database is not initialized')
     }
-    return decodeGenerationDatabase(persisted.database)
+    return runDisplaySourceStage('scope-decode', () => decodeGenerationDatabase(persisted.database))
   }
 
   private async transformTarget(

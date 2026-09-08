@@ -12,6 +12,7 @@ import {
   parseRemoteDiagnosticsQuery,
   promoteRemoteDiagnosticRecord,
 } from './remoteDiagnostics.js'
+import { diagnosticErrorFields } from './diagnostics.js'
 
 const base = { timestamp: 1, source: 'server', level: 'info', correlation: 'background' }
 const examples = [
@@ -74,6 +75,17 @@ const examples = [
     transcriptChanged: true,
   },
   { category: 'browser', stage: 'hydration', outcome: 'failed', attemptCount: 2 },
+  {
+    category: 'display',
+    stage: 'scope-decode',
+    outcome: 'failed',
+    failureKind: 'generation-input-validation',
+    validationDomain: 'database',
+    validationOwner: 'message',
+    validationFieldRef: 'a'.repeat(16),
+    validationRule: 'type',
+    valueKind: 'number',
+  },
   { category: 'legacy', detail: { timestamp: 1, source: 'server', level: 'warn', event: 'startup' } },
 ]
 
@@ -105,6 +117,21 @@ describe('exact v2 diagnostic families', () => {
       { ...base, ...examples[4], rows: 1_000_000_001 },
       { ...base, ...examples[3], correlation: 'operation' },
       { ...base, ...examples[2], locations: ['src/PRIVATE.ts:1:2'] },
+      {
+        ...base,
+        category: 'display',
+        stage: 'scope-decode',
+        outcome: 'failed',
+        failureKind: 'generation-input-validation',
+      },
+      {
+        ...base,
+        category: 'display',
+        stage: 'scope-load',
+        outcome: 'failed',
+        failureKind: 'malformed-persistence',
+        validationFieldRef: 'a'.repeat(16),
+      },
     ])
       expect(isDiagnosticEventV2(entry)).toBe(false)
     const entry = {
@@ -140,6 +167,15 @@ describe('exact v2 diagnostic families', () => {
     const promoted = promoteRemoteDiagnosticRecord(first)!
     expect(promoted.entry.category).toBe('http')
     expect(downgradeDiagnosticJournalRecord(promoted)?.entry).toMatchObject(first.entry)
+    const displayRecord = projectDiagnosticJournalRecord({
+      sequence: 2,
+      receivedAt: 2,
+      instanceId: 'a'.repeat(32),
+      provenance: { kind: 'server' },
+      entry: { ...base, ...examples[9] },
+    })!
+    expect(displayRecord.entry.category).toBe('display')
+    expect(downgradeDiagnosticJournalRecord(displayRecord)).toBeNull()
     const envelope = {
       version: 1,
       serverTime: 2,
@@ -172,5 +208,12 @@ describe('exact v2 diagnostic families', () => {
       'unknown',
       'unknown',
     ])
+  })
+  it('preserves the content-free generation validator error class', () => {
+    const error = new Error('PRIVATE-VALIDATION-MESSAGE')
+    error.name = 'GenerationInputValidationError'
+    const fields = diagnosticErrorFields(error)
+    expect(fields).toMatchObject({ errorName: 'GenerationInputValidationError' })
+    expect(JSON.stringify(fields)).not.toContain('PRIVATE-VALIDATION-MESSAGE')
   })
 })

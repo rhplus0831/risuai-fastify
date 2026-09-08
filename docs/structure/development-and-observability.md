@@ -161,13 +161,25 @@ identity (`RISU_BUILD_ID`, otherwise unknown), random process identity, capture
 bounds, source availability, loss, truncation, and pagination. V1 projects known
 server facts from the journal; it excludes browser uploads and rich-only fields.
 Stack coordinates are omitted from all remote output. Request `version=2` for
-exact deployment, HTTP, runtime, generation, prompt, provider, persistence,
+exact deployment, HTTP, runtime, display, generation, prompt, provider, persistence,
 script, browser, and compatible legacy event families. V2 adds stamped
 provenance, pending work, operation continuity, and explicit browser clock
 semantics. Journal loss counters describe server admission/retention; browser
 delivery loss remains unknown, with client sequence gaps showing possible
 omissions. No v2 payload is labeled v1. The ordinary version-1 manual report
 stays intact.
+
+Failed display-source batches emit one request-correlated, v2-only `display`
+event. Its fixed fields distinguish revision, namespace, scoped persistence
+load, strict decode, scope resolution, shared dependency, target preparation,
+and postcondition failures. Strict generation-input failures additionally carry
+only a finite owner category, validation rule, rejected value kind, and a
+16-hex reference derived from the schema field name. The reference is intended
+to be resolved against the deployed generation-input schema; the event never
+contains the field name, JSON instance path, array index, persisted value, or
+character/chat/message identifiers. Other failure kinds cannot carry validator
+metadata, and browser uploads cannot publish this server-only family.
+
 Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
 hour), limit (default 50, maximum 200), generated requestUid/operationRef,
 category, and cursor. V1 has no operation references and returns no matching
