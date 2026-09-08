@@ -1,4 +1,5 @@
 import type { Chat, character, Database, Message } from 'src/ts/storage/database.svelte'
+import type { ReaderPanelAppearance } from './readerPanelAppearance'
 
 interface CharacterReadState {
   status: string
@@ -27,6 +28,7 @@ export function createChatReadOwners(
   readMessages: (chatId: string) => readonly Message[] | undefined,
   readSelection?: () => ChatReadSelection | null | undefined,
   readSettings?: () => Partial<Database>,
+  readAppearance?: () => ReaderPanelAppearance,
 ) {
   const selection = $derived(readSelection?.())
   const readable = $derived(state.status === 'ready' || (readSelection !== undefined && state.status === 'error'))
@@ -79,6 +81,7 @@ export function createChatReadOwners(
 
   return {
     settings: readSettings,
+    appearance: readAppearance,
     characterById: (id: string): character | undefined => owners.characters.get(id),
     character: () => selectedCharacter,
     chat: () => selectedChat,

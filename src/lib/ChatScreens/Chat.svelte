@@ -4,6 +4,7 @@
 </script>
 
 <script lang="ts">
+  import { getReaderMessageAppearance } from './readerPanelAppearance'
   import { getContext, onDestroy, untrack } from 'svelte'
   import { getChatReadOwnersContext } from './chatReadOwnersContext'
   import { resolveActiveModuleStates } from 'src/ts/moduleActivation'
@@ -1887,7 +1888,9 @@
   let blankMessage = $derived(
     ((message === '{{none}}' || message === '{{blank}}' || message === '') && idx === -1) || isComment,
   )
-  const readerLightBubble = $derived(!writeActionsAllowed && displaySettings.theme === 'mobilechat')
+  const readerAppearance = $derived(
+    !writeActionsAllowed ? getReaderMessageAppearance(displaySettings, renderOwners.appearance?.()) : undefined,
+  )
   let showSenderIdentity = $derived(!isComment)
   const hideSenderIdentity = $derived(
     renderOwners.settings
@@ -2713,8 +2716,10 @@
     <!-- svelte-ignore a11y_no_static_element_interactions -->
     <span
       class="text chat-width chat-message-body chattext prose minw-0"
-      class:prose-invert={!readerLightBubble && $ColorSchemeTypeStore}
-      class:reader-light-bubble={readerLightBubble}
+      class:prose-invert={readerAppearance ? readerAppearance.tone === 'dark' : $ColorSchemeTypeStore}
+      class:reader-message-appearance={Boolean(readerAppearance)}
+      style={readerAppearance ? `${readerAppearance.style}color:var(--reader-body-color);` : undefined}
+      data-reader-message-tone={readerAppearance?.tone}
       bind:this={bodyRoot}
       onclick={handleMessageBodyClick}
       style:font-size="{0.875 * ((displaySettings.zoomsize ?? 100) / 100)}rem"
@@ -3919,25 +3924,17 @@
 {/if}
 
 <style>
-  /* Mobilechat uses a fixed light bubble independently of the surrounding app palette. */
-  .reader-light-bubble {
-    --FontColorStandard: #1f2937;
-    --FontColorBold: #111827;
-    --FontColorItalic: #4b5563;
-    --FontColorItalicBold: #374151;
-    --FontColorQuote1: #374151;
-    --FontColorQuote2: #374151;
-    color: #1f2937;
-    color-scheme: light;
+  .reader-message-appearance {
+    color: var(--reader-body-color);
   }
 
-  .reader-light-bubble :global(details),
-  .reader-light-bubble :global(summary) {
-    color: #1f2937;
+  .reader-message-appearance :global(details),
+  .reader-message-appearance :global(summary) {
+    color: var(--reader-body-color);
   }
 
-  .reader-light-bubble :global(a) {
-    color: #1d4ed8;
+  .reader-message-appearance :global(a) {
+    color: var(--reader-link-color);
   }
 
   .generation-persistence-indicator {

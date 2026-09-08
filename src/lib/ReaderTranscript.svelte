@@ -8,6 +8,7 @@
   import { getCustomBackground } from '../ts/characterState'
   import Chats from './ChatScreens/Chats.svelte'
   import { createChatReadOwners } from './ChatScreens/chatReadOwners.svelte'
+  import { getReaderPanelAppearance, hasReaderChatPanel } from './ChatScreens/readerPanelAppearance'
   import { CHAT_READ_OWNERS_CONTEXT } from './ChatScreens/chatReadOwnersContext'
   import { getCharImage } from '../ts/characterImage'
   import { getCharacterDisplayName } from '../ts/characterDisplayName'
@@ -63,6 +64,9 @@
   } = $props()
   const displaySettings = $derived(getReaderNavigationSettings())
   let backgroundStyle = $state('')
+  const panelAppearance = $derived(
+    getReaderPanelAppearance(displaySettings, hasReaderChatPanel(displaySettings, backgroundStyle)),
+  )
   $effect(() => {
     const source = displaySettings.hideAllImages ? '' : (displaySettings.customBackground ?? '')
     void $clientSessionStore.generation
@@ -182,6 +186,7 @@
     (id) => (usingRetained && id === chatId ? retained!.messages : getReaderChatMessageOwnerState(id)?.messages),
     () => ({ characterId, chatId }),
     () => ({ ...getReaderNavigationSettings(), ...getReaderModuleDisplayDatabase(), ...getReaderTranscriptPersona() }),
+    () => panelAppearance,
   )
   setContext(CHAT_READ_OWNERS_CONTEXT, readOwners)
   const displayCharacter = $derived(readOwners.character())
@@ -459,9 +464,10 @@
   {#snippet content(customStyle: string)}
     <div
       class="reader-chat-screen flex h-full min-h-0 min-w-0 flex-col relative"
-      style={customStyle}
+      style={`${customStyle}${panelAppearance.style}`}
       style:--chat-screen-width="{displaySettings.chatScreenWidth ?? 900}px"
       data-reader-transcript
+      data-reader-panel-tone={panelAppearance.tone}
       data-reader-character-id={characterId}
       data-reader-chat-id={chatId}>
       <div class="flex shrink-0 items-center justify-between gap-3 border-b border-textcolor/15 px-4 py-3">

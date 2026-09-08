@@ -341,3 +341,12 @@ foregrounds. Reader mobilechat uses dark message/disclosure text and blue links,
 while known dark folder colors use white labels. Custom HTML/reader action tests
 passed (86), and ObserverShell passed 29 after the folder-style adjustment.
 The browser fixture now checks actual computed colors as well as screenshots.
+
+Reader panel appearance is now derived once from confirmed app colors and the
+shared frame's translucent panel color, then passed through explicit read-owner
+context. It covers portrait panels as well as fixed light message bubbles/cards;
+prose, native disclosures, links, headings and composer guidance use that local
+palette. Readable custom text colors remain effective. Writer paint is unchanged.
+The nine palette cases cover opposite app/panel tones and custom-color fallback;
+Chat custom HTML/action tests passed 86 and ReaderTranscript passed 32 (127 total).
+Actual four-theme text contrast and final integration checks follow.

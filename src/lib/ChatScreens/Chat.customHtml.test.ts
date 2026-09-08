@@ -3379,7 +3379,8 @@ describe('connected reader message authority', () => {
         const actions = Array.from(target.querySelectorAll('[data-risu-message-action]'))
         expect(actions.map((button) => button.getAttribute('data-risu-message-action'))).toEqual(['copy'])
         const body = target.querySelector<HTMLElement>('.chat-message-body')!
-        expect(body.classList.contains('reader-light-bubble')).toBe(true)
+        expect(body.classList.contains('reader-message-appearance')).toBe(true)
+        expect(body.dataset.readerMessageTone).toBe('light')
         expect(body.classList.contains('prose-invert')).toBe(false)
         const copy = target.querySelector<HTMLButtonElement>('[data-risu-message-action="copy"]')!
         expect(copy.disabled).toBe(false)
