@@ -8,11 +8,21 @@
     getClientDiagnosticsSnapshot,
     subscribeClientDiagnostics,
   } from 'src/ts/diagnostics'
-  import { buildDiagnosticsReport, diagnosticEntryText, fetchClientDiagnostics } from 'src/ts/server/clientDiagnostics'
-  import type { DiagnosticEntry } from '@risuai/protocol/diagnostics'
+  import {
+    buildDiagnosticsReport,
+    diagnosticEntryText,
+    diagnosticEntryFacts,
+    fetchClientDiagnostics,
+    mergeDiagnosticsEntries,
+    type DiagnosticReportEntry,
+  } from 'src/ts/server/clientDiagnostics'
+  import { getBrowserDiagnosticsSnapshot, subscribeBrowserDiagnostics } from 'src/ts/server/browserDiagnostics'
+  import type { RemoteDiagnosticsResponseV2 } from '@risuai/protocol/remote-diagnostics'
 
   let snapshot = $state(getClientDiagnosticsSnapshot())
-  let serverEntries = $state<DiagnosticEntry[]>([])
+  let browserSnapshot = $state(getBrowserDiagnosticsSnapshot())
+  let serverEntries = $state<DiagnosticReportEntry[]>([])
+  let remote = $state<RemoteDiagnosticsResponseV2 | undefined>()
   let serverStatus = $state<'current' | 'unavailable'>('unavailable')
   let busy = $state(false)
   let feedback = $state('')
@@ -21,9 +31,9 @@
   let controller: AbortController | undefined
   let disposed = false
   const recent = $derived(
-    [...snapshot.entries, ...serverEntries]
-      .filter((entry) => !errorsOnly || entry.level !== 'info')
-      .sort((left, right) => right.timestamp - left.timestamp),
+    mergeDiagnosticsEntries(browserSnapshot.enabled ? browserSnapshot.entries : snapshot.entries, serverEntries)
+      .filter((entry) => !errorsOnly || diagnosticEntryFacts(entry).level !== 'info')
+      .reverse(),
   )
 
   async function refresh(): Promise<void> {
@@ -32,14 +42,15 @@
     controller = request
     const timeout = setTimeout(() => request.abort(), 5_000)
     try {
-      const result = await fetchClientDiagnostics(request.signal)
+      const result = await fetchClientDiagnostics(request.signal, browserSnapshot.enabled)
       if (disposed || controller !== request || request.signal.aborted) return
-      if (!result.enabled) {
+      if (result.version === 1 && !result.enabled) {
         configureClientDiagnostics(undefined)
         serverEntries = []
         return
       }
       serverEntries = result.entries
+      remote = result.version === 2 ? result : undefined
       serverStatus = 'current'
     } catch {
       if (!disposed && controller === request) serverStatus = 'unavailable'
@@ -56,7 +67,13 @@
       await refresh()
       if (disposed || !snapshot.enabled) return
       if (action === 'refresh') return
-      report = buildDiagnosticsReport(getClientDiagnosticsSnapshot().entries, serverEntries, serverStatus)
+      const browser = getBrowserDiagnosticsSnapshot()
+      report = buildDiagnosticsReport(
+        browser.enabled ? browser.entries : getClientDiagnosticsSnapshot().entries,
+        serverEntries,
+        serverStatus,
+        remote,
+      )
       if (action === 'download') {
         await downloadFile('risuai-diagnostics.txt', new TextEncoder().encode(report))
       } else {
@@ -82,6 +99,18 @@
         controller?.abort()
         controller = undefined
         serverEntries = []
+        remote = undefined
+        report = ''
+      }
+    })
+    const unsubscribeBrowser = subscribeBrowserDiagnostics(() => {
+      const previous = browserSnapshot
+      browserSnapshot = getBrowserDiagnosticsSnapshot()
+      if (previous.enabled && (!browserSnapshot.enabled || previous.sourceId !== browserSnapshot.sourceId)) {
+        controller?.abort()
+        controller = undefined
+        serverEntries = []
+        remote = undefined
         report = ''
       }
     })
@@ -90,6 +119,7 @@
       disposed = true
       controller?.abort()
       unsubscribe()
+      unsubscribeBrowser()
     }
   })
 </script>

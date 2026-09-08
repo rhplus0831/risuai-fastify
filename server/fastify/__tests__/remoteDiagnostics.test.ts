@@ -82,6 +82,25 @@ async function harness(options: { enabled?: boolean; collection?: boolean; bypas
 }
 
 describe('remote support diagnostics', () => {
+  it('negotiates joined manual v2 reads with ordinary app auth while preserving exact v1 fallback', async () => {
+    const h = await harness()
+    const { assertion } = await setupAuthedClient(h.app)
+    await vi.waitFor(() => expect(h.diagnostics.journal!.read().pending).toBe(0))
+    const headers = { 'risu-auth': assertion }
+    const legacy = (await h.app.inject({ url: '/api/v1/diagnostics', headers })).json()
+    expect(legacy.version).toBe(1)
+    expect(legacy.enabled).toBe(true)
+    const joined = await h.app.inject({ url: '/api/v1/diagnostics?version=2&limit=200', headers })
+    expect(joined.statusCode).toBe(200)
+    expect(joined.json().version).toBe(2)
+    expect(isRemoteDiagnosticsResponse(joined.json())).toBe(true)
+    expect(joined.json().sources.server).toBe('journal')
+    expect((await h.app.inject({ url: '/api/v1/diagnostics?version=2', headers: h.headers })).statusCode).toBe(401)
+    const invalid = await h.app.inject({ url: '/api/v1/diagnostics?version=2&raw=PRIVATE-MANUAL-CANARY', headers })
+    expect(invalid.statusCode).toBe(400)
+    expect(invalid.json()).toEqual({ error: 'invalid-query' })
+  })
+
   it('requires independent explicit enablement and valid credentials in every application auth state', async () => {
     const h = await harness()
     expect((await h.app.inject(SUPPORT_DIAGNOSTICS_ENDPOINT)).statusCode).toBe(401)
