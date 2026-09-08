@@ -765,7 +765,7 @@ async function bootChat(page: Page, chatId: string): Promise<void> {
     session.writer?.sessionId &&
     session.writer.sessionId !== session.sessionId
   ) {
-    await page.getByRole('button', { name: 'Use this device', exact: true }).click()
+    await page.locator('[data-reader-use-this-device]').click()
     const confirmation = page.getByRole('button', { name: 'Disconnect existing client', exact: true })
     await expect
       .poll(

@@ -596,7 +596,10 @@ test('a connected reader keeps receiving updates through a legacy writer takeove
       'Updates from the writer appear here.',
     )
     await expect(readerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toHaveCount(0)
-    await readerPage.getByRole('button', { name: 'Open Smoke Character', exact: true }).click()
+    await readerPage
+      .getByRole('navigation', { name: 'Read-only navigation' })
+      .getByRole('button', { name: 'Open Smoke Character', exact: true })
+      .click()
     await expect(readerPage).toHaveURL(/\/character\/char-smoke$/)
     expect(readerCommandRequests).toEqual([])
     expect(readerWriterBootstraps).toEqual([])
