@@ -125,6 +125,16 @@ export const PROTOCOL_ROUTE_OPERATION_CATALOG = [
     response: 'structured',
   },
   {
+    id: 'browser-diagnostics-upload',
+    methods: ['POST'],
+    path: '/api/v1/diagnostics/browser',
+    match: 'exact',
+    streaming: 'none',
+    cache: 'no-store',
+    durability: 'none',
+    response: 'structured',
+  },
+  {
     id: 'startup-telemetry',
     methods: ['POST'],
     path: '/api/v1/telemetry/startup',

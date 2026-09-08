@@ -1,6 +1,7 @@
 import { Type, type Static } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
 import { DiagnosticEntrySchema, projectDiagnosticEntry } from './diagnostics.js'
+export * from './browserDiagnostics.js'
 import {
   DIAGNOSTIC_EVENT_CATEGORIES,
   DiagnosticJournalRecordSchema,

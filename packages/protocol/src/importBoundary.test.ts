@@ -76,11 +76,13 @@ describe('@risuai/protocol import boundary', () => {
 
     expect(runtimeFiles).toEqual([
       'bardWiki.ts',
+      'browserDiagnostics.ts',
       'characterResource.ts',
       'characterSummaryResource.ts',
       'chatMessagesResource.ts',
       'chatMetadata.ts',
       'clientContext.ts',
+      'diagnosticEvents.ts',
       'diagnostics.ts',
       'displaySource.ts',
       'durableCommandOperation.ts',
@@ -94,6 +96,7 @@ describe('@risuai/protocol import boundary', () => {
       'mcpOAuthRefresh.ts',
       'moduleOrganization.ts',
       'providerOperation.ts',
+      'remoteDiagnostics.ts',
       'routeOperation.ts',
       'serverTool.ts',
       'shellResource.ts',
