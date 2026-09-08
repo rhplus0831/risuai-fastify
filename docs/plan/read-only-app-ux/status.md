@@ -288,3 +288,12 @@ pnpm test -- src/ts/server/connectedReaderSync.test.ts
 Together with the earlier bootstrap/access suites these cover retained writer
 intent, current capability checks, promotion races, generation reconciliation,
 and session/lineage fences. Browser lifecycle acceptance remains pending.
+
+### Final-check repairs — 2026-09-08
+
+The first aggregate run detected the new Return to reading key missing from the
+required complete Korean locale. Added `읽던 대화로 돌아가기`;
+`pnpm test -- src/lang/index.test.ts` then passed (22 tests). It also detected
+shared-control inventory source moves and broad reads in new smoke-only probes.
+Those are being repaired and verified before final acceptance; no production
+aggregate-read allowance or relaxed ownership gate is introduced.

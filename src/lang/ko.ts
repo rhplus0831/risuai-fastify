@@ -2516,6 +2516,7 @@ export const languageKorean = {
     chooseCharacterHelp: '이 탭이 쓰기 권한을 기다리는 동안 캐릭터 요약을 볼 수 있습니다.',
   },
   connectedReaders: {
+    returnToReading: '읽던 대화로 돌아가기',
     conversation: '대화',
     browseConversations: '대화 목록',
     chooseConversation: '읽을 채팅을 선택하세요. 이동한 위치는 이 기기에만 적용됩니다.',
