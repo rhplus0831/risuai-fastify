@@ -225,7 +225,8 @@ describe('static architecture gate: CharConfig boundaries', () => {
   it('keeps every direct shared form control named for its visible setting', () => {
     const source = readSource(file)
     for (const componentName of ['TextInput', 'TextAreaInput', 'NumberInput', 'SelectInput', 'SecretInput']) {
-      const tags = source.match(new RegExp(`<${componentName}\\b[\\s\\S]*?(?:\\/>|</${componentName}>)`, 'g')) ?? []
+      const tags: string[] =
+        source.match(new RegExp(`<${componentName}\\b[\\s\\S]*?(?:\\/>|</${componentName}>)`, 'g')) ?? []
       expect(tags.length, componentName).toBeGreaterThan(0)
       expect(
         tags.filter((tag) => !tag.includes('ariaLabel=')),

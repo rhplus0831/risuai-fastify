@@ -117,7 +117,8 @@ describe('BotSettings direct form control names', () => {
   it.each(['TextInput', 'TextAreaInput', 'NumberInput', 'SelectInput', 'SecretInput'])(
     'keeps every direct %s named for its visible setting',
     (componentName) => {
-      const tags = source.match(new RegExp(`<${componentName}\\b[\\s\\S]*?(?:\\/>|</${componentName}>)`, 'g')) ?? []
+      const tags: string[] =
+        source.match(new RegExp(`<${componentName}\\b[\\s\\S]*?(?:\\/>|</${componentName}>)`, 'g')) ?? []
 
       expect(tags.length).toBeGreaterThan(0)
       expect(tags.filter((tag) => !tag.includes('ariaLabel='))).toEqual([])
