@@ -17,7 +17,9 @@ export function allowDiagnosticStaticFile(
   root: string,
 ): boolean {
   try {
-    const file = fs.realpathSync(path.join(root, decodeURIComponent(pathname)))
+    // @fastify/static supplies its literal filename, then encodes it for send's
+    // single decode. Decoding here would check a different target for `%` names.
+    const file = fs.realpathSync(path.join(root, pathname))
     const directory = path.join(fs.realpathSync(config.dataDir), 'diagnostics')
     const privateDirectory = canonicalExistingPath(directory) ?? directory
     const relative = path.relative(privateDirectory, file)
