@@ -7,6 +7,7 @@ import fastifyMultipart from '@fastify/multipart'
 import rateLimit from '@fastify/rate-limit'
 import fastifyStatic from '@fastify/static'
 import fastifyWebsocket from '@fastify/websocket'
+import { allowDiagnosticStaticFile } from './diagnosticsStaticFiles.js'
 import { createActiveWriterState, registerActiveWriterGuard } from './activeWriter.js'
 import { registerBardWikiReadRoutes } from './routes/bardWiki.js'
 import { registerBardWikiJobRoutes } from './routes/bardWikiJobs.js'
@@ -634,6 +635,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
       wildcard: false,
       index: false,
       cacheControl: false,
+      allowedPath: (pathname, root) => allowDiagnosticStaticFile(config, pathname, root),
       setHeaders: (res, filePath) => {
         res.setHeader(
           'Cache-Control',
