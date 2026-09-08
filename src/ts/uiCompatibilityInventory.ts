@@ -138,7 +138,12 @@ export const phase4ControlInventory: readonly UiCompatibilityControlGroup[] = [
   {
     source: 'src/lib/SideBars/SideChatList.svelte',
     owner: 'route-state',
-    controls: ['chat-action:back-to-chat-list', 'chat-action:select'],
+    controls: ['chat-action:back-to-chat-list'],
+  },
+  {
+    source: 'src/lib/SideBars/ChatSelectionButton.svelte',
+    owner: 'route-state',
+    controls: ['chat-action:select'],
   },
   {
     source: 'src/lib/SideBars/SideChatList.svelte',
@@ -189,7 +194,12 @@ export const phase4ControlInventory: readonly UiCompatibilityControlGroup[] = [
   {
     source: 'src/lib/Others/GridCatalog.svelte',
     owner: 'route-state',
-    controls: ['grid-action:back', 'grid-action:open'],
+    controls: ['grid-action:back'],
+  },
+  {
+    source: 'src/lib/SideBars/CharacterCatalogView.svelte',
+    owner: 'route-state',
+    controls: ['grid-action:open'],
   },
   {
     source: 'src/lib/Others/GridCatalog.svelte',

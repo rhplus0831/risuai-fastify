@@ -1,6 +1,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
+import ts from 'typescript'
 import { parseRoute } from './routerRoute'
 import {
   phase4ControlInventory,
@@ -18,8 +19,29 @@ function sortedUnique(values: Iterable<string>): string[] {
   return [...new Set(values)].sort()
 }
 
-function quotedAttributeValues(source: string, attribute: string): string[] {
-  return sortedUnique([...source.matchAll(new RegExp(`${attribute}="([^"]+)"`, 'gu'))].map((match) => match[1]))
+function literalExpressionValues(expression: ts.Expression): string[] {
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) return [expression.text]
+  if (ts.isParenthesizedExpression(expression)) return literalExpressionValues(expression.expression)
+  if (ts.isConditionalExpression(expression)) {
+    return [...literalExpressionValues(expression.whenTrue), ...literalExpressionValues(expression.whenFalse)]
+  }
+  return []
+}
+
+function controlAttributeValues(source: string, attribute: string): string[] {
+  const values: string[] = []
+  for (const match of source.matchAll(new RegExp(`${attribute}=(?:"([^"]+)"|\\{([^}]+)\\})`, 'gu'))) {
+    if (match[1]) values.push(match[1])
+    if (!match[2]) continue
+    // Conditional markup can share one control while retaining distinct command
+    // markers. Read its result branches, never unrelated literals in its test.
+    const parsed = ts.createSourceFile('marker.ts', `const marker = ${match[2]}`, ts.ScriptTarget.Latest, true)
+    const statement = parsed.statements[0]
+    if (!statement || !ts.isVariableStatement(statement)) continue
+    const expression = statement.declarationList.declarations[0]?.initializer
+    if (expression) values.push(...literalExpressionValues(expression))
+  }
+  return sortedUnique(values)
 }
 
 function testIdValues(source: string): string[] {
@@ -80,7 +102,7 @@ function productionControlKeys(): string[] {
     const source = fs.readFileSync(file, 'utf8')
     const relativeFile = path.relative(root, file)
     for (const attribute of semanticControlAttributes) {
-      for (const value of quotedAttributeValues(source, attribute)) {
+      for (const value of controlAttributeValues(source, attribute)) {
         keys.push(`${relativeFile}\0${markerName(attribute)}:${value}`)
       }
     }
@@ -100,6 +122,15 @@ function productionControlKeys(): string[] {
 }
 
 describe('Phase 4 UI compatibility inventory', () => {
+  it('includes literal conditional control markers without treating condition values as controls', () => {
+    expect(
+      controlAttributeValues(
+        `data-risu-grid-action={view === 'trash' ? 'delete-permanent' : (view === 'active' ? 'delete' : 'restore')}`,
+        'data-risu-grid-action',
+      ),
+    ).toEqual(['delete', 'delete-permanent', 'restore'])
+  })
+
   it('classifies every route family and registered settings/playground slug', () => {
     const routerSource = read('packages/shared-core/src/routerRoute.ts')
     const rootSegments = sortedUnique([...routerSource.matchAll(/parts\[0\] === '([^']+)'/gu)].map((match) => match[1]))
