@@ -101,7 +101,11 @@ test('an authenticated reader uploads browser failures and the HTTPS helper retr
     })
     const helper = () =>
       new Promise<RemoteDiagnosticsResponseV2>((resolve, reject) => {
-        const env = { ...process.env, NODE_EXTRA_CA_CERTS: certificate, RISU_DIAGNOSTICS_REMOTE_CONFIG: helperConfig }
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          NODE_EXTRA_CA_CERTS: certificate,
+          RISU_DIAGNOSTICS_REMOTE_CONFIG: helperConfig,
+        }
         delete env.NODE_OPTIONS
         delete env.FORCE_COLOR
         delete env.NO_COLOR
