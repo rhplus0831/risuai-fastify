@@ -448,7 +448,10 @@
   {#snippet portrait()}
     {#if displayCharacter?.image && !displaySettings.hideAllImages}
       {#await getCharImage(displayCharacter.image, 'plain') then src}
-        {#if src}<img {src} alt={getCharacterDisplayName(displayCharacter)} class="h-full w-full object-contain" />{/if}
+        {#if src}<img
+            {src}
+            alt={getCharacterDisplayName(displayCharacter)}
+            class="relative h-full w-full object-contain" />{/if}
       {/await}
     {/if}
   {/snippet}

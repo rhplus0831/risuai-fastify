@@ -356,3 +356,11 @@ content so Refresh and transcript text remain visible. ReaderTranscript passed
 32 tests after this adjustment. Four-theme browser contrast had already passed
 (minimum ratios 6.09:1 mobilechat, 7.48:1 portrait themes and 5.49:1 fastify);
 the final rebuild verifies those values alongside unobscured controls.
+
+Parent screenshot review then caught the desktop portrait being covered by the
+absolute passive background. Giving the reader portrait image a positioned
+painting layer fixes that independent overlap. The final desktop/mobile parity
+rerun passed both cases, including a loaded-image occlusion assertion and fresh
+screenshot review. No further runtime change remains; the combined 19 browser
+journeys passed before this isolated image-layer adjustment and all affected
+visual/action assertions passed again afterward.
