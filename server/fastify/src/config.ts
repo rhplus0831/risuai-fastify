@@ -198,17 +198,22 @@ export function assertSupportDiagnosticsConfig(
   config: Pick<AppConfig, 'supportDiagnostics' | 'browserDiagnostics' | 'dataDir' | 'staticRoot'>,
 ): void {
   const support = config.supportDiagnostics
-  if ((support?.enabled || config.browserDiagnostics?.enabled) && config.staticRoot) {
-    const journal = canonicalDiagnosticsPath(path.join(config.dataDir, 'diagnostics'))
-    if (isSameOrDescendant(canonicalDiagnosticsPath(config.staticRoot), journal)) {
-      throw new Error('Invalid diagnostics configuration')
+  const fileRoots = ['assets', 'save', 'backups'].map((name) => path.join(config.dataDir, name))
+  const journalDirectory = path.join(config.dataDir, 'diagnostics')
+  if (support?.enabled || config.browserDiagnostics?.enabled || fs.existsSync(journalDirectory)) {
+    const journal = canonicalDiagnosticsPath(journalDirectory)
+    for (const root of [...fileRoots, ...(config.staticRoot ? [config.staticRoot] : [])]) {
+      const surface = canonicalDiagnosticsPath(root)
+      if (isSameOrDescendant(surface, journal) || isSameOrDescendant(journal, surface)) {
+        throw new Error('Invalid diagnostics configuration')
+      }
     }
   }
-  if (!support?.enabled) return
+  if (!support?.enabled && !support?.verifierFile) return
   if (!support.verifierFile || !path.isAbsolute(support.verifierFile))
     throw new Error('Invalid support diagnostics configuration')
   const verifier = canonicalDiagnosticsPath(support.verifierFile)
-  for (const root of [process.cwd(), config.dataDir, config.staticRoot].filter((root): root is string =>
+  for (const root of [process.cwd(), config.dataDir, config.staticRoot, ...fileRoots].filter((root): root is string =>
     Boolean(root),
   )) {
     if (isSameOrDescendant(canonicalDiagnosticsPath(root), verifier)) {
