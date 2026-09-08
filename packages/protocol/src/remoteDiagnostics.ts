@@ -323,6 +323,11 @@ export function isDiagnosticTransportUrl(url: string): boolean {
       pathname.startsWith('/api/v1/support/')
     )
   } catch {
-    return url.startsWith('/api/v1/diagnostics') || url.startsWith('/api/v1/support')
+    // The namespace is ASCII. Decode valid bytes independently so an invalid
+    // escape later in the path cannot bypass guards for encoded prefixes.
+    const pathname = url
+      .split('?')[0]
+      .replace(/%([a-f0-9]{2})/gi, (_match, hex: string) => String.fromCharCode(Number.parseInt(hex, 16)))
+    return pathname.startsWith('/api/v1/diagnostics') || pathname.startsWith('/api/v1/support')
   }
 }

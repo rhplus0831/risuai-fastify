@@ -8,6 +8,7 @@ import rateLimit from '@fastify/rate-limit'
 import fastifyStatic from '@fastify/static'
 import fastifyWebsocket from '@fastify/websocket'
 import { allowDiagnosticStaticFile } from './diagnosticsStaticFiles.js'
+import { onDiagnosticBadUrl } from './diagnosticsRequestRouting.js'
 import { createActiveWriterState, registerActiveWriterGuard } from './activeWriter.js'
 import { registerBardWikiReadRoutes } from './routes/bardWiki.js'
 import { registerBardWikiJobRoutes } from './routes/bardWikiJobs.js'
@@ -176,6 +177,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   const diagnostics = createClientDiagnostics(config.clientDiagnostics ?? Boolean(config.requestTrace))
   const diagnosticInstanceId = randomBytes(16).toString('hex')
   const app = Fastify({
+    routerOptions: { onBadUrl: onDiagnosticBadUrl },
     disableRequestLogging: (request) => isDiagnosticTransportUrl(request.url),
     logger:
       process.env.LOG_LEVEL === 'silent'
