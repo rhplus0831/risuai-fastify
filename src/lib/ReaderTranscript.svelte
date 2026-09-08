@@ -455,7 +455,7 @@
   {#snippet classicPortrait()}
     {#if displayCharacter && displayCharacter.viewScreen !== 'none' && !displayCharacter.inlayViewScreen && displayCharacter.image && !displaySettings.hideAllImages}
       <div
-        class="pointer-events-none absolute right-0 top-0 z-5 h-48 w-48 max-h-[35%] max-w-[35%] border-b border-l border-borderc bg-darkbg/70"
+        class="pointer-events-none absolute right-0 top-0 z-0 h-48 w-48 max-h-[35%] max-w-[35%] border-b border-l border-borderc bg-darkbg/70"
         data-reader-portrait>
         {@render portrait('waifu')}
       </div>
@@ -463,7 +463,7 @@
   {/snippet}
   {#snippet content(customStyle: string)}
     <div
-      class="reader-chat-screen flex h-full min-h-0 min-w-0 flex-col relative"
+      class="reader-chat-screen relative z-10 flex h-full min-h-0 min-w-0 flex-col"
       style={`${customStyle}${panelAppearance.style}`}
       style:--chat-screen-width="{displaySettings.chatScreenWidth ?? 900}px"
       data-reader-transcript

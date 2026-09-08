@@ -350,3 +350,9 @@ palette. Readable custom text colors remain effective. Writer paint is unchanged
 The nine palette cases cover opposite app/panel tones and custom-color fallback;
 Chat custom HTML/action tests passed 86 and ReaderTranscript passed 32 (127 total).
 Actual four-theme text contrast and final integration checks follow.
+
+The final portrait layering correction places decorative portraits below reader
+content so Refresh and transcript text remain visible. ReaderTranscript passed
+32 tests after this adjustment. Four-theme browser contrast had already passed
+(minimum ratios 6.09:1 mobilechat, 7.48:1 portrait themes and 5.49:1 fastify);
+the final rebuild verifies those values alongside unobscured controls.
