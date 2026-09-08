@@ -202,6 +202,24 @@ describe('native backup copy workers', () => {
     expect(fs.existsSync(path.join(target, `${missing.id}.bin`))).toBe(false)
   })
 
+  it.each(['optional', 'required', 'fallback'] as const)(
+    'rejects a %s metadata asset symlink before copying private bytes',
+    async (kind) => {
+      const item = asset(Buffer.from('ordinary indexed asset'))
+      const privateFile = path.join(root, 'private-key')
+      fs.writeFileSync(privateFile, 'PRIVATE_DIAGNOSTIC_KEY_CANARY')
+      const filename = `${item.id}.bin`
+      fs.rmSync(path.join(source, filename))
+      const fallback = path.join(root, 'fallback')
+      fs.mkdirSync(fallback)
+      fs.symlinkSync(privateFile, path.join(kind === 'fallback' ? fallback : source, filename))
+      await expect(
+        copyAssets([item], kind === 'optional' ? new Set() : new Set([item.id]), { fallback }),
+      ).rejects.toBeInstanceOf(BackupAssetError)
+      expect(fs.existsSync(path.join(target, filename))).toBe(false)
+    },
+  )
+
   it.each(['none', 'missing', 'size', 'hash', 'valid'] as const)(
     'uses a missing-live fallback only when verified: %s',
     async (state) => {

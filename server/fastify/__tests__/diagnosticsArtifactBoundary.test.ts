@@ -9,7 +9,7 @@ import { buildApp } from '../src/app.js'
 import { openDatabase } from '../src/db.js'
 import { getDatabaseLineage } from '../src/databaseLineage.js'
 import { createDiagnosticsJournal } from '../src/diagnosticsJournal.js'
-import { writePersistedWithMessages } from '../src/repository.js'
+import { insertAssetMetadataBatch, writePersistedWithMessages } from '../src/repository.js'
 import { decodeRisuSaveImportSnapshot } from '../src/risuSave/importSnapshot.js'
 import { setupAuthedClient } from './helpers/auth.js'
 
@@ -24,9 +24,19 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
-async function harness(aliases?: 'nested' | 'index') {
+async function harness(
+  aliases?: 'nested' | 'index',
+  fileRootAlias?: {
+    root: 'save' | 'assets' | 'backups'
+    target: 'journal' | 'verifier'
+    browserOnly?: boolean
+    disabled?: boolean
+  },
+  disabled = false,
+) {
   vi.stubEnv('LOG_LEVEL', 'silent')
   const root = mkdtempSync(path.join(tmpdir(), 'risu-diagnostic-artifacts-'))
+  cleanup.push(async () => rmSync(root, { recursive: true, force: true }))
   const dataDir = path.join(root, 'data')
   const staticRoot = path.join(root, 'public')
   const privateDir = path.join(root, 'private')
@@ -39,6 +49,8 @@ async function harness(aliases?: 'nested' | 'index') {
     { mode: 0o600 },
   )
   writeFileSync(path.join(directory, 'correlation.key'), correlationKey, { mode: 0o600 })
+  if (fileRootAlias)
+    symlinkSync(fileRootAlias.target === 'journal' ? directory : privateDir, path.join(dataDir, fileRootAlias.root))
   if (aliases === 'index') symlinkSync(verifierFile, path.join(staticRoot, 'index.html'))
   else writeFileSync(path.join(staticRoot, 'index.html'), publicDocument)
   if (aliases === 'nested') {
@@ -55,6 +67,8 @@ async function harness(aliases?: 'nested' | 'index') {
     symlinkSync(directory, path.join(staticRoot, 'nested/telemetry'))
     writeFileSync(path.join(root, 'shared-public.txt'), 'shared public file')
     symlinkSync(path.join(root, 'shared-public.txt'), path.join(staticRoot, 'nested/shared.txt'))
+    writeFileSync(path.join(staticRoot, 'nested/A'), 'public decoded filename')
+    symlinkSync(verifierFile, path.join(staticRoot, 'nested/%41'))
   }
   const built = await buildApp({
     config: {
@@ -67,7 +81,10 @@ async function harness(aliases?: 'nested' | 'index') {
       hubUrl: 'https://synthetic.invalid',
       staticRoot,
       clientDiagnostics: true,
-      supportDiagnostics: { enabled: true, verifierFile },
+      supportDiagnostics: fileRootAlias?.browserOnly
+        ? undefined
+        : { enabled: !disabled && fileRootAlias?.disabled !== true, verifierFile },
+      browserDiagnostics: fileRootAlias?.browserOnly ? { enabled: true } : undefined,
     },
     generationChat: { finalizationRetry: false },
     memoryWorker: false,
@@ -76,12 +93,13 @@ async function harness(aliases?: 'nested' | 'index') {
   })
   cleanup.push(async () => {
     await built.app.close()
-    rmSync(root, { recursive: true, force: true })
   })
   await built.app.ready()
   await built.diagnostics.ready
-  await vi.waitFor(() => expect(built.diagnostics.journal?.read().pending).toBe(0))
-  expect(built.diagnostics.journal?.read().source).toBe('journal')
+  if (!disabled) {
+    await vi.waitFor(() => expect(built.diagnostics.journal?.read().pending).toBe(0))
+    expect(built.diagnostics.journal?.read().source).toBe('journal')
+  }
   const db = openDatabase(dataDir)
   try {
     writePersistedWithMessages(db, dataDir, {
@@ -190,6 +208,7 @@ it('blocks nested static symlinks to the support verifier and diagnostic journal
     expect(response.statusCode === 404 || response.body === publicDocument).toBe(true)
   }
   expect((await h.app.inject('/nested/shared.txt')).body).toBe('shared public file')
+  for (const url of ['/nested/%2541', '/nested/%41']) expectNoPrivateArtifacts((await h.app.inject(url)).rawPayload)
 })
 
 it('does not use a private verifier symlink as the root document or SPA fallback', async () => {
@@ -200,3 +219,55 @@ it('does not use a private verifier symlink as the root document or SPA fallback
     expect(response.statusCode).toBe(404)
   }
 })
+
+it.each([false, true])(
+  'blocks private artifact file aliases in storage and asset readers with collection disabled=%s',
+  async (disabled) => {
+    const h = await harness(undefined, undefined, disabled)
+    const assets = path.join(h.dataDir, 'assets')
+    mkdirSync(assets, { recursive: true })
+    mkdirSync(path.join(h.dataDir, 'save'), { recursive: true })
+    const publicFile = path.join(h.root, 'ordinary-file')
+    writeFileSync(publicFile, 'ordinary public bytes')
+    const targets = [path.join(h.directory, 'correlation.key'), h.verifierFile, publicFile]
+    const db = openDatabase(h.dataDir)
+    try {
+      for (const [index, file] of targets.entries()) {
+        const id = String(index + 1).repeat(64)
+        const storageKey = Buffer.from(`alias-${index}`).toString('hex')
+        symlinkSync(file, path.join(assets, `${id}.bin`))
+        symlinkSync(file, path.join(h.dataDir, 'save', storageKey))
+        insertAssetMetadataBatch(db, [
+          { id, ext: 'bin', contentType: 'application/octet-stream', size: readFileSync(file).length },
+        ])
+        for (const request of [
+          { url: '/api/v1/storage/read', headers: { ...h.headers, 'file-path': storageKey } },
+          { url: `/api/v1/assets/${id}`, headers: h.headers },
+          { method: 'HEAD' as const, url: `/api/v1/assets/${id}`, headers: h.headers },
+        ]) {
+          const response = await h.app.inject(request)
+          expectNoPrivateArtifacts(response.rawPayload)
+          expect(response.statusCode).toBe(file === publicFile ? 200 : 404)
+          if (file === publicFile && request.method !== 'HEAD') expect(response.body).toBe('ordinary public bytes')
+        }
+      }
+    } finally {
+      db.close()
+    }
+  },
+)
+
+it.each(['save', 'assets', 'backups'] as const)(
+  'rejects the %s file root when it aliases private diagnostic artifacts',
+  async (root) => {
+    for (const target of ['journal', 'verifier'] as const) {
+      await expect(harness(undefined, { root, target })).rejects.toThrow(/Invalid .*diagnostics configuration/)
+      await expect(harness(undefined, { root, target, disabled: true })).rejects.toThrow(
+        /Invalid .*diagnostics configuration/,
+      )
+    }
+    await expect(harness(undefined, { root, target: 'journal', browserOnly: true })).rejects.toThrow(
+      'Invalid diagnostics configuration',
+    )
+  },
+)
