@@ -17,7 +17,7 @@ completion criteria. [Phase documents](phases/README.md) own bounded work and
 acceptance checks. [Inventory](inventory.md) maps source and test owners.
 Only `status.md` owns execution progress and validation results. Planning a
 phase does not complete it. Current source, [STRUCTURE](../../../STRUCTURE.md),
-and [architecture guides](../../structure/README.md) remain authoritative for
+and [architecture guides](../../../docs/structure/README.md) remain authoritative for
 shipped behavior.
 
 The current request authorizes completing all implementation phases. Production

@@ -3,15 +3,16 @@
 Historical server/client contracts, active-writer behavior, resource projection
 work, asset handling, and persistence migrations.
 
-| Record                                                            | Scope                                                                                                                             |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
-| [`server-client-protocol/`](server-client-protocol/README.md)     | Protocol stability/performance remediation plan, phase slices, risk analysis, verification, and the source audits that seeded it. |
-| [`sqlite-migration.md`](sqlite-migration.md)                      | Migration of remaining `db.json` state to SQLite.                                                                                 |
-| [`lazy-projection/`](lazy-projection/README.md)                   | Chat-shell bootstrap, on-demand hydration, server-owned generation writes, and related projection work.                           |
-| [`mutation-range-narrowing/`](mutation-range-narrowing/README.md) | Command mutation-range narrowing and verification budgets.                                                                        |
-| [`remove-projection-final-review.md`](remove-projection-final-review.md) | Branch-specific 2026-07-14 review of the projection-removal work before merge.                                                   |
-| [`asset-content-type-coercion-2026-07-20.md`](asset-content-type-coercion-2026-07-20.md) | Decision to coerce mislabeled uploaded assets to detected magic-byte types.                                                      |
-| [`writer-takeover-offline-mode-2026-07-21.md`](writer-takeover-offline-mode-2026-07-21.md) | Writer-ownership SSE, stale-writer latch, offline freeze, reload-only recovery, and validation limits.                           |
+| Record                                                                                                    | Scope                                                                                                                                       |
+| --------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| [`server-client-protocol/`](server-client-protocol/README.md)                                             | Protocol stability/performance remediation plan, phase slices, risk analysis, verification, and the source audits that seeded it.           |
+| [`sqlite-migration.md`](sqlite-migration.md)                                                              | Migration of remaining `db.json` state to SQLite.                                                                                           |
+| [`lazy-projection/`](lazy-projection/README.md)                                                           | Chat-shell bootstrap, on-demand hydration, server-owned generation writes, and related projection work.                                     |
+| [`mutation-range-narrowing/`](mutation-range-narrowing/README.md)                                         | Command mutation-range narrowing and verification budgets.                                                                                  |
+| [`remove-projection-final-review.md`](remove-projection-final-review.md)                                  | Branch-specific 2026-07-14 review of the projection-removal work before merge.                                                              |
+| [`asset-content-type-coercion-2026-07-20.md`](asset-content-type-coercion-2026-07-20.md)                  | Decision to coerce mislabeled uploaded assets to detected magic-byte types.                                                                 |
+| [`writer-takeover-offline-mode-2026-07-21.md`](writer-takeover-offline-mode-2026-07-21.md)                | Writer-ownership SSE, stale-writer latch, offline freeze, reload-only recovery, and validation limits.                                      |
+| [Remote diagnostics plan](remote-diagnostics/PLAN.md) and [accepted status](remote-diagnostics/status.md) | Dedicated support access, exact content-free event contracts, bounded journal, browser uploads, privacy verification, and operator handoff. |
 
 ## Protocol Source Audits
 

@@ -5,6 +5,5 @@ progress. The codebase and current architecture guides remain the source of
 truth for shipped behavior. Completed or retired planning records belong in
 `.archived-docs/`.
 
-| Workstream         | Plan                                              | Execution status                                           |
-| ------------------ | ------------------------------------------------- | ---------------------------------------------------------- |
-| Remote diagnostics | [Scope and contracts](remote-diagnostics/PLAN.md) | [Implementation in progress](remote-diagnostics/status.md) |
+There are no active plans. The completed remote diagnostics implementation and
+verification record is in the [protocol and persistence archive](../../.archived-docs/protocol-and-persistence/remote-diagnostics/status.md).

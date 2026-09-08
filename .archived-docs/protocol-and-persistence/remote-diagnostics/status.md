@@ -6,20 +6,22 @@ Stable scope: [plan](PLAN.md). Source owners: [inventory](inventory.md).
 
 ## Current Cursor
 
-Phases 0–3 are locally accepted. The latest built Chromium reader/upload/helper
-journey passes, including a subsequent upload after reload. Phase 4 combined
-proof and final privacy review are complete except the last backup-root alias
-probe. The final cross-layer aggregate and intact archive closeout remain.
+All five phases are locally accepted. The final complete `pnpm test:agent`
+profile passed all seven lanes, and the built Chromium reader/upload/HTTPS
+helper journey passed. The intact plan is archived here; current behavior and
+operator setup live in the [observability guide](../../../docs/structure/development-and-observability.md#remote-support-diagnostics).
+No production deployment, production connection, or real credential provisioning
+was performed. See [final acceptance](#final-acceptance-and-handoff).
 
 ## Phase Router
 
-| Phase                                     | Status      | Acceptance evidence                                                                                                 |
-| ----------------------------------------- | ----------- | ------------------------------------------------------------------------------------------------------------------- |
-| 0. Contract and inventory                 | Accepted    | Four successful Luna reviews reconciled; finite contract recorded                                                   |
-| 1. Remote access                          | Accepted    | Separate verifier, live-route denial matrix, real HTTPS helper and fixed errors                                     |
-| 2. Diagnostic depth and durability        | Accepted    | Exact v2 families, bounded worker journal, scoped provider/persistence/Lua evidence and actual HTTPS recovery proof |
-| 3. Browser evidence                       | Accepted    | Exact ingestion, publisher lifecycle, rich state/plugin facts, manual merge and real built Chromium/HTTPS proof     |
-| 4. Verification and operational readiness | In progress | Combined provider/recovery helper test and browser journey; final aggregate pending                                 |
+| Phase                                     | Status   | Acceptance evidence                                                                                                 |
+| ----------------------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------- |
+| 0. Contract and inventory                 | Accepted | Four successful Luna reviews reconciled; finite contract recorded                                                   |
+| 1. Remote access                          | Accepted | Separate verifier, live-route denial matrix, real HTTPS helper and fixed errors                                     |
+| 2. Diagnostic depth and durability        | Accepted | Exact v2 families, bounded worker journal, scoped provider/persistence/Lua evidence and actual HTTPS recovery proof |
+| 3. Browser evidence                       | Accepted | Exact ingestion, publisher lifecycle, rich state/plugin facts, manual merge and real built Chromium/HTTPS proof     |
+| 4. Verification and operational readiness | Accepted | Combined failure/privacy/access proof, operator guide, final aggregate and browser journey                          |
 
 ## Decisions and Scope
 
@@ -33,14 +35,15 @@ probe. The final cross-layer aggregate and intact archive closeout remain.
   manual export as fallback; no per-read manual export workflow is required.
 - 2026-09-08: Use a stable plan, mutable status, and five bounded phases. Phase 1
   must be useful with existing server events before later evidence expansion.
-- 2026-09-08: The requested deliverable for this task is the planning package.
-  No feature code, deployment, real token generation, or production connection
-  is part of this change.
+- 2026-09-08: The initial request produced the planning package. The subsequent
+  implementation request authorized completing all five phases; production
+  deployment, real credential provisioning, and production access remain outside
+  this local acceptance task.
 - Default field policy excludes original text, content hashes, raw domain IDs,
   arbitrary labels, and previews. Retain approved counts/categories and
   generated diagnostic correlation references only.
 
-## Verification Ledger
+## Planning Verification Ledger
 
 | Scope                       | Result                                                                                                                                                    | Limit                                                                   |
 | --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
@@ -71,8 +74,8 @@ documents when a decision changes them; do not duplicate execution logs there.
   pages use sequence ordering and bounded immutable snapshots; no clock-causality
   claim. No phase implementation is accepted solely from the source review.
 
-Next: finish focused combined/browser verification, resolve findings, run the
-required final cross-layer aggregate, and archive this intact plan after acceptance.
+Closed locally. Deployment and real credential provisioning are separate
+operator actions; use the current guide linked above for setup and rollback.
 
 ### Phase 1 credential and read slices
 
@@ -147,7 +150,7 @@ required final cross-layer aggregate, and archive this intact plan after accepta
   old responses and offline selectable-text export remain supported.
 - Manual report merge/schema compatibility: 3 focused tests. Existing panel:
   4 tests. Manual/server read and collector: 12 tests. Fastify TypeScript passed.
-  Ingestion and publisher lifecycle tests and actual browser proof are pending.
+  Ingestion, publisher lifecycle, and actual browser proof are recorded below.
 
 ### Phase 3 focused acceptance evidence
 
@@ -203,7 +206,73 @@ required final cross-layer aggregate, and archive this intact plan after accepta
   preserve fixed/no-store diagnostic errors before normal hooks. Protocol and
   actual HTTPS regressions `c4a7e631c` pass. Review also caught a double decode
   in static target validation; the literal-filename correction and encoded
-  symlink regression pass and are awaiting the final boundary commit.
+  symlink regression passed in `245da208e`.
 - Current docs validation (49) and explicit plan/index validation (10), Prettier,
   and whitespace checks pass at this documentation update. Final cross-layer
-  aggregate and archive validation remain pending.
+  aggregate and archive results are recorded in final acceptance below.
+- Final file-boundary commits: canonical root overlap and retained/off protection
+  `9f7364f51`, resolved-target guards for asset GET/HEAD and legacy reads
+  `8c4dcd22a`, metadata asset copy/fallback symlink rejection `414f4538e`, and
+  exact regressions `fff7f452e`. Artifact boundary (8), backup worker (20), and
+  asset/storage/remote diagnostics (60) tests pass, as does server TypeScript.
+  Ordinary public aliases remain readable. Generic nested save/extras symlinks
+  are retained without following their targets; metadata asset sources fail
+  before copying. Retained diagnostics stay protected with collection disabled.
+
+### Final aggregate corrections
+
+- The first aggregate passed all 718 frontend files (9,181 tests, 3 skipped),
+  the frontend typecheck with zero errors/warnings, documentation/topology, and
+  the smoke build. It exposed the browser upload route's two stale inventory
+  counts, an outdated off-state static-placement expectation, and the standalone
+  journal test's three-second cold subprocess envelope under 235 server forks.
+- Reviewed inventory changes were exactly shared catalog and server policy
+  counts 109→110, with no runtime edges or other manifest changes (`546857132`).
+  The retained-file test now rejects unsafe placement after disablement and
+  accepts disabled collection without artifacts (`d68e52253`, 8 tests pass).
+  The journal harness allows ten seconds for Node/TypeScript cold startup
+  (`a9251beae`, 23 tests pass); production one-second request/close deadlines
+  and stalled-worker assertions are unchanged.
+- The newly reachable browser-smoke typecheck exposed a fixture environment
+  inference error. Explicit `NodeJS.ProcessEnv` in `ea0052996` preserves behavior;
+  the complete `pnpm check:server` now passes protocol/shared-core checks,
+  architecture inventory, Fastify, and browser-smoke typechecking.
+- Final-production-source built Chromium/HTTPS proof passes (27.7 seconds,
+  29.3 seconds total). Authenticated reader uploads, actual helper retrieval,
+  failure/request correlation, reload deduplication, canary exclusion, and
+  unchanged writer/revision state all pass. The subsequent fixture type
+  annotation does not change execution.
+- Explicit Prettier validation of every changed source/document file and
+  `git diff --check` pass. The final complete aggregate also passes as recorded
+  below; archive checks cover the moved documents explicitly.
+
+### Final acceptance and handoff
+
+- Final implementation source: `ea0052996`. `pnpm test:agent` exited 0 in
+  3 minutes 28.5 seconds. All seven lanes passed: server/browser-smoke typechecks
+  (including protocol, shared core, and architecture inventory), topology,
+  current documentation, frontend tests, frontend check, server tests, and the
+  smoke build. Frontend: 718 files, 9,181 passed/3 skipped. Server: 235 files,
+  4,356 passed/2 skipped. Frontend checking reported zero errors and warnings.
+- `pnpm exec playwright test -c playwright.fastify-smoke.config.ts server/fastify/browser-smoke/remoteDiagnostics.spec.ts`
+  passed the focused real Chromium/HTTPS journey on the final production source.
+  The aggregate rebuilt that unchanged production source successfully afterward.
+- Current documentation validation covers 49 files. The explicit archived
+  plan/index validation covers 11 documents, including both active/archive
+  indexes. Explicit Prettier checks cover all changed source/documents and the
+  intact archive; whitespace checks pass.
+- All phases are accepted using fresh disposable synthetic data, local HTTPS
+  credentials, and mock providers. Combined failures are identifiable using
+  fetched evidence alone; exact contracts and decoded/serialized canary checks
+  exclude content and credentials. Dedicated support authority, rejected
+  transport privacy, file/backup isolation, application revisions/writer state,
+  v1/manual compatibility, bounded loss, and failure isolation have recorded proof.
+- No known implementation work remains. Production deployment/configuration,
+  reverse-proxy TLS behavior, real workload overhead, and real incident coverage
+  remain unverified. No production access or real secrets were used.
+  `pnpm test:all` was not requested or run; its full compatibility, coverage,
+  scale, performance, and full-browser lanes remain with the user/CI.
+- The intact planning package moved from the active-plan directory to this
+  archive after local acceptance. Current architecture/test/operator guides own
+  shipped behavior. Support reads and browser uploads remain separately opt-in;
+  disabling them preserves the manual Diagnostics workflow and domain data.

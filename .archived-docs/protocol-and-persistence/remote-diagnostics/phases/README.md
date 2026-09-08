@@ -1,6 +1,6 @@
 # Remote Diagnostics Phases
 
-Start at [status](../status.md), read [PLAN.md](../PLAN.md), then the active
+Start at [status](../status.md), read [PLAN.md](../PLAN.md), then the relevant
 phase and relevant [inventory](../inventory.md) entries.
 
 | Phase | Document                                                                        |
@@ -32,8 +32,8 @@ The default current-document set does not include this plan directory. Run
 pnpm exec tsx -e '
 import { readdirSync } from "node:fs";
 import { validateCurrentDocumentation } from "./util/current-documentation-validator.ts";
-const root = "docs/plan/remote-diagnostics";
-const documents = ["docs/plan/README.md", ...[root, `${root}/phases`].flatMap(dir =>
+const root = ".archived-docs/protocol-and-persistence/remote-diagnostics";
+const documents = ["docs/plan/README.md", ".archived-docs/protocol-and-persistence/README.md", ...[root, `${root}/phases`].flatMap(dir =>
   readdirSync(dir).filter(name => name.endsWith(".md")).map(name => `${dir}/${name}`))];
 const result = validateCurrentDocumentation({
   documentPaths: documents,
@@ -46,7 +46,7 @@ const result = validateCurrentDocumentation({
 console.log(JSON.stringify(result, null, 2));
 if (!result.ok) process.exitCode = 1;
 '
-pnpm exec prettier --ignore-path /dev/null --check docs/plan/README.md 'docs/plan/remote-diagnostics/**/*.md'
+pnpm exec prettier --ignore-path /dev/null --check docs/plan/README.md .archived-docs/protocol-and-persistence/README.md '.archived-docs/protocol-and-persistence/remote-diagnostics/**/*.md'
 git diff --check
 ```
 

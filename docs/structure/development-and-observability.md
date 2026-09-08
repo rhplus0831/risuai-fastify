@@ -219,7 +219,12 @@ The private directory is mode 0700 and files are mode 0600. Its independent
 random `correlation.key` creates opaque operation/attempt references; neither
 the key nor its domain-ID mapping is exported. Static serving cannot encompass
 this directory. Asset/legacy-storage routes and domain backup/export producers
-use their own bounded roots and do not include it.
+use their own bounded roots and do not include it. Startup rejects canonical
+path overlap with asset, save, backup, or static roots, including retained
+diagnostic files after collection is disabled. Static and application file reads
+also reject child symlinks resolving to diagnostics or the configured verifier;
+unrelated public file symlinks remain usable. Metadata-owned asset backup copies
+reject symlink sources before copying bytes.
 
 Hard limits are 24 hours, 10,000 retained events, 8 MiB of retained JSON, 4 KiB
 per record, and 256 queued/in-flight records. SQLite is capped at 16 MiB with
@@ -553,10 +558,10 @@ Server:
 | `RISU_AGENT_DEV_AUTH_BYPASS`                       | disabled                        | Direct-server dev escape hatch; full-stack runners override it as described below.                                                                                                              |
 | `LOG_LEVEL`                                        | `info`                          | Use `silent` to disable Fastify logger.                                                                                                                                                         |
 | `RISU_CLIENT_DIAGNOSTICS`                          | follows API trace mode          | Enables the authenticated recent diagnostics viewer/export; explicit `0` disables it even in `agent`/`human` trace mode.                                                                        |
-| `RISU_SUPPORT_DIAGNOSTICS` | disabled | Exact `1` enables separately authenticated support reads; requires collection and a protected verifier file. |
-| `RISU_SUPPORT_DIAGNOSTICS_VERIFIER` | unset | Absolute operator-owned verifier path outside repository/data/static roots. |
-| `RISU_BROWSER_DIAGNOSTICS` | disabled | Exact `1` opts in to ordinary-auth browser upload when client collection is enabled. |
-| `RISU_BUILD_ID` | `unknown` | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics. |
+| `RISU_SUPPORT_DIAGNOSTICS`                         | disabled                        | Exact `1` enables separately authenticated support reads; requires collection and a protected verifier file.                                                                                    |
+| `RISU_SUPPORT_DIAGNOSTICS_VERIFIER`                | unset                           | Absolute operator-owned verifier path outside repository/data/static roots.                                                                                                                     |
+| `RISU_BROWSER_DIAGNOSTICS`                         | disabled                        | Exact `1` opts in to ordinary-auth browser upload when client collection is enabled.                                                                                                            |
+| `RISU_BUILD_ID`                                    | `unknown`                       | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics.                                                                                                                |
 | `RISU_PROTOCOL_METRICS`                            | unset                           | Enables structured protocol metrics and advertises v1 browser startup collection when `1`, `true`, `yes`, or `on`.                                                                              |
 
 Local/dev:
@@ -581,7 +586,7 @@ Client/build:
 | -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                                                                                                                                                   |
 | `VITE_FAST_BOOTSTRAP_OBSERVER`                                                   | Connected readers are enabled by default; exact `FALSE` selects the conservative writer-first fallback. This is a build-time setting: rebuild the SPA and reload clients. The flag itself does not clear originating drafts or encrypted pending intent. |
-| `VITE_RISU_BUILD_ID` | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed. |
+| `VITE_RISU_BUILD_ID`                                                             | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed.                                                                                                                    |
 | `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                                                                                                                                                         |
 | `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell.                                                                                                                                  |
 | `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                                                                                                                                                     |
