@@ -1,6 +1,11 @@
 <script lang="ts">
   import ChatSelectionButton from './ChatSelectionButton.svelte'
-  import { canUseClientWriteAccess, clientSessionStore } from 'src/ts/clientSession'
+  import {
+    canUseClientWriteAccess,
+    captureClientSessionGeneration,
+    clientSessionStore,
+    isClientSessionGenerationCurrent,
+  } from 'src/ts/clientSession'
   import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
 
   import { onDestroy, tick, untrack } from 'svelte'
@@ -39,7 +44,7 @@
   import { sleep, sortableOptions } from 'src/ts/util'
   import { bookmarkListOpen } from 'src/ts/stores.svelte'
   import { language } from 'src/lang'
-  import Toggles from './Toggles.svelte'
+  import LazyComponent from '../UI/LazyComponent.svelte'
   import AuthorNoteEditor from './AuthorNoteEditor.svelte'
   import { changeChatTo, createChatCopyName } from 'src/ts/globalApi.svelte'
   import { ensureAllChatsHydrated, hydrateChatMessages } from 'src/ts/server/chatMessageHydration.svelte'
@@ -112,6 +117,19 @@
     return aggregateCharacter
   })
   let chara = $derived(sidebarCharacter ?? unavailableCharacter)
+  const writeActionsAllowed = $derived.by(() => {
+    void $clientSessionStore
+    return canUseClientWriteAccess()
+  })
+  const loadToggles = async () => {
+    const generation = captureClientSessionGeneration()
+    if (!canUseClientWriteAccess()) throw new Error(language.connectedReaders.writeAccessRequired)
+    const module = await import('./Toggles.svelte')
+    if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(generation)) {
+      throw new Error(language.connectedReaders.writeAccessRequired)
+    }
+    return module
+  }
 
   function identityCharacterRows(): readonly character[] {
     if (charactersResourceState.status === 'error') return []
@@ -1552,7 +1570,9 @@
 
       {#if chara.chaId !== '§playground'}
         <AuthorNoteEditor {chara} />
-        <Toggles {chara} />
+        {#if writeActionsAllowed}
+          <LazyComponent loader={loadToggles} componentProps={{ chara }} testId="chat-generation-toggles" />
+        {/if}
       {/if}
     </div>
   {:else}

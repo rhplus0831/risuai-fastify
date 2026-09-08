@@ -497,8 +497,17 @@ vi.mock('src/ts/server/commands', () => ({
   updateMessageCommand: sidebarMocks.updateMessageCommand,
 }))
 
+const togglesLoaderMocks = vi.hoisted(() => ({
+  load: vi.fn(),
+  resolved: vi.fn(),
+  pending: undefined as Promise<void> | undefined,
+}))
+
 vi.mock('./Toggles.svelte', async () => {
+  togglesLoaderMocks.load()
+  await togglesLoaderMocks.pending
   const mock = await import('./SideChatList.testToggles.svelte')
+  togglesLoaderMocks.resolved()
   return { default: mock.default }
 })
 
@@ -1531,6 +1540,70 @@ describe('SideChatList DOM contract harness', () => {
     expect(sidebarMocks.alertError).toHaveBeenCalledWith('Chat data could not be loaded.')
   })
 
+  it('does not request generation toggles when the mounted character is a reader', async () => {
+    await beginWriterDraftCaptureTest()
+    try {
+      seedSidebarDatabase()
+      sidebarMocks.setCurrentRoute({
+        kind: 'character',
+        path: '/character/char-a/chat-foldered',
+        chaId: 'char-a',
+        chatId: 'chat-foldered',
+      })
+      demoteClientSession()
+      component = mount(SideChatListHarness, { target })
+      await flushCommandWork()
+      expect(togglesLoaderMocks.load).not.toHaveBeenCalled()
+      expect(target.querySelector('[data-risu-lazy-surface="chat-generation-toggles"]')).toBeNull()
+      expect(target.querySelector('[data-testid="side-chat-list-toggles-stub"]')).toBeNull()
+    } finally {
+      if (component) {
+        await unmount(component)
+        component = undefined
+      }
+      await endWriterDraftCaptureTest()
+    }
+  })
+
+  it('does not mount generation toggles after their pending import loses writer authority', async () => {
+    let resolveToggles!: () => void
+    togglesLoaderMocks.pending = new Promise<void>((resolve) => {
+      resolveToggles = resolve
+    })
+    await beginWriterDraftCaptureTest()
+    try {
+      seedSidebarDatabase()
+      sidebarMocks.setCurrentRoute({
+        kind: 'character',
+        path: '/character/char-a/chat-foldered',
+        chaId: 'char-a',
+        chatId: 'chat-foldered',
+      })
+      component = mount(SideChatListHarness, { target })
+      await vi.waitFor(() => expect(togglesLoaderMocks.load).toHaveBeenCalledOnce())
+      expect(
+        target
+          .querySelector('[data-risu-lazy-surface="chat-generation-toggles"]')
+          ?.getAttribute('data-risu-lazy-state'),
+      ).toBe('pending')
+      demoteClientSession()
+      await tick()
+      resolveToggles()
+      await vi.waitFor(() => expect(togglesLoaderMocks.resolved).toHaveBeenCalledOnce())
+      await flushCommandWork()
+      expect(target.querySelector('[data-risu-lazy-surface="chat-generation-toggles"]')).toBeNull()
+      expect(target.querySelector('[data-testid="side-chat-list-toggles-stub"]')).toBeNull()
+    } finally {
+      resolveToggles()
+      togglesLoaderMocks.pending = undefined
+      if (component) {
+        await unmount(component)
+        component = undefined
+      }
+      await endWriterDraftCaptureTest()
+    }
+  })
+
   it('shows active-chat controls instead of the chat list on a chat route', async () => {
     seedSidebarDatabase()
     sidebarMocks.setCurrentRoute({
@@ -1546,7 +1619,7 @@ describe('SideChatList DOM contract harness', () => {
     expect(sidebarRoot().dataset.risuChatOpen).toBe('true')
     expect(chatRows()).toEqual([])
     expect(target.querySelector('[data-risu-chat-author-note]')).toBeTruthy()
-    expect(target.querySelector('[data-testid="side-chat-list-toggles-stub"]')).toBeTruthy()
+    await vi.waitFor(() => expect(target.querySelector('[data-testid="side-chat-list-toggles-stub"]')).toBeTruthy())
 
     backToChatListButton().click()
     await tick()

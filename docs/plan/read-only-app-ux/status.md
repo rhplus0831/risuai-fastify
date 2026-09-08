@@ -2,10 +2,10 @@
 
 ## Current Cursor
 
-- State: Phases 0–1 accepted; shared navigation implemented and transcript/browser verification in progress.
-- Next phase: [Phase 3 — shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md).
-- Next bounded slice: finish passive transcript integration and run actual
-  two-client browser acceptance before accepting Phases 2–4.
+- State: Phases 0–1 accepted; implementation complete; final browser and aggregate verification in progress.
+- Next phase: [Phase 5 — verification and rollout](phases/phase-5-verification-and-rollout.md).
+- Next bounded slice: finish final browser and aggregate checks, record acceptance,
+  and archive this package with updated current documentation.
 - Source baseline reviewed: `982eef6112a407d138ea6a77ebc638c8058edfe2`.
 - Fixed scope: Settings, plugin panels, and interactive scripts are inaccessible
   to readers through controls, routes, shortcuts, restored UI, and callbacks.
@@ -25,9 +25,9 @@
 | [0. Contract and inventory](phases/phase-0-contract-and-inventory.md)                        | Accepted     | Matrix, interfaces and confirmed-field map below; four read-only cross-checks |
 | [1. Reader boundary and navigation data](phases/phase-1-reader-boundary-and-data.md)         | Accepted     | Access, projection and local-navigation focused evidence below                |
 | [2. Shared shell and navigation](phases/phase-2-shared-shell-and-navigation.md)              | Verification | 149 focused checks; actual browser proof pending                              |
-| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Pending      | —                                                                             |
-| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Pending      | —                                                                             |
-| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Pending      | —                                                                             |
+| [3. Shared transcript and passive display](phases/phase-3-transcript-and-passive-display.md) | Verification | Focused rendering checks pass; browser themes/copy proof pending              |
+| [4. Lifecycle and action containment](phases/phase-4-lifecycle-and-containment.md)           | Verification | Focused session/sync/stream checks and initial browser lifecycle pass         |
+| [5. Verification and rollout](phases/phase-5-verification-and-rollout.md)                    | Verification | Final aggregate and browser reruns in progress                                |
 
 ## Decisions
 
@@ -304,3 +304,34 @@ writer controls remain unavailable. Four DOM regressions cover character/user
 bubbles at 320px and 900px, plain-text clipboard output and absent authoring
 controls. `pnpm test -- src/lib/ChatScreens/Chat.customHtml.test.ts` passed
 (86 tests). Browser recheck follows the rebuild.
+
+The stable-control inventory now names the extracted shared views, and its
+scanner explicitly includes literal conditional delete markers. Its focused
+suite passed (5 tests), preserving the ownership gate. Smoke probes now use
+narrow character resources and omit an unrelated legacy aggregate endpoint;
+`pnpm check:server` then passed all protocol/shared-core, architecture inventory,
+Fastify and browser-smoke checks without baseline expansion.
+
+The first aggregate finished with 9,212 frontend tests passing, two repaired
+locale/inventory failures and three pre-existing skips; server tests, frontend
+check, topology, current docs and smoke build passed. A final complete aggregate
+run is in progress after those repairs. Initial browser acceptance passed 16/19;
+two copy failures required the runtime repair above, and a lineage fixture's
+ambiguous takeover selector was narrowed to the shell control (focused rerun
+passed). The browser rebuild and final proof are in progress.
+
+The second complete `pnpm test:agent` run passed all seven lanes: 720 frontend
+files (9,219 passed, three skipped), 235 server files (4,356 passed, two skipped),
+all typechecks, architecture inventory, topology, current docs and the smoke
+build. It completed in 3m 33.6s. Subsequent browser/visual review found two
+additional boundaries requiring final repair: an inherited static writer
+sidebar import loaded Settings dependencies in readers, and light mobilechat
+bubbles inherited inverted prose colors. Final-source acceptance will follow
+those narrow fixes and their browser/typecheck/integration rechecks.
+
+The writer chat-list adapter now loads Toggles lazily after current write access,
+with a session check when the import resolves. This removes its inherited
+Settings-renderer dependency from reader startup. SideChatList passed 70 tests,
+including no reader import and no mount after a deferred import crosses demotion;
+the control inventory still passed five tests. Formatting and whitespace checks
+passed. Actual emitted-chunk denial is being rechecked in the browser.
