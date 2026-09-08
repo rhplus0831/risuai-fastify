@@ -43,7 +43,7 @@ async function harness(options: { enabled?: boolean; collection?: boolean; bypas
     chmodSync(verifierFile, 0o600)
   }
   save()
-  const { app } = await buildApp({
+  const { app, diagnostics } = await buildApp({
     config: {
       host: '127.0.0.1',
       port: 0,
@@ -63,11 +63,22 @@ async function harness(options: { enabled?: boolean; collection?: boolean; bypas
     assetGc: false,
     generationChat: { finalizationRetry: false },
   })
+  await diagnostics.ready
   cleanup.push(async () => {
     await app.close()
     rmSync(root, { recursive: true, force: true })
   })
-  return { app, root, dataDir, verifierFile, token, credential, save, headers: { authorization: `Bearer ${token}` } }
+  return {
+    app,
+    diagnostics,
+    root,
+    dataDir,
+    verifierFile,
+    token,
+    credential,
+    save,
+    headers: { authorization: `Bearer ${token}` },
+  }
 }
 
 describe('remote support diagnostics', () => {
@@ -128,9 +139,10 @@ describe('remote support diagnostics', () => {
       throw new Error(canary)
     })
     const failure = await h.app.inject('/api/v1/diagnostic-failure')
+    await vi.waitFor(() => expect(h.diagnostics.journal?.read().pending).toBe(0))
     const result = await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })
     expect(isRemoteDiagnosticsResponse(result.json())).toBe(true)
-    expect(result.json().sources).toEqual({ server: 'volatile', browser: 'not-supported' })
+    expect(result.json().sources).toEqual({ server: 'journal', browser: 'not-supported' })
     expect(result.json().entries).toContainEqual(
       expect.objectContaining({
         entry: expect.objectContaining({
@@ -167,7 +179,7 @@ describe('remote support diagnostics', () => {
 
   it('distinguishes bad query, empty result, expired cursor and effective throttling', async () => {
     const h = await harness()
-    for (const query of ['raw=true', 'limit=201', 'limit=1&limit=2', 'version=2', 'from=0&to=86400001']) {
+    for (const query of ['raw=true', 'limit=201', 'limit=1&limit=2', 'version=3', 'from=0&to=86400001']) {
       const response = await h.app.inject({ url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?${query}`, headers: h.headers })
       expect(response.statusCode).toBe(400)
       expect(response.json()).toEqual({ error: 'invalid-query' })

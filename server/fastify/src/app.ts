@@ -106,7 +106,8 @@ import {
 } from './generationOperations.js'
 import { reconcileGenerationEffectsAtStartup } from './generationEffects.js'
 import { isDiagnosticTransportUrl, SUPPORT_DIAGNOSTICS_ENDPOINT } from '@risuai/protocol/remote-diagnostics'
-import { createVolatileRemoteDiagnostics, registerRemoteDiagnosticsRoutes } from './remoteDiagnostics.js'
+import { registerRemoteDiagnosticsRoutes } from './remoteDiagnostics.js'
+import { createDiagnosticsRuntime } from './diagnosticsRuntime.js'
 
 /**
  * Node `server.requestTimeout` backstop the wall-clock bound for
@@ -154,6 +155,7 @@ export interface BuiltApp {
   app: FastifyInstance
   config: AppConfig
   generationJobs: GenerationJobRegistry
+  diagnostics: ReturnType<typeof createDiagnosticsRuntime>
 }
 
 function isPathWithin(parent: string, child: string): boolean {
@@ -167,7 +169,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   assertSupportDiagnosticsConfig(config)
   const diagnostics = createClientDiagnostics(config.clientDiagnostics ?? Boolean(config.requestTrace))
   const diagnosticInstanceId = randomBytes(16).toString('hex')
-  const remoteDiagnostics = createVolatileRemoteDiagnostics(diagnostics, diagnosticInstanceId)
   const app = Fastify({
     disableRequestLogging: (request) => isDiagnosticTransportUrl(request.url),
     logger:
@@ -277,6 +278,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   // Pre-credential-store preset copies must be repaired before routes or
   // workers can load them into a response, command baseline, or export.
   repairPersistedModelProfileInlineSecretsInSqlite(db)
+  const diagnosticsRuntime = createDiagnosticsRuntime(app, db, config, diagnostics, diagnosticInstanceId)
   reconcileGenerationOperationsAtStartup(db, serverInstanceId, app.log)
   reconcileGenerationEffectsAtStartup(db)
   const memoryEventBus = createMemoryEventBus(app.log)
@@ -428,6 +430,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     // before the database closes.
     await generationJobRegistry.settleRunners()
     generationJobRegistry.registry.dispose()
+    await diagnosticsRuntime.close()
     db.close()
   })
 
@@ -446,7 +449,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   )
   registerActiveWriterGuard(app, activeWriterState)
   registerClientDiagnosticsRoutes(app, authState, diagnostics)
-  registerRemoteDiagnosticsRoutes(app, remoteDiagnostics, config.supportDiagnostics ?? { enabled: false }, {
+  registerRemoteDiagnosticsRoutes(app, diagnosticsRuntime.source, config.supportDiagnostics ?? { enabled: false }, {
     instanceId: diagnosticInstanceId,
     build: /^[a-f0-9]{40,64}$/.test(process.env.RISU_BUILD_ID ?? '') ? process.env.RISU_BUILD_ID! : 'unknown',
   })
@@ -639,5 +642,5 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     })
   }
 
-  return { app, config, generationJobs: generationJobRegistry }
+  return { app, config, generationJobs: generationJobRegistry, diagnostics: diagnosticsRuntime }
 }
