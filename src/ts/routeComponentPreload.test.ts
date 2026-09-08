@@ -1,5 +1,6 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { parseRoute } from './routerRoute'
+import { beginClientSession, resetClientSessionForTests } from './clientSession'
 import {
   loadBardWikiSettings,
   loadBotSettings,
@@ -17,6 +18,16 @@ import {
 vi.mock('../lib/Others/GridCatalog.svelte', () => ({ default: {} }))
 
 describe('route component preload', () => {
+  beforeEach(resetClientSessionForTests)
+
+  it('does not expose writer component loaders for reader routes, including the grid', async () => {
+    beginClientSession('reader-a')
+    for (const path of ['/settings/plugins', '/playground', '/inlay', '/grid']) {
+      expect(routeComponentLoaders(parseRoute(path))).toEqual([])
+      await expect(preloadRouteComponents(parseRoute(path))).resolves.toBeUndefined()
+    }
+  })
+
   it('maps route families to their shell and exact page chunks', () => {
     expect(routeComponentLoaders(parseRoute('/settings'))).toEqual([loadSettings, loadBotSettings])
     expect(routeComponentLoaders(parseRoute('/settings/memory'))).toEqual([loadSettings, loadMemorySettings])

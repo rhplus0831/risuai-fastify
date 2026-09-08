@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { beginClientSession, demoteClientSession, resetClientSessionForTests } from '../clientSession'
+import { enterClientWriter, repromoteClientWriter } from '../__tests__/clientSession'
 import type { ResourceRequirement } from './resourceManifest'
 
 const loaderMocks = vi.hoisted(() => ({
@@ -97,6 +99,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   stopRouteResourceLoader()
   lorebookPageOwner.reset()
   withTestDatabaseWrite(resetServerResourceState)
@@ -430,6 +433,39 @@ describe('route resource loader', () => {
     await expect(navigation).resolves.toBe(true)
     await expect(finishRouteResources(characterRoute)).resolves.toBe(true)
     expect(loaderMocks.refresh).toHaveBeenCalledOnce()
+  })
+
+  it('denies direct reader resource warming and a queued idle prefetch after writer loss', async () => {
+    enterClientWriter()
+    const route = { kind: 'grid', path: '/grid' } as const
+    await prepareRouteResources(route)
+    await finishRouteResources(route)
+    loaderMocks.requirements = [requirement({ kind: 'settings-group', group: 'display', purposes: ['render'] })]
+    let idleCallback: (() => void) | undefined
+    Object.defineProperty(window, 'requestIdleCallback', {
+      configurable: true,
+      value: vi.fn((callback: () => void) => {
+        idleCallback = callback
+        return 11
+      }),
+    })
+    Object.defineProperty(window, 'cancelIdleCallback', { configurable: true, value: vi.fn() })
+    prefetchRoutePathResources('/settings/display')
+    expect(idleCallback).toBeDefined()
+    demoteClientSession()
+    repromoteClientWriter()
+    idleCallback?.()
+    expect(loaderMocks.refresh).not.toHaveBeenCalled()
+    expect(window.cancelIdleCallback).toHaveBeenCalledWith(11)
+
+    beginClientSession('reader-a')
+    vi.mocked(window.requestIdleCallback).mockClear()
+    prefetchRoutePathResources('/settings/display')
+    prefetchCharacterRouteResource('char-a')
+    startLikelyCharacterRouteWarmup()
+    await expect(prepareRouteResources(route)).resolves.toBe(false)
+    expect(window.requestIdleCallback).not.toHaveBeenCalled()
+    expect(loaderMocks.refresh).not.toHaveBeenCalled()
   })
 
   it('prefetches the exact declared resources for an intended settings route', async () => {

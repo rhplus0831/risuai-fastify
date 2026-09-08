@@ -1,4 +1,9 @@
 import { get, writable } from 'svelte/store'
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { characterRoutePath, parseRoute, type AppRoute } from '../routerRoute'
 import { routeKey } from '../routerRoute'
 import { hydrateActiveChat, hydrateChatMessageWindow } from './chatMessageHydration.svelte'
@@ -43,6 +48,7 @@ export interface RouteResourceLoadState {
 }
 
 interface ActiveRouteLoad {
+  generation: number
   controller: AbortController
   key: string
 }
@@ -60,6 +66,7 @@ interface InFlightRequirementLoad {
 }
 
 interface PendingRoutePrefetch {
+  generation: number
   controller: AbortController
   idleHandle: number | null
   key: string
@@ -84,11 +91,12 @@ export const BACKGROUND_CHARACTER_WARMUP_LIMIT = 3
 
 /** Load the non-shell resources needed before route stores can be applied safely. */
 export async function prepareRouteResources(route: AppRoute): Promise<boolean> {
+  if (!canUseClientWriteAccess()) return false
   promoteMatchingRoutePrefetch(route)
   const key = routeKey(route)
   activeRouteLoad?.controller.abort()
   const controller = new AbortController()
-  const load: ActiveRouteLoad = { controller, key }
+  const load: ActiveRouteLoad = { controller, key, generation: captureClientSessionGeneration() }
   activeRouteLoad = load
   routeResourceLoadState.set({ error: null, routeKey: key, status: 'loading' })
 
@@ -118,7 +126,7 @@ export async function prepareRouteResources(route: AppRoute): Promise<boolean> {
 /** Revalidate the selected target and apply compatibility projections after route stores commit. */
 export async function finishRouteResources(route: AppRoute): Promise<boolean> {
   const load = activeRouteLoad
-  if (!load || load.key !== routeKey(route) || load.controller.signal.aborted) return false
+  if (!load || load.key !== routeKey(route) || !isCurrentRouteLoad(load)) return false
 
   try {
     if (route.kind === 'character' && route.chatId) {
@@ -152,7 +160,7 @@ export async function finishRouteResources(route: AppRoute): Promise<boolean> {
 /** Publish a non-resource preparation failure only when this route still owns the active transition. */
 export function failActiveRouteLoad(route: AppRoute, error: unknown): boolean {
   const load = activeRouteLoad
-  if (!load || load.key !== routeKey(route) || load.controller.signal.aborted) return false
+  if (!load || load.key !== routeKey(route) || !isCurrentRouteLoad(load)) return false
   routeResourceLoadState.set({
     error: error instanceof Error ? error.message : String(error),
     errorKind: 'component',
@@ -196,7 +204,7 @@ export function stopRouteResourceLoader(): void {
 
 /** Prefetch a likely character route without hydrating its chat or prompt body. */
 export function prefetchCharacterRouteResource(characterId: string): void {
-  if (!characterId.trim()) return
+  if (!canUseClientWriteAccess() || !characterId.trim()) return
   const resident = charactersResourceState.characters.find((candidate) => candidate?.chaId === characterId)
   if (!resident || (resident as unknown as Record<string, unknown>)[SERVER_CHARACTER_SHELL_MARKER] !== true) return
   scheduleRoutePrefetch(parseRoute(characterRoutePath(characterId)), 'intent', [selectedCharacterRequirement()])
@@ -223,6 +231,7 @@ function scheduleRoutePrefetch(
   requirements = preRouteRequirements(route),
 ): boolean {
   if (
+    !canUseClientWriteAccess() ||
     typeof window === 'undefined' ||
     typeof window.requestIdleCallback !== 'function' ||
     get(routeResourceLoadState).status !== 'ready' ||
@@ -238,6 +247,7 @@ function scheduleRoutePrefetch(
   cancelRoutePrefetch()
   const prefetch: PendingRoutePrefetch = {
     controller: new AbortController(),
+    generation: captureClientSessionGeneration(),
     idleHandle: null,
     key,
     promise: null,
@@ -252,6 +262,10 @@ function scheduleRoutePrefetch(
 
 function startRoutePrefetch(prefetch: PendingRoutePrefetch): void {
   if (pendingRoutePrefetch !== prefetch || prefetch.controller.signal.aborted || prefetch.promise) return
+  if (!canUseClientWriteAccess() || !isClientSessionGenerationCurrent(prefetch.generation)) {
+    cancelRoutePrefetch()
+    return
+  }
   prefetch.idleHandle = null
   const minimumRevision = peekAppliedServerResourceRevision() ?? undefined
   prefetch.promise = Promise.all(
@@ -359,6 +373,7 @@ function likelyCharacterWarmupIds(limit: number): string[] {
 
 function canRunBackgroundWarmup(): boolean {
   if (
+    !canUseClientWriteAccess() ||
     typeof window === 'undefined' ||
     typeof navigator === 'undefined' ||
     typeof window.requestIdleCallback !== 'function'
@@ -374,7 +389,12 @@ function canRunBackgroundWarmup(): boolean {
 }
 
 function isCurrentRouteLoad(load: ActiveRouteLoad): boolean {
-  return activeRouteLoad === load && !load.controller.signal.aborted
+  return (
+    canUseClientWriteAccess() &&
+    isClientSessionGenerationCurrent(load.generation) &&
+    activeRouteLoad === load &&
+    !load.controller.signal.aborted
+  )
 }
 
 function isPostRouteRequirement(requirement: ResourceRequirement): boolean {

@@ -24,6 +24,7 @@ interface SelectionRequest {
   display?: string
   title?: string
   dismissible: boolean
+  purpose?: 'client-session'
   resolve: (selection: string | null) => void
 }
 
@@ -192,6 +193,7 @@ function displayResultDialog(request: ResultDialogRequest): void {
       msg: selectionMessage(request),
       dialogOwner: request.owner,
       dismissible: request.dismissible,
+      ...(request.purpose === undefined ? {} : { purpose: request.purpose }),
       ...(request.title === undefined ? {} : { title: request.title }),
     })
     return
@@ -320,7 +322,7 @@ function queueConfirmation(type: ConfirmationAlertType, msg: string): Promise<bo
 function queueSelection(
   options: string[],
   display?: string,
-  settings: { dismissible?: boolean; title?: string; signal?: AbortSignal } = {},
+  settings: { dismissible?: boolean; title?: string; signal?: AbortSignal; purpose?: 'client-session' } = {},
 ): Promise<string | null> {
   if (settings.signal?.aborted) return Promise.resolve(null)
   return queueResultDialog<string | null>(
@@ -330,6 +332,7 @@ function queueSelection(
       options: [...options],
       display,
       dismissible: settings.dismissible !== false,
+      ...(settings.purpose === undefined ? {} : { purpose: settings.purpose }),
       ...(settings.title === undefined ? {} : { title: settings.title }),
       resolve,
     }),
@@ -544,9 +547,9 @@ export async function alertRequiredSelect(
   msg: string[],
   display: string,
   title: string,
-  options: { signal?: AbortSignal } = {},
+  options: { signal?: AbortSignal; purpose?: 'client-session' } = {},
 ): Promise<string> {
-  return (await queueSelection(msg, display, { dismissible: false, title, signal: options.signal })) ?? ''
+  return (await queueSelection(msg, display, { dismissible: false, title, ...options })) ?? ''
 }
 
 export async function alertErrorWait(msg: string) {

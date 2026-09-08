@@ -505,7 +505,9 @@ describe('cancellable required selections', () => {
     const controller = new AbortController()
     const selection = alertRequiredSelect(['Use this device', 'Keep reading'], 'Switch write access?', 'Write access', {
       signal: controller.signal,
+      purpose: 'client-session',
     })
+    expect(alertTestState.alertStoreValue).toMatchObject({ type: 'select', purpose: 'client-session' })
     const selectionOwner = alertTestState.alertStoreValue.dialogOwner as symbol
     let nextSettled = false
     const next = alertConfirm('Unrelated confirmation').then((result) => {

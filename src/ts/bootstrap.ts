@@ -12,6 +12,7 @@ import {
 import { alertError, alertMd, alertRequiredSelect, waitAlert } from './alert'
 import { updateReducedMotion } from './gui/animation'
 import { updateColorScheme, updateTextThemeAndCSS } from './gui/colorscheme'
+import { runtimeDisplaySettingsOwner } from './gui/displaySettings'
 import { awaitLanguageReady, changeLanguage, language } from 'src/lang'
 import { resolveUniquePromptPreset } from '@risuai/shared-core/effective-prompt-template'
 import { updateGuisize } from './gui/guisize'
@@ -276,7 +277,7 @@ function hasProjectedRuntimeKey(keys: readonly string[], candidates: ReadonlySet
 }
 
 setSettingsRuntimeProjectionHook((keys) => {
-  cacheDisplaySettings(settingsResourceState.value, keys)
+  cacheDisplaySettings(runtimeDisplaySettingsOwner() ?? {}, keys)
   const colorSchemeChanged = hasProjectedRuntimeKey(keys, COLOR_SCHEME_RUNTIME_KEYS)
   if (colorSchemeChanged) updateColorScheme()
   if (colorSchemeChanged || hasProjectedRuntimeKey(keys, TEXT_THEME_RUNTIME_KEYS)) updateTextThemeAndCSS()
@@ -609,7 +610,7 @@ async function confirmConnectedServerInitialization(operation: ClientSessionOper
       [language.connectedReaders.setupThisServer],
       language.connectedReaders.setupServerBody,
       language.connectedReaders.setupServerTitle,
-      { signal: controller.signal },
+      { signal: controller.signal, purpose: 'client-session' },
     )
     return selection === '0' && !controller.signal.aborted && isClientSessionOperationCurrent(operation)
   } finally {
@@ -682,6 +683,11 @@ function installConnectedSessionLifecycle(): void {
     previous = state
     if (!state.managed) return
     if (lostWriter || state.lifecycle === 'auth-required') {
+      // Revoke optimistic appearance with authority; pending writer settings
+      // remain owned by recovery, never by the connected reader's paint path.
+      updateColorScheme()
+      updateTextThemeAndCSS()
+      updateGuisize()
       invalidateResourceCacheWork()
       stopFailedWriterPromotionRuntimes()
       stopDeferredStartupRuntimes()
@@ -902,7 +908,7 @@ export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult
         [language.writerConnectDisconnectExisting, language.cancel],
         language.writerConnectConflictBody,
         language.writerConnectConflictTitle,
-        { signal: controller.signal },
+        { signal: controller.signal, purpose: 'client-session' },
       )
       if (!current()) return superseded()
       if (selection !== '0') return returnToReader({ status: 'cancelled' })
@@ -1450,6 +1456,7 @@ export async function loadWebInitialDatabase(
             [language.writerConnectDisconnectExisting, language.cancel],
             language.writerConnectConflictBody,
             language.writerConnectConflictTitle,
+            { purpose: 'client-session' },
           )
           if (selection !== '0') {
             setObserverShellLifecycleMode('takeover-denied')

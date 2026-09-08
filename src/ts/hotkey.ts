@@ -1,5 +1,9 @@
 import { get } from 'svelte/store'
-import { isClientReadOnly } from './clientSession'
+import { canUseClientReaderContent, captureClientSessionGeneration, isClientReadOnly } from './clientSession'
+import { getReaderTranscriptCharacters } from './server/readerTranscriptProjection.svelte'
+import { uniqueReaderCharacters } from './readerRouteScope'
+import { isClientWriteOperationCurrent } from './clientWriteOperation'
+import { canShowReaderAlert } from './readerAlertPolicy'
 import {
   alertMd,
   alertError,
@@ -53,13 +57,19 @@ import {
   settingsResourceState,
 } from './server/resourceState.svelte'
 
-const READER_HOTKEYS = new Set(['copy', 'home', 'settings', 'toggleCSS', 'prevChar', 'nextChar', 'scrollToActiveChar'])
+const READER_HOTKEYS = new Set(['copy', 'home', 'toggleCSS', 'prevChar', 'nextChar', 'scrollToActiveChar'])
 
 export function initHotkey() {
   const handleHotkeyKeydown = async (ev: KeyboardEvent): Promise<void> => {
     if (ev.defaultPrevented) return
 
     const activeAlert = get(alertStore)
+    if (isClientReadOnly() && !canShowReaderAlert(activeAlert)) {
+      alertStore.set({ type: 'none', msg: '' })
+      ev.preventDefault()
+      ev.stopPropagation()
+      return
+    }
     if (activeAlert.type !== 'none' && activeAlert.type !== 'toast') {
       if (ev.key === 'Escape') {
         if (activeAlert.type === 'ask' || activeAlert.type === 'pluginconfirm') {
@@ -165,8 +175,10 @@ export function initHotkey() {
           break
         }
         case 'edit': {
+          const generation = captureClientSessionGeneration()
           clickQuery('.button-icon-edit')
           setTimeout(() => {
+            if (!isClientWriteOperationCurrent(generation)) return
             focusQuery('.message-edit-area')
           }, 100)
           break
@@ -407,8 +419,9 @@ export function initHotkey() {
 
 async function quickMenu() {
   if (isClientReadOnly()) return
+  const generation = captureClientSessionGeneration()
   const selStr = await alertSelect([language.presets, language.persona, language.hotkeyDesc.loadout])
-  if (selStr === null) return
+  if (selStr === null || !isClientWriteOperationCurrent(generation)) return
   const sel = Number(selStr)
   if (sel === 0) {
     openPresetList.set(!get(openPresetList))
@@ -484,9 +497,10 @@ function adjacentCharacterCandidateIndex(
 
 export async function changeToAdjacentCharacter(direction: 'previous' | 'next'): Promise<boolean> {
   if (isClientReadOnly()) {
+    if (!canUseClientReaderContent()) return false
     const route = get(currentRoute)
     if (route.kind !== 'character') return false
-    const rows = charactersResourceState.characters
+    const rows = uniqueReaderCharacters(getReaderTranscriptCharacters())
     const selectedIndex = rows.findIndex((candidate) => candidate.chaId === route.chaId)
     const candidates = rows.flatMap((candidate, index) =>
       stableOwnerId(candidate.chaId) &&

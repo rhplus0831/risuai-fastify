@@ -980,6 +980,51 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
   })
 
+  it('clears restricted overlays on loss and late restore while preserving explicit access decisions', async () => {
+    enterClientWriter()
+    await tick()
+    settingsOpen.set(true)
+    CustomGUISettingMenuStore.set(true)
+    QuickSettings.open = true
+    openPresetList.set(true)
+    openPersonaList.set(true)
+    loadoutModalStore.open = true
+    alertStore.set({ type: 'pluginconfirm', msg: 'Old plugin approval' })
+    demoteClientSession()
+    // Loss handlers clear state synchronously, even if promotion shares this tick.
+    expect(get(settingsOpen)).toBe(false)
+    expect(get(CustomGUISettingMenuStore)).toBe(false)
+    expect(get(openPresetList)).toBe(false)
+    expect(get(openPersonaList)).toBe(false)
+    expect(QuickSettings.open).toBe(false)
+    expect(loadoutModalStore.open).toBe(false)
+    expect(get(alertStore).type).toBe('none')
+    await tick()
+
+    CustomGUISettingMenuStore.set(true)
+    settingsOpen.set(true)
+    QuickSettings.open = true
+    alertStore.set({ type: 'select', msg: 'Restricted restored picker' })
+    await tick()
+    expect(get(CustomGUISettingMenuStore)).toBe(false)
+    expect(get(settingsOpen)).toBe(false)
+    expect(QuickSettings.open).toBe(false)
+    expect(get(alertStore).type).toBe('none')
+    expect(target.querySelector('[data-risu-lazy-surface="custom-gui-settings"]')).toBeNull()
+    expect(target.querySelector('[data-risu-lazy-surface="settings"]')).toBeNull()
+
+    alertStore.set({ type: 'select', purpose: 'client-session', msg: 'Use this device?' })
+    await tick()
+    expect(get(alertStore)).toMatchObject({ type: 'select', purpose: 'client-session' })
+    expect(target.querySelector('[data-risu-lazy-surface="alert"]')).not.toBeNull()
+    alertStore.set({ type: 'none', msg: '' })
+    repromoteClientWriter()
+    await tick()
+    expect(get(CustomGUISettingMenuStore)).toBe(false)
+    expect(get(settingsOpen)).toBe(false)
+    expect(QuickSettings.open).toBe(false)
+  })
+
   it('replaces authenticated reader content with the existing sign-in entry after auth loss', async () => {
     if (component) {
       await unmount(component)

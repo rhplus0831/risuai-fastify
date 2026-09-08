@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import {
   beginClientSession,
+  demoteClientSession,
   resetClientSessionForTests,
   setClientConnectionState,
   setClientProjectionReady,
@@ -26,9 +27,23 @@ vi.mock('./process/modules', async (importActual) => {
 })
 
 import { initHotkey } from './hotkey'
-import { alertCardExport, alertConfirm, alertPluginConfirm, cardExportCancelMessage } from './alert'
+import { enterClientWriter, repromoteClientWriter } from './__tests__/clientSession'
+import {
+  alertCardExport,
+  alertConfirm,
+  alertPluginConfirm,
+  cardExportCancelMessage,
+  resolveAlertSelection,
+} from './alert'
 import { RISU_PRESET_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './dragTypes'
-import { alertStore, PlaygroundStore, QuickSettings, selectedCharID, settingsOpen } from './stores.svelte'
+import {
+  alertStore,
+  PlaygroundStore,
+  QuickSettings,
+  selectedCharID,
+  settingsOpen,
+  openPresetList,
+} from './stores.svelte'
 import { testDatabaseState } from './__tests__/resourceDatabaseState'
 import { registerModuleEditorLeaveGuard } from './moduleEditorLeaveGuard'
 
@@ -69,7 +84,7 @@ beforeEach(() => {
 })
 
 describe('global hotkey route ownership', () => {
-  it('blocks a configured mutation shortcut while preserving reader Home and Settings navigation', async () => {
+  it('blocks mutation and Settings shortcuts while preserving reader Home navigation', async () => {
     const operation = beginClientSession('reader-a')
     settleClientReader(operation, { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-b', epoch: 1 } })
     setClientProjectionReady(true)
@@ -86,12 +101,26 @@ describe('global hotkey route ownership', () => {
       await press('h', { ctrlKey: true })
       expect(hotkeyNavigationMocks.navigate).toHaveBeenCalledWith('/')
       await press('s', { ctrlKey: true })
-      expect(hotkeyNavigationMocks.openSettingsRoute).toHaveBeenCalledOnce()
+      expect(hotkeyNavigationMocks.openSettingsRoute).not.toHaveBeenCalled()
     } finally {
       send.remove()
       resetClientSessionForTests()
     }
   })
+  it('does not open a picker after a quick-menu answer crosses writer loss and promotion', async () => {
+    enterClientWriter()
+    testDatabaseState.db = { hotkeys: [{ action: 'quickMenu', ctrl: true, key: 'q' }] }
+    openPresetList.set(false)
+    await press('q', { ctrlKey: true })
+    const selection = get(alertStore)
+    expect(selection.type).toBe('select')
+    demoteClientSession()
+    repromoteClientWriter()
+    resolveAlertSelection(selection.dialogOwner, 0)
+    await Promise.resolve()
+    expect(get(openPresetList)).toBe(false)
+  })
+
   it('runs character auto-scroll only for sidebar drags', () => {
     const scrollToActiveCharacter = vi.fn()
     window.addEventListener('scrollToActiveCharacter', scrollToActiveCharacter)

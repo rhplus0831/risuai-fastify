@@ -109,6 +109,32 @@ afterEach(async () => {
 })
 
 describe('router initial application', () => {
+  it('retains reader navigation on in-app authoring entry and leaves direct routes for the shared gate', async () => {
+    const router = await importRouterAt('/character/reader/chat-a')
+    const { enterClientWriter } = await import('./__tests__/clientSession')
+    const { demoteClientSession } = await import('./clientSession')
+    enterClientWriter()
+    demoteClientSession()
+    for (const path of ['/settings', '/settings/plugins', '/playground', '/inlay']) {
+      router.navigate(path)
+      expect(window.location.pathname).toBe('/character/reader/chat-a')
+      expect(get(router.currentRoute)).toMatchObject({ kind: 'character', chaId: 'reader', chatId: 'chat-a' })
+    }
+    router.openSettingsRoute()
+    router.navigateToPersonaSettings('persona-a')
+    expect(window.location.pathname).toBe('/character/reader/chat-a')
+    expect(routerMocks.prepareRouteResources).not.toHaveBeenCalled()
+    expect(routerMocks.preloadRouteComponents).not.toHaveBeenCalled()
+
+    router.installRouter()
+    window.history.replaceState(null, '', '/settings/plugins')
+    window.dispatchEvent(new PopStateEvent('popstate'))
+    expect(get(router.currentRoute)).toMatchObject({ kind: 'settings' })
+    await expect(router.applyRouteToStores(get(router.currentRoute))).resolves.toBe(false)
+    expect(routerMocks.prepareRouteResources).not.toHaveBeenCalled()
+    expect(routerMocks.preloadRouteComponents).not.toHaveBeenCalled()
+  })
+
   it('does not apply a retired writer route after reader navigation while its chunk is loading', async () => {
     const router = await importRouterAt('/')
     const { enterClientWriter } = await import('./__tests__/clientSession')

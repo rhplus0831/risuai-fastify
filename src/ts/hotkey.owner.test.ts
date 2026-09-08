@@ -9,6 +9,7 @@ import {
 } from './clientSession'
 import { currentRoute, navigate } from './router'
 import { get } from 'svelte/store'
+import { recordReaderCharacters } from './server/readerTranscriptProjection.svelte'
 
 // Regression coverage: ordinary keydown matching must not mutate
 // `testDatabaseState.db.hotkeys`, and hotkey settings edits must route through a
@@ -202,6 +203,9 @@ describe('hotkey handling through explicit resource owners', () => {
     settleClientReader(operation, { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-b', epoch: 1 } })
     setClientProjectionReady(true)
     setClientConnectionState('live')
+    recordReaderCharacters(charactersResourceState.characters, 1)
+    // An optimistic writer rename would reorder the list if hotkeys consulted it.
+    charactersResourceState.characters[1].name = 'Zulu pending edit'
     navigate('/character/char-a')
     await expect(changeToAdjacentCharacter('next')).resolves.toBe(true)
     expect(get(currentRoute)).toMatchObject({ kind: 'character', chaId: 'char-b' })

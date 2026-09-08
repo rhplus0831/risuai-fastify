@@ -176,3 +176,26 @@ attempt to give multiple files to the focused wrapper was rejected before any
 tests ran; each target was then run through its supported single-file interface.
 Prettier and slice-scoped whitespace checks passed. Shared UI and browser
 acceptance remain in progress.
+
+### Phase 1 access-boundary slice — 2026-09-08
+
+In-app restricted navigation and Settings shortcuts now preserve the reading
+route. Direct URLs remain available to the reader gate. Writer route component,
+resource and idle/background warming reject reader or stale session work.
+App closes restricted overlays synchronously on writer loss and on late store
+restoration; only explicit session-purpose takeover selections are admitted
+alongside passive/auth alerts. Confirmed theme/font/size repaint occurs on loss.
+Reader adjacent-character shortcuts consult committed rows. Existing plugin,
+Lua and trigger authority/generation boundaries remain in place.
+
+Focused access validation (377 tests) passed with:
+
+```sh
+pnpm exec vitest run src/ts/router.test.ts src/ts/routeComponentPreload.test.ts src/ts/routeIntentPrefetch.test.ts src/ts/server/routeResourceLoader.test.ts src/ts/hotkey.navigation.test.ts src/ts/alert.test.ts src/App.routeEffect.dom.test.ts src/ts/server/activeWriterSession.test.ts src/ts/bootstrap.test.ts --bail=1
+```
+
+Additional hotkey/resource/plugin/Lua/trigger verification passed (226 tests).
+After the committed-paint integration, `pnpm test -- src/ts/bootstrap.test.ts`
+passed (217) and `pnpm test -- src/App.routeEffect.dom.test.ts` passed (29).
+Prettier and slice whitespace checks passed. Phase 1 navigation adapter proof
+and later combined browser acceptance remain outstanding.

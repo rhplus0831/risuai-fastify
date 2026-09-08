@@ -2125,6 +2125,7 @@ export const languageEnglish = {
   },
   connectedReaders: {
     conversation: 'Conversation',
+    returnToReading: 'Return to reading',
     browseConversations: 'Browse conversations',
     chooseConversation: 'Choose a chat to read. Navigation stays on this device.',
     chooseCharacterHelp: 'Choose a character and chat to read. Changes from the writer appear here.',

@@ -36,4 +36,6 @@ export interface alertData {
   waitOwner?: AlertWaitHandle
   dialogOwner?: AlertDialogHandle
   dismissible?: boolean
+  /** Explicit authentication, initialization, or writer-access lifecycle UI. */
+  purpose?: 'client-session'
 }

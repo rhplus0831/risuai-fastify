@@ -109,6 +109,9 @@ export function navigate(path: string, options: { replace?: boolean } = {}): voi
 
   const canonicalPath = path
   const nextRoute = parseRoute(canonicalPath)
+  // Direct URLs and popstate remain visible to the reader shell's route gate.
+  // In-app restricted entries never replace the reader's current selection.
+  if (!canUseClientWriteAccess() && ['settings', 'playground', 'inlay'].includes(nextRoute.kind)) return
   if (routeKey(get(currentRoute)) !== routeKey(nextRoute) && !requestActiveModuleEditorLeave()) return
 
   if (nextRoute.kind === 'settings') {
@@ -222,7 +225,7 @@ export function closeGridRoute(): void {
 }
 
 export function syncRouteFromState(input: StateRouteInput): void {
-  if (applyingRoute || typeof window === 'undefined') return
+  if (applyingRoute || typeof window === 'undefined' || !canUseClientWriteAccess()) return
   const path = routePathFromState(input)
 
   const currentPath = normalizePath(window.location.pathname)
@@ -255,6 +258,7 @@ export function hasPendingRouteApplication(): boolean {
 
 /** Keep the character/chat sidebar choice on this exact history entry. */
 export function setCharacterSidebarViewMode(view: 'chat' | 'character'): void {
+  if (!canUseClientWriteAccess()) return
   const characterView = view === 'character'
   botMakerMode.set(characterView)
   if (typeof window === 'undefined') return

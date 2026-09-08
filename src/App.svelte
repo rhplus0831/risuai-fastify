@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { untrack } from 'svelte'
+  import { onMount, untrack } from 'svelte'
   import {
     DynamicGUI,
+    botMakerMode,
+    OpenRealmStore,
     settingsOpen,
     sideBarClosing,
     sideBarStore,
@@ -24,6 +26,7 @@
     customSideBarConfigDialogStore,
     PlaygroundStore,
     SettingsMenuIndex,
+    QuickSettings,
     closePopupEditorSession,
   } from './ts/stores.svelte'
   import { alertStore, LoadingStatusState, selectedCharID } from './ts/stores/coreStores.svelte'
@@ -64,12 +67,14 @@
   import { prefetchRouteIntent } from './ts/routeIntentPrefetch'
   import { modalFocusTrap } from './ts/gui/modalFocusTrap'
   import { alertError } from './ts/alert'
+  import { canShowReaderAlert } from './ts/readerAlertPolicy'
   import { hasDragType, RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes'
   import { consumeObserverRouteIntent, peekObserverRouteIntent } from './ts/observerRouteIntent'
   import {
     clientSessionStore,
     captureClientSessionGeneration,
     isClientSessionGenerationCurrent,
+    registerClientWriterLossHandler,
   } from './ts/clientSession'
   import { canUseClientWriteAccess } from './ts/clientSession'
   import { isClientWriteOperationCurrent } from './ts/clientWriteOperation'
@@ -105,7 +110,7 @@
   let signingInReader = $state(false)
   let retryingPluginRuntime = $state(false)
   let generationRecoveryAction = $state<'idle' | 'retrying' | 'discarding'>('idle')
-  let connectedReaderView = $derived($clientSessionStore.managed && $clientSessionStore.lifecycle !== 'writing')
+  let connectedReaderView = $derived($clientSessionStore.managed && !canUseClientWriteAccess())
   async function signInReader(): Promise<void> {
     if (signingInReader || $clientSessionStore.lifecycle !== 'auth-required') return
     signingInReader = true
@@ -145,6 +150,36 @@
         : language.preloadStaleError
       : ($routeResourceLoadState.error ?? 'This route could not be loaded.'),
   )
+
+  // Subscribe to each overlay value while access is denied so a restored state
+  // or late async callback cannot reopen it during a later promotion.
+  function closeRestrictedOverlays(): void {
+    if ($settingsOpen) settingsOpen.set(false)
+    if ($botMakerMode) botMakerMode.set(false)
+    if ($OpenRealmStore) OpenRealmStore.set(false)
+    if ($CustomGUISettingMenuStore) CustomGUISettingMenuStore.set(false)
+    if ($PlaygroundStore) PlaygroundStore.set(0)
+    if (QuickSettings.open) QuickSettings.open = false
+    if ($openPresetList) closePresetListModal()
+    if ($openPersonaList) closePersonaListModal()
+    if ($openChatGenerationTogglePresetList) closeChatGenerationTogglePresetListModal()
+    if ($bookmarkListOpen) bookmarkListOpen.set(false)
+    if ($hypaV3ModalOpen) hypaV3ModalOpen.set(false)
+    if ($showRealmInfoStore) showRealmInfoStore.set(null)
+    if (popupStore.children) popupStore.children = null
+    if (easyPanelStore.open) easyPanelStore.open = false
+    if (popUpEditorStore.open) closePopupEditorSession(popUpEditorStore.sessionId)
+    if (loadoutModalStore.open) loadoutModalStore.open = false
+    if (irisStore.open) irisStore.open = false
+    if (customSideBarConfigDialogStore.open) customSideBarConfigDialogStore.open = false
+    if (!canShowReaderAlert($alertStore)) alertStore.set({ type: 'none', msg: '' })
+  }
+
+  onMount(() => registerClientWriterLossHandler(() => untrack(closeRestrictedOverlays)))
+
+  $effect(() => {
+    if (connectedReaderView) closeRestrictedOverlays()
+  })
 
   $effect(() => {
     if ($routeResourceLoadState.status !== 'loading') {
@@ -683,7 +718,7 @@
       {/if}
     </div>
   {/if}
-  {#if $alertStore.type !== 'none'}
+  {#if $alertStore.type !== 'none' && (!connectedReaderView || canShowReaderAlert($alertStore))}
     <LazyComponent loader={loadAlert} modal testId="alert" />
   {/if}
   {#if canApplyWriterRoutes}

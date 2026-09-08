@@ -243,6 +243,7 @@ async function runWriterTakeoverFlow(): Promise<void> {
     [language.writerTakeoverRefreshNow, language.writerTakeoverStayOffline],
     language.writerTakeoverBody,
     language.writerTakeoverTitle,
+    { purpose: 'client-session' },
   )
   if (writerAccessLostMutationReported) writerAccessLostMutationNotifier()
 

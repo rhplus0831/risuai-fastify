@@ -1,3 +1,4 @@
+import { canUseClientWriteAccess } from './clientSession'
 import type { Component } from 'svelte'
 import type { AppRoute } from './routerRoute'
 
@@ -142,6 +143,7 @@ const playgroundPageLoaders = new Map<number, RouteComponentLoader>([
 ])
 
 export function routeComponentLoaders(route: AppRoute): readonly RouteComponentLoader[] {
+  if (!canUseClientWriteAccess()) return []
   switch (route.kind) {
     case 'settings': {
       const pageLoader = settingsPageLoaders.get(route.index)

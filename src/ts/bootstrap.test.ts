@@ -1697,6 +1697,7 @@ describe('API-backed client bootstrap', () => {
       [language.writerConnectDisconnectExisting, language.cancel],
       language.writerConnectConflictBody,
       language.writerConnectConflictTitle,
+      { purpose: 'client-session' },
     )
     expect(bootstrapApi.fetch).toHaveBeenNthCalledWith(1)
     expect(bootstrapApi.fetch).toHaveBeenNthCalledWith(2, null, { disconnectExistingWriter: true })
@@ -5964,7 +5965,7 @@ describe('explicit connected writer switching', () => {
       [language.connectedReaders.setupThisServer],
       language.connectedReaders.setupServerBody,
       language.connectedReaders.setupServerTitle,
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), purpose: 'client-session' },
     )
     expect(bootstrapApi.fetch).not.toHaveBeenCalled()
     expect(commandApi.initialize).not.toHaveBeenCalled()
@@ -6049,7 +6050,7 @@ describe('explicit connected writer switching', () => {
       [language.writerConnectDisconnectExisting, language.cancel],
       language.writerConnectConflictBody,
       language.writerConnectConflictTitle,
-      { signal: expect.any(AbortSignal) },
+      { signal: expect.any(AbortSignal), purpose: 'client-session' },
     )
     held.resolve({ status: 'ok', revision: 9, scope: 'shell' })
     await expect(switching).resolves.toEqual({ status: 'promoted' })
