@@ -15,7 +15,11 @@ import type {
 
 const port = parentPort!
 const MAX_INTEGER = Number.MAX_SAFE_INTEGER
+// Keep in sync with the browser-free protocol constant; this native worker
+// intentionally has no runtime imports of transformed application modules.
+const JOURNAL_VERSION = 1
 let db: DatabaseSync | undefined
+let needsVersionMarker = false
 let limits: DiagnosticsJournalLimits
 let epoch = ''
 let lineageDigest = ''
@@ -101,6 +105,64 @@ function readRows(): StoredDiagnosticRow[] {
     .all(limits.maxRecordBytes, limits.maxEvents) as unknown as StoredDiagnosticRow[]
 }
 
+function inspectVersion(file: string): number {
+  const probe = new DatabaseSync(file, { readOnly: true })
+  try {
+    const version = Number((probe.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+    if (version !== 0 && version !== JOURNAL_VERSION) throw new Error()
+    const objects = probe
+      .prepare("SELECT type, name FROM sqlite_schema WHERE name NOT LIKE 'sqlite_%' ORDER BY name LIMIT 3")
+      .all() as { type: string; name: string }[]
+    if (objects.length === 0 && version === 0) return version
+    if (
+      JSON.stringify(objects.map(({ type, name }) => [type, name])) !==
+      JSON.stringify([
+        ['table', 'journal_metadata'],
+        ['table', 'journal_records'],
+      ])
+    )
+      throw new Error()
+    const expected: Record<string, string[]> = {
+      journal_metadata: [
+        'id:INTEGER:0:1',
+        'lineage_digest:TEXT:1:0',
+        'epoch:TEXT:1:0',
+        'last_sequence:INTEGER:1:0',
+        'dropped:INTEGER:1:0',
+        'rejected:INTEGER:1:0',
+        'pruned:INTEGER:1:0',
+      ],
+      journal_records: ['sequence:INTEGER:0:1', 'received_at:INTEGER:1:0', 'record:TEXT:1:0', 'browser_key:TEXT:0:0'],
+    }
+    for (const [table, columns] of Object.entries(expected)) {
+      const actual = probe.prepare(`PRAGMA table_info(${table})`).all() as {
+        name: string
+        type: string
+        notnull: number
+        pk: number
+      }[]
+      if (
+        JSON.stringify(actual.map((column) => `${column.name}:${column.type}:${column.notnull}:${column.pk}`)) !==
+        JSON.stringify(columns)
+      )
+        throw new Error()
+    }
+    const indexes = probe.prepare('PRAGMA index_list(journal_records)').all() as {
+      name: string
+      unique: number
+      origin: string
+      partial: number
+    }[]
+    if (indexes.length !== 1 || indexes[0].unique !== 1 || indexes[0].origin !== 'u' || indexes[0].partial !== 0)
+      throw new Error()
+    const indexed = probe.prepare('PRAGMA index_info(sqlite_autoindex_journal_records_1)').all() as { name: string }[]
+    if (indexed.length !== 1 || indexed[0].name !== 'browser_key') throw new Error()
+    return version
+  } finally {
+    probe.close()
+  }
+}
+
 function initialize(request: Extract<DiagnosticsJournalRequest, { kind: 'initialize' }>): void {
   limits = request.limits
   // Defense in depth: the main thread is the only producer of this protocol.
@@ -134,6 +196,7 @@ function initialize(request: Extract<DiagnosticsJournalRequest, { kind: 'initial
   } catch (cause) {
     if (!(cause && typeof cause === 'object' && 'code' in cause && cause.code === 'EEXIST')) throw cause
   }
+  needsVersionMarker = inspectVersion(file) === 0
   db = new DatabaseSync(file)
   db.exec(`
     PRAGMA trusted_schema = OFF;
@@ -291,6 +354,10 @@ port.on('message', (request: DiagnosticsJournalRequest) => {
           const remove = db.prepare('DELETE FROM journal_records WHERE sequence = ?')
           for (const sequence of request.sequences)
             counters.rejected = add(counters.rejected, Number(remove.run(sequence).changes))
+          if (needsVersionMarker) {
+            db.exec(`PRAGMA user_version = ${JOURNAL_VERSION}`)
+            needsVersionMarker = false
+          }
         }
         prune(request.now)
       }

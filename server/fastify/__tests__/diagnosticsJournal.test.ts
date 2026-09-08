@@ -10,6 +10,7 @@ import type { DiagnosticEventV2, DiagnosticJournalRecord } from '@risuai/protoco
 import {
   createDiagnosticsJournal,
   DIAGNOSTICS_JOURNAL_HARD_LIMITS,
+  DIAGNOSTICS_JOURNAL_VERSION,
   type DiagnosticsJournal,
   type DiagnosticsJournalOptions,
 } from '../src/diagnosticsJournal.js'
@@ -167,10 +168,55 @@ describe('bounded diagnostics journal', () => {
     ])
     const database = openStore()
     const metadata = database.prepare('SELECT * FROM journal_metadata').get()
+    expect(database.prepare('PRAGMA user_version').get()).toEqual({ user_version: DIAGNOSTICS_JOURNAL_VERSION })
     expect(JSON.stringify(metadata)).not.toContain(LINEAGE)
     database.close()
     expect((await stat(directory)).mode & 0o777).toBe(0o700)
     expect((await stat(path.join(directory, 'journal.sqlite'))).mode & 0o777).toBe(0o600)
+  })
+
+  it('refuses newer journal versions without modifying existing database bytes', async () => {
+    const journal = create()
+    journal.record(event())
+    await journal.ready
+    await journal.close()
+    const database = openStore()
+    database.exec('PRAGMA user_version = 2')
+    database.close()
+    const before = await readFile(path.join(directory, 'journal.sqlite'))
+    const restarted = create()
+    await restarted.ready
+    expect(restarted.read().source).toBe('unavailable')
+    expect(restarted.read().entries).toEqual([])
+    await restarted.close()
+    expect(await readFile(path.join(directory, 'journal.sqlite'))).toEqual(before)
+  })
+
+  it('migrates only the known unversioned topology after rejecting malformed records', async () => {
+    const journal = create()
+    journal.record(event())
+    await journal.ready
+    await journal.close()
+    const database = openStore()
+    database.exec('PRAGMA user_version = 0')
+    database.prepare('UPDATE journal_records SET record = ?').run(CANARY)
+    database.close()
+    const restarted = create()
+    await restarted.ready
+    expect(restarted.read().source).toBe('journal')
+    expect(restarted.read().entries).toEqual([])
+    expect(restarted.read().rejected).toBe(1)
+    await restarted.close()
+    const migrated = openStore()
+    expect(migrated.prepare('PRAGMA user_version').get()).toEqual({ user_version: DIAGNOSTICS_JOURNAL_VERSION })
+    migrated.exec('PRAGMA user_version = 0; CREATE TABLE unknown_format (value TEXT)')
+    migrated.close()
+    const before = await readFile(path.join(directory, 'journal.sqlite'))
+    const unknown = create()
+    await unknown.ready
+    expect(unknown.read().source).toBe('unavailable')
+    await unknown.close()
+    expect(await readFile(path.join(directory, 'journal.sqlite'))).toEqual(before)
   })
 
   it('bounds the outstanding queue and durably accounts for overflow without blocking callers', async () => {
@@ -345,6 +391,7 @@ describe('bounded diagnostics journal', () => {
     }
     const journal = create()
     expect(journal.record(browserEvent(), provenance)).toBe(true)
+    expect(journal.hasBrowserEvent(provenance.sourceId, provenance.eventId)).toBe(true)
     expect(journal.record(browserEvent(), { ...provenance, clientSequence: 2 })).toBe(false)
     provenance.eventId = 'e'.repeat(32)
     await journal.ready
@@ -354,6 +401,7 @@ describe('bounded diagnostics journal', () => {
     const original = { ...provenance, eventId: 'd'.repeat(32) }
     expect(restarted.read().entries[0].provenance).toEqual({ ...original, clientSequence: 1 })
     expect(restarted.record(browserEvent(), original)).toBe(false)
+    expect(restarted.hasBrowserEvent(original.sourceId, original.eventId)).toBe(true)
     expect(restarted.record(browserEvent(), { ...original, sourceId: 'f'.repeat(32) })).toBe(true)
     await waitUntil(() => restarted.read().entries.length === 2)
   })

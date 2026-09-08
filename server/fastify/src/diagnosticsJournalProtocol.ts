@@ -1,5 +1,7 @@
 import type { DiagnosticJournalRecord } from '@risuai/protocol/remote-diagnostics'
 
+export const DIAGNOSTICS_JOURNAL_VERSION = 1
+
 export interface DiagnosticsJournalLimits {
   maxAgeMs: number
   maxEvents: number

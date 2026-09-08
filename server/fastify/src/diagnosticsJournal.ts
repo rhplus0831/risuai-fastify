@@ -17,7 +17,7 @@ import {
   type StoredDiagnosticRow,
 } from './diagnosticsJournalProtocol.js'
 
-export { DIAGNOSTICS_JOURNAL_HARD_LIMITS } from './diagnosticsJournalProtocol.js'
+export { DIAGNOSTICS_JOURNAL_HARD_LIMITS, DIAGNOSTICS_JOURNAL_VERSION } from './diagnosticsJournalProtocol.js'
 
 export interface DiagnosticsJournalOptions {
   directory: string
@@ -43,6 +43,7 @@ export interface DiagnosticsJournal {
   readonly enabled: boolean
   readonly ready: Promise<void>
   record(entry: DiagnosticEventV2, provenance?: DiagnosticJournalRecord['provenance']): boolean
+  hasBrowserEvent(sourceId: string, eventId: string): boolean
   read(): DiagnosticsJournalRead
   reset(lineage: string): void
   close(): Promise<void>
@@ -265,7 +266,7 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
       send({ kind: 'reset', lineageDigest })
       return
     }
-    if (purgePending.length) {
+    if (purgePending.length || restoring !== undefined) {
       const sequences = purgePending
       purgePending = []
       send({ kind: 'purge', sequences })
@@ -313,12 +314,9 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
     const restored = restoreRows(response.entries)
     if (restored.invalid.length) purgePending.push(...restored.invalid)
     if (completed.request.kind === 'initialize') {
-      if (purgePending.length) restoring = restored.valid
-      else {
-        entries = restored.valid
-        initialized = true
-        settleReady()
-      }
+      // Confirm exact restoration even when no row needs removal; the worker
+      // stamps a legacy unversioned store only after this trusted boundary.
+      restoring = restored.valid
     } else if (completed.request.kind === 'purge' && restoring) {
       entries = restoring.filter((record) => retained.has(record.sequence))
       restoring = undefined
@@ -389,6 +387,12 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
   return {
     enabled,
     ready,
+    hasBrowserEvent(sourceId, eventId) {
+      if (!enabled || terminal || closing || !/^[a-f0-9]{32}$/.test(sourceId) || !/^[a-f0-9]{32}$/.test(eventId))
+        return false
+      if (now() >= nextExpiry) pruneMemory()
+      return dedup.has(`${sourceId}:${eventId}`)
+    },
     record(entry, provenance = { kind: 'server' }) {
       if (!enabled || closing || terminal) {
         if (enabled && terminal && !closing) pendingLoss.dropped = add(pendingLoss.dropped, 1)
