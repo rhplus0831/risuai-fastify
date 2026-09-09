@@ -69,6 +69,7 @@ test('Reader chat switching and close/reopen detach viewers while the same provi
     const { operation, attempt } = await startHeldGeneration(pair)
     await expect.poll(() => pair.provider.snapshot().viewers).toBe(2)
     for (let visit = 0; visit < 2; visit++) {
+      await pair.b.page.locator('[data-reader-go-back]').click()
       await pair.b.page.getByRole('button', { name: 'Open chat Other Chat', exact: true }).click()
       await expectGenerationReader(pair.b, OTHER_CHAT)
       await expect(pair.b.page.locator('[data-reader-transcript]')).not.toContainText(PARTIAL)
@@ -81,6 +82,7 @@ test('Reader chat switching and close/reopen detach viewers while the same provi
         done: false,
         aborted: false,
       })
+      await pair.b.page.locator('[data-reader-go-back]').click()
       await pair.b.page.getByRole('button', { name: 'Open chat Generation Chat', exact: true }).click()
       await expectGenerationReader(pair.b)
       await expectReaderPartial(pair.b)

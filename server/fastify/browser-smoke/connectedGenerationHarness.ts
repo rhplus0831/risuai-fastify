@@ -503,7 +503,7 @@ export async function expectGenerationReader(client: GenerationClient, chatId = 
     { timeout: 30_000 },
   )
   await expect(client.page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', chatId)
-  await expect(client.page.locator('[data-reader-composer] textarea')).toBeDisabled()
+  await expect(client.page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
   await expect
     .poll(() =>
       client.page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
