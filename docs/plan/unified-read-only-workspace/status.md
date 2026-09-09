@@ -2,11 +2,10 @@
 
 ## Current Cursor
 
-- State: **Active plan created; implementation has not started.**
-- Current phase: none accepted.
-- Next action: execute Phase 0 and ratify the source/action inventory,
-  reproducible performance baseline, numeric comparison thresholds, and one
-  whole-path rollout mechanism before runtime changes.
+- State: **Implementation in progress; Phase 0 accepted.**
+- Current phase: Phase 1, access and readiness model.
+- Next action: introduce the derived workspace access snapshot and explicit
+  reader display-route ownership without changing the visible path.
 - Source baseline reviewed: `6f6adea37b39f5b9d52b86d49558f3455fda8916`.
 - No runtime behavior has changed through this planning package.
 - Current architecture and test guides remain authoritative for shipped
@@ -30,15 +29,15 @@
 
 ## Phase Ledger
 
-| Phase                                                                                           | State   | Acceptance evidence |
-| ----------------------------------------------------------------------------------------------- | ------- | ------------------- |
-| [0. Contract, inventory, and baseline](phases/phase-0-contract-inventory-and-baseline.md)       | Pending | Not run             |
-| [1. Access and readiness model](phases/phase-1-access-and-readiness-model.md)                   | Pending | Not run             |
-| [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Pending | Not run             |
-| [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Pending | Not run             |
-| [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Pending | Not run             |
-| [5. Role transitions and performance](phases/phase-5-role-transitions-and-performance.md)       | Pending | Not run             |
-| [6. Rollout cleanup and closeout](phases/phase-6-rollout-cleanup-and-closeout.md)               | Pending | Not run             |
+| Phase                                                                                           | State    | Acceptance evidence                                                                                       |
+| ----------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------- |
+| [0. Contract, inventory, and baseline](phases/phase-0-contract-inventory-and-baseline.md)       | Accepted | Source/test inventory rechecked; five-sample small/large cold/warm baseline and thresholds recorded below |
+| [1. Access and readiness model](phases/phase-1-access-and-readiness-model.md)                   | Pending  | Not run                                                                                                   |
+| [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Pending  | Not run                                                                                                   |
+| [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Pending  | Not run                                                                                                   |
+| [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Pending  | Not run                                                                                                   |
+| [5. Role transitions and performance](phases/phase-5-role-transitions-and-performance.md)       | Pending  | Not run                                                                                                   |
+| [6. Rollout cleanup and closeout](phases/phase-6-rollout-cleanup-and-closeout.md)               | Pending  | Not run                                                                                                   |
 
 ## Decisions
 
@@ -72,6 +71,22 @@
   type/build/browser checks.
 - 2026-09-10: progress and verification are recorded only here. Phase documents
   remain stable work/acceptance contracts.
+- 2026-09-10: use the existing `VITE_FAST_BOOTSTRAP_OBSERVER` boundary as the
+  sole short-lived whole-path rollout control. The default/enabled cohort will
+  become role-first and unified; exact `FALSE` remains the complete conservative
+  writer-first rollback until Phase 6. Do not introduce another feature flag,
+  and remove the environment variable and smoke override after Phase 5 evidence
+  passes.
+- 2026-09-10: the canonical workspace snapshot will derive `booting`,
+  `read-only`, `promoting`, or `writer` from client-session and startup
+  readiness authority. Its independently reported capabilities are local
+  browsing, persisted writer-route application, mutation, and generation; the
+  snapshot is presentation state and never authorizes an operation.
+- 2026-09-10: reader navigation owns the browser URL and stable character/chat
+  IDs. Promotion preserves that display target, but the retained reader intent
+  will not enter `changeChar()` or `changeChatTo()` automatically. Only a new
+  writer-mode navigation action may update persisted selection or
+  `lastInteraction`.
 
 ## Planning Evidence
 
@@ -98,8 +113,83 @@ or run for this planning-only change.
 ## Progress Record
 
 - 2026-09-10: created the stable product/architecture contract, active status
-  ledger, source/test inventory, and seven-phase execution package. All runtime
-  implementation and phase acceptance remain pending.
+  ledger, source/test inventory, and seven-phase execution package. At that
+  revision all runtime implementation and phase acceptance remained pending.
+- 2026-09-10: accepted Phase 0 at instrumentation revision `d9c75b560` against
+  runtime baseline `0654259fc`. Rechecked the App/startup/session/readiness,
+  reader/writer navigation, transcript/composer, command/outbox, generation,
+  lifecycle, rollout, telemetry, browser, and documentation owners listed in
+  `inventory.md`; no durable schema, server authorization, or projection-fence
+  change is required.
+
+## Phase 0 Acceptance Evidence
+
+The baseline ran on Linux 7.0.0-31-generic x86-64 under KVM, an AMD Ryzen 9
+9950X host allocation with 10 vCPUs and 47 GiB RAM, Node.js 24.19.0, pnpm
+11.23.0, Playwright 1.62.1, and bundled Chromium. The deterministic small and
+large SQLite fixtures, cold browser/resource cache and subsequent warm reload
+were measured five times each. Raw ignored artifacts are under
+`fast-bootstrap-results/unified-read-only-workspace-baseline/`; the five
+instrumented matrix SHA-256 prefixes are `bb55c911`, `cf5f2a30`, `1217dc66`,
+`4d04987b`, and `185df01b`. Bundle and preload artifact prefixes are
+`066f4c3a` and `8e56a2b4`.
+
+Timing values are entry-relative milliseconds. Tail is the maximum sample,
+equivalent to the nearest-rank p95 for five repetitions.
+
+| Fixture/cache | Observer-ready median/tail | Writer-ready median/tail | Chat-ready median/tail | Background-ready median/tail | Long-task maximum median/tail |
+| ------------- | -------------------------- | ------------------------ | ---------------------- | ---------------------------- | ----------------------------- |
+| Small/cold    | 624.2 / 791.0              | 674.1 / 864.7            | 812.6 / 1076.5         | 814.4 / 1078.0               | 70 / 72                       |
+| Small/warm    | 262.4 / 338.0              | 304.8 / 384.8            | 390.0 / 532.4          | 391.0 / 533.2                | 0 / 0                         |
+| Large/cold    | 572.4 / 602.3              | 621.1 / 664.4            | 775.3 / 881.4          | 777.2 / 882.5                | 69 / 78                       |
+| Large/warm    | 238.0 / 259.2              | 274.0 / 295.8            | 378.1 / 385.9          | 379.2 / 387.7                | 0 / 0                         |
+
+Every one of the 20 cases performed two shell resource reads, mounted two
+`ConversationShell` elements, removed one, changed shell identity once, and
+mounted one observer workspace. All cases recorded zero early mutations, zero
+early generations, zero missing owned frames, and 0 px maximum horizontal
+delta. Cold cases recorded one 66–78 ms long task; warm cases recorded none.
+The tiny startup layout-shift sample was at most `0.0000373671`. Small/large
+resource payloads were 24,633/47,887 bytes cold and 7,008/34,255 bytes warm in
+the representative instrumented output. The production initial closure was 373
+modules and 175,954 gzip bytes; the immediate `appStartup` closure was 1,160
+modules and 1,160,147 gzip bytes. The largest initial chunk was 72,737 gzip
+bytes. Existing protected-boundary, HTML-preload, selected-locale, and size
+budgets passed.
+
+Frozen final comparison rules:
+
+- automatic writer and settled reader startup must each perform exactly one
+  shell read; automatic writer startup must record zero observer-workspace
+  mounts, one conversation-shell mount, zero removals, and zero identity changes;
+- reader promotion and writer demotion must record 0 px automatic horizontal
+  shell delta and zero missing owned frames; layout-shift entries remain
+  supporting evidence;
+- every measured case must keep zero mutations before writer-ready and zero
+  generation starts before chat-ready;
+- compare cold only with cold and warm only with warm. Each final readiness
+  median and nearest-rank p95 must be no worse than the matching baseline by
+  more than the greater of 20% or 75 ms; the maximum long task must not exceed
+  the matching baseline by more than 20 ms;
+- initial and immediate-startup gzip closures must not grow by more than 10%,
+  and the existing 921,600-byte total/512,000-byte largest initial milestone
+  gates and protected-boundary checks remain hard requirements; and
+- semantic request payload differences from removing the duplicate shell are
+  reviewed by resource, while no unchanged resource may grow by more than 10%.
+
+Phase 0 verification:
+
+| Command                                                                                        | Result                                                                                             |
+| ---------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| `pnpm measure:fast-bootstrap`                                                                  | Passed build, bundle/preload reports, and four-case startup matrix                                 |
+| Four additional startup-matrix repetitions before instrumentation                              | Passed; reproduced two shell reads and zero early operations in all 20 samples                     |
+| Five instrumented startup-matrix repetitions                                                   | Passed; deterministic double mount/removal/identity-change assertion and performance probes passed |
+| `pnpm exec prettier --write server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts` | Passed                                                                                             |
+| `git diff --check`                                                                             | Passed                                                                                             |
+
+The browser-only probe was the sole Phase 0 source change. It records mount,
+frame, layout-shift, and long-task evidence and does not change production
+startup or presentation behavior. No known Phase 0 work remains.
 
 For every completed slice, record the exact changed boundary, source revision,
 focused commands and outcomes, browser or performance artifacts where required,
