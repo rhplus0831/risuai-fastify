@@ -286,7 +286,10 @@ export class FastifyStorage {
         const keypair = canUseWebCrypto ? await this.getKeyPair() : null
         const publicKey = keypair ? await subtleCrypto()!.exportKey('jwk', keypair.publicKey) : null
         const smokePassword = fastifyBrowserSmokePassword()
-        const input = await digestPassword(smokePassword ?? (await alertInput(language.setNodePassword)))
+        const input = await digestPassword(
+          smokePassword ??
+            (await alertInput(language.setNodePassword, undefined, undefined, { purpose: 'client-session' })),
+        )
         const s = await fetch(ROUTES.setPassword, {
           method: 'POST',
           body: JSON.stringify({
@@ -307,7 +310,10 @@ export class FastifyStorage {
         const keypair = canUseWebCrypto ? await this.getKeyPair() : null
         const publicKey = keypair ? await subtleCrypto()!.exportKey('jwk', keypair.publicKey) : null
         const smokePassword = fastifyBrowserSmokePassword()
-        const input = await digestPassword(smokePassword ?? (await alertInput(language.inputNodePassword)))
+        const input = await digestPassword(
+          smokePassword ??
+            (await alertInput(language.inputNodePassword, undefined, undefined, { purpose: 'client-session' })),
+        )
 
         const s = await fetch(ROUTES.login, {
           method: 'POST',

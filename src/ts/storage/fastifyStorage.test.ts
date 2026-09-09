@@ -163,6 +163,9 @@ describe('FastifyStorage client', () => {
       publicKey: expect.objectContaining({ kty: 'EC' }),
     })
     expect(alertState.alertInput).toHaveBeenCalledTimes(1)
+    expect(alertState.alertInput).toHaveBeenCalledWith('Set Fastify password', undefined, undefined, {
+      purpose: 'client-session',
+    })
   })
 
   it('uses server-issued session auth when WebCrypto is unavailable', async () => {
@@ -228,6 +231,9 @@ describe('FastifyStorage client', () => {
     expect(calls[0].headers['risu-auth']).toBe('')
     expect(session.get('risuauth')).toBe(replacementToken)
     expect(alertState.alertInput).toHaveBeenCalledTimes(1)
+    expect(alertState.alertInput).toHaveBeenCalledWith('Input Fastify password', undefined, undefined, {
+      purpose: 'client-session',
+    })
   })
 })
 

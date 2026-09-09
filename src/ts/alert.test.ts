@@ -640,6 +640,22 @@ describe('cancellable required selections', () => {
   })
 })
 
+describe('client-session inputs', () => {
+  it('preserves the purpose on the displayed input alert', async () => {
+    const input = alertInput('Server password', undefined, undefined, { purpose: 'client-session' })
+
+    expect(alertTestState.alertStoreValue).toMatchObject({
+      type: 'input',
+      msg: 'Server password',
+      purpose: 'client-session',
+    })
+
+    const owner = alertTestState.alertStoreValue.dialogOwner as symbol
+    expect(resolveAlertInput(owner, 'password')).toBe(true)
+    await expect(input).resolves.toBe('password')
+  })
+})
+
 describe('alertError', () => {
   it('accepts non-string payloads with String coercion after Error handling', () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)

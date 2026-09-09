@@ -34,6 +34,7 @@ interface InputRequest {
   msg: string
   datalist: [string, string][]
   defaultValue: string
+  purpose?: 'client-session'
   resolve: (value: string) => void
 }
 
@@ -205,6 +206,7 @@ function displayResultDialog(request: ResultDialogRequest): void {
       datalist: request.datalist,
       defaultValue: request.defaultValue,
       dialogOwner: request.owner,
+      ...(request.purpose === undefined ? {} : { purpose: request.purpose }),
     })
     return
   }
@@ -340,13 +342,19 @@ function queueSelection(
   )
 }
 
-function queueInput(msg: string, datalist?: [string, string][], defaultValue?: string): Promise<string> {
+function queueInput(
+  msg: string,
+  datalist?: [string, string][],
+  defaultValue?: string,
+  options: { purpose?: 'client-session' } = {},
+): Promise<string> {
   return queueResultDialog<string>((resolve) => ({
     kind: 'input',
     owner: Symbol('alert-dialog'),
     msg,
     datalist: datalist ? [...datalist] : [],
     defaultValue: defaultValue ?? '',
+    ...(options.purpose === undefined ? {} : { purpose: options.purpose }),
     resolve,
   }))
 }
@@ -726,8 +734,13 @@ export async function alertRealmTerms() {
   return false
 }
 
-export async function alertInput(msg: string, datalist?: [string, string][], defaultValue?: string) {
-  return queueInput(msg, datalist, defaultValue)
+export async function alertInput(
+  msg: string,
+  datalist?: [string, string][],
+  defaultValue?: string,
+  options: { purpose?: 'client-session' } = {},
+) {
+  return queueInput(msg, datalist, defaultValue, options)
 }
 
 export async function alertModuleSelect() {

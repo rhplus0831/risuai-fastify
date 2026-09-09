@@ -1020,6 +1020,13 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(get(alertStore)).toMatchObject({ type: 'select', purpose: 'client-session' })
     expect(target.querySelector('[data-risu-lazy-surface="alert"]')).not.toBeNull()
     alertStore.set({ type: 'none', msg: '' })
+
+    alertStore.set({ type: 'input', purpose: 'client-session', msg: 'Server password' })
+    await tick()
+    expect(get(alertStore)).toMatchObject({ type: 'input', purpose: 'client-session' })
+    expect(target.querySelector('[data-risu-lazy-surface="alert"]')).not.toBeNull()
+    alertStore.set({ type: 'none', msg: '' })
+
     repromoteClientWriter()
     await tick()
     expect(get(CustomGUISettingMenuStore)).toBe(false)
