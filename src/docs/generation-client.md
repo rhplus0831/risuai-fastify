@@ -58,7 +58,7 @@ Important files:
   exists. This UI-only row never enters the transcript owner. Once the exact
   generation id appears, its stable operation-and-attempt presentation key is
   adopted by the real assistant row and retained across activity settlement. A
-  matching active-job projection bridges foreground observer replacement so
+  matching active-job projection bridges foreground viewer replacement so
   the row and its loading animation are not remounted during reattach.
 - `src/ts/process/reattach.ts` coordinates writer background recovery by durable
   `(databaseLineage, operationId)` authority. `jobId` and `attemptNo` remain
@@ -73,7 +73,7 @@ Important files:
   after that hydration. Pending finalization/effect recovery comes from the same
   bootstrap snapshot.
   `generationJobLifecycles` records attached, retrying, exhausted-dead,
-  completed, and cancelled observer state plus the last transport error. Retry,
+  completed, and cancelled viewer state plus the last transport error. Retry,
   Refresh, and Stop resolve a stale control through its recorded operation/chat
   lineage to the current exact authority. While a durable generation remains
   active, a failed foreground lifecycle probe receives bounded retries after
@@ -124,7 +124,7 @@ job, finalization, transcript, and pending-effect authority so a mounted mobile
 tab can recover even when its original connection was discarded before the id
 reached JavaScript. A stale-attempt response redirects only to an exact newer
 live descriptor; terminal/non-live responses and compatibility 404s force
-authority and transcript reconciliation before observer UI is settled. Viewer
+authority and transcript reconciliation before viewer UI is settled. Viewer
 transport failures never use the ordinary provider-error/inlay path until
 durable authority proves a terminal generation failure. Terminal `postGeneration` data
 can advance the revision cache, apply a server-owned `messagePatch`, render the

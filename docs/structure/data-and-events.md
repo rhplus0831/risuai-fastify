@@ -140,10 +140,9 @@ before any request is sent. Terminal validation, lineage, and mutation-ID
 conflicts follow contract-specific disposal and recovery paths; only the
 request-level permanent-rejection path guarantees a scope-naming notice.
 
-The conservative startup path may adopt one unambiguous pending owner before
-writer-intent bootstrap. Connected startup instead resolves an exclusive page
-identity and discovers server ownership; foreign pending work does not grant
-that page writer access. Once recovery is authorized, the browser prepares the
+Role-first startup resolves an exclusive page identity and discovers server
+ownership before considering local pending work; foreign pending work does not
+grant that page writer access. Once recovery is authorized, the browser prepares the
 outbox with its local session id plus the returned writer epoch and database
 lineage, flushes receipt acknowledgements, and replays current-scope work before
 hydration. Same-lineage rows for other sessions remain dormant;
@@ -397,8 +396,7 @@ confirmation handshake. Changing the writer advances the durable writer
 epoch; guarded routes reject stale sessions with `423 active_writer_stale`,
 including after restart.
 
-Connected readers are enabled by default; an exact build-time
-`VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` selects the conservative fallback.
+Connected readers are part of the sole startup path.
 `src/ts/connectedClientStartup.ts` first discovers ownership. An exclusive page
 may acquire an unowned server or conditionally resume its own writer; an
 initialized server owned by another session opens for reading even when that
@@ -417,12 +415,10 @@ encrypted intents stay scoped to their originating local session and lineage.
 Authentication loss clears protected projections immediately. Lineage changes
 invalidate old request, transcript, and cache identities before replacement.
 
-The explicit conservative fallback retains the older refresh-or-stay dialog:
-refresh reclaims through its writer flow, while stay closes communication and
-freezes the page with text still selectable and copyable. That compatibility
-choice is separate from an interrupted connected reader, which reconnects using
-authenticated reads. Changing the rollout flag does not itself delete local
-drafts or pending intents, and server writer guards apply to both client modes.
+An interrupted connected reader reconnects using authenticated reads without
+requesting writer acquisition. Writer drafts and pending intents remain scoped
+to their originating session and lineage, while server writer guards apply to
+every mutation path.
 
 `server/fastify/src/routeManifest.ts` is the source of truth for auth,
 active-writer, streaming, public exceptions, and read-only POST decisions.

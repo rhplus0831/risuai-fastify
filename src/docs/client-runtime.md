@@ -67,9 +67,7 @@ repeat writer recovery, pending-mutation replay, resource loading, event
 subscription, or another completed runtime step. `App.svelte`, commands, and
 generation operations consume the narrow capabilities directly.
 
-Connected-reader startup is enabled by default.
-`VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` selects the conservative writer-first
-fallback through `src/ts/observerShellFlag.ts`.
+Connected-reader and writer startup share one role-first path.
 
 `loadData()` in `src/ts/bootstrap.ts` performs the visible startup work:
 
@@ -82,14 +80,12 @@ fallback through `src/ts/observerShellFlag.ts`.
    tab exclusivity, automatic acquisition stays disabled; setting up a genuinely
    empty server requires explicit confirmation.
 2. For a reader, `installConnectedReaderProjection()` loads the coherent shell,
-   waits for its selected locale, publishes `observer-ready`, and starts
+   waits for its selected locale, publishes `reader-ready`, and starts
    `connectedReaderSync.ts`. Reader startup then settles without outbox replay,
    writer plugins, or generation-effect recovery. For a writer, acquisition is
    fenced by the discovered lineage and writer epoch, and the following steps
-   run under the accepted recovery operation. The conservative fallback
-   instead adopts a sole pending-mutation writer identity before writer bootstrap,
-   with takeover confirmation when another writer is connected. The
-   accepted writer response supplies operation/job, finalization/effect,
+   run under the accepted recovery operation. The accepted writer response
+   supplies operation/job, finalization/effect,
    translation, and protocol projections for recovery.
 3. If bootstrap reports `initialized: false`, issue the initialization command.
    The server's transactional classifier accepts only genuinely empty state and
@@ -107,12 +103,12 @@ fallback through `src/ts/observerShellFlag.ts`.
    revision, allowlisted initial visual/account/sidebar settings, and the
    versioned character-summary projection at that same revision. It excludes
    collections, provider credentials, selected detail, prompt bodies, chats,
-   and inlays. When a reader projection was already visible, this post-replay
-   read must replace it at an equal or newer revision.
+   and inlays. During explicit reader promotion, this post-replay read replaces
+   the retained reader projection at an equal or newer revision.
 6. Seed selected-character identity from the summary projection, reset body and
    lorebook hydration, install the known-server and applied-event revision
    cursors, configure command reconciliation, apply the shell's visual settings,
-   and publish `observer-ready` if a coherent read view was not already visible.
+   and publish `reader-ready` if a coherent read view was not already visible.
    Marker-bearing summaries remain distinct from full character rows.
 7. Seed generation operations/jobs, writer-scoped generation-finalization and
    pending-effect state, and separate message/greeting translation recovery;
@@ -156,21 +152,20 @@ Visible startup bugs often sit at the boundary between coordinator
 capabilities, `selectedCharID`, resource application, route application, lazy
 body reads, and CSS variable updates.
 
-A coherent locale-ready shell may render while automatic writer acquisition or
-initial recovery is unresolved. `canUseClientReaderContent()` keeps character
-detail, transcript body, display, and greeting work behind a separate content
-gate, so the preview cannot show a prospective writer's raw text before its
-display runtime is ready. The session records actual authenticated reading or
+A settled reader may retain a coherent locale-ready shell while explicit writer
+promotion or recovery is unresolved. `canUseClientReaderContent()` keeps
+character detail, transcript body, display, and greeting work behind a separate
+content gate. Automatic writer candidates remain on the loading boundary. The
+session records actual authenticated reading or
 writing disposition before publishing it, retains that readiness through later
 promotion and interrupted recovery, and resets it on authentication/session or
 lineage replacement. Shell readiness and mutation authority remain separate.
 
-If the initial shell or locale read fails before projection readiness,
-`bootstrap.ts` retains the unresolved startup operation, presents the error,
-and retries that startup boundary after acknowledgement. It does not silently
-settle the prospective writer as a permanent reader. Authentication loss, a
-superseding session, or a fatal bootstrap error while acknowledgement is
-pending prevents the old retry from continuing.
+If a reader shell or locale read fails before projection readiness,
+`bootstrap.ts` retains the unresolved startup operation only while the same
+authenticated session remains current. A writer that already acquired authority
+stays hidden in fenced `recovering-writer` state and revalidates ownership before
+resuming. Neither case silently exposes a prospective writer as a reader.
 
 For a managed reader, `canRenderShell` and `canApplyRoutes` expose the coherent
 read view and local navigation. `App.svelte` separately gates writer route
@@ -178,7 +173,7 @@ application, so those read capabilities never enable persisted selection,
 `canMutate`, or `canGenerate`. Watching generation uses the independent reader
 viewer described in [Generation Client](generation-client.md#connected-reader-observation).
 
-`ObserverShell.svelte` exposes **Use this device** for explicit promotion.
+`Workspace.svelte` exposes the top-right **Use this device** action for explicit promotion.
 `promoteConnectedReader()` shares one attempt, refreshes ownership, and submits
 acquisition against the exact discovered lineage and writer epoch. Disconnect
 confirmation, when required, retains that same precondition. The read stream
@@ -188,9 +183,10 @@ writer events before mutation capability opens; plugins, generation effects,
 and chat dependencies still gate `canGenerate`. A current operation's cancellation
 or recovery failure returns to reading only while authenticated under the same
 lineage. Superseded attempts cannot change a newer operation's role. Remaining
-intent stays retained, and reader refresh never submits it. The latest local
-route is consumed only after authorized route application succeeds for the
-current writer.
+intent stays retained, and reader refresh never submits it. On promotion, App
+consumes the reader-only route intent and reconciles the URL to persisted writer
+state without invoking selection handlers; only a new writer-mode navigation
+may persist selection or `lastInteraction`.
 
 A foreign writer event revokes write authority synchronously, captures local
 drafts, and stops authority-bearing work before the UI returns to reading.
@@ -235,8 +231,8 @@ The main client boundaries are:
 
 Reader navigation and passive appearance share the same certification boundary.
 Resource/receipt consumers copy allowlisted order, folders, pins and visual
-settings before applying optimistic writer overlays. Shared presentation has no
-independent rollout flag and does not start writer route warming, composer
+settings before applying optimistic writer overlays. Reader presentation does
+not start writer route warming, composer
 recovery or plugins. Restricted route/overlay/script actions check current
 authority, while explicit takeover retains only valid local reading intent.
 
@@ -419,12 +415,6 @@ Managed startup never acquires a foreign writer just because its event
 connection is absent. **Use this device** performs explicit conditional
 acquisition and recovery against freshly discovered ownership.
 
-With `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE`, the conservative path retains its
-refresh-or-stay flow. It closes writer resource/hydration/translation/reattach
-services; staying offline freezes editable controls and adds the reload banner
-while keeping text selectable. Refresh re-enters conservative writer bootstrap,
-including connected-writer takeover confirmation when required.
-
 Managed import/restore observation can replace the lineage in place, enter
 reading even when the server still names the same writer session, and install
 new authoritative resources without reloading the document. Still-valid local
@@ -432,9 +422,8 @@ routes remain available; explicit writer recovery restores their authoring
 view. Once that transition advances the client generation, a delayed
 old-lineage command response cannot trigger a reload or restore old state.
 A lineage conflict belonging to the still-current generation, and unsafe
-pending-mutation predecessor recovery, retain forced-reload paths; conservative
-old-lineage command recovery uses those paths. Inspect `bootstrap.ts`,
-`connectedReaderSync.ts`, `observerProjectionLifecycle.ts`, and the command's
+pending-mutation predecessor recovery retain forced-reload paths. Inspect `bootstrap.ts`,
+`connectedReaderSync.ts`, `readerProjectionLifecycle.ts`, and the command's
 captured generation before assuming every lineage change requires a reload.
 
 ## Generation Client
@@ -533,10 +522,8 @@ precedence stays in the focused guides linked above.
   their concrete endpoints.
 - Writer route effects require App's `canApplyWriterRoutes`. Managed readers
   keep `canApplyRoutes` for local navigation without persisted selection;
-  initial shell previews also defer automatic route repair until reader content
-  is admitted.
-- CSS variables are applied before the conservative `writer-ready` shell
-  boundary. A theme bug may
+  automatic writer candidates remain behind the loading boundary.
+- CSS variables are applied before the `writer-ready` shell boundary. A theme bug may
   be runtime state, not component markup.
 - Plugins can add visible menu items and buttons. Check plugin stores before
   assuming a component owns every visible control.

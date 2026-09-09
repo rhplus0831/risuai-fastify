@@ -219,24 +219,24 @@ Display summaries can also contain an optional `preparation` breakdown. Older
 records without it remain valid. Collection uses the same diagnostic context;
 no extra production flag, profiling endpoint, or raw payload capture is needed.
 
-| Field | Measurement boundary |
-| --- | --- |
-| `loadPath` | `selected` row loading or `legacy` compatibility fallback. |
-| `loads.<owner>.readMs` | Existing SQLite statement preparation/binding, execution and returned-row materialization; excludes JavaScript JSON parsing. Owners are `settings`, `target`, `messages`, `memory`, `promptPresets`, `personas`, and `modules`. |
-| `loads.<owner>.parseMs` | Existing `JSON.parse` calls, including failed attempts; excludes byte accounting and subsequent compatibility repair/selection. |
-| `loads.<owner>.jsonValues` / `jsonSize` | Number of JSON strings attempted and cumulative UTF-8 size bucket. The joined `target` read normally parses two strings (character and chat), so this is not a SQL row count. Missing rows have no parse/size fields. |
-| `configurationMs` | Prompt/persona/module selection and construction of the scoped configuration, including their nested read/parse measurements. |
-| `legacyLoadMs` | Entire broad compatibility load when selected rows cannot serve the request. Its internals are not attributed to selected-owner measurements. |
-| `dependencyBuildMs` | Construct the selected shared dependency object, including transcript projection. |
-| `dependencyNormalizeMs` | Recursively copy dependency objects/arrays into canonical key order. |
-| `dependencySerializeMs` | Serialize that normalized graph once with `JSON.stringify`. |
-| `dependencyHashMs` | SHA-256 over the serialized string, including hash input encoding. |
-| `dependencyJsonSize` | UTF-8 size bucket of that same serialized string. With transform v3, module digests replace full module bodies here. |
-| `moduleBodyCacheHitCount` / `moduleBodyCacheMissCount` / `moduleBodyCacheBypassCount` | Selected module rows reused, loaded, or too large to retain. Bypasses are a subset of misses. |
-| `moduleDigestCacheHitCount` / `moduleDigestCacheMissCount` | Active immutable module fingerprints reused or computed. |
-| `moduleFreezeMs` | Admission/freezing work on body misses; includes cache eviction/accounting. |
-| `moduleNormalizeMs` / `moduleSerializeMs` / `moduleHashMs` | Canonicalization, serialization, and SHA-256 for module digest misses only. Nested within `sharedDependencyMs`, separate from the small combined dependency stages. |
-| `measurementMs` | Extra size/count accounting work; excludes general timer/callback overhead. |
+| Field                                                                                 | Measurement boundary                                                                                                                                                                                                            |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `loadPath`                                                                            | `selected` row loading or `legacy` compatibility fallback.                                                                                                                                                                      |
+| `loads.<owner>.readMs`                                                                | Existing SQLite statement preparation/binding, execution and returned-row materialization; excludes JavaScript JSON parsing. Owners are `settings`, `target`, `messages`, `memory`, `promptPresets`, `personas`, and `modules`. |
+| `loads.<owner>.parseMs`                                                               | Existing `JSON.parse` calls, including failed attempts; excludes byte accounting and subsequent compatibility repair/selection.                                                                                                 |
+| `loads.<owner>.jsonValues` / `jsonSize`                                               | Number of JSON strings attempted and cumulative UTF-8 size bucket. The joined `target` read normally parses two strings (character and chat), so this is not a SQL row count. Missing rows have no parse/size fields.           |
+| `configurationMs`                                                                     | Prompt/persona/module selection and construction of the scoped configuration, including their nested read/parse measurements.                                                                                                   |
+| `legacyLoadMs`                                                                        | Entire broad compatibility load when selected rows cannot serve the request. Its internals are not attributed to selected-owner measurements.                                                                                   |
+| `dependencyBuildMs`                                                                   | Construct the selected shared dependency object, including transcript projection.                                                                                                                                               |
+| `dependencyNormalizeMs`                                                               | Recursively copy dependency objects/arrays into canonical key order.                                                                                                                                                            |
+| `dependencySerializeMs`                                                               | Serialize that normalized graph once with `JSON.stringify`.                                                                                                                                                                     |
+| `dependencyHashMs`                                                                    | SHA-256 over the serialized string, including hash input encoding.                                                                                                                                                              |
+| `dependencyJsonSize`                                                                  | UTF-8 size bucket of that same serialized string. With transform v3, module digests replace full module bodies here.                                                                                                            |
+| `moduleBodyCacheHitCount` / `moduleBodyCacheMissCount` / `moduleBodyCacheBypassCount` | Selected module rows reused, loaded, or too large to retain. Bypasses are a subset of misses.                                                                                                                                   |
+| `moduleDigestCacheHitCount` / `moduleDigestCacheMissCount`                            | Active immutable module fingerprints reused or computed.                                                                                                                                                                        |
+| `moduleFreezeMs`                                                                      | Admission/freezing work on body misses; includes cache eviction/accounting.                                                                                                                                                     |
+| `moduleNormalizeMs` / `moduleSerializeMs` / `moduleHashMs`                            | Canonicalization, serialization, and SHA-256 for module digest misses only. Nested within `sharedDependencyMs`, separate from the small combined dependency stages.                                                             |
+| `measurementMs`                                                                       | Extra size/count accounting work; excludes general timer/callback overhead.                                                                                                                                                     |
 
 Size buckets have upper bounds of 4 KiB, 64 KiB, 1 MiB, 4 MiB, 16 MiB and
 64 MiB, plus `none` and `over-64MiB`. Input counts include active modules,
@@ -451,14 +451,13 @@ Implementation owners are `server/fastify/src/clientDiagnostics.ts`,
 
 Browser startup telemetry is an opt-in `browser_startup` protocol metric. Set
 `RISU_PROTOCOL_METRICS=1` (or another documented truthy value) on a Fastify
-instance to advertise `{ version: 1, sampleRate: 1 }` in its authenticated
+instance to advertise `{ version: 2, sampleRate: 1 }` in its authenticated
 bootstrap response. The browser starts a best-effort publisher before its first
 startup attempt, but sends nothing unless that response opts in. A missing,
 malformed, or unsupported configuration disables collection and clears the
-pending queue. Version 1 is deliberately unsampled: `sampleRate: 1` means every
-startup served by an opted-in instance is measured. Use deployment/server
-cohorts for a bounded rollout; version 1 does not perform per-browser random
-sampling.
+pending queue. Version 2 is deliberately unsampled: `sampleRate: 1` means every
+startup served by an opted-in instance is measured; it does not perform
+per-browser random sampling.
 
 The authenticated `POST /api/v1/telemetry/startup` route accepts at most 16 KiB
 and 32 events per batch without requiring active-writer ownership. Before
@@ -472,12 +471,11 @@ log sink must cap raw `browser_startup` retention at 14 days; derived aggregates
 may be retained for at most 90 days. Record the sink owner and deletion policy
 before using those aggregates for a rollout decision.
 
-The v1 event contract contains only:
+The v2 event contract contains only:
 
-- `phase-ready`: stable milestone, monotonic duration from `entry`, bounded
-  attempt count, and observer-shell rollout mode;
-- `attempt-completed`: bounded attempt duration, attempt count, and rollout
-  mode;
+- `phase-ready`: stable milestone, monotonic duration from `entry`, and bounded
+  attempt count;
+- `attempt-completed`: bounded attempt duration and attempt count;
 - `attempt-failed`: those attempt fields plus a stable failure code and
   milestone; and
 - `diagnostic-failure`: a stable code and milestone for a localized capability
@@ -493,25 +491,25 @@ in a gzip sidecar. Auth headers retain the request tracer's normal redaction.
 
 Aggregate `phase-ready.entryDurationMs` and
 `attempt-completed.attemptDurationMs` as distributions grouped by schema
-version, milestone, and `observerShellEnabled`. Track retry pressure from
+version and milestone. Track retry pressure from
 `attemptCount`, fatal startup outcomes from `attempt-failed`, and localized
 capability health from `diagnostic-failure`. Do not group by request UID or join
-it to user/domain data. Compare small/large-database and observer flag-off/on
-cohorts before rollout; a duration regression, rising retry count, or new fatal
+it to user/domain data. Compare small/large-database and cold/warm populations;
+a duration regression, rising retry count, or new fatal
 failure rate blocks promotion even if background readiness eventually arrives.
 
 ### Startup failure-code taxonomy
 
-| Code                                        | Meaning                                                                                 |
-| ------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `writer-bootstrap-failed`                   | The writer bootstrap attempt could not establish its required observer/writer boundary. |
-| `push-initialization-failed`                | Optional push-notification runtime initialization failed before background readiness.   |
-| `plugin-initialization-failed`              | Plugin runtime initialization did not reach coherent plugin readiness.                  |
-| `generation-recovery-failed`                | Startup could not reconcile or reattach the active generation projection.               |
-| `selected-character-hydration-failed`       | The selected character detail needed for chat readiness could not be hydrated.          |
-| `selected-chat-hydration-failed`            | The selected chat/message projection needed for chat readiness could not be hydrated.   |
-| `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated.        |
-| `runtime-initialization-failed`             | Another optional background runtime failed before background readiness.                 |
+| Code                                        | Meaning                                                                               |
+| ------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `writer-bootstrap-failed`                   | Startup could not establish its required reader or writer boundary.                   |
+| `push-initialization-failed`                | Optional push-notification runtime initialization failed before background readiness. |
+| `plugin-initialization-failed`              | Plugin runtime initialization did not reach coherent plugin readiness.                |
+| `generation-recovery-failed`                | Startup could not reconcile or reattach the active generation projection.             |
+| `selected-character-hydration-failed`       | The selected character detail needed for chat readiness could not be hydrated.        |
+| `selected-chat-hydration-failed`            | The selected chat/message projection needed for chat readiness could not be hydrated. |
+| `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated.      |
+| `runtime-initialization-failed`             | Another optional background runtime failed before background readiness.               |
 
 Telemetry is diagnostic-only on both sides. Browser listener exceptions,
 authentication failures, network errors, and rejected fetch promises are
@@ -540,9 +538,9 @@ minimal deterministic character/chat database. The large fixture in
 `test/fixtures/largeCorpusFixture.ts` is shared with client/server load-cost
 tests and deliberately expands characters, chats, messages, collections,
 lorebooks, and summary fields. Cold and warm browser/resource caches remain
-separate populations. The integration matrix runs both fixtures with the
-observer override disabled and enabled, derives direct-link cases from the
-production route manifest, and uses isolated fixtures for replay, event-gap,
+separate populations. The integration matrix runs both fixtures through the
+sole role-first path, derives direct-link cases from the production route
+manifest, and uses isolated fixtures for replay, event-gap,
 takeover, and failure-injection journeys. Direct links run in independently
 isolated batches in `startupDirectLinks.spec.ts`; the remaining journeys stay
 file-serial in `startupRecoveryIntegrationMatrix.spec.ts`. Each worker writes a
@@ -561,12 +559,12 @@ part of startup readiness or prove immediate-reload cache completeness.
 
 Generated files are local evidence and are ignored by Git:
 
-| Files under `fast-bootstrap-results/`      | Contents                                                                                                                            |
-| ------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `bundle-boundaries.json` / `.txt`          | Entry and immediate-startup closures, HTML-preload agreement, protected-boundary violations, and largest chunks.                    |
-| `initial-preload.json` / `.txt`            | Initial JavaScript files, raw/gzip totals, largest file, and both budget comparisons.                                               |
-| `startup-matrix.json` / `.txt`             | Small/large cold/warm milestones, payload/cache totals, early mutation/generation counts, request UIDs, and safe trace summaries.   |
-| `fast-bootstrap-integration.json` / `.txt` | Observer flag-off/on timings, direct links, replay/event-gap results, takeover results, and optional-runtime failure/retry results. |
+| Files under `fast-bootstrap-results/`      | Contents                                                                                                                          |
+| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
+| `bundle-boundaries.json` / `.txt`          | Entry and immediate-startup closures, HTML-preload agreement, protected-boundary violations, and largest chunks.                  |
+| `initial-preload.json` / `.txt`            | Initial JavaScript files, raw/gzip totals, largest file, and both budget comparisons.                                             |
+| `startup-matrix.json` / `.txt`             | Small/large cold/warm milestones, payload/cache totals, early mutation/generation counts, request UIDs, and safe trace summaries. |
+| `fast-bootstrap-integration.json` / `.txt` | Role-first startup timings, direct links, replay/event-gap results, takeover results, and optional-runtime failure/retry results. |
 
 `util/initial-preload-budgets.json` is authoritative. The ratified hard gates are
 921,600 bytes (900 KiB) total initial JavaScript gzip and 512,000 bytes (500
@@ -684,14 +682,13 @@ Local/dev:
 
 Client/build:
 
-| Variable                                                                         | Notes                                                                                                                                                                                                                                                    |
-| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                                                                                                                                                   |
-| `VITE_FAST_BOOTSTRAP_OBSERVER`                                                   | Connected readers are enabled by default; exact `FALSE` selects the conservative writer-first fallback. This is a build-time setting: rebuild the SPA and reload clients. The flag itself does not clear originating drafts or encrypted pending intent. |
-| `VITE_RISU_BUILD_ID`                                                             | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed.                                                                                                                    |
-| `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                                                                                                                                                         |
-| `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell.                                                                                                                                  |
-| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                                                                                                                                                     |
+| Variable                                                                         | Notes                                                                                                                                 |
+| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                                |
+| `VITE_RISU_BUILD_ID`                                                             | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed. |
+| `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                                      |
+| `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell.               |
+| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                                  |
 
 Test/audit summary variables include `RISU_TEST_INCLUDE_GATES`,
 `UPDATE_FIXTURES`, `RISU_DIRECT_REALM_IMPORT_TEST`,

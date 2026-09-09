@@ -324,12 +324,9 @@ that successful recovery restores writes. Current cancelled/failed attempts
 return to reading while authenticated under the same lineage; superseded
 attempts cannot change a newer role. Interrupted writers revalidate their own
 ownership before resuming, and become readers when another session has won.
-An exact `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` build retains the conservative
-refresh-or-freeze flow without deleting drafts or pending intents.
-
-Authentication loss clears observer route intent, optional hydration, disposable
+Authentication loss clears reader route intent, optional hydration, disposable
 cache state, authenticated projections, selection, and command/event revisions.
-Database replacement or lineage change clears observer-era intent, hydration,
+Database replacement or lineage change clears reader intent, hydration,
 and cache identities while retaining the authenticated shell only until its
 authoritative replacement is ready.
 

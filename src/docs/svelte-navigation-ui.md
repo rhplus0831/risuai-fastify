@@ -14,7 +14,7 @@ routes and shell priority.
 | Symptom                                                                | Inspect first                                                                   | Then inspect                                                                   |
 | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
 | Sidebar route, tab, character, folder, or grid button is wrong         | `src/lib/SideBars/Sidebar.svelte`                                               | `src/ts/router.ts`, `src/ts/stores.svelte.ts`                                  |
-| Reader selection, missing-chat fallback, or Use this device is wrong   | `src/lib/ObserverShell.svelte`                                                  | `src/ts/readerRouteScope.ts`, `src/ts/bootstrap.ts`, `src/ts/clientSession.ts` |
+| Reader selection, missing-chat fallback, or Use this device is wrong   | `src/lib/Workspace.svelte`, `SideBars/ReaderNavigation.svelte`                  | `src/ts/readerRouteScope.ts`, `src/ts/bootstrap.ts`, `src/ts/clientSession.ts` |
 | Chat list, chat folder, branch graph, or export/reset flow is wrong    | `src/lib/SideBars/SideChatList.svelte`                                          | `src/ts/chatCommands.ts`, `src/ts/server/chatMessageHydration.svelte.ts`       |
 | Character profile, media, lorebook, scripts, or TTS editor is wrong    | `src/lib/SideBars/CharConfig.svelte`                                            | The focused bridge/upload helper under `src/ts/server/`                        |
 | Character/chat reorder is stale, duplicated, or treated as file import | `src/lib/SideBars/sidebarDrag.ts`, `SideChatList.svelte`, `src/ts/dragTypes.ts` | [Drag, Drop, And Reordering](#drag-drop-and-reordering)                        |
@@ -72,8 +72,8 @@ is stored on the exact history entry through `src/ts/router.ts`.
 
 ## Connected Reader Navigation
 
-`ObserverShell.svelte` retains the connected reader controller and supplies it
-to the same `ConversationShell.svelte` frame as the writer. It also uses the
+`Workspace.svelte` retains the connected reader controller and supplies it to
+the same persistent `ConversationShell.svelte` frame as the writer. It also uses the
 same presentation primitives as the writer: `NavigationRail.svelte`,
 `NavigationButton.svelte`, `SidebarAvatar.svelte`, `PinnedChatsRail.svelte`,
 `ChatSelectionButton.svelte` and `CharacterCatalogView.svelte`. The writer
@@ -91,8 +91,9 @@ filters ambiguous/missing identities, orders active characters and derives pins
 from shell summaries or hydrated details. Folder expansion, character/chat
 search, grid/list presentation and drawer state stay local. Auth/database
 identity changes clear that state; reconnect keeps valid reading navigation.
-The same navigation presentation hosts the conservative shell preview. On
-responsive screens the hidden reader drawer stays mounted so search/folder
+When a reader chat is open, only the Back branch is interactive; an inert rail
+spacer preserves the canonical desktop width. On responsive screens the hidden
+reader drawer stays mounted so search/folder
 state survives ordinary open/close cycles; `modalFocusTrap` activates only
 while it is visible and retains Escape dismissal and focus restoration.
 
@@ -101,7 +102,7 @@ Home/grid and stable character/chat routes do not update `selectedCharID`,
 controls are disabled with localized reasons. In-app restricted navigation,
 shortcuts and writer route warming reject reader activation. Direct restricted
 URLs show a shared-shell write-access gate with Home and a valid Return to
-reading action. Only valid reading routes become `observerRouteIntent.ts`
+reading action. Only valid reading routes become `readerRouteIntent.ts`
 promotion intent; blocked pages cannot reopen an old restricted surface. The
 writer chat list loads Toggles lazily behind current authority and session
 checks, keeping its Settings renderer dependencies out of reader startup.
@@ -114,11 +115,10 @@ completion by its own lifetime, so an older successful handler cannot replace
 the newer visible route or consume a later intent. Startup's `background-ready`
 milestone does not mean the initial route handler has finished.
 
-During unresolved automatic writer startup, the coherent shell and local
-navigation stay visible. `canUseClientReaderContent()` defers character-detail
-reads, transcript mounting, and automatic missing-route repair until an actual
-reading or writing disposition has settled. A provisional shell therefore
-cannot replace a deep link that writer recovery has yet to reconcile.
+During unresolved automatic writer startup, the workspace stays behind the
+loading boundary. `canUseClientReaderContent()` admits character-detail reads,
+transcript mounting, and missing-route repair only after a reading or writing
+disposition has settled.
 
 `readerRouteScope.ts` resolves only unique character/chat identities from the
 certified reader projection. A shell triggers a fenced detail read. An
@@ -130,12 +130,11 @@ Ambiguous identities remain unavailable instead of selecting the first match.
 its read-only rendering contract is in
 [Svelte Chat UI](svelte-chat-ui.md#connected-reader-transcript).
 
-`ReaderTakeoverAction.svelte` owns the one explicit **Use this device** action,
-read-only badge, lifecycle announcement, and operation result. It is
-bottom-aligned in the main action region: conversation routes include the
-disabled composer-equivalent field, while Home, Grid, character, restricted,
-loading, and error routes use the same action component without a field. There
-is no reader-only top layout row or duplicate transcript action.
+`DeviceAccessAction.svelte` owns the one explicit **Use this device** action,
+read-only badge, lifecycle announcement, and operation result. It stays at the
+safe-area-aware top-right of the visual workspace and becomes icon-only on
+small screens. `ReaderTranscript.svelte` reserves matching header clearance;
+the contained disabled composer is a separate pure presentation component.
 
 The action is available only from a connected reader, shares an in-progress
 attempt, and keeps reading/local navigation available while takeover
@@ -148,8 +147,8 @@ generation. Reconnect and ordinary reader navigation do not request takeover.
 A demoted writer returns to the reader surface with its local route and captured
 editor/composer drafts retained. `WriterDraftRecovery.svelte` exposes those
 local copies without presenting them as committed messages or replaying them
-from the reader. Ownership discovery, recovery, and the conservative startup
-fallback belong in [Client Runtime](client-runtime.md#startup-sequence).
+from the reader. Ownership discovery and recovery belong in
+[Client Runtime](client-runtime.md#startup-sequence).
 
 ## Character Folder Opening
 

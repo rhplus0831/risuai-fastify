@@ -161,7 +161,7 @@ writes before the warm reload. Startup readiness itself does not wait for those
 writes; the test does not flush them or change the measured readiness boundary.
 `startupDirectLinks.spec.ts` runs every production route-manifest direct-link
 family in four independently isolated batches. `startupRecoveryIntegrationMatrix.spec.ts`
-runs flag-off/on startup, offline and response-loss replay, a real
+runs role-first startup, response-loss replay, a real
 `event_replay_unavailable` recovery, multi-tab denial/takeover/promotion, and
 slow/failing optional-runtime Retry. Per-worker partials are merged after the
 Playwright run into `fast-bootstrap-results/fast-bootstrap-integration.{json,txt}`, with

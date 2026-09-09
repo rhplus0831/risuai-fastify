@@ -3,6 +3,7 @@
 Last audited: 2026-08-31.
 Targeted source check: 2026-09-05 (display paint-cache ownership).
 Targeted source check: 2026-09-08 (connected-reader startup and generation reads).
+Targeted source check: 2026-09-10 (role-first unified workspace).
 
 This guide owns the Fastify-to-browser read boundary: bootstrap resources,
 root and targeted REST reads, hash-verified cache substitution, lazy body
@@ -18,10 +19,7 @@ the [architecture index](README.md) for adjacent ownership.
 `src/ts/startupReadiness.ts` publishes monotonic milestones and the narrow
 capabilities consumed by the shell and protocol adapters:
 
-- Connected readers are enabled by default unless the build-time
-  `VITE_FAST_BOOTSTRAP_OBSERVER` value is exactly `FALSE`. This single rollout
-  switch retains the conservative writer-first fallback. Connected startup
-  resolves a page identity, discovers ownership through authenticated read-only
+- Connected startup always resolves a page identity, discovers ownership through authenticated read-only
   bootstrap, and installs a coherent shell for initialized state. An exclusive
   page may conditionally acquire an unowned server or resume its own writer;
   a foreign owner remains authoritative even while disconnected, so other pages
@@ -30,8 +28,8 @@ capabilities consumed by the shell and protocol adapters:
   as preconditions. A stale discovery returns `409 active_writer_changed`; a
   connected foreign writer additionally returns `409 active_writer_connected`
   until the user confirms disconnection. **Use this device** is the explicit
-  reader acquisition path. The conservative fallback separately retains its
-  pre-bootstrap adoption of one unambiguous local pending-mutation owner.
+  reader acquisition path. Pending-mutation ownership is considered only after
+  the current page has acquired and authenticated writer recovery.
 - A successful writer bootstrap is deliberately runtime-only metadata:
   initialization state, revision/schema version, database lineage, durable
   writer epoch, the pre-takeover writer verdict, asset base URL, generation and
@@ -64,9 +62,9 @@ capabilities consumed by the shell and protocol adapters:
   catalog. Strictly validated summaries become marker-bearing compatibility
   shells with message-free chat identity stubs; detail, messages, per-chat Hypa
   V3 data, lore, and reroll alternates remain lazy.
-- The writer path always reads and applies a post-replay shell, even if an
-  observer shell is already visible. That equal-or-newer projection replaces
-  observer-era summary/detail state, installs the known-server and applied-event
+- The writer path reads and applies one post-replay shell after authority is
+  acquired. That authoritative projection replaces any retained reader
+  summary/detail state, installs the known-server and applied-event
   cursors, and starts command reconciliation. Startup then records runtime/job
   projections, starts owner-mutation and hydration lifecycles, and subscribes to
   `/api/v1/events` from the applied shell revision. Only an accepted event
@@ -80,10 +78,9 @@ capabilities consumed by the shell and protocol adapters:
   at `chat-ready`. Read-only transcript display uses the bounded
   `runtime:chat-display` resource surface rather than enabling writer runtimes.
   Background runtimes never become a global UI gate.
-- During initial automatic acquisition, the preview exposes the shell and local
-  navigation while `canUseClientReaderContent()` defers selected detail,
-  transcript/display reads and missing-route repair until an actual reading or
-  writing disposition. Established Readers retain content through later recovery.
+- During initial automatic acquisition, the workspace remains behind the loading
+  boundary; it does not install a provisional reader projection. Established
+  Readers retain content through later promotion and recovery.
   An initial shell or selected-locale failure before a coherent projection shows
   the startup error and retries that boundary after acknowledgement; it cannot
   silently settle as a Reader or claim successful writer startup.
@@ -128,7 +125,7 @@ capabilities consumed by the shell and protocol adapters:
 - Writer generation recovery treats SQLite `generation_operations`,
   `generation_operation_attempts`, and `generation_effects` as durable
   authority. Active jobs are live attachment hints and local activities are
-  observer state. Effect claims are writer-owned, lease-fenced, and settled by
+  reader-observation state. Effect claims are writer-owned, lease-fenced, and settled by
   receipts; recovery retries durable/recomputed effects and permanently skips
   late ephemeral effects. Runtime read-only bootstrap probes are epoch-fenced and
   bounded; a foreground probe may supersede an older suspended request while
@@ -149,7 +146,7 @@ capabilities consumed by the shell and protocol adapters:
   eligible for refresh, and terminal handoff verifies the persisted message
   identity. Hidden/offline state, selection changes, and teardown release the
   HTTP viewer without cancelling its job. No finalization retry, effect claim,
-  translation submission, or completion callback is started by this observer.
+  translation submission, or completion callback is started by the reader viewer.
 - Command success reconciliation and foreign command SSE events both flow
   through the same serialized resource path. Contiguous response-confirmed
   optimistic effects can advance their resource fences without a read;

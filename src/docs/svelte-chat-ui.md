@@ -195,19 +195,21 @@ action do so. Empty chats retain their ordinary greeting/composer layout.
 
 ### Connected Reader Transcript
 
-`ObserverShell.svelte` lazy-loads `ReaderTranscript.svelte` for an explicit local
+`Workspace.svelte` lazy-loads `ReaderTranscript.svelte` for an explicit local
 character/chat route only when `canUseClientReaderContent()` admits content.
-An initial writer's coherent shell preview does not start character detail,
-transcript body, display, or greeting work. Established readers and previous
-writers retain content admission through promotion and interrupted recovery.
+An automatic writer candidate does not mount this surface before recovery.
+Established readers and previous writers retain content admission through
+promotion and interrupted recovery.
 `ReaderTranscript.svelte` also guards its own reads and rendering, including
 manual Refresh, so a direct mount cannot bypass this boundary.
 
 `ChatScreenLayout.svelte` owns the shared theme/background/portrait frame;
 writer `ChatScreen` supplies its controllers while `ReaderTranscript` supplies
-its independent read owners and static confirmed portraits. The reader composer
-creates no draft: it explains write access and invokes the same explicit
-Use this device callback as the shell. Mobilechat bubbles expose the same
+its independent read owners and static confirmed portraits. The pure
+`ReadOnlyComposer.svelte` creates no draft, imports no writer controller, and
+renders disabled message, attachment, send, menu, translation, draft, BTW,
+sticker, and reroll semantics. The separate top-right device action owns
+promotion. Mobilechat bubbles expose the same
 reader-safe plain-text copy action as the other built-in layouts.
 `readerPanelAppearance.ts` derives a local text palette from confirmed app colors
 and the translucent chat panel, and passes its tone through the explicit read
@@ -249,8 +251,8 @@ operation/attempt key. Extend-mode Continue displays the immutable base plus
 observed text on the exact target; regenerate replaces that target's visible
 text while retaining its presentation key. Exact canonical result identity can
 adopt the row before the stream terminal arrives without showing a duplicate.
-An existing Continue target id alone cannot complete the handoff. The observer
-owns terminal hydration and projection release, including target/result suffix
+An existing Continue target id alone cannot complete the handoff. The reader
+observation controller owns terminal hydration and projection release, including target/result suffix
 reads outside the ordinary tail window.
 
 Reader projections parse promptly through the same read-only `ChatBody` path,
@@ -261,7 +263,7 @@ interruption keeps partial content readable, removes the busy indicator, and
 shows localized viewer status even when no transient row exists. Refresh
 retries the read-only viewer and transcript. Selection, incarnation, session,
 and teardown stop the old viewer; visibility/offline handling belongs to the
-observer service. Transport and authority contracts are in
+reader generation observation service. Transport and authority contracts are in
 [Generation Client](generation-client.md#connected-reader-observation).
 
 ## Message Rendering

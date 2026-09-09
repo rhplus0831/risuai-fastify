@@ -39,20 +39,20 @@ CSS, and plugin execution.
 
 ## Entrypoints And Shell
 
-| Path                                                                                                                      | Role                                                                                                                                          |
-| ------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.html`                                                                                                              | Mounts `#app` and loads `/src/main.ts`.                                                                                                       |
-| `src/main.ts`                                                                                                             | Thin entry boundary: readiness marker, preload-error handling, runtime-environment installation, and dynamic import of `src/appStartup.ts`.   |
-| `src/ts/entryStartup.ts`, `src/ts/polyfill.ts`, `src/ts/entryLoadError.ts`                                                | Environment-before-app ordering, conditional baseline globals/polyfills, and the localized pre-mount reload surface.                          |
-| `src/appStartup.ts`                                                                                                       | Installs routing, push and viewport coordinators, mounts `App.svelte`, starts bootstrap/hotkeys and route warming, and removes `#preloading`. |
-| `src/App.svelte`                                                                                                          | Main role/route render switch, responsive sidebar state, app-level file drop, route effects, and global overlay host.                         |
-| `src/lib/ConversationShell.svelte`, `src/ts/gui/shellGeometry.ts`                                                         | Role-neutral conversation frame, responsive dialog semantics, and canonical rail/panel dimensions.                                            |
-| `src/styles.css`                                                                                                          | Tailwind v4 import, theme defaults, full-height shell, global chat text CSS, and compatibility base rules.                                    |
-| `src/ts/bootstrap.ts`                                                                                                     | Loads Fastify resources and starts hydration, events, bridges, and UI-derived CSS state.                                                      |
-| `src/ts/startupReadiness.ts`                                                                                              | Publishes startup milestones, narrow UI/action capabilities, and localized retry diagnostics.                                                 |
-| `src/lib/ObserverShell.svelte`                                                                                            | Connected-reader navigation/transcript host and coherent shell-only preview during unresolved automatic writer startup.                       |
-| `src/ts/clientSession.ts`, `observerShellLifecycle.svelte.ts`, `observerRouteIntent.ts`, `observerProjectionLifecycle.ts` | Role/content admission, localized read/switch status, local route intent, and authentication/lineage projection fencing.                      |
-| `src/ts/platform.ts`                                                                                                      | Fastify-only platform flag; `isFastifyServer` is always true.                                                                                 |
+| Path                                                                                                                    | Role                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.html`                                                                                                            | Mounts `#app` and loads `/src/main.ts`.                                                                                                       |
+| `src/main.ts`                                                                                                           | Thin entry boundary: readiness marker, preload-error handling, runtime-environment installation, and dynamic import of `src/appStartup.ts`.   |
+| `src/ts/entryStartup.ts`, `src/ts/polyfill.ts`, `src/ts/entryLoadError.ts`                                              | Environment-before-app ordering, conditional baseline globals/polyfills, and the localized pre-mount reload surface.                          |
+| `src/appStartup.ts`                                                                                                     | Installs routing, push and viewport coordinators, mounts `App.svelte`, starts bootstrap/hotkeys and route warming, and removes `#preloading`. |
+| `src/App.svelte`                                                                                                        | Main role/route render switch, responsive sidebar state, app-level file drop, route effects, and global overlay host.                         |
+| `src/lib/ConversationShell.svelte`, `src/ts/gui/shellGeometry.ts`                                                       | Role-neutral conversation frame, responsive dialog semantics, and canonical rail/panel dimensions.                                            |
+| `src/styles.css`                                                                                                        | Tailwind v4 import, theme defaults, full-height shell, global chat text CSS, and compatibility base rules.                                    |
+| `src/ts/bootstrap.ts`                                                                                                   | Loads Fastify resources and starts hydration, events, bridges, and UI-derived CSS state.                                                      |
+| `src/ts/startupReadiness.ts`                                                                                            | Publishes startup milestones, narrow UI/action capabilities, and localized retry diagnostics.                                                 |
+| `src/lib/Workspace.svelte`                                                                                              | Persistent role-neutral workspace host with separate reader and writer controllers inside one `ConversationShell`.                            |
+| `src/ts/clientSession.ts`, `readerWorkspaceLifecycle.svelte.ts`, `readerRouteIntent.ts`, `readerProjectionLifecycle.ts` | Role/content admission, read/switch lifecycle state, local route intent, and authentication/lineage projection fencing.                       |
+| `src/ts/platform.ts`                                                                                                    | Fastify-only platform flag; `isFastifyServer` is always true.                                                                                 |
 
 `src/main.ts` listens for `vite:preloadError` before mounting the app. While the
 entry preloader exists, a failed entry/lazy chunk renders the localized offline
@@ -99,14 +99,10 @@ for its disposable browser session.
 1. April 1 joke screen.
 2. The managed authentication-required screen with its Sign in action.
 3. Loading while `$startupCoordinatorStore.capabilities.canRenderShell` is false.
-4. `ObserverShell` supplying reader navigation/content to the shared
-   `ConversationShell` while managed write access is unavailable, including the
-   initial shell-only preview.
-5. `CustomGUISettingMenu` while `$CustomGUISettingMenuStore` is true.
-6. `Settings` for the committed settings route.
-7. `GridCatalog` for the committed grid route.
-8. The writer `Sidebar` and `ChatScreen` supplied to the same
-   `ConversationShell` frame.
+4. `Workspace` supplying either the contained reader controller or writer
+   navigation/content to one persistent `ConversationShell`. Writer content
+   selects `CustomGUISettingMenu`, Settings, Grid, or Chat without changing the
+   outer workspace owner.
 
 Route loading and Retry status mount alongside the current writer route, whose
 content stays mounted and inert while its resources or code settle. They are
@@ -123,19 +119,18 @@ sidebar configuration. Feature-owned overlays can mount below their surface
 instead; for example, `Sidebar.svelte` owns character-folder expansion and
 editing.
 
-Connected-reader startup is enabled by default;
-`VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains conservative writer-first startup.
-Only that fallback uses the legacy refresh-or-stay flow and frozen-control
-reload banner. A managed writer loss revokes mutation/generation authority and
+Connected-reader and writer startup use the same role-first path. A managed
+writer loss revokes mutation/generation authority and
 writer route effects, captures local drafts, and replaces writer services with
 reader synchronization. Authenticated local reader navigation stays available;
 `canApplyRoutes` does not grant permission to persist selection or other edits.
 
-The initial coherent shell preview is separate from full reader content.
-`canUseClientReaderContent()` defers detail, transcript, display, greeting, and
-automatic missing-route repair until an actual reading/writing disposition has
-settled. Established content remains readable through promotion and interrupted
-writer recovery; a new authentication/session or lineage resets that admission.
+Automatic writer candidates remain behind the loading boundary until recovery
+is complete. `canUseClientReaderContent()` admits detail, transcript, display,
+greeting, and missing-route repair only for an established reading/writing
+disposition. Established reader content remains readable through promotion and
+interrupted writer recovery; a new authentication/session or lineage resets
+that admission.
 
 **Use this device** explicitly starts conditional acquisition and writer
 recovery. Reading and local navigation remain available while confirmation is
@@ -177,7 +172,7 @@ instead of assuming the shared backdrop behavior is present.
 URLs to stores, and synchronizes user-owned store changes back to history.
 Routes are not file-system based. The store effects below describe writer
 route application. Connected readers resolve home/grid and stable
-character/chat URLs locally through `ObserverShell.svelte` and
+character/chat URLs locally through `Workspace.svelte` and
 `readerRouteScope.ts`, without changing persisted selection or mounting
 authoring controls.
 
@@ -232,7 +227,7 @@ Important route and store facts:
 - `canRenderShell` opens the coherent shell. Managed readers keep local route
   capability, while `canApplyWriterRoutes` separately gates both
   persistence-capable effects. Reader content admission is also distinct from
-  the initial shell preview.
+  the automatic writer loading boundary.
 - Optional-work completion is exposed as the coordinator-owned
   `backgroundReady()` selector, not as a Svelte UI store. It does not gate
   `App.svelte`; new UI and route work must use their narrow capabilities.
