@@ -198,3 +198,18 @@ export interface SettingCategory {
   icon?: string
   items: SettingItem[]
 }
+
+/**
+ * A task-oriented group of settings rendered on one settings page.
+ *
+ * Leaf SettingItem IDs remain independent from section IDs so settings can move
+ * between pages without invalidating saved Custom Sidebar configurations.
+ */
+export interface SettingSection {
+  id: string
+  labelKey: string
+  descriptionKey?: string
+  badgeKey?: string
+  collapsible?: boolean
+  items: SettingItem[]
+}

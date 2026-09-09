@@ -29,6 +29,8 @@
   import ModelProfileList from './ModelProfileList.svelte'
   import ModelProfileRoleList from './ModelProfileRoleList.svelte'
   import ProviderCredentialList from './ProviderCredentialList.svelte'
+  import SettingsSections from '../../SettingsSections.svelte'
+  import { modelSupplementalSettingsSections } from 'src/ts/setting/modelSupplementalSettingsData'
 
   type ModelSettingsTab = 'roles' | 'profiles' | 'credentials'
 
@@ -281,6 +283,8 @@
       <LegacyModelRoleList />
     </Accordion>
   {/if}
+
+  <SettingsSections sections={modelSupplementalSettingsSections} />
 </section>
 
 <style>

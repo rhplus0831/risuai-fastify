@@ -1,6 +1,10 @@
 <script lang="ts">
-  import { advancedSettingsItems } from 'src/ts/setting/advancedSettingsData'
-  import SettingRenderer from '../SettingRenderer.svelte'
+  import { language } from 'src/lang'
+  import { advancedSettingsSections } from 'src/ts/setting/advancedSettingsData'
+  import SettingsSections from '../SettingsSections.svelte'
 </script>
 
-<SettingRenderer items={advancedSettingsItems} />
+<h2 class="mb-1 mt-2 text-2xl font-bold">{language.advancedSettings}</h2>
+<p class="mb-4 text-xs text-draculared">{language.advancedSettingsWarn}</p>
+
+<SettingsSections sections={advancedSettingsSections} />

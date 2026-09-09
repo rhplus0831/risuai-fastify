@@ -4,7 +4,7 @@
  * Data-driven definition of all settings in AccessibilitySettings page.
  */
 
-import type { SettingItem } from './types'
+import type { SettingItem, SettingSection } from './types'
 import { language } from 'src/lang'
 import { updateReducedMotion } from '../gui/animation'
 
@@ -13,7 +13,7 @@ export const accessibilitySettingsItems: SettingItem[] = [
   {
     id: 'acc.header',
     type: 'header',
-    labelKey: 'accessibility',
+    labelKey: 'interactionAccessibility',
     options: { level: 'h2' },
   },
 
@@ -26,14 +26,6 @@ export const accessibilitySettingsItems: SettingItem[] = [
     bindKey: 'reducedMotion',
     onChange: () => updateReducedMotion(),
     keywords: ['reduced', 'motion', 'animation', 'accessibility'],
-  },
-  {
-    id: 'acc.hypaV3ProgressOpenChatOnly',
-    type: 'check',
-    labelKey: 'hypaV3ProgressOpenChatOnly',
-    helpKey: 'hypaV3ProgressOpenChatOnly',
-    bindKey: 'hypaV3ProgressOpenChatOnly',
-    keywords: ['hypa', 'memory', 'progress', 'chat', 'accessibility'],
   },
   {
     id: 'acc.askRemoval',
@@ -77,6 +69,7 @@ export const accessibilitySettingsItems: SettingItem[] = [
     helpKey: 'floatingChatInput',
     bindKey: 'floatingChatInput',
     getValue: (db) => db.floatingChatInput ?? true,
+    condition: (ctx) => ctx.db.fixedChatTextarea !== true,
     keywords: ['floating', 'chat', 'input', 'composer', 'accessibility'],
   },
   {
@@ -164,49 +157,6 @@ export const accessibilitySettingsItems: SettingItem[] = [
     keywords: ['side', 'menu', 'reroll', 'button'],
   },
   {
-    id: 'acc.localActivationInGlobalLorebook',
-    type: 'check',
-    labelKey: 'localActivationInGlobalLorebook',
-    bindKey: 'localActivationInGlobalLorebook',
-    keywords: ['local', 'activation', 'global', 'lorebook'],
-  },
-  {
-    id: 'acc.requestInfoInsideChat',
-    type: 'check',
-    labelKey: 'requestInfoInsideChat',
-    bindKey: 'requestInfoInsideChat',
-    keywords: ['request', 'info', 'chat'],
-  },
-  {
-    id: 'acc.inlayErrorResponse',
-    type: 'check',
-    labelKey: 'inlayErrorResponse',
-    bindKey: 'inlayErrorResponse',
-    keywords: ['inlay', 'error', 'response'],
-  },
-  {
-    id: 'acc.bulkEnabling',
-    type: 'check',
-    labelKey: 'bulkEnabling',
-    bindKey: 'bulkEnabling',
-    keywords: ['bulk', 'enable', 'multiple'],
-  },
-  {
-    id: 'acc.applyAdditionalParamsToAll',
-    type: 'check',
-    labelKey: 'applyAdditionalParamsToAll',
-    bindKey: 'applyAdditionalParamsToAll',
-    getValue: (db) => db.applyAdditionalParamsToAll === true,
-    keywords: ['apply', 'additional', 'parameters', 'all', 'models'],
-  },
-  {
-    id: 'acc.showTranslationLoading',
-    type: 'check',
-    labelKey: 'showTranslationLoading',
-    bindKey: 'showTranslationLoading',
-    keywords: ['translation', 'loading', 'indicator'],
-  },
-  {
     id: 'acc.autoScrollToNewMessage',
     type: 'check',
     labelKey: 'autoScrollToNewMessage',
@@ -252,5 +202,78 @@ export const accessibilitySettingsItems: SettingItem[] = [
     bindKey: 'hamburgerButtonBottom',
     keywords: ['hamburger', 'button', 'bottom', 'menu', 'sidebar', 'accessibility'],
   },
+  {
+    id: 'adv.scrollToActive',
+    type: 'check',
+    labelKey: 'enableScrollToActiveChar',
+    bindKey: 'enableScrollToActiveChar',
+    helpKey: 'enableScrollToActiveChar',
+    classes: 'mt-4',
+  },
   { type: 'custom', id: 'acc.customSidebarConfig', componentId: 'CustomSidebarConfig' },
+]
+
+function settingItems(ids: string[]): SettingItem[] {
+  return ids.map((id) => {
+    const item = accessibilitySettingsItems.find((candidate) => candidate.id === id)
+    if (!item) throw new Error(`Unknown accessibility setting: ${id}`)
+    return item
+  })
+}
+
+export const accessibilitySettingsSections: SettingSection[] = [
+  {
+    id: 'motion-scrolling',
+    labelKey: 'settingsSectionMotionScrolling',
+    descriptionKey: 'settingsSectionMotionScrollingDescription',
+    items: settingItems([
+      'acc.reducedMotion',
+      'acc.autoScrollToNewMessage',
+      'acc.alwaysScrollToNewMessage',
+      'acc.newMessageButtonStyle',
+    ]),
+  },
+  {
+    id: 'composer-keyboard',
+    labelKey: 'settingsSectionComposerKeyboard',
+    descriptionKey: 'settingsSectionComposerKeyboardDescription',
+    items: settingItems([
+      'acc.sendWithEnter',
+      'acc.fixedChatTextarea',
+      'acc.floatingChatInput',
+      'acc.useMonacoEditorOnDesktop',
+      'acc.useMonacoEditorOnMobile',
+    ]),
+  },
+  {
+    id: 'message-editing',
+    labelKey: 'settingsSectionMessageEditing',
+    descriptionKey: 'settingsSectionMessageEditingDescription',
+    items: settingItems([
+      'acc.clickToEdit',
+      'acc.disableAutoPopupMessageEditor',
+      'acc.enableBlockPartialEdit',
+      'acc.enableDragPartialEdit',
+      'acc.longPressToPopupEditor',
+      'acc.askRemoval',
+      'acc.instantRemove',
+    ]),
+  },
+  {
+    id: 'navigation-controls',
+    labelKey: 'settingsSectionNavigationControls',
+    descriptionKey: 'settingsSectionNavigationControlsDescription',
+    items: settingItems([
+      'acc.swipe',
+      'acc.botSettingAtStart',
+      'acc.showMenuChatList',
+      'acc.showMenuHypaMemoryModal',
+      'acc.goCharacterOnImport',
+      'acc.sideMenuRerollButton',
+      'acc.createFolderOnBranch',
+      'acc.hamburgerButtonBottom',
+      'adv.scrollToActive',
+      'acc.customSidebarConfig',
+    ]),
+  },
 ]

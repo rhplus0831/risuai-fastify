@@ -133,6 +133,10 @@ import {
   displaySettingsItems,
 } from './displaySettingsData.svelte'
 import { languageSettingsItems } from './languageSettingsData.svelte'
+import { memorySettingsItems } from './memorySettingsData'
+import { modelSupplementalSettingsItems } from './modelSupplementalSettingsData'
+import { pluginSupplementalSettingsItems } from './pluginSupplementalSettingsData'
+import { promptSupplementalSettingsItems } from './promptSupplementalSettingsData'
 import type { SettingContext, SettingItem } from './types'
 import {
   clearDeferredSettingWrites,
@@ -162,6 +166,10 @@ const settingRendererItemSets: SettingItem[][] = [
   chatFormatSettingsItems,
   displaySettingsItems,
   languageSettingsItems,
+  memorySettingsItems,
+  modelSupplementalSettingsItems,
+  pluginSupplementalSettingsItems,
+  promptSupplementalSettingsItems,
 ]
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -434,8 +442,8 @@ describe('server-backed data-driven settings', () => {
     })
   })
 
-  it('exposes open-chat-only memory progress under Accessibility', () => {
-    expect(accessibilitySettingsItems.find((item) => item.id === 'acc.hypaV3ProgressOpenChatOnly')).toMatchObject({
+  it('exposes open-chat-only memory progress under Memory', () => {
+    expect(memorySettingsItems.find((item) => item.id === 'acc.hypaV3ProgressOpenChatOnly')).toMatchObject({
       type: 'check',
       labelKey: 'hypaV3ProgressOpenChatOnly',
       helpKey: 'hypaV3ProgressOpenChatOnly',
@@ -458,10 +466,12 @@ describe('server-backed data-driven settings', () => {
     })
     expect(floatingInput?.getValue?.({ floatingChatInput: undefined } as never)).toBe(true)
     expect(floatingInput?.getValue?.({ floatingChatInput: false } as never)).toBe(false)
+    expect(floatingInput?.condition?.({ db: { fixedChatTextarea: false } } as never)).toBe(true)
+    expect(floatingInput?.condition?.({ db: { fixedChatTextarea: true } } as never)).toBe(false)
   })
 
-  it('exposes the default-off global additional-parameters opt-in under Accessibility', () => {
-    const item = accessibilitySettingsItems.find((candidate) => candidate.id === 'acc.applyAdditionalParamsToAll')
+  it('exposes the default-off global additional-parameters opt-in under Model settings', () => {
+    const item = modelSupplementalSettingsItems.find((candidate) => candidate.id === 'acc.applyAdditionalParamsToAll')
 
     expect(item).toMatchObject({
       type: 'check',

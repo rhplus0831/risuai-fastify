@@ -174,6 +174,26 @@ describe('route resource manifest', () => {
     ])
   })
 
+  it.each([
+    ['settings:memory', 'hypaV3ProgressOpenChatOnly', 'mutate'],
+    ['settings:memory', 'loreBookDepth', 'mutate'],
+    ['settings:memory', 'localActivationInGlobalLorebook', 'mutate'],
+    ['settings:display', 'keepSessionAlive', 'mutate'],
+    ['settings:bot-model-prompt', 'gptVisionQuality', 'mutate'],
+    ['settings:language', 'useExperimental', 'render'],
+    ['settings:prompt-template', 'additionalPrompt', 'mutate'],
+  ] as const)('hydrates relocated setting %s / %s for %s', (surfaceId, key, purpose) => {
+    const group = SERVER_SETTINGS_GROUP_BY_KEY[key]
+    const surface = RESOURCE_SURFACE_MANIFEST[surfaceId]
+    const requirement = surface.requirements.find(
+      (candidate) => candidate.kind === 'settings-group' && candidate.group === group,
+    )
+
+    expect(requirement).toBeTruthy()
+    expect(requirement?.purposes).toContain(purpose)
+    if (requirement?.kind === 'settings-group' && requirement.keys) expect(requirement.keys).toContain(key)
+  })
+
   it.each(canonicalPlaygroundRoutes)('maps %s to its declared Playground surface', (path, index) => {
     const route = parseRoute(path)
     expect(route).toMatchObject({ kind: 'playground', index })

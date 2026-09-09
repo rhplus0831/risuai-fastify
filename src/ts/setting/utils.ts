@@ -19,6 +19,11 @@ import {
 } from './botSettingsParamsData'
 import { chatFormatSettingsItems } from './chatFormatSettingsData'
 import { displaySettingsItems } from './displaySettingsData.svelte'
+import { languageSupplementalSettingsItems } from './languageSettingsData.svelte'
+import { memorySettingsItems } from './memorySettingsData'
+import { modelSupplementalSettingsItems } from './modelSupplementalSettingsData'
+import { pluginSupplementalSettingsItems } from './pluginSupplementalSettingsData'
+import { promptSupplementalSettingsItems } from './promptSupplementalSettingsData'
 import {
   canUseServerCommands,
   patchServerBackedSettings,
@@ -942,6 +947,11 @@ export function getFullSettingsData(searchTerm = '') {
   const full = accessibilitySettingsItems.concat(
     advancedSettingsItems,
     basicParameterItems,
+    languageSupplementalSettingsItems,
+    memorySettingsItems,
+    modelSupplementalSettingsItems,
+    pluginSupplementalSettingsItems,
+    promptSupplementalSettingsItems,
     seedSetting,
     samplingParameterItems,
     penaltyParameterItems,

@@ -182,6 +182,36 @@ export const languageSettingsItems: SettingItem[] = [
 
   // General Translation Options
   {
+    id: 'acc.showTranslationLoading',
+    type: 'check',
+    labelKey: 'showTranslationLoading',
+    bindKey: 'showTranslationLoading',
+    keywords: ['translation', 'loading', 'indicator'],
+    classes: 'mt-4',
+    condition: (ctx) => !!ctx.db.translator,
+  },
+
+  {
+    id: 'adv.noWaitTrans',
+    type: 'check',
+    labelKey: 'noWaitForTranslate',
+    bindKey: 'noWaitForTranslate',
+    classes: 'mt-4',
+    condition: (ctx) => !!ctx.db.translator,
+  },
+
+  {
+    id: 'adv.exp.googleTrans',
+    type: 'check',
+    fallbackLabel: 'New Google Translate Experimental',
+    bindKey: 'useExperimentalGoogleTranslator',
+    condition: (ctx) => !!ctx.db.translator && ctx.db.translatorType === 'google' && ctx.db.useExperimental,
+    helpKey: 'unrecommended',
+    helpUnrecommended: true,
+    classes: 'mt-4',
+  },
+
+  {
     id: 'lang.combineTranslation',
     type: 'check',
     labelKey: 'combineTranslation',
@@ -352,3 +382,9 @@ export const languageSettingsItems: SettingItem[] = [
     },
   },
 ]
+
+const supplementalLanguageSettingIds = new Set(['acc.showTranslationLoading', 'adv.noWaitTrans', 'adv.exp.googleTrans'])
+
+export const languageSupplementalSettingsItems = languageSettingsItems.filter((item) =>
+  supplementalLanguageSettingIds.has(item.id),
+)

@@ -262,6 +262,7 @@ export const RESOURCE_SURFACE_MANIFEST = {
       'src/lib/Setting/Pages/BotSettings.svelte',
       'src/lib/Setting/Pages/Model/ModelSettingsShell.svelte',
       'src/lib/Setting/Pages/ChatFormatSettings.svelte',
+      'src/ts/setting/modelSupplementalSettingsData.ts',
     ],
     requirements: [
       group('providers', ['render', 'interact', 'mutate']),
@@ -270,6 +271,7 @@ export const RESOURCE_SURFACE_MANIFEST = {
       group('prompt', ['render', 'interact', 'mutate']),
       group('advanced', ['render', 'interact', 'mutate']),
       group('display', ['render', 'interact'], ['useLegacyGUI']),
+      group('media', ['render', 'interact', 'mutate'], ['gptVisionQuality']),
       collection('modelPresets', ['render', 'interact', 'mutate']),
       collection('promptPresets', ['render', 'interact', 'mutate']),
       collection('botPresets', ['render', 'interact', 'mutate']),
@@ -281,14 +283,20 @@ export const RESOURCE_SURFACE_MANIFEST = {
   },
   'settings:memory': {
     family: 'settings',
-    owners: ['src/lib/Setting/Pages/OtherBotSettings.svelte'],
+    owners: ['src/lib/Setting/Pages/OtherBotSettings.svelte', 'src/ts/setting/memorySettingsData.ts'],
     requirements: [
       group('media', ['render', 'interact', 'mutate']),
       group('memory', ['render', 'interact', 'mutate']),
       group('providers', ['render', 'interact', 'mutate']),
       group('models', ['render', 'interact']),
       group('runtime', ['render', 'interact']),
-      group('display', ['render'], ['useLegacyGUI']),
+      group('display', ['render', 'interact', 'mutate'], ['useLegacyGUI', 'hypaV3ProgressOpenChatOnly']),
+      group(
+        'advanced',
+        ['render', 'interact', 'mutate'],
+        ['loreBookDepth', 'loreBookToken', 'bulkEnabling', 'emotionPrompt2', 'keiServerURL'],
+      ),
+      group('sidebar', ['render', 'interact', 'mutate'], ['localActivationInGlobalLorebook']),
       collection('hypaV3Presets', ['render', 'interact', 'mutate']),
       collection('promptPresets', ['render', 'interact']),
       projection('selected-character', ['interact', 'editor-prefill']),
@@ -315,12 +323,17 @@ export const RESOURCE_SURFACE_MANIFEST = {
     ],
     requirements: [
       group('display', ['render', 'interact', 'mutate']),
+      group('advanced', ['render', 'interact', 'mutate'], ['keepSessionAlive']),
       group('media', ['render', 'interact', 'mutate']),
     ],
   },
   'settings:plugins': {
     family: 'settings',
-    owners: ['src/lib/Setting/Pages/PluginSettings.svelte', 'src/ts/plugins/plugins.svelte.ts'],
+    owners: [
+      'src/lib/Setting/Pages/PluginSettings.svelte',
+      'src/ts/plugins/plugins.svelte.ts',
+      'src/ts/setting/pluginSupplementalSettingsData.ts',
+    ],
     requirements: [
       group('providers', ['render', 'interact', 'mutate']),
       group('models', ['render', 'interact']),
@@ -367,12 +380,14 @@ export const RESOURCE_SURFACE_MANIFEST = {
     owners: [
       'src/lib/Setting/Pages/LanguageSettings.svelte',
       'src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte',
+      'src/ts/setting/languageSettingsData.svelte.ts',
     ],
     requirements: [
       group('language', ['render', 'interact', 'mutate']),
       group('providers', ['render', 'interact']),
       group('models', ['render', 'interact']),
       group('runtime', ['render', 'interact']),
+      group('advanced', ['render'], ['useExperimental']),
       collection('translatorPresets', ['render', 'interact', 'mutate']),
     ],
   },
@@ -405,13 +420,17 @@ export const RESOURCE_SURFACE_MANIFEST = {
   },
   'settings:prompt-template': {
     family: 'settings',
-    owners: ['src/lib/Setting/Pages/PromptSettings.svelte'],
+    owners: ['src/lib/Setting/Pages/PromptSettings.svelte', 'src/ts/setting/promptSupplementalSettingsData.ts'],
     requirements: [
       group('prompt', ['render', 'interact', 'mutate']),
       group('providers', ['render', 'interact']),
       group('models', ['render', 'interact']),
       group('runtime', ['render', 'interact']),
-      group('advanced', ['render', 'interact'], ['showUnrecommended']),
+      group(
+        'advanced',
+        ['render', 'interact', 'mutate'],
+        ['showUnrecommended', 'additionalPrompt', 'descriptionPrefix', 'useSayNothing', 'banCharacterset'],
+      ),
       collection('modelPresets', ['render', 'interact']),
       collection('promptPresets', ['render', 'interact', 'mutate']),
       collection('promptTemplate', ['render', 'interact', 'mutate', 'editor-prefill']),

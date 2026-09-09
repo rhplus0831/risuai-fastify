@@ -4,9 +4,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const displaySettingsMocks = vi.hoisted(() => ({ setLegacyGUI: (_value: boolean) => {} }))
 
 vi.mock('src/ts/setting/displaySettingsData.svelte', () => ({
-  displayOtherSettingsItems: [],
-  displaySizeSettingsItems: [],
-  displayThemeSettingsItems: [],
+  displayChatSettingsSections: [],
+  displayLayoutSettingsSections: [],
+  displaySoundSettingsSections: [],
+  displayThemeSettingsSections: [],
 }))
 
 vi.mock('../SettingRenderer.svelte', async () => {
@@ -54,26 +55,29 @@ describe('DisplaySettings navigation semantics', () => {
     await tick()
 
     const theme = buttonNamed(language.theme)
-    const size = buttonNamed(language.sizeAndSpeed)
-    const others = buttonNamed(language.others)
+    const layout = buttonNamed(language.settingsTabLayoutSizing)
+    const chat = buttonNamed(language.settingsTabChatAppearance)
+    const sound = buttonNamed(language.settingsTabSoundNotifications)
 
     expect(theme.getAttribute('aria-pressed')).toBe('true')
-    expect(size.getAttribute('aria-pressed')).toBe('false')
-    expect(others.getAttribute('aria-pressed')).toBe('false')
+    expect(layout.getAttribute('aria-pressed')).toBe('false')
+    expect(chat.getAttribute('aria-pressed')).toBe('false')
+    expect(sound.getAttribute('aria-pressed')).toBe('false')
 
-    size.click()
+    layout.click()
     await tick()
 
     expect(theme.getAttribute('aria-pressed')).toBe('false')
-    expect(size.getAttribute('aria-pressed')).toBe('true')
-    expect(others.getAttribute('aria-pressed')).toBe('false')
+    expect(layout.getAttribute('aria-pressed')).toBe('true')
+    expect(chat.getAttribute('aria-pressed')).toBe('false')
+    expect(sound.getAttribute('aria-pressed')).toBe('false')
   })
 
   it('switches mounted layouts when the authoritative legacy-GUI setting changes', async () => {
     component = mount(DisplaySettings, { target })
     await tick()
 
-    expect(target.querySelectorAll('button')).toHaveLength(3)
+    expect(target.querySelectorAll('button')).toHaveLength(4)
 
     displaySettingsMocks.setLegacyGUI(true)
     await tick()
@@ -81,6 +85,6 @@ describe('DisplaySettings navigation semantics', () => {
 
     displaySettingsMocks.setLegacyGUI(false)
     await tick()
-    expect(target.querySelectorAll('button')).toHaveLength(3)
+    expect(target.querySelectorAll('button')).toHaveLength(4)
   })
 })

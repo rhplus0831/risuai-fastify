@@ -2,6 +2,8 @@
   import { onDestroy } from 'svelte'
   import { PlusIcon, TrashIcon, LinkIcon, CodeXmlIcon, PowerIcon, PowerOffIcon, RefreshCwIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
+  import SettingsSections from '../SettingsSections.svelte'
+  import { pluginSupplementalSettingsSections } from 'src/ts/setting/pluginSupplementalSettingsData'
   import { alertConfirm, alertSelect } from 'src/ts/alert'
 
   import { hotReloading } from 'src/ts/stores.svelte'
@@ -596,6 +598,9 @@
       </div>
     {/if}
   {/each}
+</div>
+<div class="mt-4">
+  <SettingsSections sections={pluginSupplementalSettingsSections} />
 </div>
 <div class="text-textcolor2 mt-2 flex gap-2">
   <button

@@ -1,13 +1,14 @@
 <script lang="ts">
   import { language } from 'src/lang'
   import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
-  import SettingRenderer from '../SettingRenderer.svelte'
   import {
-    displayOtherSettingsItems,
-    displaySizeSettingsItems,
-    displayThemeSettingsItems,
+    displayChatSettingsSections,
+    displayLayoutSettingsSections,
+    displaySoundSettingsSections,
+    displayThemeSettingsSections,
   } from 'src/ts/setting/displaySettingsData.svelte'
   import { reconcileLegacyGuiSubmenu } from 'src/ts/setting/legacyGuiLayout'
+  import SettingsSections from '../SettingsSections.svelte'
 
   let submenu = $state(0)
 
@@ -23,45 +24,62 @@
 <h2 class="mb-2 text-2xl font-bold mt-2">{language.display}</h2>
 
 {#if submenu !== -1}
-  <div class="flex w-full rounded-md border border-darkborderc mb-4 overflow-x-auto h-16 min-h-16 overflow-y-clip">
+  <div class="mb-4 flex w-full overflow-x-auto rounded-md border border-darkborderc">
     <button
+      type="button"
       aria-pressed={submenu === 0}
       onclick={() => {
         submenu = 0
       }}
-      class="p-2 flex-1 border-r border-darkborderc"
+      class="min-w-28 flex-1 border-r border-darkborderc p-3"
       class:bg-darkbutton={submenu === 0}>
       <span>{language.theme}</span>
     </button>
     <button
+      type="button"
       aria-pressed={submenu === 1}
       onclick={() => {
         submenu = 1
       }}
-      class="p-2 flex-1 border-r border-darkborderc"
+      class="min-w-32 flex-1 border-r border-darkborderc p-3"
       class:bg-darkbutton={submenu === 1}>
-      <span>{language.sizeAndSpeed}</span>
+      <span>{language.settingsTabLayoutSizing}</span>
     </button>
     <button
+      type="button"
       aria-pressed={submenu === 2}
       onclick={() => {
         submenu = 2
       }}
-      class="p-2 flex-1 border-r border-darkborderc"
+      class="min-w-32 flex-1 border-r border-darkborderc p-3"
       class:bg-darkbutton={submenu === 2}>
-      <span>{language.others}</span>
+      <span>{language.settingsTabChatAppearance}</span>
+    </button>
+    <button
+      type="button"
+      aria-pressed={submenu === 3}
+      onclick={() => {
+        submenu = 3
+      }}
+      class="min-w-36 flex-1 p-3"
+      class:bg-darkbutton={submenu === 3}>
+      <span>{language.settingsTabSoundNotifications}</span>
     </button>
   </div>
 {/if}
 
 {#if submenu === 0 || submenu === -1}
-  <SettingRenderer items={displayThemeSettingsItems} />
+  <SettingsSections sections={displayThemeSettingsSections} />
 {/if}
 
 {#if submenu === 1 || submenu === -1}
-  <SettingRenderer items={displaySizeSettingsItems} />
+  <SettingsSections sections={displayLayoutSettingsSections} />
 {/if}
 
 {#if submenu === 2 || submenu === -1}
-  <SettingRenderer items={displayOtherSettingsItems} />
+  <SettingsSections sections={displayChatSettingsSections} />
+{/if}
+
+{#if submenu === 3 || submenu === -1}
+  <SettingsSections sections={displaySoundSettingsSections} />
 {/if}
