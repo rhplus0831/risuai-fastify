@@ -19,6 +19,7 @@ import { changeLanguage, language } from '../lang'
 import { mount, tick, unmount } from 'svelte'
 import { get } from 'svelte/store'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { DynamicGUI } from '../ts/stores.svelte'
 
 import type { AppRoute } from '../ts/routerRoute'
 import type { Database, character } from '../ts/storage/database.svelte'
@@ -91,6 +92,7 @@ import { withTestDatabaseWrite } from '../ts/__tests__/resourceDatabaseState'
 import { peekObserverRouteIntent, resetObserverRouteIntentForTests } from '../ts/observerRouteIntent'
 import { resetObserverShellLifecycleForTests, setObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
 import { selectedCharID } from '../ts/stores.svelte'
+import { recordReaderNavigationSettings } from '../ts/server/readerTranscriptProjection.svelte'
 
 const { default: ObserverShell } = await import('./ObserverShell.svelte')
 
@@ -313,6 +315,7 @@ describe('pre-writer ObserverShell', () => {
     observerShellMocks.navigate.mockClear()
     observerShellMocks.routerExports?.currentRoute.set({ kind: 'home', path: '/' })
     selectedCharID.set(-1)
+    DynamicGUI.set(false)
     seedShellDatabase()
     target = document.createElement('div')
     document.body.appendChild(target)
@@ -344,6 +347,36 @@ describe('pre-writer ObserverShell', () => {
     expect(status?.getAttribute('aria-live')).toBe('polite')
     expect(status?.textContent).toContain('Read only')
     expect(characterButton?.type).toBe('button')
+  })
+
+  it('uses one certified geometry model for wide and responsive reader navigation', async () => {
+    recordReaderNavigationSettings({ sideBarSize: 3, desktopSidebarColumns: 4, mobileSidebarColumns: 2 }, [
+      'sideBarSize',
+      'desktopSidebarColumns',
+      'mobileSidebarColumns',
+    ])
+    await mountObserverShell()
+
+    const wideRail = target.querySelector<HTMLElement>('[data-risu-navigation-rail]')!
+    const widePanel = target.querySelector<HTMLElement>('[data-risu-shell-sidebar-panel]')!
+    expect(wideRail.dataset.risuNavigationColumns).toBe('4')
+    expect(wideRail.style.width).toBe('20rem')
+    expect(widePanel.style.width).toBe('36rem')
+    expect(widePanel.style.minWidth).toBe('36rem')
+    expect(target.querySelector('[data-risu-shell-main]')).not.toBeNull()
+
+    DynamicGUI.set(true)
+    await tick()
+    target.querySelector<HTMLButtonElement>('[data-reader-navigation-toggle]')!.click()
+    await tick()
+
+    const responsiveRail = target.querySelector<HTMLElement>('[data-risu-navigation-rail]')!
+    const responsivePanel = target.querySelector<HTMLElement>('[data-risu-shell-sidebar-panel]')!
+    expect(responsiveRail.dataset.risuNavigationColumns).toBe('2')
+    expect(responsiveRail.style.width).toBe('10rem')
+    expect(responsivePanel.style.width).toBe('36rem')
+    expect(responsivePanel.style.minWidth).toBe('')
+    expect(target.querySelector('[data-risu-responsive-shell="shared-sidebar-dialog"]')).not.toBeNull()
   })
 
   it('keeps the latest character/chat choice local with no command request or pending record', async () => {
@@ -867,24 +900,20 @@ describe('pre-writer ObserverShell', () => {
 
   it('opens one focus-trapped mobile navigation drawer and restores focus when Escape closes it', async () => {
     await showConnectedReaderChat()
-    vi.stubGlobal(
-      'matchMedia',
-      vi.fn(() => ({ matches: true, addEventListener: vi.fn(), removeEventListener: vi.fn() })),
-    )
+    DynamicGUI.set(true)
     await mountObserverShell()
     const toggle = target.querySelector<HTMLButtonElement>('[data-reader-navigation-toggle]')!
-    const drawer = target.querySelector<HTMLElement>('#reader-navigation')!
-    expect(drawer.hidden).toBe(true)
+    expect(target.querySelector('#reader-navigation')).toBeNull()
     toggle.focus()
     toggle.click()
     await tick()
-    expect(drawer.hidden).toBe(false)
+    const drawer = target.querySelector<HTMLElement>('#reader-navigation')!
     expect(drawer.getAttribute('aria-modal')).toBe('true')
     expect(drawer.contains(document.activeElement)).toBe(true)
     expect(target.querySelectorAll('[data-reader-navigation]')).toHaveLength(1)
     drawer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await tick()
-    expect(drawer.hidden).toBe(true)
+    expect(target.querySelector('#reader-navigation')).toBeNull()
     expect(document.activeElement).toBe(toggle)
     expect(get((await createRouterMock()).currentRoute).path).toBe('/character/char-a/chat-a')
     expect(await countPendingMutationRecords()).toBe(0)

@@ -35,6 +35,7 @@
   import Sidebar from './lib/SideBars/Sidebar.svelte'
   import ChatScreen from './lib/ChatScreens/ChatScreen.svelte'
   import ObserverShell from './lib/ObserverShell.svelte'
+  import ConversationShell from './lib/ConversationShell.svelte'
   import WriterDraftRecovery from './lib/WriterDraftRecovery.svelte'
   import { showRealmInfoStore } from './ts/realmInfoStore'
   import {
@@ -65,7 +66,6 @@
   import { routeKey } from './ts/routerRoute'
   import { prefetchCharacterRouteResource, routeResourceLoadState } from './ts/server/routeResourceLoader'
   import { prefetchRouteIntent } from './ts/routeIntentPrefetch'
-  import { modalFocusTrap } from './ts/gui/modalFocusTrap'
   import { alertError } from './ts/alert'
   import { canShowReaderAlert } from './ts/readerAlertPolicy'
   import { hasDragType, RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes'
@@ -654,41 +654,24 @@
         testId="character-grid" />
     </div>
   {:else}
-    {#if !$DynamicGUI}
-      <Sidebar
-        openGrid={openGridRoute}
-        hidden={!$sideBarStore}
-        prefetchCharacter={prefetchCharacterRouteResource}
-        {preloadSettingsRoute}
-        {preloadGridRoute}
-        {preloadPlaygroundRoute} />
-    {:else if $sideBarStore}
-      <div
-        data-modal-root
-        data-risu-responsive-shell="shared-sidebar-dialog"
-        use:modalFocusTrap
-        role="dialog"
-        aria-modal="true"
-        aria-label={language.menu}
-        tabindex="-1"
-        class="fixed top-0 w-full h-full left-0 z-30 flex flex-row items-center"
-        onkeydown={handleResponsiveSidebarKeydown}>
+    <ConversationShell
+      responsive={$DynamicGUI}
+      navigationOpen={$sideBarStore}
+      navigationLabel={language.menu}
+      contentInert={routeContentBlocked}
+      contentBusy={$routeResourceLoadState.status === 'loading'}
+      onCloseNavigation={closeResponsiveSidebar}>
+      {#snippet navigation()}
         <Sidebar
           openGrid={openGridRoute}
-          hidden={false}
+          hidden={!$sideBarStore}
           prefetchCharacter={prefetchCharacterRouteResource}
           {preloadSettingsRoute}
           {preloadGridRoute}
           {preloadPlaygroundRoute} />
-      </div>
-    {/if}
-    <div
-      class="flex h-full min-w-0 grow"
-      data-risu-route-content
-      inert={routeContentBlocked}
-      aria-busy={$routeResourceLoadState.status === 'loading'}>
+      {/snippet}
       <ChatScreen route={renderedRoute} />
-    </div>
+    </ConversationShell>
   {/if}
   {#if routeLoadingVisible}
     <div

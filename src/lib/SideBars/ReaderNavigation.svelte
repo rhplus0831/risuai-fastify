@@ -14,6 +14,7 @@
   import type { PinnedChatItem } from './sidebarMultitasking'
   import { buildSidebarCharacterListItems } from './sidebarCharList'
   import { readerCharacterOrder } from './readerNavigation'
+  import { resolveShellGeometry } from 'src/ts/gui/shellGeometry'
 
   let {
     characters,
@@ -28,10 +29,12 @@
     loadingChats,
     unreadChatIds,
     pins,
+    responsive,
     onHome,
     onGrid,
     onCharacter,
     onChat,
+    onClose,
   }: {
     characters: readonly character[]
     characterOrder: Database['characterOrder']
@@ -45,10 +48,12 @@
     loadingChats: boolean
     unreadChatIds: ReadonlySet<string>
     pins: readonly PinnedChatItem[]
+    responsive: boolean
     onHome: () => void
     onGrid: () => void
     onCharacter: (id: string) => void
     onChat: (characterId: string, chatId: string) => void
+    onClose: () => void
   } = $props()
   let search = $state('')
   let chatSearch = $state('')
@@ -64,7 +69,14 @@
       (folder, index, all) => folder.id && all.findIndex((other) => other.id === folder.id) === index,
     ),
   )
-  const panelWidth = $derived(`${24 + 4 * Math.min(3, Math.max(0, Math.trunc(Number(settings.sideBarSize) || 0)))}rem`)
+  const geometry = $derived(
+    resolveShellGeometry({
+      responsive,
+      sideBarSize: settings.sideBarSize,
+      desktopSidebarColumns: settings.desktopSidebarColumns,
+      mobileSidebarColumns: settings.mobileSidebarColumns,
+    }),
+  )
   const folderIds = $derived(new Set(folders.map((folder) => folder.id)))
   const image = (path: string) => (settings.hideAllImages ? '' : getFileSrc(path))
   const matches = (index: number) =>
@@ -73,8 +85,12 @@
   const deny = () => {}
 </script>
 
-<nav class="flex h-full min-h-0 shrink-0" aria-label={language.observerShell.navigationLabel} data-reader-navigation>
-  <NavigationRail>
+<nav
+  class="flex h-full min-h-0 shrink-0"
+  class:w-full={responsive}
+  aria-label={language.observerShell.navigationLabel}
+  data-reader-navigation>
+  <NavigationRail columns={geometry.columns}>
     <NavigationButton
       label={language.home}
       selected={homeSelected}
@@ -108,13 +124,16 @@
       generatingChatIds={new Set()}
       {unreadChatIds}
       rounded={settings.roundIcons === true}
+      columns={geometry.columns}
       {selectedCharacterId}
       {selectedChatId}
       resolveImage={image}
       onPrefetch={deny}
       onOpen={(item) => onChat(item.characterId, item.chatId)} />
     <div
-      class="flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto gap-2 py-3"
+      class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-2 overflow-x-hidden overflow-y-auto py-3"
+      style:grid-template-columns={`repeat(${geometry.columns}, minmax(0, 1fr))`}
+      data-risu-sidebar-character-columns={geometry.columns}
       data-risu-sidebar-character-controls>
       {#each items as item, index (item.type === 'folder' ? `folder:${item.id}` : `character:${characters[item.index]?.chaId}`)}
         {#if item.type === 'normal' && matches(item.index)}
@@ -161,8 +180,10 @@
   </NavigationRail>
   <div
     class="setting-area h-full max-w-[calc(100vw-8rem)] min-w-0 flex flex-col overflow-hidden bg-darkbg py-4 px-3 text-textcolor"
-    style:width={panelWidth}
-    data-reader-chat-panel>
+    style:width={geometry.panelWidth}
+    style:min-width={responsive ? undefined : geometry.panelWidth}
+    data-reader-chat-panel
+    data-risu-shell-sidebar-panel>
     <label class="mb-3 block text-sm text-textcolor2"
       >{language.search}<input
         class="mt-1 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2 text-textcolor"
@@ -232,6 +253,10 @@
       </div>
     {:else}<p class="text-sm text-textcolor2">{language.connectedReaders.chooseCharacterHelp}</p>{/if}
   </div>
+  {#if responsive}
+    <button type="button" aria-label={language.close} class="h-full min-w-12 grow bg-black/50" onclick={onClose}
+    ></button>
+  {/if}
 </nav>
 
 {#snippet avatar(index: number)}

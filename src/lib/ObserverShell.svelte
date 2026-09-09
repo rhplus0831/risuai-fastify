@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { tick, onMount } from 'svelte'
+  import { tick } from 'svelte'
   import { language } from '../lang'
   import { observerShellLifecycleStore, type ObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
   import { hydrateCharacterShell, characterShellHydrationState } from '../ts/server/characterShellHydration.svelte'
@@ -13,7 +13,7 @@
   import { readerCharacterOrder, readerPinnedChats } from './SideBars/readerNavigation'
   import { getFileSrc } from '../ts/fileSource'
   import { getCharacterDisplayName, getCharacterDisplaySearchText } from '../ts/characterDisplayName'
-  import { modalFocusTrap } from '../ts/gui/modalFocusTrap'
+  import { DynamicGUI } from '../ts/stores.svelte'
   import { unreadChatIds, markChatRead } from '../ts/process/chatUnread.svelte'
   import { type AppRoute } from '../ts/routerRoute'
   import { charactersResourceState } from '../ts/server/resourceState.svelte'
@@ -23,6 +23,7 @@
   import { canUseClientReaderContent, clientSessionStore } from '../ts/clientSession'
   import { resolveReaderRoute, uniqueReaderCharacters, uniqueReaderChatIds } from '../ts/readerRouteScope'
   import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
+  import ConversationShell from './ConversationShell.svelte'
 
   let characters = $derived(charactersResourceState.status === 'ready' ? charactersResourceState.characters : [])
   let routeCharacterId = $derived($currentRoute.kind === 'character' ? $currentRoute.chaId : null)
@@ -65,7 +66,6 @@
       : [],
   )
   let readerNavigationOpen = $state(false)
-  let narrowScreen = $state(false)
   let catalogSearch = $state('')
   let catalogMode = $state<'list' | 'grid'>('list')
   let latestReadingRoute = $state<AppRoute | null>(null)
@@ -124,31 +124,6 @@
     catalogSearch = ''
     readerNavigationOpen = false
   })
-  onMount(() => {
-    const media = window.matchMedia?.('(max-width: 767px)')
-    if (!media) return
-    const update = () => {
-      narrowScreen = media.matches
-    }
-    update()
-    media.addEventListener('change', update)
-    return () => media.removeEventListener('change', update)
-  })
-  function readerDrawerTrap(node: HTMLElement, enabled: boolean) {
-    let trap = enabled ? modalFocusTrap(node) : undefined
-    return {
-      update(active: boolean) {
-        if (active && !trap) trap = modalFocusTrap(node)
-        else if (!active && trap) {
-          trap.destroy()
-          trap = undefined
-        }
-      },
-      destroy() {
-        trap?.destroy()
-      },
-    }
-  }
   let readerNotice = $state('')
   let readerNoticePath = $state('')
   let readerTranscriptModule: Promise<typeof import('./ReaderTranscript.svelte')> | undefined
@@ -399,37 +374,21 @@
     </div>
   </header>
 
-  <div class="flex min-h-0 flex-1 flex-col" data-reader-layout>
-    {#if narrowScreen}
-      <button
-        type="button"
-        class="shrink-0 border-b border-textcolor/15 px-4 py-2 text-left text-sm"
-        aria-controls="reader-navigation"
-        aria-expanded={readerNavigationOpen}
-        onclick={() => {
-          readerNavigationOpen = !readerNavigationOpen
-        }}
-        data-reader-navigation-toggle>{language.connectedReaders.browseConversations}</button>
-    {/if}
-    <div class="flex min-h-0 flex-1">
-      <!-- The dialog semantics and focus trap are enabled together only at mobile widths. -->
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <div
-        id="reader-navigation"
-        class={narrowScreen ? 'fixed inset-0 z-30 flex bg-black/50' : 'flex min-h-0 shrink-0'}
-        hidden={narrowScreen && !readerNavigationOpen}
-        data-modal-root={narrowScreen ? '' : undefined}
-        role={narrowScreen ? 'dialog' : undefined}
-        aria-modal={narrowScreen ? 'true' : undefined}
-        aria-label={language.observerShell.navigationLabel}
-        tabindex={narrowScreen ? -1 : undefined}
-        use:readerDrawerTrap={narrowScreen && readerNavigationOpen}
-        onkeydown={(event) => {
-          if (narrowScreen && event.key === 'Escape') {
-            event.preventDefault()
-            readerNavigationOpen = false
-          }
-        }}>
+  <div class="min-h-0 flex-1" data-reader-layout>
+    <ConversationShell
+      responsive={$DynamicGUI}
+      navigationOpen={!$DynamicGUI || readerNavigationOpen}
+      navigationLabel={language.observerShell.navigationLabel}
+      navigationId="reader-navigation"
+      showNavigationToggle
+      navigationToggleLabel={language.connectedReaders.browseConversations}
+      onOpenNavigation={() => {
+        readerNavigationOpen = true
+      }}
+      onCloseNavigation={() => {
+        readerNavigationOpen = false
+      }}>
+      {#snippet navigation()}
         {#key readerIdentity}
           <ReaderNavigation
             characters={navigationCharacters}
@@ -444,21 +403,17 @@
             loadingChats={$clientSessionStore.managed && !!readerCharacter && isServerCharacterShell(readerCharacter)}
             unreadChatIds={$unreadChatIds}
             pins={navigationPins}
+            responsive={$DynamicGUI}
             onHome={() => showRoute('/')}
             onGrid={() => showRoute('/grid')}
             onCharacter={showCharacter}
-            onChat={showChat} />
-        {/key}
-        {#if narrowScreen}<button
-            type="button"
-            class="self-start rounded-full bg-bgcolor p-3 text-textcolor"
-            aria-label={language.close}
-            onclick={() => {
+            onChat={showChat}
+            onClose={() => {
               readerNavigationOpen = false
-            }}>×</button
-          >{/if}
-      </div>
-      <section class="flex min-h-0 min-w-0 flex-1 flex-col" data-reader-route>
+            }} />
+        {/key}
+      {/snippet}
+      <section class="flex h-full min-h-0 min-w-0 flex-1 flex-col" data-reader-route>
         {#if $clientSessionStore.managed}
           {#if charactersResourceState.status === 'error' || (routeCharacterId && charactersResourceState.rowStatuses[routeCharacterId] === 'error')}
             <p
@@ -589,7 +544,7 @@
           </div>
         {/if}
       </section>
-    </div>
+    </ConversationShell>
   </div>
 </div>
 
