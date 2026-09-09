@@ -759,12 +759,12 @@ async function bootChat(page: Page, chatId: string): Promise<void> {
     )
     .not.toBe('starting')
   const session = await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())
-  if (
+  const needsWriterPromotion =
     session.managed &&
     session.lifecycle === 'reading' &&
-    session.writer?.sessionId &&
+    !!session.writer?.sessionId &&
     session.writer.sessionId !== session.sessionId
-  ) {
+  if (needsWriterPromotion) {
     await page.locator('[data-reader-use-this-device]').click()
     const confirmation = page.getByRole('button', { name: 'Disconnect existing client', exact: true })
     await expect
@@ -801,6 +801,14 @@ async function bootChat(page: Page, chatId: string): Promise<void> {
   }
   await expect(page.locator('.default-chat-screen')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByTestId('default-chat-composer')).toBeVisible()
+  if (needsWriterPromotion) {
+    // Promotion restores the persisted writer selection without committing the
+    // reader's direct-link choice. Select this case's target as a writer.
+    await page.evaluate(
+      (targetPath) => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo(targetPath),
+      `/character/${CHARACTER_ID}/${chatId}`,
+    )
+  }
   await ensureChatGenerationSettingsReady(page, chatId)
 }
 

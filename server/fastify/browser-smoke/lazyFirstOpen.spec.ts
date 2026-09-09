@@ -415,7 +415,7 @@ test('grid, route handlers, Sidebar panels, and chat dialogs open only on first 
 
 test('a delayed emitted stylesheet keeps the previous route mounted until the new route is ready', async ({ page }) => {
   await openLoadedHome(page)
-  const previousRoute = page.locator('[data-risu-route-content]')
+  const previousRoute = page.locator('[data-chat-screen-layout]')
   await previousRoute.evaluate((node) => node.setAttribute('data-previous-route-sentinel', 'true'))
   const settingsChunk = manifest['src/lib/Setting/Settings.svelte']
   const cssFile = settingsChunk.css?.[0]
@@ -520,42 +520,42 @@ test('preset and persona lazy dialogs stay within the viewport after first-open 
   await expect(personaSurface).toHaveCount(0)
 })
 
-test('conservative writer offline first open shows local Retry and succeeds when connectivity returns', async ({
+test('offline first open preserves reader browsing and loads the writer grid after reconnect', async ({
   page,
   context,
 }) => {
-  // This retains the writer route-loader fallback contract. Managed clients
-  // instead show interrupted reading; connectedReaderBrowsing covers that path.
-  const failedPaths: string[] = []
-  page.on('requestfailed', (request) => failedPaths.push(new URL(request.url()).pathname))
   await openLoadedHome(page)
-  const previousRoute = page.locator('[data-risu-route-content]')
-  await previousRoute.evaluate((node) => node.setAttribute('data-previous-route-sentinel', 'true'))
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin)
 
   await context.setOffline(true)
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false)
+  await expect(page.locator('[data-reader-lifecycle-status]')).toContainText(
+    'Connection interrupted. Showing the last received content.',
+  )
   await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo('/grid'))
 
-  const routeError = page.getByTestId('route-resource-error')
-  await expect(routeError).toContainText(browserSmokeEnglish.preloadOfflineError)
-  await expect(page.locator('[data-previous-route-sentinel="true"]')).toBeVisible()
+  await expect(page).toHaveURL(/\/grid$/)
+  await expect(page.locator('[data-risu-grid-catalog]')).toBeVisible()
+  await expect(page.locator('[data-reader-use-this-device]')).toBeDisabled()
   await expect(lazySurface(page, 'character-grid')).toHaveCount(0)
-  const retry = routeError.getByRole('button', { name: browserSmokeEnglish.retry })
-  await expect(retry).toBeFocused()
-  expect(failedPaths.includes(assetPath('src/lib/Others/GridCatalog.svelte'))).toBe(true)
+  await expect(page.getByTestId('default-chat-composer')).toHaveCount(0)
 
   await context.setOffline(false)
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(true)
-  const reloaded = page.waitForNavigation({ waitUntil: 'domcontentloaded' })
-  await retry.click()
-  await reloaded
+  await expect
+    .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().lifecycle), {
+      timeout: 15_000,
+    })
+    .toBe('writing')
   await waitForLoaded(page)
+  await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo('/grid'))
   await expect(lazySurface(page, 'character-grid')).toHaveAttribute('data-risu-lazy-state', 'ready')
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
 })
 
 test('a stale emitted stylesheet shows local recovery and reloads the current route', async ({ page }) => {
   await openLoadedHome(page)
-  const previousRoute = page.locator('[data-risu-route-content]')
+  const previousRoute = page.locator('[data-chat-screen-layout]')
   await previousRoute.evaluate((node) => node.setAttribute('data-previous-route-sentinel', 'true'))
   const settingsChunk = manifest['src/lib/Setting/Settings.svelte']
   const cssFile = settingsChunk.css?.[0]

@@ -350,7 +350,7 @@ test('authored settings survive local backup restore and a full reload', async (
 
   await page.goto(`${harness.baseUrl}/settings/display`)
   await waitForBrowserSmokeLoaded(page)
-  await page.getByRole('button', { name: 'Others', exact: true }).click()
+  await page.getByRole('button', { name: 'Chat appearance', exact: true }).click()
 
   const showMemoryLimit = page.getByRole('checkbox', { name: 'Show Memory Limit', exact: true })
   await expect(showMemoryLimit).not.toBeChecked()
@@ -378,7 +378,7 @@ test('authored settings survive local backup restore and a full reload', async (
 
   await page.goto(`${harness.baseUrl}/settings/display`)
   await waitForBrowserSmokeLoaded(page)
-  await page.getByRole('button', { name: 'Others', exact: true }).click()
+  await page.getByRole('button', { name: 'Chat appearance', exact: true }).click()
   const changedAfterBackup = page.waitForResponse(
     (response) =>
       response.request().method() === 'PATCH' &&
@@ -413,7 +413,7 @@ test('authored settings survive local backup restore and a full reload', async (
   await waitForBrowserSmokeLoaded(page)
   await page.goto(`${harness.baseUrl}/settings/display`)
   await waitForBrowserSmokeLoaded(page)
-  await page.getByRole('button', { name: 'Others', exact: true }).click()
+  await page.getByRole('button', { name: 'Chat appearance', exact: true }).click()
   await expect(page.getByRole('checkbox', { name: 'Show Memory Limit', exact: true })).toBeChecked()
 })
 
@@ -598,13 +598,19 @@ test('a connected reader keeps receiving updates through a writer takeover', asy
     expect(readerWriterBootstraps).toEqual([])
 
     await takeoverPage.goto(harness.baseUrl)
+    await takeoverPage.locator('[data-reader-use-this-device]').click()
     await expect(takeoverPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toBeVisible()
     await takeoverPage.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
     await waitForBrowserSmokeLoaded(takeoverPage)
-    // An unchanged older client keeps its existing frozen-page choice. The new
-    // reader remains connected throughout both foreign-owner frames.
-    await writerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true }).click()
-    await expect(writerPage.locator('#risu-offline-frozen-banner')).toBeVisible()
+    await expect
+      .poll(() =>
+        takeoverPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().lifecycle),
+      )
+      .toBe('writing')
+    // Both other clients remain connected readers after ownership transfers.
+    await expect(writerPage.locator('[data-reader-lifecycle-status]')).toContainText(
+      'Updates from the writer appear here.',
+    )
     await expect(readerPage.locator('[data-reader-lifecycle-status]')).toContainText(
       'Updates from the writer appear here.',
     )
