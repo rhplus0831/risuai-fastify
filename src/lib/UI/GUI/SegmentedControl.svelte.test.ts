@@ -73,6 +73,7 @@ describe('SegmentedControl indicator alignment', () => {
     const buttons = target.querySelectorAll<HTMLButtonElement>('[data-segment-btn]')
     expect(container).toBeTruthy()
     expect(container!.classList.contains('max-w-full')).toBe(true)
+    expect(container!.classList.contains('shrink-0')).toBe(true)
     expect(container!.classList.contains('overflow-x-auto')).toBe(true)
     expect(Array.from(buttons, (button) => button.getAttribute('aria-pressed'))).toEqual(['true', 'false'])
 

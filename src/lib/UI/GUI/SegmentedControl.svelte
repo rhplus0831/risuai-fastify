@@ -85,7 +85,8 @@
   }
 </script>
 
-<div class="segmented-control-container max-w-full overflow-x-auto {className}" bind:this={containerRef}>
+<!-- Horizontally scrollable controls must not collapse when used as flex items in settings columns. -->
+<div class="segmented-control-container max-w-full shrink-0 overflow-x-auto {className}" bind:this={containerRef}>
   <!-- Sliding indicator -->
   <div class="segmented-indicator" class:no-transition={!mounted} style={indicatorStyle}></div>
 
