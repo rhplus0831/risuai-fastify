@@ -3,7 +3,16 @@
   import type { character, Chat, Database } from 'src/ts/storage/database.svelte'
   import { getFileSrc } from 'src/ts/fileSource'
   import { getCharacterDisplayName, getCharacterDisplaySearchText } from 'src/ts/characterDisplayName'
-  import { HomeIcon, Settings, LayoutGridIcon, FolderIcon, FolderOpenIcon, PlusIcon, PuzzleIcon } from '@lucide/svelte'
+  import {
+    ArrowLeftIcon,
+    HomeIcon,
+    Settings,
+    LayoutGridIcon,
+    FolderIcon,
+    FolderOpenIcon,
+    PlusIcon,
+    PuzzleIcon,
+  } from '@lucide/svelte'
   import NavigationRail from './NavigationRail.svelte'
   import NavigationButton from './NavigationButton.svelte'
   import SidebarAvatar from './SidebarAvatar.svelte'
@@ -30,6 +39,8 @@
     unreadChatIds,
     pins,
     responsive,
+    backOnly = false,
+    onBack = () => {},
     onHome,
     onGrid,
     onCharacter,
@@ -49,6 +60,8 @@
     unreadChatIds: ReadonlySet<string>
     pins: readonly PinnedChatItem[]
     responsive: boolean
+    backOnly?: boolean
+    onBack?: () => void
     onHome: () => void
     onGrid: () => void
     onCharacter: (id: string) => void
@@ -90,172 +103,196 @@
   class:w-full={responsive}
   aria-label={language.observerShell.navigationLabel}
   data-reader-navigation>
-  <NavigationRail columns={geometry.columns}>
-    <NavigationButton
-      label={language.home}
-      selected={homeSelected}
-      enabled
-      disabledReason=""
-      onActivate={onHome}
-      onIntent={deny}><HomeIcon /></NavigationButton>
-    <NavigationButton
-      label={language.grid}
-      selected={gridSelected}
-      enabled
-      disabledReason=""
-      onActivate={onGrid}
-      onIntent={deny}><LayoutGridIcon /></NavigationButton>
-    <NavigationButton
-      label={language.settings}
-      selected={false}
-      enabled={false}
-      disabledReason={language.connectedReaders.writeAccessRequired}
-      onActivate={deny}
-      onIntent={deny}><Settings /></NavigationButton>
-    <NavigationButton
-      label={language.plugin}
-      selected={false}
-      enabled={false}
-      disabledReason={language.connectedReaders.writeAccessRequired}
-      onActivate={deny}
-      onIntent={deny}><PuzzleIcon /></NavigationButton>
-    <PinnedChatsRail
-      items={pins}
-      generatingChatIds={new Set()}
-      {unreadChatIds}
-      rounded={settings.roundIcons === true}
-      columns={geometry.columns}
-      {selectedCharacterId}
-      {selectedChatId}
-      resolveImage={image}
-      onPrefetch={deny}
-      onOpen={(item) => onChat(item.characterId, item.chatId)} />
+  {#if backOnly}
     <div
-      class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-2 overflow-x-hidden overflow-y-auto py-3"
-      style:grid-template-columns={`repeat(${geometry.columns}, minmax(0, 1fr))`}
-      data-risu-sidebar-character-columns={geometry.columns}
-      data-risu-sidebar-character-controls>
-      {#each items as item, index (item.type === 'folder' ? `folder:${item.id}` : `character:${characters[item.index]?.chaId}`)}
-        {#if item.type === 'normal' && matches(item.index)}
-          {@render avatar(item.index)}
-        {:else if item.type === 'folder' && (!search || item.folder.some((child) => matches(child.index)))}
-          <div
-            class="flex w-full flex-col items-center gap-2 rounded-md border border-selected py-1"
-            data-reader-character-folder={item.id}>
-            <div class="relative">
-              <SidebarAvatar
-                src="slot"
-                size="56"
-                rounded={settings.roundIcons === true}
-                name={item.name}
-                color={item.color}
-                backgroundimg={item.img ? image(item.img) : ''}
-                ariaExpanded={!!expanded[item.id] || !!search}
-                ariaControls={`reader-character-folder-${index}`}
-                onClick={() => {
-                  expanded[item.id] = !expanded[item.id]
-                }}>
-                {#if settings.showFolderName}<span class="truncate font-bold">{item.name}</span
-                  >{:else if expanded[item.id] || search}<FolderOpenIcon />{:else}<FolderIcon />{/if}
-              </SidebarAvatar>
-            </div>
-            <div
-              id={`reader-character-folder-${index}`}
-              class="flex flex-col items-center gap-2"
-              hidden={!expanded[item.id] && !search}>
-              {#each item.folder.filter( (child) => matches(child.index), ) as child (characters[child.index]?.chaId)}{@render avatar(
-                  child.index,
-                )}{/each}
-            </div>
-          </div>
-        {/if}
-      {/each}
+      class="setting-area h-full max-w-[calc(100vw-3rem)] min-w-0 flex flex-col overflow-hidden bg-darkbg py-4 px-3 text-textcolor"
+      style:width={geometry.panelWidth}
+      style:min-width={responsive ? undefined : geometry.panelWidth}
+      data-reader-back-only
+      data-risu-shell-sidebar-panel>
+      <button
+        type="button"
+        class="flex items-center gap-2 rounded-md border border-selected px-3 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+        onclick={onBack}
+        data-reader-go-back>
+        <ArrowLeftIcon size={18} />
+        <span>{language.goback}</span>
+      </button>
+      <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.composerReadOnly}</p>
     </div>
-    <button
-      type="button"
-      disabled
-      title={language.connectedReaders.writeAccessRequired}
-      aria-label={`${language.addCharacter}: ${language.connectedReaders.writeAccessRequired}`}
-      class="p-3 text-textcolor2 opacity-50"><PlusIcon /></button>
-  </NavigationRail>
-  <div
-    class="setting-area h-full max-w-[calc(100vw-8rem)] min-w-0 flex flex-col overflow-hidden bg-darkbg py-4 px-3 text-textcolor"
-    style:width={geometry.panelWidth}
-    style:min-width={responsive ? undefined : geometry.panelWidth}
-    data-reader-chat-panel
-    data-risu-shell-sidebar-panel>
-    <label class="mb-3 block text-sm text-textcolor2"
-      >{language.search}<input
-        class="mt-1 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2 text-textcolor"
-        type="search"
-        bind:value={search}
-        aria-label={`${language.search}: ${language.character}`} /></label>
-    {#if selectedCharacter}
-      <h2 class="truncate text-lg font-semibold mb-3">{getCharacterDisplayName(selectedCharacter)}</h2>
-      <div class="mb-3 flex border border-selected rounded-md">
-        <span class="grow p-2 text-center">{language.Chat}</span>
-        <button
-          type="button"
-          disabled
-          class="grow border-l border-selected p-2 opacity-50"
-          title={language.connectedReaders.writeAccessRequired}
-          aria-label={`${language.character}: ${language.connectedReaders.writeAccessRequired}`}
-          >{language.character}</button>
+    {#if responsive}
+      <button type="button" aria-label={language.close} class="h-full min-w-12 grow bg-black/50" onclick={onClose}
+      ></button>
+    {/if}
+  {:else}
+    <NavigationRail columns={geometry.columns}>
+      <NavigationButton
+        label={language.home}
+        selected={homeSelected}
+        enabled
+        disabledReason=""
+        onActivate={onHome}
+        onIntent={deny}><HomeIcon /></NavigationButton>
+      <NavigationButton
+        label={language.grid}
+        selected={gridSelected}
+        enabled
+        disabledReason=""
+        onActivate={onGrid}
+        onIntent={deny}><LayoutGridIcon /></NavigationButton>
+      <NavigationButton
+        label={language.settings}
+        selected={false}
+        enabled={false}
+        disabledReason={language.connectedReaders.writeAccessRequired}
+        onActivate={deny}
+        onIntent={deny}><Settings /></NavigationButton>
+      <NavigationButton
+        label={language.plugin}
+        selected={false}
+        enabled={false}
+        disabledReason={language.connectedReaders.writeAccessRequired}
+        onActivate={deny}
+        onIntent={deny}><PuzzleIcon /></NavigationButton>
+      <PinnedChatsRail
+        items={pins}
+        generatingChatIds={new Set()}
+        {unreadChatIds}
+        rounded={settings.roundIcons === true}
+        columns={geometry.columns}
+        {selectedCharacterId}
+        {selectedChatId}
+        resolveImage={image}
+        onPrefetch={deny}
+        onOpen={(item) => onChat(item.characterId, item.chatId)} />
+      <div
+        class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-2 overflow-x-hidden overflow-y-auto py-3"
+        style:grid-template-columns={`repeat(${geometry.columns}, minmax(0, 1fr))`}
+        data-risu-sidebar-character-columns={geometry.columns}
+        data-risu-sidebar-character-controls>
+        {#each items as item, index (item.type === 'folder' ? `folder:${item.id}` : `character:${characters[item.index]?.chaId}`)}
+          {#if item.type === 'normal' && matches(item.index)}
+            {@render avatar(item.index)}
+          {:else if item.type === 'folder' && (!search || item.folder.some((child) => matches(child.index)))}
+            <div
+              class="flex w-full flex-col items-center gap-2 rounded-md border border-selected py-1"
+              data-reader-character-folder={item.id}>
+              <div class="relative">
+                <SidebarAvatar
+                  src="slot"
+                  size="56"
+                  rounded={settings.roundIcons === true}
+                  name={item.name}
+                  color={item.color}
+                  backgroundimg={item.img ? image(item.img) : ''}
+                  ariaExpanded={!!expanded[item.id] || !!search}
+                  ariaControls={`reader-character-folder-${index}`}
+                  onClick={() => {
+                    expanded[item.id] = !expanded[item.id]
+                  }}>
+                  {#if settings.showFolderName}<span class="truncate font-bold">{item.name}</span
+                    >{:else if expanded[item.id] || search}<FolderOpenIcon />{:else}<FolderIcon />{/if}
+                </SidebarAvatar>
+              </div>
+              <div
+                id={`reader-character-folder-${index}`}
+                class="flex flex-col items-center gap-2"
+                hidden={!expanded[item.id] && !search}>
+                {#each item.folder.filter( (child) => matches(child.index), ) as child (characters[child.index]?.chaId)}{@render avatar(
+                    child.index,
+                  )}{/each}
+              </div>
+            </div>
+          {/if}
+        {/each}
       </div>
       <button
         type="button"
         disabled
-        class="mb-3 rounded-md bg-borderc p-2 opacity-50"
         title={language.connectedReaders.writeAccessRequired}
-        aria-label={`${language.newChat}: ${language.connectedReaders.writeAccessRequired}`}>{language.newChat}</button>
-      <input
-        class="mb-3 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2"
-        type="search"
-        bind:value={chatSearch}
-        aria-label={`${language.search}: ${language.observerShell.chatsLabel}`}
-        placeholder={language.search} />
-      <div class="min-h-0 overflow-y-auto grow" data-risu-chat-list="sidebar">
-        {#each folders as folder, index (folder.id)}
-          <div
-            class="flex flex-col mb-2 border border-darkborderc rounded-md"
-            data-risu-chat-folder-id={folder.id}
-            data-risu-chat-folder-folded={!folderOpen(folder.id, folder.folded) ? 'true' : 'false'}>
-            <button
-              type="button"
-              class="flex items-center gap-2 p-2 rounded-md text-left"
-              style:background-color={folder.color ? `var(--reader-folder-${folder.color})` : undefined}
-              style:color={['red', 'yellow', 'green', 'blue', 'indigo', 'purple', 'pink'].includes(folder.color ?? '')
-                ? '#ffffff'
-                : undefined}
-              aria-expanded={folderOpen(folder.id, folder.folded) || !!chatSearch}
-              aria-controls={`reader-chat-folder-${index}`}
-              onclick={() => {
-                chatExpanded[`${selectedCharacterId}:${folder.id}`] = !folderOpen(folder.id, folder.folded)
-              }}><FolderIcon size={16} /><span>{folder.name}</span></button>
+        aria-label={`${language.addCharacter}: ${language.connectedReaders.writeAccessRequired}`}
+        class="p-3 text-textcolor2 opacity-50"><PlusIcon /></button>
+    </NavigationRail>
+    <div
+      class="setting-area h-full max-w-[calc(100vw-8rem)] min-w-0 flex flex-col overflow-hidden bg-darkbg py-4 px-3 text-textcolor"
+      style:width={geometry.panelWidth}
+      style:min-width={responsive ? undefined : geometry.panelWidth}
+      data-reader-chat-panel
+      data-risu-shell-sidebar-panel>
+      <label class="mb-3 block text-sm text-textcolor2"
+        >{language.search}<input
+          class="mt-1 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2 text-textcolor"
+          type="search"
+          bind:value={search}
+          aria-label={`${language.search}: ${language.character}`} /></label>
+      {#if selectedCharacter}
+        <h2 class="truncate text-lg font-semibold mb-3">{getCharacterDisplayName(selectedCharacter)}</h2>
+        <div class="mb-3 flex border border-selected rounded-md">
+          <span class="grow p-2 text-center">{language.Chat}</span>
+          <button
+            type="button"
+            disabled
+            class="grow border-l border-selected p-2 opacity-50"
+            title={language.connectedReaders.writeAccessRequired}
+            aria-label={`${language.character}: ${language.connectedReaders.writeAccessRequired}`}
+            >{language.character}</button>
+        </div>
+        <button
+          type="button"
+          disabled
+          class="mb-3 rounded-md bg-borderc p-2 opacity-50"
+          title={language.connectedReaders.writeAccessRequired}
+          aria-label={`${language.newChat}: ${language.connectedReaders.writeAccessRequired}`}
+          >{language.newChat}</button>
+        <input
+          class="mb-3 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2"
+          type="search"
+          bind:value={chatSearch}
+          aria-label={`${language.search}: ${language.observerShell.chatsLabel}`}
+          placeholder={language.search} />
+        <div class="min-h-0 overflow-y-auto grow" data-risu-chat-list="sidebar">
+          {#each folders as folder, index (folder.id)}
             <div
-              id={`reader-chat-folder-${index}`}
-              class="p-2"
-              hidden={!folderOpen(folder.id, folder.folded) && !chatSearch}>
-              {#each visibleChats.filter((chat) => chat.folderId === folder.id) as chat (chat.id)}{@render chatRow(
-                  chat,
-                )}{/each}
+              class="flex flex-col mb-2 border border-darkborderc rounded-md"
+              data-risu-chat-folder-id={folder.id}
+              data-risu-chat-folder-folded={!folderOpen(folder.id, folder.folded) ? 'true' : 'false'}>
+              <button
+                type="button"
+                class="flex items-center gap-2 p-2 rounded-md text-left"
+                style:background-color={folder.color ? `var(--reader-folder-${folder.color})` : undefined}
+                style:color={['red', 'yellow', 'green', 'blue', 'indigo', 'purple', 'pink'].includes(folder.color ?? '')
+                  ? '#ffffff'
+                  : undefined}
+                aria-expanded={folderOpen(folder.id, folder.folded) || !!chatSearch}
+                aria-controls={`reader-chat-folder-${index}`}
+                onclick={() => {
+                  chatExpanded[`${selectedCharacterId}:${folder.id}`] = !folderOpen(folder.id, folder.folded)
+                }}><FolderIcon size={16} /><span>{folder.name}</span></button>
+              <div
+                id={`reader-chat-folder-${index}`}
+                class="p-2"
+                hidden={!folderOpen(folder.id, folder.folded) && !chatSearch}>
+                {#each visibleChats.filter((chat) => chat.folderId === folder.id) as chat (chat.id)}{@render chatRow(
+                    chat,
+                  )}{/each}
+              </div>
             </div>
-          </div>
-        {/each}
-        {#each visibleChats.filter((chat) => !chat.folderId || !folderIds.has(chat.folderId)) as chat (chat.id)}{@render chatRow(
-            chat,
-          )}{/each}
-        {#if loadingChats}<p role="status" class="text-sm text-textcolor2">
-            {language.loadingChatData}
-          </p>{:else if visibleChats.length === 0}<p role="status" class="text-sm text-textcolor2">
-            {chatSearch ? language.noSearchResults : language.connectedReaders.noConversations}
-          </p>{/if}
-      </div>
-    {:else}<p class="text-sm text-textcolor2">{language.connectedReaders.chooseCharacterHelp}</p>{/if}
-  </div>
-  {#if responsive}
-    <button type="button" aria-label={language.close} class="h-full min-w-12 grow bg-black/50" onclick={onClose}
-    ></button>
+          {/each}
+          {#each visibleChats.filter((chat) => !chat.folderId || !folderIds.has(chat.folderId)) as chat (chat.id)}{@render chatRow(
+              chat,
+            )}{/each}
+          {#if loadingChats}<p role="status" class="text-sm text-textcolor2">
+              {language.loadingChatData}
+            </p>{:else if visibleChats.length === 0}<p role="status" class="text-sm text-textcolor2">
+              {chatSearch ? language.noSearchResults : language.connectedReaders.noConversations}
+            </p>{/if}
+        </div>
+      {:else}<p class="text-sm text-textcolor2">{language.connectedReaders.chooseCharacterHelp}</p>{/if}
+    </div>
+    {#if responsive}
+      <button type="button" aria-label={language.close} class="h-full min-w-12 grow bg-black/50" onclick={onClose}
+      ></button>
+    {/if}
   {/if}
 </nav>
 

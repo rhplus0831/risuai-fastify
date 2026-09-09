@@ -290,8 +290,8 @@ vi.mock('src/ts/process/modules', () => ({
 vi.mock('./lib/ChatScreens/ChatScreen.svelte', async () => ({
   default: (await import('./App.routeEffect.dom.AppMarker.svelte')).default,
 }))
-vi.mock('./lib/ObserverShell.svelte', async () => ({
-  default: (await import('./App.routeEffect.dom.ObserverShellMarker.svelte')).default,
+vi.mock('./lib/Workspace.svelte', async () => ({
+  default: (await import('./App.routeEffect.dom.WorkspaceMarker.svelte')).default,
 }))
 vi.mock('./lib/Others/AlertComp.svelte', async () => ({
   default: (await import('./App.routeEffect.dom.AppMarker.svelte')).default,
@@ -972,7 +972,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     setClientConnectionState('live')
     openPresetList.set(true)
     await mountApp()
-    expect(target.querySelector('[data-testid="observer-shell-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
     expect(target.querySelector('[data-testid="preset-list"]')).toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
@@ -997,7 +997,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     await mountApp()
 
     expect(target.querySelector('[aria-busy="true"][role="status"]')).not.toBeNull()
-    expect(target.querySelector('[data-testid="observer-shell-marker"]')).toBeNull()
+    expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).toBeNull()
     expect(target.querySelector('[data-testid="app-marker"]')).toBeNull()
     expect(target.querySelector('[data-risu-conversation-shell]')).toBeNull()
   })
@@ -1064,10 +1064,10 @@ describe('App route/refreeze mounted DOM behavior', () => {
     setClientProjectionReady(true)
     setClientConnectionState('live')
     await mountApp()
-    expect(target.querySelector('[data-testid="observer-shell-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).not.toBeNull()
     requireClientAuthentication()
     await tick()
-    expect(target.querySelector('[data-testid="observer-shell-marker"]')).toBeNull()
+    expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).toBeNull()
     expect(target.querySelector('[data-reader-auth-required]')?.textContent).toContain('Sign in again')
     const button = target.querySelector('[data-reader-auth-required] button') as HTMLButtonElement
     button.click()
@@ -1091,7 +1091,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     await mountApp()
 
-    expect(target.querySelector('[data-testid="observer-shell-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
     expect(target.querySelector('[data-testid="preset-list"]')).toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
@@ -1137,7 +1137,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     )
   })
 
-  it('returns immediately to the authenticated observer shell after writer capability is revoked', async () => {
+  it('keeps the workspace identity while switching to read-only after writer capability is revoked', async () => {
     if (component) {
       unmount(component)
       component = undefined
@@ -1150,13 +1150,15 @@ describe('App route/refreeze mounted DOM behavior', () => {
     appRouteDomMocks.state.applyRouteCalls = 0
     await mountApp()
 
+    const workspace = target.querySelector('[data-risu-workspace]')
     expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
     expect(getResourceDatabase().characters[0]?.chaId).toBe('char-a')
 
     revokeStartupWriterCapabilities()
     await tick()
 
-    expect(target.querySelector('[data-testid="observer-shell-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-risu-workspace]')).toBe(workspace)
+    expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
     expect(getResourceDatabase().characters[0]?.chaId).toBe('char-a')
     expect(get(selectedCharID)).toBe(0)

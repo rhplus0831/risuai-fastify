@@ -94,11 +94,11 @@ import { resetObserverShellLifecycleForTests, setObserverShellLifecycleMode } fr
 import { selectedCharID } from '../ts/stores.svelte'
 import { recordReaderNavigationSettings } from '../ts/server/readerTranscriptProjection.svelte'
 
-const { default: ObserverShell } = await import('./ObserverShell.svelte')
+const { default: Workspace } = await import('./Workspace.svelte')
 
-type MountedComponent = Parameters<typeof unmount>[0]
+type MountedWorkspace = Parameters<typeof unmount>[0]
 
-let component: MountedComponent | undefined
+let component: MountedWorkspace | undefined
 let target: HTMLElement
 
 function makeShell(characterId: string, name: string) {
@@ -162,7 +162,7 @@ function seedShellDatabase(): void {
 
 async function mountObserverShell(): Promise<void> {
   if (component) await unmount(component)
-  component = mount(ObserverShell, { target })
+  component = mount(Workspace, { target, props: { readerMode: true } })
   await tick()
 }
 
@@ -218,7 +218,7 @@ function beginAutomaticPreview(phase: 'resolving' | 'recovering' | 'resuming') {
   return resumed
 }
 
-describe('pre-writer ObserverShell', () => {
+describe('read-only workspace', () => {
   it.each(['resolving', 'recovering', 'resuming'] as const)(
     'keeps the automatic %s shell visible without detail or transcript work',
     async (phase) => {
@@ -229,7 +229,7 @@ describe('pre-writer ObserverShell', () => {
       await mountObserverShell()
       await new Promise((resolve) => setTimeout(resolve, 0))
       await tick()
-      expect(target.querySelector('[data-observer-shell]')).not.toBeNull()
+      expect(target.querySelector('[data-risu-workspace]')).not.toBeNull()
       expect(target.textContent).toContain('Character A')
       expect(observerShellMocks.hydrateCharacterShell).not.toHaveBeenCalled()
       expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
@@ -345,8 +345,8 @@ describe('pre-writer ObserverShell', () => {
 
     expect(status?.getAttribute('role')).toBe('status')
     expect(status?.getAttribute('aria-live')).toBe('polite')
-    expect(status?.textContent).toContain('Read only')
-    expect(status?.closest('[data-risu-shell-bottom-action]')).not.toBeNull()
+    expect(status?.textContent).toContain(language.observerShell.title)
+    expect(status?.closest('[data-risu-device-access-action]')).not.toBeNull()
     expect(target.querySelector('header')).toBeNull()
     expect(characterButton?.type).toBe('button')
   })
@@ -441,7 +441,7 @@ describe('pre-writer ObserverShell', () => {
     await tick()
 
     expect(document.activeElement).toBe(retry)
-    expect(target.querySelector('[data-observer-shell]')).not.toBeNull()
+    expect(target.querySelector('[data-risu-workspace]')).not.toBeNull()
     expect(target.querySelector('[data-reader-use-this-device]')).toBeNull()
     expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
   })
@@ -480,7 +480,7 @@ describe('pre-writer ObserverShell', () => {
     )
   })
 
-  it('calls the exported promotion operation once and keeps reader navigation available through writer recovery', async () => {
+  it('calls promotion once and keeps only local Back navigation available through recovery', async () => {
     await showConnectedReaderChat()
     const pending = deferredPromotion()
     let operation: ReturnType<typeof beginClientPromotion>
@@ -491,7 +491,7 @@ describe('pre-writer ObserverShell', () => {
     const { promoteConnectedReader } = await import('../ts/bootstrap')
     const button = useThisDeviceButton()
     expect(target.querySelectorAll('[data-reader-use-this-device]')).toHaveLength(1)
-    expect(button.closest('[data-risu-shell-bottom-action]')).not.toBeNull()
+    expect(button.closest('[data-risu-device-access-action]')).not.toBeNull()
     const transcript = target.querySelector('[data-reader-test-transcript]')
     button.click()
     button.click()
@@ -509,13 +509,10 @@ describe('pre-writer ObserverShell', () => {
     expect(transcript?.closest('[inert], [aria-disabled="true"]')).toBeNull()
     expect(getClientSessionSnapshot().lifecycle).toBe('promoting')
 
-    const secondChat = target.querySelector<HTMLButtonElement>('button[aria-label="Open chat Second reader chat"]')!
-    expect(secondChat.disabled).toBe(false)
-    secondChat.focus()
-    secondChat.click()
-    await vi.waitFor(() =>
-      expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-b'),
-    )
+    expect(target.querySelector('button[aria-label="Open chat Second reader chat"]')).toBeNull()
+    const back = target.querySelector<HTMLButtonElement>('[data-reader-go-back]')!
+    expect(back.disabled).toBe(false)
+    expect(back.closest('[inert]')).toBeNull()
     expect(
       authorizeClientWriterRecovery(operation!, {
         databaseLineage: 'database-a',
@@ -528,7 +525,7 @@ describe('pre-writer ObserverShell', () => {
       language.connectedReaders.switching,
     )
     expect(useThisDeviceButton().disabled).toBe(true)
-    expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-b')
+    expect(target.querySelector('[data-reader-test-transcript]')?.getAttribute('data-chat-id')).toBe('chat-a')
     expect(get(selectedCharID)).toBe(-1)
     expect(await countPendingMutationRecords()).toBe(0)
 
@@ -539,6 +536,21 @@ describe('pre-writer ObserverShell', () => {
     expect(target.querySelector('[data-reader-writer-switch-result]')).toBeNull()
     expect(observerShellMocks.retryObserverWriterPromotion).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('makes Back the only interactive sidebar control on a reader chat route', async () => {
+    await showConnectedReaderChat()
+    const navigation = target.querySelector<HTMLElement>('[data-reader-navigation]')!
+    const interactive = [
+      ...navigation.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), [tabindex="0"]'),
+    ]
+
+    expect(interactive).toHaveLength(1)
+    expect(interactive[0].matches('[data-reader-go-back]')).toBe(true)
+    expect(interactive[0].closest('[inert]')).toBeNull()
+    interactive[0].click()
+    await tick()
+    expect(get((await createRouterMock()).currentRoute)).toMatchObject({ kind: 'character', chaId: 'char-a' })
   })
 
   it.each([
@@ -578,7 +590,10 @@ describe('pre-writer ObserverShell', () => {
     expect(button.textContent?.trim()).toBe(language.connectedReaders.useThisDevice)
     expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce()
 
-    const home = target.querySelector<HTMLButtonElement>('nav button')!
+    const back = target.querySelector<HTMLButtonElement>('[data-reader-go-back]')!
+    back.click()
+    await tick()
+    const home = target.querySelector<HTMLButtonElement>('button[aria-label="Home"]')!
     home.click()
     await tick()
     expect(get((await createRouterMock()).currentRoute).kind).toBe('home')

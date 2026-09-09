@@ -35,8 +35,7 @@
   import { pluginRuntimeStateStore } from './ts/plugins/plugins.svelte'
   import Sidebar from './lib/SideBars/Sidebar.svelte'
   import ChatScreen from './lib/ChatScreens/ChatScreen.svelte'
-  import ObserverShell from './lib/ObserverShell.svelte'
-  import ConversationShell from './lib/ConversationShell.svelte'
+  import Workspace from './lib/Workspace.svelte'
   import WriterDraftRecovery from './lib/WriterDraftRecovery.svelte'
   import { showRealmInfoStore } from './ts/realmInfoStore'
   import {
@@ -646,56 +645,60 @@
 
       <span class="text-sm mt-2 text-textcolor2">{LoadingStatusState.text}</span>
     </div>
-  {:else if preWriterObserverMode}
-    <ObserverShell />
-  {:else if $CustomGUISettingMenuStore}
-    <div
-      class="flex h-full min-w-0 grow"
-      data-risu-route-content
-      inert={routeContentBlocked}
-      aria-busy={$routeResourceLoadState.status === 'loading'}>
-      <LazyComponent loader={loadCustomGUISettingMenu} fill testId="custom-gui-settings" />
-    </div>
-  {:else if renderedRoute.kind === 'settings'}
-    <div
-      class="flex h-full min-w-0 grow"
-      data-risu-route-content
-      inert={routeContentBlocked}
-      aria-busy={$routeResourceLoadState.status === 'loading'}>
-      <LazyComponent loader={loadSettings} fill label={language.settings} testId="settings" />
-    </div>
-  {:else if renderedRoute.kind === 'grid'}
-    <div
-      class="flex h-full min-w-0 grow"
-      data-risu-route-content
-      inert={routeContentBlocked}
-      aria-busy={$routeResourceLoadState.status === 'loading'}>
-      <LazyComponent
-        loader={loadGrid}
-        componentProps={{ endGrid: closeGridRoute }}
-        fill
-        label={language.grid}
-        testId="character-grid" />
-    </div>
   {:else}
-    <ConversationShell
-      responsive={$DynamicGUI}
-      navigationOpen={$sideBarStore}
-      navigationLabel={language.menu}
-      contentInert={routeContentBlocked}
-      contentBusy={$routeResourceLoadState.status === 'loading'}
-      onCloseNavigation={closeResponsiveSidebar}>
-      {#snippet navigation()}
-        <Sidebar
-          openGrid={openGridRoute}
-          hidden={!$sideBarStore}
-          prefetchCharacter={prefetchCharacterRouteResource}
-          {preloadSettingsRoute}
-          {preloadGridRoute}
-          {preloadPlaygroundRoute} />
+    <Workspace
+      readerMode={preWriterObserverMode}
+      writerNavigationOpen={$sideBarStore}
+      writerNavigationLabel={language.menu}
+      writerContentInert={routeContentBlocked}
+      writerContentBusy={$routeResourceLoadState.status === 'loading'}
+      onWriterCloseNavigation={closeResponsiveSidebar}>
+      {#snippet writerNavigation()}
+        {#if !$CustomGUISettingMenuStore && renderedRoute.kind !== 'settings'}
+          <Sidebar
+            openGrid={openGridRoute}
+            hidden={!$sideBarStore}
+            prefetchCharacter={prefetchCharacterRouteResource}
+            {preloadSettingsRoute}
+            {preloadGridRoute}
+            {preloadPlaygroundRoute} />
+        {/if}
       {/snippet}
-      <ChatScreen route={renderedRoute} />
-    </ConversationShell>
+      {#snippet writerContent()}
+        {#if $CustomGUISettingMenuStore}
+          <div
+            class="flex h-full min-w-0 grow"
+            data-risu-route-content
+            inert={routeContentBlocked}
+            aria-busy={$routeResourceLoadState.status === 'loading'}>
+            <LazyComponent loader={loadCustomGUISettingMenu} fill testId="custom-gui-settings" />
+          </div>
+        {:else if renderedRoute.kind === 'settings'}
+          <div
+            class="flex h-full min-w-0 grow"
+            data-risu-route-content
+            inert={routeContentBlocked}
+            aria-busy={$routeResourceLoadState.status === 'loading'}>
+            <LazyComponent loader={loadSettings} fill label={language.settings} testId="settings" />
+          </div>
+        {:else if renderedRoute.kind === 'grid'}
+          <div
+            class="flex h-full min-w-0 grow"
+            data-risu-route-content
+            inert={routeContentBlocked}
+            aria-busy={$routeResourceLoadState.status === 'loading'}>
+            <LazyComponent
+              loader={loadGrid}
+              componentProps={{ endGrid: closeGridRoute }}
+              fill
+              label={language.grid}
+              testId="character-grid" />
+          </div>
+        {:else}
+          <ChatScreen route={renderedRoute} />
+        {/if}
+      {/snippet}
+    </Workspace>
   {/if}
   {#if routeLoadingVisible}
     <div
