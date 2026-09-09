@@ -105,7 +105,7 @@ test('a failed locale chunk leaves the current UI usable and a later selection r
   }
 })
 
-test('cold selected-locale failure retries before exposing its first composer', async ({ browser }) => {
+test('cold writer locale recovery stays hidden until retry before exposing its first composer', async ({ browser }) => {
   const database = smallFastBootstrapFixture()
   database.language = 'ko'
   const harness = await startFastBootstrapHarness(database)
@@ -116,19 +116,38 @@ test('cold selected-locale failure retries before exposing its first composer', 
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))
   let requests = 0
+  let markRetryRequested!: () => void
+  const retryRequested = new Promise<void>((resolve) => {
+    markRetryRequested = resolve
+  })
+  let releaseRetry!: () => void
+  const retryReleased = new Promise<void>((resolve) => {
+    releaseRetry = resolve
+  })
   await page.route(
     (url) => url.pathname === `/${koreanAsset}`,
     async (route) => {
       if (++requests === 1) await route.fulfill({ status: 503, body: 'Temporary startup locale failure' })
-      else await route.continue()
+      else {
+        markRetryRequested()
+        await retryReleased
+        await route.continue()
+      }
     },
   )
   try {
     await page.goto(`${harness.baseUrl}${chatPath}`)
-    const error = page.getByRole('alertdialog')
-    await expect(error).toBeVisible()
+    await retryRequested
+    expect(await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())).toMatchObject({
+      lifecycle: 'recovering-writer',
+      projectionReady: false,
+    })
+    expect(
+      await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
+    ).toMatchObject({ canRenderShell: false, canMutate: false, canGenerate: false })
     await expect(page.getByTestId('default-chat-composer')).toHaveCount(0)
-    await error.getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(page.locator('[data-reader-composer]')).toHaveCount(0)
+    releaseRetry()
     await expect(page.getByTestId('default-chat-composer')).toHaveAttribute('aria-label', '메시지 입력')
     expect(
       await page.evaluate(
@@ -143,6 +162,7 @@ test('cold selected-locale failure retries before exposing its first composer', 
     expect(requests).toBe(2)
     expect(errors).toEqual([])
   } finally {
+    releaseRetry()
     await context.close()
     await closeFastBootstrapHarness(harness)
   }
