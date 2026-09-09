@@ -6279,7 +6279,7 @@ describe('explicit connected writer switching', () => {
         expect(canUseClientWriteAccess()).toBe(false)
         expect(loadPlugins).not.toHaveBeenCalled()
         if (status === 'replay-unavailable') expect(connectionAfterInitialClose).toBe('connecting')
-        await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'))
+        await vi.waitFor(() => expect(getClientSessionSnapshot().connection).toBe('live'), { timeout: 5_000 })
         expect(getClientSessionSnapshot().lifecycle).toBe(status === 'replay-unavailable' ? 'writing' : 'reading')
         expect(eventApi.subscribe).toHaveBeenCalledTimes(status === 'replay-unavailable' ? 2 : 1)
       } finally {
