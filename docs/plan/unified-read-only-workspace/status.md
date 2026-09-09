@@ -2,11 +2,11 @@
 
 ## Current Cursor
 
-- State: **Implementation in progress; Phases 0–2 accepted.**
-- Current phase: Phase 3, unified shell and navigation.
-- Next action: replace the dedicated observer presentation with the shared
-  workspace, local reader navigation, restricted-route gate, and top-right
-  device action.
+- State: **Implementation in progress; Phases 0–4 accepted.**
+- Current phase: Phase 5, role transitions and performance.
+- Next action: exercise promotion/demotion/reconnect/auth/lineage/draft and
+  generation transitions, then compare final startup, bundle, and layout
+  evidence with the frozen Phase 0 thresholds.
 - Source baseline reviewed: `0654259fc`.
 - Current architecture and test guides remain authoritative for shipped
   behavior.
@@ -34,8 +34,8 @@
 | [0. Contract, inventory, and baseline](phases/phase-0-contract-inventory-and-baseline.md)       | Accepted | Source/test inventory rechecked; five-sample small/large cold/warm baseline and thresholds recorded below |
 | [1. Access and readiness model](phases/phase-1-access-and-readiness-model.md)                   | Accepted | Derived workspace snapshot and non-replayed reader-route handoff at `ee210deb2`                           |
 | [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Accepted | One-read automatic writer startup and fenced recovery failure at `c6f5871a4`                              |
-| [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Pending  | Not run                                                                                                   |
-| [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Pending  | Not run                                                                                                   |
+| [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Accepted | Persistent shared workspace, Back-only chat navigation, and top-right device action at `1a46fb9ad`        |
+| [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Accepted | Pure disabled reader composer and browser containment at `f99b5a8c2`                                      |
 | [5. Role transitions and performance](phases/phase-5-role-transitions-and-performance.md)       | Pending  | Not run                                                                                                   |
 | [6. Rollout cleanup and closeout](phases/phase-6-rollout-cleanup-and-closeout.md)               | Pending  | Not run                                                                                                   |
 
@@ -271,6 +271,67 @@ pre-acquisition locale preview and reader fallback after retained replay. Those
 tests were migrated to the new ordering and the hidden recovery contract; all
 final focused and browser checks passed. No protocol/server schema change or
 known Phase 2 work remains.
+
+## Phase 3 Acceptance Evidence
+
+Revision `1a46fb9ad` replaced the mutually exclusive App-level observer/writer
+shells with one `Workspace.svelte` and one persistent `ConversationShell` call
+site. Reader navigation/content and writer Sidebar/route content remain
+separate explicit inputs beneath that frame. Mounted App coverage proves the
+workspace DOM identity survives capability loss, while automatic lifecycle
+changes continue to suppress sidebar animation.
+
+The reader controller retains local Home, grid, character, chat, pinned,
+folder, search, drawer, and history state without writer-store or command
+fallbacks. Settings, Playground, plugin/custom-GUI and restored overlays remain
+denied before their loaders are invoked. Reader chat routes render a native
+Back button outside any inert region and no other focusable sidebar control;
+Back changes only the browser route. `DeviceAccessAction.svelte` provides the
+single icon-labelled, single-flight, safe-area-aware top-right promotion action
+and localized live result region across reader routes.
+
+Focused checks passed: 31 workspace DOM tests, 30 App route DOM tests, 3 device
+action tests, 6 Sidebar list tests, 26 Sidebar keyboard tests, 19 grid tests, 15
+hotkey navigation tests, and 9 reader-local mutation tests. The smoke build
+passed with only the pre-existing CSS and large-chunk warnings. The first
+reader browser run reached the unified UI and failed only at the removed legacy
+footer-composer selector, which Phase 4 replaced. Final browser evidence is
+recorded below. No known Phase 3 work remains.
+
+## Phase 4 Acceptance Evidence
+
+Revision `f99b5a8c2` added a pure `ReadOnlyComposer.svelte` inside the normal
+reader chat layout. Its message, translated, Draft, and BTW fields are native
+disabled/read-only controls; send, menu, attachment, sticker, and reroll
+actions are disabled and have no callbacks. It imports no draft store,
+input-hook, plugin, scripting, generation, command, outbox, or writer controller
+and therefore cannot create or restore writer state for a never-writer reader.
+`ReaderTranscript` continues to pass explicit read-only state and certified
+`ChatReadOwners` through the shared `Chats`, `Chat`, and `ChatBody`
+presentation, retaining copy, disclosure, paging, refresh, scrolling, passive
+display, and live generation observation.
+
+| Command                                                                                                              | Result                                        |
+| -------------------------------------------------------------------------------------------------------------------- | --------------------------------------------- |
+| `pnpm test -- src/lib/ChatScreens/ReadOnlyComposer.svelte.test.ts`                                                   | 2 passed                                      |
+| `pnpm test -- src/lib/ReaderTranscript.svelte.test.ts`                                                               | 31 passed                                     |
+| `pnpm test -- src/lib/ChatScreens/ChatBody.svelte.test.ts`                                                           | 17 passed                                     |
+| `pnpm test -- src/lib/ChatScreens/Chats.owner.test.ts`                                                               | 2 passed                                      |
+| `pnpm test -- src/lib/ChatScreens/DefaultChatScreen.composerDrafts.test.ts`                                          | 10 passed                                     |
+| `pnpm test -- src/ts/server/writerDraftRecovery.test.ts`                                                             | 25 passed                                     |
+| `pnpm check`                                                                                                         | 0 errors and 0 warnings                       |
+| `pnpm build:smoke`                                                                                                   | Passed; existing non-fatal warnings unchanged |
+| `pnpm exec playwright test -c playwright.fastify-smoke.config.ts server/fastify/browser-smoke/readOnlyAppUx.spec.ts` | 4 passed in 19.3 s                            |
+
+The real-browser cases cover desktop and mobile reader navigation, Back-only
+chat sidebar, disabled composer/action DOM, safe Settings/Plugin denial,
+folders/search/pins/history, passive message copy/disclosure/link behavior,
+theme and responsive layout, no reader commands/outbox/drafts, cache-pure reads,
+replay refresh, deletion fallback, and authentication loss. Intermediate runs
+identified old full-navigation assumptions after chat entry and a device action
+that overlapped Refresh; journeys were migrated to the Back-first contract and
+the action gained safe header clearance. The final complete run passed. No
+known Phase 4 work remains.
 
 For every completed slice, record the exact changed boundary, source revision,
 focused commands and outcomes, browser or performance artifacts where required,
