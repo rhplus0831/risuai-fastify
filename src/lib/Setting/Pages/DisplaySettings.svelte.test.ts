@@ -59,6 +59,7 @@ describe('DisplaySettings navigation semantics', () => {
     const chat = buttonNamed(language.settingsTabChatAppearance)
     const sound = buttonNamed(language.settingsTabSoundNotifications)
 
+    expect(theme.parentElement?.classList.contains('shrink-0')).toBe(true)
     expect(theme.getAttribute('aria-pressed')).toBe('true')
     expect(layout.getAttribute('aria-pressed')).toBe('false')
     expect(chat.getAttribute('aria-pressed')).toBe('false')

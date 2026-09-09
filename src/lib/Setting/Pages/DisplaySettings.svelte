@@ -24,7 +24,7 @@
 <h2 class="mb-2 text-2xl font-bold mt-2">{language.display}</h2>
 
 {#if submenu !== -1}
-  <div class="mb-4 flex w-full overflow-x-auto rounded-md border border-darkborderc">
+  <div class="mb-4 flex w-full shrink-0 overflow-x-auto rounded-md border border-darkborderc">
     <button
       type="button"
       aria-pressed={submenu === 0}
