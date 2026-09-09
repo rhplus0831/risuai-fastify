@@ -104,6 +104,11 @@
   aria-label={language.observerShell.navigationLabel}
   data-reader-navigation>
   {#if backOnly}
+    <div class="contents" inert aria-hidden="true" data-reader-restricted-rail>
+      <NavigationRail columns={geometry.columns}>
+        <span class="sr-only">{language.connectedReaders.writeAccessRequired}</span>
+      </NavigationRail>
+    </div>
     <div
       class="setting-area h-full max-w-[calc(100vw-3rem)] min-w-0 flex flex-col overflow-hidden bg-darkbg py-4 px-3 text-textcolor"
       style:width={geometry.panelWidth}

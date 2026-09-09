@@ -342,7 +342,7 @@ async function expectReader(client: Client, route: string, chatId: string): Prom
     { timeout: 30_000 },
   )
   await expect(client.page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', chatId)
-  await expect(client.page.locator('[data-reader-composer] textarea')).toBeDisabled()
+  await expect(client.page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
   await expect(client.page.locator('[data-reader-use-this-device]')).toBeEnabled()
   await expect
     .poll(() =>
@@ -474,7 +474,7 @@ async function promoteWithPendingStartupChat(pair: Pair, evidence: Record<string
   evidence.startupTargetScheduling = scheduling
   let promotion: Promise<void> | undefined
   try {
-    promotion = promoteViaUi(pair, pair.a, pair.b, ROUTE_A, 3)
+    promotion = promoteViaUi(pair, pair.a, pair.b, ROUTE_B, 3)
     void promotion.catch(() => undefined)
     await expect.poll(() => characterA.responses.length, { timeout: 30_000 }).toBeGreaterThan(0)
     await expect.poll(() => chatB.responses.length, { timeout: 30_000 }).toBeGreaterThan(0)
@@ -511,16 +511,17 @@ async function promoteWithPendingStartupChat(pair: Pair, evidence: Record<string
     })
 
     characterA.release()
-    await expect
-      .poll(() => durableSnapshot(pair.harness.dataDir).selectedCharacterId, { timeout: 30_000 })
-      .toBe(CHARACTER_A)
-    const selection = durableSnapshot(pair.harness.dataDir).events.find(
-      (event) => event.revision > beforeRouteRelease.revision && event.type === 'character.selected',
-    )
-    expect(selection).toMatchObject({ id: CHARACTER_A, origin_writer_session_id: pair.a.sessionId })
     await expect(pair.a.page.locator('[data-observer-shell]')).toHaveCount(0)
-    await expect(messageBody(pair.a.page, 'switch-seed-A')).toContainText('Committed switch seed A.')
-    await expect(messageBody(pair.a.page, 'switch-seed-A')).toBeVisible()
+    const afterRouteRelease = durableSnapshot(pair.harness.dataDir)
+    expect(afterRouteRelease.selectedCharacterId).toBe(CHARACTER_B)
+    expect(
+      afterRouteRelease.events.filter(
+        (event) =>
+          event.revision > beforeRouteRelease.revision &&
+          event.type === 'character.selected' &&
+          event.id === CHARACTER_A,
+      ),
+    ).toEqual([])
     const beforeChatRelease = await pair.a.page.evaluate(() => {
       const smoke = window.__RISU_FASTIFY_BROWSER_SMOKE__!
       return {
@@ -530,11 +531,15 @@ async function promoteWithPendingStartupChat(pair: Pair, evidence: Record<string
         evaluations: smoke.getStartupChatReadinessEvaluations(),
       }
     })
-    expect(beforeChatRelease.route).toMatchObject({ path: ROUTE_A, chaId: CHARACTER_A, chatId: CHAT_A })
+    expect(beforeChatRelease.route).toMatchObject({ path: ROUTE_B, chaId: CHARACTER_B, chatId: CHAT_B })
     expect(beforeChatRelease.capabilities).toMatchObject({ canMutate: true, canGenerate: false })
     expect(beforeChatRelease.evaluations).toContainEqual(evaluation)
     expect(chatB.responses.every((response) => !response.delivered)).toBe(true)
-    scheduling.acceptedSelection = selection
+    scheduling.retainedRouteWasNotPersisted = {
+      beforeRevision: beforeRouteRelease.revision,
+      afterRevision: afterRouteRelease.revision,
+      selectedCharacterId: afterRouteRelease.selectedCharacterId,
+    }
     scheduling.beforeChatRelease = beforeChatRelease
 
     chatB.release()
@@ -749,11 +754,13 @@ test('Use this device switches A to B to A in place while preserving reader rout
     await pair.a.page.getByTestId('default-chat-composer').fill(UNSENT_A)
     await expect(pair.a.page.getByTestId('default-chat-composer')).toHaveValue(UNSENT_A)
 
+    await pair.b.page.locator('[data-reader-go-back]').click()
     await pair.b.page.getByRole('button', { name: 'Open Switch Character B', exact: true }).click()
     await pair.b.page.getByRole('button', { name: 'Open chat Switch Chat B', exact: true }).click()
     await expectReader(pair.b, ROUTE_B, CHAT_B)
     await expect(messageBody(pair.b.page, 'switch-seed-B')).toContainText('Committed switch seed B.')
-    expect(durableSnapshot(pair.harness.dataDir).selectedCharacterId).toBe(CHARACTER_A)
+    const beforeReaderPromotion = durableSnapshot(pair.harness.dataDir)
+    expect(beforeReaderPromotion.selectedCharacterId).toBe(CHARACTER_A)
 
     const [writerDemotionSampler, readerPromotionSampler, writerDemotionShifts, readerPromotionShifts] =
       await Promise.all([
@@ -762,7 +769,7 @@ test('Use this device switches A to B to A in place while preserving reader rout
         startLayoutShiftSampler(pair.a.page, SHELL_LAYOUT_SELECTORS, 'writer-demotion'),
         startLayoutShiftSampler(pair.b.page, SHELL_LAYOUT_SELECTORS, 'reader-promotion'),
       ])
-    await promoteViaUi(pair, pair.b, pair.a, ROUTE_B, 2)
+    await promoteViaUi(pair, pair.b, pair.a, ROUTE_A, 2)
     await expectReader(pair.a, ROUTE_A, CHAT_A)
     const [writerDemotionFrames, readerPromotionFrames] = await Promise.all([
       stopLayoutFrameSampler(pair.a.page, writerDemotionSampler),
@@ -792,6 +799,36 @@ test('Use this device switches A to B to A in place while preserving reader rout
         `${transition}: ${JSON.stringify(shifts, null, 2)}`,
       ).toEqual([])
     }
+    const afterReaderPromotion = durableSnapshot(pair.harness.dataDir)
+    expect(afterReaderPromotion.selectedCharacterId).toBe(CHARACTER_A)
+    expect(
+      afterReaderPromotion.events.filter(
+        (event) =>
+          event.revision > beforeReaderPromotion.revision &&
+          event.type === 'character.selected' &&
+          event.id === CHARACTER_B,
+      ),
+    ).toEqual([])
+    evidence.readerRouteWasNotPersisted = {
+      beforeRevision: beforeReaderPromotion.revision,
+      afterRevision: afterReaderPromotion.revision,
+      selectedCharacterId: afterReaderPromotion.selectedCharacterId,
+    }
+
+    await pair.b.page.getByRole('button', { name: 'Switch Character B', exact: true }).click()
+    await pair.b.page.getByRole('button', { name: 'Open most recent chat Switch Chat B', exact: true }).click()
+    await expect(pair.b.page).toHaveURL(new RegExp(`${ROUTE_B}$`))
+    await expect
+      .poll(() => durableSnapshot(pair.harness.dataDir).selectedCharacterId, { timeout: 30_000 })
+      .toBe(CHARACTER_B)
+    const writerSelection = durableSnapshot(pair.harness.dataDir).events.find(
+      (event) =>
+        event.revision > afterReaderPromotion.revision &&
+        event.type === 'character.selected' &&
+        event.id === CHARACTER_B,
+    )
+    expect(writerSelection).toMatchObject({ origin_writer_session_id: pair.b.sessionId })
+    evidence.writerSelection = writerSelection
     await expect(pair.b.page.getByTestId('default-chat-composer')).toHaveValue('')
     await expect
       .poll(async () =>
@@ -828,6 +865,22 @@ test('Use this device switches A to B to A in place while preserving reader rout
 
     await promoteWithPendingStartupChat(pair, evidence)
     await expectReader(pair.b, ROUTE_B, CHAT_B)
+    const beforeWriterASelection = durableSnapshot(pair.harness.dataDir)
+    expect(beforeWriterASelection.selectedCharacterId).toBe(CHARACTER_B)
+    await pair.a.page.getByRole('button', { name: 'Switch Character A', exact: true }).click()
+    await pair.a.page.getByRole('button', { name: 'Open most recent chat Switch Chat A', exact: true }).click()
+    await expect(pair.a.page).toHaveURL(new RegExp(`${ROUTE_A}$`))
+    await expect
+      .poll(() => durableSnapshot(pair.harness.dataDir).selectedCharacterId, { timeout: 30_000 })
+      .toBe(CHARACTER_A)
+    const writerASelection = durableSnapshot(pair.harness.dataDir).events.find(
+      (event) =>
+        event.revision > beforeWriterASelection.revision &&
+        event.type === 'character.selected' &&
+        event.id === CHARACTER_A,
+    )
+    expect(writerASelection).toMatchObject({ origin_writer_session_id: pair.a.sessionId })
+    evidence.writerASelection = writerASelection
     await expect(pair.a.page.getByTestId('default-chat-composer')).toHaveValue(UNSENT_A)
     await expectStaleMessageRejected(pair, pair.b, headersB, 'switch-stale-b-message')
     evidence.writerARevision = await commitVisibleMessage(
