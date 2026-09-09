@@ -267,6 +267,28 @@ describe('Sidebar character keyboard activation', () => {
     expect(pinnedChats?.dataset.risuPinnedChatColumns).toBe('2')
   })
 
+  it('keeps the menu button aligned with the first rail column at the top or bottom', async () => {
+    settingsResourceState.value.desktopSidebarColumns = 4
+    component = mount(Sidebar, { target })
+    await tick()
+
+    let menuButton = target.querySelector<HTMLButtonElement>('button[aria-label="Menu"]')
+    expect(menuButton).toBeTruthy()
+    expect(menuButton!.classList.contains('self-start')).toBe(true)
+    expect(menuButton!.classList.contains('ml-3')).toBe(true)
+
+    unmount(component)
+    component = undefined
+    settingsResourceState.value.hamburgerButtonBottom = true
+    component = mount(Sidebar, { target })
+    await tick()
+
+    menuButton = target.querySelector<HTMLButtonElement>('button[aria-label="Menu"]')
+    expect(menuButton).toBeTruthy()
+    expect(menuButton!.classList.contains('self-start')).toBe(true)
+    expect(menuButton!.classList.contains('ml-3')).toBe(true)
+  })
+
   it('flows expanded folder bots into subsequent cells with shared subtle group styling', async () => {
     seedFolderSidebarDatabase()
     settingsResourceState.value.desktopSidebarColumns = 4

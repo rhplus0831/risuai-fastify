@@ -840,7 +840,7 @@
       <button
         aria-label={language.menu}
         aria-expanded={menuMode === 1}
-        class="flex h-8 min-h-8 w-14 min-w-14 cursor-pointer text-white mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-blue-500"
+        class="ml-3 flex h-8 min-h-8 w-14 min-w-14 cursor-pointer self-start text-white mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-blue-500"
         onclick={() => {
           menuMode = 1 - menuMode
         }}
@@ -1217,7 +1217,7 @@
       <button
         aria-label={language.menu}
         aria-expanded={menuMode === 1}
-        class="flex h-8 min-h-8 w-14 min-w-14 cursor-pointer text-white mb-2 mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-blue-500"
+        class="ml-3 flex h-8 min-h-8 w-14 min-w-14 cursor-pointer self-start text-white mb-2 mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-blue-500"
         onclick={() => {
           menuMode = 1 - menuMode
         }}
