@@ -33,6 +33,32 @@ const displayPerformance = {
   timeToFirstTransformMs: 175,
   resultCounts: { ok: 2, clientFallback: 0, stale: 0, error: 0 },
   timings: { scopeLoadMs: 120, scopeDecodeMs: 10, sharedDependencyMs: 40, luaMs: 2, regexMs: 3 },
+  preparation: {
+    loadPath: 'selected',
+    loads: {
+      settings: { readMs: 2, parseMs: 3, jsonValues: 1, jsonSize: 'up-to-64KiB' },
+      target: { readMs: 1, parseMs: 2, jsonValues: 2, jsonSize: 'up-to-1MiB' },
+      messages: { readMs: 2, parseMs: 1, jsonValues: 100, jsonSize: 'up-to-4MiB' },
+      memory: { readMs: 1 },
+      promptPresets: { readMs: 1, parseMs: 1, jsonValues: 1, jsonSize: 'up-to-4KiB' },
+      personas: { readMs: 1, parseMs: 1, jsonValues: 1, jsonSize: 'up-to-4KiB' },
+      modules: { readMs: 10, parseMs: 20, jsonValues: 3, jsonSize: 'up-to-16MiB' },
+    },
+    configurationMs: 35,
+    dependencyBuildMs: 1,
+    dependencyNormalizeMs: 25,
+    dependencySerializeMs: 10,
+    dependencyHashMs: 3,
+    dependencyJsonSize: 'up-to-16MiB',
+    measurementMs: 1,
+    activeModuleCount: 3,
+    moduleAssetCount: 100,
+    moduleRegexCount: 10,
+    moduleTriggerCount: 5,
+    characterAssetCount: 10,
+    characterRegexCount: 2,
+    characterTriggerCount: 1,
+  },
 }
 const examples = [
   {
@@ -142,9 +168,28 @@ describe('exact v2 diagnostic families', () => {
       { timings: { scopeLoadMs: 86_400_001 } },
       { timings: { scopeLoadMs: 1, script: 'PRIVATE-SCRIPT' } },
       { resultCounts: { ...displayPerformance.resultCounts, messageId: 'PRIVATE-ID' } },
+      { preparation: { dependencyHashMs: -1 } },
+      { preparation: { dependencyJsonSize: 'PRIVATE-JSON' } },
+      { preparation: { activeModuleCount: 1_000_000_001 } },
+      { preparation: { loads: { 'PRIVATE-OWNER': { readMs: 1 } } } },
+      { preparation: { loads: { modules: { readMs: Infinity } } } },
+      { preparation: { loads: { modules: { jsonValues: -1 } } } },
+      { preparation: { loads: { modules: { json: 'PRIVATE-JSON' } } } },
     ])
       expect(isDiagnosticEventV2({ ...entry, ...extra })).toBe(false)
     expect(JSON.stringify(record).length).toBeLessThan(4096)
+    const { preparation, ...oldEntry } = entry
+    expect(isDiagnosticEventV2(oldEntry)).toBe(true)
+    // Allow large bounded numbers and every owner without exceeding journal admission.
+    const maximal = JSON.parse(JSON.stringify(record), (key, value) => {
+      if (typeof value !== 'number') return value
+      if (key.endsWith('Ms')) return 86_400_000
+      if ((key.endsWith('Count') && key !== 'targetCount') || key === 'jsonValues') return 1_000_000_000
+      return value
+    })
+    maximal.entry.preparation.legacyLoadMs = 86_400_000
+    expect(isDiagnosticEventV2(maximal.entry)).toBe(true)
+    expect(Buffer.byteLength(JSON.stringify(maximal))).toBeLessThan(4096)
   })
   it.each(examples)('projects only approved facts for $category and rejects content-bearing restoration', (example) => {
     const entry = { ...base, ...example }

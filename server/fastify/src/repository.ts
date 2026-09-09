@@ -25,6 +25,12 @@ import { assessDatabaseInitialization, InitializeConflictError } from './databas
 import { COMMAND_EVENT_CATALOG, persistRevisionedCommandEvent, type CommandEvent } from './commands/events.js'
 import { getDatabaseLineage, getDatabaseWriterMetadata, rotateDatabaseLineage } from './databaseLineage.js'
 import { recordTableWrite } from './protocolMetrics.js'
+import {
+  readDisplaySourceData,
+  parseDisplaySourceJson,
+  type DisplaySourceLoadMeasurement,
+  type DisplaySourceDiagnostics,
+} from './displaySourceDiagnostics.js'
 import { bumpGenerationOperationProjectionEpoch, createGenerationOperationTables } from './generationOperations.js'
 import {
   GREETING_TRANSLATIONS_PORTABLE_FIELD,
@@ -693,17 +699,23 @@ export function createSettingsTable(db: DatabaseSync): void {
   `)
 }
 
-export function loadSettingsFromSqlite(db: DatabaseSync): Record<string, unknown> | null {
-  const row = db.prepare('SELECT data_json FROM settings WHERE id = 1').get() as { data_json: string } | undefined
-  return parseAndRepairSettingsRow(db, row)
+export function loadSettingsFromSqlite(
+  db: DatabaseSync,
+  measurement?: DisplaySourceLoadMeasurement,
+): Record<string, unknown> | null {
+  const row = readDisplaySourceData(measurement, () =>
+    db.prepare('SELECT data_json FROM settings WHERE id = 1').get(),
+  ) as { data_json: string } | undefined
+  return parseAndRepairSettingsRow(db, row, measurement)
 }
 
 function parseAndRepairSettingsRow(
   db: DatabaseSync,
   row: { data_json: string } | undefined,
+  measurement?: DisplaySourceLoadMeasurement,
 ): Record<string, unknown> | null {
   if (!row) return null
-  const parsed = JSON.parse(row.data_json)
+  const parsed = parseDisplaySourceJson(row.data_json, measurement)
   if (!isRecord(parsed)) return null
   if (repairPersistedModelProfileInlineSecrets(parsed)) {
     db.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(parsed))
@@ -2201,8 +2213,8 @@ function isRecord(value: unknown): value is JsonRecord {
   return !!value && typeof value === 'object' && !Array.isArray(value)
 }
 
-function parseStoredChatRow(dataJson: string): unknown {
-  const chat = JSON.parse(dataJson) as unknown
+function parseStoredChatRow(dataJson: string, measurement?: DisplaySourceLoadMeasurement): unknown {
+  const chat = parseDisplaySourceJson(dataJson, measurement)
   if (isRecord(chat)) repairStoredChatGenerationSettings(chat)
   return chat
 }
@@ -2696,20 +2708,24 @@ function readGenerationCollectionSelection(
   tablePresent: number,
   id: unknown,
   limit: number,
+  measurement?: DisplaySourceLoadMeasurement,
 ): JsonRecord[] {
   if (typeof id !== 'string' || id.trim() === '') return []
   if (!tablePresent)
     return generationRecords(embedded)
       .filter((record) => record.id === id)
       .slice(0, limit)
-  const rows = prepareGenerationRead(
-    db,
-    `SELECT data_json FROM ${table}
+  const rows = readDisplaySourceData(measurement, () =>
+    prepareGenerationRead(
+      db,
+      `SELECT data_json FROM ${table}
     WHERE json_extract(data_json, '$.id') = ? ORDER BY position LIMIT ?`,
-    [id, limit],
-  ).all(id, limit)
+      [id, limit],
+    ).all(id, limit),
+  )
   return rows.flatMap((row) => {
-    const parsed: unknown = typeof row.data_json === 'string' ? JSON.parse(row.data_json) : undefined
+    const parsed: unknown =
+      typeof row.data_json === 'string' ? parseDisplaySourceJson(row.data_json, measurement) : undefined
     return isRecord(parsed) && parsed.id === id ? [parsed] : []
   })
 }
@@ -2720,6 +2736,7 @@ function readGenerationModules(
   tablePresent: number,
   identifiers: readonly string[],
   includeBodies: boolean,
+  measurement?: DisplaySourceLoadMeasurement,
 ): JsonRecord[] {
   if (identifiers.length === 0) return []
   let records: JsonRecord[]
@@ -2737,16 +2754,19 @@ function readGenerationModules(
       'namespace', json_extract(data_json, '$.namespace'),
       'customModuleToggle', json_extract(data_json, '$.customModuleToggle'))`
     const selection = JSON.stringify(identifiers)
-    const rows = prepareGenerationRead(
-      db,
-      `SELECT ${projection} AS data_json FROM modules
+    const rows = readDisplaySourceData(measurement, () =>
+      prepareGenerationRead(
+        db,
+        `SELECT ${projection} AS data_json FROM modules
       WHERE json_extract(data_json, '$.id') IN (SELECT value FROM json_each(?))
         OR json_extract(data_json, '$.namespace') IN (SELECT value FROM json_each(?))
       ORDER BY position`,
-      [selection, selection],
-    ).all(selection, selection)
+        [selection, selection],
+      ).all(selection, selection),
+    )
     records = rows.flatMap((row) => {
-      const parsed: unknown = typeof row.data_json === 'string' ? JSON.parse(row.data_json) : undefined
+      const parsed: unknown =
+        typeof row.data_json === 'string' ? parseDisplaySourceJson(row.data_json, measurement) : undefined
       return isRecord(parsed) ? [parsed] : []
     })
   }
@@ -2770,18 +2790,24 @@ function generationStringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
 }
 
-function hydrateGenerationTargetChat(db: DatabaseSync, chat: JsonRecord, chatId: string): void {
-  const messages = prepareGenerationRead(
-    db,
-    'SELECT json FROM messages WHERE alternate = 0 AND chat_id = ? ORDER BY seq',
-    [chatId],
-  ).all(chatId) as { json: string }[]
-  if (messages.length > 0) chat.message = messages.map((row) => JSON.parse(row.json) as unknown)
+function hydrateGenerationTargetChat(
+  db: DatabaseSync,
+  chat: JsonRecord,
+  chatId: string,
+  measurements?: { messages: DisplaySourceLoadMeasurement; memory: DisplaySourceLoadMeasurement },
+): void {
+  const messages = readDisplaySourceData(measurements?.messages, () =>
+    prepareGenerationRead(db, 'SELECT json FROM messages WHERE alternate = 0 AND chat_id = ? ORDER BY seq', [
+      chatId,
+    ]).all(chatId),
+  ) as { json: string }[]
+  if (messages.length > 0)
+    chat.message = messages.map((row) => parseDisplaySourceJson(row.json, measurements?.messages))
   else if (!Array.isArray(chat.message)) chat.message = []
-  const hypa = prepareGenerationRead(db, 'SELECT json FROM chat_hypa_v3 WHERE chat_id = ?', [chatId]).get(chatId) as
-    | { json: string }
-    | undefined
-  if (hypa) chat.hypaV3Data = JSON.parse(hypa.json) as unknown
+  const hypa = readDisplaySourceData(measurements?.memory, () =>
+    prepareGenerationRead(db, 'SELECT json FROM chat_hypa_v3 WHERE chat_id = ?', [chatId]).get(chatId),
+  ) as { json: string } | undefined
+  if (hypa) chat.hypaV3Data = parseDisplaySourceJson(hypa.json, measurements?.memory)
 }
 
 function loadLegacyGenerationSelectedRows(
@@ -2844,6 +2870,7 @@ function readDisplayCollectionSelections(
   embedded: unknown,
   tablePresent: number,
   ids: readonly string[],
+  measurement?: DisplaySourceLoadMeasurement,
 ): JsonRecord[] {
   if (ids.length === 0) return []
   const wanted = new Set(ids)
@@ -2851,15 +2878,18 @@ function readDisplayCollectionSelections(
     return generationRecords(embedded).filter((record) => typeof record.id === 'string' && wanted.has(record.id))
   }
   const selection = JSON.stringify(ids)
-  const rows = prepareGenerationRead(
-    db,
-    `SELECT data_json FROM ${table}
+  const rows = readDisplaySourceData(measurement, () =>
+    prepareGenerationRead(
+      db,
+      `SELECT data_json FROM ${table}
     WHERE json_extract(data_json, '$.id') IN (SELECT value FROM json_each(?))
     ORDER BY position`,
-    [selection],
-  ).all(selection)
+      [selection],
+    ).all(selection),
+  )
   return rows.flatMap((row) => {
-    const parsed: unknown = typeof row.data_json === 'string' ? JSON.parse(row.data_json) : undefined
+    const parsed: unknown =
+      typeof row.data_json === 'string' ? parseDisplaySourceJson(row.data_json, measurement) : undefined
     return isRecord(parsed) && typeof parsed.id === 'string' && wanted.has(parsed.id) ? [parsed] : []
   })
 }
@@ -2893,6 +2923,7 @@ function selectDisplaySourceConfiguration(
   presence: Pick<DisplaySourceTargetRow, 'prompt_presets_present' | 'personas_present' | 'modules_present'>,
   currentChar: JsonRecord,
   currentChat: JsonRecord,
+  diagnostics?: DisplaySourceDiagnostics,
 ): JsonRecord {
   const chatSettings = normalizeStoredChatGenerationSettings(currentChat.generationSettings)
   const promptPresets = readGenerationCollectionSelection(
@@ -2902,6 +2933,7 @@ function selectDisplaySourceConfiguration(
     presence.prompt_presets_present,
     chatSettings?.promptPresetId,
     2,
+    diagnostics?.load('promptPresets'),
   )
   const globalPersonaId =
     typeof settings.selectedPersonaId === 'string' && settings.selectedPersonaId.trim()
@@ -2915,6 +2947,7 @@ function selectDisplaySourceConfiguration(
     settings.personas,
     presence.personas_present,
     personaIds,
+    diagnostics?.load('personas'),
   )
   const agentPresetId = resolveEffectiveAgentPresetId(
     {
@@ -2941,7 +2974,14 @@ function selectDisplaySourceConfiguration(
     ]),
   ]
   const modules = dedupeDisplayModules(
-    readGenerationModules(db, settings.modules, presence.modules_present, identifiers, true),
+    readGenerationModules(
+      db,
+      settings.modules,
+      presence.modules_present,
+      identifiers,
+      true,
+      diagnostics?.load('modules'),
+    ),
   )
   const database = { ...settings }
   for (const field of COLLECTION_FIELDS) delete database[field]
@@ -2961,9 +3001,25 @@ function displaySourcePersistedFromRows(
   chat: JsonRecord,
   chatId: string,
   hydrate: boolean,
+  diagnostics?: DisplaySourceDiagnostics,
 ): Persisted {
-  if (hydrate) hydrateGenerationTargetChat(db, chat, chatId)
-  const database = selectDisplaySourceConfiguration(db, settings, presence, character, chat)
+  if (hydrate)
+    hydrateGenerationTargetChat(
+      db,
+      chat,
+      chatId,
+      diagnostics
+        ? {
+            messages: diagnostics.load('messages'),
+            memory: diagnostics.load('memory'),
+          }
+        : undefined,
+    )
+  const selectConfiguration = () =>
+    selectDisplaySourceConfiguration(db, settings, presence, character, chat, diagnostics)
+  const database = diagnostics
+    ? diagnostics.measurePreparation('configurationMs', selectConfiguration)
+    : selectConfiguration()
   character.chatPage = 0
   character.chats = [chat]
   database.currentChar = 0
@@ -2980,34 +3036,41 @@ export function loadPersistedForDisplaySource(
   db: DatabaseSync,
   dataDir: string,
   target: GenerationLoadTarget,
+  diagnostics?: DisplaySourceDiagnostics,
 ): Persisted {
-  const settings = loadSettingsFromSqlite(db)
+  if (diagnostics) diagnostics.preparation.loadPath = 'selected'
+  const settings = loadSettingsFromSqlite(db, diagnostics?.load('settings'))
   if (settings !== null) {
-    const row = prepareGenerationRead(
-      db,
-      `SELECT character.data_json AS character_json, chat.data_json AS chat_json,
+    const measurement = diagnostics?.load('target')
+    const row = readDisplaySourceData(measurement, () =>
+      prepareGenerationRead(
+        db,
+        `SELECT character.data_json AS character_json, chat.data_json AS chat_json,
         EXISTS(SELECT 1 FROM prompt_presets) AS prompt_presets_present,
         EXISTS(SELECT 1 FROM personas) AS personas_present,
         EXISTS(SELECT 1 FROM modules) AS modules_present
       FROM chats AS chat JOIN characters AS character ON character.id = chat.character_id
       WHERE chat.id = ? AND character.id = ?`,
-      [target.chatId, target.characterId],
-    ).get(target.chatId, target.characterId) as unknown as DisplaySourceTargetRow | undefined
+        [target.chatId, target.characterId],
+      ).get(target.chatId, target.characterId),
+    ) as unknown as DisplaySourceTargetRow | undefined
     if (row) {
-      const character = JSON.parse(row.character_json) as unknown
-      const chat = parseStoredChatRow(row.chat_json)
+      const character = parseDisplaySourceJson(row.character_json, measurement)
+      const chat = parseStoredChatRow(row.chat_json, measurement)
       if (
         isRecord(character) &&
         character.chaId === target.characterId &&
         isRecord(chat) &&
         chat.id === target.chatId
       ) {
-        return displaySourcePersistedFromRows(db, settings, row, character, chat, target.chatId, true)
+        return displaySourcePersistedFromRows(db, settings, row, character, chat, target.chatId, true, diagnostics)
       }
     }
   }
 
-  const legacy = loadLegacyGenerationSelectedRows(db, dataDir, target, true)
+  if (diagnostics) diagnostics.preparation.loadPath = 'legacy'
+  const loadLegacy = () => loadLegacyGenerationSelectedRows(db, dataDir, target, true)
+  const legacy = diagnostics ? diagnostics.measurePreparation('legacyLoadMs', loadLegacy) : loadLegacy()
   if (!legacy.rows) return emptyPersisted()
   return displaySourcePersistedFromRows(
     db,
@@ -3017,6 +3080,7 @@ export function loadPersistedForDisplaySource(
     legacy.rows.currentChat,
     target.chatId,
     false,
+    diagnostics,
   )
 }
 

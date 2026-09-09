@@ -278,7 +278,11 @@ When remote/browser diagnostic collection is enabled, a content-free
 conversion and cache measurements under the request UID without raw metrics.
 Persistence loading and strict decoding have separate timings. Cache hits omit
 unexecuted conversion stages, and failed/stale/aborted batches retain reached
-stages. See [remote diagnostics](development-and-observability.md) for measurement
+stages. Optional preparation detail separates selected-owner SQLite reads from
+JSON parsing and shared dependency construction, canonical normalization,
+serialization, and hashing. Bucketed JSON sizes and loaded-definition counts
+identify large inputs without exporting content. Measurement does not change
+the canonical fingerprint or repeat serialization. See [remote diagnostics](development-and-observability.md) for measurement
 boundaries and the helper query.
 
 A generation-input shape that the narrow display decoder cannot support is a

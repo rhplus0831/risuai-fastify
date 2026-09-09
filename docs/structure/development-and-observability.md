@@ -215,6 +215,52 @@ event to identify time outside the service. Browser HTTP duration ends when
 subsequent stream/JSON/Markdown/DOM work. Use result timings and render readiness
 in addition to HTTP duration when comparing streaming behavior.
 
+Display summaries can also contain an optional `preparation` breakdown. Older
+records without it remain valid. Collection uses the same diagnostic context;
+no extra production flag, profiling endpoint, or raw payload capture is needed.
+
+| Field | Measurement boundary |
+| --- | --- |
+| `loadPath` | `selected` row loading or `legacy` compatibility fallback. |
+| `loads.<owner>.readMs` | Existing SQLite statement preparation/binding, execution and returned-row materialization; excludes JavaScript JSON parsing. Owners are `settings`, `target`, `messages`, `memory`, `promptPresets`, `personas`, and `modules`. |
+| `loads.<owner>.parseMs` | Existing `JSON.parse` calls, including failed attempts; excludes byte accounting and subsequent compatibility repair/selection. |
+| `loads.<owner>.jsonValues` / `jsonSize` | Number of JSON strings attempted and cumulative UTF-8 size bucket. The joined `target` read normally parses two strings (character and chat), so this is not a SQL row count. Missing rows have no parse/size fields. |
+| `configurationMs` | Prompt/persona/module selection and construction of the scoped configuration, including their nested read/parse measurements. |
+| `legacyLoadMs` | Entire broad compatibility load when selected rows cannot serve the request. Its internals are not attributed to selected-owner measurements. |
+| `dependencyBuildMs` | Construct the selected shared dependency object, including transcript projection. |
+| `dependencyNormalizeMs` | Recursively copy dependency objects/arrays into canonical key order. |
+| `dependencySerializeMs` | Serialize that normalized graph once with `JSON.stringify`. |
+| `dependencyHashMs` | SHA-256 over the serialized string, including hash input encoding. |
+| `dependencyJsonSize` | UTF-8 size bucket of that same serialized string. |
+| `measurementMs` | Extra size/count accounting work; excludes general timer/callback overhead. |
+
+Size buckets have upper bounds of 4 KiB, 64 KiB, 1 MiB, 4 MiB, 16 MiB and
+64 MiB, plus `none` and `over-64MiB`. Input counts include active modules,
+module assets/regexes/triggers, and character assets/regexes/triggers. They
+count loaded definitions, not executed scripts. No owner IDs, script text,
+message text, file paths, or dependency hashes are exported. Byte accounting
+uses strings already needed by the real request; it does not serialize a
+second copy of the loaded graph. Without a diagnostic context the extra
+timers, size scans and input-count loops are bypassed.
+
+These are nested elapsed-time measurements, not additive independent totals:
+`scopeLoadMs` includes owner reads/parses and configuration work;
+`sharedDependencyMs` includes the dependency stages and their measurement
+work. Compatibility repairs and other loader work remain in the parent total.
+An unreached stage stays absent, rather than implying it ran instantly.
+The expanded summary remains one bounded journal record under the request UID.
+
+For production investigation, deploy the instrumentation and use ordinary chat
+navigation: capture one initial load, several repeated loads of the same chat,
+and a history expansion. Save each display-source `X-Request-UID` and retrieve
+its v2 `display-performance` record with the current helper below. The recorded
+cache-hit/miss counts determine whether a sample actually reused results;
+refresh alone does not establish a cold server cache. Compare several samples
+before attributing a cost to one stage. Local synthetic fixtures verify
+measurement correctness, while production timings identify costs for the real
+payload and server. A short CPU profile is a follow-up only if a dominant stage
+still needs function-level attribution.
+
 Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
 hour), limit (default 50, maximum 200), generated requestUid/operationRef,
 category, and cursor. V1 has no operation references and returns no matching

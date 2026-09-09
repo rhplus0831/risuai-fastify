@@ -87,6 +87,27 @@ export const DIAGNOSTIC_VALUE_KINDS = [
   'other',
 ] as const
 const size = enumOf(DIAGNOSTIC_SIZE_BUCKETS)
+export const DIAGNOSTIC_DISPLAY_JSON_SIZES = [
+  'none',
+  'up-to-4KiB',
+  'up-to-64KiB',
+  'up-to-1MiB',
+  'up-to-4MiB',
+  'up-to-16MiB',
+  'up-to-64MiB',
+  'over-64MiB',
+] as const
+const displayJsonSize = enumOf(DIAGNOSTIC_DISPLAY_JSON_SIZES)
+const displayLoad = () =>
+  Type.Object(
+    {
+      readMs: Type.Optional(duration),
+      parseMs: Type.Optional(duration),
+      jsonValues: Type.Optional(count),
+      jsonSize: Type.Optional(displayJsonSize),
+    },
+    { additionalProperties: false },
+  )
 const base = {
   timestamp,
   source: enumOf(['server', 'browser']),
@@ -165,6 +186,37 @@ const eventSchemas = {
     timeToPriorityResultsMs: Type.Optional(duration),
     priorityTargetCount: Type.Optional(count),
     resultCounts: Type.Optional(object({ ok: count, clientFallback: count, stale: count, error: count })),
+    preparation: Type.Optional(
+      object({
+        loadPath: Type.Optional(enumOf(['selected', 'legacy'])),
+        loads: Type.Optional(
+          object({
+            settings: Type.Optional(displayLoad()),
+            target: Type.Optional(displayLoad()),
+            messages: Type.Optional(displayLoad()),
+            memory: Type.Optional(displayLoad()),
+            promptPresets: Type.Optional(displayLoad()),
+            personas: Type.Optional(displayLoad()),
+            modules: Type.Optional(displayLoad()),
+          }),
+        ),
+        configurationMs: Type.Optional(duration),
+        legacyLoadMs: Type.Optional(duration),
+        dependencyBuildMs: Type.Optional(duration),
+        dependencyNormalizeMs: Type.Optional(duration),
+        dependencySerializeMs: Type.Optional(duration),
+        dependencyHashMs: Type.Optional(duration),
+        dependencyJsonSize: Type.Optional(displayJsonSize),
+        measurementMs: Type.Optional(duration),
+        activeModuleCount: Type.Optional(count),
+        moduleAssetCount: Type.Optional(count),
+        moduleRegexCount: Type.Optional(count),
+        moduleTriggerCount: Type.Optional(count),
+        characterAssetCount: Type.Optional(count),
+        characterRegexCount: Type.Optional(count),
+        characterTriggerCount: Type.Optional(count),
+      }),
+    ),
     // Only reached stages are present. These are totals across the batch;
     // cache hits do not execute the Lua/trigger/regex stages.
     timings: object({

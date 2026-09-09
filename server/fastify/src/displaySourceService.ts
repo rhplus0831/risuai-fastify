@@ -16,6 +16,7 @@ import {
   DISPLAY_SOURCE_PROTOCOL_VERSION,
   DISPLAY_SOURCE_TRANSFORM_VERSION,
   displaySourceNamespaceJson,
+  normalizeDisplayDependencyValue,
   stableDisplayDependencyJson,
   type DisplaySourceRequest,
   type DisplaySourceResponse,
@@ -269,6 +270,33 @@ function sharedDependencyValue(
   }
 }
 
+function fingerprintSharedDependencies(
+  scope: DisplayScope,
+  modules: ReturnType<typeof getActiveModules>,
+  diagnostics?: DisplaySourceDiagnostics,
+): string {
+  if (!diagnostics) return sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules)))
+  // Execute the same projection/canonicalization/serialization/hash exactly
+  // once. Timing boundaries must not introduce a second serialization or a new key.
+  const value = diagnostics.measurePreparation('dependencyBuildMs', () => sharedDependencyValue(scope, modules))
+  const normalized = diagnostics.measurePreparation('dependencyNormalizeMs', () =>
+    normalizeDisplayDependencyValue(value),
+  )
+  const json = diagnostics.measurePreparation('dependencySerializeMs', () => JSON.stringify(normalized) ?? 'null')
+  const digest = diagnostics.measurePreparation('dependencyHashMs', () => sha256(json))
+  diagnostics.dependencySize(json)
+  diagnostics.inputCounts(() => ({
+    activeModuleCount: modules.length,
+    moduleAssetCount: modules.reduce((count, module) => count + (module.assets?.length ?? 0), 0),
+    moduleRegexCount: modules.reduce((count, module) => count + (module.regex?.length ?? 0), 0),
+    moduleTriggerCount: modules.reduce((count, module) => count + (module.trigger?.length ?? 0), 0),
+    characterAssetCount: scope.character.additionalAssets?.length ?? 0,
+    characterRegexCount: scope.character.customscript?.length ?? 0,
+    characterTriggerCount: scope.character.triggerscript?.length ?? 0,
+  }))
+  return digest
+}
+
 function targetDependencyValue(
   sharedDependencyFingerprint: string,
   target: DisplaySourceTarget,
@@ -475,7 +503,7 @@ export class DisplaySourceService {
     const sharedDependencyStartedAt = protocolNowMs()
     const sharedDependencyFingerprint = runDisplaySourceStage(
       'shared-dependencies',
-      () => sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules))),
+      () => fingerprintSharedDependencies(scope, modules, diagnostics),
       diagnostics,
     )
     const sharedDependencyMs = protocolDurationMs(sharedDependencyStartedAt)
@@ -625,7 +653,7 @@ export class DisplaySourceService {
   private loadScopeDatabase(chatId: string, characterId: string, diagnostics?: DisplaySourceDiagnostics): Database {
     const persisted = runDisplaySourceStage(
       'scope-load',
-      () => loadPersistedForDisplaySource(this.db, this.dataDir, { chatId, characterId }),
+      () => loadPersistedForDisplaySource(this.db, this.dataDir, { chatId, characterId }, diagnostics),
       diagnostics,
     )
     if (!persisted.database || typeof persisted.database !== 'object') {

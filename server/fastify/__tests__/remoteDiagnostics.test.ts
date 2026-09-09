@@ -107,6 +107,7 @@ describe('remote support diagnostics', () => {
                 chats: [
                   {
                     id: 'performance-chat',
+                    generationSettings: { promptPresetId: 'performance-preset', personaId: 'performance-persona' },
                     message: [
                       { role: 'char', data: `hello ${privateText}`, chatId: 'performance-message-1' },
                       { role: 'user', data: 'hello again', chatId: 'performance-message-2' },
@@ -115,6 +116,13 @@ describe('remote support diagnostics', () => {
                 ],
               },
             ],
+            modules: [
+              { id: 'performance-module', assets: [[privateText, 'asset-path', 'png']], regex: [], trigger: [] },
+            ],
+            enabledModules: ['performance-module'],
+            promptPresets: [{ id: 'performance-preset', name: privateText, regex: [] }],
+            personas: [{ id: 'performance-persona', name: privateText }],
+            selectedPersonaId: 'performance-persona',
           }),
         )
       ).revision
@@ -169,6 +177,9 @@ describe('remote support diagnostics', () => {
         'performance-chat',
         'performance-message',
         'performance-private-page',
+        'performance-module',
+        'performance-preset',
+        'performance-persona',
         payload.targets[0].sourceHash,
         response.json().contextFingerprint,
       ]) {
@@ -192,6 +203,32 @@ describe('remote support diagnostics', () => {
       transcriptMessageCount: 2,
       resultCounts: { ok: 2, clientFallback: 0, stale: 0, error: 0 },
       timeToFirstTransformMs: expect.any(Number),
+      preparation: {
+        loadPath: 'selected',
+        loads: {
+          settings: {
+            readMs: expect.any(Number),
+            parseMs: expect.any(Number),
+            jsonValues: 1,
+            jsonSize: expect.any(String),
+          },
+          target: { readMs: expect.any(Number), parseMs: expect.any(Number), jsonValues: 2 },
+          messages: { readMs: expect.any(Number), parseMs: expect.any(Number), jsonValues: 2 },
+          memory: { readMs: expect.any(Number) },
+          promptPresets: { readMs: expect.any(Number), parseMs: expect.any(Number), jsonValues: 1 },
+          personas: { readMs: expect.any(Number), parseMs: expect.any(Number), jsonValues: 1 },
+          modules: { readMs: expect.any(Number), parseMs: expect.any(Number), jsonValues: 1 },
+        },
+        configurationMs: expect.any(Number),
+        dependencyBuildMs: expect.any(Number),
+        dependencyNormalizeMs: expect.any(Number),
+        dependencySerializeMs: expect.any(Number),
+        dependencyHashMs: expect.any(Number),
+        dependencyJsonSize: expect.any(String),
+        measurementMs: expect.any(Number),
+        activeModuleCount: 1,
+        moduleAssetCount: 1,
+      },
       timings: {
         scopeLoadMs: expect.any(Number),
         scopeDecodeMs: expect.any(Number),
@@ -212,6 +249,8 @@ describe('remote support diagnostics', () => {
     expect(second.entry.timings.sharedDependencyMs).toEqual(expect.any(Number))
     expect(second.entry.timings.luaMs).toBeUndefined()
     expect(second.entry.timeToFirstTransformMs).toBeUndefined()
+    expect(second.entry.preparation?.dependencyHashMs).toEqual(expect.any(Number))
+    expect(second.response.json()).toEqual(first.response.json())
     const streaming = await run({
       ...payload,
       targets: payload.targets.map((target, index) => ({ ...target, streaming: index === 0 })),
@@ -228,6 +267,7 @@ describe('remote support diagnostics', () => {
     expect(stale.entry.timings.revisionMs).toEqual(expect.any(Number))
     expect(stale.entry.timings.scopeLoadMs).toBeUndefined()
     expect(stale.entry.resultCounts).toBeUndefined()
+    expect(stale.entry.preparation).toBeUndefined()
     const partial = await run({
       ...payload,
       targets: payload.targets.map((target, index) =>
@@ -558,8 +598,13 @@ describe('remote support diagnostics', () => {
       outcome: 'failed',
       executedTargetCount: 0,
       timings: { scopeLoadMs: expect.any(Number) },
+      preparation: {
+        loadPath: 'selected',
+        loads: { target: { readMs: expect.any(Number), parseMs: expect.any(Number), jsonValues: 1 } },
+      },
     })
     expect(failedPerformance.json().entries[0].entry.timings.scopeDecodeMs).toBeUndefined()
+    expect(failedPerformance.json().entries[0].entry.preparation.dependencyBuildMs).toBeUndefined()
     expect(failedPerformance.body).not.toContain(malformedCanary)
   })
 
