@@ -6,6 +6,8 @@
 
   const banCharactersetDraft = createServerBackedSettingDraft<string[]>('banCharacterset', [])
 
+  let { noAccordion = false }: { noAccordion?: boolean } = $props()
+
   const characterSets = [
     'Latn',
     'Hani',
@@ -49,7 +51,7 @@
   }
 </script>
 
-<Accordion styled name={language.banCharacterset}>
+{#snippet settingsBody()}
   {#each characterSets as set}
     <Button
       styled={banCharactersetDraft.value.includes(set) ? 'primary' : 'outlined'}
@@ -63,4 +65,12 @@
       {new Intl.DisplayNames([navigator.language, 'en'], { type: 'script' }).of(set)} ({characterSetsPreview[set]})
     </Button>
   {/each}
-</Accordion>
+{/snippet}
+
+{#if noAccordion}
+  {@render settingsBody()}
+{:else}
+  <Accordion styled name={language.banCharacterset}>
+    {@render settingsBody()}
+  </Accordion>
+{/if}

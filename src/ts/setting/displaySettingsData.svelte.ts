@@ -4,9 +4,10 @@
  * Data-driven definition for DisplaySettings page.
  */
 
-import type { SettingItem } from './types'
+import type { SettingItem, SettingSection } from './types'
 import { updateAnimationSpeed } from '../gui/animation'
 import { guiSizeText, updateGuisize } from '../gui/guisize'
+import { updateHeightMode } from '../gui/heightMode'
 import { updateTextThemeAndCSS } from '../gui/colorscheme'
 import { CustomGUISettingMenuStore } from '../stores.svelte'
 import { reloadRegexDisplay } from '../process/regexDisplayReload'
@@ -282,6 +283,23 @@ export const displayOtherSettingsItems: SettingItem[] = [
     keywords: ['fullscreen'],
   },
   {
+    id: 'adv.heightMode',
+    type: 'select',
+    labelKey: 'heightMode',
+    bindKey: 'heightMode',
+    onChange: () => updateHeightMode(),
+    options: {
+      selectOptions: [
+        { value: 'normal', label: 'Normal' },
+        { value: 'percent', label: 'Percent' },
+        { value: 'vh', label: 'VH' },
+        { value: 'dvh', label: 'DVH' },
+        { value: 'svh', label: 'SVH' },
+        { value: 'lvh', label: 'LVH' },
+      ],
+    },
+  },
+  {
     id: 'display.showMemoryLimit',
     type: 'check',
     labelKey: 'showMemoryLimit',
@@ -411,13 +429,6 @@ export const displayOtherSettingsItems: SettingItem[] = [
     keywords: ['additional', 'assets', 'preview'],
   },
   {
-    id: 'display.useLegacyGUI',
-    type: 'check',
-    labelKey: 'useLegacyGUI',
-    bindKey: 'useLegacyGUI',
-    keywords: ['legacy', 'gui'],
-  },
-  {
     id: 'display.paragraphBreakBySentences',
     type: 'check',
     labelKey: 'paragraphBreakBySentences',
@@ -536,6 +547,19 @@ export const displayOtherSettingsItems: SettingItem[] = [
     keywords: ['notification', 'translation', 'delay', 'seconds'],
   },
   {
+    id: 'adv.keepSessionAlive',
+    type: 'select',
+    labelKey: 'keepSessionAlive',
+    bindKey: 'keepSessionAlive',
+    helpKey: 'keepSessionAlive',
+    options: {
+      selectOptions: [
+        { value: 'off', label: 'Off' },
+        { value: 'sound', label: 'Via Sound' },
+      ],
+    },
+  },
+  {
     id: 'display.useChatSticker',
     type: 'check',
     labelKey: 'useChatSticker',
@@ -561,4 +585,121 @@ export const displaySettingsItems: SettingItem[] = [
   ...displayThemeSettingsItems,
   ...displaySizeSettingsItems,
   ...displayOtherSettingsItems,
+]
+
+function displayItems(ids: string[]): SettingItem[] {
+  return ids.map((id) => {
+    const item = displaySettingsItems.find((candidate) => candidate.id === id)
+    if (!item) throw new Error(`Unknown display setting: ${id}`)
+    return item
+  })
+}
+
+export const displayThemeSettingsSections: SettingSection[] = [
+  {
+    id: 'interface-style',
+    labelKey: 'settingsSectionInterfaceStyle',
+    items: displayItems([
+      'display.theme',
+      'display.customGui',
+      'display.guiHTML',
+      'display.waifuWidth',
+      'display.waifuWidth2',
+    ]),
+  },
+  {
+    id: 'colors-typography',
+    labelKey: 'settingsSectionColorsTypography',
+    items: displayItems([
+      'display.colorScheme',
+      'display.customColorScheme',
+      'display.textTheme',
+      'display.customTextTheme',
+      'display.font',
+      'display.customFont',
+      'display.customBackground',
+    ]),
+  },
+  {
+    id: 'advanced-appearance',
+    labelKey: 'settingsSectionAdvancedAppearance',
+    collapsible: true,
+    items: displayItems(['display.customCSS']),
+  },
+]
+
+export const displayLayoutSettingsSections: SettingSection[] = [
+  {
+    id: 'element-sizing',
+    labelKey: 'settingsSectionElementSizing',
+    items: displayItems([
+      'display.zoomsize',
+      'display.lineHeight',
+      'display.chatScreenWidth',
+      'display.iconsize',
+      'display.textAreaSize',
+      'display.textAreaTextSize',
+      'display.sideBarSize',
+      'display.animationSpeed',
+      'display.settingsCloseButtonSize',
+    ]),
+  },
+  {
+    id: 'window-sidebar',
+    labelKey: 'settingsSectionWindowSidebar',
+    items: displayItems([
+      'display.fullScreen',
+      'adv.heightMode',
+      'display.showFolderName',
+      'display.desktopSidebarColumns',
+      'display.mobileSidebarColumns',
+      'display.menuSideBar',
+    ]),
+  },
+]
+
+export const displayChatSettingsSections: SettingSection[] = [
+  {
+    id: 'message-presentation',
+    labelKey: 'settingsSectionMessagePresentation',
+    items: displayItems([
+      'display.showMemoryLimit',
+      'display.memoryLimitThickness',
+      'display.showFirstMessagePages',
+      'display.roundIcons',
+      'display.textScreenColor',
+      'display.textBorder',
+      'display.textScreenRounded',
+      'display.textScreenBorder',
+      'display.useChatCopy',
+      'display.paragraphBreakBySentences',
+      'display.paragraphBreakSentenceCount',
+      'display.unformatQuotes',
+      'display.blockquoteStyling',
+      'display.customQuotes',
+      'display.leadingDoubleQuote',
+      'display.trailingDoubleQuote',
+      'display.leadingSingleQuote',
+      'display.trailingSingleQuote',
+      'display.useChatSticker',
+    ]),
+  },
+  {
+    id: 'media-visibility',
+    labelKey: 'settingsSectionMediaVisibility',
+    items: displayItems(['display.hideAllImages', 'display.assetWidth', 'display.useAdditionalAssetsPreview']),
+  },
+]
+
+export const displaySoundSettingsSections: SettingSection[] = [
+  {
+    id: 'audio',
+    labelKey: 'settingsSectionAudio',
+    items: displayItems(['display.playMessage', 'display.playMessageOnTranslateEnd', 'adv.keepSessionAlive']),
+  },
+  {
+    id: 'notifications',
+    labelKey: 'settingsSectionNotifications',
+    items: displayItems(['display.notification', 'display.autoTranslateNotificationDeferCapSeconds']),
+  },
 ]

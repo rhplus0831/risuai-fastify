@@ -67,6 +67,12 @@
   import { reconcileLegacyGuiSubmenu } from 'src/ts/setting/legacyGuiLayout'
   import { confirmSettingsItemRemoval } from 'src/ts/setting/confirmSettingsItemRemoval'
   import { resolveModelProfile } from 'src/ts/model/modelProfileResolver'
+  import SettingRenderer from '../SettingRenderer.svelte'
+  import {
+    memoryEmotionSettingsItems,
+    memoryImageSettingsItems,
+    memoryLongTermSettingsItems,
+  } from 'src/ts/setting/memorySettingsData'
 
   let componentAlive = true
   onDestroy(() => {
@@ -784,6 +790,7 @@
 
 {#if submenu === 3 || submenu === -1}
   <Accordion name={language.imageGeneration} styled disabled={submenu !== -1}>
+    <SettingRenderer items={memoryImageSettingsItems} />
     <span class="text-textcolor mt-2">{language.imageGeneration} {language.provider} <Help key="sdProvider" /></span>
     <SelectInput className="mt-2 mb-4" bind:value={sdProviderDraft.value}>
       <OptionInput value="">None</OptionInput>
@@ -1463,6 +1470,7 @@
 
 {#if submenu === 2 || submenu === -1}
   <Accordion name={language.emotionImage} styled disabled={submenu !== -1}>
+    <SettingRenderer items={memoryEmotionSettingsItems} />
     <span class="text-textcolor mt-2">{language.emotionMethod}</span>
 
     <SelectInput className="mt-2 mb-4" bind:value={emotionProcesserDraft.value}>
@@ -1474,6 +1482,7 @@
 
 {#if submenu === 0 || submenu === -1}
   <Accordion name={language.longTermMemory} styled disabled={submenu !== -1}>
+    <SettingRenderer items={memoryLongTermSettingsItems} />
     <div class="flex mb-4">
       <Check bind:check={hypaV3Draft.value} name="{language.HypaMemory} V3" />
     </div>

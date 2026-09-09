@@ -49,7 +49,7 @@ Primary indexes and canonical slugs are:
 | `8`        | `global-lorebook`              | Legacy `src/lib/Setting/Pages/GlobalLoreBookSettings.svelte`; nav is visibility-gated                                              |
 | `9`        | `global-regex`                 | Legacy `src/lib/Setting/Pages/GlobalRegex.svelte`; nav is visibility-gated                                                         |
 | `10`       | `language`                     | `src/lib/Setting/Pages/LanguageSettings.svelte`                                                                                    |
-| `11`       | `accessibility`                | `src/lib/Setting/Pages/AccessibilitySettings.svelte`                                                                               |
+| `11`       | `accessibility`                | `src/lib/Setting/Pages/AccessibilitySettings.svelte`; visible page title is **Interaction & Accessibility**                       |
 | `12`       | `persona`                      | `src/lib/Setting/Pages/PersonaSettings.svelte`                                                                                     |
 | `13`, `18` | `prompt`, `prompt-settings`    | Prompt-template editor and prompt-preset shell                                                                                     |
 | `14`       | `modules`                      | `src/lib/Setting/Pages/Module/ModuleSettings.svelte`                                                                               |
@@ -69,7 +69,9 @@ Keep the shared route slug maps, `SettingsMenuIndex`, page branches, resource
 surfaces, and nav conditions aligned.
 
 The Memory page owns four inner tabs for long-term memory, TTS, emotion images,
-and image generation. BardWiki is a separate Tools & Extensions item at
+and image generation. The long-term tab also owns legacy Hypa/lorebook behavior,
+the emotion tab owns its global prompt/server overrides, and the image tab owns
+the image-handling beta toggle. BardWiki is a separate Tools & Extensions item at
 `/settings/bardwiki`; its lazy page edits the global defaults for enablement,
 Hypa/BardWiki/Hybrid selection, confirmation policy, model/prompt owners,
 canonical updates, and token/query/link limits. The page explains that automatic
@@ -117,6 +119,13 @@ belong to [Plugins And MCP](../../docs/structure/plugins-and-mcp.md#ui-surfaces)
 `classes`, `containerClasses`, `componentId`, `componentProps`, `getValue`,
 `setValue`, and `onChange`. `SettingContext` supplies `db`, `modelInfo`,
 `subModelInfo`, and the optional `presetMirrorTarget`.
+
+`SettingSection` groups leaf items by user intent without changing their IDs.
+`src/lib/Setting/SettingsSections.svelte` renders ordinary groups as visible,
+named regions and uses the shared accessible accordion only for advanced,
+experimental, developer, or legacy groups. Page-level section arrays are not
+the discovery catalog: `getFullSettingsData()` continues to flatten the leaf
+arrays so settings search and saved Custom Sidebar IDs survive relocation.
 
 `SettingRenderer.svelte` derives that context, evaluates `checkCondition`, and
 looks up each row type in `settingRegistry`. Wrappers under
@@ -230,6 +239,14 @@ and its retry ledger belong to
 [Client Runtime](client-runtime.md#push-notification-coordinator).
 
 ## Display And Theme Controls
+
+Display has four purpose-based tabs: Theme, Layout & sizing, Chat appearance,
+and Sound & notifications. The former Other bucket no longer exists. Custom
+background belongs to Theme; fullscreen, height mode, sidebar columns, and
+element sizing belong to Layout; message/quote/media presentation belongs to
+Chat appearance; and completion audio, keep-session-alive, and push controls
+belong to Sound & notifications. Custom CSS is a collapsed advanced-appearance
+section, while the legacy-GUI switch is under Advanced compatibility.
 
 `src/ts/setting/displaySettingsData.svelte.ts` registers `ColorSchemeSelect` as
 a custom row. `src/lib/Setting/Pages/Display/ColorSchemeSelect.svelte` renders
@@ -427,19 +444,31 @@ accepts 1-64 MiB. Increasing it improves compatibility with large legacy
 scripts at the cost of additional memory exposure; pattern and source limits
 remain fixed.
 
-Advanced Settings has an experimental data-driven OpenAI Flex Processing
-checkbox (`adv.openAIFlex`) bound to the durable `openAIFlexProcessing` field.
+Model Settings has a collapsed Advanced model behavior section for global
+compatibility controls that do not belong to an individual profile. It includes
+the experimental OpenAI Flex Processing checkbox (`adv.openAIFlex`) bound to
+the durable `openAIFlexProcessing` field, global request retry/generation
+limits, vision quality, and the legacy custom-model editor.
 This global control is separate from an LLM Gateway profile's service-tier
 select, whose valid values also include `flex`; do not conflate the two UI
 contracts. Provider applicability, request options, and runtime behavior belong
 to
 [Providers And Models](../../docs/structure/providers-and-models.md).
 
+Advanced itself is organized into Feature access, Performance & media,
+Requests & response handling, Scripting & regex, Developer diagnostics,
+Experimental, and Legacy & compatibility. The last four rare/risky groups use
+collapsed disclosure. Translation-only options live on Language, plugin
+development/compatibility lives on Plugins, global prompt behavior lives in the
+Prompt Settings tab, and navigation behavior lives under Interaction &
+Accessibility.
+
 ## Focused Tests
 
 Shell, renderer, and authoring guards include
 `src/lib/Setting/Settings.svelte.test.ts`,
 `src/lib/Setting/SettingRenderer.svelte.test.ts`,
+`src/lib/Setting/SettingsSections.svelte.test.ts`,
 `src/lib/Setting/Pages/SourceCode.svelte.test.ts`,
 `src/lib/Setting/Wrappers/SettingAccordion.svelte.test.ts`,
 `src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`,
@@ -463,5 +492,6 @@ Persistence and primitive-control guards include
 `src/lib/UI/GUI/TextAreaInput.svelte.test.ts`,
 `src/lib/UI/GUI/TextAreaResizable.svelte.test.ts`,
 `src/ts/setting/displaySettingsData.svelte.test.ts`, and
+`src/ts/setting/settingsPageSections.test.ts`, and
 `src/ts/setting/utils.test.ts`. The visible-state policy is canonical in
 [Testing And Operations](../../docs/structure/testing-and-operations.md#visible-state-test-contract).

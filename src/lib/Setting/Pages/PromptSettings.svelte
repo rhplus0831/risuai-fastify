@@ -85,6 +85,8 @@
     currentPromptPresetModelOverrideValue,
   } from 'src/ts/promptPresetModelOverrides.svelte'
   import { promptPresetModelOverrideFieldForDatabaseKey } from 'src/ts/presetSplit'
+  import SettingsSections from '../SettingsSections.svelte'
+  import { promptSupplementalSettingsSections } from 'src/ts/setting/promptSupplementalSettingsData'
 
   let sorted = 0
   let warns: string[] = $state([])
@@ -1293,6 +1295,9 @@
     <span class="text-textcolor2 mb-6 text-sm mt-2">{extokens} {language.exactTokens}</span>
   {/if}
 {:else}
+  <div class="mb-4 mt-4">
+    <SettingsSections sections={promptSupplementalSettingsSections} />
+  </div>
   <span class="text-textcolor mt-4">{language.postEndInnerFormat}</span>
   <TextInput bind:value={promptSettingsDraft.value.postEndInnerFormat} />
 

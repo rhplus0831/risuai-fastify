@@ -4,6 +4,7 @@ vi.mock('../gui/heightMode', () => ({ updateHeightMode: vi.fn() }))
 
 import { advancedSettingsItems } from './advancedSettingsData'
 import { accessibilitySettingsItems } from './accessibilitySettingsData'
+import { modelSupplementalSettingsItems } from './modelSupplementalSettingsData'
 
 describe('advanced settings data', () => {
   it('includes configurable initial and additional chat load counts', () => {
@@ -28,7 +29,7 @@ describe('advanced settings data', () => {
   })
 
   it('includes the experimental OpenAI Flex processing toggle', () => {
-    expect(advancedSettingsItems).toContainEqual(
+    expect(modelSupplementalSettingsItems).toContainEqual(
       expect.objectContaining({
         id: 'adv.openAIFlex',
         type: 'check',
