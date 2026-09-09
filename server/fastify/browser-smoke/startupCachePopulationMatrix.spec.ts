@@ -34,6 +34,26 @@ interface SafeTraceSummary {
   timing?: { process?: number; send?: number }
 }
 
+interface StartupWorkspaceProbeSnapshot {
+  conversationShellMounts: number
+  conversationShellRemovals: number
+  observerWorkspaceMounts: number
+  shellIdentityChanges: number
+  sampledFrames: number
+  missingOwnedFrames: number
+  maximumHorizontalDelta: number
+  layoutShifts: {
+    count: number
+    withoutRecentInput: number
+    cumulativeValue: number
+  }
+  longTasks: {
+    count: number
+    totalDurationMs: number
+    maximumDurationMs: number
+  }
+}
+
 interface StartupMatrixCase {
   fixture: 'small' | 'large'
   cacheState: 'cold' | 'warm'
@@ -56,6 +76,7 @@ interface StartupMatrixCase {
     mutationsBeforeWriterReady: number
     generationsBeforeChatReady: number
   }
+  workspace: StartupWorkspaceProbeSnapshot
   requestUids: string[]
   traces: SafeTraceSummary[]
 }
@@ -117,6 +138,13 @@ test('startup matrix keeps cold and warm small/large populations separate', asyn
       mutationsBeforeWriterReady: 0,
       generationsBeforeChatReady: 0,
     })
+    // Phase 0 regression evidence: the legacy automatic-writer path first
+    // mounts the reader workspace, then replaces its shared shell with a writer
+    // shell. Role-first startup intentionally changes these expectations.
+    expect(entry.workspace.conversationShellMounts).toBe(2)
+    expect(entry.workspace.conversationShellRemovals).toBe(1)
+    expect(entry.workspace.observerWorkspaceMounts).toBe(1)
+    expect(entry.workspace.shellIdentityChanges).toBe(1)
   }
 })
 
@@ -135,6 +163,7 @@ async function runFixturePair(
 
     context = await browser.newContext()
     const page = await context.newPage()
+    await installStartupWorkspaceProbe(page)
     const cdp = await context.newCDPSession(page)
     await cdp.send('Network.enable')
     await cdp.send('Network.clearBrowserCache')
@@ -207,11 +236,17 @@ async function measureNavigation(
 
   const browserSnapshot = await page.evaluate(() => {
     const startup = window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupSnapshot()
+    const workspace = (
+      window as Window & {
+        __RISU_STARTUP_WORKSPACE_PROBE__?: { snapshot: () => StartupWorkspaceProbeSnapshot }
+      }
+    ).__RISU_STARTUP_WORKSPACE_PROBE__!.snapshot()
     const javascriptEntries = performance
       .getEntriesByType('resource')
       .filter((entry) => new URL(entry.name).pathname.endsWith('.js')) as PerformanceResourceTiming[]
     return {
       startup,
+      workspace,
       timeOrigin: performance.timeOrigin,
       browserJavaScript: {
         fileCount: javascriptEntries.length,
@@ -243,6 +278,7 @@ async function measureNavigation(
     fixture,
     cacheState,
     startup: browserSnapshot.startup,
+    workspace: browserSnapshot.workspace,
     browserJavaScript: browserSnapshot.browserJavaScript,
     server: {
       bootstrapPayloadBytes: sumMetric(bootstrapMetrics, 'payloadBytes'),
@@ -256,6 +292,129 @@ async function measureNavigation(
     requestUids: [...new Set([...bootstrapMetrics, ...resourceMetrics].flatMap((metric) => metric.requestUid ?? []))],
     traces: [],
   }
+}
+
+async function installStartupWorkspaceProbe(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const state: StartupWorkspaceProbeSnapshot & {
+      snapshot: () => StartupWorkspaceProbeSnapshot
+    } = {
+      conversationShellMounts: 0,
+      conversationShellRemovals: 0,
+      observerWorkspaceMounts: 0,
+      shellIdentityChanges: 0,
+      sampledFrames: 0,
+      missingOwnedFrames: 0,
+      maximumHorizontalDelta: 0,
+      layoutShifts: { count: 0, withoutRecentInput: 0, cumulativeValue: 0 },
+      longTasks: { count: 0, totalDurationMs: 0, maximumDurationMs: 0 },
+      snapshot() {
+        return {
+          conversationShellMounts: state.conversationShellMounts,
+          conversationShellRemovals: state.conversationShellRemovals,
+          observerWorkspaceMounts: state.observerWorkspaceMounts,
+          shellIdentityChanges: state.shellIdentityChanges,
+          sampledFrames: state.sampledFrames,
+          missingOwnedFrames: state.missingOwnedFrames,
+          maximumHorizontalDelta: state.maximumHorizontalDelta,
+          layoutShifts: { ...state.layoutShifts },
+          longTasks: { ...state.longTasks },
+        }
+      },
+    }
+    ;(
+      window as Window & {
+        __RISU_STARTUP_WORKSPACE_PROBE__?: typeof state
+      }
+    ).__RISU_STARTUP_WORKSPACE_PROBE__ = state
+
+    const seenShells = new WeakSet<Element>()
+    const seenObservers = new WeakSet<Element>()
+    let hasMountedShell = false
+    const visit = (root: Node, selector: string, seen: WeakSet<Element>, onFirstSeen: (element: Element) => void) => {
+      if (!(root instanceof Element)) return
+      if (root.matches(selector) && !seen.has(root)) {
+        seen.add(root)
+        onFirstSeen(root)
+      }
+      for (const element of root.querySelectorAll(selector)) {
+        if (seen.has(element)) continue
+        seen.add(element)
+        onFirstSeen(element)
+      }
+    }
+    const mutations = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          visit(node, '[data-risu-conversation-shell]', seenShells, () => {
+            state.conversationShellMounts += 1
+            if (hasMountedShell) state.shellIdentityChanges += 1
+            hasMountedShell = true
+          })
+          visit(node, '[data-observer-shell]', seenObservers, () => {
+            state.observerWorkspaceMounts += 1
+          })
+        }
+        for (const node of record.removedNodes) {
+          visit(node, '[data-risu-conversation-shell]', new WeakSet(), () => {
+            state.conversationShellRemovals += 1
+          })
+        }
+      }
+    })
+    mutations.observe(document, { childList: true, subtree: true })
+
+    let baseline: Record<string, { left: number; width: number }> | undefined
+    const sample = () => {
+      const selectors = {
+        navigation: '[data-risu-shell-navigation]',
+        main: '[data-risu-shell-main]',
+      }
+      const current = Object.fromEntries(
+        Object.entries(selectors).map(([name, selector]) => {
+          const rect = document.querySelector(selector)?.getBoundingClientRect()
+          return [name, rect ? { left: rect.left, width: rect.width } : null]
+        }),
+      ) as Record<string, { left: number; width: number } | null>
+      const complete = Object.values(current).every(Boolean)
+      if (!baseline && complete) baseline = current as Record<string, { left: number; width: number }>
+      if (baseline) {
+        state.sampledFrames += 1
+        if (!complete) state.missingOwnedFrames += 1
+        else {
+          for (const name of Object.keys(baseline)) {
+            state.maximumHorizontalDelta = Math.max(
+              state.maximumHorizontalDelta,
+              Math.abs(current[name]!.left - baseline[name].left),
+              Math.abs(current[name]!.width - baseline[name].width),
+            )
+          }
+        }
+      }
+      requestAnimationFrame(sample)
+    }
+    requestAnimationFrame(sample)
+
+    type LayoutShiftEntry = PerformanceEntry & { value: number; hadRecentInput: boolean }
+    if (PerformanceObserver.supportedEntryTypes.includes('layout-shift')) {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries() as LayoutShiftEntry[]) {
+          state.layoutShifts.count += 1
+          state.layoutShifts.cumulativeValue += entry.value
+          if (!entry.hadRecentInput) state.layoutShifts.withoutRecentInput += 1
+        }
+      }).observe({ type: 'layout-shift', buffered: false })
+    }
+    if (PerformanceObserver.supportedEntryTypes.includes('longtask')) {
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          state.longTasks.count += 1
+          state.longTasks.totalDurationMs += entry.duration
+          state.longTasks.maximumDurationMs = Math.max(state.longTasks.maximumDurationMs, entry.duration)
+        }
+      }).observe({ type: 'longtask', buffered: false })
+    }
+  })
 }
 
 function safeProtocolMetric(metric: Readonly<Record<string, unknown>>): SafeProtocolMetric {
@@ -304,7 +463,7 @@ function readSafeTraces(dataDir: string): SafeTraceSummary[] {
 function formatMatrixArtifact(artifact: StartupMatrixArtifact): string {
   const lines = [
     'Phase 0 startup matrix',
-    'fixture\tcache\tbackground_ms\tresource_bytes\tcache_hits\tcache_misses\tjs_transfer_bytes',
+    'fixture\tcache\tbackground_ms\tresource_bytes\tcache_hits\tcache_misses\tjs_transfer_bytes\tshell_mounts\tshell_identity_changes\tmissing_owned_frames\tmaximum_horizontal_delta\tlong_tasks',
   ]
   for (const entry of artifact.cases) {
     lines.push(
@@ -316,6 +475,11 @@ function formatMatrixArtifact(artifact: StartupMatrixArtifact): string {
         entry.server.cacheHits,
         entry.server.cacheMisses,
         entry.browserJavaScript.transferBytes,
+        entry.workspace.conversationShellMounts,
+        entry.workspace.shellIdentityChanges,
+        entry.workspace.missingOwnedFrames,
+        formatNumber(entry.workspace.maximumHorizontalDelta),
+        entry.workspace.longTasks.count,
       ].join('\t'),
     )
   }
