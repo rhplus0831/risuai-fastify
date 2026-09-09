@@ -2,10 +2,11 @@
 
 ## Current Cursor
 
-- State: **Implementation in progress; Phases 0–1 accepted.**
-- Current phase: Phase 2, role-first bootstrap.
-- Next action: defer the reader projection until automatic writer acquisition
-  settles, preserving the existing post-replay recovery sequence.
+- State: **Implementation in progress; Phases 0–2 accepted.**
+- Current phase: Phase 3, unified shell and navigation.
+- Next action: replace the dedicated observer presentation with the shared
+  workspace, local reader navigation, restricted-route gate, and top-right
+  device action.
 - Source baseline reviewed: `0654259fc`.
 - Current architecture and test guides remain authoritative for shipped
   behavior.
@@ -32,7 +33,7 @@
 | ----------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------- |
 | [0. Contract, inventory, and baseline](phases/phase-0-contract-inventory-and-baseline.md)       | Accepted | Source/test inventory rechecked; five-sample small/large cold/warm baseline and thresholds recorded below |
 | [1. Access and readiness model](phases/phase-1-access-and-readiness-model.md)                   | Accepted | Derived workspace snapshot and non-replayed reader-route handoff at `ee210deb2`                           |
-| [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Pending  | Not run                                                                                                   |
+| [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Accepted | One-read automatic writer startup and fenced recovery failure at `c6f5871a4`                              |
 | [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Pending  | Not run                                                                                                   |
 | [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Pending  | Not run                                                                                                   |
 | [5. Role transitions and performance](phases/phase-5-role-transitions-and-performance.md)       | Pending  | Not run                                                                                                   |
@@ -225,6 +226,51 @@ new invariant: the retained reader target is consumed with zero handler calls,
 and a later writer navigation is the first persisted application. The final
 mounted suite passed. No visible reader-shell change, protocol change, or known
 Phase 1 work remains.
+
+## Phase 2 Acceptance Evidence
+
+Revision `c6f5871a4` makes authenticated ownership discovery precede both
+conditional acquisition and projection installation. Eligible automatic
+writers acquire first and retain the existing outbox preparation, receipt
+acknowledgement, pending replay, authoritative shell, projection/cursor setup,
+event subscription, and writer-readiness order. Foreign writers and lost
+acquisition races settle a reader disposition before loading their single
+coherent shell and synchronization stream.
+
+App consumes the derived workspace mode, so a managed initial writer remains
+on the loading boundary even after its post-replay shell arrives; it cannot
+mount `ObserverShell`, the writer workspace, or authoring resources before
+writer recovery completes. If recovery fails after acquisition while the
+server may still identify this session as writer, the client now remains in
+fenced `recovering-writer` state with an interrupted connection and schedules
+ownership revalidation. It does not silently abandon retained work or expose a
+reader projection. Authentication loss still clears the protected state.
+
+| Command                                                                                                                             | Result                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
+| `pnpm test -- src/ts/connectedClientStartup.test.ts`                                                                                | 18 passed                                                                    |
+| `pnpm test -- src/ts/bootstrap.test.ts`                                                                                             | 217 passed                                                                   |
+| `pnpm test -- src/App.routeEffect.dom.test.ts`                                                                                      | 30 passed                                                                    |
+| `pnpm test -- src/ts/workspaceAccess.test.ts`                                                                                       | 5 passed                                                                     |
+| `pnpm test -- src/ts/clientSession.test.ts`                                                                                         | 15 passed                                                                    |
+| `pnpm test -- src/ts/startupReadiness.test.ts`                                                                                      | 14 passed                                                                    |
+| `pnpm build:smoke`                                                                                                                  | Passed; existing CSS `::highlight` and large-chunk warnings remain non-fatal |
+| `pnpm exec playwright test -c playwright.fastify-smoke.config.ts server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts` | 1 passed with all four populations                                           |
+| `pnpm check`                                                                                                                        | 0 errors and 0 warnings                                                      |
+
+The final local startup artifact has SHA-256 prefix `793845b8`. Every
+small/large cold/warm case recorded one shell read, one conversation-shell
+mount, zero observer mounts, zero shell removals/identity changes, zero missing
+owned frames, 0 px maximum horizontal delta, zero mutations before
+writer-ready, and zero generations before chat-ready. Readiness remained within
+the Phase 0 thresholds; the largest observed long task was 88 ms, below the
+applicable 92 ms ceiling.
+
+The first role-first bootstrap run failed only because legacy tests expected the
+pre-acquisition locale preview and reader fallback after retained replay. Those
+tests were migrated to the new ordering and the hidden recovery contract; all
+final focused and browser checks passed. No protocol/server schema change or
+known Phase 2 work remains.
 
 For every completed slice, record the exact changed boundary, source revision,
 focused commands and outcomes, browser or performance artifacts where required,
