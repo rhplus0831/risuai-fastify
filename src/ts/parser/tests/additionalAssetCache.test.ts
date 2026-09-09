@@ -259,6 +259,8 @@ describe('additional asset resolution cache', () => {
     expect(moduleUpdated).not.toContain('/resolved/module-old')
   })
 
+  // Cooperative indexing yields to real timers. Allow aggregate-run contention;
+  // the visit counts below enforce bounded work independently of elapsed time.
   it('does not index 130,000 active module assets until an exact marker needs one', async () => {
     const moduleAssets = Array.from({ length: 130_000 }, (_, index) => [
       `asset-${index}`,
@@ -321,7 +323,7 @@ describe('additional asset resolution cache', () => {
     ).resolves.toContain('/resolved/module-path-129999')
     await expect(ParseMarkdown('{{raw::asset-0}}', character, 'back')).resolves.toContain('/resolved/module-path-0')
     expect(getAdditionalAssetCacheStatsForTests().moduleAssetTuplesVisited).toBe(130_000)
-  })
+  }, 15_000)
 
   it('preserves locale casing, the first extension and ordered deterministic variants', async () => {
     const character = simpleCharacter('variants', [
