@@ -119,7 +119,6 @@ const completedStartupSteps = new Map<StartupStep, unknown>()
 const inFlightStartupSteps = new Map<StartupStep, Promise<unknown>>()
 const inFlightCapabilityRetries = new Map<StartupRetryTarget, Promise<unknown>>()
 let nextAttemptId = 1
-let observerShellEnabled = false
 let writerCapabilitiesRevoked = false
 let chatGenerationReady = false
 let generationRecoveryReady = false
@@ -202,15 +201,7 @@ export function backgroundReady(): boolean {
 
 export function canRenderShell(): boolean {
   if (isClientSessionManaged()) return canRenderClientReadView()
-  return hasTransitioned('writer-ready') || (observerShellEnabled && hasTransitioned('observer-ready'))
-}
-
-/** Configure the temporary Phase 6 observer rollout before startup publishes readiness. */
-export function configureStartupObserverShell(enabled: boolean): void {
-  if (observerShellEnabled === enabled) return
-  observerShellEnabled = enabled
-  clearReadyCapabilityFailures()
-  notifyReadinessListeners()
+  return hasTransitioned('writer-ready')
 }
 
 export function canApplyRoutes(): boolean {
@@ -334,7 +325,7 @@ function failureTargetsForMilestone(milestone: StartupMilestone): StartupRetryTa
   switch (milestone) {
     case 'entry':
     case 'shell-mounted':
-    case 'observer-ready':
+    case 'reader-ready':
       return ['canRenderShell']
     case 'writer-ready':
       return ['canApplyRoutes', 'canMutate', 'canGenerate']
@@ -369,7 +360,6 @@ function flushObservedMilestones(): boolean {
       milestone,
       entryDurationMs: boundedTelemetryDuration(transitionAtMs - (transitionTimes.get('entry') ?? transitionAtMs)),
       attemptCount: telemetryAttemptCount(),
-      observerShellEnabled,
     })
     transitioned = true
   }
@@ -411,7 +401,6 @@ export function completeStartupAttempt(attemptId: number, completedAtMs = nowMs(
     kind: 'attempt-completed',
     attemptDurationMs: boundedTelemetryDuration(attempt.completedAtMs - attempt.startedAtMs),
     attemptCount: telemetryAttemptCount(),
-    observerShellEnabled,
   })
   notifyReadinessListeners()
 }
@@ -438,7 +427,6 @@ export function failStartupAttempt(
     kind: 'attempt-failed',
     attemptDurationMs: boundedTelemetryDuration(attempt.failedAtMs - attempt.startedAtMs),
     attemptCount: telemetryAttemptCount(),
-    observerShellEnabled,
     failureCode,
     failureMilestone,
   })
@@ -468,7 +456,6 @@ export function recordStartupCapabilityFailure(
   emitStartupTelemetryEvent({
     kind: 'diagnostic-failure',
     attemptCount: telemetryAttemptCount(),
-    observerShellEnabled,
     failureCode,
     failureMilestone,
   })
@@ -543,7 +530,6 @@ export function getStartupCoordinatorSnapshot(): StartupCoordinatorSnapshot {
       pluginsReady: pluginsReady(),
       canGenerate: canGenerate(),
     },
-    observerShellEnabled,
     writerCapabilitiesRevoked,
     failures: Object.fromEntries(
       [...capabilityFailures].map(([target, failure]) => [target, { ...failure }]),
@@ -625,7 +611,6 @@ export function resetStartupReadinessForTests(): void {
   inFlightStartupSteps.clear()
   inFlightCapabilityRetries.clear()
   nextAttemptId = 1
-  observerShellEnabled = false
   writerCapabilitiesRevoked = false
   chatGenerationReady = false
   generationRecoveryReady = false

@@ -2,7 +2,6 @@ import { get } from 'svelte/store'
 import { botMakerMode } from './stores.svelte'
 import { LoadingStatusState, selectedCharID } from './stores/coreStores.svelte'
 import { currentRoute } from './router'
-import { isPreWriterObserverShellEnabled } from './observerShellFlag'
 import {
   isPluginRuntimeReady,
   loadPlugins,
@@ -49,7 +48,7 @@ import {
   getActiveWriterSessionId,
   peekActiveWriterSessionId,
 } from './server/activeWriterSession'
-import { observerShellLifecycleStore, setObserverShellLifecycleMode } from './observerShellLifecycle.svelte'
+import { readerWorkspaceLifecycleStore, setReaderWorkspaceLifecycleMode } from './readerWorkspaceLifecycle.svelte'
 import { startOwnerMutationLifecycleFlush } from './server/ownerMutationLifecycle'
 import { replayPendingMutations } from './server/pendingMutationReplay'
 import { applyGenerationOperationBootstrap, configureGenerationOperationProtocol } from './server/generationOperations'
@@ -201,7 +200,6 @@ import {
   canRenderShell,
   canMutate,
   completeStartupAttempt,
-  configureStartupObserverShell,
   failStartupAttempt,
   finishStartupChatReadinessEvaluation,
   recordStartupCapabilityFailure,
@@ -244,7 +242,7 @@ import { bootstrapOwnership, resolveConnectedClientStartup } from './connectedCl
 import { startConnectedReaderSync } from './server/connectedReaderSync'
 import { releaseConnectedTabIdentity } from './server/connectedTabIdentity'
 import { invalidateResourceCacheWork } from './server/resourceCache'
-import { discardObserverProjectionState } from './observerProjectionLifecycle'
+import { discardReaderProjectionState } from './readerProjectionLifecycle'
 
 setPendingMutationDiscardNotifier((key, error) => {
   alertError(`${language.pendingMutationDiscarded}\n\n${language.pendingMutationDiscardedDetail(key, error)}`)
@@ -356,7 +354,6 @@ function applyResourceOwnerMutation<T>(mutation: () => T): T {
 }
 
 let loadDataInFlight: Promise<void> | null = null
-let observerWriterPromotionRetryInFlight: Promise<boolean> | null = null
 
 /**
  * Loads the application data. Concurrent callers share one attempt loop, and a
@@ -389,28 +386,22 @@ async function loadDataUntilSettled(): Promise<void> {
 async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
   const startupAttemptId = beginStartupAttempt()
   const failureCode: StartupAttemptFailureCode = 'writer-bootstrap-failed'
-  const observerShellEnabled = isPreWriterObserverShellEnabled()
   let attemptGeneration = captureClientSessionGeneration()
-  configureStartupObserverShell(observerShellEnabled)
   try {
-    if (observerShellEnabled) {
-      installConnectedSessionLifecycle()
-      const startup = await resolveConnectedClientStartup({
-        onOperationStarted: (operation) => {
-          attemptGeneration = operation.generation
-        },
-        onInitializationRequired: confirmConnectedServerInitialization,
-      })
-      if (startup.role === 'reader') {
-        await installConnectedReaderProjection(startup.runtime, startup.operation.generation)
-        recordStartupMilestone('background-ready')
-        completeStartupAttempt(startupAttemptId)
-        return null
-      }
-      await recoverConnectedWriter(startup.runtime, startup.operation)
-    } else {
-      await runStartupStep('writer-shell', () => loadWebInitialDatabase({ coordinated: true }))
+    installConnectedSessionLifecycle()
+    const startup = await resolveConnectedClientStartup({
+      onOperationStarted: (operation) => {
+        attemptGeneration = operation.generation
+      },
+      onInitializationRequired: confirmConnectedServerInitialization,
+    })
+    if (startup.role === 'reader') {
+      await installConnectedReaderProjection(startup.runtime, startup.operation.generation)
+      recordStartupMilestone('background-ready')
+      completeStartupAttempt(startupAttemptId)
+      return null
     }
+    await recoverConnectedWriter(startup.runtime, startup.operation)
     const writerGeneration = captureClientSessionGeneration()
     const assertWriterCurrent = () => {
       if (!isClientSessionGenerationCurrent(writerGeneration) || !canUseClientWriteAccess()) {
@@ -457,7 +448,7 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
       return null
     }
     if (isClientSessionManaged() && getClientSessionSnapshot().lifecycle === 'auth-required') {
-      failStartupAttempt(startupAttemptId, failureCode, 'observer-ready')
+      failStartupAttempt(startupAttemptId, failureCode, 'reader-ready')
       return null
     }
     if (isClientSessionManaged() && getClientSessionSnapshot().authenticated) {
@@ -477,7 +468,7 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
         // A failed initial shell/locale preview has not established readable
         // content or attempted writer acquisition. Retry that startup boundary
         // after acknowledgement instead of silently abandoning it as a reader.
-        failStartupAttempt(startupAttemptId, failureCode, 'observer-ready')
+        failStartupAttempt(startupAttemptId, failureCode, 'reader-ready')
         alertError(error)
         await waitAlert()
         if (
@@ -488,7 +479,7 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
         ) {
           return null
         }
-        return startupRetryTargetForMilestone('observer-ready')
+        return startupRetryTargetForMilestone('reader-ready')
       }
       if (state.lifecycle === 'recovering-writer' && state.connection === 'interrupted') {
         scheduleConnectedWriterResume()
@@ -501,18 +492,17 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
       console.warn('Writer startup deferred while the read view remains available:', error)
       return null
     }
-    const observerReady = observerShellEnabled && canRenderShell()
-    const failureMilestone: StartupMilestone = observerReady ? 'writer-ready' : 'observer-ready'
+    const readerReady = canRenderShell()
+    const failureMilestone: StartupMilestone = readerReady ? 'writer-ready' : 'reader-ready'
     if (
-      observerShellEnabled &&
-      get(observerShellLifecycleStore).mode !== 'takeover-denied' &&
-      get(observerShellLifecycleStore).mode !== 'auth-lost'
+      get(readerWorkspaceLifecycleStore).mode !== 'takeover-denied' &&
+      get(readerWorkspaceLifecycleStore).mode !== 'auth-lost'
     ) {
-      setObserverShellLifecycleMode('unavailable')
+      setReaderWorkspaceLifecycleMode('unavailable')
     }
     failStartupAttempt(startupAttemptId, failureCode, failureMilestone)
-    if (observerReady) {
-      console.warn('Writer startup deferred while the observer shell remains available:', error)
+    if (readerReady) {
+      console.warn('Writer startup deferred while the read-only workspace remains available:', error)
       return null
     }
     alertError(error)
@@ -529,7 +519,7 @@ async function installConnectedReaderProjection(
 ): Promise<void> {
   const isCurrent = () => isClientSessionGenerationCurrent(generation) && getClientSessionSnapshot().authenticated
   if (!isCurrent()) return
-  setObserverShellLifecycleMode('waiting')
+  setReaderWorkspaceLifecycleMode('waiting')
   LoadingStatusState.text = 'Loading Server Data...'
   const ownership = bootstrapOwnership(runtime)
   initializeDraftRecoveryScope({
@@ -560,7 +550,7 @@ async function installConnectedReaderProjection(
   await awaitLanguageReady()
   if (!isCurrent()) return
   setClientProjectionReady(true, generation)
-  recordStartupMilestone('observer-ready')
+  recordStartupMilestone('reader-ready')
   if (options.subscribe === false) return
   await connectReaderSession(generation)
 }
@@ -572,13 +562,13 @@ async function connectReaderSession(generation: number): Promise<void> {
   connectedReaderSync?.stop()
   connectedReaderSync = startConnectedReaderSync({
     onAuthLoss: async () => {
-      if (isCurrent()) await discardObserverProjectionState('auth-loss')
+      if (isCurrent()) await discardReaderProjectionState('auth-loss')
     },
     onLineageChange: async (ownership) => {
       if (!isCurrent()) return
       const operation = beginClientSession(getActiveWriterSessionId())
-      const { discardObserverProjectionState } = await import('./observerProjectionLifecycle')
-      await discardObserverProjectionState('lineage-change')
+      const { discardReaderProjectionState } = await import('./readerProjectionLifecycle')
+      await discardReaderProjectionState('lineage-change')
       if (!isClientSessionOperationCurrent(operation)) return
       if (!settleClientReader(operation, ownership)) return
       await refreshConnectedReader()
@@ -638,7 +628,7 @@ function refreshConnectedReader(): Promise<void> {
     if (!isClientSessionGenerationCurrent(generation)) return
     if (result.status !== 'ok') {
       if (result.status === 'error' && result.httpStatus === 401) {
-        if (isClientSessionGenerationCurrent(generation)) await discardObserverProjectionState('auth-loss')
+        if (isClientSessionGenerationCurrent(generation)) await discardReaderProjectionState('auth-loss')
         return
       }
       throw new Error(result.status === 'unavailable' ? 'Server bootstrap is unavailable' : result.error)
@@ -648,8 +638,8 @@ function refreshConnectedReader(): Promise<void> {
     const ownership = bootstrapOwnership(result.bootstrap)
     if (state.databaseLineage !== ownership.databaseLineage) {
       const operation = beginClientSession(getActiveWriterSessionId())
-      const { discardObserverProjectionState } = await import('./observerProjectionLifecycle')
-      await discardObserverProjectionState('lineage-change')
+      const { discardReaderProjectionState } = await import('./readerProjectionLifecycle')
+      await discardReaderProjectionState('lineage-change')
       if (!settleClientReader(operation, ownership)) return
       await installConnectedReaderProjection(result.bootstrap, operation.generation, { full: true })
       return
@@ -771,7 +761,7 @@ async function resumeConnectedWriter(): Promise<void> {
     if (!isClientSessionOperationCurrent(operation)) return
     if (result.status !== 'ok') {
       if (result.status === 'error' && result.httpStatus === 401) {
-        await discardObserverProjectionState('auth-loss')
+        await discardReaderProjectionState('auth-loss')
         return
       }
       throw new Error(result.status === 'unavailable' ? 'Server is unavailable' : result.error)
@@ -793,7 +783,7 @@ async function resumeConnectedWriter(): Promise<void> {
     if (!isClientSessionOperationCurrent(operation)) return
     if (verified.status !== 'ok') {
       if (verified.status === 'error' && verified.httpStatus === 401) {
-        await discardObserverProjectionState('auth-loss')
+        await discardReaderProjectionState('auth-loss')
         return
       }
       failClientSessionOperation(operation)
@@ -894,7 +884,7 @@ export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult
     if (!current()) return superseded()
     if (discovered.status !== 'ok') {
       if (discovered.status === 'error' && discovered.httpStatus === 401) {
-        await discardObserverProjectionState('auth-loss')
+        await discardReaderProjectionState('auth-loss')
         return { status: 'failed', reason: 'unavailable' }
       }
       throw new Error(discovered.status === 'unavailable' ? 'Server is unavailable' : discovered.error)
@@ -902,7 +892,7 @@ export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult
     const ownership = bootstrapOwnership(discovered.bootstrap)
     if (ownership.databaseLineage !== getClientSessionSnapshot().databaseLineage) {
       const replacement = beginClientSession(getActiveWriterSessionId())
-      await discardObserverProjectionState('lineage-change')
+      await discardReaderProjectionState('lineage-change')
       if (settleClientReader(replacement, ownership)) void refreshConnectedReader()
       return { status: 'superseded' }
     }
@@ -926,7 +916,7 @@ export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult
     }
     if (acquired.status !== 'ok') {
       if (acquired.status === 'error' && acquired.httpStatus === 401) {
-        await discardObserverProjectionState('auth-loss')
+        await discardReaderProjectionState('auth-loss')
         return { status: 'failed', reason: 'unavailable' }
       }
       return returnToReader({ status: 'failed', reason: 'unavailable' })
@@ -964,60 +954,6 @@ export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult
 
 function browserIsOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false
-}
-
-/** Idempotent targeted takeover/recovery used by the permanent observer UI. */
-export function retryObserverWriterPromotion(): Promise<boolean> {
-  if (isClientSessionManaged()) return Promise.resolve(false)
-  if (observerWriterPromotionRetryInFlight) return observerWriterPromotionRetryInFlight
-
-  const retry = (async () => {
-    setObserverShellLifecycleMode('retrying')
-    if (!backgroundReady()) {
-      await loadData()
-      return canMutate()
-    }
-
-    const startupAttemptId = beginStartupAttempt()
-    const recoveringLostWriter = beginWriterAccessRecovery()
-    try {
-      await loadWebInitialDatabase()
-      if (!serverResourceEventSubscription) {
-        throw new Error('Server event subscription is unavailable')
-      }
-      startSelectedCharacterShellHydration()
-      startChatMessageHydration()
-      try {
-        await ensureStartupChatReadiness()
-        settleStartupChatReadiness(true)
-      } catch (error) {
-        const dependencyError =
-          error instanceof StartupChatDependencyError
-            ? error
-            : new StartupChatDependencyError('selected-chat-hydration-failed', 'Selected chat hydration failed')
-        recordStartupCapabilityFailure(startupAttemptId, dependencyError.failureCode, 'chat-ready')
-        settleStartupChatReadiness(false)
-      }
-      startStartupChatReadinessSync(startupAttemptId)
-      restoreStartupWriterCapabilities()
-      if (recoveringLostWriter) completeWriterAccessRecovery(true)
-      setObserverShellLifecycleMode('promoted')
-      completeStartupAttempt(startupAttemptId)
-      return canMutate()
-    } catch (error) {
-      stopFailedWriterPromotionRuntimes()
-      if (recoveringLostWriter) completeWriterAccessRecovery(false)
-      setObserverShellLifecycleMode('unavailable')
-      failStartupAttempt(startupAttemptId, 'writer-bootstrap-failed', 'writer-ready')
-      console.warn('Observer writer promotion retry failed:', error)
-      return false
-    }
-  })().finally(() => {
-    if (observerWriterPromotionRetryInFlight === retry) observerWriterPromotionRetryInFlight = null
-  })
-
-  observerWriterPromotionRetryInFlight = retry
-  return retry
 }
 
 function stopFailedWriterPromotionRuntimes(): void {
@@ -1468,7 +1404,7 @@ export async function loadWebInitialDatabase(
             { purpose: 'client-session' },
           )
           if (selection !== '0') {
-            setObserverShellLifecycleMode('takeover-denied')
+            setReaderWorkspaceLifecycleMode('takeover-denied')
             throw new FatalBootstrapError(language.writerConnectCancelled)
           }
           result = await fetchServerBootstrap(null, { disconnectExistingWriter: true })
@@ -1567,7 +1503,7 @@ export async function loadWebInitialDatabase(
     await awaitLanguageReady()
     assertCurrent()
     if (isClientSessionManaged()) setClientProjectionReady(true)
-    recordStartupMilestone('observer-ready')
+    recordStartupMilestone('reader-ready')
   })
   await runWriterStep('writer-runtime-services', () => {
     applyGenerationOperationBootstrap(runtime, 'startup')
@@ -1669,6 +1605,7 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
   teardownServerResourceSubscription()
   serverResourceEventsDesired = true
   ensureServerResourceRecoveryListeners()
+  let initialSubscriptionSettled = false
   const subscription = await subscribeServerCommandEvents({
     sinceRevision: peekAppliedServerResourceRevision(),
     onCommandEvent: (event) => {
@@ -1694,6 +1631,7 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
       recordServerResourceEventFrame(eventEpoch, frame.event === 'message' && frame.data.length === 0),
     onError: (error) => {
       if (!isCurrentServerResourceEventEpoch(eventEpoch)) return
+      if (!initialSubscriptionSettled) return
       console.warn(error)
       if (error.includes('Malformed command event frame')) {
         enqueueServerResourceSync(async () => {
@@ -1707,9 +1645,11 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     },
     onClose: () => {
       if (!isCurrentServerResourceEventEpoch(eventEpoch)) return
+      if (!initialSubscriptionSettled) return
       scheduleServerResourceReconnect(eventEpoch)
     },
   })
+  initialSubscriptionSettled = true
   if (!isCurrentServerResourceEventEpoch(eventEpoch)) {
     if (subscription.status === 'ok') subscription.unsubscribe()
     return
@@ -1720,7 +1660,7 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     recordServerResourceEventFrame(eventEpoch)
     recordStartupMilestone('writer-ready')
     if (isClientSessionManaged()) setClientConnectionState('live')
-    setObserverShellLifecycleMode('promoted')
+    setReaderWorkspaceLifecycleMode('promoted')
     if (options.replayPendingMutations !== false) triggerReconnectPendingMutationReplay()
     if (hasPendingReplacementDatabaseRefresh()) {
       enqueueServerResourceSync(async () => {
@@ -1731,20 +1671,17 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     }
   } else if (subscription.status === 'error') {
     if (isClientSessionManaged() && subscription.httpStatus === 401) {
-      await discardObserverProjectionState('auth-loss')
+      await discardReaderProjectionState('auth-loss')
       return
     }
-    setObserverShellLifecycleMode('unavailable')
+    setReaderWorkspaceLifecycleMode('unavailable')
     console.warn(`Server event subscription failed: ${subscription.error}`)
     scheduleServerResourceReconnect(eventEpoch)
   } else if (subscription.status === 'replay-unavailable') {
-    setObserverShellLifecycleMode('unavailable')
+    setReaderWorkspaceLifecycleMode('unavailable')
     console.warn(`Server event replay unavailable at revision ${subscription.currentRevision}; refreshing resources`)
-    enqueueServerResourceSync(async () => {
-      if (!isCurrentServerResourceEventEpoch(eventEpoch)) return
-      await refreshAfterUnavailableEventReplay()
-      scheduleServerResourceReconnect(eventEpoch)
-    })
+    await refreshAfterUnavailableEventReplay()
+    if (isCurrentServerResourceEventEpoch(eventEpoch)) scheduleServerResourceReconnect(eventEpoch)
   }
 }
 
@@ -1856,7 +1793,7 @@ function restartServerResourceEvents(): void {
         if (!isClientSessionGenerationCurrent(generation)) return
         if (result.status !== 'ok') {
           if (result.status === 'error' && result.httpStatus === 401) {
-            await discardObserverProjectionState('auth-loss')
+            await discardReaderProjectionState('auth-loss')
             return
           }
           setClientConnectionState('interrupted')
@@ -3172,8 +3109,8 @@ async function reconcileReplacementDatabaseOwnership(): Promise<{
   const adoption = await adoptReplacementDatabaseOwnership(ownership)
   if (!isCurrent()) return null
   if (adoption.ownershipChanged) {
-    const { discardObserverProjectionState } = await import('./observerProjectionLifecycle')
-    await discardObserverProjectionState('lineage-change')
+    const { discardReaderProjectionState } = await import('./readerProjectionLifecycle')
+    await discardReaderProjectionState('lineage-change')
   }
   if (adoption.discarded > 0) alertError(language.backupQueuedChangesDiscarded)
   return { ownership, ownershipChanged: adoption.ownershipChanged }

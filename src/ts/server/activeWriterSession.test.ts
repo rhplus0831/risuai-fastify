@@ -168,7 +168,7 @@ describe('active writer browser session', () => {
     for (const milestone of [
       'entry',
       'shell-mounted',
-      'observer-ready',
+      'reader-ready',
       'writer-ready',
       'plugins-ready',
       'chat-ready',
@@ -196,8 +196,8 @@ describe('active writer browser session', () => {
     const { canUseServerEvents } = await import('./events')
     expect(canUseServerCommands()).toBe(false)
     expect(canUseServerEvents()).toBe(false)
-    const { observerShellLifecycleStore } = await import('../observerShellLifecycle.svelte')
-    expect(get(observerShellLifecycleStore).mode).toBe('writer-lost')
+    const { readerWorkspaceLifecycleStore } = await import('../readerWorkspaceLifecycle.svelte')
+    expect(get(readerWorkspaceLifecycleStore).mode).toBe('writer-lost')
 
     await vi.waitFor(() => expect(takeoverMocks.alertRequiredSelect).toHaveBeenCalledOnce())
     await vi.advanceTimersByTimeAsync(1_000)
@@ -208,7 +208,7 @@ describe('active writer browser session', () => {
   it('opens only the recovery transport latch and re-latches it after a failed attempt', async () => {
     const activeWriterSession = await importActiveWriterSession()
     const startupReadiness = await import('../startupReadiness')
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready'] as const) {
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready'] as const) {
       startupReadiness.recordStartupMilestone(milestone)
     }
     activeWriterSession.enterWriterTakeoverFlow()
@@ -288,8 +288,8 @@ describe('active writer browser session', () => {
     expect(document.getElementById('risu-offline-frozen-banner')?.textContent).toContain('offline and read-only')
     expect(reload).not.toHaveBeenCalled()
     expect(document.getElementById('app')?.classList.contains('risu-writer-takeover-pending')).toBe(false)
-    const { observerShellLifecycleStore } = await import('../observerShellLifecycle.svelte')
-    expect(get(observerShellLifecycleStore).mode).toBe('offline')
+    const { readerWorkspaceLifecycleStore } = await import('../readerWorkspaceLifecycle.svelte')
+    expect(get(readerWorkspaceLifecycleStore).mode).toBe('offline')
 
     const laterTextarea = document.createElement('textarea')
     const appRoot = document.getElementById('app')

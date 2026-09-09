@@ -7,7 +7,7 @@ import { phase1LazyBoundarySources } from '../../../util/fast-bootstrap-boundari
 import { buildApp } from '../src/app.js'
 import { setupBrowserSmokeAuth } from './auth.js'
 import { browserSmokeEnglish } from './englishFixture.js'
-import { importFastBootstrapDatabase, setObserverShellMode } from './fastBootstrapHarness.js'
+import { importFastBootstrapDatabase } from './fastBootstrapHarness.js'
 
 interface Harness {
   app: FastifyInstance
@@ -526,7 +526,6 @@ test('conservative writer offline first open shows local Retry and succeeds when
 }) => {
   // This retains the writer route-loader fallback contract. Managed clients
   // instead show interrupted reading; connectedReaderBrowsing covers that path.
-  await setObserverShellMode(context, 'disabled')
   const failedPaths: string[] = []
   page.on('requestfailed', (request) => failedPaths.push(new URL(request.url()).pathname))
   await openLoadedHome(page)

@@ -1,7 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
 } from './fastBootstrapHarness.js'
@@ -70,7 +69,6 @@ test('warm reload keeps appearance stable before the bundle, shell, and Display 
   const releaseShell = deferred()
   const releaseDisplay = deferred()
   try {
-    await setObserverShellMode(context, 'disabled')
     const page = await context.newPage()
     const errors: string[] = []
     page.on('pageerror', (error) => errors.push(error.message))

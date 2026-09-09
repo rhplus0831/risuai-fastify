@@ -43,7 +43,6 @@ function metricFields(event: StartupTelemetryEvent, requestUid?: string): Record
     schemaVersion: STARTUP_TELEMETRY_PROTOCOL_VERSION,
     kind: event.kind,
     attemptCount: event.attemptCount,
-    observerShellEnabled: event.observerShellEnabled,
     ...(event.kind === 'phase-ready' ? { milestone: event.milestone, entryDurationMs: event.entryDurationMs } : {}),
     ...(event.kind === 'attempt-completed' || event.kind === 'attempt-failed'
       ? { attemptDurationMs: event.attemptDurationMs }

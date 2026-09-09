@@ -101,7 +101,7 @@
 <nav
   class="flex h-full min-h-0 shrink-0"
   class:w-full={responsive}
-  aria-label={language.observerShell.navigationLabel}
+  aria-label={language.readOnlyWorkspace.navigationLabel}
   data-reader-navigation>
   {#if backOnly}
     <div class="contents" inert aria-hidden="true" data-reader-restricted-rail>
@@ -253,7 +253,7 @@
           class="mb-3 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2"
           type="search"
           bind:value={chatSearch}
-          aria-label={`${language.search}: ${language.observerShell.chatsLabel}`}
+          aria-label={`${language.search}: ${language.readOnlyWorkspace.chatsLabel}`}
           placeholder={language.search} />
         <div class="min-h-0 overflow-y-auto grow" data-risu-chat-list="sidebar">
           {#each folders as folder, index (folder.id)}
@@ -310,7 +310,7 @@
       size="56"
       rounded={settings.roundIcons === true}
       name={getCharacterDisplayName(row)}
-      ariaLabel={language.observerShell.openCharacter(getCharacterDisplayName(row))}
+      ariaLabel={language.readOnlyWorkspace.openCharacter(getCharacterDisplayName(row))}
       chaId={row.chaId}
       isCurrent={selectedCharacterId === row.chaId}
       onClick={() => onCharacter(row.chaId)} />
@@ -328,7 +328,7 @@
       name={chat.name}
       selected={selectedChatId === chat.id}
       pinned={chat.pinned === true}
-      ariaLabel={language.observerShell.openChat(chat.name)}
+      ariaLabel={language.readOnlyWorkspace.openChat(chat.name)}
       onActivate={() => {
         if (selectedCharacterId && chat.id) onChat(selectedCharacterId, chat.id)
       }} />

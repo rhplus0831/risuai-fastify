@@ -23,7 +23,7 @@ vi.mock('./chatMessageHydration.svelte', () => ({
   hydrateReaderChatMessageWindow: api.hydrate,
   hydrateReaderGenerationMessages: api.hydrate,
 }))
-vi.mock('../observerProjectionLifecycle', () => ({ discardObserverProjectionState: api.discard }))
+vi.mock('../readerProjectionLifecycle', () => ({ discardReaderProjectionState: api.discard }))
 vi.mock('./commands', () => ({ setCachedServerCommandRevision: api.revision }))
 vi.mock('./lifecycleRecovery', () => ({ subscribeBrowserLifecycleRecovery: api.lifecycle }))
 vi.mock('./readerTranscriptProjection.svelte', () => ({

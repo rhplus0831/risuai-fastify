@@ -54,7 +54,7 @@ beforeEach(() => {
   vi.restoreAllMocks()
   resetClientSessionForTests()
   resetStartupReadinessForTests()
-  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+  for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready', 'plugins-ready'] as const)
     recordStartupMilestone(milestone)
   resetGenerationEffectLedgerForTests()
 })
@@ -352,7 +352,7 @@ it('leaves managed recovered effects unclaimed until ordinary writing and cohere
   })
   expect(fetchMock).not.toHaveBeenCalled()
   expect(effect).not.toHaveBeenCalled()
-  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+  for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready', 'plugins-ready'] as const)
     recordStartupMilestone(milestone)
   settleStartupPluginRuntimeReadiness(false)
   await expect(runLedgeredGenerationEffect(ref, 'plugin_output', 'late_recovery', effect)).resolves.toEqual({

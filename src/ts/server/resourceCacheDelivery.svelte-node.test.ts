@@ -2,8 +2,8 @@ import { IDBFactory, IDBObjectStore as FakeIDBObjectStore } from 'fake-indexeddb
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: async () => 'delivery-token' }))
-vi.mock('../observerProjectionLifecycle', () => ({
-  discardObserverProjectionState: async () => {
+vi.mock('../readerProjectionLifecycle', () => ({
+  discardReaderProjectionState: async () => {
     const { clearResourceCache } = await import('./resourceCache')
     await clearResourceCache()
   },

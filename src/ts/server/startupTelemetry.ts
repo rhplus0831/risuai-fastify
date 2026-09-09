@@ -1,10 +1,5 @@
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
-import {
-  getStartupCoordinatorSnapshot,
-  getStartupReadinessSnapshot,
-  STARTUP_MILESTONES,
-  subscribeStartupTelemetryEvents,
-} from '../startupReadiness'
+import { getStartupReadinessSnapshot, STARTUP_MILESTONES, subscribeStartupTelemetryEvents } from '../startupReadiness'
 import {
   STARTUP_TELEMETRY_MAX_BATCH_EVENTS,
   STARTUP_TELEMETRY_MAX_ATTEMPTS,
@@ -46,15 +41,12 @@ export function configureStartupTelemetry(configuration: unknown): void {
   if (collectionState === 'disabled') seenMilestones.clear()
   collectionState = 'enabled'
   if (!stopTelemetrySubscription) return
-  const observerShellEnabled = getStartupCoordinatorSnapshot().observerShellEnabled
-  queuedEvents = queuedEvents.map((event) => ({ ...event, observerShellEnabled }))
   queueCurrentMilestones()
   scheduleStartupTelemetryFlush()
 }
 
 function queueCurrentMilestones(): void {
   const readiness = getStartupReadinessSnapshot()
-  const coordinator = getStartupCoordinatorSnapshot()
   for (const milestone of STARTUP_MILESTONES) {
     const timestamp = readiness.timestamps[milestone]
     if (timestamp === undefined || seenMilestones.has(milestone)) continue
@@ -66,7 +58,6 @@ function queueCurrentMilestones(): void {
         Math.max(0, readiness.durationsFromEntry[milestone] ?? 0),
       ),
       attemptCount: Math.min(STARTUP_TELEMETRY_MAX_ATTEMPTS, readiness.attempts.length),
-      observerShellEnabled: coordinator.observerShellEnabled,
     })
   }
 }

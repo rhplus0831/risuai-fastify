@@ -5,7 +5,7 @@ import { formatPromptChatFrame } from '../src/prompt/sseEvents.js'
 
 describe('shared protocol package server integration', () => {
   it('loads shared runtime validators in the strict Fastify project', () => {
-    expect(isStartupTelemetryConfiguration({ version: 1, sampleRate: 1 })).toBe(true)
+    expect(isStartupTelemetryConfiguration({ version: 2, sampleRate: 1 })).toBe(true)
     expect(isPromptChatEvent({ type: 'token', content: 'hello' })).toBe(true)
   })
 

@@ -14,7 +14,6 @@ import {
 } from './fastBootstrapIntegrationArtifact.js'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
 } from './fastBootstrapHarness.js'
@@ -52,7 +51,6 @@ test.describe('Fast-bootstrap direct-link matrix', () => {
 
         const knownRouteResourcePaths = new Set(allCases.flatMap((entry) => requiredResourcePaths(entry.route)))
         context = await browser.newContext()
-        await setObserverShellMode(context, 'disabled')
         const page = await context.newPage()
         cdp = await context.newCDPSession(page)
         await cdp.send('Network.enable')

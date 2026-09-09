@@ -12,7 +12,6 @@ import {
   beginStartupAttempt,
   canMutate,
   completeStartupAttempt,
-  configureStartupObserverShell,
   failStartupAttempt,
   getStartupReadinessSnapshot,
   recordStartupCapabilityFailure,
@@ -69,10 +68,10 @@ describe('startup telemetry publisher', () => {
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 5)
     startStartupTelemetryPublisher()
-    configureStartupTelemetry({ version: 1, sampleRate: 1 })
+    configureStartupTelemetry({ version: 2, sampleRate: 1 })
 
     const attemptId = beginStartupAttempt(10)
-    recordStartupMilestone('observer-ready', 20)
+    recordStartupMilestone('reader-ready', 20)
     recordStartupMilestone('writer-ready', 30)
     recordStartupMilestone('plugins-ready', 40)
     recordStartupMilestone('chat-ready', 50)
@@ -85,7 +84,7 @@ describe('startup telemetry publisher', () => {
     expect(events.filter((event) => event.kind === 'phase-ready').map((event) => event.milestone)).toEqual([
       'entry',
       'shell-mounted',
-      'observer-ready',
+      'reader-ready',
       'writer-ready',
       'plugins-ready',
       'chat-ready',
@@ -95,7 +94,6 @@ describe('startup telemetry publisher', () => {
       kind: 'attempt-completed',
       attemptDurationMs: 60,
       attemptCount: 1,
-      observerShellEnabled: false,
     })
     expect(requests.every((request) => request.url === '/api/v1/telemetry/startup')).toBe(true)
     expect(requests.every((request) => request.init.keepalive === true)).toBe(true)
@@ -112,7 +110,7 @@ describe('startup telemetry publisher', () => {
     recordStartupMilestone('shell-mounted', 1)
     configureStartupTelemetry(undefined)
     const attemptId = beginStartupAttempt(2)
-    failStartupAttempt(attemptId, 'writer-bootstrap-failed', 'observer-ready', 3)
+    failStartupAttempt(attemptId, 'writer-bootstrap-failed', 'reader-ready', 3)
     await __startupTelemetryTestHooks.flush()
 
     expect(requests).toEqual([])
@@ -120,16 +118,15 @@ describe('startup telemetry publisher', () => {
     expect(__startupTelemetryTestHooks.queuedEventCount()).toBe(0)
   })
 
-  it('labels milestones buffered before opt-in with the settled observer rollout mode', async () => {
+  it('backfills milestones buffered before telemetry opt-in', async () => {
     startStartupTelemetryPublisher()
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 1)
-    configureStartupObserverShell(true)
-    configureStartupTelemetry({ version: 1, sampleRate: 1 })
+    configureStartupTelemetry({ version: 2, sampleRate: 1 })
     await __startupTelemetryTestHooks.flush()
 
     expect(emittedEvents()).toHaveLength(2)
-    expect(emittedEvents().every((event) => event.observerShellEnabled)).toBe(true)
+    expect(emittedEvents().map((event) => event.kind)).toEqual(['phase-ready', 'phase-ready'])
   })
 
   it('isolates synchronous listeners and rejected transports from readiness capabilities', async () => {
@@ -138,12 +135,12 @@ describe('startup telemetry publisher', () => {
     })
     transport.auth.mockRejectedValueOnce(new Error('auth unavailable'))
     startStartupTelemetryPublisher()
-    configureStartupTelemetry({ version: 1, sampleRate: 1 })
+    configureStartupTelemetry({ version: 2, sampleRate: 1 })
 
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 1)
     const attemptId = beginStartupAttempt(2)
-    recordStartupMilestone('observer-ready', 3)
+    recordStartupMilestone('reader-ready', 3)
     recordStartupMilestone('writer-ready', 4)
     completeStartupAttempt(attemptId, 5)
     await __startupTelemetryTestHooks.flush()

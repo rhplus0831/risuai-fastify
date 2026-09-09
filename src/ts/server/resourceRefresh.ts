@@ -132,10 +132,10 @@ export function forceServerDatabaseReplacementRefresh(
   if (!canUseClientRecoveryAccess()) return Promise.resolve({ status: 'unavailable' })
   const generation = captureClientSessionGeneration()
   serverDatabaseReplacementRefreshPending = true
-  serverDatabaseReplacementDiscardPromise ??= import('../observerProjectionLifecycle').then(
-    ({ discardObserverProjectionState }) => {
+  serverDatabaseReplacementDiscardPromise ??= import('../readerProjectionLifecycle').then(
+    ({ discardReaderProjectionState }) => {
       if (isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess())
-        return discardObserverProjectionState('database-replacement')
+        return discardReaderProjectionState('database-replacement')
     },
   )
   clearCachedServerCommandRevision()

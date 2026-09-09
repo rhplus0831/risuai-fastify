@@ -6,7 +6,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { buildApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
 import { setupBrowserSmokeAuth } from './auth.js'
-import { OBSERVER_SHELL_OVERRIDE_KEY, setObserverShellMode } from './fastBootstrapHarness.js'
 
 // DOM-oracle journeys for visible state. These drive real clicks in the real
 // Fastify-served browser, assert on rendered DOM (page.locator), and cross-check
@@ -144,16 +143,15 @@ test('a sidebar toggle flip survives the command + resource refresh', async ({ p
   expect(stored, diagnostics()).toBe('0')
 })
 
-test('conservative startup preserves the same-character sidebar view through old-lineage recovery reload', async ({
+test('role-first startup preserves the same-character sidebar view through old-lineage recovery reload', async ({
   page,
 }) => {
   const diagnostics = attachDiagnostics(page)
-  await setObserverShellMode(page.context(), 'disabled')
   await openCharacterSidebarForImport(page)
-  expect(await page.evaluate((key) => sessionStorage.getItem(key), OBSERVER_SHELL_OVERRIDE_KEY)).toBe('disabled')
-  expect(await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().managed)).toBe(
-    false,
-  )
+  expect(await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())).toMatchObject({
+    managed: true,
+    lifecycle: 'writing',
+  })
 
   // Hold a real durable (lineage-tagged) command at the network boundary so the
   // import deterministically leaves old-lineage work in flight. Releasing it
@@ -303,7 +301,6 @@ test('connected-default import recovery preserves the character sidebar after ex
     }))
     expect(original.role).toMatchObject({ managed: true, lifecycle: 'writing', recoveryAuthorized: false })
     expect(original.role.sessionId).toMatch(/\S/u)
-    expect(await page.evaluate((key) => sessionStorage.getItem(key), OBSERVER_SHELL_OVERRIDE_KEY)).toBeNull()
     const beforeImport = importOwnershipSnapshot()
     expect(beforeImport.ownership).toMatchObject({ active_writer_session_id: original.role.sessionId, writer_epoch: 1 })
     expect(beforeImport.ownership.lineage).toBe(original.role.databaseLineage)
@@ -338,7 +335,7 @@ test('connected-default import recovery preserves the character sidebar after ex
     // Keep the old command held until the actual replacement projection is a
     // coherent Reader. Its later conflict must respect the superseded writer
     // generation, independent of response-versus-SSE scheduling races.
-    await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+    await expect(page.locator('[data-reader-lifecycle-status]')).toHaveText(
       'Read only. Updates from the writer appear here.',
       { timeout: 30_000 },
     )
@@ -377,7 +374,7 @@ test('connected-default import recovery preserves the character sidebar after ex
       databaseLineage: imported.databaseLineage,
     })
     evidence.import = { response: importedResponse, conflictStatus: conflict.status(), conflictBody }
-    await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+    await expect(page.locator('[data-reader-lifecycle-status]')).toHaveText(
       'Read only. Updates from the writer appear here.',
     )
     const readerTraffic = traffic.slice(importTrafficStart)

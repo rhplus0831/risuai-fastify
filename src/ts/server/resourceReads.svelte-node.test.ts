@@ -11,15 +11,15 @@ vi.mock('./browserDiagnostics', () => ({
   isBrowserDiagnosticsGenerationCurrent: (generation: number) => generation === browserEvidence.generation,
 }))
 
-const observerProjectionLifecycle = vi.hoisted(() => ({
+const readerProjectionLifecycle = vi.hoisted(() => ({
   discard: vi.fn(async () => undefined),
 }))
 
 vi.mock('../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'resource-auth-token',
 }))
-vi.mock('../observerProjectionLifecycle', () => ({
-  discardObserverProjectionState: observerProjectionLifecycle.discard,
+vi.mock('../readerProjectionLifecycle', () => ({
+  discardReaderProjectionState: readerProjectionLifecycle.discard,
 }))
 
 import { SERVER_COLLECTION_NAMES } from './resourceState.svelte'
@@ -174,7 +174,7 @@ function shellEnvelope(revision: number) {
 
 afterEach(() => {
   browserEvidence.entries = []
-  observerProjectionLifecycle.discard.mockClear()
+  readerProjectionLifecycle.discard.mockClear()
   vi.unstubAllGlobals()
 })
 
@@ -186,8 +186,8 @@ describe('server resource read clients', () => {
       status: 'error',
       error: 'unauthorized',
     })
-    expect(observerProjectionLifecycle.discard).toHaveBeenCalledOnce()
-    expect(observerProjectionLifecycle.discard).toHaveBeenCalledWith('auth-loss')
+    expect(readerProjectionLifecycle.discard).toHaveBeenCalledOnce()
+    expect(readerProjectionLifecycle.discard).toHaveBeenCalledWith('auth-loss')
   })
 
   it('reads and validates one coherent shell response', async () => {

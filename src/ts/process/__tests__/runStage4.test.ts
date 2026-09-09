@@ -536,7 +536,7 @@ describe('runStage4 - stable finalization target', () => {
 it('does not resume emotion work or finalization after a delayed notification loses writer access', async () => {
   seedDb({ notification: true })
   setManagedWriterForTest()
-  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+  for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready', 'plugins-ready'] as const)
     recordStartupMilestone(milestone)
   settleStartupPluginRuntimeReadiness(true)
   let release!: () => void

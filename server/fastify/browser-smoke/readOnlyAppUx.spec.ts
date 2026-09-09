@@ -2,7 +2,6 @@ import { devices, expect, test, type Page, type TestInfo } from '@playwright/tes
 import { writeFileSync } from 'node:fs'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
 } from './fastBootstrapHarness.js'
@@ -254,7 +253,7 @@ async function expectReadingContrast(page: Page, theme: string) {
 }
 
 async function expectReader(page: Page, chatId: string): Promise<void> {
-  await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+  await expect(page.locator('[data-reader-lifecycle-status]')).toHaveText(
     'Read only. Updates from the writer appear here.',
     { timeout: 30_000 },
   )
@@ -364,8 +363,6 @@ for (const viewport of ['desktop', 'mobile'] as const) {
     )
     try {
       // This is the existing reader-authority rollout, not a presentation switch.
-      await setObserverShellMode(writerContext, 'enabled')
-      await setObserverShellMode(readerContext, 'enabled')
       await writer.goto(`${harness.baseUrl}${ROUTE_A}`, { waitUntil: 'domcontentloaded' })
       await waitForRolloutHook(writer)
       await writer.evaluate(() =>
@@ -742,8 +739,6 @@ test('reader target deletion falls back locally and an authenticated-read failur
   writer.on('pageerror', (error) => errors.push(`writer: ${error.message}`))
   reader.on('pageerror', (error) => errors.push(`reader: ${error.message}`))
   try {
-    await setObserverShellMode(writerContext, 'enabled')
-    await setObserverShellMode(readerContext, 'enabled')
     await writer.goto(`${harness.baseUrl}${ROUTE_A}`, { waitUntil: 'domcontentloaded' })
     await waitForRolloutHook(writer)
     await writer.evaluate(() =>

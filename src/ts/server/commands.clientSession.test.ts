@@ -69,7 +69,7 @@ function loseAndRegainWriteAccess() {
 beforeEach(() => {
   resetStartupReadinessForTests()
   resetWriterAccessLostForTests()
-  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready'] as const) {
+  for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready'] as const) {
     recordStartupMilestone(milestone)
   }
   clearCachedServerCommandRevision()

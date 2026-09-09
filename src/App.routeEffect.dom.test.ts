@@ -2,7 +2,9 @@ import { mount, tick, unmount } from 'svelte'
 import {
   authenticateClientSessionReadView,
   authorizeClientWriterRecovery,
+  beginClientPromotion,
   beginClientSession,
+  completeClientWriterRecovery,
   demoteClientSession,
   requireClientAuthentication,
   settleClientReader,
@@ -23,7 +25,6 @@ import {
 } from './ts/gui/pushNotificationWarningPreference'
 import {
   beginStartupAttempt,
-  configureStartupObserverShell,
   recordStartupCapabilityFailure,
   recordStartupMilestone,
   resetStartupReadinessForTests,
@@ -392,11 +393,7 @@ import {
   sideBarTransitionCause,
 } from './ts/stores.svelte'
 import { replaceResourceDatabase } from './ts/server/resourceState.svelte'
-import {
-  peekObserverRouteIntent,
-  recordObserverRouteIntent,
-  resetObserverRouteIntentForTests,
-} from './ts/observerRouteIntent'
+import { peekReaderRouteIntent, recordReaderRouteIntent, resetReaderRouteIntentForTests } from './ts/readerRouteIntent'
 import { getResourceDatabase } from 'src/ts/__tests__/resourceDatabaseState'
 
 const { default: App } = await import('./App.svelte')
@@ -478,7 +475,7 @@ function seedStores() {
   } as unknown as Database)
 
   resetStartupReadinessForTests()
-  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready'] as const) {
+  for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready'] as const) {
     recordStartupMilestone(milestone)
   }
   selectedCharID.set(0)
@@ -504,7 +501,7 @@ function seedStores() {
   loadoutModalStore.open = false
   irisStore.open = false
   customSideBarConfigDialogStore.open = false
-  resetObserverRouteIntentForTests()
+  resetReaderRouteIntentForTests()
 }
 
 async function mountApp() {
@@ -551,7 +548,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     resetStartupReadinessForTests()
     setPushNotificationWarningDismissed(false)
     pushNotificationStateWriter.set(initialPushNotificationCoordinatorState())
-    resetObserverRouteIntentForTests()
+    resetReaderRouteIntentForTests()
     target.remove()
     vi.unstubAllEnvs()
     vi.clearAllMocks()
@@ -841,12 +838,12 @@ describe('App route/refreeze mounted DOM behavior', () => {
     const nextApplication = deferred<boolean>()
     applyRoute.mockClear().mockReturnValueOnce(nextApplication.promise)
     enterClientWriter()
-    recordObserverRouteIntent(characterRoute)
+    recordReaderRouteIntent(characterRoute)
     appRouteDomMocks.state.pendingRouteApplication = true
     try {
       await mountApp()
       expect(applyRoute).not.toHaveBeenCalled()
-      expect(peekObserverRouteIntent()).toBeNull()
+      expect(peekReaderRouteIntent()).toBeNull()
       recordStartupMilestone('background-ready')
       const nextRoute = parseAppRoute('/settings/language')
       window.history.pushState(null, '', nextRoute.path)
@@ -854,7 +851,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
       await tick()
       expect(applyRoute).toHaveBeenCalledOnce()
       expect(applyRoute).toHaveBeenLastCalledWith(nextRoute)
-      expect(peekObserverRouteIntent()).toBeNull()
+      expect(peekReaderRouteIntent()).toBeNull()
       nextApplication.resolve(true)
       await tick()
       await tick()
@@ -905,19 +902,19 @@ describe('App route/refreeze mounted DOM behavior', () => {
     const applyRoute = vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>)
     const retryApplication = deferred<boolean>()
     const alias = parseAppRoute('/characters/char-a/chats/chat-a')
-    recordObserverRouteIntent(alias)
+    recordReaderRouteIntent(alias)
     applyRoute.mockClear().mockReturnValueOnce(retryApplication.promise)
     try {
       await mountApp()
       expect(applyRoute).not.toHaveBeenCalled()
-      expect(peekObserverRouteIntent()).toBeNull()
+      expect(peekReaderRouteIntent()).toBeNull()
       router.currentRoute.set({ ...characterRoute })
       await tick()
       expect(applyRoute).toHaveBeenCalledExactlyOnceWith(characterRoute)
       retryApplication.resolve(true)
       await tick()
       await tick()
-      expect(peekObserverRouteIntent()).toBeNull()
+      expect(peekReaderRouteIntent()).toBeNull()
       expect(window.location.pathname).toBe(routePath)
     } finally {
       retryApplication.resolve(false)
@@ -984,14 +981,13 @@ describe('App route/refreeze mounted DOM behavior', () => {
       component = undefined
     }
     resetStartupReadinessForTests()
-    configureStartupObserverShell(true)
     const operation = beginClientSession('writer-a')
     const ownership = { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-a', epoch: 1 } }
     expect(authenticateClientSessionReadView(operation, ownership)).toBe(true)
     expect(authorizeClientWriterRecovery(operation, ownership)).toBe(true)
     setClientProjectionReady(true)
     setClientConnectionState('live')
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready'] as const)
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready'] as const)
       recordStartupMilestone(milestone)
 
     await mountApp()
@@ -1086,8 +1082,14 @@ describe('App route/refreeze mounted DOM behavior', () => {
     const syncRouteFromState = vi.mocked(router.syncRouteFromState as (...args: any[]) => void)
     syncRouteFromState.mockClear()
     resetStartupReadinessForTests()
-    configureStartupObserverShell(true)
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready'] as const) {
+    const readerOperation = beginClientSession('reader-a')
+    settleClientReader(readerOperation, {
+      databaseLineage: 'lineage-a',
+      writer: { sessionId: 'writer-b', epoch: 1 },
+    })
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready'] as const) {
       recordStartupMilestone(milestone)
     }
     openPresetList.set(true)
@@ -1108,19 +1110,27 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(dropEvent.defaultPrevented).toBe(true)
     expect(appRouteDomMocks.importCharacterFile).not.toHaveBeenCalled()
 
-    const olderIntent = recordObserverRouteIntent({ kind: 'home', path: '/' })
+    const olderIntent = recordReaderRouteIntent({ kind: 'home', path: '/' })
     const latestRoute: AppRoute = {
       kind: 'character',
       path: '/character/char-b/chat-b',
       chaId: 'char-b',
       chatId: 'chat-b',
     }
-    const latestIntent = recordObserverRouteIntent(latestRoute)
+    const latestIntent = recordReaderRouteIntent(latestRoute)
     expect(latestIntent.sequence).toBeGreaterThan(olderIntent.sequence)
     appRouteDomMocks.state.exports?.currentRoute.set(latestRoute)
+    const promotion = beginClientPromotion()!
+    expect(
+      authorizeClientWriterRecovery(promotion, {
+        databaseLineage: 'lineage-a',
+        writer: { sessionId: 'reader-a', epoch: 2 },
+      }),
+    ).toBe(true)
     recordStartupMilestone('writer-ready')
+    expect(completeClientWriterRecovery(promotion)).toBe(true)
 
-    await vi.waitFor(() => expect(peekObserverRouteIntent()).toBeNull())
+    await vi.waitFor(() => expect(peekReaderRouteIntent()).toBeNull())
     expect(router.applyRouteToStores).not.toHaveBeenCalled()
     expect(syncRouteFromState).toHaveBeenCalledWith(
       expect.objectContaining({ characterId: 'char-a', chatId: 'chat-a', selectedCharID: 0 }),
@@ -1147,10 +1157,10 @@ describe('App route/refreeze mounted DOM behavior', () => {
       component = undefined
     }
     resetStartupReadinessForTests()
-    configureStartupObserverShell(true)
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready'] as const) {
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready'] as const) {
       recordStartupMilestone(milestone)
     }
+    enterClientWriter()
     appRouteDomMocks.state.applyRouteCalls = 0
     await mountApp()
 
@@ -1159,6 +1169,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(getResourceDatabase().characters[0]?.chaId).toBe('char-a')
 
     revokeStartupWriterCapabilities()
+    demoteClientSession()
     await tick()
 
     expect(target.querySelector('[data-risu-workspace]')).toBe(workspace)

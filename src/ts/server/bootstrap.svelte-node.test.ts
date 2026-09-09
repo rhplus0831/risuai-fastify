@@ -81,7 +81,7 @@ describe('server runtime bootstrap helper', () => {
       revision: 1,
       databaseLineage: 'synthetic-lineage',
       browserDiagnostics: { version: 1 },
-      startupTelemetry: { version: 1, sampleRate: 1 },
+      startupTelemetry: { version: 2, sampleRate: 1 },
     })
     const current = await fetchServerBootstrapReadOnly()
     expect(current).toMatchObject({ status: 'ok', bootstrap: { browserDiagnostics: { version: 1 } } })
@@ -93,12 +93,12 @@ describe('server runtime bootstrap helper', () => {
       initialized: true,
       revision: 1,
       browserDiagnostics: { version: 2 },
-      startupTelemetry: { version: 1, sampleRate: 1 },
+      startupTelemetry: { version: 2, sampleRate: 1 },
     })
     const older = await fetchServerBootstrapReadOnly()
     expect(older.status).toBe('ok')
     if (older.status === 'ok') expect(older.bootstrap).not.toHaveProperty('browserDiagnostics')
-    expect(telemetry.configure).toHaveBeenLastCalledWith({ version: 1, sampleRate: 1 })
+    expect(telemetry.configure).toHaveBeenLastCalledWith({ version: 2, sampleRate: 1 })
     expect(getBrowserDiagnosticsSnapshot().enabled).toBe(false)
   })
   it.each([
@@ -234,7 +234,7 @@ describe('server runtime bootstrap helper', () => {
       databaseLineage: 'database-a',
       writerEpoch: 3,
       generationOperationProtocol: { version: 1 },
-      startupTelemetry: { version: 1, sampleRate: 1 },
+      startupTelemetry: { version: 2, sampleRate: 1 },
       generationOperationProjectionEpoch: 21,
       generationOperations: [
         {
@@ -317,7 +317,7 @@ describe('server runtime bootstrap helper', () => {
         databaseLineage: 'database-a',
         writerEpoch: 3,
         generationOperationProtocol: { version: 1 },
-        startupTelemetry: { version: 1, sampleRate: 1 },
+        startupTelemetry: { version: 2, sampleRate: 1 },
         generationOperationProjectionEpoch: 21,
         generationOperations: [
           {

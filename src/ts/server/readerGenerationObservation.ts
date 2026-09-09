@@ -5,7 +5,7 @@ import {
   getClientSessionSnapshot,
   isClientSessionGenerationCurrent,
 } from '../clientSession'
-import { discardObserverProjectionState } from '../observerProjectionLifecycle'
+import { discardReaderProjectionState } from '../readerProjectionLifecycle'
 import type { Message } from '../storage/database.svelte'
 import { fetchServerBootstrapReadOnly, type GenerationOperationProjection } from './bootstrap'
 import { hydrateReaderChatMessageWindow, hydrateReaderGenerationMessages } from './chatMessageHydration.svelte'
@@ -213,7 +213,7 @@ export function startReaderGenerationObservation(
   async function authenticationLost(): Promise<void> {
     if (!current()) return
     // This boundary revokes authentication synchronously before cache cleanup.
-    await discardObserverProjectionState('auth-loss')
+    await discardReaderProjectionState('auth-loss')
   }
 
   function streamCurrent(source: Viewer): boolean {

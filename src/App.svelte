@@ -69,7 +69,7 @@
   import { alertError } from './ts/alert'
   import { canShowReaderAlert } from './ts/readerAlertPolicy'
   import { hasDragType, RISU_APP_INTERNAL_DRAG_TYPE, RISU_SIDEBAR_DRAG_TYPE } from './ts/dragTypes'
-  import { consumeObserverRouteIntent, peekObserverRouteIntent } from './ts/observerRouteIntent'
+  import { consumeReaderRouteIntent, peekReaderRouteIntent } from './ts/readerRouteIntent'
   import {
     clientSessionStore,
     captureClientSessionGeneration,
@@ -137,13 +137,7 @@
   let generationRecoveryStartupFailed = $derived(
     $startupCoordinatorStore.failures.canGenerate?.failureCode === 'generation-recovery-failed',
   )
-  let preWriterObserverMode = $derived(
-    connectedReaderView ||
-      (!$clientSessionStore.managed &&
-        $startupCoordinatorStore.capabilities.canRenderShell &&
-        $startupCoordinatorStore.observerShellEnabled &&
-        !$startupCoordinatorStore.capabilities.canApplyRoutes),
-  )
+  let readOnlyWorkspaceMode = $derived(connectedReaderView)
   let renderedRoute = $state($currentRoute)
   let routeLoadingVisible = $state(false)
   let routeRetryButton = $state<HTMLButtonElement | null>(null)
@@ -325,15 +319,15 @@
     sideBarClosing.set(true)
   }
 
-  let previousObserverMode = $state<boolean | undefined>()
+  let previousReadOnlyMode = $state<boolean | undefined>()
   $effect(() => {
-    const observerMode = preWriterObserverMode
-    if (previousObserverMode === undefined) {
-      previousObserverMode = observerMode
+    const readOnlyMode = readOnlyWorkspaceMode
+    if (previousReadOnlyMode === undefined) {
+      previousReadOnlyMode = readOnlyMode
       return
     }
-    if (observerMode === previousObserverMode) return
-    previousObserverMode = observerMode
+    if (readOnlyMode === previousReadOnlyMode) return
+    previousReadOnlyMode = readOnlyMode
     untrack(() => {
       sideBarTransitionCause.set('none')
       sideBarClosing.set(false)
@@ -349,15 +343,15 @@
     // handlers; the writer state-to-route effect reconciles the URL to the
     // already-persisted selection without creating a command.
     const currentWriterRoute = $currentRoute
-    let observerIntent = peekObserverRouteIntent()
+    let observerIntent = peekReaderRouteIntent()
     // New navigation supersedes the retained route; equivalent aliases keep
     // their pending promotion/retry intent until application succeeds.
     if (observerIntent && routeKey(observerIntent.route) !== routeKey(currentWriterRoute)) {
-      consumeObserverRouteIntent(observerIntent.sequence)
+      consumeReaderRouteIntent(observerIntent.sequence)
       observerIntent = null
     }
     if (observerIntent) {
-      consumeObserverRouteIntent(observerIntent.sequence)
+      consumeReaderRouteIntent(observerIntent.sequence)
       // Reader browsing is only a presentation target. Move the URL back to
       // the already-persisted writer state without routing the reader choice
       // through selection handlers or durable commands.
@@ -666,7 +660,7 @@
     </div>
   {:else}
     <Workspace
-      readerMode={preWriterObserverMode}
+      readerMode={readOnlyWorkspaceMode}
       writerNavigationOpen={$sideBarStore}
       writerNavigationLabel={language.menu}
       writerContentInert={routeContentBlocked}

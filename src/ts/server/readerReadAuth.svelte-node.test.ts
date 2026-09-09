@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const authReset = vi.hoisted(() => ({ discard: vi.fn(async () => undefined), getAuth: vi.fn() }))
 vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: authReset.getAuth }))
-vi.mock('../observerProjectionLifecycle', () => ({ discardObserverProjectionState: authReset.discard }))
+vi.mock('../readerProjectionLifecycle', () => ({ discardReaderProjectionState: authReset.discard }))
 
 import {
   beginClientSession,

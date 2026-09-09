@@ -3,6 +3,7 @@ import path from 'node:path'
 import {
   isStartupTelemetryEvent,
   STARTUP_TELEMETRY_MILESTONES,
+  STARTUP_TELEMETRY_PROTOCOL_VERSION,
   type StartupCoordinatorSnapshot,
   type StartupReadinessSnapshot,
 } from '@risuai/protocol/startup-telemetry'
@@ -15,10 +16,8 @@ import {
   resourceSurfacesForRoute,
 } from './fastBootstrapDirectLinks.js'
 
-export interface RolloutStartupCase {
+export interface WorkspaceStartupCase {
   fixture: 'small' | 'large'
-  observerMode: 'disabled' | 'enabled'
-  observerVisibleBeforeWriter: boolean
   startup: StartupReadinessSnapshot
   coordinator: StartupCoordinatorSnapshot
   earlyRequests: {
@@ -32,7 +31,6 @@ export interface BrowserStartupTelemetry {
   schemaVersion: number
   kind: string
   attemptCount: number
-  observerShellEnabled: boolean
   milestone?: string
   entryDurationMs?: number
   attemptDurationMs?: number
@@ -51,7 +49,7 @@ export interface DirectLinkCase {
 }
 
 export interface RecoveryJourney {
-  scenario: 'event-gap' | 'offline-before-send' | 'response-lost-after-commit'
+  scenario: 'event-gap' | 'response-lost-after-commit'
   initialRevision: number
   finalRevision: number
   retainedMutationId?: string
@@ -62,7 +60,7 @@ export interface RecoveryJourney {
 
 export interface WriterJourney {
   scenario: 'denial-then-takeover'
-  observerCommandsBeforePromotion: number
+  readerCommandsBeforePromotion: number
   oldWriterCommandsAfterTakeover: number
   newWriterMutationAccepted: boolean
 }
@@ -79,7 +77,7 @@ export interface OptionalRuntimeJourney {
 
 export interface FastBootstrapRecoveryArtifact {
   schemaVersion: 1
-  startupRollout: RolloutStartupCase[]
+  workspaceStartup: WorkspaceStartupCase[]
   recoveryJourneys: RecoveryJourney[]
   writerJourneys: WriterJourney[]
   optionalRuntimeJourneys: OptionalRuntimeJourney[]
@@ -116,7 +114,7 @@ export function fastBootstrapOutputDir(): string {
 export function emptyFastBootstrapRecoveryArtifact(): FastBootstrapRecoveryArtifact {
   return {
     schemaVersion: 1,
-    startupRollout: [],
+    workspaceStartup: [],
     recoveryJourneys: [],
     writerJourneys: [],
     optionalRuntimeJourneys: [],
@@ -271,15 +269,13 @@ export function formatIntegrationArtifact(artifact: FastBootstrapIntegrationArti
   const lines = [
     'Fast-bootstrap integration matrix',
     `run_id\t${artifact.runId}`,
-    'fixture\tobserver\tobserver_before_writer\tobserver_ms\twriter_ms\tbackground_ms',
+    'fixture\treader_ms\twriter_ms\tbackground_ms',
   ]
-  for (const entry of artifact.startupRollout) {
+  for (const entry of artifact.workspaceStartup) {
     lines.push(
       [
         entry.fixture,
-        entry.observerMode,
-        entry.observerVisibleBeforeWriter,
-        formatNumber(entry.startup.durationsFromEntry['observer-ready']),
+        formatNumber(entry.startup.durationsFromEntry['reader-ready']),
         formatNumber(entry.startup.durationsFromEntry['writer-ready']),
         formatNumber(entry.startup.durationsFromEntry['background-ready']),
       ].join('\t'),
@@ -314,12 +310,12 @@ export function formatIntegrationArtifact(artifact: FastBootstrapIntegrationArti
       ].join('\t'),
     )
   }
-  lines.push('', 'Writer journeys', 'scenario\tobserver_commands_before_promotion\told_writer_commands\taccepted')
+  lines.push('', 'Writer journeys', 'scenario\treader_commands_before_promotion\told_writer_commands\taccepted')
   for (const entry of artifact.writerJourneys) {
     lines.push(
       [
         entry.scenario,
-        entry.observerCommandsBeforePromotion,
+        entry.readerCommandsBeforePromotion,
         entry.oldWriterCommandsAfterTakeover,
         entry.newWriterMutationAccepted,
       ].join('\t'),
@@ -374,7 +370,7 @@ function readJson(file: string): unknown {
 function validateRecoveryArtifact(value: unknown): asserts value is FastBootstrapRecoveryArtifact {
   if (!isRecord(value) || value.schemaVersion !== 1) throw new Error('invalid Fast-bootstrap recovery artifact schema')
   const validators = {
-    startupRollout: isRolloutStartupCase,
+    workspaceStartup: isWorkspaceStartupCase,
     recoveryJourneys: isRecoveryJourney,
     writerJourneys: isWriterJourney,
     optionalRuntimeJourneys: isOptionalRuntimeJourney,
@@ -387,15 +383,11 @@ function validateRecoveryArtifact(value: unknown): asserts value is FastBootstra
 
 function checkRecoveryCompleteness(artifact: FastBootstrapRecoveryArtifact, issues: string[]): void {
   const identities = [
-    [
-      'startupRollout',
-      artifact.startupRollout.map((entry) => `${entry.fixture}/${entry.observerMode}`),
-      ['small/disabled', 'small/enabled', 'large/disabled', 'large/enabled'],
-    ],
+    ['workspaceStartup', artifact.workspaceStartup.map((entry) => entry.fixture), ['small', 'large']],
     [
       'recoveryJourneys',
       artifact.recoveryJourneys.map((entry) => entry.scenario),
-      ['event-gap', 'offline-before-send', 'response-lost-after-commit'],
+      ['event-gap', 'response-lost-after-commit'],
     ],
     ['writerJourneys', artifact.writerJourneys.map((entry) => entry.scenario), ['denial-then-takeover']],
     [
@@ -439,14 +431,11 @@ function checkDirectLinkSemantics(
   }
 }
 
-function isRolloutStartupCase(value: unknown): boolean {
+function isWorkspaceStartupCase(value: unknown): boolean {
   if (!isRecord(value)) return false
   const { startup, coordinator, earlyRequests, telemetry } = value
-  const observerEnabled = value.observerMode === 'enabled'
   if (
     (value.fixture !== 'small' && value.fixture !== 'large') ||
-    (value.observerMode !== 'disabled' && value.observerMode !== 'enabled') ||
-    value.observerVisibleBeforeWriter !== observerEnabled ||
     !isRecord(startup) ||
     startup.schemaVersion !== 1 ||
     startup.phase !== 'background-ready' ||
@@ -457,7 +446,7 @@ function isRolloutStartupCase(value: unknown): boolean {
         isNonnegativeNumber((startup.timestamps as Record<string, unknown>)[milestone]) &&
         isNonnegativeNumber((startup.durationsFromEntry as Record<string, unknown>)[milestone]),
     ) ||
-    (startup.timestamps['observer-ready'] as number) > (startup.timestamps['writer-ready'] as number) ||
+    (startup.timestamps['reader-ready'] as number) > (startup.timestamps['writer-ready'] as number) ||
     !Array.isArray(startup.attempts) ||
     startup.attempts.length === 0 ||
     !startup.attempts.every(
@@ -472,7 +461,6 @@ function isRolloutStartupCase(value: unknown): boolean {
     ) ||
     !isRecord(coordinator) ||
     coordinator.schemaVersion !== 1 ||
-    coordinator.observerShellEnabled !== observerEnabled ||
     coordinator.writerCapabilitiesRevoked !== false ||
     !isRecord(coordinator.capabilities) ||
     coordinator.capabilities.canRenderShell !== true ||
@@ -489,7 +477,6 @@ function isRolloutStartupCase(value: unknown): boolean {
         isStartupTelemetryEvent({
           kind: 'diagnostic-failure',
           attemptCount: failure.attemptId,
-          observerShellEnabled: observerEnabled,
           failureCode: failure.failureCode,
           failureMilestone: failure.failureMilestone,
         }),
@@ -500,7 +487,7 @@ function isRolloutStartupCase(value: unknown): boolean {
     earlyRequests.mutationsBeforeWriterReady !== 0 ||
     earlyRequests.generationsBeforeChatReady !== 0 ||
     !Array.isArray(telemetry) ||
-    !telemetry.every((entry) => isBrowserStartupTelemetry(entry, observerEnabled))
+    !telemetry.every(isBrowserStartupTelemetry)
   )
     return false
   return (
@@ -511,12 +498,11 @@ function isRolloutStartupCase(value: unknown): boolean {
   )
 }
 
-function isBrowserStartupTelemetry(value: unknown, observerEnabled: boolean): boolean {
+function isBrowserStartupTelemetry(value: unknown): boolean {
   if (!isRecord(value)) return false
   const { schemaVersion, requestUid, ...event } = value
   return (
-    schemaVersion === 1 &&
-    event.observerShellEnabled === observerEnabled &&
+    schemaVersion === STARTUP_TELEMETRY_PROTOCOL_VERSION &&
     event.kind !== 'attempt-failed' &&
     (requestUid === undefined || isNonemptyString(requestUid)) &&
     isStartupTelemetryEvent(event)
@@ -538,7 +524,7 @@ function isRecoveryJourney(value: unknown): boolean {
     return value.commandAttempts === 1 && value.receiptAcknowledgements === 0 && value.resourceRefreshes >= 4
   }
   return (
-    (value.scenario === 'offline-before-send' || value.scenario === 'response-lost-after-commit') &&
+    value.scenario === 'response-lost-after-commit' &&
     isNonemptyString(value.retainedMutationId) &&
     value.commandAttempts >= 2 &&
     value.receiptAcknowledgements === 1
@@ -549,7 +535,7 @@ function isWriterJourney(value: unknown): boolean {
   return (
     isRecord(value) &&
     value.scenario === 'denial-then-takeover' &&
-    value.observerCommandsBeforePromotion === 0 &&
+    value.readerCommandsBeforePromotion === 0 &&
     value.oldWriterCommandsAfterTakeover === 0 &&
     value.newWriterMutationAccepted === true
   )

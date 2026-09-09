@@ -37,7 +37,7 @@ interface SafeTraceSummary {
 interface StartupWorkspaceProbeSnapshot {
   conversationShellMounts: number
   conversationShellRemovals: number
-  observerWorkspaceMounts: number
+  readerWorkspaceMounts: number
   shellIdentityChanges: number
   sampledFrames: number
   missingOwnedFrames: number
@@ -141,7 +141,7 @@ test('startup matrix keeps cold and warm small/large populations separate', asyn
     expect(entry.server.resources.filter((resource) => resource.resource === 'shell')).toHaveLength(1)
     expect(entry.workspace.conversationShellMounts).toBe(1)
     expect(entry.workspace.conversationShellRemovals).toBe(0)
-    expect(entry.workspace.observerWorkspaceMounts).toBe(0)
+    expect(entry.workspace.readerWorkspaceMounts).toBe(0)
     expect(entry.workspace.shellIdentityChanges).toBe(0)
   }
 })
@@ -299,7 +299,7 @@ async function installStartupWorkspaceProbe(page: Page): Promise<void> {
     } = {
       conversationShellMounts: 0,
       conversationShellRemovals: 0,
-      observerWorkspaceMounts: 0,
+      readerWorkspaceMounts: 0,
       shellIdentityChanges: 0,
       sampledFrames: 0,
       missingOwnedFrames: 0,
@@ -310,7 +310,7 @@ async function installStartupWorkspaceProbe(page: Page): Promise<void> {
         return {
           conversationShellMounts: state.conversationShellMounts,
           conversationShellRemovals: state.conversationShellRemovals,
-          observerWorkspaceMounts: state.observerWorkspaceMounts,
+          readerWorkspaceMounts: state.readerWorkspaceMounts,
           shellIdentityChanges: state.shellIdentityChanges,
           sampledFrames: state.sampledFrames,
           missingOwnedFrames: state.missingOwnedFrames,
@@ -327,7 +327,7 @@ async function installStartupWorkspaceProbe(page: Page): Promise<void> {
     ).__RISU_STARTUP_WORKSPACE_PROBE__ = state
 
     const seenShells = new WeakSet<Element>()
-    const seenObservers = new WeakSet<Element>()
+    const seenReaders = new WeakSet<Element>()
     let hasMountedShell = false
     const visit = (root: Node, selector: string, seen: WeakSet<Element>, onFirstSeen: (element: Element) => void) => {
       if (!(root instanceof Element)) return
@@ -349,8 +349,8 @@ async function installStartupWorkspaceProbe(page: Page): Promise<void> {
             if (hasMountedShell) state.shellIdentityChanges += 1
             hasMountedShell = true
           })
-          visit(node, '[data-observer-shell]', seenObservers, () => {
-            state.observerWorkspaceMounts += 1
+          visit(node, '[data-risu-workspace][data-reader-layout]', seenReaders, () => {
+            state.readerWorkspaceMounts += 1
           })
         }
         for (const node of record.removedNodes) {

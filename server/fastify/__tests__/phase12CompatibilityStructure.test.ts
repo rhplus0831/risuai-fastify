@@ -54,7 +54,6 @@ const CLOSED_STRING_VOCABULARIES = {
       'chat-hydration-runtime',
       'chat-readiness',
       'generation-recovery',
-      'observer-shell',
       'plugin-runtime',
       'push-runtime',
       'writer-bootstrap',
@@ -67,7 +66,6 @@ const CLOSED_STRING_VOCABULARIES = {
       'writer-receipt-flush',
       'writer-resource-hydration',
       'writer-runtime-services',
-      'writer-shell',
     ],
   },
   'src/ts/server/pushNotifications.ts': {
@@ -326,7 +324,7 @@ describe('Phase 12 runtime, platform, limit, and diagnostic structure', () => {
     ).toEqual([
       'entry',
       'shell-mounted',
-      'observer-ready',
+      'reader-ready',
       'writer-ready',
       'plugins-ready',
       'chat-ready',

@@ -7,7 +7,7 @@ const refreshApi = vi.hoisted(() => ({
 }))
 const bootstrapApi = vi.hoisted(() => ({ fetchReadOnly: vi.fn() }))
 const sideEffects = vi.hoisted(() => ({
-  discardObserverProjection: vi.fn(async () => undefined),
+  discardReaderProjection: vi.fn(async () => undefined),
   hydrateActiveChat: vi.fn(async () => undefined),
   hydrateSelectedCharacter: vi.fn(async () => true),
   resetChatHydration: vi.fn(),
@@ -35,8 +35,8 @@ vi.mock('./resourceInvalidation', () => ({
   refreshAllServerResources: refreshApi.refreshAll,
   refreshInvalidatedServerResources: refreshApi.refreshInvalidated,
 }))
-vi.mock('../observerProjectionLifecycle', () => ({
-  discardObserverProjectionState: sideEffects.discardObserverProjection,
+vi.mock('../readerProjectionLifecycle', () => ({
+  discardReaderProjectionState: sideEffects.discardReaderProjection,
 }))
 vi.mock('./bootstrap', () => ({ fetchServerBootstrapReadOnly: bootstrapApi.fetchReadOnly }))
 vi.mock('./chatMessageHydration.svelte', () => ({
@@ -316,8 +316,8 @@ describe('complete server resource refresh', () => {
 
     expect(peekCachedServerCommandRevision()).toBe(3)
     expect(peekAppliedServerResourceRevision()).toBe(3)
-    expect(sideEffects.discardObserverProjection).toHaveBeenCalledOnce()
-    expect(sideEffects.discardObserverProjection).toHaveBeenCalledWith('database-replacement')
+    expect(sideEffects.discardReaderProjection).toHaveBeenCalledOnce()
+    expect(sideEffects.discardReaderProjection).toHaveBeenCalledWith('database-replacement')
   })
 
   it('resets replacement fences after an older in-flight full refresh drains', async () => {

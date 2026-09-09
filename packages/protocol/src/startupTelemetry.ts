@@ -1,7 +1,7 @@
 import { Type, type Static } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
 
-export const STARTUP_TELEMETRY_PROTOCOL_VERSION = 1 as const
+export const STARTUP_TELEMETRY_PROTOCOL_VERSION = 2 as const
 export const STARTUP_TELEMETRY_MAX_BATCH_EVENTS = 32
 export const STARTUP_TELEMETRY_MAX_ATTEMPTS = 10_000
 export const STARTUP_TELEMETRY_MAX_DURATION_MS = 24 * 60 * 60 * 1000
@@ -9,7 +9,7 @@ export const STARTUP_TELEMETRY_MAX_DURATION_MS = 24 * 60 * 60 * 1000
 export const STARTUP_TELEMETRY_MILESTONES = [
   'entry',
   'shell-mounted',
-  'observer-ready',
+  'reader-ready',
   'writer-ready',
   'plugins-ready',
   'chat-ready',
@@ -19,7 +19,7 @@ export const STARTUP_TELEMETRY_MILESTONES = [
 export const StartupTelemetryMilestoneSchema = Type.Union([
   Type.Literal('entry'),
   Type.Literal('shell-mounted'),
-  Type.Literal('observer-ready'),
+  Type.Literal('reader-ready'),
   Type.Literal('writer-ready'),
   Type.Literal('plugins-ready'),
   Type.Literal('chat-ready'),
@@ -54,7 +54,6 @@ export type StartupTelemetryFailureCode = Static<typeof StartupTelemetryFailureC
 
 const StartupTelemetryEventBaseSchema = {
   attemptCount: Type.Integer({ minimum: 0, maximum: STARTUP_TELEMETRY_MAX_ATTEMPTS }),
-  observerShellEnabled: Type.Boolean(),
 }
 
 const StartupTelemetryDurationSchema = Type.Number({ minimum: 0, maximum: STARTUP_TELEMETRY_MAX_DURATION_MS })
@@ -116,8 +115,6 @@ export type StartupTelemetryEvent = Static<typeof StartupTelemetryEventSchema>
 export type StartupCapability = 'canRenderShell' | 'canApplyRoutes' | 'canMutate' | 'pluginsReady' | 'canGenerate'
 export type StartupRetryTarget = StartupCapability | 'backgroundReady'
 export type StartupStep =
-  | 'observer-shell'
-  | 'writer-shell'
   | 'writer-owner-adoption'
   | 'writer-bootstrap'
   | 'writer-initialize'
@@ -163,7 +160,6 @@ export interface StartupCapabilityFailureSnapshot {
 export interface StartupCoordinatorSnapshot {
   schemaVersion: 1
   capabilities: Record<StartupCapability, boolean>
-  observerShellEnabled: boolean
   writerCapabilitiesRevoked: boolean
   failures: Partial<Record<StartupRetryTarget, StartupCapabilityFailureSnapshot>>
   completedSteps: StartupStep[]

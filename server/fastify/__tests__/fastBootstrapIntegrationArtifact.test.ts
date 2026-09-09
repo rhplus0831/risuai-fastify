@@ -18,7 +18,7 @@ import {
   writeFastBootstrapRecoveryPartial,
   type FastBootstrapDirectLinkBatchArtifact,
   type FastBootstrapRecoveryArtifact,
-  type RolloutStartupCase,
+  type WorkspaceStartupCase,
 } from '../browser-smoke/fastBootstrapIntegrationArtifact.js'
 
 const temporaryDirectories: string[] = []
@@ -38,8 +38,8 @@ describe('Fast-bootstrap integration artifact merge', () => {
     const merged = mergeFastBootstrapArtifactOutputs({ outputDir, required: true, runId: currentRunId })
 
     expect(merged?.runId).toBe(currentRunId)
-    expect(merged?.startupRollout).toHaveLength(4)
-    expect(merged?.recoveryJourneys).toHaveLength(3)
+    expect(merged?.workspaceStartup).toHaveLength(2)
+    expect(merged?.recoveryJourneys).toHaveLength(2)
     expect(merged?.writerJourneys).toHaveLength(1)
     expect(merged?.optionalRuntimeJourneys).toHaveLength(4)
     expect(merged?.directLinks.map((entry) => entry.path)).toEqual(directLinkCases().map((entry) => entry.path))
@@ -61,13 +61,13 @@ describe('Fast-bootstrap integration artifact merge', () => {
   it('does not promote empty recovery evidence to a required final artifact', () => {
     const outputDir = writeCompleteMatrix()
     writeFastBootstrapRecoveryPartial(emptyFastBootstrapRecoveryArtifact(), outputDir, currentRunId)
-    expectRequiredFailure(outputDir, 'incomplete or duplicate startupRollout identities')
+    expectRequiredFailure(outputDir, 'incomplete or duplicate workspaceStartup identities')
     expect(fs.existsSync(path.join(outputDir, recoveryName))).toBe(true)
   })
 
   const missingIdentities: Array<readonly [keyof Omit<FastBootstrapRecoveryArtifact, 'schemaVersion'>, number]> = [
-    ...[0, 1, 2, 3].map((index) => ['startupRollout', index] as const),
-    ...[0, 1, 2].map((index) => ['recoveryJourneys', index] as const),
+    ...[0, 1].map((index) => ['workspaceStartup', index] as const),
+    ...[0, 1].map((index) => ['recoveryJourneys', index] as const),
     ['writerJourneys', 0],
     ...[0, 1, 2, 3].map((index) => ['optionalRuntimeJourneys', index] as const),
   ]
@@ -79,7 +79,7 @@ describe('Fast-bootstrap integration artifact merge', () => {
     expectRequiredFailure(outputDir, `incomplete or duplicate ${field} identities`)
   })
 
-  it.each(['startupRollout', 'recoveryJourneys', 'writerJourneys', 'optionalRuntimeJourneys'] as const)(
+  it.each(['workspaceStartup', 'recoveryJourneys', 'writerJourneys', 'optionalRuntimeJourneys'] as const)(
     'rejects duplicate %s identities even when the count is unchanged',
     (field) => {
       const outputDir = writeCompleteMatrix()
@@ -291,65 +291,58 @@ const malformedRecoveryCases: Array<
 > = [
   [
     'null startup entry',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      Object.assign(artifact.startupRollout, { 0: null })
+      Object.assign(artifact.workspaceStartup, { 0: null })
     },
   ],
   [
     'missing milestone durations',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      artifact.startupRollout[0]!.startup.durationsFromEntry = {}
+      artifact.workspaceStartup[0]!.startup.durationsFromEntry = {}
     },
   ],
   [
     'missing startup attempts',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      artifact.startupRollout[0]!.startup.attempts = []
+      artifact.workspaceStartup[0]!.startup.attempts = []
     },
   ],
   [
     'empty telemetry',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      artifact.startupRollout[0]!.telemetry = []
+      artifact.workspaceStartup[0]!.telemetry = []
     },
   ],
   [
     'malformed telemetry',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      Object.assign(artifact.startupRollout[0]!.telemetry[0]!, { entryDurationMs: 'fast' })
-    },
-  ],
-  [
-    'wrong observer observation',
-    'startupRollout',
-    (artifact) => {
-      artifact.startupRollout[0]!.observerVisibleBeforeWriter = true
+      Object.assign(artifact.workspaceStartup[0]!.telemetry[0]!, { entryDurationMs: 'fast' })
     },
   ],
   [
     'missing coordinator capabilities',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      Object.assign(artifact.startupRollout[0]!.coordinator, { capabilities: {} })
+      Object.assign(artifact.workspaceStartup[0]!.coordinator, { capabilities: {} })
     },
   ],
   [
     'malformed coordinator failure',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      Object.assign(artifact.startupRollout[0]!.coordinator, { failures: { canMutate: null } })
+      Object.assign(artifact.workspaceStartup[0]!.coordinator, { failures: { canMutate: null } })
     },
   ],
   [
     'premature mutation',
-    'startupRollout',
+    'workspaceStartup',
     (artifact) => {
-      artifact.startupRollout[0]!.earlyRequests.mutationsBeforeWriterReady = 1
+      artifact.workspaceStartup[0]!.earlyRequests.mutationsBeforeWriterReady = 1
     },
   ],
   [
@@ -405,7 +398,7 @@ const malformedRecoveryCases: Array<
     'observer command leak',
     'writerJourneys',
     (artifact) => {
-      artifact.writerJourneys[0]!.observerCommandsBeforePromotion = 1
+      artifact.writerJourneys[0]!.readerCommandsBeforePromotion = 1
     },
   ],
   [
@@ -488,9 +481,7 @@ function completeBatchArtifact(
 function completeRecoveryArtifact(): FastBootstrapRecoveryArtifact {
   return {
     schemaVersion: 1,
-    startupRollout: (['small', 'large'] as const).flatMap((fixture) =>
-      (['disabled', 'enabled'] as const).map((observerMode) => completeStartupCase(fixture, observerMode)),
-    ),
+    workspaceStartup: (['small', 'large'] as const).map(completeStartupCase),
     recoveryJourneys: [
       {
         scenario: 'event-gap',
@@ -499,15 +490,6 @@ function completeRecoveryArtifact(): FastBootstrapRecoveryArtifact {
         commandAttempts: 1,
         receiptAcknowledgements: 0,
         resourceRefreshes: 4,
-      },
-      {
-        scenario: 'offline-before-send',
-        initialRevision: 7,
-        finalRevision: 8,
-        retainedMutationId: 'offline-mutation',
-        commandAttempts: 2,
-        receiptAcknowledgements: 1,
-        resourceRefreshes: 0,
       },
       {
         scenario: 'response-lost-after-commit',
@@ -522,7 +504,7 @@ function completeRecoveryArtifact(): FastBootstrapRecoveryArtifact {
     writerJourneys: [
       {
         scenario: 'denial-then-takeover',
-        observerCommandsBeforePromotion: 0,
+        readerCommandsBeforePromotion: 0,
         oldWriterCommandsAfterTakeover: 0,
         newWriterMutationAccepted: true,
       },
@@ -568,25 +550,19 @@ function completeRecoveryArtifact(): FastBootstrapRecoveryArtifact {
   }
 }
 
-function completeStartupCase(
-  fixture: RolloutStartupCase['fixture'],
-  observerMode: RolloutStartupCase['observerMode'],
-): RolloutStartupCase {
+function completeStartupCase(fixture: WorkspaceStartupCase['fixture']): WorkspaceStartupCase {
   const milestones = [
     'entry',
     'shell-mounted',
-    'observer-ready',
+    'reader-ready',
     'writer-ready',
     'plugins-ready',
     'chat-ready',
     'background-ready',
   ] as const
   const durations = Object.fromEntries(milestones.map((milestone, index) => [milestone, index * 10]))
-  const observerShellEnabled = observerMode === 'enabled'
   return {
     fixture,
-    observerMode,
-    observerVisibleBeforeWriter: observerShellEnabled,
     startup: {
       schemaVersion: 1,
       phase: 'background-ready',
@@ -596,7 +572,6 @@ function completeStartupCase(
     },
     coordinator: {
       schemaVersion: 1,
-      observerShellEnabled,
       writerCapabilitiesRevoked: false,
       capabilities: {
         canRenderShell: true,
@@ -611,14 +586,13 @@ function completeStartupCase(
     earlyRequests: { mutationsBeforeWriterReady: 0, generationsBeforeChatReady: 0 },
     telemetry: [
       ...milestones.map((milestone, index) => ({
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'phase-ready',
         milestone,
         attemptCount: 1,
-        observerShellEnabled,
         entryDurationMs: index * 10,
       })),
-      { schemaVersion: 1, kind: 'attempt-completed', attemptCount: 1, observerShellEnabled, attemptDurationMs: 50 },
+      { schemaVersion: 2, kind: 'attempt-completed', attemptCount: 1, attemptDurationMs: 50 },
     ],
   }
 }

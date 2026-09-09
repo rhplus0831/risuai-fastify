@@ -12,7 +12,6 @@ import type { StreamJob } from '../src/streamJobs.js'
 import type { BrowserSmokeClientSessionSnapshot } from '@risuai/shared-core/browser-smoke'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
   type FastBootstrapHarness,
@@ -393,7 +392,6 @@ export async function addGenerationClient(
 ): Promise<GenerationClient> {
   const context = await browser.newContext({ viewport: { width: 1365, height: 950 } })
   context.setDefaultTimeout(10_000)
-  await setObserverShellMode(context, 'enabled')
   const requests = new Map<number, FetchRecord>()
   await context.exposeBinding('__recordConnectedGenerationFetch', (_source, record: Omit<FetchRecord, 'client'>) => {
     const existing = requests.get(record.id)
@@ -492,13 +490,12 @@ export async function expectGenerationWriter(client: GenerationClient): Promise<
       { timeout: 30_000 },
     )
     .toMatchObject({ canMutate: true, canGenerate: true })
-  await expect(client.page.locator('[data-observer-shell]')).toHaveCount(0)
   await expect(client.page.getByTestId('default-chat-composer')).toBeVisible()
   await expect(client.page).toHaveURL(new RegExp(`${ROUTE}$`))
 }
 
 export async function expectGenerationReader(client: GenerationClient, chatId = CHAT): Promise<void> {
-  await expect(client.page.locator('[data-observer-lifecycle-status]')).toHaveText(
+  await expect(client.page.locator('[data-reader-lifecycle-status]')).toHaveText(
     'Read only. Updates from the writer appear here.',
     { timeout: 30_000 },
   )

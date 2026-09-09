@@ -21,7 +21,7 @@ describe('startup telemetry protocol', () => {
     expect(STARTUP_TELEMETRY_MILESTONES).toEqual([
       'entry',
       'shell-mounted',
-      'observer-ready',
+      'reader-ready',
       'writer-ready',
       'plugins-ready',
       'chat-ready',
@@ -50,33 +50,29 @@ describe('startup telemetry protocol', () => {
             milestone: 'writer-ready',
             entryDurationMs: 125.25,
             attemptCount: 1,
-            observerShellEnabled: true,
           },
           {
             kind: 'attempt-completed',
             attemptDurationMs: 150,
             attemptCount: 1,
-            observerShellEnabled: true,
           },
           {
             kind: 'attempt-failed',
             attemptDurationMs: 25,
             attemptCount: 2,
-            observerShellEnabled: true,
             failureCode: 'writer-bootstrap-failed',
             failureMilestone: 'writer-ready',
           },
           {
             kind: 'diagnostic-failure',
             attemptCount: 2,
-            observerShellEnabled: true,
             failureCode: 'plugin-initialization-failed',
             failureMilestone: 'plugins-ready',
           },
         ]),
       ),
     ).toBe(true)
-    expect(isStartupTelemetryConfiguration({ version: 1, sampleRate: 1 })).toBe(true)
+    expect(isStartupTelemetryConfiguration({ version: 2, sampleRate: 1 })).toBe(true)
   })
 
   it('rejects arbitrary content fields, unknown taxonomy values, and invalid configuration', () => {
@@ -85,11 +81,10 @@ describe('startup telemetry protocol', () => {
       milestone: 'writer-ready',
       entryDurationMs: 125,
       attemptCount: 1,
-      observerShellEnabled: false,
     } as const
     expect(isStartupTelemetryBatch({ ...batch([validPhase]), route: '/characters/private' })).toBe(false)
-    expect(isStartupTelemetryBatch({ version: 1, events: [{ ...validPhase, account: 'private-account' }] })).toBe(false)
-    expect(isStartupTelemetryBatch({ version: 1, events: [{ ...validPhase, milestone: 'private-route' }] })).toBe(false)
+    expect(isStartupTelemetryBatch({ version: 2, events: [{ ...validPhase, account: 'private-account' }] })).toBe(false)
+    expect(isStartupTelemetryBatch({ version: 2, events: [{ ...validPhase, milestone: 'private-route' }] })).toBe(false)
     expect(isStartupTelemetryConfiguration({ version: 1, sampleRate: 0.5 })).toBe(false)
     expect(isStartupTelemetryConfiguration({ version: 1, sampleRate: 1, account: 'private-account' })).toBe(false)
   })
@@ -100,7 +95,6 @@ describe('startup telemetry protocol', () => {
       milestone: 'entry' as const,
       entryDurationMs: 0,
       attemptCount: 0,
-      observerShellEnabled: false,
     }
     expect(isStartupTelemetryBatch(batch([]))).toBe(false)
     expect(

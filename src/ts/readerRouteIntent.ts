@@ -1,11 +1,11 @@
 import { routeKey, type AppRoute } from './routerRoute'
 
-export interface ObserverRouteIntent {
+export interface ReaderRouteIntent {
   route: AppRoute
   sequence: number
 }
 
-let latestIntent: ObserverRouteIntent | null = null
+let latestIntent: ReaderRouteIntent | null = null
 let nextSequence = 0
 
 /**
@@ -13,7 +13,7 @@ let nextSequence = 0
  * Observer navigation is deliberately memory-only: this module never imports
  * the command transport or the durable mutation outbox.
  */
-export function recordObserverRouteIntent(route: AppRoute): ObserverRouteIntent {
+export function recordReaderRouteIntent(route: AppRoute): ReaderRouteIntent {
   if (latestIntent && routeKey(latestIntent.route) === routeKey(route)) return latestIntent
 
   latestIntent = {
@@ -23,23 +23,23 @@ export function recordObserverRouteIntent(route: AppRoute): ObserverRouteIntent 
   return latestIntent
 }
 
-export function peekObserverRouteIntent(): ObserverRouteIntent | null {
+export function peekReaderRouteIntent(): ReaderRouteIntent | null {
   return latestIntent ? { route: cloneRoute(latestIntent.route), sequence: latestIntent.sequence } : null
 }
 
-/** Consume an exact observer intent once after writer-safe reconciliation. */
-export function consumeObserverRouteIntent(sequence: number): ObserverRouteIntent | null {
+/** Consume an exact reader intent once after writer-safe reconciliation. */
+export function consumeReaderRouteIntent(sequence: number): ReaderRouteIntent | null {
   if (!latestIntent || latestIntent.sequence !== sequence) return null
-  const consumed = peekObserverRouteIntent()
+  const consumed = peekReaderRouteIntent()
   latestIntent = null
   return consumed
 }
 
-export function clearObserverRouteIntent(): void {
+export function clearReaderRouteIntent(): void {
   latestIntent = null
 }
 
-export function resetObserverRouteIntentForTests(): void {
+export function resetReaderRouteIntentForTests(): void {
   latestIntent = null
   nextSequence = 0
 }

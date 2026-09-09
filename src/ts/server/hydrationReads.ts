@@ -658,8 +658,8 @@ async function discardHydrationAuthLoss(
   if (status !== 401 || !isClientSessionGenerationCurrent(generation) || signal?.aborted) return
   requireClientAuthentication()
   const authGeneration = captureClientSessionGeneration()
-  const { discardObserverProjectionState } = await import('../observerProjectionLifecycle')
-  if (isClientSessionGenerationCurrent(authGeneration)) await discardObserverProjectionState('auth-loss')
+  const { discardReaderProjectionState } = await import('../readerProjectionLifecycle')
+  if (isClientSessionGenerationCurrent(authGeneration)) await discardReaderProjectionState('auth-loss')
 }
 
 function shouldFallbackHydrationCachePost(result: HydrationJsonRequestResult): boolean {

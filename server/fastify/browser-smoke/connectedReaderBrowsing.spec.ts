@@ -5,7 +5,6 @@ import { DatabaseSync } from 'node:sqlite'
 import { getSchemaState } from '../src/db.js'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
 } from './fastBootstrapHarness.js'
@@ -156,13 +155,12 @@ async function waitForSmokeHook(page: Page): Promise<void> {
 }
 
 async function expectReader(page: Page, chatId: string): Promise<void> {
-  await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+  await expect(page.locator('[data-reader-lifecycle-status]')).toHaveText(
     'Read only. Updates from the writer appear here.',
     { timeout: 30_000 },
   )
   await expect(page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', chatId)
   await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
-  await expect(page.locator('[data-observer-writer-retry]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toHaveCount(0)
   expect(
     await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
@@ -234,8 +232,6 @@ test('a mobile connected Reader follows committed updates and browses locally wi
   writer.on('pageerror', (error) => pageErrors.push(`writer: ${error.message}`))
   reader.on('pageerror', (error) => pageErrors.push(`reader: ${error.message}`))
   try {
-    await setObserverShellMode(writerContext, 'enabled')
-    await setObserverShellMode(readerContext, 'enabled')
     evidence.initial = durableSnapshot(harness.dataDir)
     expect(durableSnapshot(harness.dataDir).ownership).toMatchObject({
       active_writer_session_id: null,
@@ -452,7 +448,7 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     await readerContext.setOffline(true)
     evidence.offline = await reader.evaluate(() => ({ online: navigator.onLine }))
     expect(evidence.offline).toEqual({ online: false })
-    await expect(reader.locator('[data-observer-lifecycle-status]')).toHaveText(
+    await expect(reader.locator('[data-reader-lifecycle-status]')).toHaveText(
       'Connection interrupted. Showing the last received content.',
       { timeout: 15_000 },
     )

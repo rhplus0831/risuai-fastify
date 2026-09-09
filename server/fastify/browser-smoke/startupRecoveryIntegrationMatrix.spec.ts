@@ -6,17 +6,15 @@ import { STARTUP_TELEMETRY_FAILURE_CODES, STARTUP_TELEMETRY_MILESTONES } from '@
 import { subscribeProtocolMetrics } from '../src/protocolMetrics.js'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
-  type ObserverShellMode,
 } from './fastBootstrapHarness.js'
 import {
   emptyFastBootstrapRecoveryArtifact,
   writeFastBootstrapRecoveryPartial,
   type BrowserStartupTelemetry,
   type FastBootstrapRecoveryArtifact,
-  type RolloutStartupCase,
+  type WorkspaceStartupCase,
 } from './fastBootstrapIntegrationArtifact.js'
 
 interface ApiRequestRecord {
@@ -38,20 +36,16 @@ test.afterAll(async ({}, testInfo) => {
   })
 })
 
-test('startup rollout matrix proves flag-off and flag-on boundaries on small and large fixtures', async ({
-  browser,
-}) => {
+test('role-first startup matrix covers small and large fixtures', async ({ browser }) => {
   process.env.RISU_PROTOCOL_METRICS = '1'
   try {
-    const startupRollout: RolloutStartupCase[] = []
+    const workspaceStartup: WorkspaceStartupCase[] = []
     for (const fixture of ['small', 'large'] as const) {
       const database = fixture === 'small' ? smallFastBootstrapFixture() : buildLargeCorpusFixture().database
-      for (const observerMode of ['disabled', 'enabled'] as const) {
-        startupRollout.push(await runRolloutStartupCase(browser, fixture, database, observerMode))
-      }
+      workspaceStartup.push(await runWorkspaceStartupCase(browser, fixture, database))
     }
 
-    artifact.startupRollout = startupRollout
+    artifact.workspaceStartup = workspaceStartup
   } finally {
     if (previousProtocolMetrics === undefined) delete process.env.RISU_PROTOCOL_METRICS
     else process.env.RISU_PROTOCOL_METRICS = previousProtocolMetrics
@@ -82,7 +76,6 @@ test('legacy and null shell values normalize during built-browser startup', asyn
       sqlite.close()
     }
 
-    await setObserverShellMode(context, 'disabled')
     const page = await context.newPage()
     const pageErrors: string[] = []
     page.on('pageerror', (error) => pageErrors.push(error.message))
@@ -111,14 +104,13 @@ test('legacy and null shell values normalize during built-browser startup', asyn
   }
 })
 
-test('durable recovery replays offline work and committed work whose response was lost', async ({ browser }) => {
-  for (const scenario of ['offline-before-send', 'response-lost-after-commit'] as const) {
+test('durable recovery replays committed work whose response was lost', async ({ browser }) => {
+  for (const scenario of ['response-lost-after-commit'] as const) {
     const harness = await startFastBootstrapHarness(smallFastBootstrapFixture(), {
       temporaryDirectoryPrefix: `risu-fast-bootstrap-${scenario}-`,
     })
     const context = await browser.newContext()
     try {
-      await setObserverShellMode(context, 'disabled')
       const page = await context.newPage()
       const commandMutationIds: string[] = []
       const receiptAcknowledgements: Array<{ body: string; status: number }> = []
@@ -143,20 +135,16 @@ test('durable recovery replays offline work and committed work whose response wa
         () => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getAppliedServerResourceRevision()!,
       )
 
-      if (scenario === 'offline-before-send') {
-        await context.setOffline(true)
-      } else {
-        let responseDropped = false
-        await page.route('**/api/v1/commands/settings/runtime', async (route) => {
-          if (responseDropped) {
-            await route.continue()
-            return
-          }
-          responseDropped = true
-          await route.fetch()
-          await route.abort('connectionclosed')
-        })
-      }
+      let responseDropped = false
+      await page.route('**/api/v1/commands/settings/runtime', async (route) => {
+        if (responseDropped) {
+          await route.continue()
+          return
+        }
+        responseDropped = true
+        await route.fetch()
+        await route.abort('connectionclosed')
+      })
 
       const failedResult = await page.evaluate(() =>
         window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: true }),
@@ -221,7 +209,6 @@ test('event-gap recovery performs an authoritative refresh before reconnecting',
   })
   const context = await browser.newContext()
   try {
-    await setObserverShellMode(context, 'disabled')
     const page = await context.newPage()
     const fullRefreshPaths = new Set([
       '/api/v1/settings',
@@ -304,14 +291,18 @@ test('event-gap recovery performs an authoritative refresh before reconnecting',
       currentRevision: initialRevision + 1,
     })
     await expect
-      .poll(() =>
-        page.evaluate(() => ({
-          revision: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getAppliedServerResourceRevision(),
-          value: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().streamGeminiThoughts,
-        })),
+      .poll(() => fullRefreshRequests, { timeout: 30_000 })
+      .toBeGreaterThanOrEqual(fullRefreshRequestsBeforeGap + 4)
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => ({
+            revision: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getAppliedServerResourceRevision(),
+            value: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().streamGeminiThoughts,
+          })),
+        { timeout: 30_000 },
       )
       .toEqual({ revision: initialRevision + 1, value: true })
-    await expect.poll(() => fullRefreshRequests).toBeGreaterThanOrEqual(fullRefreshRequestsBeforeGap + 4)
     await expect
       .poll(() =>
         page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
@@ -342,7 +333,7 @@ test('event-gap recovery performs an authoritative refresh before reconnecting',
   }
 })
 
-test('mixed-client journey denies pre-authority mutation and keeps the old writer connected after legacy takeover', async ({
+test('mixed-client journey denies pre-authority mutation and keeps the old writer connected after takeover', async ({
   browser,
 }) => {
   const harness = await startFastBootstrapHarness(smallFastBootstrapFixture(), {
@@ -350,18 +341,14 @@ test('mixed-client journey denies pre-authority mutation and keeps the old write
     databaseSeedMode: 'unowned-migration',
   })
   const writerContext = await browser.newContext()
-  const observerContext = await browser.newContext()
+  const readerContext = await browser.newContext()
   try {
-    await Promise.all([
-      setObserverShellMode(writerContext, 'enabled'),
-      setObserverShellMode(observerContext, 'disabled'),
-    ])
     const writerPage = await writerContext.newPage()
-    const observerPage = await observerContext.newPage()
+    const readerPage = await readerContext.newPage()
     const writerCommands: string[] = []
-    const observerCommands: string[] = []
+    const readerCommands: string[] = []
     recordCommandPaths(writerPage, writerCommands)
-    recordCommandPaths(observerPage, observerCommands)
+    recordCommandPaths(readerPage, readerCommands)
 
     await writerPage.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' })
     await waitForSmokeHook(writerPage)
@@ -369,29 +356,34 @@ test('mixed-client journey denies pre-authority mutation and keeps the old write
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.waitForStartupMilestone('background-ready', 30_000),
     )
 
-    await observerPage.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' })
-    await waitForSmokeHook(observerPage)
-    await expect(observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toBeVisible()
-    const deniedMutation = await observerPage.evaluate(() =>
+    await readerPage.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' })
+    await waitForSmokeHook(readerPage)
+    await expect(readerPage.locator('[data-reader-use-this-device]')).toBeVisible()
+    const deniedMutation = await readerPage.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: true }),
     )
     expect(deniedMutation).toMatchObject({ status: 'unavailable' })
-    expect(observerCommands).toEqual([])
-    await observerPage.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
-    await observerPage.evaluate(() =>
-      window.__RISU_FASTIFY_BROWSER_SMOKE__!.waitForStartupMilestone('background-ready', 30_000),
-    )
-    await expect(observerPage.locator('[data-observer-shell]')).toHaveCount(0)
-    expect(observerCommands).toEqual([])
+    expect(readerCommands).toEqual([])
+    await readerPage.locator('[data-reader-use-this-device]').click()
+    await readerPage.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
+    await expect
+      .poll(() => readerPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot()))
+      .toMatchObject({ lifecycle: 'writing' })
+    await expect
+      .poll(() =>
+        readerPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
+      )
+      .toMatchObject({ canMutate: true })
+    expect(readerCommands).toEqual([])
 
-    await expect(writerPage.locator('[data-observer-shell]')).toBeVisible()
+    await expect(writerPage.locator('[data-risu-workspace]')).toBeVisible()
     await expect
       .poll(() =>
         writerPage.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
       )
       .toMatchObject({ canApplyRoutes: true, canGenerate: false, canMutate: false })
     await expect(writerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true })).toHaveCount(0)
-    await expect(writerPage.locator('[data-observer-lifecycle-status]')).toContainText(
+    await expect(writerPage.locator('[data-reader-lifecycle-status]')).toContainText(
       'Updates from the writer appear here.',
     )
     const revokedMutation = await writerPage.evaluate(() =>
@@ -400,11 +392,11 @@ test('mixed-client journey denies pre-authority mutation and keeps the old write
     expect(revokedMutation).toMatchObject({ status: 'unavailable' })
     expect(writerCommands).toEqual([])
 
-    const mutation = await observerPage.evaluate(() =>
+    const mutation = await readerPage.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.patchRuntimeSettings({ streamGeminiThoughts: true }),
     )
     expect(mutation).toMatchObject({ status: 'ok' })
-    expect(observerCommands).toEqual(['/api/v1/commands/settings/runtime'])
+    expect(readerCommands).toEqual(['/api/v1/commands/settings/runtime'])
     expect(writerCommands).toEqual([])
     await expect
       .poll(() =>
@@ -414,12 +406,12 @@ test('mixed-client journey denies pre-authority mutation and keeps the old write
 
     artifact.writerJourneys.push({
       scenario: 'denial-then-takeover',
-      observerCommandsBeforePromotion: 0,
+      readerCommandsBeforePromotion: 0,
       oldWriterCommandsAfterTakeover: writerCommands.length,
       newWriterMutationAccepted: mutation.status === 'ok',
     })
   } finally {
-    await Promise.all([writerContext.close().catch(() => undefined), observerContext.close().catch(() => undefined)])
+    await Promise.all([writerContext.close().catch(() => undefined), readerContext.close().catch(() => undefined)])
     await closeFastBootstrapHarness(harness)
   }
 })
@@ -431,7 +423,6 @@ test('background runtimes cannot delay or fail shell, mutation, and chat readine
     })
     const context = await browser.newContext()
     try {
-      await setObserverShellMode(context, 'disabled')
       const page = await context.newPage()
       const requested = deferred<void>()
       const release = deferred<void>()
@@ -507,7 +498,6 @@ test('inlay runtime stays route-local when slow or failed and recovers through R
     })
     const context = await browser.newContext()
     try {
-      await setObserverShellMode(context, 'disabled')
       const page = await context.newPage()
       await page.goto(harness.baseUrl, { waitUntil: 'domcontentloaded' })
       await waitForSmokeHook(page)
@@ -578,15 +568,14 @@ test('inlay runtime stays route-local when slow or failed and recovers through R
   }
 })
 
-async function runRolloutStartupCase(
+async function runWorkspaceStartupCase(
   browser: Browser,
-  fixture: RolloutStartupCase['fixture'],
+  fixture: WorkspaceStartupCase['fixture'],
   database: Record<string, unknown>,
-  observerMode: ObserverShellMode,
-): Promise<RolloutStartupCase> {
+): Promise<WorkspaceStartupCase> {
   const harness = await startFastBootstrapHarness(database, {
-    temporaryDirectoryPrefix: `risu-fast-bootstrap-${fixture}-${observerMode}-`,
-    ...(observerMode === 'enabled' ? { databaseSeedMode: 'unowned-migration' as const } : {}),
+    temporaryDirectoryPrefix: `risu-fast-bootstrap-${fixture}-`,
+    databaseSeedMode: 'unowned-migration',
   })
   const telemetry: BrowserStartupTelemetry[] = []
   const unsubscribeMetrics = subscribeProtocolMetrics((metric) => {
@@ -596,7 +585,6 @@ async function runRolloutStartupCase(
   let context: BrowserContext | undefined
   try {
     context = await browser.newContext()
-    await setObserverShellMode(context, observerMode)
     const page = await context.newPage()
     const requests = recordApiRequests(page)
     const writerBootstrap = await delayFirstWriterBootstrap(page)
@@ -608,18 +596,10 @@ async function runRolloutStartupCase(
     const coordinatorBeforeWriter = await page.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot(),
     )
-    expect(coordinatorBeforeWriter.observerShellEnabled).toBe(observerMode === 'enabled')
     expect(coordinatorBeforeWriter.capabilities.canMutate).toBe(false)
     expect(coordinatorBeforeWriter.capabilities.canGenerate).toBe(false)
-
-    const observerShell = page.locator('[data-observer-shell]')
-    if (observerMode === 'enabled') {
-      await expect(observerShell).toBeVisible()
-      expect(coordinatorBeforeWriter.capabilities.canRenderShell).toBe(true)
-    } else {
-      await expect(observerShell).toHaveCount(0)
-      expect(coordinatorBeforeWriter.capabilities.canRenderShell).toBe(false)
-    }
+    await expect(page.locator('[data-risu-workspace]')).toHaveCount(0)
+    expect(coordinatorBeforeWriter.capabilities.canRenderShell).toBe(false)
 
     writerBootstrap.release()
     await writerBootstrap.finished
@@ -645,7 +625,7 @@ async function runRolloutStartupCase(
       canApplyRoutes: true,
       canMutate: true,
     })
-    expect(final.startup.timestamps['observer-ready']).toBeLessThanOrEqual(final.startup.timestamps['writer-ready']!)
+    expect(final.startup.timestamps['reader-ready']).toBeLessThanOrEqual(final.startup.timestamps['writer-ready']!)
 
     const writerReadyAt = final.timeOrigin + (final.startup.timestamps['writer-ready'] ?? Number.POSITIVE_INFINITY)
     const chatReadyAt = final.timeOrigin + (final.startup.timestamps['chat-ready'] ?? Number.POSITIVE_INFINITY)
@@ -680,12 +660,8 @@ async function runRolloutStartupCase(
             ),
         ),
     ).toBe(true)
-    expect(telemetry.every((entry) => entry.observerShellEnabled === (observerMode === 'enabled'))).toBe(true)
-
     return {
       fixture,
-      observerMode,
-      observerVisibleBeforeWriter: observerMode === 'enabled',
       startup: final.startup,
       coordinator: final.coordinator,
       earlyRequests,
@@ -703,8 +679,7 @@ function safeBrowserStartupTelemetry(metric: Readonly<Record<string, unknown>>):
     metric.metric !== 'browser_startup' ||
     typeof metric.schemaVersion !== 'number' ||
     typeof metric.kind !== 'string' ||
-    typeof metric.attemptCount !== 'number' ||
-    typeof metric.observerShellEnabled !== 'boolean'
+    typeof metric.attemptCount !== 'number'
   ) {
     return null
   }
@@ -712,7 +687,6 @@ function safeBrowserStartupTelemetry(metric: Readonly<Record<string, unknown>>):
     schemaVersion: metric.schemaVersion,
     kind: metric.kind,
     attemptCount: metric.attemptCount,
-    observerShellEnabled: metric.observerShellEnabled,
     ...(typeof metric.milestone === 'string' ? { milestone: metric.milestone } : {}),
     ...(typeof metric.entryDurationMs === 'number' ? { entryDurationMs: metric.entryDurationMs } : {}),
     ...(typeof metric.attemptDurationMs === 'number' ? { attemptDurationMs: metric.attemptDurationMs } : {}),

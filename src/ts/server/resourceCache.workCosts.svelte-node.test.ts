@@ -5,8 +5,8 @@ import { reportBrowserWork } from '../__tests__/browserWorkProbe'
 vi.mock('../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'resource-work-token',
 }))
-vi.mock('../observerProjectionLifecycle', () => ({
-  discardObserverProjectionState: async () => undefined,
+vi.mock('../readerProjectionLifecycle', () => ({
+  discardReaderProjectionState: async () => undefined,
 }))
 
 import { fetchServerSettings } from './resourceReads'

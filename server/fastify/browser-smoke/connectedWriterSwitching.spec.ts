@@ -20,7 +20,6 @@ import type {
 import type { StreamJob } from '../src/streamJobs.js'
 import {
   closeFastBootstrapHarness,
-  setObserverShellMode,
   smallFastBootstrapFixture,
   startFastBootstrapHarness,
   type FastBootstrapHarness,
@@ -246,7 +245,6 @@ async function createPair(browser: Browser, generationChat?: GenerationChatRoute
     contexts.push(contextB)
     for (const context of contexts) {
       context.setDefaultTimeout(10_000)
-      await setObserverShellMode(context, 'enabled')
     }
     const pair: Pair = {
       harness,
@@ -330,14 +328,13 @@ async function expectWriter(client: Client, route: string): Promise<void> {
       { timeout: 30_000 },
     )
     .toMatchObject({ canMutate: true, canGenerate: true })
-  await expect(client.page.locator('[data-observer-shell]')).toHaveCount(0)
   await expect(client.page.getByTestId('default-chat-composer')).toBeVisible()
   await expect(client.page.getByTestId('default-chat-composer')).toBeEnabled()
   await expect(client.page).toHaveURL(new RegExp(`${route}$`))
 }
 
 async function expectReader(client: Client, route: string, chatId: string): Promise<void> {
-  await expect(client.page.locator('[data-observer-lifecycle-status]')).toHaveText(
+  await expect(client.page.locator('[data-reader-lifecycle-status]')).toHaveText(
     'Read only. Updates from the writer appear here.',
     { timeout: 30_000 },
   )
@@ -511,7 +508,6 @@ async function promoteWithPendingStartupChat(pair: Pair, evidence: Record<string
     })
 
     characterA.release()
-    await expect(pair.a.page.locator('[data-observer-shell]')).toHaveCount(0)
     const afterRouteRelease = durableSnapshot(pair.harness.dataDir)
     expect(afterRouteRelease.selectedCharacterId).toBe(CHARACTER_B)
     expect(
@@ -1232,7 +1228,6 @@ test('an empty server without Web Locks initializes only after the explicit setu
     })
     expect(Object.values(initial.domainRowCounts).every((rows) => rows === 0)).toBe(true)
     context = await browser.newContext({ locale: 'en-US' })
-    await setObserverShellMode(context, 'enabled')
     await context.addInitScript(
       ({ sessionKey, previousSessionId }) => {
         Object.defineProperty(navigator, 'locks', { configurable: true, value: undefined })
@@ -1292,7 +1287,6 @@ test('an empty server without Web Locks initializes only after the explicit setu
     ).toBe(true)
     expect(apiRequests.filter((request) => request.path.startsWith('/api/v1/commands/'))).toEqual([])
     expect(initializationSnapshot(harness.dataDir)).toEqual(initial)
-    await expect(page.locator('[data-observer-shell]')).toHaveCount(0)
     expect(
       await page.evaluate(
         () => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities.canMutate,

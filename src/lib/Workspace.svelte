@@ -1,7 +1,6 @@
 <script lang="ts">
   import { tick, type Snippet } from 'svelte'
   import { language } from '../lang'
-  import { observerShellLifecycleStore, type ObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
   import { hydrateCharacterShell, characterShellHydrationState } from '../ts/server/characterShellHydration.svelte'
   import {
     getReaderTranscriptCharacters,
@@ -19,7 +18,7 @@
   import { charactersResourceState } from '../ts/server/resourceState.svelte'
   import { isServerCharacterShell, type Chat } from '../ts/storage/database.svelte'
   import { characterRoutePath, currentRoute, navigate } from '../ts/router'
-  import { recordObserverRouteIntent } from '../ts/observerRouteIntent'
+  import { recordReaderRouteIntent } from '../ts/readerRouteIntent'
   import { canUseClientReaderContent, clientSessionStore } from '../ts/clientSession'
   import { resolveReaderRoute, uniqueReaderCharacters, uniqueReaderChatIds } from '../ts/readerRouteScope'
   import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
@@ -180,7 +179,6 @@
     return () => controller.abort()
   })
 
-  let retryWriterButton: HTMLButtonElement | undefined = $state()
   let useThisDeviceButton: HTMLButtonElement | undefined = $state()
   let writerSwitchPending = $state(false)
   let writerSwitchResult = $state<ConnectedWriterPromotionResult | null>(null)
@@ -192,10 +190,6 @@
   const writerSwitchDisabled = $derived(
     writerSwitchInProgress || $clientSessionStore.connection !== 'live' || $clientSessionStore.lifecycle !== 'reading',
   )
-  let writerRetryAvailable = $derived(
-    !$clientSessionStore.managed &&
-      ['takeover-denied', 'unavailable', 'writer-lost', 'offline'].includes($observerShellLifecycleStore.mode),
-  )
   let authoringRouteBlocked = $derived(
     $clientSessionStore.managed && !['home', 'grid', 'character'].includes($currentRoute.kind),
   )
@@ -203,14 +197,14 @@
     if (!readerMode) return
     const route = $currentRoute
     if (!$clientSessionStore.managed) {
-      recordObserverRouteIntent(route)
+      recordReaderRouteIntent(route)
       return
     }
     if (!readerContentAvailable || !$clientSessionStore.projectionReady) return
     if (readerScope.status === 'character' || readerScope.status === 'chat') {
       latestReadingRoute = { ...route }
-      recordObserverRouteIntent(route)
-    } else if (readerScope.status === 'home') recordObserverRouteIntent(route)
+      recordReaderRouteIntent(route)
+    } else if (readerScope.status === 'home') recordReaderRouteIntent(route)
   })
 
   function showRoute(path: string): void {
@@ -251,40 +245,11 @@
     void hydrateCharacterShell(characterId, { supersede: true })
   }
 
-  function lifecycleStatus(mode: ObserverShellLifecycleMode): string {
-    if ($clientSessionStore.managed) {
-      if ($clientSessionStore.connection === 'interrupted') return language.connectedReaders.interrupted
-      if ($clientSessionStore.connection === 'connecting') return language.connectedReaders.connecting
-      if (writerSwitchInProgress) return language.connectedReaders.switching
-      return language.connectedReaders.connected
-    }
-    switch (mode) {
-      case 'retrying':
-        return language.observerShell.statusRetrying
-      case 'takeover-denied':
-        return language.observerShell.statusTakeoverDenied
-      case 'unavailable':
-        return language.observerShell.statusUnavailable
-      case 'writer-lost':
-        return language.observerShell.statusWriterLost
-      case 'offline':
-        return language.observerShell.statusOffline
-      case 'auth-lost':
-        return language.observerShell.statusAuthLost
-      case 'promoted':
-        return language.observerShell.statusPromoted
-      default:
-        return language.observerShell.status
-    }
-  }
-
-  async function retryWriterPromotion(): Promise<void> {
-    const { retryObserverWriterPromotion } = await import('../ts/bootstrap')
-    const promoted = await retryObserverWriterPromotion()
-    if (!promoted) {
-      await tick()
-      retryWriterButton?.focus()
-    }
+  function lifecycleStatus(): string {
+    if ($clientSessionStore.connection === 'interrupted') return language.connectedReaders.interrupted
+    if ($clientSessionStore.connection === 'connecting') return language.connectedReaders.connecting
+    if (writerSwitchInProgress) return language.connectedReaders.switching
+    return language.connectedReaders.connected
   }
 
   function writerSwitchStatus(result: ConnectedWriterPromotionResult | null): string {
@@ -341,7 +306,7 @@
     <ConversationShell
       responsive={$DynamicGUI}
       navigationOpen={readerMode ? !$DynamicGUI || readerNavigationOpen : writerNavigationOpen}
-      navigationLabel={readerMode ? language.observerShell.navigationLabel : writerNavigationLabel}
+      navigationLabel={readerMode ? language.readOnlyWorkspace.navigationLabel : writerNavigationLabel}
       navigationId={readerMode ? 'reader-navigation' : 'conversation-shell-navigation'}
       showNavigationToggle={readerMode}
       navigationToggleLabel={language.connectedReaders.browseConversations}
@@ -480,7 +445,9 @@
                   <div class="mx-auto flex max-w-2xl flex-col gap-5">
                     <div>
                       <p class="mb-1 text-sm text-textcolor2">
-                        {selectedIsShell ? language.observerShell.summaryLabel : language.observerShell.detailsLabel}
+                        {selectedIsShell
+                          ? language.readOnlyWorkspace.summaryLabel
+                          : language.readOnlyWorkspace.detailsLabel}
                       </p>
                       <h2 id="observer-detail-heading" class="text-2xl font-semibold">
                         {selectedCharacter.displayName || selectedCharacter.name}
@@ -490,27 +457,29 @@
                       {/if}
                     </div>
 
-                    <p class="text-sm text-textcolor2">{language.observerShell.chatCount(shellChatCount)}</p>
+                    <p class="text-sm text-textcolor2">{language.readOnlyWorkspace.chatCount(shellChatCount)}</p>
 
                     {#if selectedIsShell}
-                      <div class="rounded-md border border-textcolor/15 p-4" data-observer-character-summary>
-                        <p class="text-sm text-textcolor2">{language.observerShell.summaryHelp}</p>
+                      <div class="rounded-md border border-textcolor/15 p-4" data-reader-character-summary>
+                        <p class="text-sm text-textcolor2">{language.readOnlyWorkspace.summaryHelp}</p>
                         <button
                           type="button"
                           class="mt-3 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-60"
                           disabled={selectedHydration?.status === 'loading'}
-                          aria-label={language.observerShell.loadDetailsFor(
+                          aria-label={language.readOnlyWorkspace.loadDetailsFor(
                             selectedCharacter.displayName || selectedCharacter.name,
                           )}
                           onclick={() => loadDetails(selectedCharacter.chaId)}>
                           {selectedHydration?.status === 'loading'
-                            ? language.observerShell.loadingDetails
+                            ? language.readOnlyWorkspace.loadingDetails
                             : selectedHydration?.status === 'error'
-                              ? language.observerShell.retryDetails
-                              : language.observerShell.loadDetails}
+                              ? language.readOnlyWorkspace.retryDetails
+                              : language.readOnlyWorkspace.loadDetails}
                         </button>
                         {#if selectedHydration?.status === 'error'}
-                          <p class="mt-2 text-sm text-red-500" role="alert">{language.observerShell.detailsError}</p>
+                          <p class="mt-2 text-sm text-red-500" role="alert">
+                            {language.readOnlyWorkspace.detailsError}
+                          </p>
                         {/if}
                       </div>
                     {/if}
@@ -522,18 +491,13 @@
             {/if}
           </div>
           <DeviceAccessAction
-            managed={$clientSessionStore.managed}
-            title={$clientSessionStore.managed ? language.connectedReaders.title : language.observerShell.title}
-            status={lifecycleStatus($observerShellLifecycleStore.mode)}
+            title={language.connectedReaders.title}
+            status={lifecycleStatus()}
             result={writerSwitchStatus(writerSwitchResult)}
             switchInProgress={writerSwitchInProgress}
             switchDisabled={writerSwitchDisabled}
-            retryAvailable={writerRetryAvailable}
-            retrying={$observerShellLifecycleStore.mode === 'retrying'}
             bind:useButton={useThisDeviceButton}
-            bind:retryButton={retryWriterButton}
-            onUseThisDevice={() => void useThisDevice()}
-            onRetryWriter={() => void retryWriterPromotion()} />
+            onUseThisDevice={() => void useThisDevice()} />
         </section>
       {:else}
         {@render writerContent?.()}
@@ -548,7 +512,7 @@
     data-risu-grid-catalog
     data-risu-list-kind={catalogMode}>
     <div class="h-full p-6 bg-darkbg max-w-full w-2xl flex flex-col">
-      <h2 class="text-xl font-semibold mb-3">{language.observerShell.chooseCharacter}</h2>
+      <h2 class="text-xl font-semibold mb-3">{language.readOnlyWorkspace.chooseCharacter}</h2>
       <input
         type="search"
         class="mb-3 rounded-md border border-darkborderc bg-bgcolor px-3 py-2"

@@ -134,7 +134,7 @@ beforeEach(async () => {
   for (const milestone of [
     'entry',
     'shell-mounted',
-    'observer-ready',
+    'reader-ready',
     'writer-ready',
     'plugins-ready',
     'chat-ready',

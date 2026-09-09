@@ -13,7 +13,6 @@ import {
   settleClientReader,
 } from './clientSession'
 import {
-  configureStartupObserverShell,
   recordStartupMilestone,
   resetStartupReadinessForTests,
   settleStartupChatReadiness,
@@ -27,7 +26,7 @@ const ownership = (sessionId: string | null, epoch = 1, databaseLineage = 'linea
 })
 
 function recordWriterReadiness(): void {
-  for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+  for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready', 'plugins-ready'] as const)
     recordStartupMilestone(milestone)
   settleStartupChatReadiness(true)
   settleStartupGenerationRecoveryReadiness(true)
@@ -38,12 +37,11 @@ afterEach(resetStartupReadinessForTests)
 
 describe('workspace access presentation model', () => {
   it('keeps an unresolved automatic writer booting despite a coherent preview', () => {
-    configureStartupObserverShell(true)
     const startup = beginClientSession('client-a')
     expect(authenticateClientSessionReadView(startup, ownership(null))).toBe(true)
     setClientProjectionReady(true)
     setClientConnectionState('live')
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready'] as const) recordStartupMilestone(milestone)
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready'] as const) recordStartupMilestone(milestone)
 
     expect(getWorkspaceAccessSnapshot()).toEqual({
       mode: 'booting',
@@ -59,7 +57,7 @@ describe('workspace access presentation model', () => {
     expect(settleClientReader(startup, ownership('client-b'))).toBe(true)
     setClientProjectionReady(true)
     setClientConnectionState('live')
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready'] as const) recordStartupMilestone(milestone)
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready'] as const) recordStartupMilestone(milestone)
     expect(getWorkspaceAccessSnapshot()).toEqual({
       mode: 'read-only',
       canBrowse: true,
@@ -112,7 +110,7 @@ describe('workspace access presentation model', () => {
     settleClientReader(startup, ownership('client-b'))
     setClientProjectionReady(true)
     setClientConnectionState('live')
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready'] as const) recordStartupMilestone(milestone)
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready'] as const) recordStartupMilestone(milestone)
     stop()
 
     expect(modes[0]).toBe('booting')

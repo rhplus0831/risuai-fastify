@@ -9,7 +9,6 @@ import {
   canMutate,
   canRenderShell,
   completeStartupAttempt,
-  configureStartupObserverShell,
   failStartupAttempt,
   getGenerationReadinessDiagnostic,
   getStartupCoordinatorSnapshot,
@@ -38,7 +37,7 @@ afterEach(() => {
 describe('startup readiness instrumentation', () => {
   it('requires current generation recovery and chat readiness after managed writer promotion', () => {
     enterClientWriter()
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const)
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready', 'plugins-ready'] as const)
       recordStartupMilestone(milestone)
     settleStartupChatReadiness(true)
     settleStartupGenerationRecoveryReadiness(true)
@@ -58,20 +57,20 @@ describe('startup readiness instrumentation', () => {
     expect(recordStartupMilestone('writer-ready', 12)).toBe('pending')
     expect(getStartupReadinessSnapshot().phase).toBe('shell-mounted')
 
-    recordStartupMilestone('observer-ready', 15)
+    recordStartupMilestone('reader-ready', 15)
 
     expect(getStartupReadinessSnapshot()).toMatchObject({
       phase: 'writer-ready',
       timestamps: {
         entry: 0,
         'shell-mounted': 5,
-        'observer-ready': 15,
+        'reader-ready': 15,
         'writer-ready': 15,
       },
       durationsFromEntry: {
         entry: 0,
         'shell-mounted': 5,
-        'observer-ready': 15,
+        'reader-ready': 15,
         'writer-ready': 15,
       },
     })
@@ -86,7 +85,7 @@ describe('startup readiness instrumentation', () => {
 
   it('records retry failures without error or browser-content data', () => {
     const firstAttempt = beginStartupAttempt(10)
-    failStartupAttempt(firstAttempt, 'writer-bootstrap-failed', 'observer-ready', 12)
+    failStartupAttempt(firstAttempt, 'writer-bootstrap-failed', 'reader-ready', 12)
     const secondAttempt = beginStartupAttempt(13)
     completeStartupAttempt(secondAttempt, 20)
 
@@ -97,7 +96,7 @@ describe('startup readiness instrumentation', () => {
         startedAtMs: 10,
         failedAtMs: 12,
         failureCode: 'writer-bootstrap-failed',
-        failureMilestone: 'observer-ready',
+        failureMilestone: 'reader-ready',
       },
       { attemptId: 2, startedAtMs: 13, completedAtMs: 20 },
     ])
@@ -115,7 +114,7 @@ describe('startup readiness instrumentation', () => {
       false,
     ])
 
-    recordStartupMilestone('observer-ready', 2)
+    recordStartupMilestone('reader-ready', 2)
     expect(canRenderShell()).toBe(false)
     expect(canMutate()).toBe(false)
 
@@ -155,7 +154,7 @@ describe('startup readiness instrumentation', () => {
       phase: null,
     })
 
-    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready', 'plugins-ready'] as const) {
+    for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready', 'plugins-ready'] as const) {
       recordStartupMilestone(milestone)
     }
     settleStartupGenerationRecoveryReadiness(true)
@@ -180,26 +179,21 @@ describe('startup readiness instrumentation', () => {
     })
   })
 
-  it('renders at observer readiness only when the rollout is enabled', () => {
+  it('keeps unmanaged startup hidden until writer readiness', () => {
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 1)
-    configureStartupObserverShell(true)
-    recordStartupMilestone('observer-ready', 2)
+    recordStartupMilestone('reader-ready', 2)
 
-    expect(canRenderShell()).toBe(true)
+    expect(canRenderShell()).toBe(false)
     expect(canApplyRoutes()).toBe(false)
     expect(canMutate()).toBe(false)
     expect(canGenerate()).toBe(false)
-    expect(getStartupCoordinatorSnapshot().observerShellEnabled).toBe(true)
-
-    configureStartupObserverShell(false)
-    expect(canRenderShell()).toBe(false)
   })
 
   it('settles background work even when an earlier localized milestone cannot transition', () => {
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 1)
-    recordStartupMilestone('observer-ready', 2)
+    recordStartupMilestone('reader-ready', 2)
     recordStartupMilestone('writer-ready', 3)
 
     expect(recordStartupMilestone('background-ready', 4)).toBe('pending')
@@ -211,7 +205,7 @@ describe('startup readiness instrumentation', () => {
     for (const milestone of [
       'entry',
       'shell-mounted',
-      'observer-ready',
+      'reader-ready',
       'writer-ready',
       'plugins-ready',
       'chat-ready',
@@ -250,7 +244,7 @@ describe('startup readiness instrumentation', () => {
       canGenerate: expect.objectContaining({ attemptId, failureCode: 'plugin-initialization-failed' }),
     })
 
-    recordStartupMilestone('observer-ready', 4)
+    recordStartupMilestone('reader-ready', 4)
     recordStartupMilestone('writer-ready', 5)
     recordStartupMilestone('plugins-ready', 6)
     expect(getStartupCoordinatorSnapshot().failures.pluginsReady).toBeUndefined()
@@ -309,7 +303,7 @@ describe('startup readiness instrumentation', () => {
     const waiting = waitForStartupMilestone('writer-ready', 100)
     recordStartupMilestone('entry', 0)
     recordStartupMilestone('shell-mounted', 1)
-    recordStartupMilestone('observer-ready', 2)
+    recordStartupMilestone('reader-ready', 2)
     recordStartupMilestone('writer-ready', 3)
     await expect(waiting).resolves.toBeUndefined()
 

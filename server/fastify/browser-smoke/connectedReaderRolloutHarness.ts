@@ -139,19 +139,17 @@ export async function expectRolloutWriter(page: Page): Promise<void> {
     )
     .toMatchObject({ canMutate: true, canGenerate: true })
   await expect(page.getByTestId('default-chat-composer')).toBeEditable()
-  await expect(page.locator('[data-observer-writer-retry]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toHaveCount(0)
 }
 
 export async function expectRolloutReader(page: Page): Promise<void> {
   await waitForRolloutHook(page)
-  await expect(page.locator('[data-observer-lifecycle-status]')).toHaveText(
+  await expect(page.locator('[data-reader-lifecycle-status]')).toHaveText(
     'Read only. Updates from the writer appear here.',
     { timeout: 30_000 },
   )
   await expect(page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', ROLLOUT_CHAT)
-  await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
-  await expect(page.locator('[data-observer-writer-retry]')).toHaveCount(0)
+  await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
   await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toHaveCount(0)
   expect(
     await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),

@@ -25,11 +25,10 @@ import type { AppRoute } from '../ts/routerRoute'
 import type { Database, character } from '../ts/storage/database.svelte'
 import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
 
-const observerShellMocks = vi.hoisted(() => ({
+const readOnlyWorkspaceMocks = vi.hoisted(() => ({
   hydrateCharacterShell: vi.fn(async () => true),
   hydrationState: { rows: {} as Record<string, { status: string; error: string | null }> },
   navigate: vi.fn(),
-  retryObserverWriterPromotion: vi.fn(async () => false),
   promoteConnectedReader: vi.fn<() => Promise<ConnectedWriterPromotionResult>>(async () => ({ status: 'cancelled' })),
   routerExports: undefined as
     | {
@@ -41,25 +40,25 @@ const observerShellMocks = vi.hoisted(() => ({
 }))
 
 async function createRouterMock() {
-  if (!observerShellMocks.routerExports) {
+  if (!readOnlyWorkspaceMocks.routerExports) {
     const [{ writable }, { characterRoutePath, parseRoute }] = await Promise.all([
       import('svelte/store'),
       import('../ts/routerRoute'),
     ])
     const currentRoute = writable<AppRoute>({ kind: 'home', path: '/' })
-    observerShellMocks.routerExports = {
+    readOnlyWorkspaceMocks.routerExports = {
       characterRoutePath,
       currentRoute,
       navigate: (path: string, options?: { replace?: boolean }) => {
-        if (options) observerShellMocks.navigate(path, options)
-        else observerShellMocks.navigate(path)
+        if (options) readOnlyWorkspaceMocks.navigate(path, options)
+        else readOnlyWorkspaceMocks.navigate(path)
         if (options?.replace) window.history.replaceState(null, '', path)
         else window.history.pushState(null, '', path)
         currentRoute.set(parseRoute(path))
       },
     }
   }
-  return observerShellMocks.routerExports
+  return readOnlyWorkspaceMocks.routerExports
 }
 
 vi.mock('../ts/router', createRouterMock)
@@ -67,12 +66,11 @@ vi.mock('./ReaderTranscript.svelte', async () => ({
   default: (await import('./ReaderTranscript.testStub.svelte')).default,
 }))
 vi.mock('../ts/server/characterShellHydration.svelte', () => ({
-  characterShellHydrationState: observerShellMocks.hydrationState,
-  hydrateCharacterShell: observerShellMocks.hydrateCharacterShell,
+  characterShellHydrationState: readOnlyWorkspaceMocks.hydrationState,
+  hydrateCharacterShell: readOnlyWorkspaceMocks.hydrateCharacterShell,
 }))
 vi.mock('../ts/bootstrap', () => ({
-  retryObserverWriterPromotion: observerShellMocks.retryObserverWriterPromotion,
-  promoteConnectedReader: observerShellMocks.promoteConnectedReader,
+  promoteConnectedReader: readOnlyWorkspaceMocks.promoteConnectedReader,
 }))
 
 import {
@@ -89,8 +87,11 @@ import {
   applyCharacterResource,
 } from '../ts/server/resourceState.svelte'
 import { withTestDatabaseWrite } from '../ts/__tests__/resourceDatabaseState'
-import { peekObserverRouteIntent, resetObserverRouteIntentForTests } from '../ts/observerRouteIntent'
-import { resetObserverShellLifecycleForTests, setObserverShellLifecycleMode } from '../ts/observerShellLifecycle.svelte'
+import { peekReaderRouteIntent, resetReaderRouteIntentForTests } from '../ts/readerRouteIntent'
+import {
+  resetReaderWorkspaceLifecycleForTests,
+  setReaderWorkspaceLifecycleMode,
+} from '../ts/readerWorkspaceLifecycle.svelte'
 import { selectedCharID } from '../ts/stores.svelte'
 import { recordReaderNavigationSettings } from '../ts/server/readerTranscriptProjection.svelte'
 
@@ -160,7 +161,7 @@ function seedShellDatabase(): void {
   } as unknown as Database)
 }
 
-async function mountObserverShell(): Promise<void> {
+async function mountWorkspace(): Promise<void> {
   if (component) await unmount(component)
   component = mount(Workspace, { target, props: { readerMode: true } })
   await tick()
@@ -226,12 +227,12 @@ describe('read-only workspace', () => {
       publishReaderCharacters()
       const router = await createRouterMock()
       router.navigate('/character/char-a/chat-a')
-      await mountObserverShell()
+      await mountWorkspace()
       await new Promise((resolve) => setTimeout(resolve, 0))
       await tick()
       expect(target.querySelector('[data-risu-workspace]')).not.toBeNull()
       expect(target.textContent).toContain('Character A')
-      expect(observerShellMocks.hydrateCharacterShell).not.toHaveBeenCalled()
+      expect(readOnlyWorkspaceMocks.hydrateCharacterShell).not.toHaveBeenCalled()
       expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
       applyCharacterResource({ revision: 3, character: makeDetailedCharacter() })
       await tick()
@@ -253,11 +254,11 @@ describe('read-only workspace', () => {
         publishReaderCharacters()
         const router = await createRouterMock()
         router.navigate(path)
-        observerShellMocks.navigate.mockClear()
-        await mountObserverShell()
+        readOnlyWorkspaceMocks.navigate.mockClear()
+        await mountWorkspace()
         expect(get(router.currentRoute).path).toBe(path)
-        expect(observerShellMocks.navigate).not.toHaveBeenCalled()
-        expect(observerShellMocks.hydrateCharacterShell).not.toHaveBeenCalled()
+        expect(readOnlyWorkspaceMocks.navigate).not.toHaveBeenCalled()
+        expect(readOnlyWorkspaceMocks.hydrateCharacterShell).not.toHaveBeenCalled()
         expect(target.querySelector('[data-reader-test-transcript]')).toBeNull()
       }
     },
@@ -271,11 +272,11 @@ describe('read-only workspace', () => {
     setClientConnectionState('live')
     const router = await createRouterMock()
     router.navigate('/settings/persona')
-    await mountObserverShell()
+    await mountWorkspace()
     expect(target.querySelector('[data-reader-authoring-gate]')?.textContent).toBe(
       language.connectedReaders.writeAccessRequired,
     )
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.connected,
     )
     expect(target.querySelector('input:not([type="search"]), textarea, [contenteditable="true"]')).toBeNull()
@@ -288,10 +289,9 @@ describe('read-only workspace', () => {
     expect(target.querySelector('[data-reader-authoring-gate]')).toBeNull()
     setClientConnectionState('interrupted')
     await tick()
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.interrupted,
     )
-    expect(observerShellMocks.retryObserverWriterPromotion).not.toHaveBeenCalled()
   })
 
   beforeEach(async () => {
@@ -306,20 +306,19 @@ describe('read-only workspace', () => {
       databaseLineage: 'database-a',
       requestedWriterWasActive: true,
     })
-    resetObserverRouteIntentForTests()
-    resetObserverShellLifecycleForTests()
-    observerShellMocks.hydrationState.rows = {}
-    observerShellMocks.hydrateCharacterShell.mockReset().mockResolvedValue(true)
-    observerShellMocks.retryObserverWriterPromotion.mockReset().mockResolvedValue(false)
-    observerShellMocks.promoteConnectedReader.mockReset().mockResolvedValue({ status: 'cancelled' })
-    observerShellMocks.navigate.mockClear()
-    observerShellMocks.routerExports?.currentRoute.set({ kind: 'home', path: '/' })
+    resetReaderRouteIntentForTests()
+    resetReaderWorkspaceLifecycleForTests()
+    readOnlyWorkspaceMocks.hydrationState.rows = {}
+    readOnlyWorkspaceMocks.hydrateCharacterShell.mockReset().mockResolvedValue(true)
+    readOnlyWorkspaceMocks.promoteConnectedReader.mockReset().mockResolvedValue({ status: 'cancelled' })
+    readOnlyWorkspaceMocks.navigate.mockClear()
+    readOnlyWorkspaceMocks.routerExports?.currentRoute.set({ kind: 'home', path: '/' })
     selectedCharID.set(-1)
     DynamicGUI.set(false)
     seedShellDatabase()
     target = document.createElement('div')
     document.body.appendChild(target)
-    await mountObserverShell()
+    await mountWorkspace()
   })
 
   afterEach(async () => {
@@ -330,8 +329,8 @@ describe('read-only workspace', () => {
     }
     await clearPendingMutationOutbox()
     resetPendingMutationOutboxForTests()
-    resetObserverRouteIntentForTests()
-    resetObserverShellLifecycleForTests()
+    resetReaderRouteIntentForTests()
+    resetReaderWorkspaceLifecycleForTests()
     replaceResourceDatabase({} as Database)
     target.remove()
     await changeLanguage('en')
@@ -340,12 +339,12 @@ describe('read-only workspace', () => {
   })
 
   it('announces read-only mode and uses keyboard-native navigation controls', () => {
-    const status = target.querySelector('[data-observer-read-only-status]')
+    const status = target.querySelector('[data-reader-access-status]')
     const characterButton = target.querySelector<HTMLButtonElement>('button[aria-label="Open Character A"]')
 
     expect(status?.getAttribute('role')).toBe('status')
     expect(status?.getAttribute('aria-live')).toBe('polite')
-    expect(status?.textContent).toContain(language.observerShell.title)
+    expect(status?.textContent).toContain(language.connectedReaders.title)
     expect(status?.closest('[data-risu-device-access-action]')).not.toBeNull()
     expect(target.querySelector('header')).toBeNull()
     expect(characterButton?.type).toBe('button')
@@ -357,7 +356,7 @@ describe('read-only workspace', () => {
       'desktopSidebarColumns',
       'mobileSidebarColumns',
     ])
-    await mountObserverShell()
+    await mountWorkspace()
 
     const wideRail = target.querySelector<HTMLElement>('[data-risu-navigation-rail]')!
     const widePanel = target.querySelector<HTMLElement>('[data-risu-shell-sidebar-panel]')!
@@ -387,9 +386,9 @@ describe('read-only workspace', () => {
     target.querySelector<HTMLButtonElement>('button[aria-label="Open chat Pinned chat"]')?.click()
     await tick()
 
-    expect(observerShellMocks.navigate).toHaveBeenNthCalledWith(1, '/character/char-a')
-    expect(observerShellMocks.navigate).toHaveBeenNthCalledWith(2, '/character/char-a/chat-a')
-    expect(peekObserverRouteIntent()?.route).toEqual({
+    expect(readOnlyWorkspaceMocks.navigate).toHaveBeenNthCalledWith(1, '/character/char-a')
+    expect(readOnlyWorkspaceMocks.navigate).toHaveBeenNthCalledWith(2, '/character/char-a/chat-a')
+    expect(peekReaderRouteIntent()?.route).toEqual({
       kind: 'character',
       path: '/character/char-a/chat-a',
       chaId: 'char-a',
@@ -403,10 +402,10 @@ describe('read-only workspace', () => {
   it('keeps summary and optional detail states distinct without writer-side effects', async () => {
     target.querySelector<HTMLButtonElement>('button[aria-label="Open Character A"]')?.click()
     await tick()
-    expect(target.querySelector('[data-observer-character-summary]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-character-summary]')).not.toBeNull()
     expect(target.textContent).toContain('Summary preview')
 
-    observerShellMocks.hydrateCharacterShell.mockImplementationOnce(async () => {
+    readOnlyWorkspaceMocks.hydrateCharacterShell.mockImplementationOnce(async () => {
       replaceResourceDatabase({
         characterOrder: ['char-a'],
         characters: [makeDetailedCharacter()],
@@ -418,32 +417,12 @@ describe('read-only workspace', () => {
     await tick()
     await tick()
 
-    expect(observerShellMocks.hydrateCharacterShell).toHaveBeenCalledWith('char-a', { supersede: true })
-    expect(target.querySelector('[data-observer-character-summary]')).toBeNull()
+    expect(readOnlyWorkspaceMocks.hydrateCharacterShell).toHaveBeenCalledWith('char-a', { supersede: true })
+    expect(target.querySelector('[data-reader-character-summary]')).toBeNull()
     expect(target.textContent).toContain('Read-only details')
     expect(target.querySelector('button[aria-label="Open chat Detailed chat"]')).not.toBeNull()
     expect(await countPendingMutationRecords()).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
-  })
-
-  it('keeps the observer visible with targeted retry status and restores focus after failure', async () => {
-    setObserverShellLifecycleMode('writer-lost')
-    await tick()
-
-    const retry = target.querySelector<HTMLButtonElement>('[data-observer-writer-retry]')
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toContain(
-      'Write access moved to another session',
-    )
-    expect(retry?.textContent).toContain('Retry write access')
-
-    retry?.click()
-    await vi.waitFor(() => expect(observerShellMocks.retryObserverWriterPromotion).toHaveBeenCalledOnce())
-    await tick()
-
-    expect(document.activeElement).toBe(retry)
-    expect(target.querySelector('[data-risu-workspace]')).not.toBeNull()
-    expect(target.querySelector('[data-reader-use-this-device]')).toBeNull()
-    expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
   })
 
   it.each([
@@ -460,17 +439,13 @@ describe('read-only workspace', () => {
   ])('localizes the explicit switch and its effect in %s', async (code, label, help) => {
     await changeLanguage(code)
     await showConnectedReaderChat()
-    await mountObserverShell()
-    setObserverShellLifecycleMode('retrying')
-    await tick()
-
+    await mountWorkspace()
     const button = useThisDeviceButton()
     expect(button.textContent?.trim()).toBe(label)
     expect(button.type).toBe('button')
     expect(button.disabled).toBe(false)
     expect(document.getElementById(button.getAttribute('aria-describedby')!)?.textContent?.trim()).toBe(help)
-    expect(target.querySelector('[data-observer-writer-retry]')).toBeNull()
-    expect(target.querySelector('[data-observer-read-only-status]')?.getAttribute('aria-live')).toBe('polite')
+    expect(target.querySelector('[data-reader-access-status]')?.getAttribute('aria-live')).toBe('polite')
 
     button.click()
     await vi.waitFor(() =>
@@ -484,7 +459,7 @@ describe('read-only workspace', () => {
     await showConnectedReaderChat()
     const pending = deferredPromotion()
     let operation: ReturnType<typeof beginClientPromotion>
-    observerShellMocks.promoteConnectedReader.mockImplementationOnce(() => {
+    readOnlyWorkspaceMocks.promoteConnectedReader.mockImplementationOnce(() => {
       operation = beginClientPromotion()
       return pending.promise
     })
@@ -502,7 +477,7 @@ describe('read-only workspace', () => {
     expect(button.disabled).toBe(true)
     expect(button.getAttribute('aria-busy')).toBe('true')
     expect(button.textContent?.trim()).toBe(language.connectedReaders.switchingDevice)
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.switching,
     )
     expect(target.querySelector('[data-reader-test-transcript]')).toBe(transcript)
@@ -521,7 +496,7 @@ describe('read-only workspace', () => {
     ).toBe(true)
     await tick()
     expect(getClientSessionSnapshot().lifecycle).toBe('recovering-writer')
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.switching,
     )
     expect(useThisDeviceButton().disabled).toBe(true)
@@ -534,7 +509,6 @@ describe('read-only workspace', () => {
     await vi.waitFor(() => expect(button.getAttribute('aria-busy')).toBe('false'))
     expect(getClientSessionSnapshot().lifecycle).toBe('writing')
     expect(target.querySelector('[data-reader-writer-switch-result]')).toBeNull()
-    expect(observerShellMocks.retryObserverWriterPromotion).not.toHaveBeenCalled()
     expect(fetch).not.toHaveBeenCalled()
   })
 
@@ -563,7 +537,7 @@ describe('read-only workspace', () => {
     await showConnectedReaderChat()
     const pending = deferredPromotion()
     let operation: ReturnType<typeof beginClientPromotion>
-    observerShellMocks.promoteConnectedReader.mockImplementationOnce(() => {
+    readOnlyWorkspaceMocks.promoteConnectedReader.mockImplementationOnce(() => {
       operation = beginClientPromotion()
       return pending.promise
     })
@@ -571,7 +545,7 @@ describe('read-only workspace', () => {
     const button = useThisDeviceButton()
     button.focus()
     button.click()
-    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(readOnlyWorkspaceMocks.promoteConnectedReader).toHaveBeenCalledOnce())
     if (result.status === 'superseded') observeClientWriter({ sessionId: 'writer-c', epoch: 3 })
     else failClientSessionOperation(operation!)
     pending.resolve(result)
@@ -580,7 +554,7 @@ describe('read-only workspace', () => {
     expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent?.trim()).toBe(
       language.connectedReaders[messageKey],
     )
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.connected,
     )
     expect(target.querySelector('[data-reader-test-transcript]')).toBe(transcript)
@@ -588,7 +562,7 @@ describe('read-only workspace', () => {
     expect(getClientSessionSnapshot().lifecycle).toBe('reading')
     expect(document.activeElement).toBe(button)
     expect(button.textContent?.trim()).toBe(language.connectedReaders.useThisDevice)
-    expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce()
+    expect(readOnlyWorkspaceMocks.promoteConnectedReader).toHaveBeenCalledOnce()
 
     const back = target.querySelector<HTMLButtonElement>('[data-reader-go-back]')!
     back.click()
@@ -598,7 +572,7 @@ describe('read-only workspace', () => {
     await tick()
     expect(get((await createRouterMock()).currentRoute).kind).toBe('home')
     button.click()
-    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(readOnlyWorkspaceMocks.promoteConnectedReader).toHaveBeenCalledTimes(2))
     expect(await countPendingMutationRecords()).toBe(0)
     expect(fetch).not.toHaveBeenCalled()
   })
@@ -610,18 +584,18 @@ describe('read-only workspace', () => {
     await tick()
     button.click()
     expect(button.disabled).toBe(true)
-    expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
+    expect(readOnlyWorkspaceMocks.promoteConnectedReader).not.toHaveBeenCalled()
     expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
 
     setClientConnectionState('live')
     await tick()
     const pending = deferredPromotion()
-    observerShellMocks.promoteConnectedReader.mockImplementationOnce(() => {
+    readOnlyWorkspaceMocks.promoteConnectedReader.mockImplementationOnce(() => {
       beginClientPromotion()
       return pending.promise
     })
     button.click()
-    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(readOnlyWorkspaceMocks.promoteConnectedReader).toHaveBeenCalledOnce())
     const home = target.querySelector<HTMLButtonElement>('nav button')!
     home.focus()
     setClientConnectionState('interrupted')
@@ -631,7 +605,7 @@ describe('read-only workspace', () => {
         language.connectedReaders.switchInterrupted,
       ),
     )
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.interrupted,
     )
     expect(button.disabled).toBe(true)
@@ -640,12 +614,12 @@ describe('read-only workspace', () => {
     setClientConnectionState('live')
     await tick()
     expect(button.disabled).toBe(false)
-    expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce()
+    expect(readOnlyWorkspaceMocks.promoteConnectedReader).toHaveBeenCalledOnce()
   })
 
   it('keeps a failed operation import or request readable without exposing protocol errors', async () => {
     await showConnectedReaderChat()
-    observerShellMocks.promoteConnectedReader.mockRejectedValueOnce(new Error('private_protocol_failure'))
+    readOnlyWorkspaceMocks.promoteConnectedReader.mockRejectedValueOnce(new Error('private_protocol_failure'))
     useThisDeviceButton().click()
     await vi.waitFor(() =>
       expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent?.trim()).toBe(
@@ -674,20 +648,20 @@ describe('read-only workspace', () => {
     expect(button.disabled).toBe(true)
     expect(button.getAttribute('aria-busy')).toBe('false')
     expect(button.textContent?.trim()).toBe(language.connectedReaders.useThisDevice)
-    expect(target.querySelector('[data-observer-lifecycle-status]')?.textContent).toBe(
+    expect(target.querySelector('[data-reader-lifecycle-status]')?.textContent).toBe(
       language.connectedReaders.interrupted,
     )
     button.click()
-    expect(observerShellMocks.promoteConnectedReader).not.toHaveBeenCalled()
+    expect(readOnlyWorkspaceMocks.promoteConnectedReader).not.toHaveBeenCalled()
     expect(target.querySelector('[data-reader-test-transcript]')).not.toBeNull()
   })
 
   it('preserves reader navigation focus when a live switch fails', async () => {
     await showConnectedReaderChat()
     const pending = deferredPromotion()
-    observerShellMocks.promoteConnectedReader.mockReturnValueOnce(pending.promise)
+    readOnlyWorkspaceMocks.promoteConnectedReader.mockReturnValueOnce(pending.promise)
     useThisDeviceButton().click()
-    await vi.waitFor(() => expect(observerShellMocks.promoteConnectedReader).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(readOnlyWorkspaceMocks.promoteConnectedReader).toHaveBeenCalledOnce())
     const home = target.querySelector<HTMLButtonElement>('nav button')!
     home.focus()
     pending.resolve({ status: 'failed', reason: 'unavailable' })
@@ -754,7 +728,7 @@ describe('read-only workspace', () => {
     applyCharacterResource({ revision: 2, character: deletedChat })
     await vi.waitFor(() => expect(get(router.currentRoute).path).toBe('/character/char-a/chat-b'))
     await tick()
-    expect(observerShellMocks.navigate).toHaveBeenLastCalledWith('/character/char-a/chat-b', { replace: true })
+    expect(readOnlyWorkspaceMocks.navigate).toHaveBeenLastCalledWith('/character/char-a/chat-b', { replace: true })
     expect(target.querySelector('[data-reader-route-notice]')?.textContent).toBe(
       language.connectedReaders.chatUnavailable,
     )
@@ -767,7 +741,7 @@ describe('read-only workspace', () => {
     })
     await vi.waitFor(() => expect(get(router.currentRoute).path).toBe('/'))
     await tick()
-    expect(observerShellMocks.navigate).toHaveBeenLastCalledWith('/', { replace: true })
+    expect(readOnlyWorkspaceMocks.navigate).toHaveBeenLastCalledWith('/', { replace: true })
     expect(target.querySelector('[data-reader-route-notice]')?.textContent).toBe(
       language.connectedReaders.characterUnavailable,
     )
@@ -899,7 +873,7 @@ describe('read-only workspace', () => {
     await tick()
     router.navigate('/settings/persona')
     await tick()
-    expect(peekObserverRouteIntent()?.route.path).toBe('/character/char-a/chat-b')
+    expect(peekReaderRouteIntent()?.route.path).toBe('/character/char-a/chat-b')
     const back = target.querySelector<HTMLButtonElement>('[data-reader-return-to-reading]')!
     expect(back).not.toBeNull()
     back.click()
@@ -920,7 +894,7 @@ describe('read-only workspace', () => {
   it('opens one focus-trapped mobile navigation drawer and restores focus when Escape closes it', async () => {
     await showConnectedReaderChat()
     DynamicGUI.set(true)
-    await mountObserverShell()
+    await mountWorkspace()
     const toggle = target.querySelector<HTMLButtonElement>('[data-reader-navigation-toggle]')!
     const drawer = target.querySelector<HTMLElement>('#reader-navigation')!
     expect(drawer.hidden).toBe(true)

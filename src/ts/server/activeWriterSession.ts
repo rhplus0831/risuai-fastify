@@ -1,5 +1,5 @@
 import { getChatHydrationRuntime } from '../process/generationRuntimeBridge'
-import { setObserverShellLifecycleMode } from '../observerShellLifecycle.svelte'
+import { setReaderWorkspaceLifecycleMode } from '../readerWorkspaceLifecycle.svelte'
 import { revokeStartupWriterCapabilities } from '../startupReadiness'
 import { invalidateResourceCacheWork } from './resourceCache'
 import {
@@ -89,7 +89,7 @@ export function enterWriterTakeoverFlow(): void {
   writerAccessLost = true
   invalidateResourceCacheWork()
   revokeStartupWriterCapabilities()
-  setObserverShellLifecycleMode('writer-lost')
+  setReaderWorkspaceLifecycleMode('writer-lost')
   if (isClientSessionManaged()) return
   setWriterTakeoverInteractionBlocked(true)
   void runWriterTakeoverFlow()
@@ -253,7 +253,7 @@ async function runWriterTakeoverFlow(): Promise<void> {
     return
   }
   setWriterTakeoverInteractionBlocked(false)
-  setObserverShellLifecycleMode('offline')
+  setReaderWorkspaceLifecycleMode('offline')
   enterFrozenOfflineState({
     message: language.writerOfflineBanner,
     refresh: language.writerOfflineRefresh,

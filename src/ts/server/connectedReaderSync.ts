@@ -8,7 +8,7 @@ import {
   setClientConnectionState,
   type ClientSessionOwnership,
 } from '../clientSession'
-import { peekObserverRouteIntent } from '../observerRouteIntent'
+import { peekReaderRouteIntent } from '../readerRouteIntent'
 import { fetchServerBootstrapReadOnly } from './bootstrap'
 import {
   peekAppliedServerResourceRevision,
@@ -207,7 +207,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       refreshGreetingTranslations: async (characterId, minimumRevision) => {
         const character = charactersResourceState.characters.find((candidate) => candidate.chaId === characterId)
         if (!character) return true
-        const route = peekObserverRouteIntent()?.route
+        const route = peekReaderRouteIntent()?.route
         // A greeting result belongs to a concrete chat; never clear a usable value before its read succeeds.
         for (const chat of character.chats ?? []) {
           if (!chat.id || !isCurrent()) return false

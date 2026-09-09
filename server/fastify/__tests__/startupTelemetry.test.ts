@@ -72,28 +72,26 @@ describe('startup telemetry route', () => {
       headers: { 'risu-auth': assertion, [ACTIVE_WRITER_SESSION_HEADER]: 'writer-a' },
     })
     expect(bootstrap.statusCode).toBe(200)
-    expect(bootstrap.json().startupTelemetry).toEqual({ version: 1, sampleRate: 1 })
+    expect(bootstrap.json().startupTelemetry).toEqual({ version: 2, sampleRate: 1 })
 
     const response = await harness.app.inject({
       method: 'POST',
       url: '/api/v1/telemetry/startup',
       headers: { 'risu-auth': assertion },
       payload: {
-        version: 1,
+        version: 2,
         events: [
           {
             kind: 'phase-ready',
-            milestone: 'observer-ready',
+            milestone: 'reader-ready',
             entryDurationMs: 42.5,
             attemptCount: 1,
-            observerShellEnabled: true,
           },
           {
             kind: 'diagnostic-failure',
             failureCode: 'plugin-initialization-failed',
             failureMilestone: 'plugins-ready',
             attemptCount: 1,
-            observerShellEnabled: true,
           },
         ],
       },
@@ -103,22 +101,20 @@ describe('startup telemetry route', () => {
     expect(browserStartupMetrics()).toEqual([
       {
         metric: 'browser_startup',
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'phase-ready',
-        milestone: 'observer-ready',
+        milestone: 'reader-ready',
         entryDurationMs: 42.5,
         attemptCount: 1,
-        observerShellEnabled: true,
         requestUid: response.headers['x-request-uid'],
       },
       {
         metric: 'browser_startup',
-        schemaVersion: 1,
+        schemaVersion: 2,
         kind: 'diagnostic-failure',
         failureCode: 'plugin-initialization-failed',
         failureMilestone: 'plugins-ready',
         attemptCount: 1,
-        observerShellEnabled: true,
         requestUid: response.headers['x-request-uid'],
       },
     ])
@@ -128,7 +124,7 @@ describe('startup telemetry route', () => {
     const unauthenticated = await harness.app.inject({
       method: 'POST',
       url: '/api/v1/telemetry/startup',
-      payload: { version: 1, events: [] },
+      payload: { version: 2, events: [] },
     })
     expect(unauthenticated.statusCode).toBe(401)
 
@@ -137,14 +133,13 @@ describe('startup telemetry route', () => {
       url: '/api/v1/telemetry/startup',
       headers: { 'risu-auth': assertion },
       payload: {
-        version: 1,
+        version: 2,
         events: [
           {
             kind: 'phase-ready',
             milestone: 'writer-ready',
             entryDurationMs: 10,
             attemptCount: 1,
-            observerShellEnabled: false,
             routeContent: '/characters/private-character/private-chat',
           },
         ],
@@ -169,13 +164,12 @@ describe('startup telemetry route', () => {
       url: '/api/v1/telemetry/startup',
       headers: { 'risu-auth': assertion },
       payload: {
-        version: 1,
+        version: 2,
         events: [
           {
             kind: 'attempt-completed',
             attemptDurationMs: 50,
             attemptCount: 1,
-            observerShellEnabled: false,
           },
         ],
       },

@@ -23,7 +23,6 @@ describe('read-only device access action', () => {
     component = mount(DeviceAccessAction, {
       target,
       props: {
-        managed: true,
         title: language.connectedReaders.title,
         status: language.connectedReaders.connected,
         result: language.connectedReaders.switchCancelled,
@@ -34,7 +33,7 @@ describe('read-only device access action', () => {
     const region = target.querySelector<HTMLElement>('[data-risu-device-access-action]')!
     const buttons = region.querySelectorAll<HTMLButtonElement>('[data-reader-use-this-device]')
     expect(buttons).toHaveLength(1)
-    expect(buttons[0].getAttribute('aria-label')).toContain(language.observerShell.readOnlyBadge)
+    expect(buttons[0].getAttribute('aria-label')).toContain(language.readOnlyWorkspace.readOnlyBadge)
     expect(buttons[0].getAttribute('aria-label')).toContain(language.connectedReaders.useThisDevice)
     expect(document.getElementById(buttons[0].getAttribute('aria-describedby')!)?.textContent).toBe(
       language.connectedReaders.useThisDeviceHelp,
@@ -53,7 +52,6 @@ describe('read-only device access action', () => {
     component = mount(DeviceAccessAction, {
       target,
       props: {
-        managed: true,
         title: language.connectedReaders.title,
         status: language.connectedReaders.interrupted,
         switchInProgress: true,
@@ -66,22 +64,5 @@ describe('read-only device access action', () => {
     expect(action.disabled).toBe(true)
     expect(action.getAttribute('aria-busy')).toBe('true')
     expect(onUseThisDevice).not.toHaveBeenCalled()
-  })
-
-  it('preserves the conservative writer retry state without exposing promotion', () => {
-    const onRetryWriter = vi.fn()
-    component = mount(DeviceAccessAction, {
-      target,
-      props: {
-        managed: false,
-        title: language.observerShell.title,
-        status: language.observerShell.statusUnavailable,
-        retryAvailable: true,
-        onRetryWriter,
-      },
-    })
-    target.querySelector<HTMLButtonElement>('[data-observer-writer-retry]')!.click()
-    expect(onRetryWriter).toHaveBeenCalledOnce()
-    expect(target.querySelector('[data-reader-use-this-device]')).toBeNull()
   })
 })

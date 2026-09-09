@@ -785,8 +785,8 @@ async function requestServerResourceJson(
   if (response.status === 401 && isClientSessionGenerationCurrent(generation) && !signal?.aborted) {
     requireClientAuthentication()
     const authGeneration = captureClientSessionGeneration()
-    const { discardObserverProjectionState } = await import('../observerProjectionLifecycle')
-    if (isClientSessionGenerationCurrent(authGeneration)) await discardObserverProjectionState('auth-loss')
+    const { discardReaderProjectionState } = await import('../readerProjectionLifecycle')
+    if (isClientSessionGenerationCurrent(authGeneration)) await discardReaderProjectionState('auth-loss')
   }
 
   let body: unknown = null

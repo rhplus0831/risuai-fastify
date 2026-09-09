@@ -5,7 +5,7 @@ import path from 'node:path'
 import { buildApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
 import { setupBrowserSmokeAuth } from './auth.js'
-import { importFastBootstrapDatabase, setObserverShellMode } from './fastBootstrapHarness.js'
+import { importFastBootstrapDatabase } from './fastBootstrapHarness.js'
 
 interface Harness {
   app: FastifyInstance
@@ -563,19 +563,12 @@ test('translator preset bindings persist independently across chats', async ({ p
   await expect(presetSelect()).toHaveValue('translator-smoke-b')
 })
 
-test('a connected reader keeps receiving updates through a legacy writer takeover', async ({ browser }) => {
+test('a connected reader keeps receiving updates through a writer takeover', async ({ browser }) => {
   test.setTimeout(60_000)
   await importDatabase(harness.app, browserSmokeAssertion, browserSmokeDatabase())
   const writerContext = await browser.newContext()
   const readerContext = await browser.newContext()
   const takeoverContext = await browser.newContext()
-  for (const [context, mode] of [
-    [writerContext, 'disabled'],
-    [readerContext, 'enabled'],
-    [takeoverContext, 'disabled'],
-  ] as const) {
-    await setObserverShellMode(context, mode)
-  }
   const writerPage = await writerContext.newPage()
   const readerPage = await readerContext.newPage()
   const takeoverPage = await takeoverContext.newPage()
@@ -591,8 +584,8 @@ test('a connected reader keeps receiving updates through a legacy writer takeove
     await writerPage.goto(harness.baseUrl)
     await waitForBrowserSmokeLoaded(writerPage)
     await readerPage.goto(harness.baseUrl)
-    await expect(readerPage.locator('[data-observer-shell]')).toBeVisible()
-    await expect(readerPage.locator('[data-observer-lifecycle-status]')).toContainText(
+    await expect(readerPage.locator('[data-risu-workspace]')).toBeVisible()
+    await expect(readerPage.locator('[data-reader-lifecycle-status]')).toContainText(
       'Updates from the writer appear here.',
     )
     await expect(readerPage.getByRole('button', { name: 'Disconnect existing client', exact: true })).toHaveCount(0)
@@ -612,7 +605,7 @@ test('a connected reader keeps receiving updates through a legacy writer takeove
     // reader remains connected throughout both foreign-owner frames.
     await writerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true }).click()
     await expect(writerPage.locator('#risu-offline-frozen-banner')).toBeVisible()
-    await expect(readerPage.locator('[data-observer-lifecycle-status]')).toContainText(
+    await expect(readerPage.locator('[data-reader-lifecycle-status]')).toContainText(
       'Updates from the writer appear here.',
     )
     await expect(readerPage.getByRole('button', { name: 'Stay on this page (offline)', exact: true })).toHaveCount(0)

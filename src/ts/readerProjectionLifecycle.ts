@@ -1,10 +1,10 @@
-import { clearObserverRouteIntent } from './observerRouteIntent'
+import { clearReaderRouteIntent } from './readerRouteIntent'
 import { configureClientDiagnostics } from './diagnostics'
 import {
-  observerShellLifecycleStore,
-  setObserverShellLifecycleMode,
-  type ObserverProjectionDiscardReason,
-} from './observerShellLifecycle.svelte'
+  readerWorkspaceLifecycleStore,
+  setReaderWorkspaceLifecycleMode,
+  type ReaderProjectionDiscardReason,
+} from './readerWorkspaceLifecycle.svelte'
 import { clearCharacterShellHydrationState } from './server/characterShellHydration.svelte'
 import { resetChatHydration } from './server/chatMessageHydration.svelte'
 import { clearAppliedServerResourceRevision, clearCachedServerCommandRevision } from './server/commands'
@@ -22,12 +22,12 @@ import { resetMemoryJobProjection } from './server/memoryJobProjection.svelte'
 import { resetBardWikiResource } from './server/bardWikiResource'
 
 /**
- * Drop observer-era local intent and optional detail identities whenever their
+ * Drop reader-only local intent and optional detail identities whenever their
  * authentication or database ownership scope is no longer valid. Only auth
  * loss blanks the authenticated shell immediately; replacement refreshes keep
  * the old shell visible until their authoritative snapshot is ready.
  */
-export async function discardObserverProjectionState(reason: ObserverProjectionDiscardReason): Promise<void> {
+export async function discardReaderProjectionState(reason: ReaderProjectionDiscardReason): Promise<void> {
   if (reason === 'auth-loss') {
     // Revoke authority and capture mounted drafts before the first asynchronous
     // cache operation or UI teardown. Late reads now carry an obsolete generation.
@@ -37,9 +37,9 @@ export async function discardObserverProjectionState(reason: ObserverProjectionD
     selectedCharID.set(-1)
     clearCachedServerCommandRevision()
     clearAppliedServerResourceRevision()
-    setObserverShellLifecycleMode('auth-lost')
+    setReaderWorkspaceLifecycleMode('auth-lost')
   }
-  clearObserverRouteIntent()
+  clearReaderRouteIntent()
   clearCharacterShellHydrationState()
   resetChatHydration()
   resetLorebookHydration()
@@ -54,5 +54,5 @@ export async function discardObserverProjectionState(reason: ObserverProjectionD
   }
   await clearResourceCache()
 
-  observerShellLifecycleStore.update((state) => ({ ...state, lastDiscardReason: reason }))
+  readerWorkspaceLifecycleStore.update((state) => ({ ...state, lastDiscardReason: reason }))
 }

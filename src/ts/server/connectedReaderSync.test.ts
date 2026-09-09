@@ -96,7 +96,7 @@ import {
 } from './bardWikiJobEvents'
 import { getBardWikiChatResource, loadBardWikiChatResource, resetBardWikiResource } from './bardWikiResource'
 import { charactersResourceState } from './resourceState.svelte'
-import { recordObserverRouteIntent, resetObserverRouteIntentForTests } from '../observerRouteIntent'
+import { recordReaderRouteIntent, resetReaderRouteIntentForTests } from '../readerRouteIntent'
 
 const ownership = { databaseLineage: 'database-a', writer: { sessionId: 'writer-a', epoch: 1 } }
 const streams: { input: SubscribeServerCommandEventsInput; stop: ReturnType<typeof vi.fn> }[] = []
@@ -155,7 +155,7 @@ beforeEach(() => {
   api.lifecycle.mockReset().mockReturnValue(api.stopLifecycle)
   api.greeting.mockReset()
   charactersResourceState.characters = []
-  resetObserverRouteIntentForTests()
+  resetReaderRouteIntentForTests()
   api.applied = 5
   api.known = 5
   streams.length = 0
@@ -213,7 +213,7 @@ describe('connected reader synchronization', () => {
       charactersResourceState.characters = [
         { chaId: 'char-a', chatPage: 0, chats: [{ id: 'canonical-chat' }, { id: 'reader-chat' }] },
       ] as any
-      recordObserverRouteIntent({
+      recordReaderRouteIntent({
         kind: 'character',
         path: '/character/char-a',
         chaId: 'char-a',

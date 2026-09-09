@@ -10,13 +10,13 @@ vi.mock('./process/modules', () => ({
 }))
 vi.mock('./model/modellist', () => ({ getModelInfo: vi.fn(() => ({ type: 'chat' })) }))
 
-import { discardObserverProjectionState } from './observerProjectionLifecycle'
+import { discardReaderProjectionState } from './readerProjectionLifecycle'
 import {
-  peekObserverRouteIntent,
-  recordObserverRouteIntent,
-  resetObserverRouteIntentForTests,
-} from './observerRouteIntent'
-import { observerShellLifecycleStore, resetObserverShellLifecycleForTests } from './observerShellLifecycle.svelte'
+  peekReaderRouteIntent,
+  recordReaderRouteIntent,
+  resetReaderRouteIntentForTests,
+} from './readerRouteIntent'
+import { readerWorkspaceLifecycleStore, resetReaderWorkspaceLifecycleForTests } from './readerWorkspaceLifecycle.svelte'
 import { characterShellHydrationState } from './server/characterShellHydration.svelte'
 import {
   acknowledgeCreatedChatTranscriptLocalEffect,
@@ -43,7 +43,7 @@ import { type Database } from './storage/database.svelte'
 import { selectedCharID } from './stores.svelte'
 import { getResourceDatabase } from 'src/ts/__tests__/resourceDatabaseState'
 
-function seedObserverProjection(): void {
+function seedReaderProjection(): void {
   replaceResourceDatabase({
     characterOrder: ['char-a'],
     characters: [
@@ -59,7 +59,7 @@ function seedObserverProjection(): void {
     username: 'Observer',
   } as unknown as Database)
   selectedCharID.set(0)
-  recordObserverRouteIntent({ kind: 'character', path: '/character/char-a', chaId: 'char-a' })
+  recordReaderRouteIntent({ kind: 'character', path: '/character/char-a', chaId: 'char-a' })
   characterShellHydrationState.rows = {
     'char-a': { status: 'ready', error: null },
   }
@@ -69,8 +69,8 @@ describe('observer projection lifecycle', () => {
   beforeEach(() => {
     vi.stubGlobal('indexedDB', new IDBFactory())
     resetServerResourceState()
-    resetObserverRouteIntentForTests()
-    resetObserverShellLifecycleForTests()
+    resetReaderRouteIntentForTests()
+    resetReaderWorkspaceLifecycleForTests()
     clearCachedServerCommandRevision()
     clearAppliedServerResourceRevision()
     selectedCharID.set(-1)
@@ -79,8 +79,8 @@ describe('observer projection lifecycle', () => {
   afterEach(async () => {
     await clearResourceCache()
     resetServerResourceState()
-    resetObserverRouteIntentForTests()
-    resetObserverShellLifecycleForTests()
+    resetReaderRouteIntentForTests()
+    resetReaderWorkspaceLifecycleForTests()
     clearCachedServerCommandRevision()
     clearAppliedServerResourceRevision()
     selectedCharID.set(-1)
@@ -88,9 +88,9 @@ describe('observer projection lifecycle', () => {
   })
 
   it.each(['database-replacement', 'lineage-change'] as const)(
-    'keeps the authenticated shell visible but clears observer-era intent for %s',
+    'keeps the authenticated shell visible but clears reader-only intent for %s',
     async (reason) => {
-      seedObserverProjection()
+      seedReaderProjection()
       expect(acknowledgeCreatedChatTranscriptLocalEffect('chat-a')).toBe(true)
       markCharacterLorebookHydrated('char-a')
       markPromptTemplateProjectionApplied('preset-a')
@@ -98,37 +98,37 @@ describe('observer projection lifecycle', () => {
       const hash = await sha256JsonValue(value)
       await persistResourceCache([{ key: 'collection:modules', hashes: [hash], values: [value] }])
 
-      await discardObserverProjectionState(reason)
+      await discardReaderProjectionState(reason)
 
       expect(getResourceDatabase().characters?.[0]?.chaId).toBe('char-a')
       expect(get(selectedCharID)).toBe(0)
-      expect(peekObserverRouteIntent()).toBeNull()
+      expect(peekReaderRouteIntent()).toBeNull()
       expect(characterShellHydrationState.rows).toEqual({})
       expect(isChatMessageTranscriptHydrated('chat-a')).toBe(false)
       expect(isCharacterLorebookHydrated('char-a')).toBe(false)
       expect(isPromptTemplateHydrated('preset-a')).toBe(false)
       expect((await readResourceCacheSnapshots(['collection:modules']))?.get('collection:modules')?.hashes).toEqual([])
-      expect(get(observerShellLifecycleStore)).toMatchObject({ mode: 'waiting', lastDiscardReason: reason })
+      expect(get(readerWorkspaceLifecycleStore)).toMatchObject({ mode: 'waiting', lastDiscardReason: reason })
     },
   )
 
   it('clears authenticated resources, revisions, cache, and local intent on auth loss', async () => {
-    seedObserverProjection()
+    seedReaderProjection()
     setCachedServerCommandRevision(17)
     setAppliedServerResourceRevision(17)
     const value = { id: 'cached-observer-value' }
     const hash = await sha256JsonValue(value)
     await persistResourceCache([{ key: 'collection:modules', hashes: [hash], values: [value] }])
 
-    await discardObserverProjectionState('auth-loss')
+    await discardReaderProjectionState('auth-loss')
 
     expect(getResourceDatabase().characters).toEqual([])
     expect(get(selectedCharID)).toBe(-1)
-    expect(peekObserverRouteIntent()).toBeNull()
+    expect(peekReaderRouteIntent()).toBeNull()
     expect(characterShellHydrationState.rows).toEqual({})
     expect(peekCachedServerCommandRevision()).toBeNull()
     expect(peekAppliedServerResourceRevision()).toBeNull()
     expect((await readResourceCacheSnapshots(['collection:modules']))?.get('collection:modules')?.hashes).toEqual([])
-    expect(get(observerShellLifecycleStore)).toEqual({ mode: 'auth-lost', lastDiscardReason: 'auth-loss' })
+    expect(get(readerWorkspaceLifecycleStore)).toEqual({ mode: 'auth-lost', lastDiscardReason: 'auth-loss' })
   })
 })

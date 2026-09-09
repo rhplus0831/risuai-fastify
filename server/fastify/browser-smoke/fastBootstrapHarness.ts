@@ -1,4 +1,4 @@
-import { expect, type BrowserContext } from '@playwright/test'
+import { expect } from '@playwright/test'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -8,10 +8,6 @@ import type { FastifyInstance } from 'fastify'
 import { buildApp, type BuildAppOptions } from '../src/app.js'
 import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { setupBrowserSmokeAuth } from './auth.js'
-
-export const OBSERVER_SHELL_OVERRIDE_KEY = 'risu:fast-bootstrap-observer-shell'
-
-export type ObserverShellMode = 'disabled' | 'enabled'
 
 export interface FastBootstrapHarness {
   app: FastifyInstance
@@ -160,17 +156,6 @@ async function expectUnownedImportFixture(app: FastifyInstance, assertion: strin
   } finally {
     db.close()
   }
-}
-
-export async function setObserverShellMode(context: BrowserContext, mode: ObserverShellMode): Promise<void> {
-  await context.addInitScript(
-    ({ key, value }) => {
-      try {
-        sessionStorage.setItem(key, value)
-      } catch {}
-    },
-    { key: OBSERVER_SHELL_OVERRIDE_KEY, value: mode },
-  )
 }
 
 export function smallFastBootstrapFixture(): Record<string, unknown> {
