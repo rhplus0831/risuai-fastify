@@ -346,6 +346,8 @@ describe('pre-writer ObserverShell', () => {
     expect(status?.getAttribute('role')).toBe('status')
     expect(status?.getAttribute('aria-live')).toBe('polite')
     expect(status?.textContent).toContain('Read only')
+    expect(status?.closest('[data-risu-shell-bottom-action]')).not.toBeNull()
+    expect(target.querySelector('header')).toBeNull()
     expect(characterButton?.type).toBe('button')
   })
 
@@ -488,6 +490,8 @@ describe('pre-writer ObserverShell', () => {
     })
     const { promoteConnectedReader } = await import('../ts/bootstrap')
     const button = useThisDeviceButton()
+    expect(target.querySelectorAll('[data-reader-use-this-device]')).toHaveLength(1)
+    expect(button.closest('[data-risu-shell-bottom-action]')).not.toBeNull()
     const transcript = target.querySelector('[data-reader-test-transcript]')
     button.click()
     button.click()

@@ -24,6 +24,7 @@
   import { resolveReaderRoute, uniqueReaderCharacters, uniqueReaderChatIds } from '../ts/readerRouteScope'
   import type { ConnectedWriterPromotionResult } from '../ts/bootstrap'
   import ConversationShell from './ConversationShell.svelte'
+  import ReaderTakeoverAction from './ReaderTakeoverAction.svelte'
 
   let characters = $derived(charactersResourceState.status === 'ready' ? charactersResourceState.characters : [])
   let routeCharacterId = $derived($currentRoute.kind === 'character' ? $currentRoute.chaId : null)
@@ -176,6 +177,13 @@
   let authoringRouteBlocked = $derived(
     $clientSessionStore.managed && !['home', 'grid', 'character'].includes($currentRoute.kind),
   )
+  let readerChatRoute = $derived(
+    $clientSessionStore.managed &&
+      readerContentAvailable &&
+      readerScope.status === 'chat' &&
+      !!routeCharacterId &&
+      !!routeChatId,
+  )
 
   $effect(() => {
     const route = $currentRoute
@@ -313,68 +321,8 @@
   }
 </script>
 
-<div class="flex h-full w-full flex-col overflow-hidden bg-bg text-textcolor" data-observer-shell>
-  <header class="border-b border-textcolor/15 px-3 py-2">
-    <div
-      class="flex w-full flex-wrap items-center justify-between gap-2"
-      role="status"
-      aria-live="polite"
-      data-observer-read-only-status>
-      <div class={$clientSessionStore.managed ? 'flex flex-wrap items-center gap-x-3 gap-y-1' : ''}>
-        <h1 class="text-sm font-semibold">
-          {$clientSessionStore.managed ? language.connectedReaders.title : language.observerShell.title}
-        </h1>
-        <p class="text-sm text-textcolor2" data-observer-lifecycle-status>
-          {lifecycleStatus($observerShellLifecycleStore.mode)}
-        </p>
-        {#if $clientSessionStore.managed}
-          <p id="reader-writer-switch-help" class="sr-only">
-            {language.connectedReaders.useThisDeviceHelp}
-          </p>
-          <button
-            bind:this={useThisDeviceButton}
-            type="button"
-            class="rounded-md border border-textcolor/30 px-3 py-1 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-            aria-describedby="reader-writer-switch-help"
-            aria-busy={writerSwitchInProgress}
-            data-reader-use-this-device
-            disabled={writerSwitchDisabled}
-            onclick={() => void useThisDevice()}>
-            {writerSwitchInProgress
-              ? language.connectedReaders.switchingDevice
-              : language.connectedReaders.useThisDevice}
-          </button>
-          {#if writerSwitchStatus(writerSwitchResult)}
-            <p class="mt-2 max-w-2xl text-sm text-textcolor2" data-reader-writer-switch-result>
-              {writerSwitchStatus(writerSwitchResult)}
-            </p>
-          {/if}
-        {:else if writerRetryAvailable}
-          <button
-            bind:this={retryWriterButton}
-            type="button"
-            class="mt-2 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
-            data-observer-writer-retry
-            onclick={() => void retryWriterPromotion()}>
-            {language.observerShell.retryWriter}
-          </button>
-        {:else if $observerShellLifecycleStore.mode === 'retrying'}
-          <button
-            type="button"
-            class="mt-2 cursor-wait rounded-md border border-textcolor/30 px-3 py-2 text-sm opacity-60"
-            data-observer-writer-retry
-            disabled>
-            {language.observerShell.retryingWriter}
-          </button>
-        {/if}
-      </div>
-      <span class="w-fit rounded-full border border-yellow-600/60 bg-yellow-600/10 px-3 py-1 text-sm">
-        {language.observerShell.readOnlyBadge}
-      </span>
-    </div>
-  </header>
-
-  <div class="min-h-0 flex-1" data-reader-layout>
+<div class="contents" data-observer-shell>
+  <div class="h-full min-h-0 w-full" data-reader-layout>
     <ConversationShell
       responsive={$DynamicGUI}
       navigationOpen={!$DynamicGUI || readerNavigationOpen}
@@ -414,135 +362,150 @@
         {/key}
       {/snippet}
       <section class="flex h-full min-h-0 min-w-0 flex-1 flex-col" data-reader-route>
-        {#if $clientSessionStore.managed}
-          {#if charactersResourceState.status === 'error' || (routeCharacterId && charactersResourceState.rowStatuses[routeCharacterId] === 'error')}
-            <p
-              class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm text-textcolor2"
-              role="alert"
-              data-reader-resource-read-failed>
-              {language.connectedReaders.readFailed}
-            </p>
-          {/if}
-          {#if readerNotice && readerNoticePath === $currentRoute.path}<p
-              class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm"
-              role="status"
-              data-reader-route-notice>
-              {readerNotice}
-            </p>{/if}
-          {#if !readerContentAvailable}
-            <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
-          {:else if readerScope.status === 'blocked'}
-            <div class="p-6">
-              <p role="status" data-reader-authoring-gate>{language.connectedReaders.writeAccessRequired}</p>
-              <div class="mt-4 flex gap-3">
-                <button type="button" class="rounded-md border border-selected px-3 py-2" onclick={() => showRoute('/')}
-                  >{language.home}</button>
-                {#if returnReadingPath}<button
+        <div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+          {#if $clientSessionStore.managed}
+            {#if charactersResourceState.status === 'error' || (routeCharacterId && charactersResourceState.rowStatuses[routeCharacterId] === 'error')}
+              <p
+                class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm text-textcolor2"
+                role="alert"
+                data-reader-resource-read-failed>
+                {language.connectedReaders.readFailed}
+              </p>
+            {/if}
+            {#if readerNotice && readerNoticePath === $currentRoute.path}<p
+                class="shrink-0 border-b border-textcolor/15 px-4 py-3 text-sm"
+                role="status"
+                data-reader-route-notice>
+                {readerNotice}
+              </p>{/if}
+            {#if !readerContentAvailable}
+              <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
+            {:else if readerScope.status === 'blocked'}
+              <div class="p-6">
+                <p role="status" data-reader-authoring-gate>{language.connectedReaders.writeAccessRequired}</p>
+                <div class="mt-4 flex gap-3">
+                  <button
                     type="button"
                     class="rounded-md border border-selected px-3 py-2"
-                    data-reader-return-to-reading
-                    onclick={() => {
-                      if (returnReadingPath) showRoute(returnReadingPath)
-                    }}>{language.connectedReaders.returnToReading}</button
-                  >{/if}
-              </div>
-            </div>
-          {:else if readerScope.status === 'ambiguous'}
-            <p class="p-6" role="alert" data-reader-ambiguous-target>
-              {language.connectedReaders.ambiguousConversation}
-            </p>
-          {:else if routeCharacterId && routeChatId}
-            {#if selectedHydration?.status === 'error'}
-              <div class="shrink-0 px-4 py-3 text-sm" role="alert">
-                <p>{language.connectedReaders.readFailed}</p>
-                <button
-                  type="button"
-                  class="mt-2 rounded border border-textcolor/20 px-3 py-2"
-                  onclick={() => loadDetails(routeCharacterId)}>{language.retry}</button>
-              </div>
-            {/if}
-            {#key `${routeCharacterId}:${routeChatId}`}
-              {#await loadReaderTranscript()}
-                <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
-              {:then module}
-                <module.default
-                  characterId={routeCharacterId}
-                  chatId={routeChatId}
-                  onUseThisDevice={() => void useThisDevice()}
-                  takeoverDisabled={writerSwitchDisabled} />
-              {:catch}
-                <p class="p-6 text-textcolor2" role="alert">{language.connectedReaders.readFailed}</p>
-              {/await}
-            {/key}
-          {:else if readerCharacter}
-            <div class="overflow-y-auto p-5 sm:p-8">
-              <h2 class="text-xl font-semibold">{readerCharacter.displayName || readerCharacter.name}</h2>
-              <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.chooseConversation}</p>
-              {#if selectedHydration?.status === 'error'}
-                <p class="mt-4 text-sm" role="alert">{language.connectedReaders.readFailed}</p>
-                <button
-                  class="mt-2 rounded border border-textcolor/20 px-3 py-2"
-                  type="button"
-                  onclick={() => loadDetails(readerCharacter.chaId)}>{language.retry}</button>
-              {:else if isServerCharacterShell(readerCharacter)}<p class="mt-4 text-sm text-textcolor2" role="status">
-                  {language.loadingChatData}
-                </p>{/if}
-            </div>
-          {:else if readerScope.status === 'loading'}
-            <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
-          {:else}
-            {@render catalog()}
-          {/if}
-        {:else}
-          <div class="min-h-0 overflow-y-auto p-5 sm:p-8" aria-labelledby="observer-detail-heading">
-            {#if authoringRouteBlocked}
-              <p id="observer-detail-heading" role="status" data-reader-authoring-gate>
-                {language.connectedReaders.writeAccessRequired}
-              </p>
-            {:else if selectedCharacter}
-              <div class="mx-auto flex max-w-2xl flex-col gap-5">
-                <div>
-                  <p class="mb-1 text-sm text-textcolor2">
-                    {selectedIsShell ? language.observerShell.summaryLabel : language.observerShell.detailsLabel}
-                  </p>
-                  <h2 id="observer-detail-heading" class="text-2xl font-semibold">
-                    {selectedCharacter.displayName || selectedCharacter.name}
-                  </h2>
-                  {#if selectedCharacter.creatorNotes}
-                    <p class="mt-3 whitespace-pre-wrap text-sm text-textcolor2">{selectedCharacter.creatorNotes}</p>
-                  {/if}
-                </div>
-
-                <p class="text-sm text-textcolor2">{language.observerShell.chatCount(shellChatCount)}</p>
-
-                {#if selectedIsShell}
-                  <div class="rounded-md border border-textcolor/15 p-4" data-observer-character-summary>
-                    <p class="text-sm text-textcolor2">{language.observerShell.summaryHelp}</p>
-                    <button
+                    onclick={() => showRoute('/')}>{language.home}</button>
+                  {#if returnReadingPath}<button
                       type="button"
-                      class="mt-3 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-60"
-                      disabled={selectedHydration?.status === 'loading'}
-                      aria-label={language.observerShell.loadDetailsFor(
-                        selectedCharacter.displayName || selectedCharacter.name,
-                      )}
-                      onclick={() => loadDetails(selectedCharacter.chaId)}>
-                      {selectedHydration?.status === 'loading'
-                        ? language.observerShell.loadingDetails
-                        : selectedHydration?.status === 'error'
-                          ? language.observerShell.retryDetails
-                          : language.observerShell.loadDetails}
-                    </button>
-                    {#if selectedHydration?.status === 'error'}
-                      <p class="mt-2 text-sm text-red-500" role="alert">{language.observerShell.detailsError}</p>
-                    {/if}
-                  </div>
-                {/if}
+                      class="rounded-md border border-selected px-3 py-2"
+                      data-reader-return-to-reading
+                      onclick={() => {
+                        if (returnReadingPath) showRoute(returnReadingPath)
+                      }}>{language.connectedReaders.returnToReading}</button
+                    >{/if}
+                </div>
               </div>
+            {:else if readerScope.status === 'ambiguous'}
+              <p class="p-6" role="alert" data-reader-ambiguous-target>
+                {language.connectedReaders.ambiguousConversation}
+              </p>
+            {:else if routeCharacterId && routeChatId}
+              {#if selectedHydration?.status === 'error'}
+                <div class="shrink-0 px-4 py-3 text-sm" role="alert">
+                  <p>{language.connectedReaders.readFailed}</p>
+                  <button
+                    type="button"
+                    class="mt-2 rounded border border-textcolor/20 px-3 py-2"
+                    onclick={() => loadDetails(routeCharacterId)}>{language.retry}</button>
+                </div>
+              {/if}
+              {#key `${routeCharacterId}:${routeChatId}`}
+                {#await loadReaderTranscript()}
+                  <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
+                {:then module}
+                  <module.default characterId={routeCharacterId} chatId={routeChatId} />
+                {:catch}
+                  <p class="p-6 text-textcolor2" role="alert">{language.connectedReaders.readFailed}</p>
+                {/await}
+              {/key}
+            {:else if readerCharacter}
+              <div class="overflow-y-auto p-5 sm:p-8">
+                <h2 class="text-xl font-semibold">{readerCharacter.displayName || readerCharacter.name}</h2>
+                <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.chooseConversation}</p>
+                {#if selectedHydration?.status === 'error'}
+                  <p class="mt-4 text-sm" role="alert">{language.connectedReaders.readFailed}</p>
+                  <button
+                    class="mt-2 rounded border border-textcolor/20 px-3 py-2"
+                    type="button"
+                    onclick={() => loadDetails(readerCharacter.chaId)}>{language.retry}</button>
+                {:else if isServerCharacterShell(readerCharacter)}<p class="mt-4 text-sm text-textcolor2" role="status">
+                    {language.loadingChatData}
+                  </p>{/if}
+              </div>
+            {:else if readerScope.status === 'loading'}
+              <p class="p-6 text-textcolor2" role="status">{language.loadingChatData}</p>
             {:else}
               {@render catalog()}
             {/if}
-          </div>
-        {/if}
+          {:else}
+            <div class="min-h-0 overflow-y-auto p-5 sm:p-8" aria-labelledby="observer-detail-heading">
+              {#if authoringRouteBlocked}
+                <p id="observer-detail-heading" role="status" data-reader-authoring-gate>
+                  {language.connectedReaders.writeAccessRequired}
+                </p>
+              {:else if selectedCharacter}
+                <div class="mx-auto flex max-w-2xl flex-col gap-5">
+                  <div>
+                    <p class="mb-1 text-sm text-textcolor2">
+                      {selectedIsShell ? language.observerShell.summaryLabel : language.observerShell.detailsLabel}
+                    </p>
+                    <h2 id="observer-detail-heading" class="text-2xl font-semibold">
+                      {selectedCharacter.displayName || selectedCharacter.name}
+                    </h2>
+                    {#if selectedCharacter.creatorNotes}
+                      <p class="mt-3 whitespace-pre-wrap text-sm text-textcolor2">{selectedCharacter.creatorNotes}</p>
+                    {/if}
+                  </div>
+
+                  <p class="text-sm text-textcolor2">{language.observerShell.chatCount(shellChatCount)}</p>
+
+                  {#if selectedIsShell}
+                    <div class="rounded-md border border-textcolor/15 p-4" data-observer-character-summary>
+                      <p class="text-sm text-textcolor2">{language.observerShell.summaryHelp}</p>
+                      <button
+                        type="button"
+                        class="mt-3 rounded-md border border-textcolor/30 px-3 py-2 text-sm hover:bg-textcolor/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:cursor-wait disabled:opacity-60"
+                        disabled={selectedHydration?.status === 'loading'}
+                        aria-label={language.observerShell.loadDetailsFor(
+                          selectedCharacter.displayName || selectedCharacter.name,
+                        )}
+                        onclick={() => loadDetails(selectedCharacter.chaId)}>
+                        {selectedHydration?.status === 'loading'
+                          ? language.observerShell.loadingDetails
+                          : selectedHydration?.status === 'error'
+                            ? language.observerShell.retryDetails
+                            : language.observerShell.loadDetails}
+                      </button>
+                      {#if selectedHydration?.status === 'error'}
+                        <p class="mt-2 text-sm text-red-500" role="alert">{language.observerShell.detailsError}</p>
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+              {:else}
+                {@render catalog()}
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <ReaderTakeoverAction
+          conversation={readerChatRoute}
+          managed={$clientSessionStore.managed}
+          title={$clientSessionStore.managed ? language.connectedReaders.title : language.observerShell.title}
+          status={lifecycleStatus($observerShellLifecycleStore.mode)}
+          result={writerSwitchStatus(writerSwitchResult)}
+          switchInProgress={writerSwitchInProgress}
+          switchDisabled={writerSwitchDisabled}
+          retryAvailable={writerRetryAvailable}
+          retrying={$observerShellLifecycleStore.mode === 'retrying'}
+          contentWidth={readerSettings.chatScreenWidth ?? 900}
+          bind:useButton={useThisDeviceButton}
+          bind:retryButton={retryWriterButton}
+          onUseThisDevice={() => void useThisDevice()}
+          onRetryWriter={() => void retryWriterPromotion()} />
       </section>
     </ConversationShell>
   </div>

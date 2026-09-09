@@ -69,8 +69,6 @@ vi.mock('../ts/process/modules', async (importActual) => ({
   moduleUpdate: () => {},
 }))
 
-const disabledReaderActions = { onUseThisDevice: () => {}, takeoverDisabled: true }
-
 let target: HTMLElement
 let component: ReturnType<typeof mount> | undefined
 let observations: {
@@ -212,7 +210,7 @@ afterEach(async () => {
 })
 
 describe('connected reader transcript', () => {
-  it('uses confirmed transcript appearance and composer takeover without opening a writer controller', async () => {
+  it('uses confirmed transcript appearance without opening a writer controller', async () => {
     seedReaderChat(3)
     withTestDatabaseWrite(() => {
       settingsResourceState.value.theme = 'mobilechat'
@@ -226,15 +224,11 @@ describe('connected reader transcript', () => {
       settingsResourceState.value.chatScreenWidth = 1200
       settingsResourceState.value.chatLoadInitialPages = 30
     })
-    const useThisDevice = vi.fn()
     component = mount(ReaderTranscript, {
       target,
       props: {
-        ...disabledReaderActions,
         characterId: 'reader-character',
         chatId: 'reader-chat',
-        onUseThisDevice: useThisDevice,
-        takeoverDisabled: false,
       },
     })
     await settle()
@@ -246,38 +240,9 @@ describe('connected reader transcript', () => {
     ).toBe('640px')
     expect(target.querySelector('[data-reader-load-more]')).not.toBeNull()
     expect(target.querySelector<HTMLElement>('[style*="font-size"]')?.style.fontSize).toBe('1.3125rem')
-    const composer = target.querySelector<HTMLTextAreaElement>('[data-reader-composer] textarea')!
-    expect(composer.disabled).toBe(true)
-    expect(composer.value).toBe('')
-    expect(target.querySelector(`#${composer.getAttribute('aria-describedby')}`)?.textContent).toContain(
-      language.connectedReaders.composerReadOnly,
-    )
-    target.querySelector<HTMLButtonElement>('[data-reader-composer-takeover]')!.click()
-    expect(useThisDevice).toHaveBeenCalledOnce()
     expect(get(selectedCharID)).toBe(0)
     expect(settingsResourceState.value.theme).toBe('cardboard')
     expect(target.querySelector('[data-default-chat-transcript]')).toBeNull()
-  })
-
-  it('rejects the disabled composer takeover callback even through dispatchEvent', async () => {
-    seedReaderChat(1)
-    startReader()
-    const useThisDevice = vi.fn()
-    component = mount(ReaderTranscript, {
-      target,
-      props: {
-        ...disabledReaderActions,
-        characterId: 'reader-character',
-        chatId: 'reader-chat',
-        onUseThisDevice: useThisDevice,
-        takeoverDisabled: true,
-      },
-    })
-    await settle()
-    const button = target.querySelector<HTMLButtonElement>('[data-reader-composer-takeover]')!
-    expect(button.disabled).toBe(true)
-    button.dispatchEvent(new MouseEvent('click', { bubbles: true }))
-    expect(useThisDevice).not.toHaveBeenCalled()
   })
 
   it('retains passive message controls and denies direct script dispatch with localized reasons', async () => {
@@ -289,7 +254,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.querySelector('details summary')?.textContent).toBe('More')
@@ -343,7 +308,7 @@ describe('connected reader transcript', () => {
     HideIconStore.set(true)
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.querySelector('[data-reader-background]')?.textContent).toContain('Confirmed module background')
@@ -377,7 +342,7 @@ describe('connected reader transcript', () => {
     })
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     const backgroundCall = vi.mocked(parser.ParseMarkdown).mock.calls.find((call) => call[2] === 'back')!
@@ -431,7 +396,7 @@ describe('connected reader transcript', () => {
         .mockResolvedValue({ status: 'error', error: 'test' })
       component = mount(ReaderTranscript, {
         target,
-        props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+        props: { characterId: 'reader-character', chatId: 'reader-chat' },
       })
       await settle()
       expect(hydration.hydrateReaderChatMessageWindow).not.toHaveBeenCalled()
@@ -467,7 +432,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     const assertReadable = () => expect(target.textContent).toContain('Reader message 1')
@@ -497,7 +462,7 @@ describe('connected reader transcript', () => {
     setClientConnectionState('interrupted')
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain('Reader message 1')
@@ -548,7 +513,7 @@ describe('connected reader transcript', () => {
     const writerBefore = JSON.stringify(charactersResourceState.characters)
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     const projection = liveProjection()
@@ -625,7 +590,7 @@ describe('connected reader transcript', () => {
       const base = original[1]
       component = mount(ReaderTranscript, {
         target,
-        props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+        props: { characterId: 'reader-character', chatId: 'reader-chat' },
       })
       await settle()
       const baseRow = target
@@ -685,7 +650,7 @@ describe('connected reader transcript', () => {
     ) as Message[]
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     const oldRow = target
@@ -754,7 +719,7 @@ describe('connected reader transcript', () => {
     ])
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain(base.data)
@@ -782,7 +747,7 @@ describe('connected reader transcript', () => {
     ) as Message[]
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.querySelector(`[data-risu-message-id="${original[0].chatId}"]`)).toBeNull()
@@ -852,7 +817,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     observations[0].input.onChange({ status: 'interrupted', projection: null })
@@ -879,7 +844,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     const parserCalls = vi.mocked(parser.ParseMarkdown).mock.calls.length
@@ -893,7 +858,7 @@ describe('connected reader transcript', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  it('renders its explicit chat with copy and a disabled composer without changing writer selection', async () => {
+  it('renders its explicit chat with copy without changing writer selection', async () => {
     seedReaderChat()
     startReader()
     const clipboard = { writeText: vi.fn(async () => undefined) }
@@ -902,12 +867,11 @@ describe('connected reader transcript', () => {
     try {
       component = mount(ReaderTranscript, {
         target,
-        props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+        props: { characterId: 'reader-character', chatId: 'reader-chat' },
       })
       await settle()
       expect(target.textContent).toContain('Reader message 2')
       expect(target.textContent).not.toContain('Phase 0 render-cost message')
-      expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer] textarea')?.disabled).toBe(true)
       expect(
         target.querySelector(
           '[data-risu-message-action="edit"], [data-risu-message-action="remove"], [data-risu-message-action="translate"], [data-risu-message-action="reroll"]',
@@ -971,7 +935,7 @@ describe('connected reader transcript', () => {
     try {
       component = mount(ReaderTranscript, {
         target,
-        props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+        props: { characterId: 'reader-character', chatId: 'reader-chat' },
       })
       await settle()
       expect(target.textContent).toContain('Reader message 4')
@@ -991,7 +955,6 @@ describe('connected reader transcript', () => {
       copy!.click()
       await settle()
       expect(clipboard.writeText).toHaveBeenCalledWith('Reader message 4')
-      expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer] textarea')?.disabled).toBe(true)
       expect(get(selectedCharID)).toBe(0)
       expect(fetch).not.toHaveBeenCalled()
     } finally {
@@ -1020,7 +983,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain('Reader message 2')
@@ -1039,7 +1002,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.querySelectorAll('.risu-chat')).toHaveLength(2)
@@ -1057,7 +1020,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     const committed = JSON.parse(JSON.stringify(reader.chats[0].message)) as Message[]
@@ -1080,7 +1043,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain('Reader message 2')
@@ -1099,7 +1062,7 @@ describe('connected reader transcript', () => {
     startReader()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain('Reader message 2')
@@ -1140,7 +1103,7 @@ describe('connected reader transcript', () => {
     demoteClientSession()
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: previous.chaId, chatId },
+      props: { characterId: previous.chaId, chatId },
     })
     await settle()
     expect(hydration.hydrateReaderChatMessageWindow).toHaveBeenCalledOnce()
@@ -1193,7 +1156,7 @@ describe('connected reader transcript', () => {
     for (let visit = 0; visit < 2; visit += 1) {
       component = mount(ReaderTranscript, {
         target,
-        props: { ...disabledReaderActions, characterId: previous.chaId, chatId },
+        props: { characterId: previous.chaId, chatId },
       })
       await settle()
       expect(target.textContent).toContain(committed)
@@ -1219,7 +1182,7 @@ describe('connected reader transcript', () => {
     expect(hydration.getReaderChatMessageOwnerState(chatId)?.messages).toEqual([])
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: previous.chaId, chatId },
+      props: { characterId: previous.chaId, chatId },
     })
     await settle()
     expect(target.textContent).not.toContain(committed)
@@ -1231,7 +1194,7 @@ describe('connected reader transcript', () => {
     const source = JSON.parse(JSON.stringify(reader)) as character
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain('Reader message 1')
@@ -1293,7 +1256,7 @@ describe('connected reader transcript', () => {
     })
     component = mount(ReaderTranscript, {
       target,
-      props: { ...disabledReaderActions, characterId: 'reader-character', chatId: 'reader-chat' },
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
     expect(target.textContent).toContain('Committed persona')

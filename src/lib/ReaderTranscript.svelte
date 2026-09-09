@@ -54,13 +54,9 @@
   let {
     characterId,
     chatId,
-    onUseThisDevice,
-    takeoverDisabled,
   }: {
     characterId: string
     chatId: string
-    onUseThisDevice: () => void
-    takeoverDisabled: boolean
   } = $props()
   const displaySettings = $derived(getReaderNavigationSettings())
   let backgroundStyle = $state('')
@@ -593,36 +589,12 @@
           data-reader-new-messages
           onclick={() => chatsInstance?.scrollToLatestMessage()}>{language.connectedReaders.newMessages}</button
         >{/if}
-      <div class="reader-composer shrink-0 border-t border-textcolor/15 p-3" data-reader-composer>
-        <div class="mb-2 flex flex-wrap items-center justify-between gap-2">
-          <p id="reader-composer-reason" class="text-sm text-textcolor2">
-            {language.connectedReaders.composerReadOnly}
-          </p>
-          <button
-            class="rounded-md border border-textcolor/20 px-3 py-2 text-sm disabled:opacity-50"
-            disabled={takeoverDisabled}
-            onclick={() => {
-              if (!takeoverDisabled) onUseThisDevice()
-            }}
-            data-reader-composer-takeover>{language.connectedReaders.useThisDevice}</button>
-        </div>
-        <textarea
-          rows="1"
-          disabled
-          readonly
-          aria-label={language.messageInput}
-          aria-describedby="reader-composer-reason"
-          placeholder={language.connectedReaders.composerReadOnly}
-          class="block w-full resize-none rounded-md border border-textcolor/15 bg-textcolor/5 px-3 py-3 text-sm text-textcolor2"
-        ></textarea>
-      </div>
     </div>
   {/snippet}
 </ChatScreenLayout>
 
 <style>
-  .reader-chat-screen :global(.risu-chat),
-  .reader-composer {
+  .reader-chat-screen :global(.risu-chat) {
     width: min(var(--chat-screen-width, 900px), 100%);
     margin-inline: auto;
   }
