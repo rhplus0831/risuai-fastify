@@ -2,12 +2,11 @@
 
 ## Current Cursor
 
-- State: **Implementation in progress; Phase 0 accepted.**
-- Current phase: Phase 1, access and readiness model.
-- Next action: introduce the derived workspace access snapshot and explicit
-  reader display-route ownership without changing the visible path.
-- Source baseline reviewed: `6f6adea37b39f5b9d52b86d49558f3455fda8916`.
-- No runtime behavior has changed through this planning package.
+- State: **Implementation in progress; Phases 0–1 accepted.**
+- Current phase: Phase 2, role-first bootstrap.
+- Next action: defer the reader projection until automatic writer acquisition
+  settles, preserving the existing post-replay recovery sequence.
+- Source baseline reviewed: `0654259fc`.
 - Current architecture and test guides remain authoritative for shipped
   behavior.
 
@@ -32,7 +31,7 @@
 | Phase                                                                                           | State    | Acceptance evidence                                                                                       |
 | ----------------------------------------------------------------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------- |
 | [0. Contract, inventory, and baseline](phases/phase-0-contract-inventory-and-baseline.md)       | Accepted | Source/test inventory rechecked; five-sample small/large cold/warm baseline and thresholds recorded below |
-| [1. Access and readiness model](phases/phase-1-access-and-readiness-model.md)                   | Pending  | Not run                                                                                                   |
+| [1. Access and readiness model](phases/phase-1-access-and-readiness-model.md)                   | Accepted | Derived workspace snapshot and non-replayed reader-route handoff at `ee210deb2`                           |
 | [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Pending  | Not run                                                                                                   |
 | [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Pending  | Not run                                                                                                   |
 | [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Pending  | Not run                                                                                                   |
@@ -190,6 +189,42 @@ Phase 0 verification:
 The browser-only probe was the sole Phase 0 source change. It records mount,
 frame, layout-shift, and long-task evidence and does not change production
 startup or presentation behavior. No known Phase 0 work remains.
+
+## Phase 1 Acceptance Evidence
+
+Revision `ee210deb2` added `workspaceAccess.ts`, whose presentation mode and
+four independent capabilities derive from the current client-session role and
+the existing startup guards. A coherent shell preview during initial automatic
+acquisition remains `booting`; an established reader remains browsable as
+`read-only` and `promoting`; writer presentation requires completed writer
+recovery and ordinary mutation readiness. The selectors mirror rather than
+replace `canUseClientWriteAccess()`, `canMutate()`, and `canGenerate()`.
+
+The client session now exposes its existing established-role signal without a
+second mutable authority flag. App promotion consumes the reader-only display
+intent without invoking `applyRouteToStores()`. The state-to-route effect may
+then reconcile to the already-persisted writer selection, and only a subsequent
+writer-owned route change invokes the persistence-capable handlers. Stable
+reader character/chat IDs remain memory-only and no route handoff calls
+`changeChar()`, updates `lastInteraction`, dispatches a command, or creates an
+outbox record.
+
+| Command                                                     | Result                  |
+| ----------------------------------------------------------- | ----------------------- |
+| `pnpm test -- src/ts/workspaceAccess.test.ts`               | 5 passed                |
+| `pnpm test -- src/App.routeEffect.dom.test.ts`              | 29 passed               |
+| `pnpm test -- src/ts/clientSession.test.ts`                 | 15 passed               |
+| `pnpm test -- src/ts/startupReadiness.test.ts`              | 14 passed               |
+| `pnpm test -- src/ts/observerRouteIntent.test.ts`           | 4 passed                |
+| `pnpm test -- src/ts/server/commands.clientSession.test.ts` | 9 passed                |
+| `pnpm check`                                                | 0 errors and 0 warnings |
+
+The first two App DOM runs failed because retained-route tests still expected
+the old automatic writer-handler replay. Their assertions were migrated to the
+new invariant: the retained reader target is consumed with zero handler calls,
+and a later writer navigation is the first persisted application. The final
+mounted suite passed. No visible reader-shell change, protocol change, or known
+Phase 1 work remains.
 
 For every completed slice, record the exact changed boundary, source revision,
 focused commands and outcomes, browser or performance artifacts where required,
