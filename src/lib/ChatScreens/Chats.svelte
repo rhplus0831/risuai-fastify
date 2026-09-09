@@ -753,6 +753,30 @@
     displayCommitCoordinator.setVisible(visible)
   }
 
+  function captureDisplayCommitAnchor(): { id: string; top: number } | null {
+    // Repeated first-body commits can each round scrollTop. Keep the intended
+    // offset of the readable anchor even if another row becomes readable above
+    // it, including legacy paging, which has no residency reconciliation.
+    if (residencyAnchor && scrollContainer && Math.abs(scrollContainer.scrollTop - residencyScrollTop) < 0.5) {
+      const element = rowElements.get(residencyAnchor.id)
+      const viewport = scrollContainer.getBoundingClientRect()
+      const visual = element?.querySelector<HTMLElement>('.risu-chat[data-risu-message-id]')
+      const rect = visual?.getBoundingClientRect()
+      if (
+        element?.isConnected &&
+        !element.hasAttribute('data-transcript-pending-geometry') &&
+        rect &&
+        rect.bottom > viewport.top &&
+        rect.top < viewport.bottom &&
+        // Preserve rounding residue, not a stale position after an unrelated
+        // layout change such as folding a message.
+        Math.abs(element.getBoundingClientRect().top - viewport.top - residencyAnchor.top) <= 1
+      )
+        return residencyAnchor
+    }
+    return captureResidencyAnchor()
+  }
+
   function commitDisplayBodyChanges(commits: readonly (() => void)[], preserveAnchor: boolean): void {
     if (commits.length === 0 || chatsComponentDestroyed) return
     if (
@@ -767,7 +791,7 @@
     const anchor =
       container && currentTranscriptAnchor() === 'free'
         ? ((jumpMessageId ? transcriptRowAnchor(jumpMessageId) : displayNavigationAnchor) ??
-          (preserveAnchor ? captureResidencyAnchor() : null))
+          (preserveAnchor ? captureDisplayCommitAnchor() : null))
         : null
     bodyCommitTransaction = true
     try {
@@ -895,7 +919,7 @@
     if (held) held.ready = true
     if (held) {
       if (bodyCommitTransaction) restoreReturningRowHeight(key)
-      else displayCommitCoordinator.commit(key, () => restoreReturningRowHeight(key))
+      else displayCommitCoordinator.commit(key, () => restoreReturningRowHeight(key), { preserveAnchor: true })
     }
     if (pendingRowParses.size === 0 && returningRowHeights.size === 0) displayNavigationAnchor = null
     // Normal completion releases the held height inside the same body commit.

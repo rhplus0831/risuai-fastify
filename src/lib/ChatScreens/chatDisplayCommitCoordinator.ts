@@ -18,6 +18,12 @@ interface ChatDisplayCommitCoordinatorOptions {
   batchSize?: number
 }
 
+interface ChatDisplayCommitOptions {
+  signal?: AbortSignal
+  /** Initial bodies and held-height releases must be anchored even after idle. */
+  preserveAnchor?: boolean
+}
+
 /**
  * Owns the interval between asynchronous body completion and its DOM commit.
  * Off-screen results wait through wheel/touch momentum; visible results can
@@ -83,14 +89,15 @@ export function createChatDisplayCommitCoordinator(options: ChatDisplayCommitCoo
   }
 
   return {
-    commit(key: string, applyCommit: () => void, signal?: AbortSignal) {
+    commit(key: string, applyCommit: () => void, commitOptions: ChatDisplayCommitOptions = {}) {
+      const { signal } = commitOptions
       if (destroyed || signal?.aborted) return
       const previous = pending.get(key)
       if (previous) remove(previous)
       const job: PendingCommit = {
         key,
         apply: applyCommit,
-        preserveAnchor: interacting || Date.now() <= preserveAnchorUntil,
+        preserveAnchor: commitOptions.preserveAnchor === true || interacting || Date.now() <= preserveAnchorUntil,
         signal,
       }
       if (signal) {

@@ -200,9 +200,13 @@ The browser bridge cases also prove that critical newest-message targets settle
 before deferred background rows enter the revision lane, and that changing the
 visible chat aborts an obsolete fetch before the replacement batch starts.
 `chatDisplayScrollStability.spec.ts` holds sequential older-row responses while
-real CDP wheel input continues, then checks visible-row identity and pixel
-displacement for delayed success and handled fallback in bounded and legacy
-paging.
+real CDP wheel input continues, then pauses beyond the interaction grace before
+releasing unfinished newer rows below the reading position. Animation-frame,
+after-frame, and DOM-mutation samples require the same readable anchor node to
+remain within one pixel throughout late commits, not only after settlement.
+The matrix covers delayed success and handled fallback in bounded and legacy
+paging. Coordinator and ChatBody tests also pin explicit initial-commit anchor
+preservation after grace expiry without forcing it on ordinary later updates.
 Cache cases cover exact-namespace reuse after a context switch, isolation
 between namespace identities, least-recent namespace retirement, stale
 in-flight completion rejection, and entry/byte bounds aggregated across all

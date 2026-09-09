@@ -1,7 +1,7 @@
 # Svelte Chat UI Guide
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-09 (asynchronous display-body geometry and anchor ownership).
+Targeted source check: 2026-09-09 (late initial display-body commits and fractional anchor retention).
 
 This guide owns the visible chat frame, transcript, message rows, composer
 variants, generation/loading feedback, and in-chat confirmations. Return to the
@@ -130,11 +130,16 @@ height wins, otherwise a deterministic source-only estimate is clamped between
 160 and 960 pixels. The display scheduler prioritizes visible queued rows while
 remaining serial. Completed offscreen bodies wait through active wheel/touch
 scrolling; after 140 milliseconds of scroll idle they commit in batches of at
-most four. Visible or idle commits run through a transcript-owned transaction
-that captures the first stable visible row, applies the HTML and placeholder
-release together, and restores that row's viewport offset before paint. Newly
-mounted pending placeholders are only fallback anchors, so they cannot displace
-the row that was already visible. Both bounded and diagnostic legacy paging use
+most four. Initial HTML commits and held-height releases preserve the viewport
+through completion, even when serialized parsing finishes after the
+1,500-millisecond interaction grace. Ordinary later body updates retain the
+interaction/grace policy. The transcript-owned transaction applies HTML and
+placeholder release together, then restores the visible anchor before paint.
+It retains the intended fractional offset of an already readable, visible row
+while the scroll position is unchanged; another row becoming readable above it
+does not discard that rounding residue. User movement or an unrelated layout
+change requires a fresh anchor. Newly mounted pending placeholders are only
+fallback anchors when no stable visible row is available. Both bounded and diagnostic legacy paging use
 this application anchor owner, and the inner transcript disables native scroll
 anchoring to avoid two corrections for one height transition. Chat switches,
 aborts, and teardown discard held work; all uncancelled rows still render.
@@ -162,8 +167,9 @@ bound and restore the saved window on success, failure, hidden-route cancellatio
 or destruction. A quick return to the same chat cannot revive an old capture.
 The local diagnostic key `risu-transcript-legacy-paging=1`, set before chat mount,
 retains the previous paging path for rollback, bypassing residency height observers
-and reconciliation and restoring native scroll anchoring. It does not enforce
-the row bound; interaction admission and stable draft ownership still apply.
+and reconciliation while retaining shared display-body anchor transactions and
+disabled native scroll anchoring. It does not enforce the row bound; interaction
+admission and stable draft ownership still apply.
 
 On chat entry, `Chats.svelte` waits for the newest persisted row to render and
 aligns the beginning of that row with the transcript scrollport's start. A

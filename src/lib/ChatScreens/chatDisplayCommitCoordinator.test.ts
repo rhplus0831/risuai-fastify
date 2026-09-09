@@ -1,13 +1,15 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { createChatDisplayCommitCoordinator } from './chatDisplayCommitCoordinator'
 
 function harness(batchSize = 2) {
   let idle: (() => void) | undefined
   const frames: Array<() => void> = []
   const batches: string[][] = []
+  const preservedAnchors: boolean[] = []
   const coordinator = createChatDisplayCommitCoordinator({
     batchSize,
-    applyBatch(commits) {
+    applyBatch(commits, preserveAnchor) {
+      preservedAnchors.push(preserveAnchor)
       const batch: string[] = []
       commits.forEach((commit) => {
         const previous = currentBatch
@@ -32,17 +34,18 @@ function harness(batchSize = 2) {
     },
   })
   let currentBatch: string[] | undefined
-  const commit = (key: string, signal?: AbortSignal) =>
+  const commit = (key: string, signal?: AbortSignal, preserveAnchor = false) =>
     coordinator.commit(
       key,
       () => {
         currentBatch?.push(key)
       },
-      signal,
+      { signal, preserveAnchor },
     )
   return {
     coordinator,
     batches,
+    preservedAnchors,
     commit,
     idle() {
       const run = idle
@@ -56,6 +59,27 @@ function harness(batchSize = 2) {
 }
 
 describe('chat display commit coordinator', () => {
+  it('preserves explicitly held geometry after idle without forcing anchors on ordinary later updates', () => {
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    const h = harness()
+    try {
+      h.coordinator.noteInteraction()
+      h.idle()
+      clock.mockReturnValue(12_000)
+      h.commit('ordinary')
+      h.frame()
+      h.commit('initial-body', undefined, true)
+      h.frame()
+      h.commit('ordinary-after')
+      h.frame()
+      expect(h.preservedAnchors).toEqual([false, true, false])
+      expect(h.batches).toEqual([['ordinary'], ['initial-body'], ['ordinary-after']])
+    } finally {
+      h.coordinator.destroy()
+      clock.mockRestore()
+    }
+  })
+
   it('holds off-screen completions through interaction, promotes visible rows, and flushes bounded idle batches', () => {
     const h = harness()
     h.coordinator.noteInteraction()

@@ -131,7 +131,12 @@
       if (settle) settleInitialDisplayParse()
     }
     if (displayCommitCoordinator && transcriptRowKey) {
-      displayCommitCoordinator.commit(transcriptRowKey, apply, queuedDisplay?.signal)
+      displayCommitCoordinator.commit(transcriptRowKey, apply, {
+        signal: queuedDisplay?.signal,
+        // Serialized background parsing can outlast the interaction grace. Its
+        // first HTML and placeholder release must still preserve one viewport.
+        preserveAnchor: !initialDisplayParseSettled,
+      })
     } else {
       apply()
     }

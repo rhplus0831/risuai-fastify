@@ -2,7 +2,7 @@
 
 Last audited: 2026-09-04.
 
-Targeted source check: 2026-09-09 (deferred display-body scroll stability).
+Targeted source check: 2026-09-09 (late display-body scroll stability after interaction grace expiry).
 
 This area covers URL/store routing, history and hotkey ownership, character/chat selection, chat folders and forks, transcript hydration, composer and attachment behavior, message rendering/editing/translation, active-chat generation settings, and the browser journeys that prove visible state survives command settlement and reload. Durable command mechanics are analyzed in [Persistence, Commands, and Events](persistence-commands-and-events.md), browser projection mechanics in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md), and generation internals in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
 
@@ -88,8 +88,12 @@ The cached-parser-owner fault protects direct remount readability separately.
 handled-fallback matrix in bounded and diagnostic legacy paging. Each case uses
 tall custom cards and deterministic data images, completes multiple sequential
 older-row display responses during real CDP wheel input, rejects frame-to-frame
-visible-row discontinuities, and requires the same readable anchor to remain
-within one pixel while the idle commit queue drains.
+visible-row discontinuities, then pauses for 1,800 milliseconds with unfinished
+newer rows still below a readable anchor. While those late bodies render,
+animation-frame, after-frame, and DOM-mutation samples require the same anchor
+node and readable body to remain mounted within one pixel of its original
+offset. This catches transient displacement between HTML commits and later
+residency correction, as well as accumulated fractional drift in legacy paging.
 
 The lazy-manifest case checks the 60 registered boundaries; separate first-open
 journeys exercise their named route/dialog entries and visible loading/recovery.

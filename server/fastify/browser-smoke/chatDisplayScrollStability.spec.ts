@@ -31,11 +31,19 @@ interface ViewportFrame {
   visible: Array<{ id: string; top: number; readable: boolean; pending: boolean }>
 }
 
+interface IdleAnchorSample {
+  time: number
+  phase: 'animation-frame' | 'after-frame' | 'mutation'
+  top: number | null
+  readable: boolean
+  sameNode: boolean
+}
+
 for (const responseMode of ['delayed-success', 'handled-fallback'] as const satisfies readonly ResponseMode[]) {
   for (const pagingMode of ['bounded', 'legacy'] as const satisfies readonly PagingMode[]) {
     test(`${responseMode} display bodies preserve the active-scroll anchor in ${pagingMode} paging`, async ({
       page,
-    }) => {
+    }, testInfo) => {
       test.setTimeout(180_000)
       const database = displayScrollFixture()
       const character = (
@@ -109,7 +117,7 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
                   x: bounds.x + bounds.width / 2,
                   y: bounds.y + bounds.height / 2,
                   deltaX: 0,
-                  deltaY: -30,
+                  deltaY: -90,
                 })
                 await page.waitForTimeout(8)
               }
@@ -124,6 +132,10 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
             })(),
             (async () => {
               for (let delivery = 0; delivery < 6; delivery++) {
+                // Let scrolling move past queued rows before their serialized
+                // replies arrive, leaving unfinished newer rows below the
+                // eventual reading position as in the production trace.
+                await page.waitForTimeout(delivery === 0 ? 1_500 : 150)
                 await expect
                   .poll(() => blocked.filter((gate) => !gate.released).length, { timeout: 20_000 })
                   .toBeGreaterThan(0)
@@ -139,9 +151,43 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
 
         expect(deliveredDuringGesture.length).toBeGreaterThanOrEqual(6)
         assertContinuousVisibleRows(frames)
-        const afterGesture = await displayViewport(page)
-        const anchor = afterGesture.visible.find((row) => row.readable && !row.pending)
+        let afterGesture = await displayViewport(page)
+        let anchor = afterGesture.visible.find((row) => row.readable && !row.pending)
+        // A fast gesture can reach an older placeholder before its prioritized
+        // parse runs. Let that visible row become readable while keeping the
+        // skipped newer rows pending below it.
+        for (let promotion = 0; !anchor && promotion < 3; promotion++) {
+          await expect.poll(() => blocked.some((gate) => !gate.released)).toBe(true)
+          const gate = blocked.find((gate) => !gate.released)!
+          gate.release()
+          for (const index of gate.indexes) {
+            await expect(
+              page.locator(`[data-risu-message-id="display-scroll-${index}"] .chat-message-body`),
+            ).toContainText(`${ROW_MARKER} ${index}.`)
+          }
+          afterGesture = await displayViewport(page)
+          anchor = afterGesture.visible.find((row) => row.readable && !row.pending)
+        }
         expect(anchor, 'a stable readable row remains visible when the gesture ends').toBeDefined()
+
+        // Production continued receiving sequential first-body results after the
+        // interaction grace expired. Sample the frames between these late
+        // commits and residency correction, not just the settled viewport.
+        await page.waitForTimeout(1_800)
+        const lateIndexes = await page
+          .locator('[data-transcript-pending-geometry]')
+          .evaluateAll((rows) =>
+            rows.map((row) =>
+              Number(
+                row.querySelector<HTMLElement>('[data-risu-message-id]')?.dataset.risuMessageId?.split('-').at(-1),
+              ),
+            ),
+          )
+        expect(
+          lateIndexes.some((index) => index > Number(anchor!.id.split('-').at(-1))),
+          `late bodies ${lateIndexes.join(',')} include a row newer than anchor ${anchor!.id}`,
+        ).toBe(true)
+        await startIdleAnchorSampling(page, anchor!.id)
 
         releaseImmediately = true
         blocked.forEach((gate) => gate.release())
@@ -169,6 +215,21 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
         )
 
         const settled = await displayViewport(page)
+        const idleSamples = await stopIdleAnchorSampling(page)
+        await testInfo.attach('late-display-anchor-frames', {
+          body: JSON.stringify(idleSamples),
+          contentType: 'application/json',
+        })
+        expect(idleSamples.length).toBeGreaterThan(10)
+        for (const sample of idleSamples) {
+          expect(sample.sameNode, `${sample.phase} at ${sample.time}ms retains the readable anchor node`).toBe(true)
+          expect(sample.readable, `${sample.phase} at ${sample.time}ms retains the anchor body`).toBe(true)
+          expect(sample.top, `${sample.phase} at ${sample.time}ms keeps the anchor mounted`).not.toBeNull()
+          expect(
+            Math.abs(sample.top! - anchor!.top),
+            `${sample.phase} at ${sample.time}ms preserves the anchor through late body commits`,
+          ).toBeLessThanOrEqual(1)
+        }
         const settledAnchor = settled.visible.find((row) => row.id === anchor!.id)
         expect(settledAnchor?.readable, `anchor ${anchor!.id} stays readable after idle flushing`).toBe(true)
         expect(
@@ -196,6 +257,65 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
       }
     })
   }
+}
+
+async function startIdleAnchorSampling(page: Page, id: string): Promise<void> {
+  await page.evaluate(
+    ({ selector, id, marker }) => {
+      const transcript = document.querySelector<HTMLElement>(selector)!
+      const rowSelector = `.risu-chat[data-risu-message-id="${CSS.escape(id)}"]`
+      const original = transcript.querySelector<HTMLElement>(rowSelector)
+      const samples: IdleAnchorSample[] = []
+      const started = performance.now()
+      let frame = 0
+      let stopped = false
+      const timers = new Set<ReturnType<typeof setTimeout>>()
+      const sample = (phase: IdleAnchorSample['phase']) => {
+        if (stopped) return
+        const row = transcript.querySelector<HTMLElement>(rowSelector)
+        samples.push({
+          time: performance.now() - started,
+          phase,
+          top: row ? row.getBoundingClientRect().top - transcript.getBoundingClientRect().top : null,
+          readable: row?.querySelector('.chat-message-body')?.textContent?.includes(marker) ?? false,
+          sameNode: row !== null && row === original,
+        })
+      }
+      const nextFrame = () => {
+        sample('animation-frame')
+        const timer = setTimeout(() => {
+          timers.delete(timer)
+          sample('after-frame')
+        }, 0)
+        timers.add(timer)
+        frame = requestAnimationFrame(nextFrame)
+      }
+      const observer = new MutationObserver(() => sample('mutation'))
+      observer.observe(transcript, { childList: true, subtree: true, attributes: true, characterData: true })
+      frame = requestAnimationFrame(nextFrame)
+      Object.assign(window, {
+        __lateDisplayAnchor: {
+          stop() {
+            stopped = true
+            cancelAnimationFrame(frame)
+            timers.forEach(clearTimeout)
+            observer.disconnect()
+            return samples
+          },
+        },
+      })
+    },
+    { selector: TRANSCRIPT, id, marker: ROW_MARKER },
+  )
+}
+
+async function stopIdleAnchorSampling(page: Page): Promise<IdleAnchorSample[]> {
+  return page.evaluate(() => {
+    const runtime = window as typeof window & { __lateDisplayAnchor?: { stop(): IdleAnchorSample[] } }
+    const samples = runtime.__lateDisplayAnchor!.stop()
+    delete runtime.__lateDisplayAnchor
+    return samples
+  })
 }
 
 function displayScrollFixture(): Record<string, unknown> {

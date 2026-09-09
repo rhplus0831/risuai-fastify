@@ -660,4 +660,62 @@ describe('ChatBody translation parse bounds', () => {
     expect(onInitialDisplayParseSettled).toHaveBeenCalledOnce()
     coordinator.destroy()
   })
+
+  it('preserves the first body anchor when its parse finishes after the interaction grace', async () => {
+    let resolveParse!: (html: string) => void
+    chatBodyMocks.ParseMarkdown.mockReturnValue(new Promise<string>((resolve) => (resolveParse = resolve)))
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(10_000)
+    let idle: (() => void) | undefined
+    let frame: (() => void) | undefined
+    const applyBatch = vi.fn((commits: readonly (() => void)[], _preserveAnchor: boolean) => {
+      flushSync(() => commits.forEach((commit) => commit()))
+    })
+    const coordinator = createChatDisplayCommitCoordinator({
+      applyBatch,
+      scheduleIdle(run) {
+        idle = run
+        return () => {}
+      },
+      scheduleFrame(run) {
+        frame = run
+        return () => {}
+      },
+    })
+    const settled = vi.fn()
+    try {
+      coordinator.noteInteraction()
+      component = mount(ChatBody, {
+        target,
+        context: new Map([[CHAT_DISPLAY_COMMIT_COORDINATOR, coordinator]]),
+        props: {
+          idx: 0,
+          modelShortName: '',
+          msgDisplay: 'late first body',
+          role: 'char',
+          translated: false,
+          translating: false,
+          retranslate: false,
+          allowClientTranslation: false,
+          transcriptRowKey: 'late-row',
+          onInitialDisplayParseSettled: settled,
+        },
+      })
+      flushSync()
+      clock.mockReturnValue(12_000)
+      idle!()
+      resolveParse('late rendered body')
+      await flushComponentPromises()
+      expect(target.textContent).toBe('')
+      expect(settled).not.toHaveBeenCalled()
+
+      frame!()
+      expect(applyBatch).toHaveBeenCalledOnce()
+      expect(applyBatch.mock.calls[0][1]).toBe(true)
+      expect(target.textContent).toBe('late rendered body')
+      expect(settled).toHaveBeenCalledOnce()
+    } finally {
+      coordinator.destroy()
+      clock.mockRestore()
+    }
+  })
 })
