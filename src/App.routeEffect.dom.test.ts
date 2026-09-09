@@ -1,5 +1,7 @@
 import { mount, tick, unmount } from 'svelte'
 import {
+  authenticateClientSessionReadView,
+  authorizeClientWriterRecovery,
   beginClientSession,
   demoteClientSession,
   requireClientAuthentication,
@@ -974,6 +976,30 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
     expect(target.querySelector('[data-testid="preset-list"]')).toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
+  })
+
+  it('keeps an initial managed writer recovery behind the loading boundary', async () => {
+    if (component) {
+      await unmount(component)
+      component = undefined
+    }
+    resetStartupReadinessForTests()
+    configureStartupObserverShell(true)
+    const operation = beginClientSession('writer-a')
+    const ownership = { databaseLineage: 'lineage-a', writer: { sessionId: 'writer-a', epoch: 1 } }
+    expect(authenticateClientSessionReadView(operation, ownership)).toBe(true)
+    expect(authorizeClientWriterRecovery(operation, ownership)).toBe(true)
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    for (const milestone of ['entry', 'shell-mounted', 'observer-ready', 'writer-ready'] as const)
+      recordStartupMilestone(milestone)
+
+    await mountApp()
+
+    expect(target.querySelector('[aria-busy="true"][role="status"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="observer-shell-marker"]')).toBeNull()
+    expect(target.querySelector('[data-testid="app-marker"]')).toBeNull()
+    expect(target.querySelector('[data-risu-conversation-shell]')).toBeNull()
   })
 
   it('clears restricted overlays on loss and late restore while preserving explicit access decisions', async () => {

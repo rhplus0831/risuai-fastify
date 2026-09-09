@@ -138,13 +138,11 @@ test('startup matrix keeps cold and warm small/large populations separate', asyn
       mutationsBeforeWriterReady: 0,
       generationsBeforeChatReady: 0,
     })
-    // Phase 0 regression evidence: the legacy automatic-writer path first
-    // mounts the reader workspace, then replaces its shared shell with a writer
-    // shell. Role-first startup intentionally changes these expectations.
-    expect(entry.workspace.conversationShellMounts).toBe(2)
-    expect(entry.workspace.conversationShellRemovals).toBe(1)
-    expect(entry.workspace.observerWorkspaceMounts).toBe(1)
-    expect(entry.workspace.shellIdentityChanges).toBe(1)
+    expect(entry.server.resources.filter((resource) => resource.resource === 'shell')).toHaveLength(1)
+    expect(entry.workspace.conversationShellMounts).toBe(1)
+    expect(entry.workspace.conversationShellRemovals).toBe(0)
+    expect(entry.workspace.observerWorkspaceMounts).toBe(0)
+    expect(entry.workspace.shellIdentityChanges).toBe(0)
   }
 })
 

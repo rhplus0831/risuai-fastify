@@ -399,8 +399,6 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
         onOperationStarted: (operation) => {
           attemptGeneration = operation.generation
         },
-        onCoherentReadView: (runtime, operation) =>
-          installConnectedReaderProjection(runtime, operation.generation, { subscribe: false }),
         onInitializationRequired: confirmConnectedServerInitialization,
       })
       if (startup.role === 'reader') {
@@ -464,6 +462,17 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
     }
     if (isClientSessionManaged() && getClientSessionSnapshot().authenticated) {
       const state = getClientSessionSnapshot()
+      if (state.lifecycle === 'recovering-writer' && state.writer?.sessionId === state.sessionId) {
+        // Acquisition succeeded, so this page may still be the server writer.
+        // Keep the workspace hidden and revalidate ownership before either
+        // resuming recovery or explicitly settling as a reader.
+        failStartupAttempt(startupAttemptId, failureCode, 'writer-ready')
+        stopFailedWriterPromotionRuntimes()
+        setClientConnectionState('interrupted', attemptGeneration)
+        scheduleConnectedWriterResume()
+        console.warn('Writer recovery remains pending after startup failure:', error)
+        return null
+      }
       if (state.lifecycle === 'resolving' && !state.projectionReady) {
         // A failed initial shell/locale preview has not established readable
         // content or attempted writer acquisition. Retry that startup boundary

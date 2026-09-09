@@ -28,7 +28,6 @@ export function bootstrapOwnership(runtime: ServerBootstrapRuntime): ClientSessi
 export async function resolveConnectedClientStartup(
   options: {
     onOperationStarted?: (operation: ClientSessionOperation) => void
-    onCoherentReadView?: (runtime: ServerBootstrapRuntime, operation: ClientSessionOperation) => Promise<void>
     onInitializationRequired?: (operation: ClientSessionOperation) => Promise<boolean>
   } = {},
 ): Promise<ConnectedStartupResult> {
@@ -46,6 +45,7 @@ export async function resolveConnectedClientStartup(
   }
   let runtime = result.bootstrap
   const ownership = bootstrapOwnership(runtime)
+  if (!authenticateClientSessionReadView(operation, ownership)) throw new Error('Connected startup was superseded')
   let initializationConfirmed = false
   if (
     identity.exclusive === false &&
@@ -60,11 +60,6 @@ export async function resolveConnectedClientStartup(
     (identity.exclusive || initializationConfirmed) &&
     (ownership.writer.sessionId === null || ownership.writer.sessionId === identity.sessionId)
   ) {
-    if (runtime.initialized && options.onCoherentReadView) {
-      if (!authenticateClientSessionReadView(operation, ownership)) throw new Error('Connected startup was superseded')
-      await options.onCoherentReadView(runtime, operation)
-      assertCurrent()
-    }
     // The precondition makes the discovery/acquisition race atomic on the server.
     // In particular, a still-owning reload cannot take back ownership after a
     // different client wins while this read is in flight.

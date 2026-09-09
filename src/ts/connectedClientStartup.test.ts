@@ -32,7 +32,7 @@ beforeEach(() => {
   vi.resetAllMocks()
   api.identity.mockResolvedValue({ sessionId: 'local-tab', exclusive: true, previousSessionId: null })
   api.read.mockResolvedValue(runtime('other-tab'))
-  api.acquire.mockResolvedValue(runtime('local-tab'))
+  api.acquire.mockResolvedValue(runtime('local-tab', { writerEpoch: 5, writer: { sessionId: 'local-tab', epoch: 5 } }))
 })
 
 describe('connected startup ownership discovery', () => {
@@ -63,7 +63,13 @@ describe('connected startup ownership discovery', () => {
 
   it('preserves the first-run owner branch without treating an empty database as a readable projection', async () => {
     api.read.mockResolvedValue(runtime(null, { initialized: false }))
-    api.acquire.mockResolvedValue(runtime('local-tab', { initialized: false }))
+    api.acquire.mockResolvedValue(
+      runtime('local-tab', {
+        initialized: false,
+        writerEpoch: 5,
+        writer: { sessionId: 'local-tab', epoch: 5 },
+      }),
+    )
     const onInitializationRequired = vi.fn(async () => true)
     const result = await resolveConnectedClientStartup({ onInitializationRequired })
     expect(result.role).toBe('writer')
@@ -112,7 +118,7 @@ describe('connected startup ownership discovery', () => {
     const pending = resolveConnectedClientStartup()
     await vi.waitFor(() => expect(api.acquire).toHaveBeenCalledOnce())
     beginClientSession('new-tab')
-    release(runtime('local-tab'))
+    release(runtime('local-tab', { writerEpoch: 5, writer: { sessionId: 'local-tab', epoch: 5 } }))
     await expect(pending).rejects.toThrow('superseded')
     expect(canUseClientRecoveryAccess()).toBe(false)
   })
@@ -136,7 +142,9 @@ describe('connected startup ownership discovery', () => {
     const identity = { sessionId: 'fresh-tab', exclusive: false, previousSessionId: 'originating-tab' }
     api.identity.mockResolvedValue(identity)
     api.read.mockResolvedValue(runtime(null, { initialized: false }))
-    api.acquire.mockResolvedValue(runtime('fresh-tab', { initialized: false }))
+    api.acquire.mockResolvedValue(
+      runtime('fresh-tab', { initialized: false, writerEpoch: 5, writer: { sessionId: 'fresh-tab', epoch: 5 } }),
+    )
     let confirm!: (confirmed: boolean) => void
     const onInitializationRequired = vi.fn(
       () =>
@@ -144,15 +152,13 @@ describe('connected startup ownership discovery', () => {
           confirm = resolve
         }),
     )
-    const onCoherentReadView = vi.fn(async () => {})
-    const startup = resolveConnectedClientStartup({ onInitializationRequired, onCoherentReadView })
+    const startup = resolveConnectedClientStartup({ onInitializationRequired })
     await vi.waitFor(() => expect(onInitializationRequired).toHaveBeenCalledOnce())
 
     expect(onInitializationRequired).toHaveBeenCalledWith(
       expect.objectContaining({ generation: getClientSessionSnapshot().generation, kind: 'startup' }),
     )
     expect(api.acquire).not.toHaveBeenCalled()
-    expect(onCoherentReadView).not.toHaveBeenCalled()
     expect(getClientSessionSnapshot()).toMatchObject({
       sessionId: 'fresh-tab',
       lifecycle: 'resolving',
@@ -183,17 +189,14 @@ describe('connected startup ownership discovery', () => {
     async (decision) => {
       api.identity.mockResolvedValue({ sessionId: 'fresh-tab', exclusive: false, previousSessionId: 'originating-tab' })
       api.read.mockResolvedValue(runtime(null, { initialized: false }))
-      const onCoherentReadView = vi.fn(async () => {})
       const onInitializationRequired = vi.fn(async () => false)
 
       await expect(
         resolveConnectedClientStartup({
-          onCoherentReadView,
           ...(decision === 'declined' ? { onInitializationRequired } : {}),
         }),
       ).rejects.toThrow('Waiting for the server database to be initialized')
       expect(api.acquire).not.toHaveBeenCalled()
-      expect(onCoherentReadView).not.toHaveBeenCalled()
       expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'resolving', projectionReady: false })
       expect(canUseClientRecoveryAccess()).toBe(false)
       expect(canUseClientWriteAccess()).toBe(false)
@@ -263,19 +266,25 @@ describe('connected startup ownership discovery', () => {
     expect(canUseClientWriteAccess()).toBe(false)
   })
 
-  it('publishes an authenticated coherent preview while leaving acquisition and ordinary writes separate', async () => {
+  it('publishes authenticated ownership without a projection before acquisition settles', async () => {
     api.read.mockResolvedValue(runtime(null))
-    api.acquire.mockResolvedValue(
-      runtime('local-tab', { writerEpoch: 5, writer: { sessionId: 'local-tab', epoch: 5 } }),
+    let release!: (value: ReturnType<typeof runtime>) => void
+    api.acquire.mockReturnValue(
+      new Promise((resolve) => {
+        release = resolve
+      }),
     )
-    const onCoherentReadView = vi.fn(async () => {
-      expect(getClientSessionSnapshot()).toMatchObject({ authenticated: true, lifecycle: 'resolving' })
-      expect(canUseClientRecoveryAccess()).toBe(false)
-      expect(canUseClientWriteAccess()).toBe(false)
-      expect(api.acquire).not.toHaveBeenCalled()
+    const startup = resolveConnectedClientStartup()
+    await vi.waitFor(() => expect(api.acquire).toHaveBeenCalledOnce())
+    expect(getClientSessionSnapshot()).toMatchObject({
+      authenticated: true,
+      lifecycle: 'resolving',
+      projectionReady: false,
     })
-    expect((await resolveConnectedClientStartup({ onCoherentReadView })).role).toBe('writer')
-    expect(onCoherentReadView).toHaveBeenCalledOnce()
+    expect(canUseClientRecoveryAccess()).toBe(false)
+    expect(canUseClientWriteAccess()).toBe(false)
+    release(runtime('local-tab', { writerEpoch: 5, writer: { sessionId: 'local-tab', epoch: 5 } }))
+    expect((await startup).role).toBe('writer')
   })
 
   it('requires authentication instead of retrying writer startup after an unauthorized discovery', async () => {

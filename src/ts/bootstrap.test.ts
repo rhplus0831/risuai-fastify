@@ -660,7 +660,7 @@ describe('API-backed client bootstrap', () => {
   })
 
   it.each(['unowned', 'owning'] as const)(
-    'retries a failed initial locale preview before acquiring the %s writer',
+    'keeps a failed %s-writer locale recovery hidden after acquisition',
     async (ownership) => {
       __observerShellFlagTestHooks.setOverride(true)
       const expectedEpoch = ownership === 'unowned' ? 0 : 1
@@ -672,64 +672,38 @@ describe('API-backed client bootstrap', () => {
       )
       const failure = new Error('initial locale chunk unavailable')
       vi.spyOn(languageRuntime, 'awaitLanguageReady').mockRejectedValueOnce(failure)
-      let acknowledge!: () => void
-      vi.mocked(waitAlert).mockImplementationOnce(
-        () =>
-          new Promise<Awaited<ReturnType<typeof waitAlert>>>((resolve) => {
-            acknowledge = () => resolve({ type: 'none', msg: '' })
-          }),
-      )
-      const loading = loadData()
-      try {
-        await vi.waitFor(() => expect(waitAlert).toHaveBeenCalledOnce())
-        expect(alertError).toHaveBeenCalledExactlyOnceWith(failure)
-        expect(bootstrapApi.fetch).not.toHaveBeenCalled()
-        expect(pendingMutationApi.prepare).not.toHaveBeenCalled()
-        expect(pendingMutationApi.replay).not.toHaveBeenCalled()
-        expect(readerApi.start).not.toHaveBeenCalled()
-        expect(getClientSessionSnapshot()).toMatchObject({
-          lifecycle: 'resolving',
-          authenticated: true,
-          projectionReady: false,
-        })
-        expect(getStartupCoordinatorSnapshot().capabilities.canRenderShell).toBe(false)
-        expect(backgroundReady()).toBe(false)
-      } finally {
-        acknowledge?.()
-        await loading
-      }
-      expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(2)
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await loadData()
+
+      expect(waitAlert).not.toHaveBeenCalled()
+      expect(alertError).not.toHaveBeenCalled()
+      expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce()
       expect(bootstrapApi.fetch).toHaveBeenCalledExactlyOnceWith(null, {
         expectedWriter: { epoch: expectedEpoch, databaseLineage: 'database-a' },
       })
       expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
-      expect(getClientSessionSnapshot().lifecycle).toBe('writing')
-      expect(backgroundReady()).toBe(true)
+      expect(readerApi.start).not.toHaveBeenCalled()
+      expect(getClientSessionSnapshot()).toMatchObject({
+        lifecycle: 'recovering-writer',
+        connection: 'interrupted',
+        authenticated: true,
+        projectionReady: false,
+      })
+      expect(getStartupCoordinatorSnapshot().capabilities.canRenderShell).toBe(false)
+      expect(backgroundReady()).toBe(false)
     },
   )
 
-  it('does not retry an initial locale failure after authentication is lost during its alert', async () => {
+  it('clears a pending writer recovery when authentication is lost', async () => {
     __observerShellFlagTestHooks.setOverride(true)
     vi.spyOn(languageRuntime, 'awaitLanguageReady').mockRejectedValueOnce(new Error('initial locale chunk unavailable'))
-    let acknowledge!: () => void
-    vi.mocked(waitAlert).mockImplementationOnce(
-      () =>
-        new Promise<Awaited<ReturnType<typeof waitAlert>>>((resolve) => {
-          acknowledge = () => resolve({ type: 'none', msg: '' })
-        }),
-    )
-    const loading = loadData()
-    try {
-      await vi.waitFor(() => expect(waitAlert).toHaveBeenCalledOnce())
-      requireClientAuthentication()
-    } finally {
-      acknowledge?.()
-      await loading
-    }
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await loadData()
+    requireClientAuthentication()
     expect(getClientSessionSnapshot().lifecycle).toBe('auth-required')
     expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce()
-    expect(bootstrapApi.fetch).not.toHaveBeenCalled()
-    expect(pendingMutationApi.replay).not.toHaveBeenCalled()
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
     expect(readerApi.start).not.toHaveBeenCalled()
   })
 
@@ -821,18 +795,23 @@ describe('API-backed client bootstrap', () => {
     expect(readerApi.start).not.toHaveBeenCalled()
   })
 
-  it('parks retained pending intent and opens a reader projection when writer recovery cannot finish', async () => {
+  it('keeps retained pending intent in hidden writer recovery until ownership is revalidated', async () => {
     __observerShellFlagTestHooks.setOverride(true)
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     pendingMutationApi.replay.mockResolvedValue({ attempted: 1, discarded: 0, retained: 1, succeeded: 0 })
     await loadData()
-    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'recovering-writer',
+      connection: 'interrupted',
+      projectionReady: false,
+    })
     expect(getStartupCoordinatorSnapshot().capabilities.canMutate).toBe(false)
-    expect(readerApi.start).toHaveBeenCalledOnce()
+    expect(getStartupCoordinatorSnapshot().capabilities.canRenderShell).toBe(false)
+    expect(readerApi.start).not.toHaveBeenCalled()
     expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
     expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
-    expect(resourceApi.loadInitial).toHaveBeenCalledOnce()
-    expect(resourceApi.readAll).toHaveBeenCalledOnce()
+    expect(resourceApi.loadInitial).not.toHaveBeenCalled()
+    expect(resourceApi.readAll).not.toHaveBeenCalled()
     expect(loadPlugins).not.toHaveBeenCalled()
   })
 

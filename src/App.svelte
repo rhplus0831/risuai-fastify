@@ -82,6 +82,7 @@
   import { loadGrid, loadSettings } from './ts/routeComponentPreload'
   import { pushNotificationCoordinatorState } from './ts/server/pushNotificationState'
   import { pushNotificationWarningDismissed } from './ts/gui/pushNotificationWarningPreference'
+  import { workspaceAccessStore } from './ts/workspaceAccess'
 
   const loadAlert = () => import('./lib/Others/AlertComp.svelte')
   const loadPushNotificationWarning = () => import('./lib/Others/PushNotificationWarning.svelte')
@@ -111,7 +112,9 @@
   let signingInReader = $state(false)
   let retryingPluginRuntime = $state(false)
   let generationRecoveryAction = $state<'idle' | 'retrying' | 'discarding'>('idle')
-  let connectedReaderView = $derived($clientSessionStore.managed && !canUseClientWriteAccess())
+  let connectedReaderView = $derived(
+    $workspaceAccessStore.mode === 'read-only' || $workspaceAccessStore.mode === 'promoting',
+  )
   async function signInReader(): Promise<void> {
     if (signingInReader || $clientSessionStore.lifecycle !== 'auth-required') return
     signingInReader = true
@@ -124,16 +127,23 @@
       signingInReader = false
     }
   }
-  let canApplyWriterRoutes = $derived($startupCoordinatorStore.capabilities.canApplyRoutes && !connectedReaderView)
+  let canApplyWriterRoutes = $derived($workspaceAccessStore.canApplyWriterRoute)
+  let workspaceIsBooting = $derived(
+    $clientSessionStore.managed
+      ? $workspaceAccessStore.mode === 'booting'
+      : !$startupCoordinatorStore.capabilities.canRenderShell,
+  )
   let pluginStartupFailed = $derived($startupCoordinatorStore.failures.pluginsReady !== undefined)
   let pluginRuntimeFailed = $derived($pluginRuntimeStateStore.phase === 'error')
   let generationRecoveryStartupFailed = $derived(
     $startupCoordinatorStore.failures.canGenerate?.failureCode === 'generation-recovery-failed',
   )
   let preWriterObserverMode = $derived(
-    $startupCoordinatorStore.capabilities.canRenderShell &&
-      (connectedReaderView ||
-        ($startupCoordinatorStore.observerShellEnabled && !$startupCoordinatorStore.capabilities.canApplyRoutes)),
+    connectedReaderView ||
+      (!$clientSessionStore.managed &&
+        $startupCoordinatorStore.capabilities.canRenderShell &&
+        $startupCoordinatorStore.observerShellEnabled &&
+        !$startupCoordinatorStore.capabilities.canApplyRoutes),
   )
   let renderedRoute = $state($currentRoute)
   let routeLoadingVisible = $state(false)
@@ -616,7 +626,7 @@
         {language.connectedReaders.signIn}
       </button>
     </div>
-  {:else if !$startupCoordinatorStore.capabilities.canRenderShell}
+  {:else if workspaceIsBooting}
     <div
       class="w-full h-full flex justify-center items-center text-textcolor text-xl bg-bgcolor flex-col"
       role="status"
