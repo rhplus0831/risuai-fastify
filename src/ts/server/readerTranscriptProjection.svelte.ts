@@ -60,6 +60,8 @@ export const READER_NAVIGATION_SETTING_KEYS = [
   'customCSS',
   'menuSideBar',
   'showFolderName',
+  'desktopSidebarColumns',
+  'mobileSidebarColumns',
   'hamburgerButtonBottom',
   'chatLoadInitialPages',
   'chatLoadAdditionalPages',

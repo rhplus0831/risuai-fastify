@@ -90,7 +90,7 @@
     getCharacterResourceOwner,
     settingsResourceState,
   } from 'src/ts/server/resourceState.svelte'
-  import { normalizeDesktopSidebarColumns, normalizeMobileSidebarColumns } from '@risuai/shared-core/sidebar-columns'
+  import { resolveShellGeometry } from 'src/ts/gui/shellGeometry'
 
   const loadCharConfig = () => import('./CharConfig.svelte')
   const loadDevTool = () => import('./DevTool.svelte')
@@ -511,13 +511,15 @@
   let hamburgerButtonBottom = $derived(sidebarBooleanSetting('hamburgerButtonBottom', 'sidebar'))
   let showFolderName = $derived(sidebarBooleanSetting('showFolderName', 'display'))
   let enableDevTools = $derived(sidebarBooleanSetting('enableDevTools', 'advanced'))
-  let desktopSidebarColumns = $derived(
-    normalizeDesktopSidebarColumns(sidebarNumberSetting('desktopSidebarColumns', 'display', 1)),
+  let sidebarGeometry = $derived(
+    resolveShellGeometry({
+      responsive: $DynamicGUI,
+      sideBarSize: $sideBarSize,
+      desktopSidebarColumns: sidebarNumberSetting('desktopSidebarColumns', 'display', 1),
+      mobileSidebarColumns: sidebarNumberSetting('mobileSidebarColumns', 'display', 1),
+    }),
   )
-  let mobileSidebarColumns = $derived(
-    normalizeMobileSidebarColumns(sidebarNumberSetting('mobileSidebarColumns', 'display', 1)),
-  )
-  let sidebarColumns = $derived($DynamicGUI ? mobileSidebarColumns : desktopSidebarColumns)
+  let sidebarColumns = $derived(sidebarGeometry.columns)
   let warningChatIds = $derived(collectExhaustedGenerationChatIds($generationJobLifecycles))
   let generatingChatIds = $derived(
     collectGeneratingChatIds($activeGenerationJobs, $activeChatGenerations, warningChatIds),
@@ -1229,20 +1231,15 @@
 <div
   class="setting-area h-full flex-col overflow-y-auto overflow-x-hidden bg-darkbg py-6 text-textcolor max-h-full"
   class:risu-sidebar={!$sideBarClosing}
-  class:w-96={$sideBarSize === 0}
-  class:w-110={$sideBarSize === 1}
-  class:w-124={$sideBarSize === 2}
-  class:w-138={$sideBarSize === 3}
   class:risu-sidebar-close={$sideBarClosing}
-  class:min-w-96={!$DynamicGUI && $sideBarSize === 0}
-  class:min-w-110={!$DynamicGUI && $sideBarSize === 1}
-  class:min-w-124={!$DynamicGUI && $sideBarSize === 2}
-  class:min-w-138={!$DynamicGUI && $sideBarSize === 3}
   class:px-2={$DynamicGUI}
   class:px-4={!$DynamicGUI}
   class:dynamic-sidebar={$DynamicGUI}
   class:hidden
   class:flex={!hidden}
+  style:width={sidebarGeometry.panelWidth}
+  style:min-width={$DynamicGUI ? undefined : sidebarGeometry.panelWidth}
+  data-risu-shell-sidebar-panel
   onanimationend={() => {
     if ($sideBarClosing) {
       $sideBarClosing = false

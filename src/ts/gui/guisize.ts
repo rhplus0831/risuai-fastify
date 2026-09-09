@@ -2,6 +2,7 @@ import { writable } from 'svelte/store'
 import { cachedDisplaySize, runtimeDisplaySettingsOwner } from './displaySettings'
 import { applyDisplayStyles, cacheDisplaySettings } from './displaySettingsCache'
 import { settingsResourceState } from '../server/resourceState.svelte'
+import { normalizeSidebarSize, sidebarPanelWidthRem } from './shellGeometry'
 
 export let textAreaSize = writable(cachedDisplaySize('textAreaSize'))
 export let sideBarSize = writable(cachedDisplaySize('sideBarSize'))
@@ -25,8 +26,9 @@ export function updateGuisize() {
     textAreaTextSize.set(db.textAreaTextSize)
   }
   if (typeof db.sideBarSize === 'number' && Number.isFinite(db.sideBarSize)) {
-    sideBarSize.set(db.sideBarSize)
-    applyDisplayStyles({ '--sidebar-size': 24 + 4 * db.sideBarSize + 'rem' })
+    const normalized = normalizeSidebarSize(db.sideBarSize)
+    sideBarSize.set(normalized)
+    applyDisplayStyles({ '--sidebar-size': `${sidebarPanelWidthRem(normalized)}rem` })
   }
   cacheDisplaySettings(
     db,

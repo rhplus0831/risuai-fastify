@@ -380,7 +380,14 @@ describe('authoritative reader display metadata', () => {
     expect(
       applySettingsResource({
         revision: 2,
-        settings: { theme: 'waifu', customFont: 'serif', zoomsize: 115, translatorPrompt: 'private' },
+        settings: {
+          theme: 'waifu',
+          customFont: 'serif',
+          zoomsize: 115,
+          desktopSidebarColumns: 4,
+          mobileSidebarColumns: 2,
+          translatorPrompt: 'private',
+        },
       }),
     ).toBe(true)
     order[0].name = 'Changed caller input'
@@ -395,7 +402,13 @@ describe('authoritative reader display metadata', () => {
       chats: [{ folderId: 'folder-a', pinned: true }],
       backgroundHTML: '<p>Confirmed background</p>',
     })
-    expect(getReaderNavigationSettings()).toMatchObject({ theme: 'waifu', customFont: 'serif', zoomsize: 115 })
+    expect(getReaderNavigationSettings()).toMatchObject({
+      theme: 'waifu',
+      customFont: 'serif',
+      zoomsize: 115,
+      desktopSidebarColumns: 4,
+      mobileSidebarColumns: 2,
+    })
     expect(getReaderNavigationSettings()).not.toHaveProperty('translatorPrompt')
   })
 
