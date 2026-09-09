@@ -42,7 +42,7 @@ export interface BridgeFamilyObservation {
 }
 
 export interface TemporarySeamObservation {
-  id: 'character-aggregate-endpoint' | 'observer-shell-rollout'
+  id: 'character-aggregate-endpoint'
   file: string
   marker: string
   count: number
@@ -170,10 +170,6 @@ const TEMPORARY_SEAM_MARKERS = [
   {
     id: 'character-aggregate-endpoint' as const,
     markers: ['/api/v1/characters/aggregate', '/characters/aggregate'],
-  },
-  {
-    id: 'observer-shell-rollout' as const,
-    markers: ['VITE_FAST_BOOTSTRAP_OBSERVER', 'risu:fast-bootstrap-observer-shell'],
   },
 ]
 
@@ -547,19 +543,11 @@ export function createClientResourceBaseline(
     }),
     temporarySeams: observation.temporarySeams.map((seam) => ({
       ...seam,
-      owner:
-        seam.id === 'character-aggregate-endpoint'
-          ? 'Fastify compatibility character/chat resource read'
-          : 'deployment-owned pre-writer observer-shell rollout',
-      disposition:
-        seam.id === 'character-aggregate-endpoint'
-          ? 'retained external compatibility; first-party production clients use narrow owners'
-          : 'retained operational rollout control; production ignores the smoke-only session override',
+      owner: 'Fastify compatibility character/chat resource read',
+      disposition: 'retained external compatibility; first-party production clients use narrow owners',
       migrationPhase: 'Workstream 3 Phase 7 retained-seam decision',
       removalTrigger:
-        seam.id === 'character-aggregate-endpoint'
-          ? 'Remove after path-only access telemetry records zero supported-client requests for 30 consecutive days.'
-          : 'Remove after deployment telemetry satisfies the documented observer-shell safety and latency thresholds.',
+        'Remove after path-only access telemetry records zero supported-client requests for 30 consecutive days.',
     })),
   }
 }
