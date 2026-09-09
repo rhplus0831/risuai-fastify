@@ -140,8 +140,6 @@ describe('display paint cache', () => {
   it('uses theme colors for both loading surfaces', () => {
     expect(entryHtml.match(/id="preloading"[\s\S]*?>/)?.[0]).toContain('bg-bgcolor')
     const app = readFileSync('src/App.svelte', 'utf8')
-    expect(app.match(/!\$startupCoordinatorStore.capabilities.canRenderShell}[\s\S]*?role="status"/)?.[0]).toContain(
-      'bg-bgcolor',
-    )
+    expect(app.match(/\{:else if workspaceIsBooting\}[\s\S]*?role="status"/)?.[0]).toContain('bg-bgcolor')
   })
 })

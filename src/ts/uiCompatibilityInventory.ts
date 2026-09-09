@@ -119,11 +119,12 @@ export const phase4ControlInventory: readonly UiCompatibilityControlGroup[] = [
   {
     source: 'src/App.svelte',
     owner: 'route-state',
-    controls: [
-      'responsive-shell:shared-sidebar-dialog',
-      'testid:route-resource-error',
-      'testid:route-resource-loading',
-    ],
+    controls: ['testid:route-resource-error', 'testid:route-resource-loading'],
+  },
+  {
+    source: 'src/lib/ConversationShell.svelte',
+    owner: 'route-state',
+    controls: ['responsive-shell:shared-sidebar-dialog'],
   },
   {
     source: 'src/lib/UI/GUI/SideBarArrow.svelte',

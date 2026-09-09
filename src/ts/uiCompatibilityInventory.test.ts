@@ -184,6 +184,8 @@ describe('Phase 4 UI compatibility inventory', () => {
 
   it('pins the signed shared responsive shell in place of the unmounted baseline mobile shell', () => {
     const appSource = read('src/App.svelte')
+    const workspaceSource = read('src/lib/Workspace.svelte')
+    const shellSource = read('src/lib/ConversationShell.svelte')
     const storesSource = read('src/ts/stores.svelte.ts')
     const legacyImports = productionFiles(path.join(root, 'src')).filter((file) => {
       if (phase4ResponsiveShellClassification.baselineShell.some((component) => file.endsWith(`${component}.svelte`))) {
@@ -206,9 +208,17 @@ describe('Phase 4 UI compatibility inventory', () => {
     expect(legacyImports).toEqual([])
     expect(betaMobileGuiOwners).toEqual([])
     expect(storesSource).toContain(`DynamicGUI.set(${phase4ResponsiveShellClassification.currentBreakpoint})`)
-    expect(appSource).toContain('{:else if $sideBarStore}')
-    expect(appSource).toContain(`data-risu-responsive-shell="${phase4ResponsiveShellClassification.currentShell}"`)
-    expect(appSource).toContain('use:modalFocusTrap')
+    expect(appSource).toContain('<Workspace')
+    expect(appSource).toContain('writerNavigationOpen={$sideBarStore}')
+    expect(workspaceSource).toContain('<ConversationShell')
+    expect(workspaceSource).toContain('responsive={$DynamicGUI}')
+    expect(workspaceSource).toContain(
+      'navigationOpen={readerMode ? !$DynamicGUI || readerNavigationOpen : writerNavigationOpen}',
+    )
+    expect(shellSource).toContain('{:else if responsive && (navigationOpen || preserveResponsiveNavigation)}')
+    expect(shellSource).toContain(`data-risu-responsive-shell="${phase4ResponsiveShellClassification.currentShell}"`)
+    expect(shellSource).toContain('use:conditionalModalFocusTrap={navigationOpen}')
+    expect(shellSource).toContain('modalFocusTrap(node)')
     expect(appSource).toContain('<Sidebar')
     expect(appSource).toContain('<ChatScreen')
     for (const component of phase4ResponsiveShellClassification.baselineShell) {
