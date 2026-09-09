@@ -470,7 +470,9 @@
       data-reader-panel-tone={panelAppearance.tone}
       data-reader-character-id={characterId}
       data-reader-chat-id={chatId}>
-      <div class="flex shrink-0 items-center justify-between gap-3 border-b border-textcolor/15 px-4 py-3">
+      <div
+        class="flex shrink-0 items-center justify-between gap-3 border-b border-textcolor/15 py-3 pl-4 pr-16 sm:pr-48"
+        data-reader-transcript-header>
         <div class="min-w-0">
           <h2 id="reader-chat-heading" class="truncate text-lg font-semibold">
             {displayChat?.name ?? language.connectedReaders.conversation}

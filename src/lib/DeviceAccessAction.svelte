@@ -67,7 +67,9 @@
             if (!switchDisabled) onUseThisDevice()
           }}>
           <LockKeyholeIcon size={16} aria-hidden="true" />
-          {switchInProgress ? language.connectedReaders.switchingDevice : language.connectedReaders.useThisDevice}
+          <span class="hidden sm:inline">
+            {switchInProgress ? language.connectedReaders.switchingDevice : language.connectedReaders.useThisDevice}
+          </span>
         </button>
       {:else if retryAvailable}
         <button
@@ -93,7 +95,7 @@
 
 <style>
   aside {
-    top: max(4.5rem, calc(env(safe-area-inset-top) + 3.5rem));
+    top: max(0.75rem, env(safe-area-inset-top));
     right: max(0.75rem, env(safe-area-inset-right));
   }
 </style>

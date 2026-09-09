@@ -161,7 +161,7 @@ async function expectReader(page: Page, chatId: string): Promise<void> {
     { timeout: 30_000 },
   )
   await expect(page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', chatId)
-  await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
+  await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
   await expect(page.locator('[data-observer-writer-retry]')).toHaveCount(0)
   await expect(page.getByRole('button', { name: 'Disconnect', exact: true })).toHaveCount(0)
   expect(
@@ -176,6 +176,8 @@ function messageBody(page: Page, id: string) {
 async function openReaderNavigation(page: Page): Promise<void> {
   const toggle = page.locator('[data-reader-navigation-toggle]')
   if ((await toggle.isVisible()) && (await toggle.getAttribute('aria-expanded')) === 'false') await toggle.click()
+  const back = page.locator('[data-reader-go-back]')
+  if (await back.isVisible()) await back.click()
 }
 
 async function writerCommand(page: Page, commandPath: string, body: Record<string, unknown>): Promise<number> {
@@ -421,8 +423,11 @@ test('a mobile connected Reader follows committed updates and browses locally wi
     await reader.goBack()
     await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_A}`)
     await reader.goBack()
+    await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
+    await reader.goBack()
     await expect(reader).toHaveURL(`${harness.baseUrl}${ROUTE_B}`)
     await expect(messageBody(reader, 'connected-reader-copy-message')).toHaveText(COPY_TEXT)
+    await reader.goForward()
     await reader.goForward()
     await reader.goForward()
     await expect(reader).toHaveURL(`${harness.baseUrl}${ROUTE_A}`)
