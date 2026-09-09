@@ -273,6 +273,14 @@ shared-dependency, per-target fingerprint, transcript-size, and per-batch cache
 outcome fields so regressions can be separated from actual script execution
 time.
 
+When remote/browser diagnostic collection is enabled, a content-free
+`display-performance` v2 event additionally exports per-batch queue, preparation,
+conversion and cache measurements under the request UID without raw metrics.
+Persistence loading and strict decoding have separate timings. Cache hits omit
+unexecuted conversion stages, and failed/stale/aborted batches retain reached
+stages. See [remote diagnostics](development-and-observability.md) for measurement
+boundaries and the helper query.
+
 A generation-input shape that the narrow display decoder cannot support is a
 handled compatibility boundary: the route returns HTTP 200 with one
 `client_fallback` / `scope_input_incompatible` entry per target, so the browser

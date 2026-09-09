@@ -183,6 +183,32 @@ JSON instance path, array index, persisted value, or character/chat/message
 identifiers. Other failure kinds cannot carry validator metadata, and browser
 uploads cannot publish this server-only family.
 
+Each accepted display-source service batch also emits one v2-only
+`display-performance` event under its request UID, independently of
+`RISU_PROTOCOL_METRICS`. It records requested/visited/executed target counts,
+transcript message count when known, cache hits/misses/in-flight joins and
+streaming bypasses, and final result counts when a response exists. Failed,
+stale, handled-fallback and aborted work retains the measurements reached so
+far; stages that never ran are absent, including conversion stages on cache
+hits. A cache miss counts an attempted conversion even when that attempt fails.
+No message text, domain IDs, page-session IDs, source/dependency hashes or raw
+metric payloads enter the summary. Browser uploads cannot publish this family;
+v1 exports omit it.
+
+`durationMs` covers service enqueue through completion, including
+`queueWaitMs`; it excludes route authentication/body validation and HTTP response
+serialization. `queueDepth` counts earlier unfinished batches at enqueue, and
+`timeToFirstTransformMs`, when present, also starts at enqueue. The closed
+`timings` object reports accumulated milliseconds for revision/namespace checks,
+scope persistence load, scope decode, scope resolution, module resolution,
+shared dependency hashing, source/target hashing, target setup, Lua, declarative
+triggers, regex/CBS, target cleanup and postcondition checks. These are measured
+stage totals rather than a complete accounting of service duration. In this
+event, `scopeLoadMs` excludes decoding; the older raw `display_source_batch`
+metric's `scopeLoadMs` includes both. Pair the summary with the same UID's HTTP
+event to identify time outside the service. Browser HTTP duration ends when
+`fetch` resolves and excludes subsequent JSON/Markdown/DOM work.
+
 Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
 hour), limit (default 50, maximum 200), generated requestUid/operationRef,
 category, and cursor. V1 has no operation references and returns no matching
@@ -206,6 +232,7 @@ private transferred config, then run:
 ```sh
 pnpm diagnostics:remote --limit=50
 pnpm diagnostics:remote --version=2 --requestUid=<generated-request-uid>
+pnpm diagnostics:remote --version=2 --category=display-performance --requestUid=<generated-request-uid>
 pnpm diagnostics:remote --version=2 --operationRef=<opaque-operation-reference>
 pnpm diagnostics:remote --version=2 --cursor=<returned-cursor>
 ```

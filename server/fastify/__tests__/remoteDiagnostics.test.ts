@@ -7,6 +7,7 @@ import {
   isRemoteDiagnosticsResponse,
   parseRemoteDiagnosticsQuery,
   SUPPORT_DIAGNOSTICS_ENDPOINT,
+  type DiagnosticEventV2,
 } from '@risuai/protocol/remote-diagnostics'
 import { buildApp } from '../src/app.js'
 import { openDatabase } from '../src/db.js'
@@ -85,6 +86,169 @@ async function harness(options: { enabled?: boolean; collection?: boolean; bypas
 }
 
 describe('remote support diagnostics', () => {
+  it('exports display preparation and conversion timings with cache counts even when raw metrics are off', async () => {
+    vi.stubEnv('RISU_PROTOCOL_METRICS', '0')
+    const h = await harness()
+    const { assertion } = await setupAuthedClient(h.app)
+    const privateText = 'PRIVATE-DISPLAY-PERFORMANCE-CONTENT'
+    const db = openDatabase(h.dataDir)
+    let revision: number
+    try {
+      revision = (
+        await applyImport(
+          db,
+          h.dataDir,
+          normalizeRisuSaveSnapshotDatabase({
+            characters: [
+              {
+                chaId: 'performance-character',
+                name: privateText,
+                customscript: [{ in: 'hello', out: 'rendered', type: 'editdisplay' }],
+                chats: [
+                  {
+                    id: 'performance-chat',
+                    message: [
+                      { role: 'char', data: `hello ${privateText}`, chatId: 'performance-message-1' },
+                      { role: 'user', data: 'hello again', chatId: 'performance-message-2' },
+                    ],
+                  },
+                ],
+              },
+            ],
+          }),
+        )
+      ).revision
+    } finally {
+      db.close()
+    }
+    const payload = {
+      protocolVersion: 1,
+      baseRevision: revision,
+      context: { pageSessionId: 'performance-private-page' },
+      targets: [`hello ${privateText}`, 'hello again'].map((source, index) => ({
+        requestKey: `performance-request-${index}`,
+        characterId: 'performance-character',
+        messageId: `performance-message-${index + 1}`,
+        index,
+        role: index === 0 ? 'char' : 'user',
+        firstMessage: false,
+        layer: 'original',
+        source,
+        sourceHash: createHash('sha256').update(source).digest('hex'),
+        projectionEpoch: index,
+      })),
+    }
+    type PerformanceEvent = Extract<DiagnosticEventV2, { category: 'display-performance' }>
+    const run = async (body: Record<string, unknown> = payload, statusCode = 200) => {
+      const response = await h.app.inject({
+        method: 'POST',
+        url: '/api/v1/chats/performance-chat/display-sources',
+        headers: { 'risu-auth': assertion },
+        payload: body,
+      })
+      expect(response.statusCode).toBe(statusCode)
+      await vi.waitFor(() => expect(h.diagnostics.journal!.read().pending).toBe(0))
+      const evidence = await h.app.inject({
+        url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=2&category=display-performance&requestUid=${response.headers['x-request-uid']}`,
+        headers: h.headers,
+      })
+      expect(evidence.statusCode).toBe(200)
+      expect(isRemoteDiagnosticsResponse(evidence.json())).toBe(true)
+      expect(evidence.json().entries).toHaveLength(1)
+      const entry = evidence.json().entries[0].entry as PerformanceEvent
+      expect(entry).toMatchObject({
+        source: 'server',
+        correlation: 'request',
+        requestUid: response.headers['x-request-uid'],
+        category: 'display-performance',
+        targetCount: 2,
+      })
+      for (const canary of [
+        privateText,
+        'performance-character',
+        'performance-chat',
+        'performance-message',
+        'performance-private-page',
+        payload.targets[0].sourceHash,
+        response.json().contextFingerprint,
+      ]) {
+        if (canary) expect(evidence.body).not.toContain(canary)
+      }
+      return { entry, response }
+    }
+    const first = await run()
+    expect(first.response.json().entries.map((entry: { displaySource: string }) => entry.displaySource)).toEqual([
+      `rendered ${privateText}`,
+      'rendered again',
+    ])
+    expect(first.entry).toMatchObject({
+      outcome: 'ok',
+      visitedTargetCount: 2,
+      executedTargetCount: 2,
+      cacheHitCount: 0,
+      cacheMissCount: 2,
+      inflightJoinCount: 0,
+      streamingBypassCount: 0,
+      transcriptMessageCount: 2,
+      resultCounts: { ok: 2, clientFallback: 0, stale: 0, error: 0 },
+      timeToFirstTransformMs: expect.any(Number),
+      timings: {
+        scopeLoadMs: expect.any(Number),
+        scopeDecodeMs: expect.any(Number),
+        sharedDependencyMs: expect.any(Number),
+        targetFingerprintMs: expect.any(Number),
+        targetSetupMs: expect.any(Number),
+        luaMs: expect.any(Number),
+        triggerMs: expect.any(Number),
+        regexMs: expect.any(Number),
+        targetCleanupMs: expect.any(Number),
+        postconditionMs: expect.any(Number),
+      },
+    })
+    expect(first.entry.durationMs).toBeGreaterThanOrEqual(first.entry.queueWaitMs)
+    const second = await run()
+    expect(second.entry).toMatchObject({ outcome: 'ok', cacheHitCount: 2, cacheMissCount: 0, executedTargetCount: 0 })
+    expect(second.entry.timings.scopeLoadMs).toEqual(expect.any(Number))
+    expect(second.entry.timings.sharedDependencyMs).toEqual(expect.any(Number))
+    expect(second.entry.timings.luaMs).toBeUndefined()
+    expect(second.entry.timeToFirstTransformMs).toBeUndefined()
+    const streaming = await run({
+      ...payload,
+      targets: payload.targets.map((target, index) => ({ ...target, streaming: index === 0 })),
+    })
+    expect(streaming.entry).toMatchObject({
+      outcome: 'ok',
+      cacheHitCount: 1,
+      cacheMissCount: 0,
+      streamingBypassCount: 1,
+      executedTargetCount: 1,
+    })
+    const stale = await run({ ...payload, baseRevision: revision - 1 }, 409)
+    expect(stale.entry).toMatchObject({ outcome: 'stale', visitedTargetCount: 0, executedTargetCount: 0 })
+    expect(stale.entry.timings.revisionMs).toEqual(expect.any(Number))
+    expect(stale.entry.timings.scopeLoadMs).toBeUndefined()
+    expect(stale.entry.resultCounts).toBeUndefined()
+    const partial = await run({
+      ...payload,
+      targets: payload.targets.map((target, index) =>
+        index === 0 ? { ...target, sourceHash: '0'.repeat(64) } : target,
+      ),
+    })
+    expect(partial.entry).toMatchObject({
+      outcome: 'partial',
+      visitedTargetCount: 2,
+      executedTargetCount: 0,
+      cacheHitCount: 1,
+      resultCounts: { ok: 1, clientFallback: 0, stale: 0, error: 1 },
+    })
+    const legacy = await h.app.inject({
+      url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=1&requestUid=${first.response.headers['x-request-uid']}`,
+      headers: h.headers,
+    })
+    expect(isRemoteDiagnosticsResponse(legacy.json())).toBe(true)
+    expect(legacy.body).not.toContain('display-performance')
+  })
+
   it('negotiates joined manual v2 reads with ordinary app auth while preserving exact v1 fallback', async () => {
     const h = await harness()
     const { assertion } = await setupAuthedClient(h.app)
@@ -331,6 +495,25 @@ describe('remote support diagnostics', () => {
     const correlatedEntries = evidence.json().entries as Array<{ entry: { category: string } }>
     expect(correlatedEntries.filter((record) => record.entry.category === 'display')).toHaveLength(1)
     expect(correlatedEntries.filter((record) => record.entry.category === 'runtime')).toHaveLength(0)
+    expect(evidence.json().entries).toContainEqual(
+      expect.objectContaining({
+        entry: expect.objectContaining({
+          category: 'display-performance',
+          outcome: 'client-fallback',
+          targetCount: 2,
+          visitedTargetCount: 0,
+          executedTargetCount: 0,
+          resultCounts: { ok: 0, clientFallback: 2, stale: 0, error: 0 },
+          timings: {
+            revisionMs: expect.any(Number),
+            namespaceMs: expect.any(Number),
+            scopeLoadMs: expect.any(Number),
+            scopeDecodeMs: expect.any(Number),
+            postconditionMs: expect.any(Number),
+          },
+        }),
+      }),
+    )
 
     const malformedCanary = 'PRIVATE-DISPLAY-MALFORMED-JSON-CANARY'
     const malformedDb = openDatabase(h.dataDir)
@@ -366,6 +549,18 @@ describe('remote support diagnostics', () => {
       }),
     )
     expect(malformedEvidence.body).not.toContain(malformedCanary)
+    const failedPerformance = await h.app.inject({
+      url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?version=2&category=display-performance&requestUid=${malformedFailure.headers['x-request-uid']}`,
+      headers: h.headers,
+    })
+    expect(failedPerformance.json().entries).toHaveLength(1)
+    expect(failedPerformance.json().entries[0].entry).toMatchObject({
+      outcome: 'failed',
+      executedTargetCount: 0,
+      timings: { scopeLoadMs: expect.any(Number) },
+    })
+    expect(failedPerformance.json().entries[0].entry.timings.scopeDecodeMs).toBeUndefined()
+    expect(failedPerformance.body).not.toContain(malformedCanary)
   })
 
   it('distinguishes bad query, empty result, expired cursor and effective throttling', async () => {

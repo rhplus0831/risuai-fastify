@@ -162,6 +162,57 @@ describe('remote diagnostics helper with real HTTPS and CLI processes', () => {
     expect(result.stdout).not.toContain(canary)
   })
 
+  it('fetches request-correlated v2 display performance through the real CLI', async () => {
+    const requestUid = 'a'.repeat(64)
+    const value: RemoteDiagnosticsResponse = {
+      ...envelope,
+      version: 2,
+      clock: { ordering: 'server-sequence', browserTime: 'client-asserted', skew: 'unknown' },
+      collection: { pending: 0, operationContinuity: 'retained' },
+      entries: [
+        {
+          sequence: 1,
+          receivedAt: 1000,
+          instanceId,
+          provenance: { kind: 'server' },
+          entry: {
+            timestamp: 1000,
+            source: 'server',
+            level: 'info',
+            correlation: 'request',
+            requestUid,
+            category: 'display-performance',
+            outcome: 'ok',
+            durationMs: 185,
+            queueWaitMs: 2,
+            queueDepth: 0,
+            targetCount: 2,
+            visitedTargetCount: 2,
+            executedTargetCount: 0,
+            cacheHitCount: 2,
+            cacheMissCount: 0,
+            inflightJoinCount: 0,
+            streamingBypassCount: 0,
+            resultCounts: { ok: 2, clientFallback: 0, stale: 0, error: 0 },
+            timings: { scopeLoadMs: 170, scopeDecodeMs: 1, sharedDependencyMs: 10 },
+          },
+        },
+      ],
+    }
+    handler = (_request, response) => {
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify(value))
+    }
+    const result = await run(['--version=2', '--category=display-performance', `--requestUid=${requestUid}`])
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(JSON.parse(result.stdout)).toEqual(value)
+    expect(requests[0].url).toBe(
+      `/api/v1/support/diagnostics?version=2&category=display-performance&requestUid=${requestUid}`,
+    )
+    expect(result.stdout).not.toContain(token)
+  })
+
   it.each(['gzip', 'deflate', 'br'] as const)(
     'validates %s encoded responses after decompression',
     async (encoding) => {

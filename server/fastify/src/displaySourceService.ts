@@ -38,6 +38,11 @@ import { DisplaySourceCache } from './displaySourceCache.js'
 import { resolvePromptModelId } from './prompt/promptScope.js'
 import type { DiagnosticEventV2 } from '@risuai/protocol/remote-diagnostics'
 import { recordDiagnosticEvent } from './diagnosticContext.js'
+import {
+  beginDisplaySourceDiagnostics,
+  type DisplaySourceDiagnostics,
+  type DisplayPerformanceTiming,
+} from './displaySourceDiagnostics.js'
 
 type DisplayDiagnosticEvent = Extract<DiagnosticEventV2, { category: 'display' }>
 type DisplaySourceFailureStage = DisplayDiagnosticEvent['stage']
@@ -47,9 +52,25 @@ export type DisplaySourceFailureDiagnostic = Omit<
 >
 
 const displaySourceFailureStages = new WeakMap<object, DisplaySourceFailureStage>()
+const displaySourceTimingNames: Partial<Record<DisplaySourceFailureStage, DisplayPerformanceTiming>> = {
+  revision: 'revisionMs',
+  namespace: 'namespaceMs',
+  'scope-load': 'scopeLoadMs',
+  'scope-decode': 'scopeDecodeMs',
+  'scope-resolution': 'scopeResolutionMs',
+  'shared-dependencies': 'sharedDependencyMs',
+  'target-preparation': 'sourceHashMs',
+  postcondition: 'postconditionMs',
+}
 
 /** Attach a content-free stage without wrapping the error or changing route status classification. */
-function runDisplaySourceStage<T>(stage: DisplaySourceFailureStage, operation: () => T): T {
+function runDisplaySourceStage<T>(
+  stage: DisplaySourceFailureStage,
+  operation: () => T,
+  diagnostics?: DisplaySourceDiagnostics,
+  timing = displaySourceTimingNames[stage],
+): T {
+  const startedAt = diagnostics ? protocolNowMs() : 0
   try {
     return operation()
   } catch (error) {
@@ -57,6 +78,8 @@ function runDisplaySourceStage<T>(stage: DisplaySourceFailureStage, operation: (
       if (!displaySourceFailureStages.has(error)) displaySourceFailureStages.set(error, stage)
     }
     throw error
+  } finally {
+    if (diagnostics && timing) diagnostics.addDuration(timing, protocolNowMs() - startedAt)
   }
 }
 
@@ -296,10 +319,19 @@ export class DisplaySourceService {
   transformBatch(chatId: string, request: DisplaySourceRequest, signal?: AbortSignal): Promise<DisplaySourceResponse> {
     const enqueuedAt = protocolNowMs()
     const queueDepth = this.queuedBatchCount
+    const diagnostics = beginDisplaySourceDiagnostics(request.targets.length, enqueuedAt, queueDepth)
     this.queuedBatchCount += 1
-    const run = this.exclusiveTail.then(() =>
-      this.transformBatchExclusive(chatId, request, protocolDurationMs(enqueuedAt), queueDepth, signal),
-    )
+    const run = this.exclusiveTail.then(async () => {
+      const queueWaitMs = protocolDurationMs(enqueuedAt)
+      if (diagnostics) diagnostics.queueWaitMs = queueWaitMs
+      let response: DisplaySourceResponse | undefined
+      try {
+        response = await this.transformBatchExclusive(chatId, request, queueWaitMs, queueDepth, signal, diagnostics)
+        return response
+      } finally {
+        diagnostics?.finish(response, signal?.aborted === true)
+      }
+    })
     this.exclusiveTail = run.then(
       () => undefined,
       () => undefined,
@@ -315,33 +347,39 @@ export class DisplaySourceService {
     queueWaitMs: number,
     queueDepth: number,
     signal?: AbortSignal,
+    diagnostics?: DisplaySourceDiagnostics,
   ): Promise<DisplaySourceResponse> {
     const startedAt = protocolNowMs()
     throwIfAborted(signal)
-    const initialRevision = runDisplaySourceStage('revision', () => getSchemaState(this.db).revision)
+    const initialRevision = runDisplaySourceStage('revision', () => getSchemaState(this.db).revision, diagnostics)
     if (request.baseRevision !== initialRevision) {
+      if (diagnostics) diagnostics.outcome = 'stale'
       throw new ValidationError(`Display source base revision is stale; current revision is ${initialRevision}`)
     }
 
-    const { databaseLineage, activeWriterEpoch, contextFingerprint } = runDisplaySourceStage('namespace', () => {
-      const databaseLineage = getDatabaseLineage(this.db)
-      const activeWriterEpoch = getDatabaseWriterMetadata(this.db).epoch
-      const namespaceJson = displaySourceNamespaceJson({
-        databaseLineage,
-        activeWriterEpoch,
-        context: request.context,
-      })
-      const contextFingerprint = sha256(namespaceJson)
-      this.cache.activate(contextFingerprint)
-      return { databaseLineage, activeWriterEpoch, contextFingerprint }
-    })
+    const { databaseLineage, activeWriterEpoch, contextFingerprint } = runDisplaySourceStage(
+      'namespace',
+      () => {
+        const databaseLineage = getDatabaseLineage(this.db)
+        const activeWriterEpoch = getDatabaseWriterMetadata(this.db).epoch
+        const namespaceJson = displaySourceNamespaceJson({
+          databaseLineage,
+          activeWriterEpoch,
+          context: request.context,
+        })
+        const contextFingerprint = sha256(namespaceJson)
+        this.cache.activate(contextFingerprint)
+        return { databaseLineage, activeWriterEpoch, contextFingerprint }
+      },
+      diagnostics,
+    )
 
     const primaryTarget = request.targets[0]
     if (!primaryTarget) throw new ValidationError('Display source request has no targets')
     const scopeLoadStartedAt = protocolNowMs()
     let database: Database
     try {
-      database = this.loadScopeDatabase(chatId, primaryTarget.characterId)
+      database = this.loadScopeDatabase(chatId, primaryTarget.characterId, diagnostics)
     } catch (error) {
       throwIfAborted(signal)
       if (!(error instanceof GenerationInputValidationError)) throw error
@@ -356,6 +394,7 @@ export class DisplaySourceService {
         databaseLineage,
         activeWriterEpoch,
         contextFingerprint,
+        diagnostics,
       )
       if (stale) return stale
       const entries = request.targets.map((target) => errorEntry(target, 'client_fallback', 'scope_input_incompatible'))
@@ -379,10 +418,13 @@ export class DisplaySourceService {
       }
     }
     const scopeLoadMs = protocolDurationMs(scopeLoadStartedAt)
-    const scope = runDisplaySourceStage('scope-resolution', () =>
-      primaryTarget ? displayScope(database, primaryTarget.characterId, chatId) : null,
+    const scope = runDisplaySourceStage(
+      'scope-resolution',
+      () => (primaryTarget ? displayScope(database, primaryTarget.characterId, chatId) : null),
+      diagnostics,
     )
     if (!scope) throw new ValidationError('Display source chat or character was not found')
+    if (diagnostics) diagnostics.transcriptMessageCount = scope.chat.message?.length ?? 0
     const entries: DisplaySourceResponseEntry[] = []
     const { luaExecBudget, triggerBudget, modules, dynamicAssetFallback } = runDisplaySourceStage(
       'shared-dependencies',
@@ -393,10 +435,14 @@ export class DisplaySourceService {
         const dynamicAssetFallback = dynamicAssetFallbackRequired(scope, modules)
         return { luaExecBudget, triggerBudget, modules, dynamicAssetFallback }
       },
+      diagnostics,
+      'moduleResolutionMs',
     )
     const sharedDependencyStartedAt = protocolNowMs()
-    const sharedDependencyFingerprint = runDisplaySourceStage('shared-dependencies', () =>
-      sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules))),
+    const sharedDependencyFingerprint = runDisplaySourceStage(
+      'shared-dependencies',
+      () => sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules))),
+      diagnostics,
     )
     const sharedDependencyMs = protocolDurationMs(sharedDependencyStartedAt)
     let targetFingerprintMs = 0
@@ -407,11 +453,12 @@ export class DisplaySourceService {
 
     for (const target of request.targets) {
       throwIfAborted(signal)
+      if (diagnostics) diagnostics.visitedTargetCount++
       if (target.characterId !== scope.character.chaId || !targetIsFresh(scope, target)) {
         entries.push(errorEntry(target, 'stale', 'target_identity_changed'))
         continue
       }
-      const actualSourceHash = runDisplaySourceStage('target-preparation', () => sha256(target.source))
+      const actualSourceHash = runDisplaySourceStage('target-preparation', () => sha256(target.source), diagnostics)
       if (actualSourceHash !== target.sourceHash) {
         entries.push(errorEntry(target, 'error', 'source_hash_mismatch'))
         continue
@@ -422,14 +469,19 @@ export class DisplaySourceService {
       }
 
       const targetFingerprintStartedAt = protocolNowMs()
-      const dependencyFingerprint = runDisplaySourceStage('target-preparation', () =>
-        sha256(
-          stableDisplayDependencyJson(targetDependencyValue(sharedDependencyFingerprint, target, actualSourceHash)),
-        ),
+      const dependencyFingerprint = runDisplaySourceStage(
+        'target-preparation',
+        () =>
+          sha256(
+            stableDisplayDependencyJson(targetDependencyValue(sharedDependencyFingerprint, target, actualSourceHash)),
+          ),
+        diagnostics,
+        'targetFingerprintMs',
       )
       targetFingerprintMs += protocolDurationMs(targetFingerprintStartedAt)
       try {
         const execute = async () => {
+          diagnostics?.transformStarted(target.streaming === true)
           const outcome = await this.transformTarget(
             scope,
             target,
@@ -438,6 +490,7 @@ export class DisplaySourceService {
             triggerBudget,
             modules,
             signal,
+            diagnostics,
           )
           emitProtocolMetric('display_source_transform', {
             status: 'ok',
@@ -460,6 +513,8 @@ export class DisplaySourceService {
         else if (result.cacheStatus === 'hit') batchCacheHitCount += 1
         else if (result.cacheStatus === 'inflight_join') batchInflightJoinCount += 1
         else batchCacheMissCount += 1
+        if (diagnostics && result.cacheStatus === 'hit') diagnostics.cacheHitCount++
+        if (diagnostics && result.cacheStatus === 'inflight_join') diagnostics.inflightJoinCount++
         entries.push({
           requestKey: target.requestKey,
           status: 'ok',
@@ -481,6 +536,7 @@ export class DisplaySourceService {
       databaseLineage,
       activeWriterEpoch,
       contextFingerprint,
+      diagnostics,
     )
     if (stale) return stale
 
@@ -506,14 +562,16 @@ export class DisplaySourceService {
     return { protocolVersion: DISPLAY_SOURCE_PROTOCOL_VERSION, revision, contextFingerprint, entries }
   }
 
-  private loadScopeDatabase(chatId: string, characterId: string): Database {
-    const persisted = runDisplaySourceStage('scope-load', () =>
-      loadPersistedForDisplaySource(this.db, this.dataDir, { chatId, characterId }),
+  private loadScopeDatabase(chatId: string, characterId: string, diagnostics?: DisplaySourceDiagnostics): Database {
+    const persisted = runDisplaySourceStage(
+      'scope-load',
+      () => loadPersistedForDisplaySource(this.db, this.dataDir, { chatId, characterId }),
+      diagnostics,
     )
     if (!persisted.database || typeof persisted.database !== 'object') {
       throw new ValidationError('Server database is not initialized')
     }
-    return runDisplaySourceStage('scope-decode', () => decodeDisplaySourceDatabase(persisted.database))
+    return runDisplaySourceStage('scope-decode', () => decodeDisplaySourceDatabase(persisted.database), diagnostics)
   }
 
   private async transformTarget(
@@ -524,31 +582,40 @@ export class DisplaySourceService {
     triggerBudget: ReturnType<typeof createTriggerExecutionBudget>,
     modules: ReturnType<typeof getActiveModules>,
     signal?: AbortSignal,
+    diagnostics?: DisplaySourceDiagnostics,
   ): Promise<TransformOutcome> {
-    const beforeScriptstate = cloneScriptstate(scope.chat.scriptstate)
     const stageDurations: Record<string, number> = {}
-    const measure = async <T>(stage: string, operation: () => Promise<T>): Promise<T> => {
+    const measure = async <T>(stage: 'lua' | 'trigger' | 'regex', operation: () => Promise<T>): Promise<T> => {
       const startedAt = protocolNowMs()
       try {
         return await operation()
       } finally {
         stageDurations[`${stage}Ms`] = protocolDurationMs(startedAt)
+        diagnostics?.addDuration(`${stage}Ms`, stageDurations[`${stage}Ms`])
       }
     }
     let data = target.source
-    const cbsConditions: CbsConditions = {
-      firstmsg: target.firstMessage,
-      ...(target.role === null ? {} : { chatRole: target.role }),
-    }
-    const model = resolvePromptModelId(scope.database, 'chatMain')
-
-    const varEngine = createTriggerVarEngine({
-      chat: scope.chat,
-      database: scope.database,
-      selectedCharID: scope.selectedCharID,
-      chatPage: scope.chatPage,
-      defaultVariables: getChatDefaultVariables(scope.character, scope.database),
-    })
+    const { beforeScriptstate, cbsConditions, model, varEngine } = runDisplaySourceStage(
+      'target-preparation',
+      () => {
+        const beforeScriptstate = cloneScriptstate(scope.chat.scriptstate)
+        const cbsConditions: CbsConditions = {
+          firstmsg: target.firstMessage,
+          ...(target.role === null ? {} : { chatRole: target.role }),
+        }
+        const model = resolvePromptModelId(scope.database, 'chatMain')
+        const varEngine = createTriggerVarEngine({
+          chat: scope.chat,
+          database: scope.database,
+          selectedCharID: scope.selectedCharID,
+          chatPage: scope.chatPage,
+          defaultVariables: getChatDefaultVariables(scope.character, scope.database),
+        })
+        return { beforeScriptstate, cbsConditions, model, varEngine }
+      },
+      diagnostics,
+      'targetSetupMs',
+    )
     try {
       try {
         data = await measure('lua', () =>
@@ -637,12 +704,17 @@ export class DisplaySourceService {
         stageDurations,
       }
     } finally {
+      const cleanupStartedAt = diagnostics ? protocolNowMs() : 0
       // `editDisplay` is a render-time projection, so it may be retried, cached,
       // skipped, or evaluated out of transcript order. Lua chat-variable writes
       // stay visible to the remaining stages of this target, but every target
       // starts from the same authoritative snapshot: always discard its delta
       // before another target runs, and never persist display-time scriptstate.
-      installScriptstate(scope.chat, beforeScriptstate)
+      try {
+        installScriptstate(scope.chat, beforeScriptstate)
+      } finally {
+        diagnostics?.addDuration('targetCleanupMs', protocolNowMs() - cleanupStartedAt)
+      }
     }
   }
 
@@ -665,14 +737,21 @@ export class DisplaySourceService {
     databaseLineage: string,
     activeWriterEpoch: number,
     contextFingerprint: string,
+    diagnostics?: DisplaySourceDiagnostics,
   ): DisplaySourceResponse | null {
-    if (runDisplaySourceStage('postcondition', () => getSchemaState(this.db).revision) !== initialRevision) {
+    if (
+      runDisplaySourceStage('postcondition', () => getSchemaState(this.db).revision, diagnostics) !== initialRevision
+    ) {
       return this.staleResponse(request, contextFingerprint, 'revision_changed_during_transform')
     }
-    const { currentLineage, currentWriterEpoch } = runDisplaySourceStage('postcondition', () => ({
-      currentLineage: getDatabaseLineage(this.db),
-      currentWriterEpoch: getDatabaseWriterMetadata(this.db).epoch,
-    }))
+    const { currentLineage, currentWriterEpoch } = runDisplaySourceStage(
+      'postcondition',
+      () => ({
+        currentLineage: getDatabaseLineage(this.db),
+        currentWriterEpoch: getDatabaseWriterMetadata(this.db).epoch,
+      }),
+      diagnostics,
+    )
     if (currentLineage === databaseLineage && currentWriterEpoch === activeWriterEpoch) return null
     const currentNamespace = sha256(
       displaySourceNamespaceJson({

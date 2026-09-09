@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   isDiagnosticEventV2,
+  isBrowserDiagnosticEvent,
   projectDiagnosticEventV2,
   projectDiagnosticJournalRecord,
   diagnosticSizeBucket,
@@ -15,6 +16,24 @@ import {
 import { diagnosticErrorFields } from './diagnostics.js'
 
 const base = { timestamp: 1, source: 'server', level: 'info', correlation: 'background' }
+const displayPerformance = {
+  category: 'display-performance',
+  outcome: 'ok',
+  durationMs: 185,
+  queueWaitMs: 5,
+  queueDepth: 1,
+  targetCount: 2,
+  visitedTargetCount: 2,
+  executedTargetCount: 1,
+  cacheHitCount: 1,
+  cacheMissCount: 1,
+  inflightJoinCount: 0,
+  streamingBypassCount: 0,
+  transcriptMessageCount: 100,
+  timeToFirstTransformMs: 175,
+  resultCounts: { ok: 2, clientFallback: 0, stale: 0, error: 0 },
+  timings: { scopeLoadMs: 120, scopeDecodeMs: 10, sharedDependencyMs: 40, luaMs: 2, regexMs: 3 },
+}
 const examples = [
   {
     category: 'deployment',
@@ -87,9 +106,46 @@ const examples = [
     valueKind: 'number',
   },
   { category: 'legacy', detail: { timestamp: 1, source: 'server', level: 'warn', event: 'startup' } },
+  displayPerformance,
 ]
 
 describe('exact v2 diagnostic families', () => {
+  it('exports bounded performance summaries only in v2 and rejects browser or content-bearing records', () => {
+    const entry = { ...base, ...displayPerformance }
+    expect(parseRemoteDiagnosticsQuery({ version: '2', category: 'display-performance' })).toMatchObject({
+      category: 'display-performance',
+    })
+    expect(parseRemoteDiagnosticsQuery({ category: 'display-performance' })).toBeNull()
+    const record = projectDiagnosticJournalRecord({
+      sequence: 1,
+      receivedAt: 2,
+      instanceId: 'a'.repeat(32),
+      provenance: { kind: 'server' },
+      entry,
+    })!
+    expect(downgradeDiagnosticJournalRecord(record)).toBeNull()
+    const browserEntry = { ...entry, source: 'browser', correlation: 'client-asserted' }
+    expect(isDiagnosticEventV2(browserEntry)).toBe(true)
+    expect(isBrowserDiagnosticEvent(browserEntry)).toBe(false)
+    expect(
+      projectDiagnosticJournalRecord({
+        ...record,
+        provenance: { kind: 'browser', sourceId: 'b'.repeat(32), eventId: 'c'.repeat(32), clientSequence: 1 },
+        entry: browserEntry,
+      }),
+    ).toBeNull()
+    for (const extra of [
+      { targetCount: 65 },
+      { queueWaitMs: -1 },
+      { durationMs: Infinity },
+      { transcriptMessageCount: 1_000_000_001 },
+      { timings: { scopeLoadMs: 86_400_001 } },
+      { timings: { scopeLoadMs: 1, script: 'PRIVATE-SCRIPT' } },
+      { resultCounts: { ...displayPerformance.resultCounts, messageId: 'PRIVATE-ID' } },
+    ])
+      expect(isDiagnosticEventV2({ ...entry, ...extra })).toBe(false)
+    expect(JSON.stringify(record).length).toBeLessThan(4096)
+  })
   it.each(examples)('projects only approved facts for $category and rejects content-bearing restoration', (example) => {
     const entry = { ...base, ...example }
     expect(isDiagnosticEventV2(entry)).toBe(true)
