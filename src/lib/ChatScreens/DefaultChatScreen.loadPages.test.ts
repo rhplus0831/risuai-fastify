@@ -2320,10 +2320,10 @@ describe('DefaultChatScreen live generation progress ownership', () => {
     const halfSecond = { characterId: 'character-1', chatId: 'chat-1', generationId: 'generation-1' }
     beginHalfStreamingProgress(halfFirst)
     beginHalfStreamingProgress(halfSecond)
-    recordHalfStreamingToken(halfFirst, 2_000, { generatedTokens: 4, elapsedMs: 1_000 })
-    recordHalfStreamingToken(halfSecond, 3_000, { generatedTokens: 12, elapsedMs: 2_000 })
-    recordHalfStreamingToken(halfFirst, 3_000, { generatedTokens: 8, elapsedMs: 2_000 })
-    recordHalfStreamingToken(halfSecond, 4_000, { generatedTokens: 18, elapsedMs: 3_000 })
+    recordHalfStreamingToken(halfFirst, 2_000, { generatedTokens: 4 })
+    recordHalfStreamingToken(halfSecond, 3_000, { generatedTokens: 12 })
+    recordHalfStreamingToken(halfFirst, 3_000, { generatedTokens: 8 })
+    recordHalfStreamingToken(halfSecond, 4_000, { generatedTokens: 18 })
 
     mountScreen()
     await waitFor(() => {

@@ -16,17 +16,16 @@ export interface ActiveHalfStreamingProgress extends HalfStreamingProgressTarget
 export interface HalfStreamingTokenSample {
   /** Cumulative generated-token count measured by the streaming server. */
   generatedTokens?: number
-  /** Milliseconds elapsed since provider dispatch began. */
-  elapsedMs?: number
 }
 
 const MAX_ACTIVE_HALF_STREAMING_PROGRESS = 16
+const TOKEN_SPEED_WINDOW_MS = 5_000
 
 export const halfStreamingProgress = writable<ActiveHalfStreamingProgress[]>([])
 
 interface HalfStreamingProgressSession extends HalfStreamingProgressTarget {
-  firstSample?: Required<HalfStreamingTokenSample>
-  latestSample?: Required<HalfStreamingTokenSample>
+  latestGeneratedTokens?: number
+  arrivalSamples: Array<{ generatedTokens: number; receivedAt: number }>
 }
 
 const activeTargets = new Map<string, HalfStreamingProgressSession>()
@@ -71,7 +70,7 @@ export function beginHalfStreamingProgress(target: HalfStreamingProgressTarget):
     if (sameChat(activeTarget, target.characterId, target.chatId)) activeTargets.delete(key)
   }
   const key = targetKey(target)
-  activeTargets.set(key, { ...target })
+  activeTargets.set(key, { ...target, arrivalSamples: [] })
   halfStreamingProgress.update((entries) => [
     ...entries.filter((entry) => !sameChat(entry, target.characterId, target.chatId)),
     {
@@ -86,8 +85,9 @@ export function beginHalfStreamingProgress(target: HalfStreamingProgressTarget):
 
 /**
  * Record one provider token frame. Server streams can supply tokenizer-aware
- * cumulative progress so batched gateway deltas still report useful throughput;
- * local and older server streams retain the frame-counting fallback.
+ * cumulative progress so batched gateway deltas retain useful totals. Display
+ * throughput uses a trailing client-arrival window; local and older server
+ * streams retain the frame-counting fallback within the same window.
  */
 export function recordHalfStreamingToken(
   target: HalfStreamingProgressTarget,
@@ -103,54 +103,61 @@ export function recordHalfStreamingToken(
     const active = current.find((entry) => sameTarget(entry, target))
     if (!active) return current
     const sampledTokens = sample?.generatedTokens
-    const sampledElapsedMs = sample?.elapsedMs
-    if (
-      typeof sampledTokens === 'number' &&
-      Number.isFinite(sampledTokens) &&
-      sampledTokens >= 0 &&
-      typeof sampledElapsedMs === 'number' &&
-      Number.isFinite(sampledElapsedMs) &&
-      sampledElapsedMs >= 0
-    ) {
-      const generatedTokens = Math.floor(sampledTokens)
-      const latestSample = activeTarget.latestSample
-      if (
-        latestSample &&
-        (generatedTokens < latestSample.generatedTokens || sampledElapsedMs < latestSample.elapsedMs)
-      ) {
+    let generatedTokens: number
+    if (typeof sampledTokens === 'number' && Number.isFinite(sampledTokens) && sampledTokens >= 0) {
+      generatedTokens = Math.floor(sampledTokens)
+      if (activeTarget.latestGeneratedTokens !== undefined && generatedTokens < activeTarget.latestGeneratedTokens) {
         return current
       }
-      const currentSample = { generatedTokens, elapsedMs: sampledElapsedMs }
-      // Start at the first output sample, excluding prompt processing and the
-      // entire first batch from both sides of the rate calculation. Server time
-      // keeps buffered delivery/replay from looking faster than generation.
-      if (generatedTokens > 0) activeTarget.firstSample ??= currentSample
-      activeTarget.latestSample = currentSample
-      const firstSample = activeTarget.firstSample
-      const elapsedMs = firstSample ? sampledElapsedMs - firstSample.elapsedMs : 0
-      const next = {
-        ...active,
-        generatedTokens,
-        tokensPerSecond:
-          firstSample && elapsedMs > 0 ? (generatedTokens - firstSample.generatedTokens) / (elapsedMs / 1000) : 0,
-        firstTokenAt: active.firstTokenAt ?? (generatedTokens > 0 ? now : undefined),
-        updatedAt: now,
-      }
-      return current.map((entry) => (sameTarget(entry, target) ? next : entry))
+      activeTarget.latestGeneratedTokens = generatedTokens
+    } else {
+      // Once tokenizer-aware progress is available, incomplete metadata must not
+      // turn cumulative token totals back into frame counts.
+      if (activeTarget.latestGeneratedTokens !== undefined) return current
+      generatedTokens = active.generatedTokens + 1
     }
-    // Once tokenizer-aware progress is available, incomplete metadata must not
-    // turn cumulative token totals back into frame counts.
-    if (activeTarget.latestSample) return current
-    const firstTokenAt = active.firstTokenAt ?? now
-    const generatedTokens = active.generatedTokens + 1
-    const elapsedSeconds = (now - firstTokenAt) / 1000
-    const tokensPerSecond = elapsedSeconds > 0 ? (generatedTokens - 1) / elapsedSeconds : 0
+
+    const latestArrival = activeTarget.arrivalSamples.at(-1)
+    const receivedAt = Math.max(Number.isFinite(now) ? now : Date.now(), latestArrival?.receivedAt ?? -Infinity)
+    if (generatedTokens > 0 || latestArrival) {
+      const currentSample = { generatedTokens, receivedAt }
+      if (latestArrival?.receivedAt === receivedAt) {
+        activeTarget.arrivalSamples[activeTarget.arrivalSamples.length - 1] = currentSample
+      } else {
+        activeTarget.arrivalSamples.push(currentSample)
+      }
+    }
+
+    const cutoff = receivedAt - TOKEN_SPEED_WINDOW_MS
+    while (activeTarget.arrivalSamples.length > 2 && activeTarget.arrivalSamples[1].receivedAt <= cutoff) {
+      activeTarget.arrivalSamples.shift()
+    }
+
+    const firstArrival = activeTarget.arrivalSamples[0]
+    const secondArrival = activeTarget.arrivalSamples[1]
+    const lastArrival = activeTarget.arrivalSamples.at(-1)
+    let windowStartedAt = firstArrival?.receivedAt ?? receivedAt
+    let windowStartTokens = firstArrival?.generatedTokens ?? generatedTokens
+    if (firstArrival && secondArrival && firstArrival.receivedAt < cutoff) {
+      const sampleSpan = secondArrival.receivedAt - firstArrival.receivedAt
+      if (sampleSpan > 0) {
+        const cutoffFraction = (cutoff - firstArrival.receivedAt) / sampleSpan
+        windowStartedAt = cutoff
+        windowStartTokens =
+          firstArrival.generatedTokens + (secondArrival.generatedTokens - firstArrival.generatedTokens) * cutoffFraction
+      }
+    }
+    const windowElapsedMs = lastArrival ? lastArrival.receivedAt - windowStartedAt : 0
+    const tokensPerSecond =
+      lastArrival && windowElapsedMs > 0
+        ? Math.max(0, lastArrival.generatedTokens - windowStartTokens) / (windowElapsedMs / 1000)
+        : 0
     const next = {
       ...active,
       generatedTokens,
       tokensPerSecond,
-      firstTokenAt,
-      updatedAt: now,
+      firstTokenAt: active.firstTokenAt ?? (generatedTokens > 0 ? receivedAt : undefined),
+      updatedAt: receivedAt,
     }
     return current.map((entry) => (sameTarget(entry, target) ? next : entry))
   })

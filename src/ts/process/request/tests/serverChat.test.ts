@@ -688,7 +688,6 @@ describe('requestServerChat', () => {
     controlled.send('token', {
       content: 'A complete batched gateway response.',
       generatedTokens: 9,
-      elapsedMs: 3_000,
     })
     await vi.waitFor(() => {
       expect(findHalfStreamingProgress('gateway-generation')).toMatchObject({
@@ -750,7 +749,6 @@ describe('requestServerChat', () => {
       await vi.waitFor(() =>
         expect(findHalfStreamingProgress('stripped-generation')).toMatchObject({
           generatedTokens: 15,
-          tokensPerSecond: 3,
         }),
       )
       expect(readResolved).toBe(false)

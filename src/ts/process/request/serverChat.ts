@@ -1264,15 +1264,10 @@ export async function requestServerChatGeneration(
                   const content = event.content
                   tokenResult += content
                   if (halfStreaming) {
-                    const hasProgress =
-                      Number.isFinite(event.generatedTokens) &&
-                      (event.generatedTokens ?? 0) > 0 &&
-                      Number.isFinite(event.elapsedMs) &&
-                      (event.elapsedMs ?? 0) > 0
+                    const hasProgress = Number.isFinite(event.generatedTokens) && (event.generatedTokens ?? 0) > 0
                     if ((content.length > 0 || hasProgress) && halfStreamingTarget) {
                       recordHalfStreamingToken(halfStreamingTarget, Date.now(), {
                         generatedTokens: event.generatedTokens,
-                        elapsedMs: event.elapsedMs,
                       })
                     }
                   } else if (content.length > 0 && !replayGapPending) {

@@ -224,16 +224,19 @@ When an `info` frame carries `halfStreaming: true`,
 `src/ts/process/request/serverChat.ts` marks the stream as half-streaming and
 buffers provider text in `tokenResult` instead of enqueueing it into the visible
 stream. Progress remains live through `src/ts/process/halfStreamingProgress.ts`:
-token frames use cumulative server-tokenized `generatedTokens` and
-provider-dispatch `elapsedMs` when present. The row displays the cumulative token
-count alongside average output speed: tokens received after the first non-empty
-sample divided by server elapsed time since that sample. Subtracting the first
-sample's count and time excludes the initial wait and avoids inflating the rate
-with a batched first chunk. Speed stays zero until a later sample provides a
-positive time interval; replay uses server timestamps rather than arrival timing.
-Counts and timing reset for each generation or reattachment, and regressive
-samples are ignored. Local and older server streams retain the frame-counting
-estimate. The buffered text is enqueued once on `done`.
+token frames use cumulative server-tokenized `generatedTokens` when present.
+The row displays that cumulative count alongside a client-timed rolling output
+speed. Each accepted count is timestamped when it reaches the browser, and the
+rate is the token delta over at most the latest five seconds of arrival history.
+The boundary count is interpolated when the five-second cutoff falls between
+samples. The first non-empty sample establishes the baseline, so speed stays
+zero until a later client-time sample provides a positive interval; samples
+arriving in the same millisecond do not invent one. Server `elapsedMs` remains
+available as transport metadata but does not drive the writer display. Counts
+and arrival history reset for each generation or reattachment, and regressive
+counts are ignored. Local and older server streams retain their frame-counting
+estimate inside the same rolling window. The buffered text is enqueued once on
+`done`.
 Stop keeps a server-backed half-stream viewer attached until the raw buffered
 partial and cancelled terminal arrive, then reconciles the exact processed
 persisted snapshot. As a fallback, reconciliation can recreate a placeholder
