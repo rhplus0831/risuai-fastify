@@ -146,7 +146,7 @@ test('an authenticated reader uploads browser failures and the HTTPS helper retr
         })
     })
     await page.goto(`${baseUrl}/character/fast-bootstrap-small-character/fast-bootstrap-small-chat`)
-    await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
+    await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
     const domain = new DatabaseSync(path.join(dataDir, 'risu.db'), { readOnly: true })
     const authority = () =>
       domain.prepare('SELECT active_writer_session_id, writer_epoch FROM database_metadata WHERE id=1').get()
@@ -211,7 +211,7 @@ test('an authenticated reader uploads browser failures and the HTTPS helper retr
       expect(new Set(browserIds).size).toBe(browserIds.length)
       const uploadsBeforeReload = uploads.length
       await page.reload()
-      await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
+      await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
       await expect.poll(() => uploads.length, { timeout: 20_000 }).toBeGreaterThan(uploadsBeforeReload)
       const afterReload = await helper()
       for (const id of browserIds)
