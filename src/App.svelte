@@ -63,7 +63,7 @@
     retryCurrentRouteApplication,
     syncRouteFromState,
   } from './ts/router'
-  import { routeKey } from './ts/routerRoute'
+  import { routeKey, type AppRoute } from './ts/routerRoute'
   import { prefetchCharacterRouteResource, routeResourceLoadState } from './ts/server/routeResourceLoader'
   import { prefetchRouteIntent } from './ts/routeIntentPrefetch'
   import { alertError } from './ts/alert'
@@ -304,6 +304,21 @@
     return owner === candidate ? candidate.id : undefined
   }
 
+  function reconcileWriterRouteFromPersistedState(currentRouteKind: AppRoute['kind']): void {
+    const selectedCharacterIndex = $selectedCharID
+    const character = selectedRouteCharacter(selectedCharacterIndex)
+    syncRouteFromState({
+      currentRouteKind,
+      settingsOpen: $settingsOpen,
+      settingsMenuIndex: $SettingsMenuIndex,
+      selectedCharID: selectedCharacterIndex,
+      playgroundStore: $PlaygroundStore,
+      personaId: getPersonaOwnerStateSnapshot()?.selectedPersonaId ?? undefined,
+      characterId: character?.chaId,
+      chatId: routeChatIsOpen ? selectedRouteChatId(character) : undefined,
+    })
+  }
+
   function closeResponsiveSidebar(): void {
     if ($sideBarClosing) return
     sideBarTransitionCause.set('explicit-close')
@@ -343,6 +358,10 @@
     }
     if (observerIntent) {
       consumeObserverRouteIntent(observerIntent.sequence)
+      // Reader browsing is only a presentation target. Move the URL back to
+      // the already-persisted writer state without routing the reader choice
+      // through selection handlers or durable commands.
+      untrack(() => reconcileWriterRouteFromPersistedState(currentWriterRoute.kind))
       return
     }
     if (consumeStateDrivenRouteUpdate()) {

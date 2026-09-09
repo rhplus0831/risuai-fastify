@@ -1081,7 +1081,10 @@ describe('App route/refreeze mounted DOM behavior', () => {
       component = undefined
     }
     appRouteDomMocks.state.applyRouteCalls = 0
-    vi.mocked(appRouteDomMocks.state.exports?.applyRouteToStores as (...args: any[]) => Promise<boolean>).mockClear()
+    const router = appRouteDomMocks.state.exports!
+    vi.mocked(router.applyRouteToStores as (...args: any[]) => Promise<boolean>).mockClear()
+    const syncRouteFromState = vi.mocked(router.syncRouteFromState as (...args: any[]) => void)
+    syncRouteFromState.mockClear()
     resetStartupReadinessForTests()
     configureStartupObserverShell(true)
     for (const milestone of ['entry', 'shell-mounted', 'observer-ready'] as const) {
@@ -1108,9 +1111,9 @@ describe('App route/refreeze mounted DOM behavior', () => {
     const olderIntent = recordObserverRouteIntent({ kind: 'home', path: '/' })
     const latestRoute: AppRoute = {
       kind: 'character',
-      path: '/character/char-a/chat-a',
-      chaId: 'char-a',
-      chatId: 'chat-a',
+      path: '/character/char-b/chat-b',
+      chaId: 'char-b',
+      chatId: 'chat-b',
     }
     const latestIntent = recordObserverRouteIntent(latestRoute)
     expect(latestIntent.sequence).toBeGreaterThan(olderIntent.sequence)
@@ -1118,7 +1121,10 @@ describe('App route/refreeze mounted DOM behavior', () => {
     recordStartupMilestone('writer-ready')
 
     await vi.waitFor(() => expect(peekObserverRouteIntent()).toBeNull())
-    expect(appRouteDomMocks.state.exports?.applyRouteToStores).not.toHaveBeenCalled()
+    expect(router.applyRouteToStores).not.toHaveBeenCalled()
+    expect(syncRouteFromState).toHaveBeenCalledWith(
+      expect.objectContaining({ characterId: 'char-a', chatId: 'chat-a', selectedCharID: 0 }),
+    )
     await vi.waitFor(() => expect(target.querySelector('[data-risu-shell-main]')).not.toBeNull())
     expect(get(sideBarTransitionCause)).toBe('none')
     expect(target.querySelector('.risu-sidebar, .risu-sidebar-close')).toBeNull()
@@ -1126,15 +1132,13 @@ describe('App route/refreeze mounted DOM behavior', () => {
     // Consuming a nonreactive reader target must not remove the effect's live
     // URL dependency; a new writer-owned navigation still applies normally.
     const nextRoute: AppRoute = {
-      kind: 'character',
-      path: '/character/char-b/chat-b',
-      chaId: 'char-b',
-      chatId: 'chat-b',
+      kind: 'settings',
+      path: '/settings/language',
+      section: 'language',
+      index: 1,
     }
-    appRouteDomMocks.state.exports?.currentRoute.set(nextRoute)
-    await vi.waitFor(() =>
-      expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenLastCalledWith(nextRoute),
-    )
+    router.currentRoute.set(nextRoute)
+    await vi.waitFor(() => expect(router.applyRouteToStores).toHaveBeenLastCalledWith(nextRoute))
   })
 
   it('keeps the workspace identity while switching to read-only after writer capability is revoked', async () => {
