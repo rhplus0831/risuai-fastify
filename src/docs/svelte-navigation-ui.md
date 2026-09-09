@@ -1,7 +1,7 @@
 # Svelte Navigation UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-08 (shared reader presentation, committed display and restricted entry).
+Targeted source check: 2026-09-09 (shared conversation-shell geometry and role-transition motion policy).
 
 This guide owns the sidebar, navigation controls, character and chat selection,
 character configuration, and list organization.
@@ -49,10 +49,20 @@ identities; changing chatPage or message bodies does not rebuild the projection.
 Generation, warning, and unread states each derive one set of character indexes,
 so individual badges and folder aggregates avoid repeating global chat scans.
 
-On wide layouts `src/App.svelte` mounts the sidebar beside chat. On responsive
-layouts the app mounts it as a focus-trapped dialog when `sideBarStore` is open;
-Escape closes that dialog. Route/store synchronization and history ownership
+`ConversationShell.svelte` owns the role-neutral outer flex frame, navigation
+slot, main-content column, and responsive dialog semantics. On wide layouts
+`src/App.svelte` supplies the writer sidebar beside chat. On responsive layouts
+the shell mounts it as a focus-trapped dialog when `sideBarStore` is open;
+Escape closes that dialog. `shellGeometry.ts` normalizes the shared 1024-pixel
+boundary, one-to-four desktop or one-to-two mobile rail columns, and the
+24/28/32/36-rem panel sizes. Route/store synchronization and history ownership
 belong to [Svelte UI](svelte-ui.md#routes-and-stores).
+
+`sideBarTransitionCause` separates explicit open/close requests from automatic
+mount, startup, role resolution, promotion, demotion, reconnect, and recovery.
+Only explicit requests attach the rail, panel, and backdrop entry/exit animation
+classes. The settled writer geometry remains the canonical layout; automatic
+role changes establish it immediately.
 
 Character routes without a chat ID show the list/selection state; routes with a
 chat ID put `SideChatList.svelte` into chat-open mode. The latter shows back,
@@ -62,7 +72,8 @@ is stored on the exact history entry through `src/ts/router.ts`.
 
 ## Connected Reader Navigation
 
-`ObserverShell.svelte` retains the connected reader controller and uses the
+`ObserverShell.svelte` retains the connected reader controller and supplies it
+to the same `ConversationShell.svelte` frame as the writer. It also uses the
 same presentation primitives as the writer: `NavigationRail.svelte`,
 `NavigationButton.svelte`, `SidebarAvatar.svelte`, `PinnedChatsRail.svelte`,
 `ChatSelectionButton.svelte` and `CharacterCatalogView.svelte`. The writer
@@ -71,13 +82,19 @@ editor owners and pending outcomes. These shared views accept explicit display
 inputs, selected IDs and callbacks; they do not fall back to writer stores.
 
 `ReaderNavigation.svelte` consumes certified rows, character order and display
-settings from `readerTranscriptProjection.svelte.ts`. `readerNavigation.ts`
+settings from `readerTranscriptProjection.svelte.ts`, including confirmed
+`sideBarSize`, `desktopSidebarColumns`, and `mobileSidebarColumns`. The reader
+and writer call the same geometry resolver and use the same responsive
+classification; pending writer settings never enter the reader adapter.
+`readerNavigation.ts`
 filters ambiguous/missing identities, orders active characters and derives pins
 from shell summaries or hydrated details. Folder expansion, character/chat
 search, grid/list presentation and drawer state stay local. Auth/database
 identity changes clear that state; reconnect keeps valid reading navigation.
-The same navigation presentation hosts the conservative shell preview. Narrow
-screens use `modalFocusTrap` with Escape dismissal and focus restoration.
+The same navigation presentation hosts the conservative shell preview. On
+responsive screens the hidden reader drawer stays mounted so search/folder
+state survives ordinary open/close cycles; `modalFocusTrap` activates only
+while it is visible and retains Escape dismissal and focus restoration.
 
 Home/grid and stable character/chat routes do not update `selectedCharID`,
 `currentChar` or persisted `chatPage`. Settings, plugin panels and authoring
@@ -113,14 +130,20 @@ Ambiguous identities remain unavailable instead of selecting the first match.
 its read-only rendering contract is in
 [Svelte Chat UI](svelte-chat-ui.md#connected-reader-transcript).
 
-**Use this device** is the explicit promotion action. It is available only from
-a connected reader, shares an in-progress attempt, and keeps reading/local
-navigation available while takeover confirmation is pending. Cancellation,
-supersession, interruption, and retained-work recovery failures have distinct
-localized feedback. A successful acquisition still waits for fenced writer
-recovery before mutation controls become usable; plugins, effects, and chat
-dependencies additionally gate generation. Reconnect and ordinary reader
-navigation do not request takeover.
+`ReaderTakeoverAction.svelte` owns the one explicit **Use this device** action,
+read-only badge, lifecycle announcement, and operation result. It is
+bottom-aligned in the main action region: conversation routes include the
+disabled composer-equivalent field, while Home, Grid, character, restricted,
+loading, and error routes use the same action component without a field. There
+is no reader-only top layout row or duplicate transcript action.
+
+The action is available only from a connected reader, shares an in-progress
+attempt, and keeps reading/local navigation available while takeover
+confirmation is pending. Cancellation, supersession, interruption, and
+retained-work recovery failures have distinct localized feedback. A successful
+acquisition still waits for fenced writer recovery before mutation controls
+become usable; plugins, effects, and chat dependencies additionally gate
+generation. Reconnect and ordinary reader navigation do not request takeover.
 
 A demoted writer returns to the reader surface with its local route and captured
 editor/composer drafts retained. `WriterDraftRecovery.svelte` exposes those

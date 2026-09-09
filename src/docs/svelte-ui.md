@@ -1,7 +1,7 @@
 # Svelte UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-08 (shared reader views, access containment and confirmed appearance).
+Targeted source check: 2026-09-09 (shared conversation frame, geometry and transition stability).
 
 This guide owns the Svelte application shell, routing, shared frontend
 platform behavior, localization, styling, responsive behavior, and Playground.
@@ -45,7 +45,8 @@ CSS, and plugin execution.
 | `src/main.ts`                                                                                                             | Thin entry boundary: readiness marker, preload-error handling, runtime-environment installation, and dynamic import of `src/appStartup.ts`.   |
 | `src/ts/entryStartup.ts`, `src/ts/polyfill.ts`, `src/ts/entryLoadError.ts`                                                | Environment-before-app ordering, conditional baseline globals/polyfills, and the localized pre-mount reload surface.                          |
 | `src/appStartup.ts`                                                                                                       | Installs routing, push and viewport coordinators, mounts `App.svelte`, starts bootstrap/hotkeys and route warming, and removes `#preloading`. |
-| `src/App.svelte`                                                                                                          | Main render switch, responsive sidebar dialog, app-level file drop, route effects, and global overlay host.                                   |
+| `src/App.svelte`                                                                                                          | Main role/route render switch, responsive sidebar state, app-level file drop, route effects, and global overlay host.                         |
+| `src/lib/ConversationShell.svelte`, `src/ts/gui/shellGeometry.ts`                                                         | Role-neutral conversation frame, responsive dialog semantics, and canonical rail/panel dimensions.                                            |
 | `src/styles.css`                                                                                                          | Tailwind v4 import, theme defaults, full-height shell, global chat text CSS, and compatibility base rules.                                    |
 | `src/ts/bootstrap.ts`                                                                                                     | Loads Fastify resources and starts hydration, events, bridges, and UI-derived CSS state.                                                      |
 | `src/ts/startupReadiness.ts`                                                                                              | Publishes startup milestones, narrow UI/action capabilities, and localized retry diagnostics.                                                 |
@@ -98,23 +99,29 @@ for its disposable browser session.
 1. April 1 joke screen.
 2. The managed authentication-required screen with its Sign in action.
 3. Loading while `$startupCoordinatorStore.capabilities.canRenderShell` is false.
-4. `ObserverShell` with shared navigation and transcript presentation while
-   managed write access is unavailable, including the initial shell-only preview.
+4. `ObserverShell` supplying reader navigation/content to the shared
+   `ConversationShell` while managed write access is unavailable, including the
+   initial shell-only preview.
 5. `CustomGUISettingMenu` while `$CustomGUISettingMenuStore` is true.
 6. `Settings` for the committed settings route.
 7. `GridCatalog` for the committed grid route.
-8. The normal `Sidebar` plus `ChatScreen` shell.
+8. The writer `Sidebar` and `ChatScreen` supplied to the same
+   `ConversationShell` frame.
 
 Route loading and Retry status mount alongside the current writer route, whose
 content stays mounted and inert while its resources or code settle. They are
 not separate main render branches.
 
-On responsive layouts the sidebar becomes an app-hosted, focus-trapped dialog
-over the chat. Global overlays mount after the main branch: alerts, Realm,
-preset/persona lists, saved-toggle management, bookmarks, Hypa V3, the saving
-icon, popup list and editor, EasyPanel, loadouts, Iris, and custom sidebar
-configuration. Feature-owned overlays can mount below their surface instead;
-for example, `Sidebar.svelte` owns character-folder expansion and editing.
+`ConversationShell` keeps the navigation and main-column structure consistent
+between reader and writer roles. The controller/content branch changes with
+authority, but role resolution does not select different shell dimensions or a
+reader-only top row. On responsive layouts the sidebar becomes an app-hosted,
+focus-trapped dialog over the chat. Global overlays mount after the main branch:
+alerts, Realm, preset/persona lists, saved-toggle management, bookmarks, Hypa V3,
+the saving icon, popup list and editor, EasyPanel, loadouts, Iris, and custom
+sidebar configuration. Feature-owned overlays can mount below their surface
+instead; for example, `Sidebar.svelte` owns character-folder expansion and
+editing.
 
 Connected-reader startup is enabled by default;
 `VITE_FAST_BOOTSTRAP_OBSERVER=FALSE` retains conservative writer-first startup.
@@ -362,7 +369,17 @@ contracts; hard-coded viewport offsets drift with narrow content. Chat geometry 
 Reduced Motion is a durable Accessibility setting, not an operating-system
 media-query preference. Bootstrap and settings effects call
 `updateReducedMotion()`, while global styles and progress components consume
-the root class.
+the root class. Shell entry/exit animation additionally requires an explicit
+`sideBarTransitionCause`; startup, automatic role changes, reconnect, and
+recovery mount directly at settled geometry. Explicit sidebar/drawer open and
+close retain the existing Reduced Motion contract.
+
+`shellGeometry.ts` is the canonical conversation-shell dimension model. It
+normalizes `sideBarSize` to 0–3 (24, 28, 32, or 36 rem), desktop rail columns to
+1–4, mobile rail columns to 1–2, and each rail column to 5 rem. Both reader and
+writer adapters consume those values. Managed readers receive the column values
+only through the certified display projection; pending writer settings remain
+isolated.
 
 The body is overflow-hidden and full-height, and `#app` uses `overflow: clip`.
 `src/ts/gui/viewportScrollGuard.ts` pins the document root at the origin before
@@ -410,10 +427,13 @@ constraints. The two coordinators have focused unit and browser coverage.
 
 ## Mobile And Lite
 
-`DynamicGUI` derives from `window.innerWidth <= 1024` in
-`src/ts/stores.svelte.ts`. `sideBarStore`, `sideBarClosing`, `SizeStore`,
-`MobileGUI`, `MobileGUIStack`, `MobileSideBar`, and `MobileSearch` coordinate
-responsive state.
+`DynamicGUI` uses the canonical `window.innerWidth <= 1024` conversation-shell
+boundary. Reader and writer roles both consume that store; there is no
+reader-only media-query threshold. `sideBarStore`, `sideBarClosing`,
+`sideBarTransitionCause`, `SizeStore`, `MobileGUI`, `MobileGUIStack`,
+`MobileSideBar`, and `MobileSearch` coordinate responsive state. The responsive
+reader drawer remains mounted while hidden to preserve local navigation state,
+but its dialog focus trap is active only while open.
 
 The full `MobileHeader`, `MobileBody`, and `MobileFooter` shell is not mounted
 from `src/App.svelte`. Do not start there for a live mobile bug unless the work

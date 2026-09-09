@@ -6,13 +6,13 @@ Start at [status](status.md) for the current phase, next action, decisions, and
 verification evidence. This document defines intended behavior and bounded work;
 it does not describe a shipped implementation. Current source,
 [STRUCTURE](../../../STRUCTURE.md), and the
-[architecture guides](../../structure/README.md) remain authoritative for shipped
+[architecture guides](../../../docs/structure/README.md) remain authoritative for shipped
 behavior.
 
 This is a focused follow-up to the completed
-[connected read-only clients](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/PLAN.md)
+[connected read-only clients](../connected-read-only-clients/PLAN.md)
 and
-[read-only app UX](../../../.archived-docs/ui-and-user-input/read-only-app-ux/PLAN.md)
+[read-only app UX](../read-only-app-ux/PLAN.md)
 workstreams. Those archives remain closed. This plan does not reopen their wider
 authority, synchronization, or reader-rendering scope.
 
@@ -210,18 +210,18 @@ All previously accepted reader constraints remain mandatory:
 
 This inline map replaces a separate inventory document.
 
-| Concern | Current owners | Focused evidence |
-| --- | --- | --- |
-| Top-level shell and role branches | `src/App.svelte` | `src/App.routeEffect.dom.test.ts` |
-| Reader shell, takeover lifecycle, route states | `src/lib/ObserverShell.svelte` | `src/lib/ObserverShell.svelte.test.ts` |
-| Writer navigation and panel geometry | `src/lib/SideBars/Sidebar.svelte` | `src/lib/SideBars/Sidebar.charList.test.ts`, `src/lib/SideBars/Sidebar.keyboard.dom.test.ts` |
-| Reader navigation geometry and local browsing | `src/lib/SideBars/ReaderNavigation.svelte` | `src/lib/ObserverShell.svelte.test.ts` |
-| Shared rail geometry and motion | `src/lib/SideBars/NavigationRail.svelte` | owning sidebar/App DOM tests; add a focused helper/component test if extraction warrants it |
-| Bottom conversation action | `src/lib/ReaderTranscript.svelte` and the new/extracted bottom action owner | `src/lib/ReaderTranscript.svelte.test.ts`, `src/lib/ObserverShell.svelte.test.ts` |
-| Responsive and sidebar-size state | `src/ts/stores.svelte.ts`, `src/ts/gui/guisize.ts`, `src/ts/gui/displaySettings.ts` | `src/ts/gui/guisize.test.ts`, `src/ts/gui/displaySettings.dom.test.ts` |
-| Certified reader settings | `src/ts/server/readerTranscriptProjection.svelte.ts`, existing shell resource | `src/ts/server/readerTranscriptProjection.svelte.test.ts` |
-| Real reader/writer transition | browser smoke fixtures | `server/fastify/browser-smoke/readOnlyAppUx.spec.ts`, `server/fastify/browser-smoke/connectedWriterSwitching.spec.ts` |
-| Current behavior documentation | `src/docs/svelte-navigation-ui.md`, `src/docs/svelte-ui.md`, `docs/tests/app-navigation-and-chat.md` | `pnpm check:docs` |
+| Concern                                        | Current owners                                                                                       | Focused evidence                                                                                                      |
+| ---------------------------------------------- | ---------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
+| Top-level shell and role branches              | `src/App.svelte`                                                                                     | `src/App.routeEffect.dom.test.ts`                                                                                     |
+| Reader shell, takeover lifecycle, route states | `src/lib/ObserverShell.svelte`                                                                       | `src/lib/ObserverShell.svelte.test.ts`                                                                                |
+| Writer navigation and panel geometry           | `src/lib/SideBars/Sidebar.svelte`                                                                    | `src/lib/SideBars/Sidebar.charList.test.ts`, `src/lib/SideBars/Sidebar.keyboard.dom.test.ts`                          |
+| Reader navigation geometry and local browsing  | `src/lib/SideBars/ReaderNavigation.svelte`                                                           | `src/lib/ObserverShell.svelte.test.ts`                                                                                |
+| Shared rail geometry and motion                | `src/lib/SideBars/NavigationRail.svelte`                                                             | owning sidebar/App DOM tests; add a focused helper/component test if extraction warrants it                           |
+| Bottom conversation action                     | `src/lib/ReaderTranscript.svelte` and the new/extracted bottom action owner                          | `src/lib/ReaderTranscript.svelte.test.ts`, `src/lib/ObserverShell.svelte.test.ts`                                     |
+| Responsive and sidebar-size state              | `src/ts/stores.svelte.ts`, `src/ts/gui/guisize.ts`, `src/ts/gui/displaySettings.ts`                  | `src/ts/gui/guisize.test.ts`, `src/ts/gui/displaySettings.dom.test.ts`                                                |
+| Certified reader settings                      | `src/ts/server/readerTranscriptProjection.svelte.ts`, existing shell resource                        | `src/ts/server/readerTranscriptProjection.svelte.test.ts`                                                             |
+| Real reader/writer transition                  | browser smoke fixtures                                                                               | `server/fastify/browser-smoke/readOnlyAppUx.spec.ts`, `server/fastify/browser-smoke/connectedWriterSwitching.spec.ts` |
+| Current behavior documentation                 | `src/docs/svelte-navigation-ui.md`, `src/docs/svelte-ui.md`, `docs/tests/app-navigation-and-chat.md` | `pnpm check:docs`                                                                                                     |
 
 ## Phase 1: Geometry Contract and Regression Harness
 

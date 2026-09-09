@@ -2,7 +2,7 @@
 
 Last audited: 2026-09-04.
 
-Targeted source check: 2026-09-09 (late display-body scroll stability after interaction grace expiry).
+Targeted source check: 2026-09-09 (read-only conversation-shell parity and role-transition frame sampling).
 
 This area covers URL/store routing, history and hotkey ownership, character/chat selection, chat folders and forks, transcript hydration, composer and attachment behavior, message rendering/editing/translation, active-chat generation settings, and the browser journeys that prove visible state survives command settlement and reload. Durable command mechanics are analyzed in [Persistence, Commands, and Events](persistence-commands-and-events.md), browser projection mechanics in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md), and generation internals in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
 
@@ -19,7 +19,10 @@ writer selection and persistence effects have a separate gate.
 
 Shared-view regressions in `ObserverShell.svelte.test.ts` exercise committed
 folders/pins/search/cards, local writer-independent selection, restricted-route
-Return to reading, auth-loss activation denial and mobile focus handling.
+Return to reading, auth-loss activation denial, one bottom takeover action, and
+mobile focus handling. The responsive drawer remains mounted while hidden so
+reader-local folder/search state survives close and reopen, while the focus trap
+is active only for the visible dialog.
 `readerTranscriptProjection.svelte.test.ts` and
 `gui/displaySettings.dom.test.ts` prove pending appearance/metadata isolation,
 accepted receipt refresh and auth/lineage clearing. Route prefetch tests hold
@@ -27,7 +30,7 @@ idle work across demotion, and App rejects restored restricted overlays while
 retaining explicit session takeover dialogs.
 
 `server/fastify/browser-smoke/readOnlyAppUx.spec.ts` adds actual desktop/mobile
-shared navigation, themes/backgrounds, keyboard/focus, history/copy/disclosures,
+shared-frame navigation, themes/backgrounds, keyboard/focus, history/copy/disclosures,
 blocked script invocations and authoring entries. Its oracles compare SQLite
 events/receipts, native outbox state, local and writer selection and network
 traffic. Authenticated cache POSTs are classified as reads. Controlled failure
@@ -57,7 +60,14 @@ test independently proves protected message content is removed.
 emulation with actual committed DOM updates, clipboard/history/local navigation,
 reload and offline catch-up, plus SQL ownership and forbidden-request checks.
 `connectedWriterSwitching.spec.ts` verifies in-place A → B → A transfer, continued
-Reader navigation and preservation of the originating draft. The separate
+Reader navigation and preservation of the originating draft. Its shared
+`layoutFrameSampler.ts` samples the navigation rail, sidebar panel, and main
+column on every animation frame from before transfer through settled readiness,
+reports the exact element/property/time for a largest baseline delta, and
+records Performance Observer layout-shift entries as supporting evidence. The
+primary oracle requires every sampled left edge and width to remain within one
+CSS pixel; layout shifts with recent input remain in the artifact rather than
+being silently excluded. The separate
 `connectedReaderGeneration.spec.ts` verifies live output, viewer detachment and
 terminal convergence during transfers. These specs use built Chromium/Fastify
 fixtures; controlled lifecycle events and mobile emulation do not establish
@@ -184,7 +194,7 @@ scheduling.
 | Group                      | Complete in-scope file inventory                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
 | -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Route/shell/hotkeys        | `src/App.routeEffect.dom.test.ts`; `src/lib/ObserverShell.svelte.test.ts`; `src/ts/observerRouteIntent.test.ts`; `src/ts/router.test.ts`; `src/ts/server/routeResourceLoader.test.ts`; `src/ts/hotkey.navigation.test.ts`; `src/ts/hotkey.owner.test.ts`; `src/lib/SideBars/Sidebar.keyboard.dom.test.ts`; `server/fastify/browser-smoke/startupRecoveryIntegrationMatrix.spec.ts`                                                                                                                                                                                                                                                                                                                                       |
-| Connected-reader UI        | `src/ts/readerRouteScope.test.ts`; `src/lib/ReaderTranscript.svelte.test.ts`; `src/lib/ChatScreens/readerGenerationRows.test.ts`; `src/lib/WriterDraftRecovery.svelte.test.ts`; `server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts`; `server/fastify/browser-smoke/connectedWriterSwitching.spec.ts`                                                                                                                                                                                                                                                                                                                                                                                                          |
+| Connected-reader UI        | `src/ts/gui/shellGeometry.test.ts`; `src/ts/readerRouteScope.test.ts`; `src/lib/ReaderTakeoverAction.svelte.test.ts`; `src/lib/ReaderTranscript.svelte.test.ts`; `src/lib/ChatScreens/readerGenerationRows.test.ts`; `src/lib/WriterDraftRecovery.svelte.test.ts`; `server/fastify/__tests__/layoutFrameSampler.test.ts`; `server/fastify/browser-smoke/readOnlyAppUx.spec.ts`; `server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts`; `server/fastify/browser-smoke/connectedWriterSwitching.spec.ts`                                                                                                                                                                                                          |
 | Organization/navigation    | `src/lib/Others/BookmarkList.svelte.test.ts`; `src/lib/Others/ChatList.svelte.test.ts`; `src/lib/SideBars/SideChatList.svelte.test.ts`; `DropList.svelte.test.ts`; `dropList.test.ts`; `chatFolderGrouping.test.ts`; `sidebarDrag.test.ts`; `sidebarOrganizer.test.ts`; `Sidebar.charList.test.ts`                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | Composer/transcript        | `src/lib/ChatScreens/AgentPresetProgress.svelte.test.ts`; `AssetInput.svelte.test.ts`; `ChatsUnread.test.ts`; `DefaultChatScreen.composerDrafts.test.ts`; `DefaultChatScreen.loadPages.test.ts`; `DefaultChatScreen.shellGreeting.dom.test.ts`; `PostGenerationScriptProgress.svelte.test.ts`; `chatGenerationLoading.test.ts`; `memoryLimitMarker.test.ts`                                                                                                                                                                                                                                                                                                                                                              |
 | Message/rendering          | `src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts`; `Chat.customHtml.test.ts`; `Chat.parserDependencies.test.ts`; `ChatBody.parseMemo.test.ts`; `ChatBody.svelte.test.ts`; `ChatScreenBackground.test.ts`; `PartialEditController.sharedHover.test.ts`; `RerollList.svelte.test.ts`; `ResizeBox.svelte.test.ts`; `ResizeBoxPointer.test.ts`; `Suggestion.svelte.test.ts`; `TransitionImage.svelte.test.ts`; `branchComment.test.ts`; `chatButtonTriggerFreshness.test.ts`; `messageEditPopup.test.ts`; `newMessageTranslationEligibility.test.ts`; `partialEditFreshness.test.ts`; `partialEditLayer.test.ts`; `partialEditTouchTrigger.test.ts`; `src/ts/process/serverGeneratedMessageTranslation.test.ts` |
