@@ -86,6 +86,12 @@ settings from `readerTranscriptProjection.svelte.ts`, including confirmed
 `sideBarSize`, `desktopSidebarColumns`, and `mobileSidebarColumns`. The reader
 and writer call the same geometry resolver and use the same responsive
 classification; pending writer settings never enter the reader adapter.
+The reader also honors the confirmed `menuSideBar` and
+`hamburgerButtonBottom` preferences. In hamburger mode it uses the same
+`HamburgerNavigationMenu.svelte` shell and Settings, Home, Playground, and Grid
+layout as the writer; Settings and Playground remain native disabled controls
+with the write-access reason, while Home and Grid retain local read-only
+navigation. Plugin-defined hamburger actions are writer-only.
 `readerNavigation.ts`
 filters ambiguous/missing identities, orders active characters and derives pins
 from shell summaries or hydrated details. Folder expansion, character/chat

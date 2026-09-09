@@ -6,6 +6,8 @@
     interactive?: boolean
     ariaLabel?: string
     onIntent?: () => void
+    enabled?: boolean
+    disabledReason?: string
   }
 
   let {
@@ -15,20 +17,51 @@
     interactive = true,
     ariaLabel,
     onIntent = () => {},
+    enabled = true,
+    disabledReason = '',
   }: Props = $props()
+
+  const accessibleLabel = $derived(!enabled && disabledReason ? `${ariaLabel}: ${disabledReason}` : ariaLabel)
 </script>
 
 {#await additionalStyle}
   {#if interactive}
-    <button onclick={onClick} onpointerenter={onIntent} onfocus={onIntent} class="ico" aria-label={ariaLabel}
-      >{@render children?.()}</button>
+    <button
+      type="button"
+      onclick={() => {
+        if (enabled) onClick()
+      }}
+      onpointerenter={() => {
+        if (enabled) onIntent()
+      }}
+      onfocus={() => {
+        if (enabled) onIntent()
+      }}
+      class="ico"
+      disabled={!enabled}
+      aria-label={accessibleLabel}
+      title={!enabled ? disabledReason : ariaLabel}>{@render children?.()}</button>
   {:else}
     <div class="ico" aria-hidden="true">{@render children?.()}</div>
   {/if}
 {:then as}
   {#if interactive}
-    <button onclick={onClick} onpointerenter={onIntent} onfocus={onIntent} class="ico" style={as} aria-label={ariaLabel}
-      >{@render children?.()}</button>
+    <button
+      type="button"
+      onclick={() => {
+        if (enabled) onClick()
+      }}
+      onpointerenter={() => {
+        if (enabled) onIntent()
+      }}
+      onfocus={() => {
+        if (enabled) onIntent()
+      }}
+      class="ico"
+      style={as}
+      disabled={!enabled}
+      aria-label={accessibleLabel}
+      title={!enabled ? disabledReason : ariaLabel}>{@render children?.()}</button>
   {:else}
     <div class="ico" style={as} aria-hidden="true">{@render children?.()}</div>
   {/if}
@@ -55,7 +88,11 @@
     transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
   }
 
-  .ico:hover {
+  .ico:disabled {
+    cursor: not-allowed;
+  }
+
+  .ico:not(:disabled):hover {
     --tw-bg-opacity: 1;
     background-color: rgba(16, 185, 129, var(--tw-bg-opacity));
   }

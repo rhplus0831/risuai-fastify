@@ -64,6 +64,8 @@ function fixture(): Record<string, unknown> {
     zoomsize: 120,
     customCSS: ':root { --read-only-ux-theme: confirmed; }',
     roundIcons: true,
+    menuSideBar: false,
+    hamburgerButtonBottom: false,
     showFolderName: true,
     characterOrder: [CHARACTER_A, { id: CHARACTER_FOLDER, name: 'Voyages', color: 'blue', data: [CHARACTER_B] }],
     characters: [
@@ -406,7 +408,11 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       await expect(reader.locator('[data-risu-navigation-rail]')).toHaveCSS('width', '80px')
       await expect(writer.locator('[data-risu-navigation-rail]')).toBeVisible()
       const navigation = reader.locator('[data-reader-navigation]')
-      for (const label of ['Settings', 'Plugin']) {
+      const hamburger = navigation.getByRole('button', { name: 'Menu', exact: true })
+      await hamburger.click()
+      await expect(hamburger).toHaveAttribute('aria-expanded', 'true')
+      await expect(navigation.locator('[data-risu-hamburger-menu]')).toBeVisible()
+      for (const label of ['Settings', 'Playground']) {
         const control = navigation.getByRole('button', { name: new RegExp(`^${label}:`) })
         await expect(control).toBeDisabled()
         await expect(control).toHaveAttribute('title', WRITE_ACCESS_REASON)
@@ -415,6 +421,8 @@ for (const viewport of ['desktop', 'mobile'] as const) {
         await control.dispatchEvent('click')
         await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
       }
+      await hamburger.click()
+      await expect(hamburger).toHaveAttribute('aria-expanded', 'false')
 
       const characterFolder = navigation.locator(`[data-reader-character-folder="${CHARACTER_FOLDER}"]`)
       const folderToggle = characterFolder.getByRole('button', { name: 'Voyages', exact: true })
@@ -514,6 +522,7 @@ for (const viewport of ['desktop', 'mobile'] as const) {
 
       await openNavigation(reader)
       await navigation.locator('[data-reader-go-back]').click()
+      await hamburger.click()
       await navigation.getByRole('button', { name: 'Home', exact: true }).click()
       await expect(reader).toHaveURL(`${harness.baseUrl}/`)
       const catalog = reader.locator('[data-risu-grid-catalog]')
@@ -529,6 +538,7 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       await expectReader(reader, CHAT_B)
       await openNavigation(reader)
       await navigation.locator('[data-reader-go-back]').click()
+      await hamburger.click()
       await navigation.getByRole('button', { name: 'Grid', exact: true }).click()
       await expect(reader).toHaveURL(`${harness.baseUrl}/grid`)
       await expect(catalog).toBeVisible()

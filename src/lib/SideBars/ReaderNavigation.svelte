@@ -15,6 +15,7 @@
   } from '@lucide/svelte'
   import NavigationRail from './NavigationRail.svelte'
   import NavigationButton from './NavigationButton.svelte'
+  import HamburgerNavigationMenu from './HamburgerNavigationMenu.svelte'
   import SidebarAvatar from './SidebarAvatar.svelte'
   import SidebarIndicator from './SidebarIndicator.svelte'
   import PinnedChatsRail from './PinnedChatsRail.svelte'
@@ -72,6 +73,7 @@
   let chatSearch = $state('')
   let expanded = $state<Record<string, boolean>>({})
   let chatExpanded = $state<Record<string, boolean>>({})
+  let hamburgerExpanded = $state(false)
   const order = $derived(readerCharacterOrder(characters, characterOrder))
   const items = $derived(buildSidebarCharacterListItems(order, characters))
   const visibleChats = $derived(
@@ -96,6 +98,19 @@
     getCharacterDisplaySearchText(characters[index]).toLocaleLowerCase().includes(search.toLocaleLowerCase())
   const folderOpen = (id: string, folded: boolean) => chatExpanded[`${selectedCharacterId}:${id}`] ?? !folded
   const deny = () => {}
+  const openHome = () => {
+    hamburgerExpanded = false
+    onHome()
+  }
+  const openGrid = () => {
+    hamburgerExpanded = false
+    onGrid()
+  }
+  $effect(() => {
+    void settings.menuSideBar
+    void settings.hamburgerButtonBottom
+    hamburgerExpanded = false
+  })
 </script>
 
 <nav
@@ -131,34 +146,49 @@
     {/if}
   {:else}
     <NavigationRail columns={geometry.columns}>
-      <NavigationButton
-        label={language.home}
-        selected={homeSelected}
-        enabled
-        disabledReason=""
-        onActivate={onHome}
-        onIntent={deny}><HomeIcon /></NavigationButton>
-      <NavigationButton
-        label={language.grid}
-        selected={gridSelected}
-        enabled
-        disabledReason=""
-        onActivate={onGrid}
-        onIntent={deny}><LayoutGridIcon /></NavigationButton>
-      <NavigationButton
-        label={language.settings}
-        selected={false}
-        enabled={false}
-        disabledReason={language.connectedReaders.writeAccessRequired}
-        onActivate={deny}
-        onIntent={deny}><Settings /></NavigationButton>
-      <NavigationButton
-        label={language.plugin}
-        selected={false}
-        enabled={false}
-        disabledReason={language.connectedReaders.writeAccessRequired}
-        onActivate={deny}
-        onIntent={deny}><PuzzleIcon /></NavigationButton>
+      {#if settings.menuSideBar === true}
+        <NavigationButton
+          label={language.home}
+          selected={homeSelected}
+          enabled
+          disabledReason=""
+          onActivate={onHome}
+          onIntent={deny}><HomeIcon /></NavigationButton>
+        <NavigationButton
+          label={language.grid}
+          selected={gridSelected}
+          enabled
+          disabledReason=""
+          onActivate={onGrid}
+          onIntent={deny}><LayoutGridIcon /></NavigationButton>
+        <NavigationButton
+          label={language.settings}
+          selected={false}
+          enabled={false}
+          disabledReason={language.connectedReaders.writeAccessRequired}
+          onActivate={deny}
+          onIntent={deny}><Settings /></NavigationButton>
+        <NavigationButton
+          label={language.plugin}
+          selected={false}
+          enabled={false}
+          disabledReason={language.connectedReaders.writeAccessRequired}
+          onActivate={deny}
+          onIntent={deny}><PuzzleIcon /></NavigationButton>
+      {:else if settings.hamburgerButtonBottom !== true}
+        <HamburgerNavigationMenu
+          expanded={hamburgerExpanded}
+          disabledReason={language.connectedReaders.writeAccessRequired}
+          settingsEnabled={false}
+          playgroundEnabled={false}
+          onToggle={() => {
+            hamburgerExpanded = !hamburgerExpanded
+          }}
+          onSettings={deny}
+          onHome={openHome}
+          onPlayground={deny}
+          onGrid={openGrid} />
+      {/if}
       <PinnedChatsRail
         items={pins}
         generatingChatIds={new Set()}
@@ -169,12 +199,14 @@
         {selectedChatId}
         resolveImage={image}
         onPrefetch={deny}
-        onOpen={(item) => onChat(item.characterId, item.chatId)} />
+        onOpen={(item) => onChat(item.characterId, item.chatId)}
+        isInert={settings.menuSideBar !== true && hamburgerExpanded} />
       <div
         class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-2 overflow-x-hidden overflow-y-auto py-3"
         style:grid-template-columns={`repeat(${geometry.columns}, minmax(0, 1fr))`}
         data-risu-sidebar-character-columns={geometry.columns}
-        data-risu-sidebar-character-controls>
+        data-risu-sidebar-character-controls
+        inert={settings.menuSideBar !== true && hamburgerExpanded}>
         {#each items as item, index (item.type === 'folder' ? `folder:${item.id}` : `character:${characters[item.index]?.chaId}`)}
           {#if item.type === 'normal' && matches(item.index)}
             {@render avatar(item.index)}
@@ -217,6 +249,21 @@
         title={language.connectedReaders.writeAccessRequired}
         aria-label={`${language.addCharacter}: ${language.connectedReaders.writeAccessRequired}`}
         class="p-3 text-textcolor2 opacity-50"><PlusIcon /></button>
+      {#if settings.menuSideBar !== true && settings.hamburgerButtonBottom === true}
+        <HamburgerNavigationMenu
+          expanded={hamburgerExpanded}
+          bottom
+          disabledReason={language.connectedReaders.writeAccessRequired}
+          settingsEnabled={false}
+          playgroundEnabled={false}
+          onToggle={() => {
+            hamburgerExpanded = !hamburgerExpanded
+          }}
+          onSettings={deny}
+          onHome={openHome}
+          onPlayground={deny}
+          onGrid={openGrid} />
+      {/if}
     </NavigationRail>
     <div
       class="setting-area h-full max-w-[calc(100vw-8rem)] min-w-0 flex flex-col overflow-hidden bg-darkbg py-4 px-3 text-textcolor"

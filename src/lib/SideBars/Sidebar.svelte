@@ -14,18 +14,9 @@
   } from '../../ts/stores.svelte'
   import type { character } from '../../ts/storage/database.svelte'
   import BarIcon from './BarIcon.svelte'
+  import HamburgerNavigationMenu from './HamburgerNavigationMenu.svelte'
   import SidebarIndicator from './SidebarIndicator.svelte'
-  import {
-    ShellIcon,
-    Settings,
-    ListIcon,
-    LayoutGridIcon,
-    FolderIcon,
-    FolderOpenIcon,
-    HomeIcon,
-    WrenchIcon,
-    User2Icon,
-  } from '@lucide/svelte'
+  import { ShellIcon, Settings, FolderIcon, FolderOpenIcon, HomeIcon, WrenchIcon, User2Icon } from '@lucide/svelte'
   import { getCharImage } from '../../ts/characterImage'
   import { language } from '../../lang'
   import SidebarAvatar from './SidebarAvatar.svelte'
@@ -849,52 +840,22 @@
     {editMode}
     columns={sidebarColumns}>
     {#if !hamburgerButtonBottom}
-      <button
-        aria-label={language.menu}
-        aria-expanded={menuMode === 1}
-        class="ml-3 flex h-8 min-h-8 w-14 min-w-14 cursor-pointer self-start text-white mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-blue-500"
-        onclick={() => {
+      <HamburgerNavigationMenu
+        expanded={menuMode === 1}
+        onToggle={() => {
           menuMode = 1 - menuMode
         }}
-        ><ListIcon />
-      </button>
-      <div class="mt-2 border-b border-b-selected w-full relative text-white">
-        {#if menuMode === 1}
-          <div
-            class="absolute w-20 min-w-20 flex border-b-selected border-b bg-bgcolor flex-col items-center pt-2 rounded-b-md z-20 pb-2">
-            <BarIcon onClick={openSettingsRoute} onIntent={preloadSettingsRoute} ariaLabel={language.settings}
-              ><Settings /></BarIcon>
-            <div class="mt-2"></div>
-            <BarIcon onClick={openHomeRoute} ariaLabel={language.home}><HomeIcon /></BarIcon>
-            <div class="mt-2"></div>
-            <BarIcon
-              onClick={openPlaygroundRoute}
-              onIntent={preloadPlaygroundRoute}
-              ariaLabel={language.playground.playground}><ShellIcon /></BarIcon>
-            {#if $pluginRuntimeStateStore.phase === 'ready'}
-              {#each additionalHamburgerMenu as menu}
-                <div class="mt-2"></div>
-                <BarIcon
-                  ariaLabel={menu.name}
-                  onClick={() => {
-                    reseter()
-                    if (canUseClientWriteAccess()) menu.callback()
-                  }}>
-                  <PluginDefinedIcon ico={menu} />
-                </BarIcon>
-              {/each}
-            {/if}
-            <div class="mt-2"></div>
-            <BarIcon
-              ariaLabel={language.grid}
-              onIntent={preloadGridRoute}
-              onClick={() => {
-                reseter()
-                openGrid()
-              }}><LayoutGridIcon /></BarIcon>
-          </div>
-        {/if}
-      </div>
+        onSettings={openSettingsRoute}
+        onSettingsIntent={preloadSettingsRoute}
+        onHome={openHomeRoute}
+        onPlayground={openPlaygroundRoute}
+        onPlaygroundIntent={preloadPlaygroundRoute}
+        onGrid={() => {
+          reseter()
+          openGrid()
+        }}
+        onGridIntent={preloadGridRoute}
+        extras={hamburgerExtras} />
     {/if}
     <PinnedChatsRail
       items={pinnedChats}
@@ -1189,52 +1150,23 @@
       </div>
     </div>
     {#if hamburgerButtonBottom}
-      <div class="border-t border-t-selected w-full relative text-white">
-        {#if menuMode === 1}
-          <div
-            class="absolute bottom-full w-20 min-w-20 flex border-t-selected border-t bg-bgcolor flex-col items-center pt-2 rounded-t-md z-20 pb-2">
-            <BarIcon onClick={openSettingsRoute} onIntent={preloadSettingsRoute} ariaLabel={language.settings}
-              ><Settings /></BarIcon>
-            <div class="mt-2"></div>
-            <BarIcon onClick={openHomeRoute} ariaLabel={language.home}><HomeIcon /></BarIcon>
-            <div class="mt-2"></div>
-            <BarIcon
-              onClick={openPlaygroundRoute}
-              onIntent={preloadPlaygroundRoute}
-              ariaLabel={language.playground.playground}><ShellIcon /></BarIcon>
-            {#if $pluginRuntimeStateStore.phase === 'ready'}
-              {#each additionalHamburgerMenu as menu}
-                <div class="mt-2"></div>
-                <BarIcon
-                  ariaLabel={menu.name}
-                  onClick={() => {
-                    reseter()
-                    if (canUseClientWriteAccess()) menu.callback()
-                  }}>
-                  <PluginDefinedIcon ico={menu} />
-                </BarIcon>
-              {/each}
-            {/if}
-            <div class="mt-2"></div>
-            <BarIcon
-              ariaLabel={language.grid}
-              onIntent={preloadGridRoute}
-              onClick={() => {
-                reseter()
-                openGrid()
-              }}><LayoutGridIcon /></BarIcon>
-          </div>
-        {/if}
-      </div>
-      <button
-        aria-label={language.menu}
-        aria-expanded={menuMode === 1}
-        class="ml-3 flex h-8 min-h-8 w-14 min-w-14 cursor-pointer self-start text-white mb-2 mt-2 items-center justify-center rounded-md bg-textcolor2 transition-colors hover:bg-blue-500"
-        onclick={() => {
+      <HamburgerNavigationMenu
+        expanded={menuMode === 1}
+        bottom
+        onToggle={() => {
           menuMode = 1 - menuMode
         }}
-        ><ListIcon />
-      </button>
+        onSettings={openSettingsRoute}
+        onSettingsIntent={preloadSettingsRoute}
+        onHome={openHomeRoute}
+        onPlayground={openPlaygroundRoute}
+        onPlaygroundIntent={preloadPlaygroundRoute}
+        onGrid={() => {
+          reseter()
+          openGrid()
+        }}
+        onGridIntent={preloadGridRoute}
+        extras={hamburgerExtras} />
     {/if}
   </NavigationRail>
 {/if}
@@ -1326,6 +1258,22 @@
     {/if}
   {/if}
 </div>
+
+{#snippet hamburgerExtras()}
+  {#if $pluginRuntimeStateStore.phase === 'ready'}
+    {#each additionalHamburgerMenu as menu}
+      <div class="mt-2"></div>
+      <BarIcon
+        ariaLabel={menu.name}
+        onClick={() => {
+          reseter()
+          if (canUseClientWriteAccess()) menu.callback()
+        }}>
+        <PluginDefinedIcon ico={menu} />
+      </BarIcon>
+    {/each}
+  {/if}
+{/snippet}
 
 {#if $DynamicGUI}
   <button

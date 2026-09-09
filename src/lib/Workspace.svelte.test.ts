@@ -167,6 +167,16 @@ async function mountWorkspace(): Promise<void> {
   await tick()
 }
 
+async function expandReaderHamburger(): Promise<HTMLButtonElement> {
+  const toggle = target.querySelector<HTMLButtonElement>('[data-reader-navigation] [data-risu-hamburger-menu-toggle]')
+  expect(toggle).not.toBeNull()
+  if (toggle!.getAttribute('aria-expanded') !== 'true') {
+    toggle!.click()
+    await tick()
+  }
+  return toggle!
+}
+
 async function showConnectedReaderChat(): Promise<void> {
   const reader = makeDetailedCharacter()
   reader.chats.push({ ...reader.chats[0], id: 'chat-b', name: 'Second reader chat', message: [] })
@@ -280,7 +290,8 @@ describe('read-only workspace', () => {
       language.connectedReaders.connected,
     )
     expect(target.querySelector('input:not([type="search"]), textarea, [contenteditable="true"]')).toBeNull()
-    const home = target.querySelector<HTMLButtonElement>('nav button')!
+    await expandReaderHamburger()
+    const home = target.querySelector<HTMLButtonElement>('[data-reader-navigation] button[aria-label="Home"]')!
     home.focus()
     expect(document.activeElement).toBe(home)
     home.click()
@@ -348,6 +359,55 @@ describe('read-only workspace', () => {
     expect(status?.closest('[data-risu-device-access-action]')).not.toBeNull()
     expect(target.querySelector('header')).toBeNull()
     expect(characterButton?.type).toBe('button')
+  })
+
+  it('uses the writer hamburger UI while keeping Settings and Playground unavailable', async () => {
+    recordReaderNavigationSettings({ menuSideBar: false, hamburgerButtonBottom: false }, [
+      'menuSideBar',
+      'hamburgerButtonBottom',
+    ])
+    await mountWorkspace()
+
+    const characterControls = target.querySelector<HTMLElement>('[data-risu-sidebar-character-controls]')!
+    expect(target.querySelector('[data-reader-navigation] button[aria-label="Home"]')).toBeNull()
+    const toggle = await expandReaderHamburger()
+    const menu = target.querySelector<HTMLElement>('[data-reader-navigation] [data-risu-hamburger-menu]')!
+    const settings = menu.querySelector<HTMLButtonElement>('button[aria-label^="Settings:"]')!
+    const playground = menu.querySelector<HTMLButtonElement>('button[aria-label^="Playground:"]')!
+    const home = menu.querySelector<HTMLButtonElement>('button[aria-label="Home"]')!
+    const grid = menu.querySelector<HTMLButtonElement>('button[aria-label="Grid"]')!
+
+    expect(menu).not.toBeNull()
+    expect(menu.parentElement?.dataset.risuHamburgerMenuPlacement).toBe('top')
+    expect(settings.disabled).toBe(true)
+    expect(settings.title).toBe(language.connectedReaders.writeAccessRequired)
+    expect(playground.disabled).toBe(true)
+    expect(playground.title).toBe(language.connectedReaders.writeAccessRequired)
+    expect(home.disabled).toBe(false)
+    expect(grid.disabled).toBe(false)
+    expect(characterControls.hasAttribute('inert')).toBe(true)
+
+    settings.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    playground.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    expect(get((await createRouterMock()).currentRoute).path).toBe('/')
+    expect(fetch).not.toHaveBeenCalled()
+
+    toggle.click()
+    await tick()
+    expect(characterControls.hasAttribute('inert')).toBe(false)
+  })
+
+  it('places the read-only hamburger at the saved bottom position', async () => {
+    recordReaderNavigationSettings({ menuSideBar: false, hamburgerButtonBottom: true }, [
+      'menuSideBar',
+      'hamburgerButtonBottom',
+    ])
+    await mountWorkspace()
+
+    const anchor = target.querySelector<HTMLElement>('[data-risu-hamburger-menu-anchor]')!
+    const toggle = target.querySelector<HTMLElement>('[data-risu-hamburger-menu-toggle]')!
+    expect(anchor.dataset.risuHamburgerMenuPlacement).toBe('bottom')
+    expect(anchor.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING).not.toBe(0)
   })
 
   it('uses one certified geometry model for wide and responsive reader navigation', async () => {
@@ -567,6 +627,7 @@ describe('read-only workspace', () => {
     const back = target.querySelector<HTMLButtonElement>('[data-reader-go-back]')!
     back.click()
     await tick()
+    await expandReaderHamburger()
     const home = target.querySelector<HTMLButtonElement>('button[aria-label="Home"]')!
     home.click()
     await tick()
@@ -854,9 +915,11 @@ describe('read-only workspace', () => {
     await tick()
     expect(search.value).toBe('Character B')
     expect(chatFolder.getAttribute('aria-expanded')).toBe('true')
+    await expandReaderHamburger()
     target.querySelector<HTMLButtonElement>('[data-reader-navigation] button[aria-label="Home"]')!.click()
     await tick()
     expect(target.querySelectorAll('[data-risu-grid-character-row]')).toHaveLength(2)
+    await expandReaderHamburger()
     const settings = target.querySelector<HTMLButtonElement>('button[aria-label^="Settings:"]')!
     expect(settings.disabled).toBe(true)
     settings.dispatchEvent(new MouseEvent('click', { bubbles: true }))
@@ -881,6 +944,7 @@ describe('read-only workspace', () => {
     expect(get(router.currentRoute).path).toBe('/character/char-a/chat-b')
     router.navigate('/settings/persona')
     await tick()
+    await expandReaderHamburger()
     const staleHome = target.querySelector<HTMLButtonElement>('[data-reader-navigation] button[aria-label="Home"]')!
     requireClientAuthentication()
     staleHome.dispatchEvent(new MouseEvent('click', { bubbles: true }))
