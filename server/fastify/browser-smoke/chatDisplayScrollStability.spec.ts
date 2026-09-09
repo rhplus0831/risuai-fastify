@@ -12,6 +12,7 @@ test.use({ trace: 'off' })
 const TRANSCRIPT = '[data-default-chat-transcript]'
 const MESSAGE_COUNT = 18
 const CRITICAL_MESSAGE_COUNT = 2
+const WHEEL_STEP = 90
 const ROW_MARKER = 'Deferred display row'
 const STATIC_IMAGE =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII='
@@ -25,10 +26,18 @@ interface DeliveryGate {
   release(): void
 }
 
+interface ViewportRow {
+  id: string
+  top: number
+  readable: boolean
+  pending: boolean
+}
+
 interface ViewportFrame {
   scrollTop: number
   clientHeight: number
-  visible: Array<{ id: string; top: number; readable: boolean; pending: boolean }>
+  rows: ViewportRow[]
+  visible: ViewportRow[]
 }
 
 interface IdleAnchorSample {
@@ -117,19 +126,18 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
                   x: bounds.x + bounds.width / 2,
                   y: bounds.y + bounds.height / 2,
                   deltaX: 0,
-                  deltaY: -90,
+                  deltaY: -WHEEL_STEP,
                 })
                 await page.waitForTimeout(8)
+                // Sample each wheel frame before dispatching the next step.
+                // An independent timer can miss several valid 90px steps under
+                // concurrent browser load and mistake their sum for a jump.
+                await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())))
+                frames.push(await displayViewport(page))
               }
             })().finally(() => {
               gestureActive = false
             }),
-            (async () => {
-              while (gestureActive) {
-                frames.push(await displayViewport(page))
-                await page.waitForTimeout(24)
-              }
-            })(),
             (async () => {
               for (let delivery = 0; delivery < 6; delivery++) {
                 // Let scrolling move past queued rows before their serialized
@@ -371,8 +379,8 @@ function displayResponseEntries(value: unknown): Array<{ status: string; reason?
 async function displayViewport(page: Page): Promise<ViewportFrame> {
   return page.locator(TRANSCRIPT).evaluate((transcript, marker) => {
     const viewport = transcript.getBoundingClientRect()
-    const visible = Array.from(transcript.querySelectorAll<HTMLElement>('.risu-chat[data-risu-message-id]'))
-      .map((row) => {
+    const measured = Array.from(transcript.querySelectorAll<HTMLElement>('.risu-chat[data-risu-message-id]')).map(
+      (row) => {
         const rect = row.getBoundingClientRect()
         const wrapper = row.closest<HTMLElement>('[data-transcript-row-id]')
         return {
@@ -382,11 +390,18 @@ async function displayViewport(page: Page): Promise<ViewportFrame> {
           readable: row.querySelector('.chat-message-body')?.textContent?.includes(marker as string) ?? false,
           pending: wrapper?.hasAttribute('data-transcript-pending-geometry') ?? false,
         }
-      })
+      },
+    )
+    const visible = measured
       .filter((row) => row.bottom > 0 && row.top < viewport.height)
       .sort((left, right) => left.top - right.top)
       .map(({ bottom: _bottom, ...row }) => row)
-    return { scrollTop: transcript.scrollTop, clientHeight: transcript.clientHeight, visible }
+    return {
+      scrollTop: transcript.scrollTop,
+      clientHeight: transcript.clientHeight,
+      rows: measured.map(({ bottom: _bottom, ...row }) => row),
+      visible,
+    }
   }, ROW_MARKER)
 }
 
@@ -394,18 +409,32 @@ function assertContinuousVisibleRows(frames: readonly ViewportFrame[]): void {
   expect(frames.length).toBeGreaterThan(10)
   const comparisons = frames.slice(1).flatMap((frame, index) => {
     const previous = frames[index]
-    const overlap = frame.visible.flatMap((row) => {
-      const before = previous.visible.find((candidate) => candidate.id === row.id)
-      return before ? [{ id: row.id, displacement: row.top - before.top }] : []
-    })
+    const overlap = frame.visible.filter((row) => previous.visible.some((candidate) => candidate.id === row.id))
     return previous.visible.length > 0 && frame.visible.length > 0 ? [{ frame: index + 1, overlap }] : []
   })
   expect(comparisons.length).toBeGreaterThan(10)
+  let readableComparisons = 0
   for (const comparison of comparisons) {
     expect(comparison.overlap.length, `frame ${comparison.frame} retains a visible row identity`).toBeGreaterThan(0)
-    expect(
-      Math.max(...comparison.overlap.map((row) => Math.abs(row.displacement))),
-      `frame ${comparison.frame} visible-row displacement`,
-    ).toBeLessThanOrEqual(240)
+    // A pending card can grow upward on its first render while the readable
+    // row below it stays fixed. Track already-readable rows that this wheel
+    // step should leave visible, not expanding placeholders or rows the user
+    // intentionally scrolls out. Look them up among all mounted rows so an
+    // unexpected displacement outside the viewport cannot evade the check.
+    const previous = frames[comparison.frame - 1]
+    const next = frames[comparison.frame]
+    for (const before of previous.visible.filter(
+      (row) => row.readable && !row.pending && row.top + WHEEL_STEP < previous.clientHeight,
+    )) {
+      readableComparisons++
+      const after = next.rows.find((row) => row.id === before.id)
+      expect(after?.readable, `frame ${comparison.frame} retains readable row ${before.id}`).toBe(true)
+      expect(after?.pending, `frame ${comparison.frame} does not replace readable row ${before.id}`).toBe(false)
+      expect(
+        Math.abs(after!.top - before.top),
+        `frame ${comparison.frame} readable-row displacement: ${JSON.stringify({ before, after })}`,
+      ).toBeLessThanOrEqual(240)
+    }
   }
+  expect(readableComparisons, 'active input exercises already-readable row positions').toBeGreaterThan(10)
 }

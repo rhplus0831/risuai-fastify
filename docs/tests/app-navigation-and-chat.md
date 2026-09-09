@@ -87,8 +87,12 @@ The cached-parser-owner fault protects direct remount readability separately.
 `chatDisplayScrollStability.spec.ts` runs a four-case delayed-success versus
 handled-fallback matrix in bounded and diagnostic legacy paging. Each case uses
 tall custom cards and deterministic data images, completes multiple sequential
-older-row display responses during real CDP wheel input, rejects frame-to-frame
-visible-row discontinuities, then pauses for 1,800 milliseconds with unfinished
+older-row display responses during real CDP wheel input, and samples each wheel
+frame before dispatching the next step. It rejects visible-row discontinuities
+and bounds movement of already-readable rows that the input should leave visible,
+including unexpected displacement outside the viewport. First-render placeholder
+expansion is not treated as movement of an already-readable anchor. Each case
+then pauses for 1,800 milliseconds with unfinished
 newer rows still below a readable anchor. While those late bodies render,
 animation-frame, after-frame, and DOM-mutation samples require the same anchor
 node and readable body to remain mounted within one pixel of its original
