@@ -692,6 +692,37 @@ describe('router character route freshness', () => {
     expect(get(stores.botMakerMode)).toBe(false)
   })
 
+  it.each(['ready', 'loading', 'error', 'different-character', 'duplicate-character', 'reader', 'new-route'] as const)(
+    'restores only a valid writer history presentation without selection commands: %s',
+    async (state) => {
+      const router = await importRouterAt('/character/char-a/chat-a')
+      const { enterClientWriter } = await import('./__tests__/clientSession')
+      enterClientWriter()
+      const stores = await import('./stores.svelte')
+      const { charactersResourceState, replaceResourceDatabase } = await import('./server/resourceState.svelte')
+      const character = { chaId: 'char-a', chatPage: 0, chats: [{ id: 'chat-a', message: [] }] }
+      replaceResourceDatabase({ characters: [character] } as any)
+      stores.selectedCharID.set(0)
+      router.setCharacterSidebarViewMode('character')
+      stores.botMakerMode.set(false)
+      if (state === 'loading' || state === 'error') charactersResourceState.status = state
+      if (state === 'different-character') charactersResourceState.characters[0].chaId = 'char-b'
+      if (state === 'duplicate-character') charactersResourceState.characters.push({ ...character } as any)
+      if (state === 'reader') {
+        const { demoteClientSession } = await import('./clientSession')
+        demoteClientSession()
+      }
+      if (state === 'new-route') router.navigate('/character/char-a/chat-b')
+
+      router.restoreCharacterSidebarViewFromHistory()
+
+      expect(get(stores.botMakerMode)).toBe(state === 'ready')
+      expect(routerMocks.changeChar).not.toHaveBeenCalled()
+      expect(routerMocks.changeChatTo).not.toHaveBeenCalled()
+      expect(routerMocks.prepareRouteResources).not.toHaveBeenCalled()
+    },
+  )
+
   it.each(['idle', 'loading'] as const)(
     'does not restore the sidebar while character owners are %s',
     async (status) => {

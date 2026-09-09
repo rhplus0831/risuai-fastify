@@ -115,6 +115,11 @@ completion by its own lifetime, so an older successful handler cannot replace
 the newer visible route or consume a later intent. Startup's `background-ready`
 milestone does not mean the initial route handler has finished.
 
+After writer promotion reconciles the URL to the persisted selection, the
+router restores a saved Character sidebar tab only for the same history entry
+and a unique ready character owner. This restores presentation without applying
+the reader's route through character/chat selection commands.
+
 During unresolved automatic writer startup, the workspace stays behind the
 loading boundary. `canUseClientReaderContent()` admits character-detail reads,
 transcript mounting, and missing-route repair only after a reading or writing

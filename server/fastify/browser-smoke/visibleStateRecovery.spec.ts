@@ -16,8 +16,8 @@ import { setupBrowserSmokeAuth } from './auth.js'
 //   - Journey 2 (settle): toggle a sidebar checkbox -> the flip survives the
 //     command + resource refresh (not just the optimistic paint).
 //   - Journey 3 (GATE): retain the character sidebar across an old-lineage
-//     command and import: conservative startup reloads, while connected startup
-//     becomes a Reader in place and restores the view after Use this device.
+//     command and import: the client becomes a Reader in place and restores
+//     the view after Use this device.
 
 interface Harness {
   app: FastifyInstance
@@ -143,9 +143,7 @@ test('a sidebar toggle flip survives the command + resource refresh', async ({ p
   expect(stored, diagnostics()).toBe('0')
 })
 
-test('role-first startup preserves the same-character sidebar view through old-lineage recovery reload', async ({
-  page,
-}) => {
+test('the character sidebar survives an old-lineage response and in-place writer recovery', async ({ page }) => {
   const diagnostics = attachDiagnostics(page)
   await openCharacterSidebarForImport(page)
   expect(await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot())).toMatchObject({
@@ -155,16 +153,13 @@ test('role-first startup preserves the same-character sidebar view through old-l
 
   // Hold a real durable (lineage-tagged) command at the network boundary so the
   // import deterministically leaves old-lineage work in flight. Releasing it
-  // after the lineage rotates must produce the ownership conflict and reload
-  // this exact history entry. Only receipt-tagged mutations can hit
+  // after the lineage rotates must produce the ownership conflict while keeping
+  // this document and history entry. Only receipt-tagged mutations can hit
   // database_lineage_conflict; an untagged command would settle as a benign
-  // revision_conflict and never trigger the recovery reload under test.
+  // revision_conflict and never exercise the superseded generation guard.
   const heldCommand = await holdNextRuntimeSettingsCommand(page)
   const previousDocumentTimeOrigin = await page.evaluate(() => performance.timeOrigin)
   const lineageConflictResponsePromise = page.waitForResponse(isDatabaseLineageConflictResponse, {
-    timeout: 15_000,
-  })
-  const recoveryNavigationResponsePromise = page.waitForResponse(isRecoveryNavigationResponse(page), {
     timeout: 15_000,
   })
   await page.evaluate(() => {
@@ -188,24 +183,18 @@ test('role-first startup preserves the same-character sidebar view through old-l
     databaseLineage: imported.databaseLineage,
   })
 
-  const recoveryNavigationResponse = await recoveryNavigationResponsePromise
-  expect(recoveryNavigationResponse.status(), diagnostics()).toBe(200)
+  await expect(page.locator('[data-reader-lifecycle-status]')).toContainText('Updates from the writer appear here.')
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(previousDocumentTimeOrigin)
+  await page.locator('[data-reader-use-this-device]').click()
   await expect
-    .poll(
-      async () => {
-        try {
-          return await page.evaluate((previous) => performance.timeOrigin !== previous, previousDocumentTimeOrigin)
-        } catch {
-          return false
-        }
-      },
-      { timeout: 15_000, message: 'recovery navigation did not replace the document' },
-    )
-    .toBe(true)
+    .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().lifecycle), {
+      timeout: 15_000,
+    })
+    .toBe('writing')
   await waitForBrowserLoaded(page)
   await waitForAppliedResourceRevision(page, imported.revision)
 
-  // Store and DOM oracles now run after the new document has loaded the imported
+  // Store and DOM oracles now run after the same document has loaded the imported
   // revision. The sidebar must retain the user's "character" view through that
   // authoritative recovery.
   await expect
@@ -216,12 +205,13 @@ test('role-first startup preserves the same-character sidebar view through old-l
           const character = (snap.characters as Array<Record<string, any>>)[0]
           return character?.chats?.length ?? 0
         }),
-      { timeout: 15_000, message: 'imported chats did not settle in the recovered document' },
+      { timeout: 15_000, message: 'imported chats did not settle after writer recovery' },
     )
     .toBe(2)
   await expect(page).toHaveURL(/\/character\/char-1\/chat-a$/)
   expect(await sidebarTabActive(page, 'character'), diagnostics()).toBe(true)
   await expect(page.locator('[data-risu-sidebar-panel="character"]').first()).toBeVisible()
+  expect(await page.evaluate(() => performance.timeOrigin)).toBe(previousDocumentTimeOrigin)
 })
 
 test('connected-default import recovery preserves the character sidebar after explicit same-owner writer recovery', async ({
@@ -340,8 +330,12 @@ test('connected-default import recovery preserves the character sidebar after ex
       { timeout: 30_000 },
     )
     await expect(page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', 'chat-a')
-    await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
-    await expect(page.getByRole('button', { name: 'Open chat Chat B', exact: true })).toBeVisible()
+    await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
+    await expect(
+      page
+        .getByRole('navigation', { name: 'Read-only navigation' })
+        .getByRole('button', { name: 'Go Back', exact: true }),
+    ).toBeVisible()
     await waitForAppliedResourceRevision(page, imported.revision)
     const reader = await page.evaluate(() => ({
       role: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot(),
@@ -597,18 +591,6 @@ async function isDatabaseLineageConflictResponse(response: Response): Promise<bo
     return body?.error === 'database_lineage_conflict'
   } catch {
     return false
-  }
-}
-
-function isRecoveryNavigationResponse(page: Page): (response: Response) => boolean {
-  return (response) => {
-    const request = response.request()
-    return (
-      request.isNavigationRequest() &&
-      request.frame() === page.mainFrame() &&
-      request.method() === 'GET' &&
-      new URL(response.url()).pathname === '/character/char-1/chat-a'
-    )
   }
 }
 

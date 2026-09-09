@@ -62,6 +62,7 @@
     openGridRoute,
     retryCurrentRouteApplication,
     syncRouteFromState,
+    restoreCharacterSidebarViewFromHistory,
   } from './ts/router'
   import { routeKey, type AppRoute } from './ts/routerRoute'
   import { prefetchCharacterRouteResource, routeResourceLoadState } from './ts/server/routeResourceLoader'
@@ -355,7 +356,10 @@
       // Reader browsing is only a presentation target. Move the URL back to
       // the already-persisted writer state without routing the reader choice
       // through selection handlers or durable commands.
-      untrack(() => reconcileWriterRouteFromPersistedState(currentWriterRoute.kind))
+      untrack(() => {
+        reconcileWriterRouteFromPersistedState(currentWriterRoute.kind)
+        restoreCharacterSidebarViewFromHistory()
+      })
       return
     }
     if (consumeStateDrivenRouteUpdate()) {

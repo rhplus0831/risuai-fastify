@@ -281,6 +281,13 @@ export function setCharacterSidebarViewMode(view: 'chat' | 'character'): void {
   replaceCurrentHistoryState(previousState)
 }
 
+/** Restore same-entry presentation after recovery without applying a selection route. */
+export function restoreCharacterSidebarViewFromHistory(): void {
+  const route = get(currentRoute)
+  if (route.kind !== 'character') return
+  restoreCharacterSidebarViewMode(route, canUseClientWriteAccess)
+}
+
 export async function applyRouteToStores(route: AppRoute): Promise<boolean> {
   if (!canUseClientWriteAccess()) return false
   const sessionGeneration = captureClientSessionGeneration()

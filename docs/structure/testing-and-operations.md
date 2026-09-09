@@ -355,8 +355,8 @@ invariant that benefits from a dedicated audit location.
 Browser-smoke contracts protect reload/reconciliation behavior:
 `server/fastify/browser-smoke/visibleStateRecovery.spec.ts` covers chat-switch
 repainting of the active generation preset, sidebar-toggle survival through
-command/resource reconciliation, and route/sidebar continuity after an
-old-lineage recovery reload.
+command/resource reconciliation, and route/sidebar continuity through an
+old-lineage response, in-place Reader recovery, and explicit writer recovery.
 `server/fastify/browser-smoke/rerollSwipePersistence.spec.ts` proves persisted
 reroll alternates reconstruct after reload and remain candidate-recoverable. It
 clicks the real message reroll control, observes the operation request and absence

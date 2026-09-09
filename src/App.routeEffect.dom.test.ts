@@ -104,6 +104,7 @@ async function createRouteMock() {
       openGridRoute: appRouteDomMocks.openGridRoute,
       parseRoute: vi.fn(() => characterRoute),
       retryCurrentRouteApplication: vi.fn(),
+      restoreCharacterSidebarViewFromHistory: vi.fn(),
       setCharacterSidebarViewMode: (view: 'chat' | 'character') => appRouteDomMocks.state.setSidebarViewMode(view),
       syncRouteFromState: vi.fn(),
     }
@@ -1082,6 +1083,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     const syncRouteFromState = vi.mocked(router.syncRouteFromState as (...args: any[]) => void)
     syncRouteFromState.mockClear()
     resetStartupReadinessForTests()
+    vi.mocked(router.restoreCharacterSidebarViewFromHistory as () => void).mockClear()
     const readerOperation = beginClientSession('reader-a')
     settleClientReader(readerOperation, {
       databaseLineage: 'lineage-a',
@@ -1132,6 +1134,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     await vi.waitFor(() => expect(peekReaderRouteIntent()).toBeNull())
     expect(router.applyRouteToStores).not.toHaveBeenCalled()
+    expect(router.restoreCharacterSidebarViewFromHistory).toHaveBeenCalledOnce()
     expect(syncRouteFromState).toHaveBeenCalledWith(
       expect.objectContaining({ characterId: 'char-a', chatId: 'chat-a', selectedCharID: 0 }),
     )
