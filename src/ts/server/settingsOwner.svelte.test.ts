@@ -81,7 +81,7 @@ const settingsGroupMocks = vi.hoisted(() => ({
     ) {
       return 'providers'
     }
-    if (key === 'banCharacterset' || key === 'globalscript') return 'advanced'
+    if (key === 'banCharacterset' || key === 'globalscript' || key === 'inputHooks') return 'advanced'
     return null
   },
 }))
@@ -346,10 +346,15 @@ function hypaPreset(name: string, settings: Record<string, unknown> = {}): HypaV
 async function createSettingDraft<T>(
   key: string,
   fallback: T,
+  onPersistenceStatus?: (status: import('./settingsOwner.svelte').SettingPersistenceStatus) => void,
 ): Promise<{ draft: ServerBackedSettingDraft<T>; stop: () => void }> {
   let draft: ServerBackedSettingDraft<T> | undefined
   const stop = $effect.root(() => {
-    draft = createServerBackedSettingDraft(key, fallback, { delayMs: DELAY })
+    draft = createServerBackedSettingDraft(key, fallback, {
+      delayMs: DELAY,
+      onPersistenceStatus,
+      retainFailedDraft: !!onPersistenceStatus,
+    })
   })
   await flushAndSettle()
   if (!draft) {
@@ -1560,4 +1565,125 @@ it('captures pre-effect typing against the same normalized baseline that seeded 
   } finally {
     stop()
   }
+})
+
+describe('whole-field autosave feedback', () => {
+  it('preserves failed hook records and saves newer input without replaying the failed snapshot', async () => {
+    const original = [{ id: 'hook', name: 'Draft', type: 'draft', prompt: 'Original prompt' }]
+    setupSettings({ inputHooks: original })
+    recorded.patchResults.push({ status: 'error', error: 'failed' })
+    const report = vi.fn()
+    const { draft, stop } = await createSettingDraft('inputHooks', original, report)
+    try {
+      draft.value = [{ ...original[0], prompt: 'Failed edit' }]
+      await flushAndSettle()
+      await vi.advanceTimersByTimeAsync(DELAY)
+      await flushAndSettle()
+      expect(report).toHaveBeenLastCalledWith('failed')
+      expect(draft.value[0].prompt).toBe('Failed edit')
+      expect(recorded.patches).toHaveLength(1)
+      draft.value = [{ ...draft.value[0], prompt: 'Newer edit' }]
+      await flushAndSettle()
+      await vi.advanceTimersByTimeAsync(DELAY)
+      expect(recorded.patches.at(-1)?.patch.inputHooks).toEqual([{ ...original[0], prompt: 'Newer edit' }])
+      expect(report).toHaveBeenLastCalledWith('accepted')
+    } finally {
+      stop()
+    }
+  })
+
+  it('waits for the latest edit receipt before reporting accepted', async () => {
+    setupSettings({ textTheme: 'original' })
+    const first = createDeferred<unknown>()
+    const second = createDeferred<unknown>()
+    recorded.patchResults.push(first.promise, second.promise)
+    const report = vi.fn()
+    const { draft, stop } = await createSettingDraft('textTheme', 'original', report)
+    try {
+      expect(report).not.toHaveBeenCalled()
+      draft.value = 'first edit'
+      await flushAndSettle()
+      expect(report).toHaveBeenLastCalledWith('saving')
+      await vi.advanceTimersByTimeAsync(DELAY)
+      draft.value = 'second edit'
+      await flushAndSettle()
+      await vi.advanceTimersByTimeAsync(DELAY)
+      first.resolve({ status: 'ok', revision: 2 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(report).toHaveBeenLastCalledWith('saving')
+      second.resolve({ status: 'ok', revision: 3 })
+      await vi.advanceTimersByTimeAsync(0)
+      expect(report).toHaveBeenLastCalledWith('accepted')
+      expect(draft.value).toBe('second edit')
+    } finally {
+      stop()
+    }
+  })
+
+  it.each(['accepted', 'discarded'] as const)(
+    'reports queued saves until their final %s receipt',
+    async (settlement) => {
+      setupSettings({ textTheme: 'original' })
+      durabilityMocks.retainFailures = true
+      recorded.patchResults.push({ status: 'unavailable' })
+      const report = vi.fn()
+      const { draft, stop } = await createSettingDraft('textTheme', 'original', report)
+      try {
+        draft.value = 'queued edit'
+        await flushAndSettle()
+        await vi.advanceTimersByTimeAsync(DELAY)
+        expect(report).toHaveBeenLastCalledWith('queued')
+        expect(report).not.toHaveBeenCalledWith('accepted')
+        publishSettingsSettlement(durabilityMocks.dispatched[0].mutationId, settlement)
+        await flushAndSettle()
+        expect(report).toHaveBeenLastCalledWith(settlement === 'accepted' ? 'accepted' : 'failed')
+        expect(draft.value).toBe('queued edit')
+      } finally {
+        stop()
+      }
+    },
+  )
+
+  it('retains failed input and retries the current draft through the durable queue', async () => {
+    setupSettings({ textTheme: 'original' })
+    recorded.patchResults.push({ status: 'error', error: 'failed' })
+    const report = vi.fn()
+    const { draft, stop } = await createSettingDraft('textTheme', 'original', report)
+    try {
+      draft.value = 'keep my edit'
+      await flushAndSettle()
+      await vi.advanceTimersByTimeAsync(DELAY)
+      await flushAndSettle()
+      expect(report).toHaveBeenLastCalledWith('failed')
+      expect(draft.value).toBe('keep my edit')
+      draft.retryPersistence()
+      expect(report).toHaveBeenLastCalledWith('saving')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(recorded.patches.at(-1)?.patch).toEqual({ textTheme: 'keep my edit' })
+      expect(report).toHaveBeenLastCalledWith('accepted')
+    } finally {
+      stop()
+    }
+  })
+
+  it('ignores a queued predecessor settlement after a newer edit and stops notifying after unmount', async () => {
+    setupSettings({ textTheme: 'original' })
+    durabilityMocks.retainFailures = true
+    recorded.patchResults.push({ status: 'unavailable' }, { status: 'unavailable' })
+    const report = vi.fn()
+    const { draft, stop } = await createSettingDraft('textTheme', 'original', report)
+    draft.value = 'first edit'
+    await flushAndSettle()
+    await vi.advanceTimersByTimeAsync(DELAY)
+    const firstId = durabilityMocks.dispatched[0].mutationId
+    draft.value = 'latest edit'
+    await flushAndSettle()
+    await vi.advanceTimersByTimeAsync(DELAY)
+    publishSettingsSettlement(firstId, 'accepted')
+    expect(report).toHaveBeenLastCalledWith('queued')
+    const count = report.mock.calls.length
+    stop()
+    publishSettingsSettlement(durabilityMocks.dispatched[1].mutationId, 'accepted')
+    expect(report).toHaveBeenCalledTimes(count)
+  })
 })

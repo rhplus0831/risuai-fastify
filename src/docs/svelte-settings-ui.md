@@ -334,6 +334,20 @@ and model. The model select inherits the `otherAx` role when blank or stores a
 specific durable model-profile ID; divider options render as `---` and restore
 the prior selection rather than becoming a model.
 
+Hook cards keep name, type, and model visible. Prompt disclosures are keyed by
+hook ID and keep their editors mounted while hidden, preserving edits and
+independent expansion state. New hooks open their prompt and focus their name;
+deletion names the hook in the shared confirmation and moves focus to another
+hook or Add. The prompt uses the shared popup editor with a stable, derived hook
+ID as its context, so changing another row does not invalidate an open editor.
+
+This page opts into whole-field draft persistence feedback and failed-draft
+retention in `createServerBackedSettingDraft`. Saving, queued, accepted, and
+failed states follow the current edit's durable receipt; earlier receipts
+cannot clear newer feedback. A debounce needing no command returns to neutral feedback.
+Failed edits remain in the editor, and Retry stages the current draft through
+the existing durable queue. Other drafts retain their default behavior.
+
 Draft rows additionally expose the Translation checkbox. The UI owns that
 choice and the reviewed-Draft presentation; model resolution, slots, history
 windows, Translation semantics, and hook execution are canonical in

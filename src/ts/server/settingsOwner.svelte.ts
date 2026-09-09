@@ -68,7 +68,11 @@ interface PendingSettingsPatch {
   projectionEpochs: SettingsGroupProjectionEpochs
   timer: ReturnType<typeof setTimeout> | null
   outbox: PendingMutationHandle | null
+  persistenceListeners: Map<string, SettingPersistenceListener>
 }
+
+export type SettingPersistenceStatus = 'idle' | 'saving' | 'accepted' | 'queued' | 'failed'
+type SettingPersistenceListener = (status: SettingPersistenceStatus) => void
 
 interface PendingSettingsAttempt {
   sessionGeneration: number
@@ -95,6 +99,7 @@ const pendingSettingsPatch: PendingSettingsPatch = {
   projectionEpochs: {},
   timer: null,
   outbox: null,
+  persistenceListeners: new Map(),
 }
 const pendingSettingsAttempts: PendingSettingsAttempt[] = []
 let nextSettingsAttemptSequence = 0
@@ -227,11 +232,16 @@ export interface ServerBackedSettingDraftOptions<T = unknown> {
   delayMs?: number
   dispatch?: boolean
   normalizeDraft?: (value: T) => T
+  /** Receipt feedback for whole-field autosaves; preset mirrors and sparse object queues keep their own feedback. */
+  onPersistenceStatus?: SettingPersistenceListener
+  /** Keep failed whole-field edits in the editor for an explicit retry. */
+  retainFailedDraft?: boolean
 }
 
 export interface ServerBackedSettingDraft<T> {
   value: T
   captureRecoveryDraft(): { value: T; baseline: T } | null
+  retryPersistence(): void
 }
 
 export interface ApplyOnboardingServerBackedSettingsOptions {
@@ -261,6 +271,21 @@ export function createServerBackedSettingDraft<T>(
       if (snapshotJson(draft.value) === snapshotJson(dirtyBaseline)) return null
       return { value: cloneDraftValue(draft.value), baseline: cloneDraftValue(dirtyBaseline) }
     },
+    retryPersistence() {
+      if (
+        options.dispatch === false ||
+        !canUseClientWriteAccess() ||
+        !isClientSessionGenerationCurrent(sessionGeneration)
+      )
+        return
+      const attempted = cloneDraftValue(draft.value)
+      if (retainedFailure) dirtyBaseline = cloneDraftValue(currentSettingValue(key, fallback))
+      retainedFailure = false
+      dirty = true
+      dirtyOwnerKey = serverSettingDraftOwnerKey(key)
+      reassertDirtySettingDraftValue(key, attempted)
+      queueSettingsPatch({ [key]: attempted }, { [key]: cloneJsonValue(dirtyBaseline) }, 0, beginPersistenceFeedback())
+    },
   })
   const delayMs = options.delayMs ?? 250
   let initialized = false
@@ -272,6 +297,43 @@ export function createServerBackedSettingDraft<T>(
   let dirty = false
   let dirtyOwnerKey: string | null = null
   let dirtyBaseline = cloneJsonValue(draft.value)
+  let persistenceVersion = 0
+  let retainedFailure = false
+
+  function beginPersistenceFeedback(): SettingPersistenceListener | undefined {
+    const version = ++persistenceVersion
+    if (!options.onPersistenceStatus && !options.retainFailedDraft) return undefined
+    const ownershipEpoch = settingsOwnerDatabaseOwnershipEpoch
+    const attempted = cloneDraftValue(draft.value)
+    const baseline = cloneDraftValue(dirtyBaseline)
+    const listener: SettingPersistenceListener = (status) => {
+      if (
+        version !== persistenceVersion ||
+        ownershipEpoch !== settingsOwnerDatabaseOwnershipEpoch ||
+        !isClientSessionGenerationCurrent(sessionGeneration)
+      )
+        return
+      if (status === 'failed' && options.retainFailedDraft) {
+        retainedFailure = true
+        dirty = true
+        dirtyOwnerKey = serverSettingDraftOwnerKey(key)
+        dirtyBaseline = baseline
+        suppressDraftDispatch = true
+        draft.value = cloneDraftValue(attempted)
+        previousDraftDispatchSnapshot = snapshotJson(attempted)
+        queueMicrotask(() => {
+          suppressDraftDispatch = false
+        })
+      }
+      options.onPersistenceStatus?.(status)
+    }
+    listener('saving')
+    return listener
+  }
+
+  $effect(() => () => {
+    persistenceVersion++
+  })
 
   $effect(() => {
     const ownerProjectionToken = settingsDraftProjectionToken(key)
@@ -285,6 +347,7 @@ export function createServerBackedSettingDraft<T>(
     const draftSnapshot = snapshotJson(draft.value)
 
     if (databaseOwnershipChanged || ownerChanged) {
+      retainedFailure = false
       dirty = false
       dirtyOwnerKey = null
       dirtyBaseline = cloneDraftValue(serverValue)
@@ -299,7 +362,12 @@ export function createServerBackedSettingDraft<T>(
     } else {
       if (serverSnapshot !== previousServerSnapshot && serverSnapshot !== draftSnapshot) {
         suppressDraftDispatch = true
-        if (ownerProjectionChanged && dirty) {
+        if (retainedFailure) {
+          const normalizedServerValue = cloneDraftValue(serverValue)
+          const rebased = mergeSettingDraftValues(dirtyBaseline, draft.value, normalizedServerValue)
+          if (!rebased.ambiguous) draft.value = cloneDraftValue(rebased.value)
+          dirtyBaseline = normalizedServerValue
+        } else if (ownerProjectionChanged && dirty) {
           const normalizedServerValue = cloneDraftValue(serverValue)
           if (snapshotJson(dirtyBaseline) === snapshotJson(normalizedServerValue)) {
             if (isClientSessionGenerationCurrent(sessionGeneration)) reassertDirtySettingDraftValue(key, draft.value)
@@ -337,7 +405,7 @@ export function createServerBackedSettingDraft<T>(
     previousOwnerKey = ownerKey
     previousOwnerProjectionToken = ownerProjectionToken
     previousDatabaseOwnershipEpoch = databaseOwnershipEpoch
-    previousServerSnapshot = dirty ? snapshotJson(draft.value) : serverSnapshot
+    previousServerSnapshot = dirty && !retainedFailure ? snapshotJson(draft.value) : serverSnapshot
   })
 
   $effect(() =>
@@ -376,6 +444,7 @@ export function createServerBackedSettingDraft<T>(
     if (snapshot === previousDraftDispatchSnapshot) return
 
     const wasDirty = dirty
+    retainedFailure = false
     dirty = true
     previousDraftDispatchSnapshot = snapshot
 
@@ -418,7 +487,7 @@ export function createServerBackedSettingDraft<T>(
             ? `local:${key}`
             : serverSettingDraftOwnerKey(key)
       if (!mirroredToPreset && options.dispatch !== false) {
-        queueSettingsPatch({ [key]: attempted }, { [key]: previous }, delayMs)
+        queueSettingsPatch({ [key]: attempted }, { [key]: previous }, delayMs, beginPersistenceFeedback())
       }
       previousServerSnapshot = snapshot
     })
@@ -1016,7 +1085,12 @@ function dispatchServerBackedSettingsPatch(
   })
 }
 
-function queueSettingsPatch(patch: SettingsPatch, previous: SettingsPatch, delay: number): void {
+function queueSettingsPatch(
+  patch: SettingsPatch,
+  previous: SettingsPatch,
+  delay: number,
+  onPersistenceStatus?: SettingPersistenceListener,
+): void {
   if (!canUseClientWriteAccess()) return
   if (!isClientSessionGenerationCurrent(pendingSettingsPatch.sessionGeneration)) {
     if (pendingSettingsPatch.timer) clearTimeout(pendingSettingsPatch.timer)
@@ -1026,7 +1100,12 @@ function queueSettingsPatch(patch: SettingsPatch, previous: SettingsPatch, delay
   }
   pendingSettingsPatch.sessionGeneration = captureClientSessionGeneration()
   for (const [key, value] of Object.entries(patch)) {
-    if (queueSparseObjectSettingPatch(key, previous[key], value, delay)) continue
+    if (queueSparseObjectSettingPatch(key, previous[key], value, delay)) {
+      onPersistenceStatus?.('idle')
+      continue
+    }
+    if (onPersistenceStatus) pendingSettingsPatch.persistenceListeners.set(key, onPersistenceStatus)
+    else pendingSettingsPatch.persistenceListeners.delete(key)
     const group = settingsGroupForKey(key)
     if (group && pendingSettingsPatch.projectionEpochs[group] === undefined) {
       pendingSettingsPatch.projectionEpochs[group] = captureSettingsGroupProjectionEpoch(group)
@@ -1062,6 +1141,7 @@ function discardPendingSettingsPatchKey(key: string, delay: number): boolean {
   delete pendingSettingsPatch.patch[key]
   delete pendingSettingsPatch.previous[key]
   delete pendingSettingsPatch.attempted[key]
+  pendingSettingsPatch.persistenceListeners.delete(key)
   pendingSettingsPatch.durableAttempted = {}
   pendingSettingsPatch.outbox = null
   if (stagedOutbox) void acknowledgePendingMutation(stagedOutbox)
@@ -1079,6 +1159,8 @@ function refreshPendingSettingsPatch(delay: number): void {
   if (Object.keys(pendingSettingsPatch.patch).length === 0) {
     pendingSettingsPatch.timer = null
     if (pendingSettingsPatch.outbox) void acknowledgePendingMutation(pendingSettingsPatch.outbox)
+    // A reverted debounce makes no new request. Do not report server acceptance.
+    for (const listener of pendingSettingsPatch.persistenceListeners.values()) listener('idle')
     resetPendingSettingsPatch()
     return
   }
@@ -1129,6 +1211,7 @@ function resetPendingSettingsPatch(): void {
   pendingSettingsPatch.durableAttempted = {}
   pendingSettingsPatch.projectionEpochs = {}
   pendingSettingsPatch.outbox = null
+  pendingSettingsPatch.persistenceListeners = new Map()
 }
 
 export function flushPendingSettingsOwnerMutations(options: ServerCommandTransportOptions = {}): void {
@@ -1180,6 +1263,7 @@ function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {
   const optimisticProjectionEpochs = pendingSettingsPatch.projectionEpochs
   const stagedOutbox = pendingSettingsPatch.outbox
   const sessionGeneration = pendingSettingsPatch.sessionGeneration
+  const persistenceListeners = pendingSettingsPatch.persistenceListeners
   resetPendingSettingsPatch()
 
   if (Object.keys(commandPatch).length === 0) {
@@ -1189,8 +1273,23 @@ function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {
 
   const intent = settingsPatchDurableIntent(commandPatch)
   const outbox = stagedOutbox ?? stagePendingMutation(SETTINGS_BRIDGE_MUTATION_KEY, intent)
-  void dispatchDurableMutation(outbox, intent, (transport) =>
-    dispatchTrackedServerBackedSettingsPatch({
+  let finalSettlement = false
+  let stopSettlement: () => void = () => {}
+  const notifyPersistence = (status: SettingPersistenceStatus) => {
+    if (!isClientSessionGenerationCurrent(sessionGeneration)) return
+    for (const listener of persistenceListeners.values()) listener(status)
+  }
+  if (persistenceListeners.size > 0) {
+    stopSettlement = registerDurableMutationSettlementListener(outbox.mutationId, (settlement) => {
+      finalSettlement = true
+      notifyPersistence(settlement === 'accepted' ? 'accepted' : 'failed')
+      stopSettlement()
+    })
+  }
+  let rollbackDisposition: ServerCommandTransportOptions['failureRollbackDisposition']
+  void dispatchDurableMutation(outbox, intent, (transport) => {
+    rollbackDisposition = transport.failureRollbackDisposition
+    return dispatchTrackedServerBackedSettingsPatch({
       sessionGeneration,
       patch: commandPatch,
       optimisticProjectionEpochs,
@@ -1202,7 +1301,21 @@ function dispatchPendingSettingsPatch(options: ServerCommandTransportOptions = {
       failureRollbackDisposition: transport.failureRollbackDisposition,
       previous: commandPrevious,
       attempted: commandAttempted,
-    }),
+    })
+  }).then(
+    (result) => {
+      if (finalSettlement) return
+      const status =
+        result.status === 'ok' ? 'accepted' : rollbackDisposition?.(result) === 'retain' ? 'queued' : 'failed'
+      notifyPersistence(status)
+      if (status !== 'queued') stopSettlement()
+    },
+    () => {
+      if (finalSettlement) return
+      const status = rollbackDisposition?.({ status: 'unavailable' }) === 'retain' ? 'queued' : 'failed'
+      notifyPersistence(status)
+      if (status !== 'queued') stopSettlement()
+    },
   )
 }
 

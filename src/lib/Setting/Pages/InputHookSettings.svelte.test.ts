@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 const inputHookSettingsMocks = vi.hoisted(() => ({
   readInputHooks: () => [] as Array<Record<string, unknown>>,
   setInputHooks: (_hooks: Array<Record<string, unknown>>) => {},
+  reportPersistence: (_status: 'idle' | 'saving' | 'accepted' | 'queued' | 'failed') => {},
+  retryPersistence: vi.fn(),
 }))
 
 vi.mock('src/ts/server/settingsOwner.svelte', async () => {
@@ -16,14 +18,22 @@ vi.mock('src/ts/server/settingsOwner.svelte', async () => {
   inputHookSettingsMocks.setInputHooks = (value) => hooks.set(clone(value))
 
   return {
-    createServerBackedSettingDraft: () => ({
-      get value() {
-        return reactiveHooks.current
-      },
-      set value(value: Array<Record<string, unknown>>) {
-        hooks.set(clone(value))
-      },
-    }),
+    createServerBackedSettingDraft: (
+      _key: string,
+      _fallback: unknown,
+      options: { onPersistenceStatus: typeof inputHookSettingsMocks.reportPersistence },
+    ) => {
+      inputHookSettingsMocks.reportPersistence = options.onPersistenceStatus
+      return {
+        get value() {
+          return reactiveHooks.current
+        },
+        set value(value: Array<Record<string, unknown>>) {
+          hooks.set(clone(value))
+        },
+        retryPersistence: inputHookSettingsMocks.retryPersistence,
+      }
+    },
   }
 })
 
@@ -31,13 +41,18 @@ vi.mock('src/ts/process/templates/templates', () => ({
   prebuiltPresets: { OAI: { mainPrompt: '', jailbreak: '' } },
 }))
 
-vi.mock('src/lib/UI/GUI/TextAreaInput.svelte', async () => ({
-  default: (await import('src/lib/UI/GUI/TextInput.svelte')).default,
+vi.mock('src/ts/process/modules', () => ({
+  getModuleAssets: () => [],
+  getModuleLorebooks: () => [],
+  getModuleRegexScripts: () => [],
+  getModules: () => [],
+  moduleUpdate: () => {},
 }))
 
 import { language } from 'src/lang'
 import { replaceResourceDatabase } from 'src/ts/server/resourceState.svelte'
 import InputHookSettings from './InputHookSettings.svelte'
+import { popUpEditorStore } from 'src/ts/stores.svelte'
 
 type MountedComponent = Parameters<typeof unmount>[0]
 
@@ -55,6 +70,9 @@ function translationCheckbox(): HTMLInputElement | null {
 }
 
 beforeEach(() => {
+  vi.useFakeTimers()
+  inputHookSettingsMocks.retryPersistence.mockReset()
+  popUpEditorStore.open = false
   inputHookSettingsMocks.setInputHooks([
     {
       id: 'legacy-hook',
@@ -88,6 +106,9 @@ afterEach(() => {
   replaceResourceDatabase({} as any)
   target.remove()
   document.body.innerHTML = ''
+  vi.useRealTimers()
+  vi.restoreAllMocks()
+  vi.unstubAllGlobals()
 })
 
 describe('InputHookSettings model profiles', () => {
@@ -131,6 +152,9 @@ describe('InputHookSettings model profiles', () => {
       model: { mode: 'inheritOtherAx' },
       translation: false,
     })
+    const card = target.querySelector('article:last-child')!
+    expect(card.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true')
+    expect(document.activeElement).toBe(card.querySelector('input[type="text"]'))
   })
 
   it('shows and persists Translation only for Draft hooks', async () => {
@@ -153,5 +177,126 @@ describe('InputHookSettings model profiles', () => {
     ])
     await tick()
     expect(translationCheckbox()).toBeNull()
+  })
+})
+
+function hookCard(name: string): HTMLElement {
+  const card = Array.from(target.querySelectorAll('article')).find((card) => card.getAttribute('aria-label') === name)
+  if (!card) throw new Error(`Hook card not found: ${name}`)
+  return card
+}
+
+describe('InputHookSettings editing', () => {
+  it('keeps independent disclosures and edited prompts attached to hook IDs across list changes', async () => {
+    inputHookSettingsMocks.setInputHooks([
+      { id: 'first', name: 'First', type: 'draft', prompt: '<|im_start|>user\nRewrite this.' },
+      { id: 'second', name: 'Second', type: 'btw', prompt: 'Check this.' },
+    ])
+    await tick()
+    const first = hookCard('First')
+    const firstToggle = first.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+    const panel = document.getElementById(firstToggle.getAttribute('aria-controls')!)!
+    expect(firstToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(panel.hidden).toBe(true)
+    expect(firstToggle.textContent).toContain('Rewrite this.')
+    expect(firstToggle.textContent).not.toContain('<|im_start|>')
+
+    firstToggle.click()
+    hookCard('Second').querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    await tick()
+    expect(panel.hidden).toBe(false)
+    const editor = first.querySelector('textarea')!
+    editor.value = 'Keep this new prompt.'
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    firstToggle.click()
+    await tick()
+    expect(panel.hidden).toBe(true)
+    expect(hookCard('Second').querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true')
+    inputHookSettingsMocks.setInputHooks([...inputHookSettingsMocks.readInputHooks()].reverse())
+    await tick()
+    hookCard('First').querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    await tick()
+    expect(hookCard('First').querySelector('textarea')).toBe(editor)
+    expect(editor.value).toBe('Keep this new prompt.')
+    expect(inputHookSettingsMocks.readInputHooks().find((hook) => hook.id === 'first')?.prompt).toBe(
+      'Keep this new prompt.',
+    )
+  })
+
+  it('commits the real popup editor to its hook after a preceding hook is removed', async () => {
+    inputHookSettingsMocks.setInputHooks([
+      { id: 'first', name: 'First', type: 'btw', prompt: 'First prompt' },
+      { id: 'second', name: 'Second', type: 'btw', prompt: 'Second prompt' },
+      { id: 'third', name: 'Third', type: 'btw', prompt: 'Third prompt' },
+    ])
+    await tick()
+    const card = hookCard('Second')
+    card.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    await tick()
+    card.querySelector<HTMLButtonElement>(`button[aria-label="${language.hotkeyDesc.popupEditor}"]`)!.click()
+    expect(popUpEditorStore.open).toBe(true)
+    expect(popUpEditorStore.value).toBe('Second prompt')
+    popUpEditorStore.value = 'Edited in the popup'
+    inputHookSettingsMocks.setInputHooks(inputHookSettingsMocks.readInputHooks().filter((hook) => hook.id !== 'first'))
+    await tick()
+    popUpEditorStore.open = false
+    await vi.advanceTimersByTimeAsync(150)
+    await tick()
+    expect(inputHookSettingsMocks.readInputHooks().find((hook) => hook.id === 'second')?.prompt).toBe(
+      'Edited in the popup',
+    )
+    expect(inputHookSettingsMocks.readInputHooks().find((hook) => hook.id === 'third')?.prompt).toBe('Third prompt')
+    expect(hookCard('Second').querySelector('textarea')?.value).toBe('Edited in the popup')
+  })
+
+  it('does not apply a popup draft to another hook when its owner is removed', async () => {
+    const card = hookCard('Legacy Hook')
+    card.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    await tick()
+    card.querySelector<HTMLButtonElement>(`button[aria-label="${language.hotkeyDesc.popupEditor}"]`)!.click()
+    popUpEditorStore.value = 'Removed hook edit'
+    inputHookSettingsMocks.setInputHooks([{ id: 'replacement', name: 'Replacement', type: 'btw', prompt: 'Keep me' }])
+    await tick()
+    popUpEditorStore.open = false
+    await vi.advanceTimersByTimeAsync(150)
+    expect(inputHookSettingsMocks.readInputHooks()[0].prompt).toBe('Keep me')
+  })
+
+  it('names the hook in the delete confirmation and preserves it on cancel', async () => {
+    const confirm = vi.fn().mockReturnValue(false)
+    vi.stubGlobal('confirm', confirm)
+    const remove = hookCard('Legacy Hook').querySelector<HTMLButtonElement>(
+      `button[aria-label="${language.inputHookDelete}: Legacy Hook"]`,
+    )!
+    remove.click()
+    await tick()
+    expect(confirm).toHaveBeenCalledWith(language.settingsItemRemovalConfirmNamed('Legacy Hook'))
+    expect(inputHookSettingsMocks.readInputHooks()).toHaveLength(1)
+    confirm.mockReturnValue(true)
+    remove.click()
+    await tick()
+    expect(inputHookSettingsMocks.readInputHooks()).toEqual([])
+    expect(target.textContent).toContain(language.inputHookSettings.empty)
+    expect(document.activeElement).toBe(target.querySelector(`button[aria-label="${language.inputHookAdd}"]`))
+  })
+
+  it('shows queued and failed saves distinctly and retries without replacing edited text', async () => {
+    const editor = hookCard('Legacy Hook').querySelector('textarea')!
+    editor.value = 'Unsaved changes'
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    inputHookSettingsMocks.reportPersistence('queued')
+    await tick()
+    expect(target.querySelector('[role="status"]')?.textContent).toContain(language.inputHookSettings.queued)
+    inputHookSettingsMocks.reportPersistence('failed')
+    await tick()
+    const alert = target.querySelector('[role="alert"]')!
+    expect(alert.textContent).toContain(language.inputHookSettings.saveFailed)
+    alert.querySelector<HTMLButtonElement>('button')!.click()
+    expect(inputHookSettingsMocks.retryPersistence).toHaveBeenCalledTimes(1)
+    expect(editor.value).toBe('Unsaved changes')
+    inputHookSettingsMocks.reportPersistence('accepted')
+    await tick()
+    expect(target.querySelector('[role="status"]')?.textContent).toContain(language.inputHookSettings.saved)
   })
 })
