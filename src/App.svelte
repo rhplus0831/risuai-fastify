@@ -320,8 +320,10 @@
 
   $effect(() => {
     if (!canApplyWriterRoutes) return
-    // Keep the live URL subscription even while a nonreactive reader intent
-    // supplies the first route after promotion.
+    // Keep the live URL subscription while consuming the reader-only display
+    // target. Promotion never replays that target through writer selection
+    // handlers; the writer state-to-route effect reconciles the URL to the
+    // already-persisted selection without creating a command.
     const currentWriterRoute = $currentRoute
     let observerIntent = peekObserverRouteIntent()
     // New navigation supersedes the retained route; equivalent aliases keep
@@ -330,19 +332,21 @@
       consumeObserverRouteIntent(observerIntent.sequence)
       observerIntent = null
     }
-    const route = observerIntent?.route ?? currentWriterRoute
-    if (consumeStateDrivenRouteUpdate() && !observerIntent) {
-      renderedRoute = route
+    if (observerIntent) {
+      consumeObserverRouteIntent(observerIntent.sequence)
+      return
+    }
+    if (consumeStateDrivenRouteUpdate()) {
+      renderedRoute = currentWriterRoute
       return
     }
     let current = true
     const sessionGeneration = captureClientSessionGeneration()
     untrack(() => {
-      void applyRouteToStores(route).then((applied) => {
+      void applyRouteToStores(currentWriterRoute).then((applied) => {
         if (!current || !applied || !canApplyWriterRoutes || !isClientSessionGenerationCurrent(sessionGeneration))
           return
-        renderedRoute = route
-        if (observerIntent) consumeObserverRouteIntent(observerIntent.sequence)
+        renderedRoute = currentWriterRoute
       })
     })
     return () => {

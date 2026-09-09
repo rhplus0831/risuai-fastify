@@ -73,6 +73,11 @@ export function isClientSessionManaged(): boolean {
   return state.managed
 }
 
+/** A coherent preview alone is not an established reader/writer disposition. */
+export function hasResolvedClientSessionRole(): boolean {
+  return !state.managed || initialRoleResolved
+}
+
 /** Compatibility is deliberate: the conservative path retains its existing guards. */
 export function canUseClientWriteAccess(): boolean {
   return (

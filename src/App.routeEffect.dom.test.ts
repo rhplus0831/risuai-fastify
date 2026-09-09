@@ -831,42 +831,37 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(applyRoute).toHaveBeenCalledWith(settingsRoute)
   })
 
-  it('lets newer writer navigation supersede a retained reader route before its initial application finishes', async () => {
+  it('makes a newer writer navigation the first persisted application after a retained reader route', async () => {
     await unmount(component!)
     component = undefined
     const router = appRouteDomMocks.state.exports!
     const applyRoute = vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>)
-    const initialApplication = deferred<boolean>()
     const nextApplication = deferred<boolean>()
-    applyRoute.mockClear().mockReturnValueOnce(initialApplication.promise).mockReturnValueOnce(nextApplication.promise)
+    applyRoute.mockClear().mockReturnValueOnce(nextApplication.promise)
     enterClientWriter()
     recordObserverRouteIntent(characterRoute)
     appRouteDomMocks.state.pendingRouteApplication = true
     try {
       await mountApp()
-      expect(applyRoute).toHaveBeenCalledExactlyOnceWith(characterRoute)
-      expect(peekObserverRouteIntent()?.route).toEqual(characterRoute)
+      expect(applyRoute).not.toHaveBeenCalled()
+      expect(peekObserverRouteIntent()).toBeNull()
       recordStartupMilestone('background-ready')
       const nextRoute = parseAppRoute('/settings/language')
       window.history.pushState(null, '', nextRoute.path)
       router.currentRoute.set(nextRoute)
       await tick()
-      expect(applyRoute).toHaveBeenCalledTimes(2)
+      expect(applyRoute).toHaveBeenCalledOnce()
       expect(applyRoute).toHaveBeenLastCalledWith(nextRoute)
       expect(peekObserverRouteIntent()).toBeNull()
       nextApplication.resolve(true)
       await tick()
       await tick()
       expect(target.querySelector('[data-risu-lazy-surface="settings"]')).not.toBeNull()
-      initialApplication.resolve(true)
-      await tick()
-      await tick()
       expect(get(router.currentRoute)).toEqual(nextRoute)
       expect(window.location.pathname).toBe('/settings/language')
       expect(target.querySelector('[data-risu-lazy-surface="settings"]')).not.toBeNull()
       expect(target.querySelector('[data-rendered-route="/character/char-a/chat-a"]')).toBeNull()
     } finally {
-      initialApplication.resolve(false)
       nextApplication.resolve(false)
       await tick()
     }
@@ -901,23 +896,22 @@ describe('App route/refreeze mounted DOM behavior', () => {
     }
   })
 
-  it('retains a semantically matching reader alias through failed application and consumes it after a successful retry', async () => {
+  it('consumes a semantically matching reader alias before a later writer application', async () => {
     await unmount(component!)
     component = undefined
     const router = appRouteDomMocks.state.exports!
     const applyRoute = vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>)
     const retryApplication = deferred<boolean>()
     const alias = parseAppRoute('/characters/char-a/chats/chat-a')
-    const intent = recordObserverRouteIntent(alias)
-    applyRoute.mockClear().mockResolvedValueOnce(false).mockReturnValueOnce(retryApplication.promise)
+    recordObserverRouteIntent(alias)
+    applyRoute.mockClear().mockReturnValueOnce(retryApplication.promise)
     try {
       await mountApp()
-      expect(applyRoute).toHaveBeenCalledExactlyOnceWith(alias)
-      expect(peekObserverRouteIntent()).toEqual(intent)
+      expect(applyRoute).not.toHaveBeenCalled()
+      expect(peekObserverRouteIntent()).toBeNull()
       router.currentRoute.set({ ...characterRoute })
       await tick()
-      expect(applyRoute).toHaveBeenLastCalledWith(alias)
-      expect(peekObserverRouteIntent()).toEqual(intent)
+      expect(applyRoute).toHaveBeenCalledExactlyOnceWith(characterRoute)
       retryApplication.resolve(true)
       await tick()
       await tick()
@@ -1055,7 +1049,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     await vi.waitFor(() => expect(appRouteDomMocks.retryConnectedAuthentication).toHaveBeenCalledOnce())
   })
 
-  it('renders the dedicated observer view without applying persistence-capable routes', async () => {
+  it('does not replay a reader display route through persistence-capable handlers after promotion', async () => {
     if (component) {
       unmount(component)
       component = undefined
@@ -1097,16 +1091,14 @@ describe('App route/refreeze mounted DOM behavior', () => {
     appRouteDomMocks.state.exports?.currentRoute.set(latestRoute)
     recordStartupMilestone('writer-ready')
 
-    await vi.waitFor(() => expect(appRouteDomMocks.state.applyRouteCalls).toBe(1))
-    expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenCalledOnce()
-    expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenCalledWith(latestRoute)
     await vi.waitFor(() => expect(peekObserverRouteIntent()).toBeNull())
+    expect(appRouteDomMocks.state.exports?.applyRouteToStores).not.toHaveBeenCalled()
     await vi.waitFor(() => expect(target.querySelector('[data-risu-shell-main]')).not.toBeNull())
     expect(get(sideBarTransitionCause)).toBe('none')
     expect(target.querySelector('.risu-sidebar, .risu-sidebar-close')).toBeNull()
 
-    // Consuming a nonreactive reader intent must not remove the effect's live
-    // URL dependency; the next ordinary writer navigation still applies.
+    // Consuming a nonreactive reader target must not remove the effect's live
+    // URL dependency; a new writer-owned navigation still applies normally.
     const nextRoute: AppRoute = {
       kind: 'character',
       path: '/character/char-b/chat-b',
