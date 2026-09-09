@@ -93,7 +93,7 @@
 
 <style>
   aside {
-    top: max(0.75rem, env(safe-area-inset-top));
+    top: max(4.5rem, calc(env(safe-area-inset-top) + 3.5rem));
     right: max(0.75rem, env(safe-area-inset-right));
   }
 </style>

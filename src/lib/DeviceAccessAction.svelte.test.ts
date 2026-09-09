@@ -43,6 +43,7 @@ describe('read-only device access action', () => {
     expect(target.querySelector('[data-reader-writer-switch-result]')?.textContent).toBe(
       language.connectedReaders.switchCancelled,
     )
+    expect(getComputedStyle(region).top).not.toBe('0px')
     buttons[0].click()
     expect(onUseThisDevice).toHaveBeenCalledOnce()
   })

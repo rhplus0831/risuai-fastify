@@ -7,6 +7,7 @@
   import ReaderChatBackground from './ChatScreens/ReaderChatBackground.svelte'
   import { getCustomBackground } from '../ts/characterState'
   import Chats from './ChatScreens/Chats.svelte'
+  import ReadOnlyComposer from './ChatScreens/ReadOnlyComposer.svelte'
   import { createChatReadOwners } from './ChatScreens/chatReadOwners.svelte'
   import { getReaderPanelAppearance, hasReaderChatPanel } from './ChatScreens/readerPanelAppearance'
   import { CHAT_READ_OWNERS_CONTEXT } from './ChatScreens/chatReadOwnersContext'
@@ -589,6 +590,7 @@
           data-reader-new-messages
           onclick={() => chatsInstance?.scrollToLatestMessage()}>{language.connectedReaders.newMessages}</button
         >{/if}
+      <ReadOnlyComposer />
     </div>
   {/snippet}
 </ChatScreenLayout>

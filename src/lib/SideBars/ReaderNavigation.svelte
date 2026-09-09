@@ -121,8 +121,8 @@
       <p class="mt-3 text-sm text-textcolor2">{language.connectedReaders.composerReadOnly}</p>
     </div>
     {#if responsive}
-      <button type="button" aria-label={language.close} class="h-full min-w-12 grow bg-black/50" onclick={onClose}
-      ></button>
+      <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
+      <div aria-hidden="true" class="h-full min-w-12 grow bg-black/50" onclick={onClose}></div>
     {/if}
   {:else}
     <NavigationRail columns={geometry.columns}>

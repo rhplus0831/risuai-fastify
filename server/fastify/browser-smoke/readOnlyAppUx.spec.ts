@@ -207,7 +207,7 @@ async function readingContrast(page: Page) {
         summary: `.risu-chat[data-risu-message-id="${scriptId}"] summary`,
         link: `.risu-chat[data-risu-message-id="${scriptId}"] a`,
         composerReason: '#reader-composer-reason',
-        takeover: '[data-reader-composer-takeover]',
+        takeover: '[data-reader-use-this-device]',
       }
       return Object.fromEntries(
         Object.entries(selectors).map(([name, selector]) => {
@@ -259,8 +259,8 @@ async function expectReader(page: Page, chatId: string): Promise<void> {
     { timeout: 30_000 },
   )
   await expect(page.locator('[data-reader-transcript]')).toHaveAttribute('data-reader-chat-id', chatId)
-  await expect(page.locator('[data-reader-composer] textarea')).toBeDisabled()
-  await expect(page.locator('[data-reader-composer-takeover]')).toBeEnabled()
+  await expect(page.locator('[data-reader-composer-field="message"]')).toBeDisabled()
+  await expect(page.locator('[data-reader-use-this-device]')).toBeEnabled()
   expect(
     await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities),
   ).toMatchObject({ canMutate: false, canGenerate: false })
@@ -400,6 +400,12 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       await expect(body(reader, COPY_ID)).toHaveCSS('font-family', 'Georgia, serif')
 
       await openNavigation(reader)
+      const chatNavigation = reader.locator('[data-reader-navigation]')
+      const back = chatNavigation.locator('[data-reader-go-back]')
+      await expect(back).toBeEnabled()
+      await expect(chatNavigation.locator('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).toHaveCount(1)
+      await back.click()
+      await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
       await expect(reader.locator('[data-risu-navigation-rail]')).toHaveCSS('width', '80px')
       await expect(writer.locator('[data-risu-navigation-rail]')).toBeVisible()
       const navigation = reader.locator('[data-reader-navigation]')
@@ -410,7 +416,7 @@ for (const viewport of ['desktop', 'mobile'] as const) {
         // Programmatic events reach the handler even when a native control is disabled.
         await control.dispatchEvent('pointerenter')
         await control.dispatchEvent('click')
-        await expect(reader).toHaveURL(`${harness.baseUrl}${ROUTE_B}`)
+        await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
       }
 
       const characterFolder = navigation.locator(`[data-reader-character-folder="${CHARACTER_FOLDER}"]`)
@@ -496,15 +502,21 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       await reader.goBack()
       await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_A}`)
       await reader.goBack()
+      await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
+      await reader.goBack()
       await expectReader(reader, CHAT_B)
+      await reader.goForward()
       await reader.goForward()
       await reader.goForward()
       await expectReader(reader, CHAT_A)
       await openNavigation(reader)
+      await navigation.locator('[data-reader-go-back]').click()
+      await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_A}`)
       await navigation.locator(`[data-risu-pinned-chat="${CHAT_B}"]`).getByRole('button').click()
       await expectReader(reader, CHAT_B)
 
       await openNavigation(reader)
+      await navigation.locator('[data-reader-go-back]').click()
       await navigation.getByRole('button', { name: 'Home', exact: true }).click()
       await expect(reader).toHaveURL(`${harness.baseUrl}/`)
       const catalog = reader.locator('[data-risu-grid-catalog]')
@@ -519,10 +531,14 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       await navigation.getByRole('button', { name: 'Open chat Harbor Reading', exact: true }).click()
       await expectReader(reader, CHAT_B)
       await openNavigation(reader)
+      await navigation.locator('[data-reader-go-back]').click()
       await navigation.getByRole('button', { name: 'Grid', exact: true }).click()
       await expect(reader).toHaveURL(`${harness.baseUrl}/grid`)
       await expect(catalog).toBeVisible()
       await reader.goBack()
+      await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
+      await openNavigation(reader)
+      await navigation.getByRole('button', { name: 'Open chat Harbor Reading', exact: true }).click()
       await expectReader(reader, CHAT_B)
       await closeNavigation(reader)
 
@@ -666,7 +682,7 @@ for (const viewport of ['desktop', 'mobile'] as const) {
           }
           return {
             transcript: rectangle('[data-reader-scroll]'),
-            takeover: rectangle('[data-reader-composer-takeover]'),
+            takeover: rectangle('[data-reader-use-this-device]'),
             viewport: { width: innerWidth, height: innerHeight },
             overflow: document.documentElement.scrollWidth > innerWidth,
           }
@@ -746,6 +762,8 @@ test('reader target deletion falls back locally and an authenticated-read failur
     evidence.initial = initial
     await openNavigation(reader)
     const navigation = reader.locator('[data-reader-navigation]')
+    await navigation.locator('[data-reader-go-back]').click()
+    await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
     await navigation
       .locator(`[data-reader-character-folder="${CHARACTER_FOLDER}"]`)
       .getByRole('button', { name: 'Voyages', exact: true })
@@ -757,6 +775,8 @@ test('reader target deletion falls back locally and an authenticated-read failur
       .click()
     await navigation.getByRole('searchbox', { name: 'Search: Chats', exact: true }).fill('Harbor')
     await expect(navigation.locator(`[data-risu-chat-id="${CHAT_B}"]`)).toBeVisible()
+    await navigation.getByRole('button', { name: 'Open chat Harbor Reading', exact: true }).click()
+    await expectReader(reader, CHAT_B)
 
     const beforeReplayRequests = requests.length
     await reader.route('**/api/v1/events?*', async (route) => {
@@ -795,6 +815,9 @@ test('reader target deletion falls back locally and an authenticated-read failur
         `replay refresh reads ${path}`,
       ).toBe(true)
     }
+    await openNavigation(reader)
+    await reader.locator('[data-reader-go-back]').click()
+    await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
     await expect(navigation.getByRole('searchbox', { name: 'Search: Character', exact: true })).toHaveValue('Harbor')
     await expect(navigation.getByRole('searchbox', { name: 'Search: Chats', exact: true })).toHaveValue('Harbor')
     await expect(
@@ -805,6 +828,8 @@ test('reader target deletion falls back locally and an authenticated-read failur
     expect(rolloutDurableSnapshot(harness.dataDir)).toEqual(initial)
     expect(await readNativeRolloutOutbox(reader)).toEqual(outbox)
     expect(requests.filter(isForbiddenReaderRequest)).toEqual([])
+    await navigation.getByRole('button', { name: 'Open chat Harbor Reading', exact: true }).click()
+    await expectReader(reader, CHAT_B)
 
     const deleted = await writer.evaluate(
       async ({ chatId }) => {
@@ -830,6 +855,8 @@ test('reader target deletion falls back locally and an authenticated-read failur
     await expectReader(reader, CHAT_NOTES)
     await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}/${CHAT_NOTES}`)
     await expect(body(reader, 'read-only-ux-note')).toHaveText('Committed notes remain available.')
+    await openNavigation(reader)
+    await reader.locator('[data-reader-go-back]').click()
     await expect(navigation.locator(`[data-risu-pinned-chat="${CHAT_B}"]`)).toHaveCount(0)
     await expect(navigation.locator(`[data-risu-chat-id="${CHAT_B}"]`)).toHaveCount(0)
     await expect(navigation.getByRole('searchbox', { name: 'Search: Character', exact: true })).toHaveValue('Harbor')
@@ -844,6 +871,8 @@ test('reader target deletion falls back locally and an authenticated-read failur
       { id: CHAT_B, origin_writer_session_id: initial.ownership.active_writer_session_id },
     ])
     evidence.afterDeletion = afterDeletion
+    await navigation.getByRole('button', { name: 'Open chat Harbor Notes', exact: true }).click()
+    await expectReader(reader, CHAT_NOTES)
 
     // Controlled transport failure of a real protected read. Server data and
     // auth credentials are untouched, so only Reader B must clear its UI.
