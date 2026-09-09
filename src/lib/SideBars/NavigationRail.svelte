@@ -1,25 +1,37 @@
 <script lang="ts">
   import type { Snippet } from 'svelte'
+  import { normalizeDesktopSidebarColumns } from '@risuai/shared-core/sidebar-columns'
   let {
     children,
     hidden = false,
     closing = false,
     editMode = false,
+    columns = 1,
   }: {
     children: Snippet
     hidden?: boolean
     closing?: boolean
     editMode?: boolean
+    columns?: number
   } = $props()
+
+  const normalizedColumns = $derived(normalizeDesktopSidebarColumns(columns))
+  const railWidth = $derived(`${normalizedColumns * 5}rem`)
+  const railCloseOffset = $derived(`${normalizedColumns * 10}rem`)
 </script>
 
 <div
-  class="h-full w-20 min-w-20 shrink-0 flex-col items-center bg-bgcolor text-textcolor shadow-lg relative rs-sidebar"
+  class="h-full shrink-0 flex-col items-center bg-bgcolor text-textcolor shadow-lg relative rs-sidebar"
   class:editMode
   class:risu-sub-sidebar={closing}
   class:risu-sub-sidebar-close={closing}
   class:hidden
   class:flex={!hidden}
+  style:width={railWidth}
+  style:min-width={railWidth}
+  style:--risu-navigation-rail-width={railWidth}
+  style:--risu-navigation-rail-close-offset={railCloseOffset}
+  data-risu-navigation-columns={normalizedColumns}
   data-risu-navigation-rail>
   {@render children()}
 </div>
@@ -34,22 +46,22 @@
       min-width: 0rem;
     }
     to {
-      width: 5rem;
-      min-width: 5rem;
+      width: var(--risu-navigation-rail-width);
+      min-width: var(--risu-navigation-rail-width);
     }
   }
   @keyframes sub-sidebar-transition-close {
     from {
-      width: 5rem;
-      min-width: 5rem;
-      max-width: 5rem;
+      width: var(--risu-navigation-rail-width);
+      min-width: var(--risu-navigation-rail-width);
+      max-width: var(--risu-navigation-rail-width);
       right: 0rem;
     }
     to {
       width: 0rem;
       min-width: 0rem;
       max-width: 0rem;
-      right: 10rem;
+      right: var(--risu-navigation-rail-close-offset);
     }
   }
   .risu-sub-sidebar {

@@ -502,6 +502,8 @@ describe('settings owner mutations', () => {
           reducedMotion: false,
           heightMode: 'percent',
           sideBarSize: 0,
+          desktopSidebarColumns: 1,
+          mobileSidebarColumns: 1,
           roundIcons: false,
           menuSideBar: false,
           showFolderName: true,

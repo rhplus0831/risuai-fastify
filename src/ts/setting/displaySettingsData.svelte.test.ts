@@ -134,6 +134,33 @@ describe('display theme settings data', () => {
   })
 })
 
+describe('sidebar column settings data', () => {
+  it('offers exact desktop and mobile column choices with legacy fallbacks', () => {
+    const desktop = displayOtherSettingsItems.find((item) => item.id === 'display.desktopSidebarColumns')
+    const mobile = displayOtherSettingsItems.find((item) => item.id === 'display.mobileSidebarColumns')
+
+    expect(desktop).toMatchObject({
+      type: 'segmented',
+      labelKey: 'desktopSidebarColumns',
+      bindKey: 'desktopSidebarColumns',
+      keywords: ['desktop', 'sidebar', 'bot', 'columns', 'layout'],
+    })
+    expect(desktop?.options?.segmentOptions?.map((option) => option.value)).toEqual([1, 2, 3, 4])
+    expect(desktop?.getValue?.({} as never)).toBe(1)
+    expect(desktop?.getValue?.({ desktopSidebarColumns: 4 } as never)).toBe(4)
+
+    expect(mobile).toMatchObject({
+      type: 'segmented',
+      labelKey: 'mobileSidebarColumns',
+      bindKey: 'mobileSidebarColumns',
+      keywords: ['mobile', 'sidebar', 'bot', 'columns', 'layout'],
+    })
+    expect(mobile?.options?.segmentOptions?.map((option) => option.value)).toEqual([1, 2])
+    expect(mobile?.getValue?.({} as never)).toBe(1)
+    expect(mobile?.getValue?.({ mobileSidebarColumns: 2 } as never)).toBe(2)
+  })
+})
+
 describe('display size settings data', () => {
   it('exposes the fixed chat screen width slider in pixels', () => {
     const chatScreenWidth = displaySizeSettingsItems.find((item) => item.id === 'display.chatScreenWidth')

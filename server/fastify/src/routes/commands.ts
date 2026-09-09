@@ -65,6 +65,13 @@ import {
   MIN_REGEX_OUTPUT_SIZE_LIMIT_MIB,
 } from '@risuai/shared-core/regex-output-size-limit'
 import {
+  MAX_DESKTOP_SIDEBAR_COLUMNS,
+  MAX_MOBILE_SIDEBAR_COLUMNS,
+  MIN_SIDEBAR_COLUMNS,
+  isValidDesktopSidebarColumns,
+  isValidMobileSidebarColumns,
+} from '@risuai/shared-core/sidebar-columns'
+import {
   createPromptItemRecord,
   normalizePromptItemRecord,
   PROMPT_SETTINGS_KEYS,
@@ -1877,6 +1884,8 @@ export const SETTINGS_GROUP_KEYS: Record<ReadableSettingsGroup, readonly string[
     'textAreaSize',
     'textAreaTextSize',
     'sideBarSize',
+    'desktopSidebarColumns',
+    'mobileSidebarColumns',
     'assetWidth',
     'animationSpeed',
     'reducedMotion',
@@ -2276,6 +2285,8 @@ const NUMBER_SETTING_KEYS = new Set([
   'sdSteps',
   'settingsCloseButtonSize',
   'sideBarSize',
+  'desktopSidebarColumns',
+  'mobileSidebarColumns',
   'temperature',
   'textAreaSize',
   'textAreaTextSize',
@@ -10728,6 +10739,16 @@ function validateSettingValue(key: string, value: unknown): void {
     (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > MAX_REQUEST_HISTORY_LIMIT)
   ) {
     throw new ValidationError(`requestHistoryLimit must be an integer from 0 to ${MAX_REQUEST_HISTORY_LIMIT}`)
+  }
+  if (key === 'desktopSidebarColumns' && !isValidDesktopSidebarColumns(value)) {
+    throw new ValidationError(
+      `desktopSidebarColumns must be an integer from ${MIN_SIDEBAR_COLUMNS} to ${MAX_DESKTOP_SIDEBAR_COLUMNS}`,
+    )
+  }
+  if (key === 'mobileSidebarColumns' && !isValidMobileSidebarColumns(value)) {
+    throw new ValidationError(
+      `mobileSidebarColumns must be an integer from ${MIN_SIDEBAR_COLUMNS} to ${MAX_MOBILE_SIDEBAR_COLUMNS}`,
+    )
   }
   const kind = settingValueKind(key)
   if (kind === 'json') {

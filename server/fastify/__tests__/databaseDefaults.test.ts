@@ -136,6 +136,8 @@ describe('database defaults', () => {
     expect(database.reducedMotion).toBe(false)
     expect(database.floatingChatInput).toBe(true)
     expect(database.chatScreenWidth).toBe(900)
+    expect(database.desktopSidebarColumns).toBe(1)
+    expect(database.mobileSidebarColumns).toBe(1)
     expect(database.chatDisplayTailCount).toBe(30)
     expect(database.chatLoadInitialPages).toBe(30)
     expect(database.chatLoadAdditionalPages).toBe(15)
@@ -496,6 +498,22 @@ describe('database defaults', () => {
     const database = normalizeDatabaseDefaults({ chatScreenWidth: 1240 }, { providerDefaults: false })
 
     expect(database.chatScreenWidth).toBe(1240)
+  })
+
+  it('preserves valid sidebar columns and clamps imported values to each device limit', () => {
+    const valid = normalizeDatabaseDefaults(
+      { desktopSidebarColumns: 4, mobileSidebarColumns: 2 },
+      { providerDefaults: false },
+    )
+    const clamped = normalizeDatabaseDefaults(
+      { desktopSidebarColumns: 9, mobileSidebarColumns: 3 },
+      { providerDefaults: false },
+    )
+
+    expect(valid.desktopSidebarColumns).toBe(4)
+    expect(valid.mobileSidebarColumns).toBe(2)
+    expect(clamped.desktopSidebarColumns).toBe(4)
+    expect(clamped.mobileSidebarColumns).toBe(2)
   })
 
   it('preserves an existing translation-notification defer cap', () => {

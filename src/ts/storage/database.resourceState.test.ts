@@ -84,13 +84,15 @@ describe('test database adapter over resource state', () => {
     expect(charactersResourceState.listRevision).toBe(17)
   })
 
-  it('backfills chat screen width when an authoritative database predates the setting', () => {
+  it('backfills post-launch display settings when an authoritative database predates them', () => {
     const database = databaseFixture()
 
     applyServerResourceDatabase(database)
 
     expect(getDatabase().chatScreenWidth).toBe(900)
     expect(getDatabase().autoTranslateNotificationDeferCapSeconds).toBe(180)
+    expect(getDatabase().desktopSidebarColumns).toBe(1)
+    expect(getDatabase().mobileSidebarColumns).toBe(1)
   })
 
   it('removes unsupported legacy database-key sidebar rows during resource normalization', () => {

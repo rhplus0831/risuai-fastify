@@ -140,6 +140,7 @@ import {
   DEFAULT_CHAT_LOAD_INITIAL_PAGES,
   normalizeChatLoadPages,
 } from '@risuai/shared-core/chat-load-pages'
+import { normalizeDesktopSidebarColumns, normalizeMobileSidebarColumns } from '@risuai/shared-core/sidebar-columns'
 import type { ChatGenerationSettings } from '../chatGenerationSettings'
 import { optimisticallyRehomeGenerationReferences } from '../generationReferenceCascade'
 import {
@@ -3358,6 +3359,8 @@ export function setDatabase(data: Database) {
   data.useInstructPrompt ??= false
   data.textAreaSize ??= 0
   data.sideBarSize ??= 0
+  data.desktopSidebarColumns = normalizeDesktopSidebarColumns(data.desktopSidebarColumns)
+  data.mobileSidebarColumns = normalizeMobileSidebarColumns(data.mobileSidebarColumns)
   data.textAreaTextSize ??= 0
   data.combineTranslation ??= false
   data.customPromptTemplateToggle ??= ''
@@ -3544,6 +3547,8 @@ export function setDatabase(data: Database) {
 export function applyServerResourceDatabase(data: Database, revision?: number) {
   data.chatScreenWidth ??= 900
   data.autoTranslateNotificationDeferCapSeconds ??= 180
+  data.desktopSidebarColumns = normalizeDesktopSidebarColumns(data.desktopSidebarColumns)
+  data.mobileSidebarColumns = normalizeMobileSidebarColumns(data.mobileSidebarColumns)
   data.customSidebarItems = normalizeCustomSidebarItems(data.customSidebarItems)
   data.chatGenerationTogglePresets = normalizeChatGenerationTogglePresets(data.chatGenerationTogglePresets)
   normalizeNestedPromptTemplates(data)
@@ -4207,6 +4212,8 @@ export interface Database {
   useInstructPrompt: boolean
   textAreaSize: number
   sideBarSize: number
+  desktopSidebarColumns: number
+  mobileSidebarColumns: number
   textAreaTextSize: number
   combineTranslation: boolean
   dynamicAssets: boolean

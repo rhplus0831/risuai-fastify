@@ -21,7 +21,7 @@
 
 <button
   type="button"
-  class="flex items-center justify-center py-2 flex-col gap-1 w-full disabled:cursor-not-allowed disabled:opacity-50"
+  class="flex w-full max-w-20 flex-col items-center justify-center gap-1 py-2 disabled:cursor-not-allowed disabled:opacity-50"
   class:text-textcolor2={!selected}
   disabled={!enabled}
   aria-label={!enabled ? `${label}: ${disabledReason}` : label}

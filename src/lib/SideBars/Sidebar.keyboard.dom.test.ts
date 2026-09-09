@@ -220,6 +220,80 @@ afterEach(() => {
 })
 
 describe('Sidebar character keyboard activation', () => {
+  it('switches the writer rail, pinned chats, and bot grid between desktop and mobile columns', async () => {
+    setDatabaseLite({
+      characterOrder: ['char-a', 'char-b'],
+      characters: [
+        {
+          chaId: 'char-a',
+          name: 'Alpha',
+          image: '',
+          chatPage: 0,
+          chats: [{ id: 'chat-a', name: 'Pinned Alpha', pinned: true, message: [] }],
+        },
+        {
+          chaId: 'char-b',
+          name: 'Beta',
+          image: '',
+          chatPage: 0,
+          chats: [{ id: 'chat-b', name: 'Pinned Beta', pinned: true, message: [] }],
+        },
+      ],
+      desktopSidebarColumns: 4,
+      mobileSidebarColumns: 2,
+      hamburgerButtonBottom: false,
+      menuSideBar: false,
+      roundIcons: false,
+    } as never)
+
+    component = mount(Sidebar, { target })
+    await tick()
+
+    const rail = target.querySelector<HTMLElement>('[data-risu-navigation-rail]')
+    const characterControls = target.querySelector<HTMLElement>('[data-risu-sidebar-character-controls]')
+    const pinnedChats = target.querySelector<HTMLElement>('[data-risu-pinned-chats]')
+    expect(rail?.dataset.risuNavigationColumns).toBe('4')
+    expect(rail?.style.width).toBe('20rem')
+    expect(characterControls?.dataset.risuSidebarCharacterColumns).toBe('4')
+    expect(characterControls?.style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))')
+    expect(pinnedChats?.dataset.risuPinnedChatColumns).toBe('4')
+
+    DynamicGUI.set(true)
+    await tick()
+
+    expect(rail?.dataset.risuNavigationColumns).toBe('2')
+    expect(rail?.style.width).toBe('10rem')
+    expect(characterControls?.dataset.risuSidebarCharacterColumns).toBe('2')
+    expect(pinnedChats?.dataset.risuPinnedChatColumns).toBe('2')
+  })
+
+  it('flows expanded folder bots into subsequent cells with shared subtle group styling', async () => {
+    seedFolderSidebarDatabase()
+    settingsResourceState.value.desktopSidebarColumns = 4
+    component = mount(Sidebar, { target })
+    await tick()
+
+    target.querySelector<HTMLButtonElement>('button[aria-label="Folder A"]')?.click()
+
+    await vi.waitFor(() => {
+      expect(target.querySelector('[data-risu-sidebar-grid-cell="folder-child"] [data-char-id="char-a"]')).toBeTruthy()
+    })
+
+    const cells = [...target.querySelectorAll<HTMLElement>('[data-risu-sidebar-grid-cell]')]
+    expect(cells.map((cell) => cell.dataset.risuSidebarGridCell)).toEqual(['root', 'folder-child', 'root'])
+    expect(cells[0]?.querySelector('button[aria-label="Folder A"]')).toBeTruthy()
+    expect(cells[1]?.querySelector('[data-char-id="char-a"]')).toBeTruthy()
+    expect(cells[2]?.querySelector('button[aria-label="Folder B"]')).toBeTruthy()
+
+    const folderGroup = target.querySelectorAll<HTMLElement>('[data-risu-folder-group="folder-a"][role="listitem"]')
+    expect(folderGroup).toHaveLength(2)
+    for (const cell of folderGroup) {
+      expect(cell.classList.contains('border')).toBe(true)
+      expect(cell.classList.contains('border-selected')).toBe(true)
+      expect(cell.classList.contains('bg-blue-700/20')).toBe(true)
+    }
+  })
+
   it('prefetches a desktop character on pointer or keyboard intent', async () => {
     const prefetchCharacter = vi.fn()
     component = mount(Sidebar, { target, props: { prefetchCharacter } })

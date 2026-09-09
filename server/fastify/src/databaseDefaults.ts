@@ -3,6 +3,7 @@ import { prebuiltNAIpresets, prebuiltPresets } from './legacyGenerationDefaults.
 import { defaultHotkeys, RETIRED_HOTKEY_ACTIONS } from '@risuai/shared-core/default-hotkeys'
 import { LLMFormat } from '@risuai/shared-core/model-types'
 import { DEFAULT_CHAT_DISPLAY_TAIL_COUNT } from '@risuai/shared-core/chat-display-tail-count'
+import { normalizeDesktopSidebarColumns, normalizeMobileSidebarColumns } from '@risuai/shared-core/sidebar-columns'
 import {
   DEFAULT_CHAT_LOAD_ADDITIONAL_PAGES,
   DEFAULT_CHAT_LOAD_INITIAL_PAGES,
@@ -879,6 +880,8 @@ export function normalizeDatabaseDefaults(
   setDefault(database, 'useInstructPrompt', false)
   setDefault(database, 'textAreaSize', 0)
   setDefault(database, 'sideBarSize', 0)
+  database.desktopSidebarColumns = normalizeDesktopSidebarColumns(database.desktopSidebarColumns)
+  database.mobileSidebarColumns = normalizeMobileSidebarColumns(database.mobileSidebarColumns)
   setDefault(database, 'textAreaTextSize', 0)
   setDefault(database, 'combineTranslation', false)
   setDefault(database, 'customPromptTemplateToggle', '')

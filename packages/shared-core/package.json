@@ -63,6 +63,7 @@
     "./risuchat-parser-helpers": "./src/risuChatParserHelpers.ts",
     "./router-route": "./src/routerRoute.ts",
     "./script-model-overrides": "./src/scriptModelOverrides.ts",
-    "./settings-groups": "./src/settingsGroups.ts"
+    "./settings-groups": "./src/settingsGroups.ts",
+    "./sidebar-columns": "./src/sidebarColumns.ts"
   }
 }

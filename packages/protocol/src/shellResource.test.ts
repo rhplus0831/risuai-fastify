@@ -44,6 +44,8 @@ function shellSettings(): ServerShellSettings {
     reducedMotion: false,
     heightMode: 'percent',
     sideBarSize: 0,
+    desktopSidebarColumns: 1,
+    mobileSidebarColumns: 1,
     roundIcons: false,
     menuSideBar: false,
     showFolderName: true,
@@ -109,6 +111,10 @@ describe('server shell protocol', () => {
     const malformed = shellPayload()
     malformed.settings.sideBarSize = Number.NaN
     expect(isServerShellPayload(malformed)).toBe(false)
+
+    const malformedColumns = shellPayload()
+    malformedColumns.settings.desktopSidebarColumns = 5
+    expect(isServerShellPayload(malformedColumns)).toBe(false)
   })
 
   it('rejects unsupported versions and incoherent nested revisions', () => {

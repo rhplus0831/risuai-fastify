@@ -1404,6 +1404,8 @@ const languageKoreanBase = {
   textAreaSize: '입력창 크기',
   textAreaTextSize: '입력창 글자 크기',
   sideBarSize: '사이드바 크기',
+  desktopSidebarColumns: '데스크톱 사이드바 열 개수',
+  mobileSidebarColumns: '모바일 사이드바 열 개수',
   embedding: '임베딩',
   voyageContext4: 'Voyage Context 4',
   syntax: '문법',

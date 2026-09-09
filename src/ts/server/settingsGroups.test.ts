@@ -65,6 +65,13 @@ describe('settings group contracts', () => {
     }
   })
 
+  it('persists writer sidebar column preferences through the display settings group', () => {
+    for (const key of ['desktopSidebarColumns', 'mobileSidebarColumns']) {
+      expect(SERVER_SETTINGS_GROUP_BY_KEY[key]).toBe('display')
+      expect(SERVER_SETTINGS_KEYS_BY_GROUP.display).toContain(key)
+    }
+  })
+
   it('does not expose retired Mood Light state as a server-backed setting', () => {
     expect(SERVER_SETTINGS_GROUP_BY_KEY).not.toHaveProperty('moodLightMembership')
     expect(SERVER_SETTINGS_KEYS_BY_GROUP.sidebar).not.toContain('moodLightMembership')

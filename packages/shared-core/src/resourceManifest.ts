@@ -159,6 +159,8 @@ export const RESOURCE_SURFACE_MANIFEST = {
           'reducedMotion',
           'heightMode',
           'sideBarSize',
+          'desktopSidebarColumns',
+          'mobileSidebarColumns',
           'roundIcons',
           'menuSideBar',
           'showFolderName',

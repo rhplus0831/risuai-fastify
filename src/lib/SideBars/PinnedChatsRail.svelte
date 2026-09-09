@@ -4,6 +4,7 @@
   import UnreadIndicator from './UnreadIndicator.svelte'
   import SidebarAvatar from './SidebarAvatar.svelte'
   import type { PinnedChatItem } from './sidebarMultitasking'
+  import { normalizeDesktopSidebarColumns } from '@risuai/shared-core/sidebar-columns'
 
   interface Props {
     items: readonly PinnedChatItem[]
@@ -17,6 +18,7 @@
     resolveImage: (image: string) => string | Promise<string>
     onPrefetch: (item: PinnedChatItem) => void
     isInert?: boolean
+    columns?: number
   }
 
   let {
@@ -31,14 +33,19 @@
     selectedChatId,
     resolveImage,
     isInert = false,
+    columns = 1,
   }: Props = $props()
+
+  const normalizedColumns = $derived(normalizeDesktopSidebarColumns(columns))
 </script>
 
 {#if items.length > 0}
   <nav
-    class="flex max-h-[35%] w-full shrink-0 flex-col items-center gap-2 overflow-x-hidden overflow-y-auto border-b border-b-selected px-1 py-2"
+    class="grid max-h-[35%] w-full shrink-0 items-start gap-2 overflow-x-hidden overflow-y-auto border-b border-b-selected px-1 py-2"
+    style:grid-template-columns={`repeat(${normalizedColumns}, minmax(0, 1fr))`}
     aria-label={language.pinnedChats}
     inert={isInert}
+    data-risu-pinned-chat-columns={normalizedColumns}
     data-risu-pinned-chats>
     {#each items as item (`${item.characterId}:${item.chatId}`)}
       {@const isCurrent = selectedCharacterId === item.characterId && selectedChatId === item.chatId}

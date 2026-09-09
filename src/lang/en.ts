@@ -1956,6 +1956,8 @@ export const languageEnglish = {
   textAreaSize: 'Input Area Size',
   textAreaTextSize: 'Input Area Text Size',
   sideBarSize: 'Sidebar Size',
+  desktopSidebarColumns: 'Desktop Sidebar Columns',
+  mobileSidebarColumns: 'Mobile Sidebar Columns',
   embedding: 'Embedding',
   voyageContext4: 'Voyage Context 4',
   syntax: 'Syntax',

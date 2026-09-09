@@ -1342,6 +1342,8 @@ describe('scalar settings groups', () => {
       theme: 'dark',
       zoomsize: 100,
       chatScreenWidth: 900,
+      desktopSidebarColumns: 1,
+      mobileSidebarColumns: 1,
       autoTranslateNotificationDeferCapSeconds: 180,
       paragraphBreakBySentences: false,
       paragraphBreakSentenceCount: 3,
@@ -1358,6 +1360,8 @@ describe('scalar settings groups', () => {
           theme: 'light',
           zoomsize: 88,
           chatScreenWidth: 1240,
+          desktopSidebarColumns: 4,
+          mobileSidebarColumns: 2,
           autoTranslateNotificationDeferCapSeconds: 0,
           paragraphBreakBySentences: true,
           paragraphBreakSentenceCount: 5,
@@ -1378,6 +1382,8 @@ describe('scalar settings groups', () => {
         'theme',
         'zoomsize',
         'chatScreenWidth',
+        'desktopSidebarColumns',
+        'mobileSidebarColumns',
         'autoTranslateNotificationDeferCapSeconds',
         'paragraphBreakBySentences',
         'paragraphBreakSentenceCount',
@@ -1395,11 +1401,38 @@ describe('scalar settings groups', () => {
       theme: 'light',
       zoomsize: 88,
       chatScreenWidth: 1240,
+      desktopSidebarColumns: 4,
+      mobileSidebarColumns: 2,
       autoTranslateNotificationDeferCapSeconds: 0,
       paragraphBreakBySentences: true,
       paragraphBreakSentenceCount: 5,
       greeting: 'hi',
     })
+  })
+
+  it('rejects sidebar column values outside each exact integer range', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await importDatabase(harness.app, assertion, {
+      desktopSidebarColumns: 1,
+      mobileSidebarColumns: 1,
+    })
+
+    for (const [key, values, maximum] of [
+      ['desktopSidebarColumns', [0, 1.5, 5], 4],
+      ['mobileSidebarColumns', [0, 1.5, 3], 2],
+    ] as const) {
+      for (const value of values) {
+        const res = await harness.app.inject({
+          method: 'PATCH',
+          url: '/api/v1/commands/settings/display',
+          headers: { 'risu-auth': assertion },
+          payload: { baseRevision: revision, patch: { [key]: value } },
+        })
+
+        expect(res.statusCode).toBe(400)
+        expect(res.json().error).toBe(`${key} must be an integer from 1 to ${maximum}`)
+      }
+    }
   })
 
   it('omits a large verbatim setting value from the command response', async () => {

@@ -259,7 +259,7 @@
         },
         {
           "file": "src/ts/storage/database.resourceState.test.ts",
-          "count": 10
+          "count": 12
         }
       ]
     },
@@ -695,7 +695,7 @@
         },
         {
           "file": "src/lib/SideBars/Sidebar.keyboard.dom.test.ts",
-          "count": 5
+          "count": 6
         },
         {
           "file": "src/ts/hotkey.preview.test.ts",

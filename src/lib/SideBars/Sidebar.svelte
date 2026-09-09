@@ -90,6 +90,7 @@
     getCharacterResourceOwner,
     settingsResourceState,
   } from 'src/ts/server/resourceState.svelte'
+  import { normalizeDesktopSidebarColumns, normalizeMobileSidebarColumns } from '@risuai/shared-core/sidebar-columns'
 
   const loadCharConfig = () => import('./CharConfig.svelte')
   const loadDevTool = () => import('./DevTool.svelte')
@@ -111,6 +112,26 @@
   )
 
   type CharacterFolderColor = (typeof characterFolderColors)[number]
+
+  function expandedFolderCellClass(color: string): string {
+    const background =
+      color === 'red'
+        ? 'bg-red-700/20'
+        : color === 'yellow'
+          ? 'bg-yellow-700/20'
+          : color === 'green'
+            ? 'bg-green-700/20'
+            : color === 'blue'
+              ? 'bg-blue-700/20'
+              : color === 'indigo'
+                ? 'bg-indigo-700/20'
+                : color === 'purple'
+                  ? 'bg-purple-700/20'
+                  : color === 'pink'
+                    ? 'bg-pink-700/20'
+                    : 'bg-darkbg/20'
+    return `rounded-lg border border-selected ${background}`
+  }
 
   function characterFolderActionKey(folderId: string): string {
     return `folder:${folderId}`
@@ -463,6 +484,7 @@
     | 'showFolderName'
     | 'enableDevTools'
   type SidebarSettingsGroup = 'display' | 'sidebar' | 'advanced'
+  type SidebarNumberSetting = 'desktopSidebarColumns' | 'mobileSidebarColumns'
 
   function sidebarBooleanSetting(key: SidebarBooleanSetting, group: SidebarSettingsGroup, fallback = false): boolean {
     const status = settingsResourceState.status
@@ -470,6 +492,14 @@
     if (status !== 'ready' && status !== 'idle' && status !== 'loading') return fallback
     const value = settingsResourceState.value[key]
     return typeof value === 'boolean' ? value : fallback
+  }
+
+  function sidebarNumberSetting(key: SidebarNumberSetting, group: SidebarSettingsGroup, fallback: number): number {
+    const status = settingsResourceState.status
+    if (status === 'error' || settingsResourceState.groupStatuses[group] === 'error') return fallback
+    if (status !== 'ready' && status !== 'idle' && status !== 'loading') return fallback
+    const value = settingsResourceState.value[key]
+    return typeof value === 'number' ? value : fallback
   }
 
   const getSidebarCharacterList = createSidebarCharacterListMemo()
@@ -481,6 +511,13 @@
   let hamburgerButtonBottom = $derived(sidebarBooleanSetting('hamburgerButtonBottom', 'sidebar'))
   let showFolderName = $derived(sidebarBooleanSetting('showFolderName', 'display'))
   let enableDevTools = $derived(sidebarBooleanSetting('enableDevTools', 'advanced'))
+  let desktopSidebarColumns = $derived(
+    normalizeDesktopSidebarColumns(sidebarNumberSetting('desktopSidebarColumns', 'display', 1)),
+  )
+  let mobileSidebarColumns = $derived(
+    normalizeMobileSidebarColumns(sidebarNumberSetting('mobileSidebarColumns', 'display', 1)),
+  )
+  let sidebarColumns = $derived($DynamicGUI ? mobileSidebarColumns : desktopSidebarColumns)
   let warningChatIds = $derived(collectExhaustedGenerationChatIds($generationJobLifecycles))
   let generatingChatIds = $derived(
     collectGeneratingChatIds($activeGenerationJobs, $activeChatGenerations, warningChatIds),
@@ -736,7 +773,7 @@
 </script>
 
 {#if menuSideBar}
-  <NavigationRail {hidden} closing={$sideBarClosing} {editMode}>
+  <NavigationRail {hidden} closing={$sideBarClosing} {editMode} columns={sidebarColumns}>
     <NavigationButton
       label={language.home}
       selected={$selectedCharID < 0 && $PlaygroundStore === 0 && !$settingsOpen}
@@ -791,13 +828,14 @@
       {warningChatIds}
       unreadChatIds={$unreadChatIds}
       rounded={IconRounded}
+      columns={sidebarColumns}
       onOpen={openPinnedChat}
       onPrefetch={(item) => {
         if (canUseClientWriteAccess()) prefetchCharacter(item.characterId)
       }} />
   </NavigationRail>
 {:else}
-  <NavigationRail {hidden} closing={$sideBarClosing} {editMode}>
+  <NavigationRail {hidden} closing={$sideBarClosing} {editMode} columns={sidebarColumns}>
     {#if !hamburgerButtonBottom}
       <button
         aria-label={language.menu}
@@ -855,18 +893,21 @@
       {warningChatIds}
       unreadChatIds={$unreadChatIds}
       rounded={IconRounded}
+      columns={sidebarColumns}
       onOpen={openNarrowPinnedChat}
       onPrefetch={(item) => {
         if (canUseClientWriteAccess()) prefetchCharacter(item.characterId)
       }}
       isInert={menuMode === 1} />
     <div
-      class="flex grow w-full flex-col items-center overflow-x-hidden overflow-y-auto pr-0"
+      class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-4 overflow-x-hidden overflow-y-auto pt-1"
+      style:grid-template-columns={`repeat(${sidebarColumns}, minmax(0, 1fr))`}
       data-risu-sidebar-character-controls
+      data-risu-sidebar-character-columns={sidebarColumns}
       inert={menuMode === 1}>
       {#each Object.entries(characterOrganizationActions).filter(([, action]) => action.status === 'failed') as [actionKey, action] (actionKey)}
         <span
-          class="w-16 px-1 py-0.5 text-center text-[10px] leading-tight text-textcolor2"
+          class="col-span-full w-16 justify-self-center px-1 py-0.5 text-center text-[10px] leading-tight text-textcolor2"
           data-risu-character-organization-status={action.status}
           data-risu-character-organization-key={actionKey}
           role="status"
@@ -876,8 +917,9 @@
         </span>
       {/each}
       <div
-        class="h-4 min-h-4 w-14"
-        role="listitem"
+        class="col-span-full h-4 min-h-4 w-full"
+        data-risu-character-drop="first"
+        role="presentation"
         ondragover={dropZoneDragOver}
         ondragleave={(e) => {
           e.currentTarget.classList.remove('bg-green-500')
@@ -893,9 +935,15 @@
       </div>
       {#each charImages as char}
         <div
-          class="group relative flex items-center px-2"
+          class="group relative flex min-w-0 items-center justify-center p-1 {char.type === 'folder' &&
+          openFolders.includes(char.id)
+            ? expandedFolderCellClass(char.color)
+            : ''}"
           role="listitem"
           draggable={!characterOrganizationMutationPending}
+          data-risu-sidebar-grid-cell="root"
+          data-risu-folder-group={char.type === 'folder' && openFolders.includes(char.id) ? char.id : undefined}
+          data-risu-folder-expanded={char.type === 'folder' ? openFolders.includes(char.id) : undefined}
           data-risu-character-organization-status={char.type === 'folder'
             ? (characterOrganizationActions[characterFolderActionKey(char.id)]?.status ??
               characterOrganizationActions.order?.status ??
@@ -997,47 +1045,57 @@
                 if (char.type === 'folder') void toggleCharacterFolder(char)
               }} />
           {/if}
+          {#if char.type === 'folder' && openFolders.includes(char.id)}
+            <div
+              class="absolute -bottom-3 left-1 z-20 h-4 w-8 rounded-sm"
+              data-risu-character-drop="folder-start"
+              data-risu-folder-group={char.id}
+              role="presentation"
+              ondragover={dropZoneDragOver}
+              ondragleave={(e) => {
+                e.currentTarget.classList.remove('bg-green-500')
+              }}
+              ondrop={(e) => {
+                const da = consumeDropZoneDrag(e)
+                if (da && char.type === 'folder') {
+                  inserter(da, { index: 0, folder: char.id })
+                }
+              }}
+              ondragenter={preventCharacterDrag}>
+            </div>
+          {/if}
+          <div
+            class="absolute -bottom-3 z-20 h-4 rounded-sm {char.type === 'folder' && openFolders.includes(char.id)
+              ? 'right-1 w-8'
+              : 'left-1/2 w-14 -translate-x-1/2'}"
+            data-risu-character-drop="after-root"
+            role="presentation"
+            ondragover={dropZoneDragOver}
+            ondragleave={(e) => {
+              e.currentTarget.classList.remove('bg-green-500')
+            }}
+            ondrop={(e) => {
+              const da = consumeDropZoneDrag(e)
+              const target = positionAfter(sidebarItemPosition(char))
+              if (da && target) {
+                inserter(da, target)
+              }
+            }}
+            ondragenter={preventCharacterDrag}>
+          </div>
         </div>
         {#if char.type === 'folder' && openFolders.includes(char.id)}
           {#key char.color}
-            <div class="p-1 flex flex-col items-center py-1 mt-1 rounded-lg relative">
-              <div
-                class="absolute top-0 left-1 border border-selected w-full h-full rounded-lg z-0 {char.color === 'red'
-                  ? 'bg-red-700/20'
-                  : char.color === 'yellow'
-                    ? 'bg-yellow-700/20'
-                    : char.color === 'green'
-                      ? 'bg-green-700/20'
-                      : char.color === 'blue'
-                        ? 'bg-blue-700/20'
-                        : char.color === 'indigo'
-                          ? 'bg-indigo-700/20'
-                          : char.color === 'purple'
-                            ? 'bg-purple-700/20'
-                            : char.color === 'pink'
-                              ? 'bg-pink-700/20'
-                              : 'bg-darkbg/20'}">
-              </div>
-              <div
-                class="h-4 min-h-4 w-14 relative z-10"
-                role="listitem"
-                ondragover={dropZoneDragOver}
-                ondragleave={(e) => {
-                  e.currentTarget.classList.remove('bg-green-500')
-                }}
-                ondrop={(e) => {
-                  const da = consumeDropZoneDrag(e)
-                  if (da && char.type === 'folder') {
-                    inserter(da, { index: 0, folder: char.id })
-                  }
-                }}
-                ondragenter={preventCharacterDrag}>
-              </div>
+            <div class="contents">
               {#each char.folder as char2}
                 <div
-                  class="group relative flex items-center px-2 z-10"
+                  class="group relative flex min-w-0 items-center justify-center p-1 {expandedFolderCellClass(
+                    char.color,
+                  )}"
                   role="listitem"
                   draggable={!characterOrganizationMutationPending}
+                  data-risu-sidebar-grid-cell="folder-child"
+                  data-risu-folder-group={char.id}
                   data-risu-character-organization-status={characterOrganizationActions.order?.status ?? 'idle'}
                   aria-busy={isCharacterOrganizationActionPending('order')}
                   ondragstart={(e) => {
@@ -1077,45 +1135,31 @@
                       label={`${language.newMessage}: ${char2.name}`}
                       onActivate={() => openCharacterRoute(char2.index)} />
                   {/if}
-                </div>
-                <div
-                  class="h-4 min-h-4 w-14 relative z-20"
-                  role="listitem"
-                  ondragover={dropZoneDragOver}
-                  ondragleave={(e) => {
-                    e.currentTarget.classList.remove('bg-green-500')
-                  }}
-                  ondrop={(e) => {
-                    const da = consumeDropZoneDrag(e)
-                    const target = positionAfter(characterOrderPosition(characterOwnerAt(char2.index)?.chaId))
-                    if (da && target) {
-                      inserter(da, target)
-                    }
-                  }}
-                  ondragenter={preventCharacterDrag}>
+                  <div
+                    class="absolute -bottom-3 left-1/2 z-20 h-4 w-14 -translate-x-1/2 rounded-sm"
+                    data-risu-character-drop="after-folder-child"
+                    data-risu-folder-group={char.id}
+                    role="presentation"
+                    ondragover={dropZoneDragOver}
+                    ondragleave={(e) => {
+                      e.currentTarget.classList.remove('bg-green-500')
+                    }}
+                    ondrop={(e) => {
+                      const da = consumeDropZoneDrag(e)
+                      const target = positionAfter(characterOrderPosition(characterOwnerAt(char2.index)?.chaId))
+                      if (da && target) {
+                        inserter(da, target)
+                      }
+                    }}
+                    ondragenter={preventCharacterDrag}>
+                  </div>
                 </div>
               {/each}
             </div>
           {/key}
         {/if}
-        <div
-          class="h-4 min-h-4 w-14"
-          role="listitem"
-          ondragover={dropZoneDragOver}
-          ondragleave={(e) => {
-            e.currentTarget.classList.remove('bg-green-500')
-          }}
-          ondrop={(e) => {
-            const da = consumeDropZoneDrag(e)
-            const target = positionAfter(sidebarItemPosition(char))
-            if (da && target) {
-              inserter(da, target)
-            }
-          }}
-          ondragenter={preventCharacterDrag}>
-        </div>
       {/each}
-      <div class="flex flex-col items-center gap-2 px-2">
+      <div class="col-span-full flex flex-col items-center gap-2 px-2">
         <BaseRoundedButton
           ariaLabel={language.addCharacter}
           onClick={async () => {

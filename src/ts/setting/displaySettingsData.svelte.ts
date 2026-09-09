@@ -10,6 +10,7 @@ import { guiSizeText, updateGuisize } from '../gui/guisize'
 import { updateTextThemeAndCSS } from '../gui/colorscheme'
 import { CustomGUISettingMenuStore } from '../stores.svelte'
 import { reloadRegexDisplay } from '../process/regexDisplayReload'
+import { normalizeDesktopSidebarColumns, normalizeMobileSidebarColumns } from '@risuai/shared-core/sidebar-columns'
 
 /** Display fields edited by custom controls rather than SettingRenderer wrappers. */
 export const displayNonRendererServerSettingKeys = [
@@ -308,6 +309,28 @@ export const displayOtherSettingsItems: SettingItem[] = [
     labelKey: 'showFolderNameInIcon',
     bindKey: 'showFolderName',
     keywords: ['folder', 'name', 'icon'],
+  },
+  {
+    id: 'display.desktopSidebarColumns',
+    type: 'segmented',
+    labelKey: 'desktopSidebarColumns',
+    bindKey: 'desktopSidebarColumns',
+    getValue: (db) => normalizeDesktopSidebarColumns(db.desktopSidebarColumns),
+    options: {
+      segmentOptions: [1, 2, 3, 4].map((value) => ({ value, label: String(value) })),
+    },
+    keywords: ['desktop', 'sidebar', 'bot', 'columns', 'layout'],
+  },
+  {
+    id: 'display.mobileSidebarColumns',
+    type: 'segmented',
+    labelKey: 'mobileSidebarColumns',
+    bindKey: 'mobileSidebarColumns',
+    getValue: (db) => normalizeMobileSidebarColumns(db.mobileSidebarColumns),
+    options: {
+      segmentOptions: [1, 2].map((value) => ({ value, label: String(value) })),
+    },
+    keywords: ['mobile', 'sidebar', 'bot', 'columns', 'layout'],
   },
   {
     id: 'display.customBackground',

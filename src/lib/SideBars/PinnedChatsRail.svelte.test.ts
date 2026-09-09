@@ -101,6 +101,29 @@ afterEach(() => {
 })
 
 describe('PinnedChatsRail current route', () => {
+  it('lays pinned chats out with the requested writer column count', async () => {
+    component = mount(PinnedChatsRail, {
+      target,
+      props: {
+        items: pinnedChats,
+        selectedCharacterId: null,
+        selectedChatId: null,
+        resolveImage: (image: string) => image,
+        onPrefetch: vi.fn(),
+        generatingChatIds: new Set<string>(),
+        rounded: false,
+        onOpen: vi.fn(),
+        columns: 4,
+      },
+    })
+    await tick()
+
+    const rail = target.querySelector<HTMLElement>('[data-risu-pinned-chats]')
+    expect(rail?.dataset.risuPinnedChatColumns).toBe('4')
+    expect(rail?.style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))')
+    expect(rail?.querySelectorAll('[data-risu-pinned-chat]')).toHaveLength(2)
+  })
+
   it('tracks exactly one current pinned chat across chat, character-only, and non-chat routes', async () => {
     setCharacterRoute('char-a', 'chat-a')
     component = mount(PinnedChatsRail, {
