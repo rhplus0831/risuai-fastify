@@ -90,11 +90,16 @@ export class DisplaySourceDiagnostics {
     })
   }
 
-  inputCounts(collect: () => Record<PreparationCount, number>): void {
+  inputCounts(collect: () => Partial<Record<PreparationCount, number>>): void {
     this.measurePreparation('measurementMs', () => {
       const counts = collect()
-      for (const key of Object.keys(counts) as PreparationCount[]) this.preparation[key] = boundedCount(counts[key])
+      for (const key of Object.keys(counts) as PreparationCount[])
+        this.preparation[key] = boundedCount(counts[key] ?? 0)
     })
+  }
+
+  incrementPreparation(stage: PreparationCount): void {
+    this.preparation[stage] = boundedCount((this.preparation[stage] ?? 0) + 1)
   }
 
   load(owner: LoadOwner): DisplaySourceLoadMeasurement {

@@ -98,6 +98,19 @@ const activeFetches = new Map<AbortController, ActiveDisplaySourceFetch>()
 const inFlightDisplaySources = new Map<string, Promise<ServerDisplaySourceResult>>()
 const completedDisplaySources = new Map<string, CompletedDisplaySource>()
 let activeDisplaySourceChatId: string | null = null
+let nearestDisplayMessageRanks = new Map<number, number>()
+
+/** Refresh at scroll/layout time; queued work consults this at dispatch, after
+ * coalescing and waiting for the revision lane, including direction reversals.
+ */
+export function setNearestDisplaySourceMessages(chatId: string | null, indices: readonly number[]): void {
+  if (chatId !== activeDisplaySourceChatId) return
+  nearestDisplayMessageRanks = new Map()
+  indices.forEach((index, rank) => {
+    if (!nearestDisplayMessageRanks.has(index)) nearestDisplayMessageRanks.set(index, rank)
+  })
+}
+
 let displaySourceClientGeneration = 0
 let displaySourceResultEpoch = 0
 /** Also fences the browser's finalized HTML memo after a streamed projection is retired. */
@@ -191,6 +204,7 @@ export function resetDisplaySourceClientForTests(): void {
   activeFetches.clear()
   clearDisplaySourceDedupeCache()
   activeDisplaySourceChatId = null
+  nearestDisplayMessageRanks.clear()
 }
 
 /**
@@ -201,6 +215,7 @@ export function resetDisplaySourceClientForTests(): void {
 export function activateDisplaySourceChat(chatId: string | null): void {
   if (activeDisplaySourceChatId === chatId) return
   activeDisplaySourceChatId = chatId
+  nearestDisplayMessageRanks.clear()
   readerDisplayLimitedWritable.set(false)
 
   for (const [batchKey, pending] of pendingByBatch) {
@@ -493,6 +508,34 @@ function clearDisplaySourceDedupeCache(): void {
   completedDisplaySources.clear()
 }
 
+function compareDisplaySourcePriority(left: PendingDisplaySource, right: PendingDisplaySource): number {
+  const rank = (item: PendingDisplaySource) =>
+    item.chatId === activeDisplaySourceChatId && item.priority !== 'normal'
+      ? (nearestDisplayMessageRanks.get(item.target.index) ?? Infinity)
+      : Infinity
+  return (
+    rank(left) - rank(right) ||
+    { critical: 0, normal: 1, background: 2 }[left.priority] -
+      { critical: 0, normal: 1, background: 2 }[right.priority] ||
+    right.target.index - left.target.index ||
+    left.target.layer.localeCompare(right.target.layer) ||
+    left.target.requestKey.localeCompare(right.target.requestKey)
+  )
+}
+
+function displayPriorityKeys(pending: PendingDisplaySource[]): string[] {
+  const rowKey = ({ target }: PendingDisplaySource) =>
+    JSON.stringify([target.characterId, target.firstMessage, target.messageId ?? target.index])
+  const rows = new Set<string>()
+  for (const item of pending) {
+    if (item.priority === 'normal') continue
+    rows.add(rowKey(item))
+    if (rows.size === 3) break
+  }
+  // Keep every layer of the selected logical messages in the readiness group.
+  return pending.filter((item) => rows.has(rowKey(item))).map((item) => item.target.requestKey)
+}
+
 async function flushDisplaySourceBatch(
   chatId: string,
   context: DisplayRequestContext,
@@ -500,20 +543,13 @@ async function flushDisplaySourceBatch(
   pending: PendingDisplaySource[],
 ): Promise<void> {
   if (pending.length === 0) return
-  const ordered = [...pending].sort(
-    (left, right) =>
-      ({ critical: 0, normal: 1, background: 2 })[left.priority] -
-        { critical: 0, normal: 1, background: 2 }[right.priority] ||
-      right.target.index - left.target.index ||
-      left.target.layer.localeCompare(right.target.layer) ||
-      left.target.requestKey.localeCompare(right.target.requestKey),
-  )
+  const ordered = [...pending]
   let executed = false
   try {
     const execute = async () => {
       let chunk: PendingDisplaySource[] = []
       let bytes = 0
-      for (const item of ordered) {
+      for (const item of ordered.sort(compareDisplaySourcePriority)) {
         const size = new TextEncoder().encode(item.target.source).byteLength
         if (
           chunk.length > 0 &&
@@ -589,6 +625,7 @@ async function flushDisplaySourceChunk(
     return
   }
 
+  pending.sort(compareDisplaySourcePriority)
   const controller = new AbortController()
   activeFetches.set(controller, {
     chatId,
@@ -612,7 +649,7 @@ async function flushDisplaySourceChunk(
           baseRevision,
           context,
           targets: pending.map((item) => item.target),
-          priorityKeys: pending.filter((item) => item.priority === 'critical').map((item) => item.target.requestKey),
+          priorityKeys: displayPriorityKeys(pending),
         }),
       })
     } catch {

@@ -1,4 +1,5 @@
 import { DatabaseSync } from 'node:sqlite'
+import { createDisplayModuleVersioning } from './displayModuleCache.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { createChatBlobTable, createMessageTable } from './messageStore.js'
@@ -28,7 +29,7 @@ import {
   repairPersistedLegacyLocalStopStringsInSqlite,
 } from './repository.js'
 
-export const CURRENT_SCHEMA_VERSION = 38
+export const CURRENT_SCHEMA_VERSION = 39
 
 export const CURRENT_SCHEMA_TABLES = [
   'assets',
@@ -498,6 +499,15 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       repairPersistedLegacyLocalStopStringsInSqlite(db)
     },
   },
+  {
+    version: 39,
+    name: 'display-module-content-version',
+    up: (db) => {
+      createDatabaseMetadataTable(db)
+      createCollectionTables(db)
+      createDisplayModuleVersioning(db)
+    },
+  },
 ]
 
 export function assertMigrationCatalog(
@@ -615,6 +625,7 @@ function initializeFreshDatabase(db: DatabaseSync): void {
   createGreetingTranslationTable(db)
   createRequestHistoryTable(db)
   createCollectionTables(db)
+  createDisplayModuleVersioning(db)
   createSettingsTable(db)
   createPushSubscriptionsTable(db)
 }

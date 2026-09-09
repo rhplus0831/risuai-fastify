@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
+import { readDisplayModules } from './displayModuleCache.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { backup as backupSqliteDatabase, DatabaseSync, type SQLInputValue, type StatementSync } from 'node:sqlite'
@@ -2974,14 +2975,9 @@ function selectDisplaySourceConfiguration(
     ]),
   ]
   const modules = dedupeDisplayModules(
-    readGenerationModules(
-      db,
-      settings.modules,
-      presence.modules_present,
-      identifiers,
-      true,
-      diagnostics?.load('modules'),
-    ),
+    presence.modules_present
+      ? readDisplayModules(db, identifiers, diagnostics)
+      : readGenerationModules(db, settings.modules, 0, identifiers, true, diagnostics?.load('modules')),
   )
   const database = { ...settings }
   for (const field of COLLECTION_FIELDS) delete database[field]

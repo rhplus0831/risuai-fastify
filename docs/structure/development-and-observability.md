@@ -231,7 +231,11 @@ no extra production flag, profiling endpoint, or raw payload capture is needed.
 | `dependencyNormalizeMs` | Recursively copy dependency objects/arrays into canonical key order. |
 | `dependencySerializeMs` | Serialize that normalized graph once with `JSON.stringify`. |
 | `dependencyHashMs` | SHA-256 over the serialized string, including hash input encoding. |
-| `dependencyJsonSize` | UTF-8 size bucket of that same serialized string. |
+| `dependencyJsonSize` | UTF-8 size bucket of that same serialized string. With transform v3, module digests replace full module bodies here. |
+| `moduleBodyCacheHitCount` / `moduleBodyCacheMissCount` / `moduleBodyCacheBypassCount` | Selected module rows reused, loaded, or too large to retain. Bypasses are a subset of misses. |
+| `moduleDigestCacheHitCount` / `moduleDigestCacheMissCount` | Active immutable module fingerprints reused or computed. |
+| `moduleFreezeMs` | Admission/freezing work on body misses; includes cache eviction/accounting. |
+| `moduleNormalizeMs` / `moduleSerializeMs` / `moduleHashMs` | Canonicalization, serialization, and SHA-256 for module digest misses only. Nested within `sharedDependencyMs`, separate from the small combined dependency stages. |
 | `measurementMs` | Extra size/count accounting work; excludes general timer/callback overhead. |
 
 Size buckets have upper bounds of 4 KiB, 64 KiB, 1 MiB, 4 MiB, 16 MiB and
@@ -247,7 +251,11 @@ These are nested elapsed-time measurements, not additive independent totals:
 `scopeLoadMs` includes owner reads/parses and configuration work;
 `sharedDependencyMs` includes the dependency stages and their measurement
 work. Compatibility repairs and other loader work remain in the parent total.
-An unreached stage stays absent, rather than implying it ran instantly.
+An unreached stage stays absent, rather than implying it ran instantly. A warm
+module-body hit has indexed read timing but no JSON parse/count/size measurement;
+a warm module-digest hit omits module normalization/serialization/hash timings.
+The first request after a restart or module change still pays body parsing,
+freezing, and digest creation. Compare warm and cold requests separately.
 The expanded summary remains one bounded journal record under the request UID.
 
 For production investigation, deploy the instrumentation and use ordinary chat

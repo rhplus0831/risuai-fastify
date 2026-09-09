@@ -26,6 +26,7 @@ import { reloadRegexDisplay, resetRegexDisplayReloadForTests } from '../process/
 import { charactersResourceState, resetServerResourceState } from './resourceState.svelte'
 import {
   activateDisplaySourceChat,
+  setNearestDisplaySourceMessages,
   captureDisplaySourceRenderEpoch,
   markReaderDisplayLimited,
   readerDisplayLimitedStore,
@@ -272,6 +273,74 @@ describe('browser display source batching client', () => {
     send('done', { ...context, targetCount: 4 })
     stream.close()
     await expect(background).resolves.toMatchObject({ status: 'ok', displaySource: 'OLD' })
+  })
+
+  it('selects the current nearest three coalesced rows at dispatch and includes every layer', async () => {
+    activateDisplaySourceChat('chat-a')
+    setNearestDisplaySourceMessages('chat-a', [9, 8, 7, 6, 5])
+    const entered = createDeferred<void>()
+    const release = createDeferred<void>()
+    const lane = runExternalServerRevisionOperation(async () => {
+      entered.resolve()
+      await release.promise
+    })
+    await entered.promise
+    const requests: DisplayRequestBody[] = []
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as DisplayRequestBody
+      requests.push(body)
+      return successfulDisplayResponse(body, 7)
+    })
+    const results = [5, 6, 7, 8, 9].flatMap((index) =>
+      (['original', 'translation'] as const).map((layer) =>
+        requestServerDisplaySource({
+          chatId: 'chat-a',
+          character: { chaId: 'char-a' },
+          messageId: `message-${index}`,
+          index,
+          role: 'char',
+          firstMessage: false,
+          layer,
+          source: `${index}:${layer}`,
+          priority: 'critical',
+        }),
+      ),
+    )
+    // Mounted waves have all marked themselves critical; scrolling reverses
+    // while their common request is waiting behind a command.
+    setNearestDisplaySourceMessages('chat-a', [5, 6, 7, 8, 9])
+    release.resolve()
+    await lane
+    await Promise.all(results)
+    expect(requests).toHaveLength(1)
+    const body = requests[0]
+    expect(body.targets).toHaveLength(10)
+    expect(
+      body.targets.filter((target) => body.priorityKeys?.includes(target.requestKey)).map((target) => target.source),
+    ).toEqual(['5:original', '5:translation', '6:original', '6:translation', '7:original', '7:translation'])
+    activateDisplaySourceChat('chat-b')
+    setNearestDisplaySourceMessages('chat-a', [9])
+    activateDisplaySourceChat('chat-a')
+    const next = [0, 1, 2, 3].map((index) =>
+      requestServerDisplaySource({
+        chatId: 'chat-a',
+        character: { chaId: 'char-a' },
+        messageId: `other-${index}`,
+        index,
+        role: 'char',
+        firstMessage: false,
+        layer: 'original',
+        source: `other-${index}`,
+        priority: 'critical',
+      }),
+    )
+    await Promise.all(next)
+    const latest = requests[1]
+    expect(
+      latest.targets
+        .filter((target) => latest.priorityKeys?.includes(target.requestKey))
+        .map((target) => target.source),
+    ).toEqual(['other-3', 'other-2', 'other-1'])
   })
 
   it.each(['eof', 'duplicate', 'invalidated', 'namespace', 'malformed'] as const)(

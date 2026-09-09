@@ -26,7 +26,7 @@ const EXPECTED_COMMAND_ROUTE_COUNT = 165
 const EXPECTED_COMMAND_ROUTE_DIGEST = '6cf578fff081487c445f780af234697ff41635daf5a6b12450c833b26f3cbe7e'
 const EXPECTED_COMMAND_EVENT_COUNT = 150
 const EXPECTED_COMMAND_EVENT_DIGEST = 'd3d6a356bea9e728b5e2cae0422f696dee8065534eb5bb7781d471c6617859cd'
-const EXPECTED_SQLITE_SCHEMA_DIGEST = 'c58dc02a662f40f6ec988d0e7f8077ecd42b54dcc7a7bbaa9f474828eccf910c'
+const EXPECTED_SQLITE_SCHEMA_DIGEST = '8d5936e7ab85badf3bac393270d800efb0e1f2749b286660a345348027f42f5c'
 
 /**
  * Persisted event history from before reusable Agents can still contain these
@@ -133,7 +133,7 @@ const PERSISTED_TABLE_CLASSIFICATION: Record<string, { class: PersistedTableClas
   chats: { class: 'shared-logical-state', owner: 'chat repository' },
   command_events: { class: 'command-durability', owner: 'command event replay' },
   command_mutation_receipts: { class: 'command-durability', owner: 'mutation idempotency' },
-  database_metadata: { class: 'server-operational', owner: 'lineage and active writer' },
+  database_metadata: { class: 'server-operational', owner: 'lineage, active writer, and module content version' },
   generation_effects: { class: 'generation-lifecycle', owner: 'generation effect ledger' },
   generation_finalization_retries: { class: 'generation-lifecycle', owner: 'generation finalization retry' },
   generation_operation_attempts: { class: 'generation-lifecycle', owner: 'generation attempt ledger' },

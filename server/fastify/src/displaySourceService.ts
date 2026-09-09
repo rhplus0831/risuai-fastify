@@ -1,5 +1,6 @@
 import { decodeDisplaySourceDatabase, GenerationInputValidationError } from './prompt/generationInputDecoder.js'
 import { createHash } from 'node:crypto'
+import { fingerprintDisplayModule, getDisplayModuleVersion } from './displayModuleCache.js'
 import { isDeepStrictEqual } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import type {
@@ -208,10 +209,7 @@ function targetIsFresh(scope: DisplayScope, target: DisplaySourceTarget): boolea
   return true
 }
 
-function sharedDependencyValue(
-  scope: DisplayScope,
-  modules: ReturnType<typeof getActiveModules>,
-): Record<string, unknown> {
+function sharedDependencyValue(scope: DisplayScope, moduleDigests: string[]): Record<string, unknown> {
   const selectedPersona = selectedPersonaProfile(scope.database)
   return {
     character: {
@@ -257,15 +255,7 @@ function sharedDependencyValue(
       templateDefaultVariables: scope.database.templateDefaultVariables,
       username: selectedPersona?.name ?? scope.database.username,
     },
-    modules: modules.map((module) => ({
-      assets: module.assets,
-      id: module.id,
-      customModuleToggle: module.customModuleToggle,
-      lowLevelAccess: module.lowLevelAccess,
-      namespace: module.namespace,
-      regex: module.regex,
-      trigger: module.trigger,
-    })),
+    moduleDigests,
     transformVersion: DISPLAY_SOURCE_TRANSFORM_VERSION,
   }
 }
@@ -275,10 +265,11 @@ function fingerprintSharedDependencies(
   modules: ReturnType<typeof getActiveModules>,
   diagnostics?: DisplaySourceDiagnostics,
 ): string {
-  if (!diagnostics) return sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, modules)))
+  const moduleDigests = modules.map((module) => fingerprintDisplayModule(module, diagnostics))
+  if (!diagnostics) return sha256(stableDisplayDependencyJson(sharedDependencyValue(scope, moduleDigests)))
   // Execute the same projection/canonicalization/serialization/hash exactly
   // once. Timing boundaries must not introduce a second serialization or a new key.
-  const value = diagnostics.measurePreparation('dependencyBuildMs', () => sharedDependencyValue(scope, modules))
+  const value = diagnostics.measurePreparation('dependencyBuildMs', () => sharedDependencyValue(scope, moduleDigests))
   const normalized = diagnostics.measurePreparation('dependencyNormalizeMs', () =>
     normalizeDisplayDependencyValue(value),
   )
@@ -417,7 +408,7 @@ export class DisplaySourceService {
       throw new ValidationError(`Display source base revision is stale; current revision is ${initialRevision}`)
     }
 
-    const { databaseLineage, activeWriterEpoch, contextFingerprint } = runDisplaySourceStage(
+    const { databaseLineage, activeWriterEpoch, contextFingerprint, moduleVersion } = runDisplaySourceStage(
       'namespace',
       () => {
         const databaseLineage = getDatabaseLineage(this.db)
@@ -429,7 +420,12 @@ export class DisplaySourceService {
         })
         const contextFingerprint = sha256(namespaceJson)
         this.cache.activate(contextFingerprint)
-        return { databaseLineage, activeWriterEpoch, contextFingerprint }
+        return {
+          databaseLineage,
+          activeWriterEpoch,
+          contextFingerprint,
+          moduleVersion: getDisplayModuleVersion(this.db),
+        }
       },
       diagnostics,
     )
@@ -454,6 +450,7 @@ export class DisplaySourceService {
         databaseLineage,
         activeWriterEpoch,
         contextFingerprint,
+        moduleVersion,
         diagnostics,
       )
       if (stale) return stale
@@ -521,6 +518,7 @@ export class DisplaySourceService {
         databaseLineage,
         activeWriterEpoch,
         contextFingerprint,
+        moduleVersion,
         diagnostics,
       )
       if (before) return before
@@ -605,6 +603,7 @@ export class DisplaySourceService {
         databaseLineage,
         activeWriterEpoch,
         contextFingerprint,
+        moduleVersion,
         diagnostics,
       )
       if (stale) return stale
@@ -624,6 +623,7 @@ export class DisplaySourceService {
       databaseLineage,
       activeWriterEpoch,
       contextFingerprint,
+      moduleVersion,
       diagnostics,
     )
     if (stale) return stale
@@ -825,12 +825,16 @@ export class DisplaySourceService {
     databaseLineage: string,
     activeWriterEpoch: number,
     contextFingerprint: string,
+    moduleVersion: string,
     diagnostics?: DisplaySourceDiagnostics,
   ): DisplaySourceResponse | null {
     if (
       runDisplaySourceStage('postcondition', () => getSchemaState(this.db).revision, diagnostics) !== initialRevision
     ) {
       return this.staleResponse(request, contextFingerprint, 'revision_changed_during_transform')
+    }
+    if (runDisplaySourceStage('postcondition', () => getDisplayModuleVersion(this.db), diagnostics) !== moduleVersion) {
+      return this.staleResponse(request, contextFingerprint, 'modules_changed_during_transform')
     }
     const { currentLineage, currentWriterEpoch } = runDisplaySourceStage(
       'postcondition',

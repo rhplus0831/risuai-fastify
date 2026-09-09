@@ -40,6 +40,14 @@ uniqueness, retry safety, and current-version behavior are guarded by
 `server/fastify/__tests__/migrationFoundation.test.ts` and
 `server/fastify/__tests__/db.test.ts`.
 
+Migration 39 adds live `database_metadata.module_content_version` tracking for
+parsed display-module reuse. SQLite module insert/update/delete triggers rotate
+a random token in the same transaction, covering commands, direct SQL, imports,
+and backup replacement on any connection. Random tokens avoid reuse of a rolled
+back version. Chat/settings-only writes leave the token unchanged. The metadata
+is device-local and is not copied back from a restored snapshot; module rows
+continue to use their existing portable schema.
+
 Migration 38 removes the two observed JSON encodings of MessagePack's undefined
 marker from `localStopStrings` in global settings and legacy/model/prompt
 presets, including embedded legacy collections. The repair runs transactionally

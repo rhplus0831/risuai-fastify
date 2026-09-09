@@ -31,7 +31,7 @@ const target = {
 describe('display-source protocol', () => {
   it('publishes the exact versions, layer taxonomy, and limits', () => {
     expect(DISPLAY_SOURCE_PROTOCOL_VERSION).toBe(1)
-    expect(DISPLAY_SOURCE_TRANSFORM_VERSION).toBe('editdisplay-v2-ephemeral-state')
+    expect(DISPLAY_SOURCE_TRANSFORM_VERSION).toBe('editdisplay-v3-module-digests')
     expect(DISPLAY_SOURCE_LAYERS).toEqual(['original', 'translation', 'bilingual', 'greeting', 'preview'])
     expect(DISPLAY_SOURCE_LIMITS).toEqual({
       maxTargets: 64,

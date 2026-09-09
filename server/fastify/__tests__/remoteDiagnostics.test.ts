@@ -250,6 +250,11 @@ describe('remote support diagnostics', () => {
     expect(second.entry.timings.luaMs).toBeUndefined()
     expect(second.entry.timeToFirstTransformMs).toBeUndefined()
     expect(second.entry.preparation?.dependencyHashMs).toEqual(expect.any(Number))
+    expect(second.entry.preparation).toMatchObject({ moduleBodyCacheHitCount: 1, moduleDigestCacheHitCount: 1 })
+    expect(second.entry.preparation?.loads?.modules?.jsonValues).toBeUndefined()
+    expect(second.entry.preparation?.loads?.modules?.parseMs).toBeUndefined()
+    expect(second.entry.preparation?.moduleSerializeMs).toBeUndefined()
+    expect(first.entry.preparation).toMatchObject({ moduleBodyCacheMissCount: 1, moduleDigestCacheMissCount: 1 })
     expect(second.response.json()).toEqual(first.response.json())
     const streaming = await run({
       ...payload,

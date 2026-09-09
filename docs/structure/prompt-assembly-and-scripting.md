@@ -265,7 +265,20 @@ chat and transcript, selected prompt/persona dependencies, module activation
 identities, and the activation-winning module bodies required by the transform.
 Inactive modules, unrelated prompt/persona rows, and later duplicate module
 bodies stay outside the display decoder. Unrelated character/chat payloads and
-asset metadata are not scanned. A compatible batch canonicalizes and hashes the
+asset metadata are not scanned. `server/fastify/src/displayModuleCache.ts` reuses
+selected parsed module bodies per SQLite handle and module-content token. A
+position-only indexed lookup avoids materializing cached JSON. The LRU retains
+at most 256 bodies and 64 MiB of charged size (JSON UTF-16/property allowance plus
+object/array overhead, not a measured heap limit). Oversized bodies bypass reuse.
+Module definitions are deeply frozen; generation loads and mutable execution
+state remain private. Module writes retire the whole module-body cache, while
+chat-only changes retain it. Legacy embedded bodies use the uncached path.
+
+Each immutable active module also carries a weakly held digest of its display
+dependency fields. The `editdisplay-v3-module-digests` fingerprint combines those
+ordered digests with current character/chat/settings dependencies; it never
+re-serializes an unchanged asset catalog on a warm hit. A compatible batch
+canonicalizes and hashes the
 shared transcript and scripting dependencies once, then combines that digest
 with each target's small identity and source digest. Opt-in
 `display_source_batch` metrics expose queue wait, scoped-load,
@@ -294,6 +307,10 @@ fallback is read-only and does not normalize or rewrite the rejected record.
 
 The display POST accepts optional `priorityKeys` identifying targets in foreground
 order and negotiates a finite SSE response with `Accept: text/event-stream`.
+The browser chooses at most three distinct message rows at the final coalesced
+HTTP boundary, including all their display layers. Viewport ranks are refreshed
+on layout/scroll and consulted after waiting for the command lane and auth, so
+paging waves cannot each add another three rows to the same priority group.
 JSON remains the default for older clients. Both groups share one scoped load and
 dependency fingerprint. SSE emits `result` per target and a terminal `done`,
 `invalidated`, or `error`; it uses bounded writes and aborts on disconnect or
@@ -303,7 +320,7 @@ errors. No event contains final HTML: browser Markdown/sanitization still follow
 `displaySourceQueue.ts` retains exclusive execution through each complete target
 and its state cleanup, then yields for I/O and newly queued foreground work.
 The batch generator retains its prepared scope and budgets across these turns;
-request async context is bound to each queued operation. Revision/lineage/writer
+request async context is bound to each queued operation. Revision/lineage/writer/module-token
 postconditions run before and after targets, and once at completion. A late
 change emits terminal invalidation, including for already delivered results.
 The browser reparses affected projections after invalidation and keeps fetch

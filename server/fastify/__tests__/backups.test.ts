@@ -6,6 +6,7 @@ import { createHash, webcrypto } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import { buildApp } from '../src/app.js'
 import { createCommandEventSink, type CommandEventSink } from '../src/commands/events.js'
+import { readDisplayModules, getDisplayModuleVersion } from '../src/displayModuleCache.js'
 import { CURRENT_SCHEMA_VERSION } from '../src/db.js'
 import { getDatabaseLineage } from '../src/databaseLineage.js'
 import { createBardWikiDocument, updateBardWikiChatSettings } from '../src/bardWikiRepository.js'
@@ -473,74 +474,88 @@ describe('backups', () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await importDb(harness.app, assertion, {
       tag: 'A',
+      modules: [{ id: 'module-a', namespace: 'test' }],
       loadouts: [
         { id: 'loadout-a', name: 'Shared name' },
         { id: 'loadout-b', name: 'Shared name' },
       ],
       lastLoadedLoadoutName: 'Shared name',
     })
-    const backup = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/backups',
-      headers: { 'risu-auth': assertion },
-      payload: { label: 'snapshot of A' },
-    })
-    expect(backup.statusCode).toBe(201)
-    const backupId = backup.json().id
+    const cacheDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      const [moduleA] = readDisplayModules(cacheDb, ['test'])
+      const versionA = getDisplayModuleVersion(cacheDb)
+      const backup = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/backups',
+        headers: { 'risu-auth': assertion },
+        payload: { label: 'snapshot of A' },
+      })
+      expect(backup.statusCode).toBe(201)
+      const backupId = backup.json().id
 
-    await importDb(harness.app, assertion, { tag: 'B' })
-    const beforeRestore = await injectComposedResourceDatabase(harness.app, {
-      method: 'GET',
-      url: '/api/v1/bootstrap',
-      headers: { 'risu-auth': assertion },
-    })
-    expect(beforeRestore.resourceDatabase).toMatchObject({
-      tag: 'B',
-      characters: [],
-      botPresets: [],
-      modules: [],
-      loadouts: [],
-      plugins: [],
-      pluginCustomStorage: {},
-    })
+      await importDb(harness.app, assertion, { tag: 'B' })
+      expect(readDisplayModules(cacheDb, ['test'])).toEqual([])
+      expect(getDisplayModuleVersion(cacheDb)).not.toBe(versionA)
+      const beforeRestore = await injectComposedResourceDatabase(harness.app, {
+        method: 'GET',
+        url: '/api/v1/bootstrap',
+        headers: { 'risu-auth': assertion },
+      })
+      expect(beforeRestore.resourceDatabase).toMatchObject({
+        tag: 'B',
+        characters: [],
+        botPresets: [],
+        modules: [],
+        loadouts: [],
+        plugins: [],
+        pluginCustomStorage: {},
+      })
 
-    const restored = await harness.app.inject({
-      method: 'POST',
-      url: `/api/v1/backups/${backupId}/restore`,
-      headers: { 'risu-auth': assertion },
-    })
-    expect(restored.statusCode).toBe(200)
-    const revisionAfter = restored.json().revision
-    expect(restored.json().event).toEqual({
-      type: 'state.restored',
-      resource: 'state',
-      revision: revisionAfter,
-    })
-    expect(harness.commandEvents.list()).toContainEqual({
-      type: 'state.restored',
-      resource: 'state',
-      revision: revisionAfter,
-    })
+      const restored = await harness.app.inject({
+        method: 'POST',
+        url: `/api/v1/backups/${backupId}/restore`,
+        headers: { 'risu-auth': assertion },
+      })
+      expect(restored.statusCode).toBe(200)
+      const revisionAfter = restored.json().revision
+      expect(restored.json().event).toEqual({
+        type: 'state.restored',
+        resource: 'state',
+        revision: revisionAfter,
+      })
+      expect(harness.commandEvents.list()).toContainEqual({
+        type: 'state.restored',
+        resource: 'state',
+        revision: revisionAfter,
+      })
 
-    const afterRestore = await injectComposedResourceDatabase(harness.app, {
-      method: 'GET',
-      url: '/api/v1/bootstrap',
-      headers: { 'risu-auth': assertion },
-    })
-    expect(afterRestore.resourceDatabase).toMatchObject({
-      tag: 'A',
-      characters: [],
-      botPresets: [],
-      modules: [],
-      loadouts: [
-        { id: 'loadout-a', name: 'Shared name' },
-        { id: 'loadout-b', name: 'Shared name' },
-      ],
-      lastLoadedLoadoutName: 'Shared name',
-      plugins: [],
-      pluginCustomStorage: {},
-    })
-    expect(afterRestore.json().revision).toBe(revisionAfter)
+      const afterRestore = await injectComposedResourceDatabase(harness.app, {
+        method: 'GET',
+        url: '/api/v1/bootstrap',
+        headers: { 'risu-auth': assertion },
+      })
+      const [restoredModule] = readDisplayModules(cacheDb, ['test'])
+      expect(restoredModule).toEqual(moduleA)
+      expect(restoredModule).not.toBe(moduleA)
+      expect(getDisplayModuleVersion(cacheDb)).not.toBe(versionA)
+      expect(afterRestore.resourceDatabase).toMatchObject({
+        tag: 'A',
+        characters: [],
+        botPresets: [],
+        modules: [{ id: 'module-a', namespace: 'test' }],
+        loadouts: [
+          { id: 'loadout-a', name: 'Shared name' },
+          { id: 'loadout-b', name: 'Shared name' },
+        ],
+        lastLoadedLoadoutName: 'Shared name',
+        plugins: [],
+        pluginCustomStorage: {},
+      })
+      expect(afterRestore.json().revision).toBe(revisionAfter)
+    } finally {
+      cacheDb.close()
+    }
   })
 
   it('restores canonical owner identities and cache inputs across a server restart', async () => {

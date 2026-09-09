@@ -3,7 +3,7 @@ import { Value } from '@sinclair/typebox/value'
 import { normalizeReportedClientContext } from './clientContext'
 
 export const DISPLAY_SOURCE_PROTOCOL_VERSION = 1 as const
-export const DISPLAY_SOURCE_TRANSFORM_VERSION = 'editdisplay-v2-ephemeral-state' as const
+export const DISPLAY_SOURCE_TRANSFORM_VERSION = 'editdisplay-v3-module-digests' as const
 
 export const DISPLAY_SOURCE_LIMITS = {
   maxTargets: 64,

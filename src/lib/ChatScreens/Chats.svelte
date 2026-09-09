@@ -64,6 +64,7 @@
     activateDisplaySourceChat,
     releaseDisplaySourceChat,
     beginDisplaySourceCollection,
+    setNearestDisplaySourceMessages,
   } from 'src/ts/server/displaySources'
   import {
     charactersResourceState,
@@ -585,7 +586,7 @@
   // Hydration owns chatRows. Only this layer decides which of those rows mount.
   const heights = new TranscriptHeightCache()
   const rowElements = new Map<string, HTMLElement>()
-  const rowKeyElements = new Map<string, { id: string; element: HTMLElement }>()
+  const rowKeyElements = new Map<string, { id: string; element: HTMLElement; index: number }>()
   const pendingRowParses = new Map<string, Set<symbol>>()
   type PendingRowEstimate = 'source' | 'spacer' | false
   const pendingRowGeometryRequests = new Map<string, { source: string; estimate: PendingRowEstimate }>()
@@ -760,10 +761,11 @@
         const rect = element.getBoundingClientRect()
         return Math.max(0, viewport.top - rect.bottom, rect.top - viewport.bottom)
       }
-      displayScheduler.setNearest(
-        [...rowKeyElements.entries()]
-          .sort((a, b) => distance(a[1].element) - distance(b[1].element))
-          .map(([key]) => key),
+      const nearest = [...rowKeyElements.entries()].sort((a, b) => distance(a[1].element) - distance(b[1].element))
+      displayScheduler.setNearest(nearest.map(([key]) => key))
+      setNearestDisplaySourceMessages(
+        getCurrentChatRoomId(),
+        nearest.map(([, row]) => row.index),
       )
     }
     displayCommitCoordinator.setVisible(visible)
@@ -1050,10 +1052,10 @@
     }
   }
 
-  function measureTranscriptRow(element: HTMLElement, entry: { id: string; key: string }) {
+  function measureTranscriptRow(element: HTMLElement, entry: { id: string; key: string; row: { idx: number } }) {
     let { id, key } = entry
     rowElements.set(id, element)
-    rowKeyElements.set(key, { id, element })
+    rowKeyElements.set(key, { id, element, index: entry.row.idx })
     const pendingGeometry = pendingRowGeometryRequests.get(key)
     if (pendingGeometry) holdRowGeometry(key, pendingGeometry.source, pendingGeometry.estimate)
     const measuredHeight = heights.measured(id)
@@ -1085,14 +1087,14 @@
     observer?.observe(element)
     scheduleResidency()
     return {
-      update(next: { id: string; key: string }) {
-        if (next.id === id && next.key === key) return
+      update(next: { id: string; key: string; row: { idx: number } }) {
+        if (next.id === id && next.key === key && rowKeyElements.get(key)?.index === next.row.idx) return
         if (rowElements.get(id) === element) rowElements.delete(id)
         if (rowKeyElements.get(key)?.element === element) rowKeyElements.delete(key)
         id = next.id
         key = next.key
         rowElements.set(id, element)
-        rowKeyElements.set(key, { id, element })
+        rowKeyElements.set(key, { id, element, index: next.row.idx })
         scheduleResidency()
       },
       destroy() {

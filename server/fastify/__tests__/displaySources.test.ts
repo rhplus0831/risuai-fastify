@@ -926,58 +926,65 @@ describe('prioritized display streams', () => {
     }
   })
 
-  it('executes real targets in priority order and invalidates previously streamed results after a revision change', async () => {
-    const db = openDatabase(harness.dataDir)
-    try {
-      const seeded = await applyImport(
-        db,
-        harness.dataDir,
-        normalizeRisuSaveSnapshotDatabase({
-          characters: [
-            {
-              chaId: 'stream-char',
-              name: 'Character',
-              chats: [
-                {
-                  id: 'stream-chat',
-                  message: streamingRequest().targets.map((target) => ({
-                    role: target.role,
-                    data: target.source,
-                    chatId: target.messageId,
-                  })),
-                },
-              ],
-            },
-          ],
-        }),
-      )
-      const service = new DisplaySourceService({ db, dataDir: harness.dataDir })
-      const delivered: string[] = []
-      const response = await service.transformBatch(
-        'stream-chat',
-        streamingRequest(seeded.revision),
-        undefined,
-        (result) => {
-          delivered.push(result.entries[0].requestKey)
-        },
-      )
-      expect(delivered).toEqual(['target-3', 'target-2', 'target-1', 'target-0'])
-      expect(response.entries.every((entry) => entry.status === 'ok')).toBe(true)
-      const staleDelivered: string[] = []
-      const stale = await service.transformBatch(
-        'stream-chat',
-        streamingRequest(seeded.revision),
-        undefined,
-        (result) => {
-          staleDelivered.push(result.entries[0].requestKey)
-          db.prepare('UPDATE schema_version SET revision = revision + 1').run()
-        },
-      )
-      expect(staleDelivered).toEqual(['target-3'])
-      expect(stale.entries.every((entry) => entry.status === 'stale')).toBe(true)
-      expect(stale.revision).toBe(seeded.revision + 1)
-    } finally {
-      db.close()
-    }
-  })
+  it.each(['revision', 'module'] as const)(
+    'executes real targets in priority order and invalidates previously streamed results after a %s change',
+    async (change) => {
+      const db = openDatabase(harness.dataDir)
+      try {
+        const seeded = await applyImport(
+          db,
+          harness.dataDir,
+          normalizeRisuSaveSnapshotDatabase({
+            characters: [
+              {
+                chaId: 'stream-char',
+                name: 'Character',
+                chats: [
+                  {
+                    id: 'stream-chat',
+                    message: streamingRequest().targets.map((target) => ({
+                      role: target.role,
+                      data: target.source,
+                      chatId: target.messageId,
+                    })),
+                  },
+                ],
+              },
+            ],
+          }),
+        )
+        const service = new DisplaySourceService({ db, dataDir: harness.dataDir })
+        const delivered: string[] = []
+        const response = await service.transformBatch(
+          'stream-chat',
+          streamingRequest(seeded.revision),
+          undefined,
+          (result) => {
+            delivered.push(result.entries[0].requestKey)
+          },
+        )
+        expect(delivered).toEqual(['target-3', 'target-2', 'target-1', 'target-0'])
+        expect(response.entries.every((entry) => entry.status === 'ok')).toBe(true)
+        const staleDelivered: string[] = []
+        const stale = await service.transformBatch(
+          'stream-chat',
+          streamingRequest(seeded.revision),
+          undefined,
+          (result) => {
+            staleDelivered.push(result.entries[0].requestKey)
+            if (change === 'revision') db.prepare('UPDATE schema_version SET revision = revision + 1').run()
+            else
+              db.prepare('INSERT INTO modules (position, data_json) VALUES (0, ?)').run(
+                JSON.stringify({ id: 'new-module' }),
+              )
+          },
+        )
+        expect(staleDelivered).toEqual(['target-3'])
+        expect(stale.entries.every((entry) => entry.status === 'stale')).toBe(true)
+        expect(stale.revision).toBe(seeded.revision + (change === 'revision' ? 1 : 0))
+      } finally {
+        db.close()
+      }
+    },
+  )
 })
