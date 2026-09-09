@@ -288,13 +288,23 @@ runs its complete legacy transform. Malformed stored JSON, storage faults,
 invariant failures, and unexpected exceptions remain server errors. The
 fallback is read-only and does not normalize or rewrite the rejected record.
 
-The client submits the newest two mounted messages as a critical batch and
-defers the rest of the transcript window until those results settle. The server
-still transforms targets serially: Lua and V2 trigger budgets are shared within
-each batch, and the request-local runtime scope is temporarily mutable even
-though scriptstate is restored per target. Client disconnects abort queued or
-active display stages rather than leaving a superseded chat on the service's
-exclusive execution tail.
+The display POST accepts optional `priorityKeys` identifying targets in foreground
+order and negotiates a finite SSE response with `Accept: text/event-stream`.
+JSON remains the default for older clients. Both groups share one scoped load and
+dependency fingerprint. SSE emits `result` per target and a terminal `done`,
+`invalidated`, or `error`; it uses bounded writes and aborts on disconnect or
+buffer overflow. Validation/auth failures before the first frame remain HTTP
+errors. No event contains final HTML: browser Markdown/sanitization still follows.
+
+`displaySourceQueue.ts` retains exclusive execution through each complete target
+and its state cleanup, then yields for I/O and newly queued foreground work.
+The batch generator retains its prepared scope and budgets across these turns;
+request async context is bound to each queued operation. Revision/lineage/writer
+postconditions run before and after targets, and once at completion. A late
+change emits terminal invalidation, including for already delivered results.
+The browser reparses affected projections after invalidation and keeps fetch
+cancellation active through body consumption. Writer reads retain the shared
+command revision lane until stream completion; reader requests remain independent.
 
 ### Display Activation And Persistence
 

@@ -301,6 +301,31 @@ describe('ChatBody content-keyed parse memo', () => {
     expect(parse).toHaveBeenCalledTimes(2)
   })
 
+  it('recomputes finalized HTML after streamed display results are invalidated', async () => {
+    const character = seedDb()
+    const memo = await import('./ChatBodyParseMemo')
+    const bridge = await import('../../ts/server/displaySources')
+    const parser = await import('../../ts/parser/parser.svelte')
+    const epoch = vi.spyOn(bridge, 'captureDisplaySourceRenderEpoch').mockReturnValue('test:before')
+    const parse = vi
+      .spyOn(parser, 'ParseMarkdown')
+      .mockResolvedValueOnce('old projection')
+      .mockResolvedValueOnce('fresh projection')
+    const input = {
+      data: 'unchanged source',
+      charArg: character.chaId,
+      owners: memo.createChatBodyParseOwnerReaders(),
+      mode: 'notrim' as const,
+      chatID: 0,
+      cbsConditions: { firstmsg: false, chatRole: 'char' },
+    }
+    await expect(memo.memoizedChatBodyParse(input)).resolves.toBe('old projection')
+    await expect(memo.memoizedChatBodyParse(input)).resolves.toBe('old projection')
+    epoch.mockReturnValue('test:after')
+    await expect(memo.memoizedChatBodyParse(input)).resolves.toBe('fresh projection')
+    expect(parse).toHaveBeenCalledTimes(2)
+  })
+
   it('invalidates asset markup when a cached paint width is replaced by the authoritative default', async () => {
     const character = seedDb()
     const memo = await import('./ChatBodyParseMemo')

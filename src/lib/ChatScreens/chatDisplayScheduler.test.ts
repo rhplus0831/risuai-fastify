@@ -118,3 +118,66 @@ describe('progressive chat display', () => {
     expect(started).toEqual(['visible', 'oldest', 'middle'])
   })
 })
+
+describe('streaming display admission', () => {
+  it('collects a bounded mixed window before any network result and prioritizes three nearest rows', async () => {
+    const released: string[] = []
+    const scheduler = createChatDisplayScheduler(undefined, (scope) => () => {
+      released.push(scope)
+    })
+    scheduler.setScope('chat')
+    scheduler.setPaused(true)
+    scheduler.setNearest(['row-4', 'row-3', 'row-2', 'row-1', 'row-0'])
+    const started: Array<{ key: string; priority: string }> = []
+    const finish: Array<() => void> = []
+    const jobs = Array.from({ length: 5 }, (_, i) =>
+      scheduler.runBatch(
+        async (priority, prepared) => {
+          started.push({ key: `row-${i}`, priority })
+          prepared()
+          await new Promise<void>((resolve) => finish.push(resolve))
+          return i
+        },
+        new AbortController().signal,
+        `row-${i}`,
+        'background',
+      ),
+    )
+    await Promise.resolve()
+    expect(started).toEqual([
+      { key: 'row-4', priority: 'critical' },
+      { key: 'row-3', priority: 'critical' },
+      { key: 'row-2', priority: 'critical' },
+      { key: 'row-1', priority: 'background' },
+      { key: 'row-0', priority: 'background' },
+    ])
+    expect(released).toEqual(['chat'])
+    finish.forEach((resolve) => resolve())
+    await Promise.all(jobs)
+    scheduler.destroy()
+  })
+
+  it('cancels queued and active preparation on a chat switch', async () => {
+    const scheduler = createChatDisplayScheduler()
+    scheduler.setScope('old')
+    let finish!: () => void
+    const active = scheduler.runBatch(
+      async () => {
+        await new Promise<void>((resolve) => {
+          finish = resolve
+        })
+        return 'obsolete'
+      },
+      new AbortController().signal,
+      'row',
+      'critical',
+    )
+    await Promise.resolve()
+    scheduler.setScope('new')
+    await expect(active).resolves.toBeUndefined()
+    finish()
+    const queued = scheduler.runBatch(async () => 'queued', new AbortController().signal, 'new-row', 'critical')
+    scheduler.destroy()
+    await expect(queued).resolves.toBeUndefined()
+  })
+})

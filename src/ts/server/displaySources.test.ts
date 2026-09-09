@@ -26,6 +26,7 @@ import { reloadRegexDisplay, resetRegexDisplayReloadForTests } from '../process/
 import { charactersResourceState, resetServerResourceState } from './resourceState.svelte'
 import {
   activateDisplaySourceChat,
+  captureDisplaySourceRenderEpoch,
   markReaderDisplayLimited,
   readerDisplayLimitedStore,
   configureDisplaySourceProtocol,
@@ -45,6 +46,7 @@ interface DisplayRequestBody {
   baseRevision: number
   context: { pageSessionId: string; browserLanguage?: string; screenWidth?: number; screenHeight?: number }
   targets: Array<{ requestKey: string; source: string; sourceHash: string }>
+  priorityKeys?: string[]
 }
 
 interface Deferred<T> {
@@ -199,69 +201,160 @@ describe('browser display source batching client', () => {
     expect(requests).toHaveLength(2)
   })
 
-  it('releases critical newest-message results before deferred background rows', async () => {
+  it('streams three priority results from one mixed batch while background remains pending', async () => {
     activateDisplaySourceChat('chat-a')
-    const deferredCriticalResponse = createDeferred<Response>()
     const requests: DisplayRequestBody[] = []
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
-        const body = JSON.parse(String(init.body)) as DisplayRequestBody
-        requests.push(body)
-        if (requests.length === 1) return deferredCriticalResponse.promise
-        return successfulDisplayResponse(body, 9)
-      }) as unknown as typeof fetch,
-    )
-
-    const character = { chaId: 'char-a' }
-    const background = requestServerDisplaySource({
-      chatId: 'chat-a',
-      character,
-      messageId: 'message-old',
-      index: 0,
-      role: 'char',
-      firstMessage: false,
-      layer: 'original',
-      source: 'old',
-      priority: 'background',
+    let stream!: ReadableStreamDefaultController<Uint8Array>
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      expect(new Headers(init.headers).get('accept')).toContain('text/event-stream')
+      requests.push(JSON.parse(String(init.body)))
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            stream = controller
+          },
+        }),
+        { headers: { 'content-type': 'text/event-stream' } },
+      )
+    })
+    const request = (source: string, index: number, priority: 'critical' | 'background') =>
+      requestServerDisplaySource({
+        chatId: 'chat-a',
+        character: { chaId: 'char-a' },
+        messageId: `message-${index}`,
+        index,
+        role: 'char',
+        firstMessage: false,
+        layer: 'original',
+        source,
+        priority,
+      })
+    let backgroundSettled = false
+    const background = request('old', 0, 'background').then((result) => {
+      backgroundSettled = true
+      return result
     })
     const critical = [
-      requestServerDisplaySource({
-        chatId: 'chat-a',
-        character,
-        messageId: 'message-latest-a',
-        index: 8,
-        role: 'char',
-        firstMessage: false,
-        layer: 'original',
-        source: 'latest-a',
-        priority: 'critical',
-      }),
-      requestServerDisplaySource({
-        chatId: 'chat-a',
-        character,
-        messageId: 'message-latest-b',
-        index: 9,
-        role: 'char',
-        firstMessage: false,
-        layer: 'original',
-        source: 'latest-b',
-        priority: 'critical',
-      }),
+      request('latest-a', 7, 'critical'),
+      request('latest-b', 8, 'critical'),
+      request('latest-c', 9, 'critical'),
     ]
-
     await vi.waitFor(() => expect(requests).toHaveLength(1))
-    expect(requests[0].targets.map((target) => target.source)).toEqual(['latest-a', 'latest-b'])
-    deferredCriticalResponse.resolve(await successfulDisplayResponse(requests[0], 8))
+    const body = requests[0]
+    expect(body.targets.map((target) => target.source)).toEqual(['latest-c', 'latest-b', 'latest-a', 'old'])
+    expect(body.priorityKeys).toEqual(body.targets.slice(0, 3).map((target) => target.requestKey))
+    const contextFingerprint = await sha256Hex(
+      displaySourceNamespaceJson({ databaseLineage: 'lineage-a', activeWriterEpoch: 3, context: body.context }),
+    )
+    const context = { protocolVersion: 1, revision: 7, contextFingerprint }
+    const send = (event: string, data: unknown) =>
+      stream.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+    const result = (target: DisplayRequestBody['targets'][number]) =>
+      send('result', {
+        ...context,
+        entry: {
+          requestKey: target.requestKey,
+          sourceHash: target.sourceHash,
+          status: 'ok',
+          displaySource: target.source.toUpperCase(),
+          dependencyFingerprint: `dep:${target.source}`,
+        },
+      })
+    for (const target of body.targets.slice(0, 3)) result(target)
     await expect(Promise.all(critical)).resolves.toEqual([
-      expect.objectContaining({ status: 'ok', displaySource: 'LATEST-A' }),
-      expect.objectContaining({ status: 'ok', displaySource: 'LATEST-B' }),
+      expect.objectContaining({ displaySource: 'LATEST-A' }),
+      expect.objectContaining({ displaySource: 'LATEST-B' }),
+      expect.objectContaining({ displaySource: 'LATEST-C' }),
     ])
-
-    await vi.waitFor(() => expect(requests).toHaveLength(2))
-    expect(requests[1].baseRevision).toBe(8)
-    expect(requests[1].targets.map((target) => target.source)).toEqual(['old'])
+    expect(backgroundSettled).toBe(false)
+    expect(requests).toHaveLength(1)
+    result(body.targets[3])
+    send('done', { ...context, targetCount: 4 })
+    stream.close()
     await expect(background).resolves.toMatchObject({ status: 'ok', displaySource: 'OLD' })
+  })
+
+  it.each(['eof', 'duplicate', 'invalidated', 'namespace', 'malformed'] as const)(
+    'settles unfinished stream targets after %s and keeps cancellation through body consumption',
+    async (failure) => {
+      activateDisplaySourceChat('chat-a')
+      let body!: DisplayRequestBody
+      let stream!: ReadableStreamDefaultController<Uint8Array>
+      const cancel = vi.fn()
+      vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+        body = JSON.parse(String(init.body))
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller
+            },
+            cancel,
+          }),
+          { headers: { 'content-type': 'text/event-stream' } },
+        )
+      })
+      const input = {
+        chatId: 'chat-a',
+        character: { chaId: 'char-a' },
+        role: 'char',
+        firstMessage: false,
+        layer: 'original' as const,
+        priority: 'critical' as const,
+      }
+      const first = requestServerDisplaySource({ ...input, index: 1, messageId: 'one', source: 'one' })
+      const second = requestServerDisplaySource({ ...input, index: 0, messageId: 'two', source: 'two' })
+      await vi.waitFor(() => expect(body).toBeDefined())
+      const contextFingerprint = await sha256Hex(
+        displaySourceNamespaceJson({ databaseLineage: 'lineage-a', activeWriterEpoch: 3, context: body.context }),
+      )
+      const context = { protocolVersion: 1, revision: 7, contextFingerprint }
+      const send = (event: string, data: unknown) =>
+        stream.enqueue(new TextEncoder().encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`))
+      const entry = {
+        requestKey: body.targets[0].requestKey,
+        sourceHash: body.targets[0].sourceHash,
+        status: 'ok',
+        displaySource: 'ONE',
+        dependencyFingerprint: 'dep',
+      }
+      send('result', { ...context, entry })
+      await expect(first).resolves.toMatchObject({ status: 'ok', displaySource: 'ONE' })
+      const renderEpoch = captureDisplaySourceRenderEpoch()
+      if (failure === 'eof') stream.close()
+      if (failure === 'duplicate') send('result', { ...context, entry })
+      if (failure === 'invalidated') send('invalidated', { revision: 8, reason: 'revision_changed_during_transform' })
+      if (failure === 'namespace') configureDisplaySourceProtocol({ version: 1 }, 'lineage-b', 4)
+      if (failure === 'malformed') send('result', { ...context, entry: { status: 'ok' } })
+      await expect(second).resolves.toMatchObject({ status: 'fallback' })
+      if (failure !== 'eof') await vi.waitFor(() => expect(cancel).toHaveBeenCalled())
+      expect(peekCachedServerCommandRevision()).toBe(failure === 'invalidated' ? 8 : 7)
+      if (failure !== 'eof') expect(captureDisplaySourceRenderEpoch()).not.toBe(renderEpoch)
+      await runExternalServerRevisionOperation(async () => undefined)
+    },
+  )
+
+  it('packs by aggregate UTF-8 source bytes as well as target count', async () => {
+    const sizes: number[] = []
+    vi.stubGlobal('fetch', async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body)) as DisplayRequestBody
+      sizes.push(body.targets.reduce((bytes, target) => bytes + new TextEncoder().encode(target.source).byteLength, 0))
+      return successfulDisplayResponse(body, 7)
+    })
+    await Promise.all(
+      Array.from({ length: 10 }, (_, index) =>
+        requestServerDisplaySource({
+          chatId: 'chat-a',
+          character: { chaId: 'char-a' },
+          index,
+          messageId: `large-${index}`,
+          role: 'char',
+          firstMessage: false,
+          layer: 'original',
+          source: 'a'.repeat(512 * 1024),
+        }),
+      ),
+    )
+    expect(sizes).toEqual([4 * 1024 * 1024, 1024 * 1024])
   })
 
   it('aborts obsolete visible-chat work so navigation can use the revision lane', async () => {

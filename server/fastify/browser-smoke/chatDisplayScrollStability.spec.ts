@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { gateDisplayStreamResults } from './displayStreamGate.js'
 import { DatabaseSync } from 'node:sqlite'
 import path from 'node:path'
 import {
@@ -11,7 +12,7 @@ test.use({ trace: 'off' })
 
 const TRANSCRIPT = '[data-default-chat-transcript]'
 const MESSAGE_COUNT = 18
-const CRITICAL_MESSAGE_COUNT = 2
+const CRITICAL_MESSAGE_COUNT = 3
 const WHEEL_STEP = 90
 const ROW_MARKER = 'Deferred display row'
 const STATIC_IMAGE =
@@ -74,12 +75,10 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
         if (legacy) localStorage.setItem('risu-transcript-legacy-paging', '1')
       }, pagingMode === 'legacy')
       await page.setViewportSize({ width: 390, height: 844 })
-      await page.route('**/api/v1/chats/*/display-sources', async (route) => {
-        const request = route.request().postDataJSON() as { targets: Array<{ index: number }> }
-        const indexes = request.targets.map((target) => target.index)
-        const background = indexes.some((index) => index < MESSAGE_COUNT - CRITICAL_MESSAGE_COUNT)
-        const response = await route.fetch()
-        responseEntries.push(...displayResponseEntries(await response.json()))
+      await gateDisplayStreamResults(page, async (result) => {
+        const indexes = [result.index]
+        const background = !result.priority
+        responseEntries.push({ status: result.status, reason: result.reason })
         if (background && !releaseImmediately) {
           let release!: () => void
           const held = new Promise<void>((resolve) => {
@@ -98,7 +97,6 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
           await held
         }
         if (background && gestureActive) deliveredDuringGesture.push(indexes)
-        await route.fulfill({ response })
       })
 
       try {
@@ -166,7 +164,10 @@ for (const responseMode of ['delayed-success', 'handled-fallback'] as const sati
         // skipped newer rows pending below it.
         for (let promotion = 0; !anchor && promotion < 3; promotion++) {
           await expect.poll(() => blocked.some((gate) => !gate.released)).toBe(true)
-          const gate = blocked.find((gate) => !gate.released)!
+          const visibleIndexes = new Set(afterGesture.visible.map((row) => Number(row.id.split('-').at(-1))))
+          const gate =
+            blocked.find((gate) => !gate.released && gate.indexes.some((index) => visibleIndexes.has(index))) ??
+            blocked.find((gate) => !gate.released)!
           gate.release()
           for (const index of gate.indexes) {
             await expect(

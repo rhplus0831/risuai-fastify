@@ -10,10 +10,12 @@ import {
   type DisplaySourceLayer,
   type DisplaySourceRequest,
   type DisplaySourceTarget,
+  type DisplaySourceStreamEvent,
 } from '@risuai/protocol/display-source'
 import type { DisplaySourceService } from '../displaySourceService.js'
 import { displaySourceFailureDiagnostic } from '../displaySourceService.js'
 import { recordDiagnosticEvent } from '../diagnosticContext.js'
+import { writeBoundedRaw } from '../streamBackpressure.js'
 
 const DISPLAY_SOURCE_LAYERS: ReadonlySet<DisplaySourceLayer> = new Set([
   'original',
@@ -116,6 +118,14 @@ export function readDisplaySourceRequest(value: unknown): DisplaySourceRequest {
   const targets = raw.targets.map(readTarget)
   const requestKeys = new Set(targets.map((target) => target.requestKey))
   if (requestKeys.size !== targets.length) throw new ValidationError('target requestKey values must be unique')
+  if (
+    raw.priorityKeys !== undefined &&
+    (!Array.isArray(raw.priorityKeys) ||
+      raw.priorityKeys.length > targets.length ||
+      raw.priorityKeys.some((key) => typeof key !== 'string' || !requestKeys.has(key)) ||
+      new Set(raw.priorityKeys).size !== raw.priorityKeys.length)
+  )
+    throw new ValidationError('priorityKeys must contain unique keys from targets')
   const totalSourceBytes = targets.reduce((total, target) => total + Buffer.byteLength(target.source, 'utf8'), 0)
   if (totalSourceBytes > DISPLAY_SOURCE_LIMITS.maxRequestSourceBytes) {
     throw new ValidationError('display source request exceeds the total source byte limit')
@@ -125,6 +135,7 @@ export function readDisplaySourceRequest(value: unknown): DisplaySourceRequest {
     baseRevision: raw.baseRevision as number,
     context,
     targets,
+    ...(raw.priorityKeys === undefined ? {} : { priorityKeys: raw.priorityKeys as string[] }),
   }
 }
 
@@ -136,6 +147,32 @@ export function registerDisplaySourceRoutes(
   app.post('/api/v1/chats/:chatId/display-sources', async (req, reply) => {
     if (!(await requireAuth(authState, req, reply))) return
     const controller = new AbortController()
+    const streaming = req.headers.accept?.includes('text/event-stream') === true
+    let streamStarted = false
+    const send = (event: DisplaySourceStreamEvent) => {
+      if (controller.signal.aborted) throw controller.signal.reason
+      if (!streamStarted) {
+        streamStarted = true
+        reply.hijack()
+        for (const [name, value] of Object.entries(reply.getHeaders())) {
+          if (value !== undefined) reply.raw.setHeader(name, value)
+        }
+        reply.raw.writeHead(200, {
+          'content-type': 'text/event-stream; charset=utf-8',
+          'cache-control': 'no-cache, no-transform',
+          'x-accel-buffering': 'no',
+        })
+      }
+      const { type, ...data } = event
+      if (
+        !writeBoundedRaw(reply.raw, `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`, {
+          onOverflow: () => controller.abort(new Error('Display source stream buffer exceeded')),
+        })
+      ) {
+        controller.abort(new Error('Display source stream closed'))
+        throw controller.signal.reason
+      }
+    }
     const abortRequest = () => {
       if (!controller.signal.aborted) controller.abort(new Error('Display source client disconnected'))
     }
@@ -147,9 +184,57 @@ export function registerDisplaySourceRoutes(
     try {
       const chatId = readChatId((req.params as { chatId?: unknown }).chatId)
       const request = readDisplaySourceRequest(req.body)
-      return await service.transformBatch(chatId, request, controller.signal)
+      if (!streaming) return await service.transformBatch(chatId, request, controller.signal)
+      const delivered = new Set<string>()
+      const response = await service.transformBatch(chatId, request, controller.signal, (result) => {
+        for (const entry of result.entries) {
+          send({
+            type: 'result',
+            protocolVersion: result.protocolVersion,
+            revision: result.revision,
+            contextFingerprint: result.contextFingerprint,
+            entry,
+          })
+          delivered.add(entry.requestKey)
+        }
+      })
+      const retired = response.entries.find(
+        (entry) =>
+          entry.status === 'stale' &&
+          (entry.reason === 'revision_changed_during_transform' || entry.reason === 'display_namespace_retired'),
+      )
+      if (retired && retired.status !== 'ok') {
+        send({ type: 'invalidated', revision: response.revision, reason: retired.reason })
+      } else {
+        for (const entry of response.entries) {
+          if (!delivered.has(entry.requestKey))
+            send({
+              type: 'result',
+              protocolVersion: response.protocolVersion,
+              revision: response.revision,
+              contextFingerprint: response.contextFingerprint,
+              entry,
+            })
+        }
+        send({
+          type: 'done',
+          protocolVersion: response.protocolVersion,
+          revision: response.revision,
+          contextFingerprint: response.contextFingerprint,
+          targetCount: response.entries.length,
+        })
+      }
+      reply.raw.end()
+      return reply
     } catch (error) {
       if (controller.signal.aborted) return reply
+      if (streamStarted) {
+        recordDiagnosticEvent({ category: 'display', level: 'error', ...displaySourceFailureDiagnostic(error) })
+        req.log.error({ err: error }, 'display source stream failed')
+        send({ type: 'error', reason: 'display_source_transform_failed' })
+        reply.raw.end()
+        return reply
+      }
       if (error instanceof EntityNotFoundError) return reply.code(404).send({ error: error.message })
       if (error instanceof ValidationError) {
         const isRevisionConflict = error.message.includes('base revision is stale')

@@ -265,13 +265,13 @@ describe('chat startup rendering', () => {
         flushSync()
         await flush()
         expect(target.querySelectorAll('.risu-chat')).toHaveLength(6)
-        expect(parse).toHaveBeenCalledTimes(2)
+        expect(parse).toHaveBeenCalledTimes(3)
         expect(target.textContent).toContain(chat.message[5].data)
         expect(target.textContent).not.toContain(chat.message[0].data)
         const estimatedRows = [
           ...target.querySelectorAll<HTMLElement>('[data-transcript-pending-geometry="estimated"]'),
         ]
-        expect(estimatedRows).toHaveLength(4)
+        expect(estimatedRows).toHaveLength(3)
         expect(
           estimatedRows.every((row) => {
             const height = Number.parseFloat(row.style.height)
@@ -279,13 +279,13 @@ describe('chat startup rendering', () => {
           }),
         ).toBe(true)
         await frame()
-        expect(parse).toHaveBeenCalledTimes(readOnly ? 3 : 2)
+        expect(parse).toHaveBeenCalledTimes(readOnly ? 4 : 3)
         if (!readOnly) {
           recordStartupMilestone('background-ready')
           completeStartupAttempt(startupAttempt)
         }
         await flush()
-        for (let count = readOnly ? 4 : 3; count <= 6; count++) {
+        for (let count = readOnly ? 5 : 4; count <= 6; count++) {
           await frame()
           expect(parse).toHaveBeenCalledTimes(count)
         }

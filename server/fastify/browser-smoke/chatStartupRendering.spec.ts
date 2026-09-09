@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { gateDisplayStreamResults } from './displayStreamGate.js'
 import {
   closeFastBootstrapHarness,
   smallFastBootstrapFixture,
@@ -138,20 +139,25 @@ test('direct chat startup releases the newest rows before older display work and
   page.on('request', (request) => {
     if (new URL(request.url()).pathname === `/api/v1/characters/${character.chaId}`) characterReads++
   })
-  await page.route('**/api/v1/chats/*/display-sources', async (route) => {
-    const body = route.request().postDataJSON() as { targets: Array<{ index: number }> }
-    if (body.targets.some((target) => target.index < 10)) {
+  let initialBatchSize = 0
+  await gateDisplayStreamResults(page, async (result) => {
+    initialBatchSize = Math.max(initialBatchSize, result.targetCount)
+    if (!result.priority) {
       blockedOlder++
       await olderGate
     }
-    await route.continue()
   })
   try {
     await page.setViewportSize({ width: 390, height: 844 })
     await page.goto(`${harness.baseUrl}/character/${character.chaId}/${chat.id}`)
     const latest = page.locator('[data-risu-message-id="startup-message-11"] .chat-message-body')
     await expect(latest).toContainText('Newest startup message')
-    await expect.poll(() => blockedOlder).toBe(1)
+    await expect.poll(() => blockedOlder).toBeGreaterThan(0)
+    expect(initialBatchSize).toBe(12)
+    for (const index of [9, 10, 11]) {
+      await expect(page.locator(`[data-risu-message-id="startup-message-${index}"] .chat-message-body`)).not.toBeEmpty()
+    }
+    await expect(page.locator('[data-chat-message-skeleton]')).toHaveCount(0)
     await expect(page.locator('.risu-chat[data-risu-message-id^="startup-message-"]')).toHaveCount(12)
     await expect(page.locator('[data-risu-message-id="startup-message-0"] .chat-message-body')).not.toContainText(
       'Startup history 0',

@@ -7,6 +7,7 @@ import {
   displaySourceNamespaceJson,
   isDisplaySourceRequest,
   isDisplaySourceResponse,
+  isDisplaySourceStreamEvent,
   normalizeDisplayDependencyValue,
   normalizeDisplayRequestContext,
   stableDisplayDependencyJson,
@@ -152,5 +153,40 @@ describe('display-source protocol', () => {
         entries: [{ requestKey: 'request-1', status: 'ok', sourceHash: target.sourceHash, reason: 'wrong' }],
       }),
     ).toBe(false)
+  })
+})
+
+describe('display source streaming protocol', () => {
+  it('validates finite stream events and explicit request priorities', () => {
+    expect(
+      isDisplaySourceRequest({
+        protocolVersion: 1,
+        baseRevision: 7,
+        context: { pageSessionId: 'p' },
+        targets: [target],
+        priorityKeys: [target.requestKey],
+      }),
+    ).toBe(true)
+    const context = { protocolVersion: 1, revision: 7, contextFingerprint: 'namespace' }
+    expect(
+      isDisplaySourceStreamEvent({
+        type: 'result',
+        ...context,
+        entry: {
+          requestKey: target.requestKey,
+          sourceHash: target.sourceHash,
+          status: 'ok',
+          displaySource: 'rendered',
+          dependencyFingerprint: 'dep',
+        },
+      }),
+    ).toBe(true)
+    expect(isDisplaySourceStreamEvent({ type: 'done', ...context, targetCount: 1 })).toBe(true)
+    expect(isDisplaySourceStreamEvent({ type: 'done', ...context, targetCount: 65 })).toBe(false)
+    expect(isDisplaySourceStreamEvent({ type: 'result', ...context, entry: { status: 'ok' } })).toBe(false)
+    expect(
+      isDisplaySourceStreamEvent({ type: 'invalidated', revision: 8, reason: 'revision_changed_during_transform' }),
+    ).toBe(true)
+    expect(isDisplaySourceStreamEvent({ type: 'error', reason: 'failed' })).toBe(true)
   })
 })

@@ -1,9 +1,19 @@
 export const CHAT_DISPLAY_SCHEDULER = Symbol('chat-display-scheduler')
 
 type Job = { key?: string; start(): Promise<void>; cancel(): void }
+type Priority = 'critical' | 'normal' | 'background'
+type BatchJob = {
+  key?: string
+  priority: Priority
+  start(priority: Priority, prepared: () => void): Promise<void>
+  cancel(): void
+}
 
-/** Older rows run one at a time, yielding to input/paint between parses. */
-export function createChatDisplayScheduler(schedule: (run: () => void) => () => void = scheduleIdleDisplay) {
+/** Batch server input preparation; retain serial idle parsing for browser-only work. */
+export function createChatDisplayScheduler(
+  schedule: (run: () => void) => () => void = scheduleIdleDisplay,
+  collect: (scope: string) => () => void = () => () => {},
+) {
   let scope: string | null = null
   let paused = true
   let destroyed = false
@@ -12,6 +22,48 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
   let cancelScheduled: (() => void) | undefined
   const jobs: Job[] = []
   let visible = new Set<string>()
+  let nearest: readonly string[] = []
+  const batchJobs: BatchJob[] = []
+  const runningBatchJobs = new Set<BatchJob>()
+  let batchScheduled = false
+
+  const drainBatch = () => {
+    if (destroyed || batchScheduled || batchJobs.length === 0 || runningBatchJobs.size >= 64) return
+    batchScheduled = true
+    // A Svelte mount registers a window's rows in one turn. Start their input
+    // preparation together; network completion does not gate sibling admission.
+    queueMicrotask(() => {
+      batchScheduled = false
+      if (destroyed) return
+      const rank = (job: BatchJob) =>
+        job.priority === 'critical' ? -1 : job.key && nearest.includes(job.key) ? nearest.indexOf(job.key) : Infinity
+      batchJobs.sort((a, b) => rank(a) - rank(b))
+      const jobs = batchJobs.splice(0, Math.max(0, 64 - runningBatchJobs.size))
+      if (!jobs.length) return
+      const release = collect(scope ?? '')
+      let preparing = jobs.length
+      const criticalKeys = new Set(jobs.filter((job) => job.priority === 'critical').map((job) => job.key))
+      for (const job of jobs) {
+        if (criticalKeys.size >= 3) break
+        criticalKeys.add(job.key)
+      }
+      for (const job of jobs) {
+        let prepared = false
+        const ready = () => {
+          if (prepared) return
+          prepared = true
+          if (--preparing === 0) release()
+        }
+        runningBatchJobs.add(job)
+        void job.start(criticalKeys.has(job.key) ? 'critical' : job.priority, ready).finally(() => {
+          ready()
+          runningBatchJobs.delete(job)
+          drainBatch()
+        })
+      }
+      if (batchJobs.length) setTimeout(drainBatch, 0)
+    })
+  }
 
   const drain = () => {
     if (destroyed || paused || running || cancelScheduled || jobs.length === 0) return
@@ -36,6 +88,9 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
     cancelScheduled?.()
     cancelScheduled = undefined
     for (const job of jobs.splice(0)) job.cancel()
+    for (const job of batchJobs.splice(0)) job.cancel()
+    for (const job of runningBatchJobs) job.cancel()
+    runningBatchJobs.clear()
   }
 
   return {
@@ -45,6 +100,7 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
       scope = next
       paused = true
       visible.clear()
+      nearest = []
     },
     setPaused(next: boolean) {
       paused = next
@@ -56,6 +112,47 @@ export function createChatDisplayScheduler(schedule: (run: () => void) => () => 
     setVisible(keys: readonly string[]) {
       visible = new Set(keys)
       drain()
+    },
+    setNearest(keys: readonly string[]) {
+      nearest = keys
+    },
+    runBatch<T>(
+      work: (priority: Priority, prepared: () => void) => Promise<T>,
+      signal: AbortSignal,
+      key: string | undefined,
+      priority: Priority,
+    ): Promise<T | undefined> {
+      if (destroyed || signal.aborted) return Promise.resolve(undefined)
+      return new Promise((resolve, reject) => {
+        const cancel = () => {
+          const index = batchJobs.indexOf(job)
+          if (index >= 0) batchJobs.splice(index, 1)
+          signal.removeEventListener('abort', cancel)
+          resolve(undefined)
+        }
+        const job: BatchJob = {
+          key,
+          priority,
+          cancel,
+          async start(nextPriority, prepared) {
+            if (signal.aborted) {
+              prepared()
+              cancel()
+              return
+            }
+            try {
+              resolve(await work(nextPriority, prepared))
+            } catch (error) {
+              reject(error)
+            } finally {
+              signal.removeEventListener('abort', cancel)
+            }
+          },
+        }
+        signal.addEventListener('abort', cancel, { once: true })
+        batchJobs.push(job)
+        drainBatch()
+      })
     },
     run<T>(work: () => Promise<T>, signal: AbortSignal, key?: string): Promise<T | undefined> {
       if (destroyed || signal.aborted) return Promise.resolve(undefined)

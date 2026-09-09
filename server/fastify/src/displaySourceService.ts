@@ -35,6 +35,7 @@ import { processScriptAsync } from './prompt/scripts.js'
 import { isBoundedRegexError } from './prompt/boundedRegex.js'
 import { emitProtocolMetric, protocolDurationMs, protocolNowMs } from './protocolMetrics.js'
 import { DisplaySourceCache } from './displaySourceCache.js'
+import { DisplaySourceQueue } from './displaySourceQueue.js'
 import { resolvePromptModelId } from './prompt/promptScope.js'
 import type { DiagnosticEventV2 } from '@risuai/protocol/remote-diagnostics'
 import { recordDiagnosticEvent } from './diagnosticContext.js'
@@ -303,7 +304,7 @@ export class DisplaySourceService {
 
   private readonly db: DatabaseSync
   private readonly dataDir: string
-  private exclusiveTail: Promise<void> = Promise.resolve()
+  private readonly targetQueue = new DisplaySourceQueue()
   private queuedBatchCount = 0
 
   constructor(options: DisplaySourceServiceOptions) {
@@ -316,39 +317,70 @@ export class DisplaySourceService {
     return getSchemaState(this.db).revision
   }
 
-  transformBatch(chatId: string, request: DisplaySourceRequest, signal?: AbortSignal): Promise<DisplaySourceResponse> {
-    const enqueuedAt = protocolNowMs()
-    const queueDepth = this.queuedBatchCount
-    const diagnostics = beginDisplaySourceDiagnostics(request.targets.length, enqueuedAt, queueDepth)
-    this.queuedBatchCount += 1
-    const run = this.exclusiveTail.then(async () => {
-      const queueWaitMs = protocolDurationMs(enqueuedAt)
-      if (diagnostics) diagnostics.queueWaitMs = queueWaitMs
-      let response: DisplaySourceResponse | undefined
-      try {
-        response = await this.transformBatchExclusive(chatId, request, queueWaitMs, queueDepth, signal, diagnostics)
-        return response
-      } finally {
-        diagnostics?.finish(response, signal?.aborted === true)
-      }
-    })
-    this.exclusiveTail = run.then(
-      () => undefined,
-      () => undefined,
-    )
-    return run.finally(() => {
-      this.queuedBatchCount -= 1
-    })
-  }
-
-  private async transformBatchExclusive(
+  async transformBatch(
     chatId: string,
     request: DisplaySourceRequest,
-    queueWaitMs: number,
+    signal?: AbortSignal,
+    onResult?: (result: DisplaySourceResponse) => void,
+  ): Promise<DisplaySourceResponse> {
+    const enqueuedAt = protocolNowMs()
+    const queueDepth = this.queuedBatchCount++
+    const diagnostics = beginDisplaySourceDiagnostics(request.targets.length, enqueuedAt, queueDepth)
+    let response: DisplaySourceResponse | undefined
+    const queueTiming = { waitMs: 0 }
+    const priority = new Map((request.priorityKeys ?? []).map((key, index) => [key, index]))
+    if (diagnostics) diagnostics.priorityTargetCount = priority.size
+    const targets = [...request.targets].sort(
+      (a, b) => (priority.get(a.requestKey) ?? Infinity) - (priority.get(b.requestKey) ?? Infinity),
+    )
+    const iterator = this.transformPreparedBatch(
+      chatId,
+      { ...request, targets },
+      queueTiming,
+      queueDepth,
+      signal,
+      diagnostics,
+    )
+    let index = 0
+    let waitingAt: number | undefined
+    try {
+      while (true) {
+        waitingAt = protocolNowMs()
+        const next = await this.targetQueue.run(
+          priority.has(targets[index]?.requestKey) ? 0 : request.priorityKeys ? 2 : 1,
+          async () => {
+            queueTiming.waitMs += protocolDurationMs(waitingAt!)
+            waitingAt = undefined
+            if (diagnostics) diagnostics.queueWaitMs = queueTiming.waitMs
+            return iterator.next()
+          },
+          signal,
+        )
+        if (next.done) {
+          response = next.value
+          return response
+        }
+        index += next.value.entries.length
+        for (const entry of next.value.entries) diagnostics?.resultReady(priority.has(entry.requestKey))
+        onResult?.(next.value)
+      }
+    } finally {
+      if (waitingAt !== undefined) queueTiming.waitMs += protocolDurationMs(waitingAt)
+      if (diagnostics) diagnostics.queueWaitMs = queueTiming.waitMs
+      await iterator.return(undefined as never)
+      this.queuedBatchCount--
+      diagnostics?.finish(response, signal?.aborted === true)
+    }
+  }
+
+  private async *transformPreparedBatch(
+    chatId: string,
+    request: DisplaySourceRequest,
+    queueTiming: { waitMs: number },
     queueDepth: number,
     signal?: AbortSignal,
     diagnostics?: DisplaySourceDiagnostics,
-  ): Promise<DisplaySourceResponse> {
+  ): AsyncGenerator<DisplaySourceResponse, DisplaySourceResponse, void> {
     const startedAt = protocolNowMs()
     throwIfAborted(signal)
     const initialRevision = runDisplaySourceStage('revision', () => getSchemaState(this.db).revision, diagnostics)
@@ -404,7 +436,7 @@ export class DisplaySourceService {
         okCount: 0,
         fallbackCount: entries.length,
         durationMs: protocolDurationMs(startedAt),
-        queueWaitMs,
+        queueWaitMs: queueTiming.waitMs,
         queueDepth,
         scopeLoadMs: protocolDurationMs(scopeLoadStartedAt),
         revision: initialRevision,
@@ -430,7 +462,9 @@ export class DisplaySourceService {
       'shared-dependencies',
       () => {
         const luaExecBudget = createLuaExecBudget()
-        const triggerBudget = createTriggerExecutionBudget()
+        // Foreground work can suspend this batch between targets. Charge its
+        // script budget for its own processing, not another batch's queue turn.
+        const triggerBudget = createTriggerExecutionBudget({ now: () => protocolNowMs() - queueTiming.waitMs })
         const modules = getActiveModules(scope.database, scope.character, scope.chat)
         const dynamicAssetFallback = dynamicAssetFallbackRequired(scope, modules)
         return { luaExecBudget, triggerBudget, modules, dynamicAssetFallback }
@@ -453,79 +487,105 @@ export class DisplaySourceService {
 
     for (const target of request.targets) {
       throwIfAborted(signal)
-      if (diagnostics) diagnostics.visitedTargetCount++
-      if (target.characterId !== scope.character.chaId || !targetIsFresh(scope, target)) {
-        entries.push(errorEntry(target, 'stale', 'target_identity_changed'))
-        continue
-      }
-      const actualSourceHash = runDisplaySourceStage('target-preparation', () => sha256(target.source), diagnostics)
-      if (actualSourceHash !== target.sourceHash) {
-        entries.push(errorEntry(target, 'error', 'source_hash_mismatch'))
-        continue
-      }
-      if (dynamicAssetFallback) {
-        entries.push(errorEntry(target, 'client_fallback', 'dynamic_asset_similarity_required'))
-        continue
-      }
-
-      const targetFingerprintStartedAt = protocolNowMs()
-      const dependencyFingerprint = runDisplaySourceStage(
-        'target-preparation',
-        () =>
-          sha256(
-            stableDisplayDependencyJson(targetDependencyValue(sharedDependencyFingerprint, target, actualSourceHash)),
-          ),
+      const before = this.postconditionResponse(
+        request,
+        initialRevision,
+        databaseLineage,
+        activeWriterEpoch,
+        contextFingerprint,
         diagnostics,
-        'targetFingerprintMs',
       )
-      targetFingerprintMs += protocolDurationMs(targetFingerprintStartedAt)
-      try {
-        const execute = async () => {
-          diagnostics?.transformStarted(target.streaming === true)
-          const outcome = await this.transformTarget(
-            scope,
-            target,
-            request.context,
-            luaExecBudget,
-            triggerBudget,
-            modules,
-            signal,
-            diagnostics,
-          )
-          emitProtocolMetric('display_source_transform', {
-            status: 'ok',
-            characterId: target.characterId,
-            chatId: scope.chat.id,
-            durationMs: Object.values(outcome.stageDurations).reduce((sum, duration) => sum + duration, 0),
-            outputBytes: Buffer.byteLength(outcome.displaySource, 'utf8'),
-            ephemeralStateChanged: outcome.ephemeralStateChanged,
-            ...outcome.stageDurations,
-          })
-          return {
-            value: { displaySource: outcome.displaySource, dependencyFingerprint },
-            cacheable: true,
-          }
-        }
-        const result = target.streaming
-          ? { ...(await execute()).value, cacheStatus: 'miss' as const }
-          : await this.cache.resolve(contextFingerprint, dependencyFingerprint, execute)
-        if (target.streaming) streamingBypassCount += 1
-        else if (result.cacheStatus === 'hit') batchCacheHitCount += 1
-        else if (result.cacheStatus === 'inflight_join') batchInflightJoinCount += 1
-        else batchCacheMissCount += 1
-        if (diagnostics && result.cacheStatus === 'hit') diagnostics.cacheHitCount++
-        if (diagnostics && result.cacheStatus === 'inflight_join') diagnostics.inflightJoinCount++
-        entries.push({
-          requestKey: target.requestKey,
-          status: 'ok',
-          sourceHash: target.sourceHash,
-          dependencyFingerprint: result.dependencyFingerprint,
-          displaySource: result.displaySource,
-        })
-      } catch (error) {
+      if (before) return before
+      const entry = await (async (): Promise<DisplaySourceResponseEntry> => {
         throwIfAborted(signal)
-        const reason = isBoundedRegexError(error) ? 'bounded_regex_rejected' : 'transform_failed'
-        entries.push(errorEntry(target, isBoundedRegexError(error) ? 'client_fallback' : 'error', reason))
+        if (diagnostics) diagnostics.visitedTargetCount++
+        if (target.characterId !== scope.character.chaId || !targetIsFresh(scope, target)) {
+          return errorEntry(target, 'stale', 'target_identity_changed')
+        }
+        const actualSourceHash = runDisplaySourceStage('target-preparation', () => sha256(target.source), diagnostics)
+        if (actualSourceHash !== target.sourceHash) {
+          return errorEntry(target, 'error', 'source_hash_mismatch')
+        }
+        if (dynamicAssetFallback) {
+          return errorEntry(target, 'client_fallback', 'dynamic_asset_similarity_required')
+        }
+
+        const targetFingerprintStartedAt = protocolNowMs()
+        const dependencyFingerprint = runDisplaySourceStage(
+          'target-preparation',
+          () =>
+            sha256(
+              stableDisplayDependencyJson(targetDependencyValue(sharedDependencyFingerprint, target, actualSourceHash)),
+            ),
+          diagnostics,
+          'targetFingerprintMs',
+        )
+        targetFingerprintMs += protocolDurationMs(targetFingerprintStartedAt)
+        try {
+          const execute = async () => {
+            diagnostics?.transformStarted(target.streaming === true)
+            const outcome = await this.transformTarget(
+              scope,
+              target,
+              request.context,
+              luaExecBudget,
+              triggerBudget,
+              modules,
+              signal,
+              diagnostics,
+            )
+            emitProtocolMetric('display_source_transform', {
+              status: 'ok',
+              characterId: target.characterId,
+              chatId: scope.chat.id,
+              durationMs: Object.values(outcome.stageDurations).reduce((sum, duration) => sum + duration, 0),
+              outputBytes: Buffer.byteLength(outcome.displaySource, 'utf8'),
+              ephemeralStateChanged: outcome.ephemeralStateChanged,
+              ...outcome.stageDurations,
+            })
+            return {
+              value: { displaySource: outcome.displaySource, dependencyFingerprint },
+              cacheable: true,
+            }
+          }
+          const result = target.streaming
+            ? { ...(await execute()).value, cacheStatus: 'miss' as const }
+            : await this.cache.resolve(contextFingerprint, dependencyFingerprint, execute)
+          if (target.streaming) streamingBypassCount += 1
+          else if (result.cacheStatus === 'hit') batchCacheHitCount += 1
+          else if (result.cacheStatus === 'inflight_join') batchInflightJoinCount += 1
+          else batchCacheMissCount += 1
+          if (diagnostics && result.cacheStatus === 'hit') diagnostics.cacheHitCount++
+          if (diagnostics && result.cacheStatus === 'inflight_join') diagnostics.inflightJoinCount++
+          return {
+            requestKey: target.requestKey,
+            status: 'ok',
+            sourceHash: target.sourceHash,
+            dependencyFingerprint: result.dependencyFingerprint,
+            displaySource: result.displaySource,
+          }
+        } catch (error) {
+          throwIfAborted(signal)
+          const reason = isBoundedRegexError(error) ? 'bounded_regex_rejected' : 'transform_failed'
+          return errorEntry(target, isBoundedRegexError(error) ? 'client_fallback' : 'error', reason)
+        }
+      })()
+      throwIfAborted(signal)
+      const stale = this.postconditionResponse(
+        request,
+        initialRevision,
+        databaseLineage,
+        activeWriterEpoch,
+        contextFingerprint,
+        diagnostics,
+      )
+      if (stale) return stale
+      entries.push(entry)
+      yield {
+        protocolVersion: DISPLAY_SOURCE_PROTOCOL_VERSION,
+        revision: initialRevision,
+        contextFingerprint,
+        entries: [entry],
       }
     }
 
@@ -546,7 +606,7 @@ export class DisplaySourceService {
       okCount: entries.filter((entry) => entry.status === 'ok').length,
       fallbackCount: entries.filter((entry) => entry.status === 'client_fallback').length,
       durationMs: protocolDurationMs(startedAt),
-      queueWaitMs,
+      queueWaitMs: queueTiming.waitMs,
       queueDepth,
       scopeLoadMs,
       sharedDependencyMs,

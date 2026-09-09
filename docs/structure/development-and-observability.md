@@ -196,9 +196,13 @@ metric payloads enter the summary. Browser uploads cannot publish this family;
 v1 exports omit it.
 
 `durationMs` covers service enqueue through completion, including
-`queueWaitMs`; it excludes route authentication/body validation and HTTP response
-serialization. `queueDepth` counts earlier unfinished batches at enqueue, and
-`timeToFirstTransformMs`, when present, also starts at enqueue. The closed
+`queueWaitMs`; it excludes route authentication/body validation and final JSON
+response serialization. SSE per-result callback/encoding time is included. `queueDepth` counts earlier unfinished batches at enqueue, and
+`timeToFirstTransformMs`, when present, also starts at enqueue. Queue wait is
+accumulated across target scheduling turns, including cancellation while queued.
+`timeToFirstResultMs` and `timeToPriorityResultsMs` measure the first fresh result
+and completion of all `priorityTargetCount` foreground results, respectively;
+they precede network delivery and browser rendering. The closed
 `timings` object reports accumulated milliseconds for revision/namespace checks,
 scope persistence load, scope decode, scope resolution, module resolution,
 shared dependency hashing, source/target hashing, target setup, Lua, declarative
@@ -207,7 +211,9 @@ stage totals rather than a complete accounting of service duration. In this
 event, `scopeLoadMs` excludes decoding; the older raw `display_source_batch`
 metric's `scopeLoadMs` includes both. Pair the summary with the same UID's HTTP
 event to identify time outside the service. Browser HTTP duration ends when
-`fetch` resolves and excludes subsequent JSON/Markdown/DOM work.
+`fetch` resolves (headers, potentially just the first SSE result) and excludes
+subsequent stream/JSON/Markdown/DOM work. Use result timings and render readiness
+in addition to HTTP duration when comparing streaming behavior.
 
 Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
 hour), limit (default 50, maximum 200), generated requestUid/operationRef,

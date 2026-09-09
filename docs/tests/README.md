@@ -197,9 +197,9 @@ asset, and unrelated-collection payload scans. Its metric assertions distinguish
 the cold misses from warm cache hits and pin the queue/load/fingerprint timing
 dimensions.
 The browser bridge cases also prove that critical newest-message targets settle
-before deferred background rows enter the revision lane, and that changing the
+from the same mixed batch before background results complete, and that changing the
 visible chat aborts an obsolete fetch before the replacement batch starts.
-`chatDisplayScrollStability.spec.ts` holds sequential older-row responses while
+`chatDisplayScrollStability.spec.ts` holds individual older-row SSE results while
 real CDP wheel input continues, then pauses beyond the interaction grace before
 releasing unfinished newer rows below the reading position. Animation-frame,
 after-frame, and DOM-mutation samples require the same readable anchor node to

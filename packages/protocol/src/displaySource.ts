@@ -52,6 +52,8 @@ export const DisplaySourceRequestSchema = Type.Object(
     baseRevision: Type.Number(),
     context: DisplayRequestContextSchema,
     targets: Type.Array(DisplaySourceTargetSchema),
+    /** Target keys in foreground processing order; omitted by legacy JSON clients. */
+    priorityKeys: Type.Optional(Type.Array(Type.String(), { maxItems: DISPLAY_SOURCE_LIMITS.maxTargets })),
   },
   { additionalProperties: false },
 )
@@ -91,6 +93,43 @@ export const DisplaySourceResponseSchema = Type.Object(
   },
   { additionalProperties: false },
 )
+
+const displayStreamContext = {
+  protocolVersion: Type.Literal(DISPLAY_SOURCE_PROTOCOL_VERSION),
+  revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+  contextFingerprint: Type.String(),
+}
+
+/** A finite POST response stream. Every target has one result, followed by done.
+ * Invalidation retires already delivered projections as well as pending work.
+ */
+export const DisplaySourceStreamEventSchema = Type.Union([
+  Type.Object(
+    { type: Type.Literal('result'), ...displayStreamContext, entry: DisplaySourceResponseEntrySchema },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('done'),
+      ...displayStreamContext,
+      targetCount: Type.Integer({ minimum: 0, maximum: DISPLAY_SOURCE_LIMITS.maxTargets }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object(
+    {
+      type: Type.Literal('invalidated'),
+      revision: Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+      reason: Type.String(),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Object({ type: Type.Literal('error'), reason: Type.String() }, { additionalProperties: false }),
+])
+export type DisplaySourceStreamEvent = Static<typeof DisplaySourceStreamEventSchema>
+export function isDisplaySourceStreamEvent(value: unknown): value is DisplaySourceStreamEvent {
+  return Value.Check(DisplaySourceStreamEventSchema, value)
+}
 
 export const DisplaySourceNamespaceInputSchema = Type.Object(
   {

@@ -465,15 +465,22 @@ settle, then waits for all registered preparations before starting the
 zero-delay flush. Digest completion order therefore cannot split concurrently
 requested same-chat rows into separate revision-lane operations.
 
-Initial transcript mounting assigns the newest two messages critical priority
-and the remaining mounted window background priority. The bridge sends the
-critical group first and releases its parse/readiness promises before yielding
-and entering the background group into the revision lane; targets inside either
-group remain serialized because their execution budgets and runtime scope are
-mutable. Changing the visible chat resolves queued obsolete work and aborts its
-in-flight fetch. Fastify converts that disconnect into an `AbortSignal` for the
-display stages, so an old chat cannot keep the new chat queued behind a full
-transform batch.
+Initial transcript mounting assigns the newest three messages critical priority.
+The scheduler admits compatible mounted rows' post-asset preparation together;
+`priorityKeys` puts those three at the front of one mixed-priority batch. The
+bridge requests SSE, resolves validated result promises as frames arrive, and
+checks the terminal event before releasing the shared revision lane. It accepts
+legacy JSON responses too. Requests split at both target-count and aggregate
+UTF-8 source-byte limits. Newly admitted rows collect while an earlier response
+is active instead of reserving individual revision-lane operations.
+
+The server checks revision and namespace before publishing each result. Terminal
+invalidation clears bridge results, changes the finalized-HTML memo epoch, and
+advances the affected render owner's reload token, so earlier streamed projections cannot remain cached as
+current. EOF/errors settle unfinished targets through existing fallbacks;
+malformed/duplicate events retire partial projections. Chat, session, or namespace
+changes cancel the response body as well as the initial fetch. The client keeps
+its last rendered bodies during ordinary replacements and history loading.
 
 With current write access, the full client `processScriptFull` path remains the
 fallback for browser edit hooks, unsupported fuzzy dynamic assets, missing

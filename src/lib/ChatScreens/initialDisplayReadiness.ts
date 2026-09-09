@@ -7,7 +7,7 @@ export interface InitialDisplayReadiness {
 
 type ReadinessPhase = 'awaiting-rows' | 'collecting' | 'ready'
 
-export const INITIAL_DISPLAY_MESSAGE_COUNT = 2
+export const INITIAL_DISPLAY_MESSAGE_COUNT = 3
 
 export function shouldAwaitInitialDisplayParse(messageIndex: number, messageCount: number): boolean {
   return (

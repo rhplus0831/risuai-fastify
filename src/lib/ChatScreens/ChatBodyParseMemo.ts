@@ -23,7 +23,7 @@ import {
   stableDisplayDependencyJson as stableStringify,
 } from '@risuai/protocol/display-source'
 import type { DisplaySourceLayer } from '@risuai/protocol/display-source'
-import type { DisplaySourcePriority } from '../../ts/server/displaySources'
+import { captureDisplaySourceRenderEpoch, type DisplaySourcePriority } from '../../ts/server/displaySources'
 import { displaySettingForPaint } from '../../ts/gui/displaySettings'
 import { resolveActiveModuleStates } from '../../ts/moduleActivation'
 
@@ -92,6 +92,7 @@ export interface ChatBodyParseMemoInput {
   name?: string
   streaming?: boolean
   displayPriority?: DisplaySourcePriority
+  displayPrepared?: () => void
   readOnly?: boolean
   memoKey?: string
 }
@@ -109,6 +110,7 @@ export interface ChatBodyCachedOnlyInput {
   name?: string
   streaming?: boolean
   displayPriority?: DisplaySourcePriority
+  displayPrepared?: () => void
   readOnly?: boolean
   cachedOnlyParseKey?: string
   detectionKey?: string
@@ -511,7 +513,7 @@ export function getChatBodyParseMemoKey(input: ChatBodyParseMemoInput): string {
     reconcileModuleRenderRevision()
     debugStats.parseKeyBuilds += 1
     const modules = safeGetModules(input.owners)
-    return `{"activeChat":${serializedActiveChatSignature(input.owners)},"cbsConditions":${stableFragment(
+    return `{"displayEpoch":${stableFragment(captureDisplaySourceRenderEpoch())},"activeChat":${serializedActiveChatSignature(input.owners)},"cbsConditions":${stableFragment(
       input.cbsConditions ?? {},
     )},"character":${serializedCharacterSignature(input.charArg, input.owners)},"chatId":${stableFragment(
       input.chatId,
@@ -570,6 +572,7 @@ export function getChatBodyCachedOnlyLlmDetectionKey(input: ChatBodyCachedOnlyIn
           name: input.name,
           streaming: input.streaming,
           displayPriority: input.displayPriority,
+          displayPrepared: input.displayPrepared,
           readOnly: input.readOnly,
         }))
 
@@ -589,6 +592,7 @@ export function memoizedChatBodyParse(input: ChatBodyParseMemoInput): Promise<st
     const key = input.memoKey ?? getChatBodyParseMemoKey(input)
     const cached = parseMemo.get(key)
     if (cached) {
+      input.displayPrepared?.()
       return refresh(parseMemo, key, cached)
     }
     const activeChat = input.owners.activeChatOwner()
@@ -614,6 +618,7 @@ export function memoizedChatBodyParse(input: ChatBodyParseMemoInput): Promise<st
         name: input.name,
         streaming: input.streaming,
         priority: input.displayPriority,
+        prepared: input.displayPrepared,
         readOnly: input.readOnly,
         readContext,
       },
@@ -651,6 +656,7 @@ export async function getChatBodyCachedOnlyLlmDecision(input: ChatBodyCachedOnly
           name: input.name,
           streaming: input.streaming,
           displayPriority: input.displayPriority,
+          displayPrepared: input.displayPrepared,
           readOnly: input.readOnly,
           memoKey: input.cachedOnlyParseKey,
         })

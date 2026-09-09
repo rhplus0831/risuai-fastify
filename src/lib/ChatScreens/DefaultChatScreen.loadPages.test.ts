@@ -1035,13 +1035,13 @@ describe('DefaultChatScreen initial display readiness', () => {
     await waitFor(() => expect(retryPlugin).toHaveBeenCalledOnce())
   })
 
-  it('shows the message skeleton until the newest two cold row parses settle', async () => {
+  it('shows the message skeleton until the newest three cold row parses settle', async () => {
     defaultChatScreenTestChatController.hold()
     seedDatabase([4])
     mountScreen()
 
     await waitFor(() => {
-      expect(defaultChatScreenTestChatController.pendingCount()).toBe(2)
+      expect(defaultChatScreenTestChatController.pendingCount()).toBe(3)
     })
     expect(messageRowIndexes()).toEqual([3, 2, 1, 0])
 
@@ -1062,9 +1062,14 @@ describe('DefaultChatScreen initial display readiness', () => {
 
     expect(defaultChatScreenTestChatController.releaseNext()).toBe(true)
     await settle()
-    expect(defaultChatScreenTestChatController.pendingCount()).toBe(1)
+    expect(defaultChatScreenTestChatController.pendingCount()).toBe(2)
     expect(target.querySelector('[data-chat-message-skeleton]')).toBeTruthy()
 
+    expect(defaultChatScreenTestChatController.releaseNext()).toBe(true)
+
+    await settle()
+    expect(defaultChatScreenTestChatController.pendingCount()).toBe(1)
+    expect(target.querySelector('[data-chat-message-skeleton]')).toBeTruthy()
     expect(defaultChatScreenTestChatController.releaseNext()).toBe(true)
 
     await waitFor(() => {

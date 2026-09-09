@@ -312,9 +312,9 @@ export const BROWSER_OPERATION_BINDINGS = [
     method: 'POST',
     examplePath: '/api/v1/chats/chat-1/display-sources',
     cache: 'unspecified',
-    streaming: 'none',
+    streaming: 'sse-optional',
     durability: 'none',
-    response: 'structured',
+    response: 'structured-or-sse',
     owner: 'src/ts/server/displaySources.ts#requestServerDisplaySource',
   }),
   operation({

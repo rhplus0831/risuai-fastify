@@ -161,6 +161,9 @@ const eventSchemas = {
     streamingBypassCount: count,
     transcriptMessageCount: Type.Optional(count),
     timeToFirstTransformMs: Type.Optional(duration),
+    timeToFirstResultMs: Type.Optional(duration),
+    timeToPriorityResultsMs: Type.Optional(duration),
+    priorityTargetCount: Type.Optional(count),
     resultCounts: Type.Optional(object({ ok: count, clientFallback: count, stale: count, error: count })),
     // Only reached stages are present. These are totals across the batch;
     // cache hits do not execute the Lua/trigger/regex stages.

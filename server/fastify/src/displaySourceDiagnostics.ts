@@ -23,6 +23,10 @@ export class DisplaySourceDiagnostics {
   streamingBypassCount = 0
   transcriptMessageCount?: number
   private timeToFirstTransformMs?: number
+  private timeToFirstResultMs?: number
+  private timeToPriorityResultsMs?: number
+  priorityTargetCount = 0
+  private priorityResults = 0
 
   constructor(
     private readonly targetCount: number,
@@ -39,6 +43,13 @@ export class DisplaySourceDiagnostics {
     this.executedTargetCount++
     if (streaming) this.streamingBypassCount++
     else this.cacheMissCount++
+  }
+
+  resultReady(priority: boolean): void {
+    this.timeToFirstResultMs ??= boundedDuration(protocolNowMs() - this.enqueuedAt)
+    if (priority && ++this.priorityResults === this.priorityTargetCount) {
+      this.timeToPriorityResultsMs = boundedDuration(protocolNowMs() - this.enqueuedAt)
+    }
   }
 
   finish(response: DisplaySourceResponse | undefined, aborted: boolean): void {
@@ -78,6 +89,9 @@ export class DisplaySourceDiagnostics {
       transcriptMessageCount:
         this.transcriptMessageCount === undefined ? undefined : boundedCount(this.transcriptMessageCount),
       timeToFirstTransformMs: this.timeToFirstTransformMs,
+      timeToFirstResultMs: this.timeToFirstResultMs,
+      timeToPriorityResultsMs: this.timeToPriorityResultsMs,
+      priorityTargetCount: this.priorityTargetCount,
       resultCounts,
       timings: this.timings,
     })

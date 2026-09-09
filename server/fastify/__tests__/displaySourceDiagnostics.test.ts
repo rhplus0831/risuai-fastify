@@ -59,6 +59,7 @@ it('retains request association and queue time for an aborted queued batch witho
       protocolVersion: 1,
       baseRevision: revision,
       context: { pageSessionId: 'page' },
+      priorityKeys: ['target'],
       targets: [
         {
           requestKey: 'target',
@@ -88,9 +89,18 @@ it('retains request association and queue time for an aborted queued batch witho
     release()
     await first
     await rejected
-    const summaries = events.filter((entry) => entry.category === 'display-performance')
+    const summaries = events
+      .filter((entry) => entry.category === 'display-performance')
+      .sort((a, b) => (a.requestUid ?? '').localeCompare(b.requestUid ?? ''))
     expect(summaries).toHaveLength(2)
-    expect(summaries[0]).toMatchObject({ requestUid: 'a'.repeat(64), outcome: 'ok', cacheMissCount: 1 })
+    expect(summaries[0]).toMatchObject({
+      requestUid: 'a'.repeat(64),
+      outcome: 'ok',
+      cacheMissCount: 1,
+      priorityTargetCount: 1,
+      timeToFirstResultMs: expect.any(Number),
+      timeToPriorityResultsMs: expect.any(Number),
+    })
     expect(summaries[1]).toMatchObject({
       requestUid: 'b'.repeat(64),
       outcome: 'aborted',

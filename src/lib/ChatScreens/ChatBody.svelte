@@ -40,7 +40,7 @@
     createChatBodyParseOwnerReaders,
   } from './ChatBodyParseMemo'
   import type { DisplaySourceLayer } from '@risuai/protocol/display-source'
-  import type { DisplaySourcePriority } from 'src/ts/server/displaySources'
+  import { canBatchDisplaySources, type DisplaySourcePriority } from 'src/ts/server/displaySources'
   import { getChatReadOwnersContext } from './chatReadOwnersContext'
 
   interface Props {
@@ -224,7 +224,13 @@
     }
   }
 
-  const markParsing = async (data: string, charArg: string | simpleCharacterArgument, chatID: number) => {
+  const markParsing = async (
+    data: string,
+    charArg: string | simpleCharacterArgument,
+    chatID: number,
+    scheduledPriority: DisplaySourcePriority = displayPriority,
+    displayPrepared?: () => void,
+  ) => {
     const runId = ++markParsingRun
     const sessionGeneration = captureClientSessionGeneration()
     const parseReadOnly = effectiveReadOnly
@@ -263,7 +269,8 @@
               messageId,
               name,
               streaming,
-              displayPriority,
+              displayPriority: scheduledPriority,
+              displayPrepared,
               readOnly: parseReadOnly,
             })
           : undefined
@@ -297,7 +304,8 @@
                 messageId,
                 name,
                 streaming,
-                displayPriority,
+                displayPriority: scheduledPriority,
+                displayPrepared,
                 readOnly: parseReadOnly,
                 fallbackMode: mode,
                 cachedOnlyParseKey,
@@ -361,7 +369,8 @@
                 messageId,
                 name,
                 streaming,
-                displayPriority,
+                displayPriority: scheduledPriority,
+                displayPrepared,
                 readOnly: parseReadOnly,
               }),
             data,
@@ -391,7 +400,8 @@
                 messageId,
                 name,
                 streaming,
-                displayPriority,
+                displayPriority: scheduledPriority,
+                displayPrepared,
                 readOnly: parseReadOnly,
               }),
             data,
@@ -440,7 +450,8 @@
                 messageId,
                 name,
                 streaming,
-                displayPriority,
+                displayPriority: scheduledPriority,
+                displayPrepared,
                 readOnly: parseReadOnly,
               }),
             data,
@@ -483,7 +494,8 @@
               messageId,
               name,
               streaming,
-              displayPriority,
+              displayPriority: scheduledPriority,
+              displayPrepared,
               readOnly: parseReadOnly,
             }),
           data,
@@ -498,6 +510,8 @@
         settleInitialDisplayParse()
       }
       throw error
+    } finally {
+      displayPrepared?.()
     }
   }
 
@@ -640,6 +654,14 @@
       markParsingRun += 1
       const controller = new AbortController()
       queuedDisplay = controller
+      if (displayScheduler && canBatchDisplaySources()) {
+        return displayScheduler.runBatch(
+          (priority, prepared) => markParsing(parseData, parseCharacter, parseIndex, priority, prepared),
+          controller.signal,
+          transcriptRowKey,
+          parseDisplayPriority,
+        )
+      }
       if (!displayScheduler || parseDisplayPriority !== 'background') {
         return markParsing(parseData, parseCharacter, parseIndex)
       }

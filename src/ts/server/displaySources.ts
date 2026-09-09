@@ -26,8 +26,11 @@ import {
   type DisplaySourceLayer,
   type DisplaySourceResponse,
   type DisplaySourceTarget,
+  type DisplaySourceResponseEntry,
+  isDisplaySourceStreamEvent,
 } from '@risuai/protocol/display-source'
-import { currentRegexDisplayReloadToken } from '../process/regexDisplayReload'
+import { iterateSseEvents } from '../process/request/sseParse'
+import { currentRegexDisplayReloadToken, reloadRegexDisplay } from '../process/regexDisplayReload'
 
 const SERVER_DATABASE_LINEAGE_HEADER = 'risu-database-lineage'
 
@@ -89,11 +92,18 @@ let projectionEpoch = 0
 const pendingByBatch = new Map<string, PendingDisplaySource[]>()
 const preparingByBatch = new Map<string, number>()
 const scheduledBatches = new Set<string>()
+const flushingBatches = new Map<string, symbol>()
+const collectingChats = new Map<string, number>()
 const activeFetches = new Map<AbortController, ActiveDisplaySourceFetch>()
 const inFlightDisplaySources = new Map<string, Promise<ServerDisplaySourceResult>>()
 const completedDisplaySources = new Map<string, CompletedDisplaySource>()
 let activeDisplaySourceChatId: string | null = null
 let displaySourceClientGeneration = 0
+let displaySourceResultEpoch = 0
+/** Also fences the browser's finalized HTML memo after a streamed projection is retired. */
+export function captureDisplaySourceRenderEpoch(): string {
+  return `${displaySourceClientGeneration}:${displaySourceResultEpoch}`
+}
 const pageSessionId = createPageSessionId()
 
 function createPageSessionId(): string {
@@ -140,6 +150,30 @@ export function canUseDisplaySourceProtocol(): boolean {
   )
 }
 
+export function canBatchDisplaySources(): boolean {
+  return (
+    canUseDisplaySourceProtocol() && (isClientReadOnly() || (isPluginRuntimeReady() && pluginV2.editdisplay.size === 0))
+  )
+}
+
+/** Hold compatible post-asset inputs together while a mounted window prepares.
+ * Slow browser-only translation/assets must not indefinitely delay the first rows.
+ */
+export function beginDisplaySourceCollection(chatId: string): () => void {
+  collectingChats.set(chatId, (collectingChats.get(chatId) ?? 0) + 1)
+  let released = false
+  const release = () => {
+    if (released) return
+    released = true
+    clearTimeout(deadline)
+    const count = collectingChats.get(chatId) ?? 0
+    if (count <= 1) collectingChats.delete(chatId)
+    else collectingChats.set(chatId, count - 1)
+  }
+  const deadline = setTimeout(release, 16)
+  return release
+}
+
 export function resetDisplaySourceClientForTests(): void {
   protocolVersion = 0
   databaseLineage = null
@@ -152,6 +186,8 @@ export function resetDisplaySourceClientForTests(): void {
   pendingByBatch.clear()
   preparingByBatch.clear()
   scheduledBatches.clear()
+  flushingBatches.clear()
+  collectingChats.clear()
   activeFetches.clear()
   clearDisplaySourceDedupeCache()
   activeDisplaySourceChatId = null
@@ -287,10 +323,15 @@ export async function requestServerDisplaySource(input: ServerDisplaySourceInput
 
     if (!dedupeKey) return request
     const generation = displaySourceClientGeneration
+    const resultEpoch = displaySourceResultEpoch
     inFlightDisplaySources.set(dedupeKey, request)
     void request
       .then((result) => {
-        if (result.status === 'ok' && generation === displaySourceClientGeneration) {
+        if (
+          result.status === 'ok' &&
+          generation === displaySourceClientGeneration &&
+          resultEpoch === displaySourceResultEpoch
+        ) {
           rememberCompletedDisplaySource(dedupeKey, result)
         }
       })
@@ -377,13 +418,22 @@ function scheduleDisplaySourceBatch(
   scheduledBatches.add(batchKey)
   setTimeout(() => {
     scheduledBatches.delete(batchKey)
-    if (preparingByBatch.has(batchKey)) {
+    // Rows admitted while a response is streaming join the next window request
+    // instead of reserving a separate command-lane operation for each row.
+    if (flushingBatches.has(batchKey)) return
+    if (preparingByBatch.has(batchKey) || collectingChats.has(batch.chatId)) {
       scheduleDisplaySourceBatch(batchKey, batch)
       return
     }
     const pending = pendingByBatch.get(batchKey) ?? []
     pendingByBatch.delete(batchKey)
-    void flushDisplaySourcePriorityGroups(batch.chatId, batch.context, batch.configuredLineage, pending)
+    const run = Symbol()
+    flushingBatches.set(batchKey, run)
+    void flushDisplaySourceBatch(batch.chatId, batch.context, batch.configuredLineage, pending).finally(() => {
+      if (flushingBatches.get(batchKey) !== run) return
+      flushingBatches.delete(batchKey)
+      scheduleDisplaySourceBatch(batchKey, batch)
+    })
   }, 0)
 }
 
@@ -438,40 +488,9 @@ function rememberCompletedDisplaySource(
 function clearDisplaySourceDedupeCache(): void {
   readerDisplayLimitedWritable.set(false)
   displaySourceClientGeneration += 1
+  for (const controller of activeFetches.keys()) controller.abort('display_namespace_changed')
   inFlightDisplaySources.clear()
   completedDisplaySources.clear()
-}
-
-async function flushDisplaySourcePriorityGroups(
-  chatId: string,
-  context: DisplayRequestContext,
-  configuredLineage: string,
-  pending: PendingDisplaySource[],
-): Promise<void> {
-  const critical = pending.filter((item) => item.priority === 'critical')
-  const normal = pending.filter((item) => item.priority === 'normal')
-  const background = pending.filter((item) => item.priority === 'background')
-
-  await flushDisplaySourceBatch(chatId, context, configuredLineage, critical)
-  await flushDisplaySourceBatch(chatId, context, configuredLineage, normal)
-  if (background.length === 0) return
-  await yieldToBackgroundDisplayWork()
-  await flushDisplaySourceBatch(chatId, context, configuredLineage, background)
-}
-
-function yieldToBackgroundDisplayWork(): Promise<void> {
-  return new Promise((resolve) => {
-    const requestIdleCallback = (
-      globalThis as typeof globalThis & {
-        requestIdleCallback?: (callback: () => void, options?: { timeout: number }) => number
-      }
-    ).requestIdleCallback
-    if (typeof requestIdleCallback === 'function') {
-      requestIdleCallback(resolve, { timeout: 250 })
-      return
-    }
-    setTimeout(resolve, 0)
-  })
 }
 
 async function flushDisplaySourceBatch(
@@ -483,21 +502,32 @@ async function flushDisplaySourceBatch(
   if (pending.length === 0) return
   const ordered = [...pending].sort(
     (left, right) =>
-      left.target.index - right.target.index ||
+      ({ critical: 0, normal: 1, background: 2 })[left.priority] -
+        { critical: 0, normal: 1, background: 2 }[right.priority] ||
+      right.target.index - left.target.index ||
       left.target.layer.localeCompare(right.target.layer) ||
       left.target.requestKey.localeCompare(right.target.requestKey),
   )
   let executed = false
   try {
     const execute = async () => {
-      for (let offset = 0; offset < ordered.length; offset += DISPLAY_SOURCE_LIMITS.maxTargets) {
-        await flushDisplaySourceChunk(
-          chatId,
-          context,
-          configuredLineage,
-          ordered.slice(offset, offset + DISPLAY_SOURCE_LIMITS.maxTargets),
-        )
+      let chunk: PendingDisplaySource[] = []
+      let bytes = 0
+      for (const item of ordered) {
+        const size = new TextEncoder().encode(item.target.source).byteLength
+        if (
+          chunk.length > 0 &&
+          (chunk.length >= DISPLAY_SOURCE_LIMITS.maxTargets ||
+            bytes + size > DISPLAY_SOURCE_LIMITS.maxRequestSourceBytes)
+        ) {
+          await flushDisplaySourceChunk(chatId, context, configuredLineage, chunk)
+          chunk = []
+          bytes = 0
+        }
+        chunk.push(item)
+        bytes += size
       }
+      if (chunk.length) await flushDisplaySourceChunk(chatId, context, configuredLineage, chunk)
     }
     if (ordered[0].reader) {
       await execute()
@@ -559,103 +589,212 @@ async function flushDisplaySourceChunk(
     return
   }
 
-  let response: Response
   const controller = new AbortController()
   activeFetches.set(controller, {
     chatId,
     cancellable: pending.some((item) => item.priority !== 'normal'),
   })
   try {
-    response = await fetch(`/api/v1/chats/${encodeURIComponent(chatId)}/display-sources`, {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        'content-type': 'application/json',
-        'risu-auth': auth,
-        [SERVER_DATABASE_LINEAGE_HEADER]: configuredLineage,
-        ...activeWriterSessionHeader(),
-      },
-      body: JSON.stringify({
-        protocolVersion: DISPLAY_SOURCE_PROTOCOL_VERSION,
-        baseRevision,
-        context,
-        targets: pending.map((item) => item.target),
-      }),
-    })
-  } catch {
-    fallbackAll(
-      controller.signal.aborted && typeof controller.signal.reason === 'string'
-        ? controller.signal.reason
-        : 'network_error',
-    )
-    return
+    let response: Response
+    try {
+      response = await fetch(`/api/v1/chats/${encodeURIComponent(chatId)}/display-sources`, {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          'content-type': 'application/json',
+          accept: 'text/event-stream, application/json',
+          'risu-auth': auth,
+          [SERVER_DATABASE_LINEAGE_HEADER]: configuredLineage,
+          ...activeWriterSessionHeader(),
+        },
+        body: JSON.stringify({
+          protocolVersion: DISPLAY_SOURCE_PROTOCOL_VERSION,
+          baseRevision,
+          context,
+          targets: pending.map((item) => item.target),
+          priorityKeys: pending.filter((item) => item.priority === 'critical').map((item) => item.target.requestKey),
+        }),
+      })
+    } catch {
+      fallbackAll(
+        controller.signal.aborted && typeof controller.signal.reason === 'string'
+          ? controller.signal.reason
+          : 'network_error',
+      )
+      return
+    }
+
+    if (response.ok && response.headers.get('content-type')?.includes('text/event-stream')) {
+      await consumeDisplaySourceStream(response, pending, baseRevision, controller, isCurrent, chatId)
+      return
+    }
+
+    let body: unknown
+    try {
+      body = await response.json()
+    } catch {
+      body = null
+    }
+    if (!isCurrent()) {
+      fallbackAll('display_namespace_changed')
+      return
+    }
+    if (pending.some((item) => item.priority !== 'normal') && activeDisplaySourceChatId !== chatId) {
+      fallbackAll('display_scope_changed')
+      return
+    }
+    if (!response.ok) {
+      if (!pending[0].reader) handleActiveWriterStaleResponse(response, body, pending[0].sessionGeneration)
+      if (
+        response.status === 409 &&
+        body &&
+        typeof body === 'object' &&
+        Number.isSafeInteger((body as { currentRevision?: unknown }).currentRevision)
+      ) {
+        setCachedServerCommandRevision((body as { currentRevision: number }).currentRevision)
+      }
+      fallbackAll(response.status === 409 ? 'revision_conflict' : `http_${response.status}`)
+      return
+    }
+    if (!isDisplaySourceResponse(body)) {
+      fallbackAll('invalid_response')
+      return
+    }
+    if (body.revision < baseRevision || body.revision < (peekCachedServerCommandRevision() ?? 0)) {
+      fallbackAll('stale_response')
+      return
+    }
+    // A namespace mismatch must never advance even the shared read revision fence.
+    if (pending.some((item) => body.contextFingerprint !== item.expectedContextFingerprint)) {
+      fallbackAll('stale_response')
+      return
+    }
+    setCachedServerCommandRevision(body.revision)
+
+    const entries = new Map(body.entries.map((entry) => [entry.requestKey, entry]))
+    for (const item of pending) {
+      const entry = entries.get(item.target.requestKey)
+      if (
+        body.contextFingerprint !== item.expectedContextFingerprint ||
+        !entry ||
+        entry.sourceHash !== item.target.sourceHash
+      ) {
+        item.resolve({ status: 'fallback', reason: 'stale_response' })
+        continue
+      }
+      if (entry.status !== 'ok') {
+        item.resolve({ status: 'fallback', reason: entry.reason })
+        continue
+      }
+      item.resolve({
+        status: 'ok',
+        displaySource: entry.displaySource,
+        dependencyFingerprint: entry.dependencyFingerprint,
+      })
+    }
   } finally {
     activeFetches.delete(controller)
   }
+}
 
-  let body: unknown
+async function consumeDisplaySourceStream(
+  response: Response,
+  pending: PendingDisplaySource[],
+  baseRevision: number,
+  controller: AbortController,
+  isCurrent: () => boolean,
+  chatId: string,
+): Promise<void> {
+  const remaining = new Map(pending.map((item) => [item.target.requestKey, item]))
+  const received = new Set<string>()
+  let completed = false
+  let reason = 'incomplete_stream'
+  let invalidate = false
+  const validContext = (revision: number, fingerprint: string) =>
+    isCurrent() &&
+    revision === baseRevision &&
+    revision >= (peekCachedServerCommandRevision() ?? 0) &&
+    pending.every((item) => item.expectedContextFingerprint === fingerprint) &&
+    (!pending.some((item) => item.priority !== 'normal') || activeDisplaySourceChatId === chatId)
   try {
-    body = await response.json()
+    if (!response.body) return
+    for await (const frame of iterateSseEvents(response.body, controller.signal)) {
+      if (!frame.data) continue
+      const event: unknown = { ...JSON.parse(frame.data), type: frame.event }
+      if (!isDisplaySourceStreamEvent(event)) {
+        reason = 'invalid_response'
+        invalidate = true
+        break
+      }
+      if (!isCurrent()) {
+        reason = 'display_namespace_changed'
+        invalidate = true
+        break
+      }
+      if (event.type === 'invalidated') {
+        reason = event.reason
+        invalidate = true
+        // A namespace retirement must never advance the revision fence.
+        if (reason === 'revision_changed_during_transform') setCachedServerCommandRevision(event.revision)
+        break
+      }
+      if (event.type === 'error') {
+        reason = event.reason
+        break
+      }
+      if (!validContext(event.revision, event.contextFingerprint)) {
+        reason = 'stale_response'
+        invalidate = true
+        break
+      }
+      if (event.type === 'done') {
+        if (remaining.size || event.targetCount !== pending.length) {
+          reason = 'invalid_response'
+          invalidate = true
+          break
+        }
+        setCachedServerCommandRevision(event.revision)
+        completed = true
+        break
+      }
+      const entry = event.entry
+      const item = remaining.get(entry.requestKey)
+      if (!item || received.has(entry.requestKey) || entry.sourceHash !== item.target.sourceHash) {
+        reason = 'invalid_response'
+        invalidate = true
+        break
+      }
+      received.add(entry.requestKey)
+      remaining.delete(entry.requestKey)
+      settleDisplaySourceEntry(item, entry)
+    }
   } catch {
-    body = null
-  }
-  if (!isCurrent()) {
-    fallbackAll('display_namespace_changed')
-    return
-  }
-  if (pending.some((item) => item.priority !== 'normal') && activeDisplaySourceChatId !== chatId) {
-    fallbackAll('display_scope_changed')
-    return
-  }
-  if (!response.ok) {
-    if (!pending[0].reader) handleActiveWriterStaleResponse(response, body, pending[0].sessionGeneration)
-    if (
-      response.status === 409 &&
-      body &&
-      typeof body === 'object' &&
-      Number.isSafeInteger((body as { currentRevision?: unknown }).currentRevision)
-    ) {
-      setCachedServerCommandRevision((body as { currentRevision: number }).currentRevision)
+    reason =
+      controller.signal.aborted && typeof controller.signal.reason === 'string'
+        ? controller.signal.reason
+        : 'network_error'
+  } finally {
+    if (!completed) {
+      for (const item of remaining.values()) item.resolve({ status: 'fallback', reason })
+      if (invalidate && received.size > 0) {
+        // Previously displayed projections must be reparsed, including memoized
+        // HTML and completed bridge results. An unrelated chat is not reloaded.
+        displaySourceResultEpoch++
+        inFlightDisplaySources.clear()
+        completedDisplaySources.clear()
+        if (isCurrent() && activeDisplaySourceChatId === chatId)
+          reloadRegexDisplay(`character:${pending[0].target.characterId}`)
+      }
     }
-    fallbackAll(response.status === 409 ? 'revision_conflict' : `http_${response.status}`)
-    return
   }
-  if (!isDisplaySourceResponse(body)) {
-    fallbackAll('invalid_response')
-    return
-  }
-  if (body.revision < baseRevision || body.revision < (peekCachedServerCommandRevision() ?? 0)) {
-    fallbackAll('stale_response')
-    return
-  }
-  // A namespace mismatch must never advance even the shared read revision fence.
-  if (pending.some((item) => body.contextFingerprint !== item.expectedContextFingerprint)) {
-    fallbackAll('stale_response')
-    return
-  }
-  setCachedServerCommandRevision(body.revision)
+}
 
-  const entries = new Map(body.entries.map((entry) => [entry.requestKey, entry]))
-  for (const item of pending) {
-    const entry = entries.get(item.target.requestKey)
-    if (
-      body.contextFingerprint !== item.expectedContextFingerprint ||
-      !entry ||
-      entry.sourceHash !== item.target.sourceHash
-    ) {
-      item.resolve({ status: 'fallback', reason: 'stale_response' })
-      continue
-    }
-    if (entry.status !== 'ok') {
-      item.resolve({ status: 'fallback', reason: entry.reason })
-      continue
-    }
-    item.resolve({
-      status: 'ok',
-      displaySource: entry.displaySource,
-      dependencyFingerprint: entry.dependencyFingerprint,
-    })
-  }
+function settleDisplaySourceEntry(item: PendingDisplaySource, entry: DisplaySourceResponseEntry): void {
+  item.resolve(
+    entry.status === 'ok'
+      ? { status: 'ok', displaySource: entry.displaySource, dependencyFingerprint: entry.dependencyFingerprint }
+      : { status: 'fallback', reason: entry.reason },
+  )
 }
 
 function isDisplaySourceResponse(value: unknown): value is DisplaySourceResponse {

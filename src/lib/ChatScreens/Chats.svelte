@@ -60,7 +60,11 @@
     generationDisplayProjections,
     type GenerationDisplayProjection,
   } from 'src/ts/process/generationDisplayProjection.svelte'
-  import { activateDisplaySourceChat, releaseDisplaySourceChat } from 'src/ts/server/displaySources'
+  import {
+    activateDisplaySourceChat,
+    releaseDisplaySourceChat,
+    beginDisplaySourceCollection,
+  } from 'src/ts/server/displaySources'
   import {
     charactersResourceState,
     getCharacterResourceOwner,
@@ -228,7 +232,7 @@
   let transcriptAnchorKey: string | null = null
   let pendingGeneratedMessageEndKey: string | null = null
   let chatsComponentDestroyed = false
-  const displayScheduler = createChatDisplayScheduler()
+  const displayScheduler = createChatDisplayScheduler(undefined, beginDisplaySourceCollection)
   setContext(CHAT_DISPLAY_SCHEDULER, displayScheduler)
   const displayCommitCoordinator = createChatDisplayCommitCoordinator({
     applyBatch: commitDisplayBodyChanges,
@@ -750,6 +754,18 @@
   function updateDisplayVisibility(): void {
     const visible = visibleDisplayRowKeys()
     displayScheduler.setVisible(visible)
+    if (scrollContainer) {
+      const viewport = scrollContainer.getBoundingClientRect()
+      const distance = (element: HTMLElement) => {
+        const rect = element.getBoundingClientRect()
+        return Math.max(0, viewport.top - rect.bottom, rect.top - viewport.bottom)
+      }
+      displayScheduler.setNearest(
+        [...rowKeyElements.entries()]
+          .sort((a, b) => distance(a[1].element) - distance(b[1].element))
+          .map(([key]) => key),
+      )
+    }
     displayCommitCoordinator.setVisible(visible)
   }
 

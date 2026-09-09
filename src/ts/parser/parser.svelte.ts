@@ -1316,6 +1316,7 @@ export async function ParseMarkdown(
     name?: string
     streaming?: boolean
     priority?: DisplaySourcePriority
+    prepared?: () => void
   } = {},
 ) {
   const sessionGeneration = captureClientSessionGeneration()
@@ -1354,9 +1355,9 @@ export async function ParseMarkdown(
     const messageId = displayTarget.messageId ?? (chatID >= 0 ? currentChat?.message?.[chatID]?.chatId : undefined)
     const currentTriggerId = get(CurrentTriggerIdStore)
     const hasBrowserOnlyTriggerContext = !startedReadOnly && currentTriggerId !== null && currentTriggerId !== 'null'
-    const serverDisplaySource =
+    const serverDisplayRequest =
       currentChat?.id && !hasBrowserOnlyTriggerContext
-        ? await requestServerDisplaySource({
+        ? requestServerDisplaySource({
             chatId: currentChat.id,
             character: char,
             ...(messageId ? { messageId } : {}),
@@ -1374,6 +1375,8 @@ export async function ParseMarkdown(
                 : {}),
           })
         : ({ status: 'fallback', reason: 'chat_unavailable' } as const)
+    displayTarget.prepared?.()
+    const serverDisplaySource = await serverDisplayRequest
     if (serverDisplaySource.status === 'ok') {
       data = serverDisplaySource.displaySource
     } else if (startedReadOnly || isClientReadOnly() || !isClientSessionGenerationCurrent(sessionGeneration)) {

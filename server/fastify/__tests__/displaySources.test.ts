@@ -3,8 +3,11 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { FastifyInstance } from 'fastify'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { buildApp } from '../src/app.js'
+import { DisplaySourceService } from '../src/displaySourceService.js'
+import { readDisplaySourceRequest } from '../src/routes/displaySources.js'
+import type { DisplaySourceRequest } from '@risuai/protocol/display-source'
 import { getSchemaState, openDatabase } from '../src/db.js'
 import { applyImport, loadPersistedForGenerationAssembly } from '../src/repository.js'
 import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
@@ -91,6 +94,7 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
+  vi.restoreAllMocks()
   await harness.app.close()
   rmSync(harness.dataDir, { recursive: true, force: true })
 })
@@ -827,5 +831,153 @@ describe('POST /api/v1/chats/:chatId/display-sources', () => {
         reason: 'scope_input_incompatible',
       }),
     ])
+  })
+})
+
+function streamingRequest(revision = 0): DisplaySourceRequest {
+  return {
+    protocolVersion: 1,
+    baseRevision: revision,
+    context: { pageSessionId: 'stream-page' },
+    targets: Array.from({ length: 4 }, (_, index) => ({
+      requestKey: `target-${index}`,
+      characterId: 'stream-char',
+      messageId: `message-${index}`,
+      index,
+      role: 'char',
+      firstMessage: false,
+      layer: 'original',
+      source: `message ${index}`,
+      sourceHash: sourceHash(`message ${index}`),
+      projectionEpoch: index,
+    })),
+    priorityKeys: ['target-3', 'target-2', 'target-1'],
+  }
+}
+
+describe('prioritized display streams', () => {
+  it('rejects priority keys outside the batch or repeated keys', () => {
+    expect(() => readDisplaySourceRequest({ ...streamingRequest(), priorityKeys: ['missing'] })).toThrow('priorityKeys')
+    expect(() => readDisplaySourceRequest({ ...streamingRequest(), priorityKeys: ['target-1', 'target-1'] })).toThrow(
+      'priorityKeys',
+    )
+  })
+
+  it('flushes three results over HTTP before background completion and preserves request correlation', async () => {
+    const assertion = await setupAuthedClient(harness.app)
+    let finish!: () => void
+    const held = new Promise<void>((resolve) => {
+      finish = resolve
+    })
+    const transform = vi
+      .spyOn(DisplaySourceService.prototype, 'transformBatch')
+      .mockImplementation(async (_chatId, request, _signal, onResult) => {
+        const context = { protocolVersion: 1 as const, revision: request.baseRevision, contextFingerprint: 'context' }
+        const ordered = [...request.targets].sort((a, b) => b.index - a.index)
+        const entries = ordered.map((target) => ({
+          requestKey: target.requestKey,
+          sourceHash: target.sourceHash,
+          status: 'ok' as const,
+          displaySource: target.source,
+          dependencyFingerprint: 'dep',
+        }))
+        for (const entry of entries.slice(0, 3)) onResult?.({ ...context, entries: [entry] })
+        await held
+        onResult?.({ ...context, entries: entries.slice(3) })
+        return { ...context, entries }
+      })
+    const address = await harness.app.listen({ host: '127.0.0.1', port: 0 })
+    const controller = new AbortController()
+    try {
+      const response = await fetch(`${address}/api/v1/chats/stream-chat/display-sources`, {
+        method: 'POST',
+        headers: { 'risu-auth': assertion, 'content-type': 'application/json', accept: 'text/event-stream' },
+        body: JSON.stringify(streamingRequest()),
+        signal: controller.signal,
+      })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('content-type')).toContain('text/event-stream')
+      expect(response.headers.get('x-accel-buffering')).toBe('no')
+      const reader = response.body!.getReader()
+      const decoder = new TextDecoder()
+      let data = ''
+      while (!data.includes('target-1')) {
+        const chunk = await reader.read()
+        expect(chunk.done).toBe(false)
+        data += decoder.decode(chunk.value, { stream: true })
+      }
+      expect(data).toContain('target-3')
+      expect(data).toContain('target-2')
+      expect(data).not.toContain('target-0')
+      expect(data).not.toContain('event: done')
+      finish()
+      while (true) {
+        const chunk = await reader.read()
+        if (chunk.done) break
+        data += decoder.decode(chunk.value, { stream: true })
+      }
+      expect(data).toContain('target-0')
+      expect(data).toContain('event: done')
+      expect(data.match(/event: result/g)).toHaveLength(4)
+    } finally {
+      finish()
+      controller.abort()
+      transform.mockRestore()
+    }
+  })
+
+  it('executes real targets in priority order and invalidates previously streamed results after a revision change', async () => {
+    const db = openDatabase(harness.dataDir)
+    try {
+      const seeded = await applyImport(
+        db,
+        harness.dataDir,
+        normalizeRisuSaveSnapshotDatabase({
+          characters: [
+            {
+              chaId: 'stream-char',
+              name: 'Character',
+              chats: [
+                {
+                  id: 'stream-chat',
+                  message: streamingRequest().targets.map((target) => ({
+                    role: target.role,
+                    data: target.source,
+                    chatId: target.messageId,
+                  })),
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      const service = new DisplaySourceService({ db, dataDir: harness.dataDir })
+      const delivered: string[] = []
+      const response = await service.transformBatch(
+        'stream-chat',
+        streamingRequest(seeded.revision),
+        undefined,
+        (result) => {
+          delivered.push(result.entries[0].requestKey)
+        },
+      )
+      expect(delivered).toEqual(['target-3', 'target-2', 'target-1', 'target-0'])
+      expect(response.entries.every((entry) => entry.status === 'ok')).toBe(true)
+      const staleDelivered: string[] = []
+      const stale = await service.transformBatch(
+        'stream-chat',
+        streamingRequest(seeded.revision),
+        undefined,
+        (result) => {
+          staleDelivered.push(result.entries[0].requestKey)
+          db.prepare('UPDATE schema_version SET revision = revision + 1').run()
+        },
+      )
+      expect(staleDelivered).toEqual(['target-3'])
+      expect(stale.entries.every((entry) => entry.status === 'stale')).toBe(true)
+      expect(stale.revision).toBe(seeded.revision + 1)
+    } finally {
+      db.close()
+    }
   })
 })

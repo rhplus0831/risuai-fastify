@@ -308,14 +308,20 @@ hiding policy and watermark applicability are part of that cache key; a miss
 still sanitizes markup, including a second pass after decoded styles, before
 pruning bilingual pairs and adding metadata. Unmounting releases this cache.
 
-The newest two messages parse immediately and own initial display readiness.
-Older rows keep their mounted controls and last rendered body while
-`chatDisplayScheduler.ts` waits for initial display and optional startup work
-to settle. It then starts one older-message parse per idle turn, waiting for
-that parse to finish before starting the next. Queued work is cancelled on
-input changes, chat switches and unmount; older rows never block the initial
-readiness registrations. The configured transcript window and scroll anchors
-remain owned by the existing paging and viewport code.
+The newest three messages own initial display readiness. With the server display
+protocol, `chatDisplayScheduler.ts` starts a bounded group of mounted rows'
+input preparation together, before initial/background startup readiness. The
+bridge holds compatible post-asset inputs together for at most one frame (16 ms),
+then sends priority and background targets in the same request. Slow optional
+browser work can join a later batch instead of delaying the priority rows.
+The server streams the newest three first; the loading cover waits for their
+browser body commits and Svelte render tick. Empty and shorter chats wait only
+for available rows. Viewport admission ranks new work by proximity and promotes
+the nearest three queued rows. Arrivals during an active stream collect into the
+next bounded request. DOM residency, configured paging, and anchored commit
+transactions remain separate from network admission; existing content stays
+visible during history loading. Browser-only/plugin fallback still uses serial
+idle parsing. Input changes, chat switches, and unmount cancel obsolete work.
 Module-dependent signatures use a compact client render revision plus active
 module ids; they never embed module assets, regex definitions, or triggers in a
 per-message key. Parse and LLM-detection memo keys are bounded by both entry
@@ -357,7 +363,7 @@ message id and original/translation/bilingual layer; `ChatBody.svelte` carries
 those through the existing parse memo; and `ParseMarkdown()` sends the
 post-first-asset source through the same-chat batch bridge. Pending parses keep
 the last successful body. On a cold transcript mount, `Chats.svelte` keeps the
-message-shaped chat-window skeleton visible until the newest two rows' first
+message-shaped chat-window skeleton visible until the newest three rows' first
 display parses settle; later reparses continue showing their last successful
 bodies.
 An empty hydration shell starts that cold-display cycle only if persisted rows
