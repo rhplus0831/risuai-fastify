@@ -2,24 +2,23 @@
 
 Date: 2026-09-10
 
-This inventory maps the source, behavior, test, documentation, rollout, and
-measurement owners relevant to [PLAN.md](PLAN.md). It is a planning baseline,
-not proof of shipped unified-workspace behavior. Recheck cited owners at the
-start of each phase and record meaningful drift in [status](status.md).
+This inventory maps the source, behavior, test, documentation, and measurement
+owners relevant to [PLAN.md](PLAN.md). It began as the planning baseline and was
+updated at closeout to the shipped owners. Acceptance evidence is in
+[status](status.md).
 
 ## Current Architecture Summary
 
-The current App has mutually exclusive loading, `ObserverShell`, Settings, grid,
-and normal writer branches. `ObserverShell` combines reader controller,
-navigation, local route intent, transcript selection, lifecycle status, and
-promotion UI. The normal branch combines `Sidebar`, `ChatScreen`, and
-`ConversationShell`.
+The current App keeps loading and authentication outside one persistent
+`Workspace.svelte`. Reader navigation/transcript and writer Sidebar/ChatScreen
+controllers are explicit alternatives beneath the same `ConversationShell`.
+`DeviceAccessAction.svelte` owns promotion and `ReadOnlyComposer.svelte` owns
+contained chat input presentation.
 
-Connected startup currently may install a coherent reader projection before an
-automatic writer acquisition. Writer recovery then loads the authoritative
-post-replay shell and establishes its event cursor. This ordering provides early
-read visibility but creates a dedicated component handoff and can perform two
-shell reads on the successful automatic-writer path.
+Connected startup resolves role before workspace presentation. Automatic
+writers acquire and recover before their one authoritative shell read; settled
+readers install one coherent reader projection. No observer compatibility branch
+or rollout override remains.
 
 The writer UI cannot be made reader-compatible through styling alone:
 
@@ -43,11 +42,11 @@ The writer UI cannot be made reader-compatible through styling alone:
 | Startup orchestration          | `src/ts/bootstrap.ts`                                                                                                                                        | Skip early reader projection for successful automatic writers; install one projection for settled readers; preserve recovery order |
 | Readiness/capabilities         | `src/ts/startupReadiness.ts`, `packages/protocol/src/startupTelemetry.ts`                                                                                    | Derive workspace presentation without collapsing render, route, mutation, plugin, and generation gates                             |
 | Session authority              | `src/ts/clientSession.ts`, `src/ts/clientWriteOperation.ts`                                                                                                  | Expose the semantic established-reader versus initial-resolving distinction without a second role flag                             |
-| Current observer composition   | `src/lib/ObserverShell.svelte`, `src/lib/ReaderTakeoverAction.svelte`                                                                                        | Extract retained reader controller/status/promotion responsibilities, then delete dedicated presentation                           |
+| Unified workspace composition  | `src/lib/Workspace.svelte`, `src/lib/DeviceAccessAction.svelte`, `src/lib/ChatScreens/ReadOnlyComposer.svelte`                                               | Retains separate reader/writer controllers beneath one persistent role-neutral frame                                               |
 | Shared shell and geometry      | `src/lib/ConversationShell.svelte`, `src/ts/gui/shellGeometry.ts`, `src/ts/stores.svelte.ts`                                                                 | Keep one role-neutral outer frame and explicit transition-cause behavior                                                           |
 | Writer navigation              | `src/lib/SideBars/Sidebar.svelte`, `src/lib/SideBars/SideChatList.svelte`                                                                                    | Separate shared presentation from writer selection/organization controller; add back-only reader chat mode                         |
 | Reader navigation              | `src/lib/SideBars/ReaderNavigation.svelte`, `src/lib/SideBars/readerNavigation.ts`, `src/ts/readerRouteScope.ts`                                             | Supply explicit committed rows/local callbacks to shared navigation presentation                                                   |
-| Local reader route intent      | `src/ts/observerRouteIntent.ts`, `src/ts/router.ts`, App route effects                                                                                       | Rename/rehome ownership; prevent automatic post-promotion `lastInteraction` replay                                                 |
+| Local reader route intent      | `src/ts/readerRouteIntent.ts`, `src/ts/router.ts`, App route effects                                                                                         | Memory-only display target; promotion consumes and reconciles without persisted-selection replay                                   |
 | Character selection            | `src/ts/characters.ts`, `src/ts/characterState.ts`, `src/ts/characterCommands.ts`                                                                            | Keep writer behavior; readers navigate by stable route ID without `changeChar()`                                                   |
 | Chat selection/organization    | `src/ts/globalApi.svelte.ts`, `src/ts/chatCommands.ts`, `src/lib/SideBars/SideChatList.svelte`                                                               | Keep writer behavior; no reader `chatPage`, selection command, reorder, rename, create, import, export-reset, or delete path       |
 | Home and grid                  | `src/lib/UI/MainMenu.svelte`, `src/lib/Others/GridCatalog.svelte`, `src/lib/SideBars/CharacterCatalogView.svelte`                                            | Reuse familiar views with local reader navigation and explicit denial of Realm/import/trash/edit operations                        |
@@ -117,7 +116,7 @@ The writer UI cannot be made reader-compatible through styling alone:
 | `docs/structure/server-resources-and-bridges.md` | Documents early observer projection followed by authoritative post-replay writer shell                                       | Recheck implementation and trace exact request ownership                                |
 | `src/App.svelte`                                 | Observer and writer workspaces are mutually exclusive branches                                                               | Instrument mount identity and transition cost before replacement                        |
 | Prior shell-parity status                        | Provides rectangle/frame sampling and reports stable outer geometry after earlier work                                       | Reuse helper/oracles; this plan additionally targets component/resource transition cost |
-| Startup telemetry and artifacts                  | Already record milestones, payload/cache totals, early mutation/generation counters, and observer rollout mode               | Extend or version only as needed for role-first cohort and request/mount evidence       |
+| Startup telemetry and artifacts                  | Record v2 milestones, payload/cache totals, early mutation/generation counters, and role-first workspace evidence            | Preserve privacy-safe timing and request/mount evidence                                 |
 
 Phase 0 must record the machine/runtime/browser configuration, fixture sizes,
 cold/warm cache policy, repetition count, raw artifact locations, median/tail
@@ -128,21 +127,21 @@ comparison method, and numeric regression thresholds before implementation.
 | Risk                              | Primary focused evidence                                                                                                                             |
 | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Startup role/readiness            | `src/ts/connectedClientStartup.test.ts`, `src/ts/bootstrap.test.ts`, `src/ts/startupReadiness.test.ts`, `src/ts/clientSession.test.ts`               |
-| Observer removal/App admission    | `src/App.routeEffect.dom.test.ts`, current `src/lib/ObserverShell.svelte.test.ts` cases migrated to new owners                                       |
-| Local route/no mutation           | `src/ts/observerRouteIntent.test.ts`, `src/ts/readerLocalMutations.svelte.test.ts`, router and character/chat selection tests                        |
+| Workspace/App admission           | `src/App.routeEffect.dom.test.ts`, `src/lib/Workspace.svelte.test.ts`, and `src/lib/DeviceAccessAction.svelte.test.ts`                               |
+| Local route/no mutation           | `src/ts/readerRouteIntent.test.ts`, `src/ts/readerLocalMutations.svelte.test.ts`, router and character/chat selection tests                          |
 | Navigation/accessibility          | `src/lib/SideBars/Sidebar.charList.test.ts`, `src/lib/SideBars/Sidebar.keyboard.dom.test.ts`, shared navigation/ReaderNavigation tests               |
 | Grid/Home restrictions            | `src/lib/Others/GridCatalog.svelte.test.ts`, MainMenu-focused tests, App direct-route tests                                                          |
 | Reader transcript/passive display | `src/lib/ReaderTranscript.svelte.test.ts`, `Chats`, `Chat`, `ChatBody`, parser/passive-HTML tests                                                    |
 | Composer containment/drafts       | `src/lib/ChatScreens/DefaultChatScreen.composerDrafts.test.ts`, DefaultChatScreen DOM owner tests, and writer draft recovery suites                  |
 | Command/outbox denial             | `src/ts/server/commands.clientSession.test.ts`, durable dispatch/outbox/replay suites                                                                |
-| Writer loss/auth/lineage          | `src/ts/server/activeWriterSession.test.ts`, `src/ts/observerProjectionLifecycle.test.ts`, connected reader sync and replacement ownership suites    |
+| Writer loss/auth/lineage          | `src/ts/server/activeWriterSession.test.ts`, `src/ts/readerProjectionLifecycle.test.ts`, connected reader sync and replacement ownership suites      |
 | Generation observation/denial     | reader generation observation, generation operation/reattach, send/generation guard tests                                                            |
 | Real reader/writer behavior       | `server/fastify/browser-smoke/readOnlyAppUx.spec.ts`, `connectedWriterSwitching.spec.ts`, `connectedReaderBrowsing.spec.ts`, startup/recovery matrix |
 | Performance/bundle                | `pnpm verify:fast-bootstrap` constituent scripts selected under Crunch Mode, startup matrix, bundle-boundary reports, layout-frame sampler tests     |
 
 Use the narrowest relevant file for each implementation slice. A moved owner
-requires moving or adding behavioral proof; do not retain tests that only assert
-obsolete ObserverShell names or DOM markers.
+requires moving or adding behavioral proof; tests use final product behavior and
+semantic reader/workspace selectors.
 
 ## Documentation, Rollout, and Cleanup Owners
 
@@ -156,11 +155,9 @@ obsolete ObserverShell names or DOM markers.
 | Startup observability      | `docs/structure/development-and-observability.md`, protocol/browser/server telemetry schemas and tests                          |
 | Test discovery             | `docs/tests/app-navigation-and-chat.md`, `docs/tests/browser-state-sync-and-recovery.md`, other affected focused test guides    |
 | Temporary seam inventory   | `util/client-resource-inventory.ts` and its checked-in baseline/matrix consumers                                                |
-| Rollout/smoke controls     | `src/ts/observerShellFlag.ts`, its tests, browser-smoke harness and all override consumers                                      |
-| Observer-named lifecycle   | `src/ts/observerShellLifecycle.svelte.ts`, `src/ts/observerProjectionLifecycle.ts`, active-writer/bootstrap consumers and tests |
-| Final component cleanup    | `src/lib/ObserverShell.svelte`, `src/lib/ReaderTakeoverAction.svelte`, obsolete fixtures/selectors/tests                        |
+| Retired rollout controls   | `src/ts/bootstrap.ts`, browser-smoke harness and startup integration artifact                                                   |
+| Reader lifecycle           | `src/ts/readerWorkspaceLifecycle.svelte.ts`, `src/ts/readerProjectionLifecycle.ts`, active-writer/bootstrap consumers and tests |
+| Final components           | `src/lib/Workspace.svelte`, `src/lib/DeviceAccessAction.svelte`, `src/lib/ChatScreens/ReadOnlyComposer.svelte`                  |
 
-Do not delete observer-named files mechanically until their non-presentation
-projection/lifecycle responsibilities have explicit successor owners and passing
-behavioral evidence. The unrelated DOM/runtime observer module is outside this
-cleanup unless a separately justified change requires it.
+The unrelated `src/ts/observer.svelte.ts` DOM/runtime observer remains outside
+this presentation cleanup.

@@ -2,11 +2,9 @@
 
 ## Current Cursor
 
-- State: **Implementation in progress; Phases 0–4 accepted.**
-- Current phase: Phase 5, role transitions and performance.
-- Next action: exercise promotion/demotion/reconnect/auth/lineage/draft and
-  generation transitions, then compare final startup, bundle, and layout
-  evidence with the frozen Phase 0 thresholds.
+- State: **Completed and archived; all phases accepted.**
+- Current phase: Closeout complete.
+- Next action: None. Current architecture and test guides own shipped behavior.
 - Source baseline reviewed: `0654259fc`.
 - Current architecture and test guides remain authoritative for shipped
   behavior.
@@ -19,12 +17,13 @@
   performance owners.
 - [Phase index](phases/README.md): execution rules, phase routing, and explicit
   plan-document validation.
-- [Active plans](../README.md): repository active-plan index.
-- [Prior read-only app UX](../../../.archived-docs/ui-and-user-input/read-only-app-ux/status.md):
+- [UI archive](../README.md): related completed reader work.
+- [Active plans](../../../docs/plan/README.md): repository planning index.
+- [Prior read-only app UX](../read-only-app-ux/status.md):
   accepted familiar-reader presentation and containment evidence.
-- [Prior shell parity](../../../.archived-docs/ui-and-user-input/read-only-shell-parity/status.md):
+- [Prior shell parity](../read-only-shell-parity/status.md):
   accepted geometry and automatic-transition stability evidence.
-- [Prior connected readers](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/status.md):
+- [Prior connected readers](../connected-read-only-clients/status.md):
   accepted authority, synchronization, promotion, and live-observation evidence.
 
 ## Phase Ledger
@@ -36,8 +35,8 @@
 | [2. Role-first bootstrap](phases/phase-2-role-first-bootstrap.md)                               | Accepted | One-read automatic writer startup and fenced recovery failure at `c6f5871a4`                              |
 | [3. Unified shell and navigation](phases/phase-3-unified-shell-and-navigation.md)               | Accepted | Persistent shared workspace, Back-only chat navigation, and top-right device action at `1a46fb9ad`        |
 | [4. Transcript and composer containment](phases/phase-4-transcript-and-composer-containment.md) | Accepted | Pure disabled reader composer and browser containment at `f99b5a8c2`                                      |
-| [5. Role transitions and performance](phases/phase-5-role-transitions-and-performance.md)       | Pending  | Not run                                                                                                   |
-| [6. Rollout cleanup and closeout](phases/phase-6-rollout-cleanup-and-closeout.md)               | Pending  | Not run                                                                                                   |
+| [5. Role transitions and performance](phases/phase-5-role-transitions-and-performance.md)       | Accepted | In-place role, draft, generation, reconnect, and five-sample performance gates passed                     |
+| [6. Rollout cleanup and closeout](phases/phase-6-rollout-cleanup-and-closeout.md)               | Accepted | Sole role-first path, telemetry v2, retired rollout seam, current docs, and archive validation passed     |
 
 ## Decisions
 
@@ -83,9 +82,10 @@
   browsing, persisted writer-route application, mutation, and generation; the
   snapshot is presentation state and never authorizes an operation.
 - 2026-09-10: reader navigation owns the browser URL and stable character/chat
-  IDs. Promotion preserves that display target, but the retained reader intent
-  will not enter `changeChar()` or `changeChatTo()` automatically. Only a new
-  writer-mode navigation action may update persisted selection or
+  IDs while reading and during pending promotion. Once writer recovery settles,
+  App consumes the reader-only target and reconciles the URL to canonical
+  persisted writer state without calling `changeChar()` or `changeChatTo()`.
+  Only a new writer-mode navigation action may update persisted selection or
   `lastInteraction`.
 
 ## Planning Evidence
@@ -216,7 +216,7 @@ outbox record.
 | `pnpm test -- src/App.routeEffect.dom.test.ts`              | 29 passed               |
 | `pnpm test -- src/ts/clientSession.test.ts`                 | 15 passed               |
 | `pnpm test -- src/ts/startupReadiness.test.ts`              | 14 passed               |
-| `pnpm test -- src/ts/observerRouteIntent.test.ts`           | 4 passed                |
+| `pnpm test -- src/ts/readerRouteIntent.test.ts`             | 4 passed                |
 | `pnpm test -- src/ts/server/commands.clientSession.test.ts` | 9 passed                |
 | `pnpm check`                                                | 0 errors and 0 warnings |
 
@@ -239,7 +239,7 @@ coherent shell and synchronization stream.
 
 App consumes the derived workspace mode, so a managed initial writer remains
 on the loading boundary even after its post-replay shell arrives; it cannot
-mount `ObserverShell`, the writer workspace, or authoring resources before
+mount the read-only workspace, writer content, or authoring resources before
 writer recovery completes. If recovery fails after acquisition while the
 server may still identify this session as writer, the client now remains in
 fenced `recovering-writer` state with an interrupted connection and schedules
@@ -333,7 +333,114 @@ that overlapped Refresh; journeys were migrated to the Back-first contract and
 the action gained safe header clearance. The final complete run passed. No
 known Phase 4 work remains.
 
-For every completed slice, record the exact changed boundary, source revision,
-focused commands and outcomes, browser or performance artifacts where required,
-failures and resolutions, and remaining limitations. Advance the phase cursor
-only after every acceptance item has final-source evidence.
+## Phase 5 Acceptance Evidence
+
+Revisions `df9252a6f`, `6a3835abb`, `a7b89bcd5`, and `c1def05e4`
+completed the integrated transition gate. Promotion now consumes reader-only
+route intent and immediately reconciles the URL to persisted writer state
+without invoking selection handlers. The A → B → A browser journey proves that
+both pre-promotion reader targets leave durable selection unchanged, while a
+fresh writer-mode selection creates the next `character.selected` event under
+the new writer session. The same journey retains the originating writer draft,
+rejects stale mutations, keeps each demoted reader on its own route, and does
+not reload either document.
+
+Back-only reader chat navigation retains an inert rail spacer, so the canonical
+rail/panel/main rectangles do not change when authority moves. The final
+transition artifact under
+`fast-bootstrap-results/unified-read-only-workspace-final-role-first/transitions/`
+has SHA-256 prefix `fc46dc6f`; writer demotion sampled 32 frames and reader
+promotion sampled 33, with zero missing elements and 0 px maximum horizontal
+delta. The one promotion layout-shift entry had recent user input and remains
+supporting evidence rather than an unexplained automatic shift.
+
+The mobile browsing journey identified the top-right action covering a message
+control after scrolling. `DeviceAccessAction` now uses its safe-area-aware true
+top-right position, becomes icon-only below the small breakpoint, and
+`ReaderTranscript` reserves matching header clearance. Desktop/mobile reader
+containment and the Pixel 7 navigation/copy/history/reconnect journey pass.
+
+Focused final-source lifecycle coverage included 23 Vitest files and 545 tests
+for startup, session/readiness, App/workspace/device/composer/transcript,
+commands/outbox, writer loss, auth/lineage replacement, reader synchronization,
+generation observation, refresh, and telemetry. The standalone bootstrap suite
+passed 214 tests. The connected-generation browser suite passed all five live
+partial, viewer-detachment, transfer, finalization, and receipted-IGP journeys.
+`connectedWriterSwitching.spec.ts` passed all three journeys,
+`connectedReaderBrowsing.spec.ts` passed, `readOnlyAppUx.spec.ts` passed all
+four journeys, and `connectedReaderRollout.spec.ts` passed the real server
+restart/reconnect journey.
+
+The final five-sample cleanup-complete measurement is retained under
+`fast-bootstrap-results/unified-read-only-workspace-final-role-first/`. Matrix
+SHA-256 prefixes are `a3c07ec2`, `29e02c3d`, `b550dd54`, `09f21270`, and
+`0b327145`; bundle-boundary and initial-preload prefixes are `865760fc` and
+`4e2759ec`.
+
+| Fixture/cache | Reader-ready median/tail | Writer-ready median/tail | Chat-ready median/tail | Background-ready median/tail | Long-task maximum median/tail |
+| ------------- | ------------------------ | ------------------------ | ---------------------- | ---------------------------- | ----------------------------- |
+| Small/cold    | 568.7 / 639.9            | 579.1 / 649.6            | 706.6 / 776.1          | 707.3 / 777.1                | 66 / 84                       |
+| Small/warm    | 220.2 / 232.1            | 226.2 / 238.6            | 312.2 / 320.6          | 313.1 / 321.8                | 0 / 0                         |
+| Large/cold    | 529.9 / 566.2            | 536.8 / 575.2            | 667.4 / 694.0          | 668.3 / 696.9                | 62 / 74                       |
+| Large/warm    | 242.0 / 286.0            | 248.1 / 303.5            | 328.9 / 448.4          | 329.8 / 450.3                | 0 / 0                         |
+
+All 20 cases performed one shell read and one conversation-shell mount, with
+zero reader-workspace mounts during automatic writer startup, zero removals,
+zero identity changes, zero missing frames, 0 px maximum horizontal delta,
+zero mutations before writer-ready, and zero generations before chat-ready.
+Every readiness median/tail and long-task maximum is inside the Phase 0 frozen
+allowance. Initial JavaScript is 175,551 gzip bytes across 373 modules, down
+403 bytes from baseline; immediate startup is 1,160,200 gzip bytes across 1,161
+modules, up 53 bytes (less than 0.01%). The 72,713-byte largest initial chunk
+and total closure pass both hard budgets. No Phase 5 regression remains.
+
+## Phase 6 Acceptance Evidence
+
+Revision `1a9a1020b` made role-first connected startup the sole production path.
+It removed `VITE_FAST_BOOTSTRAP_OBSERVER`, the smoke session override,
+flag-on/off startup branches, unmanaged retry presentation, obsolete selectors,
+and the dedicated fallback browser campaign. Reader route, projection, and
+lifecycle owners now use `readerRouteIntent.ts`,
+`readerProjectionLifecycle.ts`, and `readerWorkspaceLifecycle.svelte.ts`.
+`Workspace.svelte`, `DeviceAccessAction.svelte`, and
+`ReadOnlyComposer.svelte` own the final presentation. Startup telemetry protocol
+v2 uses `reader-ready` and no longer publishes a rollout-cohort field.
+
+The flag-free recovery browser gate exposed a managed writer replay-gap race:
+the stream close callback could interrupt the session before the initial 409
+result began its authoritative refresh. Initial subscription callbacks are now
+ignored until the result is classified, and replay-unavailable refresh is
+awaited before reconnect. The focused bootstrap regression and the real
+`event_replay_unavailable` journey both pass; revision `73a28d6d6` gives the
+bounded reconnect-backoff assertion its non-flaky deadline.
+
+Revision `28e107827` removed the rollout marker from the client-resource
+inventory and regenerated its checked-in baseline. Architecture validation now
+reports 4,279 test-fixture compatibility references across 30 consumer groups,
+zero bridge families, and 16 retained character-aggregate seam markers, down
+from 21 total markers. Revision `75e8a1d18` updated current startup, persistence,
+UI, navigation, chat/generation, observability, environment, and test guides.
+
+Final verification:
+
+| Command or focused group                                                           | Result                                                                                                                                   |
+| ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `pnpm exec vitest run ...` across 23 final changed-owner files                     | 545 passed                                                                                                                               |
+| `pnpm exec vitest run src/ts/bootstrap.test.ts --maxWorkers=1`                     | 214 passed                                                                                                                               |
+| Fastify telemetry/protocol/artifact/compatibility group                            | 73 passed                                                                                                                                |
+| `pnpm check`                                                                       | 0 errors and 0 warnings                                                                                                                  |
+| `pnpm check:server`                                                                | Protocol, shared-core, inventory, Fastify, and browser-smoke checks passed                                                               |
+| `pnpm exec tsx util/architecture-inventory.ts`                                     | All four inventory gates passed                                                                                                          |
+| `pnpm build:smoke` and `pnpm measure:fast-bootstrap`                               | Passed with only the existing CSS `::highlight` and large-chunk warnings                                                                 |
+| `readOnlyAppUx.spec.ts`                                                            | 4 passed                                                                                                                                 |
+| `connectedReaderBrowsing.spec.ts`                                                  | 1 passed                                                                                                                                 |
+| `connectedWriterSwitching.spec.ts`                                                 | 3 passed                                                                                                                                 |
+| `connectedReaderGeneration.spec.ts`                                                | 5 passed                                                                                                                                 |
+| `connectedReaderRollout.spec.ts`                                                   | 1 passed                                                                                                                                 |
+| Required `startupDirectLinks.spec.ts` + `startupRecoveryIntegrationMatrix.spec.ts` | 11 passed; 44 direct links, two role-first fixtures, response-loss replay, event-gap recovery, takeover, and four optional-runtime cases |
+| `pnpm check:docs`                                                                  | 49 current documents passed                                                                                                              |
+
+The merged Fast-bootstrap integration artifact has SHA-256 prefix `e1b24933`.
+No full-suite command was run, in accordance with Crunch Mode; the required
+changed-owner and cross-layer gates above are green. No known required work or
+residual rollout path remains.

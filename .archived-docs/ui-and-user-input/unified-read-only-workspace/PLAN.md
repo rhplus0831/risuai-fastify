@@ -6,14 +6,14 @@ Start at [status](status.md) for the current phase, decisions, next action, and
 verification evidence. This document defines intended behavior and completion
 criteria; it does not describe shipped implementation. Current source,
 [STRUCTURE](../../../STRUCTURE.md), and the
-[architecture guides](../../structure/README.md) remain authoritative for
+[architecture guides](../../../docs/structure/README.md) remain authoritative for
 shipped behavior.
 
 This is a new follow-up to the completed
-[connected read-only clients](../../../.archived-docs/ui-and-user-input/connected-read-only-clients/PLAN.md),
-[read-only app UX](../../../.archived-docs/ui-and-user-input/read-only-app-ux/PLAN.md),
+[connected read-only clients](../connected-read-only-clients/PLAN.md),
+[read-only app UX](../read-only-app-ux/PLAN.md),
 and
-[read-only shell parity](../../../.archived-docs/ui-and-user-input/read-only-shell-parity/PLAN.md)
+[read-only shell parity](../read-only-shell-parity/PLAN.md)
 workstreams. Those packages remain closed. This plan preserves their accepted
 authority, projection, accessibility, and transition guarantees while replacing
 the dedicated observer presentation and the early observer-to-writer render
