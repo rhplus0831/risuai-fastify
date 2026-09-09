@@ -11,6 +11,7 @@
     navigationId = 'conversation-shell-navigation',
     showNavigationToggle = false,
     navigationToggleLabel = '',
+    preserveResponsiveNavigation = false,
     contentInert = false,
     contentBusy = false,
     onOpenNavigation = () => {},
@@ -24,6 +25,7 @@
     navigationId?: string
     showNavigationToggle?: boolean
     navigationToggleLabel?: string
+    preserveResponsiveNavigation?: boolean
     contentInert?: boolean
     contentBusy?: boolean
     onOpenNavigation?: () => void
@@ -35,6 +37,22 @@
     event.preventDefault()
     event.stopPropagation()
     onCloseNavigation()
+  }
+
+  function conditionalModalFocusTrap(node: HTMLElement, enabled: boolean) {
+    let trap = enabled ? modalFocusTrap(node) : undefined
+    return {
+      update(active: boolean) {
+        if (active && !trap) trap = modalFocusTrap(node)
+        else if (!active && trap) {
+          trap.destroy()
+          trap = undefined
+        }
+      },
+      destroy() {
+        trap?.destroy()
+      },
+    }
   }
 </script>
 
@@ -56,18 +74,20 @@
     <div id={navigationId} class="contents" data-risu-shell-navigation>
       {@render navigation()}
     </div>
-  {:else if responsive && navigationOpen}
+  {:else if responsive && (navigationOpen || preserveResponsiveNavigation)}
     <div
       id={navigationId}
       data-modal-root
       data-risu-responsive-shell="shared-sidebar-dialog"
       data-risu-shell-navigation
-      use:modalFocusTrap
+      use:conditionalModalFocusTrap={navigationOpen}
       role="dialog"
       aria-modal="true"
       aria-label={navigationLabel}
       tabindex="-1"
       class="fixed left-0 top-0 z-30 flex h-full w-full flex-row items-center"
+      class:hidden={!navigationOpen}
+      hidden={!navigationOpen}
       onkeydown={handleNavigationKeydown}>
       {@render navigation()}
     </div>

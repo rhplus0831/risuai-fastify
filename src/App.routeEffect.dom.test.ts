@@ -387,6 +387,7 @@ import {
   settingsOpen,
   sideBarClosing,
   sideBarStore,
+  sideBarTransitionCause,
 } from './ts/stores.svelte'
 import { replaceResourceDatabase } from './ts/server/resourceState.svelte'
 import {
@@ -485,6 +486,7 @@ function seedStores() {
   PlaygroundStore.set(0)
   botMakerMode.set(false)
   sideBarClosing.set(false)
+  sideBarTransitionCause.set('none')
   CustomGUISettingMenuStore.set(false)
   SettingsMenuIndex.set(-1)
   openPresetList.set(false)
@@ -1092,6 +1094,9 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenCalledOnce()
     expect(appRouteDomMocks.state.exports?.applyRouteToStores).toHaveBeenCalledWith(latestRoute)
     await vi.waitFor(() => expect(peekObserverRouteIntent()).toBeNull())
+    await vi.waitFor(() => expect(target.querySelector('[data-risu-shell-main]')).not.toBeNull())
+    expect(get(sideBarTransitionCause)).toBe('none')
+    expect(target.querySelector('.risu-sidebar, .risu-sidebar-close')).toBeNull()
 
     // Consuming a nonreactive reader intent must not remove the effect's live
     // URL dependency; the next ordinary writer navigation still applies.
@@ -1292,12 +1297,14 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     expect(escape.defaultPrevented).toBe(true)
     expect(get(sideBarClosing)).toBe(true)
+    expect(get(sideBarTransitionCause)).toBe('explicit-close')
     dialog?.querySelector<HTMLElement>('.setting-area')?.dispatchEvent(new Event('animationend', { bubbles: true }))
     await tick()
     await Promise.resolve()
 
     expect(target.querySelector('[data-risu-responsive-shell="shared-sidebar-dialog"]')).toBeNull()
     expect(get(sideBarStore)).toBe(false)
+    expect(get(sideBarTransitionCause)).toBe('none')
     expect(opener.inert).toBe(false)
     expect(document.activeElement).toBe(opener)
     opener.remove()

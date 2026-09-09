@@ -5,7 +5,7 @@ import { changeLanguage } from 'src/lang'
 import { installLanguageReactivity } from 'src/lang/reactivity'
 import { languageEnglish } from 'src/lang/en'
 import { languageKorean } from 'src/lang/ko'
-import { DynamicGUI, MobileGUI, sideBarClosing, sideBarStore } from 'src/ts/stores.svelte'
+import { DynamicGUI, MobileGUI, sideBarClosing, sideBarStore, sideBarTransitionCause } from 'src/ts/stores.svelte'
 import SideBarArrow from './SideBarArrow.svelte'
 
 type MountedComponent = Parameters<typeof unmount>[0]
@@ -21,6 +21,7 @@ beforeEach(async () => {
   MobileGUI.set(false)
   sideBarClosing.set(false)
   sideBarStore.set(true)
+  sideBarTransitionCause.set('none')
   await changeLanguage('ko')
 })
 
@@ -35,6 +36,7 @@ afterEach(() => {
   MobileGUI.set(false)
   sideBarClosing.set(false)
   sideBarStore.set(true)
+  sideBarTransitionCause.set('none')
 })
 
 describe('SideBarArrow accessible names', () => {
@@ -61,6 +63,7 @@ describe('SideBarArrow accessible names', () => {
     collapseButton?.click()
     await tick()
     expect(get(sideBarClosing)).toBe(true)
+    expect(get(sideBarTransitionCause)).toBe('explicit-close')
 
     sideBarClosing.set(false)
     sideBarStore.set(false)
@@ -73,5 +76,6 @@ describe('SideBarArrow accessible names', () => {
     await tick()
     expect(get(sideBarClosing)).toBe(false)
     expect(get(sideBarStore)).toBe(true)
+    expect(get(sideBarTransitionCause)).toBe('explicit-open')
   })
 })

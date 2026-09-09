@@ -907,17 +907,19 @@ describe('pre-writer ObserverShell', () => {
     DynamicGUI.set(true)
     await mountObserverShell()
     const toggle = target.querySelector<HTMLButtonElement>('[data-reader-navigation-toggle]')!
-    expect(target.querySelector('#reader-navigation')).toBeNull()
+    const drawer = target.querySelector<HTMLElement>('#reader-navigation')!
+    expect(drawer.hidden).toBe(true)
     toggle.focus()
     toggle.click()
     await tick()
-    const drawer = target.querySelector<HTMLElement>('#reader-navigation')!
+    expect(drawer.hidden).toBe(false)
     expect(drawer.getAttribute('aria-modal')).toBe('true')
     expect(drawer.contains(document.activeElement)).toBe(true)
     expect(target.querySelectorAll('[data-reader-navigation]')).toHaveLength(1)
     drawer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await tick()
-    expect(target.querySelector('#reader-navigation')).toBeNull()
+    expect(drawer.hidden).toBe(true)
+    expect(target.querySelector('#reader-navigation')).toBe(drawer)
     expect(document.activeElement).toBe(toggle)
     expect(get((await createRouterMock()).currentRoute).path).toBe('/character/char-a/chat-a')
     expect(await countPendingMutationRecords()).toBe(0)

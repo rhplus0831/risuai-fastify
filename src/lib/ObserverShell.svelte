@@ -330,6 +330,7 @@
       navigationId="reader-navigation"
       showNavigationToggle
       navigationToggleLabel={language.connectedReaders.browseConversations}
+      preserveResponsiveNavigation
       onOpenNavigation={() => {
         readerNavigationOpen = true
       }}

@@ -7,6 +7,7 @@
     settingsOpen,
     sideBarClosing,
     sideBarStore,
+    sideBarTransitionCause,
     PlaygroundStore,
     QuickSettings,
     additionalHamburgerMenu,
@@ -579,6 +580,7 @@
     reseter()
     navigate(characterRoutePath(item.characterId, item.chatId))
     if ($DynamicGUI) {
+      sideBarTransitionCause.set('explicit-close')
       sideBarClosing.set(true)
     }
   }
@@ -775,7 +777,11 @@
 </script>
 
 {#if menuSideBar}
-  <NavigationRail {hidden} closing={$sideBarClosing} {editMode} columns={sidebarColumns}>
+  <NavigationRail
+    {hidden}
+    closing={$sideBarClosing && $sideBarTransitionCause === 'explicit-close'}
+    {editMode}
+    columns={sidebarColumns}>
     <NavigationButton
       label={language.home}
       selected={$selectedCharID < 0 && $PlaygroundStore === 0 && !$settingsOpen}
@@ -837,7 +843,11 @@
       }} />
   </NavigationRail>
 {:else}
-  <NavigationRail {hidden} closing={$sideBarClosing} {editMode} columns={sidebarColumns}>
+  <NavigationRail
+    {hidden}
+    closing={$sideBarClosing && $sideBarTransitionCause === 'explicit-close'}
+    {editMode}
+    columns={sidebarColumns}>
     {#if !hamburgerButtonBottom}
       <button
         aria-label={language.menu}
@@ -1230,8 +1240,8 @@
 {/if}
 <div
   class="setting-area h-full flex-col overflow-y-auto overflow-x-hidden bg-darkbg py-6 text-textcolor max-h-full"
-  class:risu-sidebar={!$sideBarClosing}
-  class:risu-sidebar-close={$sideBarClosing}
+  class:risu-sidebar={!$sideBarClosing && $sideBarTransitionCause === 'explicit-open'}
+  class:risu-sidebar-close={$sideBarClosing && $sideBarTransitionCause === 'explicit-close'}
   class:px-2={$DynamicGUI}
   class:px-4={!$DynamicGUI}
   class:dynamic-sidebar={$DynamicGUI}
@@ -1240,10 +1250,14 @@
   style:width={sidebarGeometry.panelWidth}
   style:min-width={$DynamicGUI ? undefined : sidebarGeometry.panelWidth}
   data-risu-shell-sidebar-panel
-  onanimationend={() => {
+  onanimationend={(event) => {
+    if (event.target !== event.currentTarget) return
     if ($sideBarClosing) {
       $sideBarClosing = false
+      sideBarTransitionCause.set('none')
       sideBarStore.set(false)
+    } else if ($sideBarTransitionCause === 'explicit-open') {
+      sideBarTransitionCause.set('none')
     }
   }}>
   {#if sideBarMode === 0}
@@ -1317,16 +1331,17 @@
   <button
     type="button"
     aria-label={language.close}
-    class="grow h-full min-w-12"
     class:hidden
     onclick={() => {
       if ($sideBarClosing) {
         return
       }
+      sideBarTransitionCause.set('explicit-close')
       $sideBarClosing = true
     }}
-    class:sidebar-dark-animation={!$sideBarClosing}
-    class:sidebar-dark-close-animation={$sideBarClosing}>
+    class="grow h-full min-w-12 bg-black/50"
+    class:sidebar-dark-animation={!$sideBarClosing && $sideBarTransitionCause === 'explicit-open'}
+    class:sidebar-dark-close-animation={$sideBarClosing && $sideBarTransitionCause === 'explicit-close'}>
   </button>
 {/if}
 

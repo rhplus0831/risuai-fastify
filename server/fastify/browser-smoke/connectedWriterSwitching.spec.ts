@@ -25,6 +25,15 @@ import {
   startFastBootstrapHarness,
   type FastBootstrapHarness,
 } from './fastBootstrapHarness.js'
+import {
+  analyzeHorizontalLayoutFrames,
+  findOwnedLayoutShifts,
+  formatLayoutFrameFailure,
+  startLayoutFrameSampler,
+  startLayoutShiftSampler,
+  stopLayoutFrameSampler,
+  stopLayoutShiftSampler,
+} from './layoutFrameSampler.js'
 
 const CHARACTER_A = 'connected-switch-character-a'
 const CHARACTER_B = 'connected-switch-character-b'
@@ -44,6 +53,11 @@ const GENERATION_SETTINGS = {
   promptPresetId: 'switch-prompt-preset',
   jailbreakToggle: false,
   sidebarToggles: {},
+}
+const SHELL_LAYOUT_SELECTORS = {
+  rail: '[data-risu-navigation-rail]',
+  panel: '[data-risu-shell-sidebar-panel]',
+  main: '[data-risu-shell-main]',
 }
 
 interface Ownership {
@@ -741,8 +755,43 @@ test('Use this device switches A to B to A in place while preserving reader rout
     await expect(messageBody(pair.b.page, 'switch-seed-B')).toContainText('Committed switch seed B.')
     expect(durableSnapshot(pair.harness.dataDir).selectedCharacterId).toBe(CHARACTER_A)
 
+    const [writerDemotionSampler, readerPromotionSampler, writerDemotionShifts, readerPromotionShifts] =
+      await Promise.all([
+        startLayoutFrameSampler(pair.a.page, SHELL_LAYOUT_SELECTORS, 'writer-demotion'),
+        startLayoutFrameSampler(pair.b.page, SHELL_LAYOUT_SELECTORS, 'reader-promotion'),
+        startLayoutShiftSampler(pair.a.page, SHELL_LAYOUT_SELECTORS, 'writer-demotion'),
+        startLayoutShiftSampler(pair.b.page, SHELL_LAYOUT_SELECTORS, 'reader-promotion'),
+      ])
     await promoteViaUi(pair, pair.b, pair.a, ROUTE_B, 2)
     await expectReader(pair.a, ROUTE_A, CHAT_A)
+    const [writerDemotionFrames, readerPromotionFrames] = await Promise.all([
+      stopLayoutFrameSampler(pair.a.page, writerDemotionSampler),
+      stopLayoutFrameSampler(pair.b.page, readerPromotionSampler),
+    ])
+    const [writerDemotionLayoutShifts, readerPromotionLayoutShifts] = await Promise.all([
+      stopLayoutShiftSampler(pair.a.page, writerDemotionShifts),
+      stopLayoutShiftSampler(pair.b.page, readerPromotionShifts),
+    ])
+    const transitionFrames = {
+      writerDemotion: analyzeHorizontalLayoutFrames(writerDemotionFrames),
+      readerPromotion: analyzeHorizontalLayoutFrames(readerPromotionFrames),
+    }
+    evidence.transitionFrames = transitionFrames
+    for (const [transition, report] of Object.entries(transitionFrames)) {
+      expect(report.missing, `${transition}: ${formatLayoutFrameFailure(report)}`).toEqual([])
+      expect(report.maximumDelta, `${transition}: ${formatLayoutFrameFailure(report)}`).toBeLessThanOrEqual(1)
+    }
+    const transitionLayoutShifts = {
+      writerDemotion: writerDemotionLayoutShifts,
+      readerPromotion: readerPromotionLayoutShifts,
+    }
+    evidence.transitionLayoutShifts = transitionLayoutShifts
+    for (const [transition, shifts] of Object.entries(transitionLayoutShifts)) {
+      expect(
+        findOwnedLayoutShifts(shifts).filter((shift) => !shift.hadRecentInput),
+        `${transition}: ${JSON.stringify(shifts, null, 2)}`,
+      ).toEqual([])
+    }
     await expect(pair.b.page.getByTestId('default-chat-composer')).toHaveValue('')
     await expect
       .poll(async () =>

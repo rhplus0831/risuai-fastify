@@ -7,6 +7,7 @@
     settingsOpen,
     sideBarClosing,
     sideBarStore,
+    sideBarTransitionCause,
     openPresetList,
     openPersonaList,
     openChatGenerationTogglePresetList,
@@ -296,15 +297,24 @@
 
   function closeResponsiveSidebar(): void {
     if ($sideBarClosing) return
+    sideBarTransitionCause.set('explicit-close')
     sideBarClosing.set(true)
   }
 
-  function handleResponsiveSidebarKeydown(event: KeyboardEvent): void {
-    if (event.key !== 'Escape') return
-    event.preventDefault()
-    event.stopPropagation()
-    closeResponsiveSidebar()
-  }
+  let previousObserverMode = $state<boolean | undefined>()
+  $effect(() => {
+    const observerMode = preWriterObserverMode
+    if (previousObserverMode === undefined) {
+      previousObserverMode = observerMode
+      return
+    }
+    if (observerMode === previousObserverMode) return
+    previousObserverMode = observerMode
+    untrack(() => {
+      sideBarTransitionCause.set('none')
+      sideBarClosing.set(false)
+    })
+  })
 
   let routeChatIsOpen = $derived($currentRoute.kind === 'character' && typeof $currentRoute.chatId === 'string')
 
