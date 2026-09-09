@@ -11,11 +11,7 @@ vi.mock('./process/modules', () => ({
 vi.mock('./model/modellist', () => ({ getModelInfo: vi.fn(() => ({ type: 'chat' })) }))
 
 import { discardReaderProjectionState } from './readerProjectionLifecycle'
-import {
-  peekReaderRouteIntent,
-  recordReaderRouteIntent,
-  resetReaderRouteIntentForTests,
-} from './readerRouteIntent'
+import { peekReaderRouteIntent, recordReaderRouteIntent, resetReaderRouteIntentForTests } from './readerRouteIntent'
 import { readerWorkspaceLifecycleStore, resetReaderWorkspaceLifecycleForTests } from './readerWorkspaceLifecycle.svelte'
 import { characterShellHydrationState } from './server/characterShellHydration.svelte'
 import {
