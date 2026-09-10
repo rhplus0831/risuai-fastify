@@ -18,7 +18,7 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
-async function harness(blockStorage = false) {
+async function harness(blockStorage = false, build = 'unknown') {
   vi.stubEnv('RISU_PROTOCOL_METRICS', '')
   const dataDir = mkdtempSync(path.join(tmpdir(), 'risu-diagnostics-runtime-'))
   const db = openDatabase(dataDir)
@@ -41,7 +41,7 @@ async function harness(blockStorage = false) {
       supportDiagnostics: { enabled: true },
     },
     collector,
-    'ab'.repeat(16),
+    { instanceId: 'ab'.repeat(16), build },
   )
   cleanup.push(async () => {
     await runtime.close()
@@ -57,6 +57,51 @@ async function harness(blockStorage = false) {
 }
 
 describe('diagnostics runtime isolation from application authority', () => {
+  it('exports sanitized application frames only for the matching known build and only in v3', async () => {
+    const build = 'c'.repeat(40)
+    const h = await harness(false, build)
+    const canary = 'PRIVATE_RUNTIME_ERROR_MESSAGE_CANARY'
+    h.app.get('/api/v1/build-bound-frame', async () => {
+      const error = new Error(canary)
+      error.stack = `Error: ${canary}\n    at handler (/deploy/server/fastify/src/app.ts:12:3)\n    at plugin (/private/plugin.ts:9:1)`
+      throw error
+    })
+    const failure = await h.app.inject('/api/v1/build-bound-frame')
+    await h.settled()
+    const identity = { build, instanceId: 'ab'.repeat(16) }
+    const reader = createRemoteDiagnosticsReader(h.runtime.source, identity)
+    const requestUid = failure.headers['x-request-uid']
+    const v3 = reader.read(parseRemoteDiagnosticsQuery({ version: '3', requestUid })!)
+    const v2 = reader.read(parseRemoteDiagnosticsQuery({ version: '2', requestUid })!)
+    if (typeof v3 === 'string' || typeof v2 === 'string') throw new Error('unexpected diagnostic error')
+    if (v3.version !== 3 || v2.version !== 2) throw new Error('unexpected diagnostic version')
+    const runtime = v3.entries.find((record) => record.entry.category === 'runtime')
+    expect(runtime).toMatchObject({
+      entry: { errorName: 'Error' },
+      facts: [{ id: 'runtime.location.0', type: 'location', value: 'server/fastify/src/app.ts:12:3' }],
+    })
+    expect(JSON.stringify(v2)).not.toContain('facts')
+    expect(JSON.stringify(v3)).not.toContain(canary)
+    expect(JSON.stringify(v3)).not.toContain('plugin.ts')
+
+    const unknown = await harness()
+    unknown.collector.record({
+      event: 'runtime-error',
+      level: 'error',
+      errorName: 'TypeError',
+      locations: ['server/fastify/src/app.ts:12:3'],
+    })
+    await unknown.settled()
+    const unknownReader = createRemoteDiagnosticsReader(unknown.runtime.source, {
+      build: 'unknown',
+      instanceId: 'ab'.repeat(16),
+    })
+    const unknownV3 = unknownReader.read(parseRemoteDiagnosticsQuery({ version: '3' })!)
+    if (typeof unknownV3 === 'string') throw new Error(unknownV3)
+    if (unknownV3.version !== 3) throw new Error('unexpected diagnostic version')
+    expect(JSON.stringify(unknownV3)).not.toContain('location')
+  })
+
   it('retains scoped metrics after the original request leaves the 2000 UID recognition window', async () => {
     const h = await harness()
     let release!: () => void

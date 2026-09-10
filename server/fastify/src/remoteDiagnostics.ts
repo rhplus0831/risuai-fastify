@@ -105,6 +105,18 @@ export function createRemoteDiagnosticsReader(
   now = Date.now,
 ) {
   const snapshots: Snapshot[] = []
+  const projectV3Record = (value: unknown) => {
+    const record = projectRemoteDiagnosticRecordV3(value)
+    if (!record?.facts?.some((fact) => fact.type === 'location')) return record
+    const facts = record.facts.filter(
+      (fact) => fact.type !== 'location' || (identity.build !== 'unknown' && record.instanceId === identity.instanceId),
+    )
+    const { facts: _facts, ...base } = record
+    return projectRemoteDiagnosticRecordV3({
+      ...base,
+      ...(facts.length ? { facts } : {}),
+    })
+  }
   const prune = (epoch: string) => {
     for (let i = snapshots.length - 1; i >= 0; i--) {
       if (snapshots[i].expiresAt <= now() || snapshots[i].epoch !== epoch) snapshots.splice(i, 1)
@@ -123,7 +135,7 @@ export function createRemoteDiagnosticsReader(
       ? {
           ...snapshot.metadata,
           ...common,
-          entries: snapshot.pages[index].map((entry) => projectRemoteDiagnosticRecordV3(entry)!),
+          entries: snapshot.pages[index].map((entry) => projectV3Record(entry)!),
         }
       : snapshot.metadata.version === 2
         ? {
@@ -167,8 +179,8 @@ export function createRemoteDiagnosticsReader(
         const record =
           query.version === 3
             ? persisted
-              ? (validated as RemoteDiagnosticRecordV3)
-              : projectRemoteDiagnosticRecordV3(promoteRemoteDiagnosticRecord(validated as RemoteDiagnosticRecord))
+              ? projectV3Record(validated)
+              : projectV3Record(promoteRemoteDiagnosticRecord(validated as RemoteDiagnosticRecord))
             : query.version === 2
               ? persisted
                 ? projectV2Record(validated)

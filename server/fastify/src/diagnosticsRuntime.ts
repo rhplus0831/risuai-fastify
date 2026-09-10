@@ -9,6 +9,8 @@ import {
   type BrowserDiagnosticsBatch,
   type BrowserDiagnosticsUploadResponse,
   type DiagnosticEventV2,
+  type RemoteDiagnosticFact,
+  type RemoteDiagnosticsResponse,
 } from '@risuai/protocol/remote-diagnostics'
 import type { AppConfig } from './config.js'
 import type { ClientDiagnostics } from './clientDiagnostics.js'
@@ -32,8 +34,9 @@ export function createDiagnosticsRuntime(
   db: DatabaseSync,
   config: AppConfig,
   collector: ClientDiagnostics,
-  instanceId: string,
+  identity: RemoteDiagnosticsResponse['identity'],
 ) {
+  const { instanceId } = identity
   const browserEnabled = collector.enabled && config.browserDiagnostics?.enabled === true
   const enabled = collector.enabled && (config.supportDiagnostics?.enabled === true || browserEnabled)
   if (!enabled) {
@@ -54,13 +57,14 @@ export function createDiagnosticsRuntime(
   let keyReady = false
   let operationContinuity: 'retained' | 'process-only' = 'process-only'
   const referenceKey = randomBytes(32)
-  const startup: { entry: DiagnosticEventV2; context?: DiagnosticContext }[] = []
+  const startup: { entry: DiagnosticEventV2; context?: DiagnosticContext; facts?: readonly RemoteDiagnosticFact[] }[] =
+    []
   let startupDropped = 0
-  const record = (entry: DiagnosticEventV2, context?: DiagnosticContext) => {
+  const record = (entry: DiagnosticEventV2, context?: DiagnosticContext, facts?: readonly RemoteDiagnosticFact[]) => {
     if (!keyReady) {
-      if (startup.length < 256) startup.push({ entry, context })
+      if (startup.length < 256) startup.push({ entry, context, facts })
       else startupDropped = Math.min(Number.MAX_SAFE_INTEGER, startupDropped + 1)
-    } else journal.record(entry)
+    } else journal.record(entry, undefined, facts)
   }
   const flushStartup = () => {
     while (startup.length) {
@@ -72,7 +76,7 @@ export function createDiagnosticsRuntime(
           ? { operationRef: pending.context.operationRef, attemptRef: pending.context.attemptRef }
           : {}),
       })
-      if (entry) journal.record(entry)
+      if (entry) journal.record(entry, undefined, pending.facts)
     }
   }
   const history = () => {
@@ -170,7 +174,15 @@ export function createDiagnosticsRuntime(
             }
           : {}),
       })
-      if (projected) record(projected, scoped ? context : undefined)
+      const facts =
+        identity.build !== 'unknown' &&
+        (entry.event === 'runtime-error' || entry.event === 'unhandled-rejection') &&
+        entry.locations?.length
+          ? entry.locations.map(
+              (value, index): RemoteDiagnosticFact => ({ id: `runtime.location.${index}`, type: 'location', value }),
+            )
+          : undefined
+      if (projected) record(projected, scoped ? context : undefined, facts)
     } catch {
       /* Sanitized telemetry never controls the observed request. */
     }

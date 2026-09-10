@@ -131,6 +131,50 @@ describe('remote support diagnostics', () => {
     expect(isRemoteDiagnosticsResponse(v2)).toBe(true)
   })
 
+  it('removes location facts that cannot be tied to the response build instance', () => {
+    const now = Date.now()
+    const record = {
+      sequence: 1,
+      receivedAt: now,
+      instanceId: 'a'.repeat(32),
+      provenance: { kind: 'server' as const },
+      entry: {
+        timestamp: now,
+        source: 'server' as const,
+        level: 'error' as const,
+        correlation: 'background' as const,
+        category: 'runtime' as const,
+        kind: 'runtime-error' as const,
+      },
+      facts: [
+        { id: 'runtime.location.0', type: 'location' as const, value: 'server/fastify/src/app.ts:12:3' },
+        { id: 'runtime.retryable', type: 'boolean' as const, value: true },
+      ],
+    }
+    const source: RemoteDiagnosticsSource = {
+      enabled: true,
+      read: () => ({
+        entries: [record],
+        epoch: 'b'.repeat(32),
+        source: 'journal',
+        dropped: 0,
+        rejected: 0,
+        pruned: 0,
+      }),
+    }
+    for (const identity of [
+      { build: 'unknown', instanceId: record.instanceId },
+      { build: 'c'.repeat(40), instanceId: 'd'.repeat(32) },
+    ]) {
+      const response = createRemoteDiagnosticsReader(source, identity).read(
+        parseRemoteDiagnosticsQuery({ version: '3' }, now)!,
+      )
+      if (typeof response === 'string') throw new Error(response)
+      expect(response.entries[0]).toMatchObject({ facts: [{ id: 'runtime.retryable', value: true }] })
+      expect(JSON.stringify(response)).not.toContain('runtime.location')
+    }
+  })
+
   it('exports display preparation and conversion timings with cache counts even when raw metrics are off', async () => {
     vi.stubEnv('RISU_PROTOCOL_METRICS', '0')
     const h = await harness()

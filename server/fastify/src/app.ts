@@ -176,6 +176,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   assertSupportDiagnosticsConfig(config)
   const diagnostics = createClientDiagnostics(config.clientDiagnostics ?? Boolean(config.requestTrace))
   const diagnosticInstanceId = randomBytes(16).toString('hex')
+  const diagnosticIdentity = {
+    instanceId: diagnosticInstanceId,
+    build: /^[a-f0-9]{40,64}$/.test(process.env.RISU_BUILD_ID ?? '') ? process.env.RISU_BUILD_ID! : 'unknown',
+  }
   const app = Fastify({
     routerOptions: { onBadUrl: onDiagnosticBadUrl },
     disableRequestLogging: (request) => isDiagnosticTransportUrl(request.url),
@@ -287,7 +291,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   // Pre-credential-store preset copies must be repaired before routes or
   // workers can load them into a response, command baseline, or export.
   repairPersistedModelProfileInlineSecretsInSqlite(db)
-  const diagnosticsRuntime = createDiagnosticsRuntime(app, db, config, diagnostics, diagnosticInstanceId)
+  const diagnosticsRuntime = createDiagnosticsRuntime(app, db, config, diagnostics, diagnosticIdentity)
   reconcileGenerationOperationsAtStartup(db, serverInstanceId, app.log)
   reconcileGenerationEffectsAtStartup(db)
   const memoryEventBus = createMemoryEventBus(app.log)
@@ -458,10 +462,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     diagnosticsRuntime.browserEnabled,
   )
   registerActiveWriterGuard(app, activeWriterState)
-  const diagnosticIdentity = {
-    instanceId: diagnosticInstanceId,
-    build: /^[a-f0-9]{40,64}$/.test(process.env.RISU_BUILD_ID ?? '') ? process.env.RISU_BUILD_ID! : 'unknown',
-  }
   registerClientDiagnosticsRoutes(app, authState, diagnostics, diagnosticsRuntime.source, diagnosticIdentity)
   registerRemoteDiagnosticsRoutes(
     app,
