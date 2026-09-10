@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 2 in progress — destructive safety and persistence feedback.**
-- Next action: expose certified Preset/Agent dependency impact and preserve mutation outcome feedback.
+- State: **Phase 3 in progress — compact navigation and action density.**
+- Next action: refine the responsive drawer, chat hierarchy, row menus, and touch targets.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -20,7 +20,7 @@
 | --- | --- | --- |
 | [0. Shared contracts and acceptance baseline](phases/phase-0-shared-contracts-and-baseline.md) | Accepted | Shared diagnostics, certified deletion impact, safety DOM assertions, and a disposable-data compact browser scaffold are in place. |
 | [1. Effective state and validation](phases/phase-1-effective-state-and-validation.md) | Accepted | No-op, inherited, unchanged, invalid, and ineffective configurations are explicit before save or generation. |
-| [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Pending | Preview dependency consequences and preserve the existing accepted/queued/failed contract. |
+| [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Accepted | Dependency consequences are previewed and accepted/queued/failed recovery semantics remain explicit. |
 | [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Pending | Clarify the responsive drawer, reduce row-action crowding, and strengthen hierarchy and overflow cues. |
 | [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Pending | Replace implementation-first copy with outcomes and add insertion, completion, and preview assistance. |
 | [5. Guided BardWiki workspace](phases/phase-5-guided-bardwiki-workspace.md) | Pending | Turn the empty workspace, overrides, lifecycle tools, and mobile flow into guided tasks. |
@@ -189,3 +189,34 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   separate explicit draft, and asserts the exact sparse override payload.
 - Phase 1 accepted. Next slice: dependency-aware destructive confirmations and
   deletion safety in Phase 2.
+
+### 2026-09-10 — Phase 2 destructive-impact and dependency slice
+
+- Source base: `1cd3cb1ec`.
+- Changed owners: Agent/Preset settings, a focused Preset deletion dialog,
+  localized destructive copy, and component interaction tests. The Phase 0
+  impact projector and existing command/rollback paths remain the data owners.
+- Preset deletion now shows a target-bearing alert dialog with bounded global
+  default, explicit-chat, and loadout categories plus each post-delete
+  fallback. Submission rechecks the certified projection and requires another
+  review if it changed. Unavailable or malformed owners disable deletion and
+  expose a retry action.
+- Cancellation performs no mutation and restores trigger focus. Accepted
+  deletion announces authoritative cleanup counts; queued deletion says pending
+  sync and never claims server success; failed deletion stays in the dialog with
+  the retained command error. Danger actions have text/icon treatment,
+  target-bearing accessible names, and a visual separator.
+- Agent cards now disclose every blocking Preset and use count, with an action
+  that opens that Preset. The still-disabled delete control names the Agent and
+  dependency count; the server hard rejection is unchanged.
+- Passed `pnpm test -- src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`
+  (37 tests), `pnpm test -- src/ts/agentPresets.test.ts` (39 tests), `pnpm test
+  -- src/ts/agents.test.ts` (7 tests), `pnpm test --
+  server/fastify/__tests__/agentPresetDeletionSafety.test.ts` (13 tests),
+  `pnpm test -- src/lib/Setting/Pages/InputHookSettings.svelte.test.ts` (9
+  tests), and `pnpm check` with no diagnostics.
+- Existing Input Hook tests confirm named cancellation, accepted/queued/failed
+  feedback, Retry, focus recovery, and a newer edit winning over an older
+  settlement; no working autosave abstraction was replaced.
+- Phase 2 accepted. Next slice: responsive navigation and consolidated compact
+  row actions in Phase 3.

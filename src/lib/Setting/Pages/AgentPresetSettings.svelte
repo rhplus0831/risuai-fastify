@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from 'svelte'
   import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PencilIcon, PlusIcon, TrashIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
@@ -7,6 +8,7 @@
     createAgentPreset,
     deleteAgentPreset,
     duplicateAgentPreset,
+    getAgentPresetDeleteImpact,
     reorderAgentPresets,
     setAgentPresetDefault,
     updateAgentPreset,
@@ -24,6 +26,7 @@
     type AgentPresetStepRecord,
   } from 'src/ts/agentPresetRecords'
   import type { AgentPresetSnapshot } from 'src/ts/server/commands'
+  import type { AgentPresetDeleteImpactResult } from 'src/ts/agentPresetDeletionImpact'
   import {
     charactersResourceState,
     collectionsResourceState,
@@ -31,6 +34,7 @@
   } from 'src/ts/server/resourceState.svelte'
   import type { ModelProfileRecord } from 'src/ts/model/modelProfileRecords'
   import AgentPresetEditorDrawer from './AgentPresetEditorDrawer.svelte'
+  import AgentPresetDeleteDialog from './AgentPresetDeleteDialog.svelte'
   import AgentSettingsSection from './AgentSettingsSection.svelte'
 
   type EditorMode = 'create' | 'edit' | null
@@ -45,6 +49,11 @@
   let editorKey = $state(0)
   let busy = $state(false)
   let commandError = $state('')
+  let mutationMessage = $state('')
+  let deleteImpact = $state<AgentPresetDeleteImpactResult | null>(null)
+  let deleteSubmitting = $state(false)
+  let deleteError = $state('')
+  let deleteTrigger: HTMLButtonElement | null = null
   const initialProjectionLatch = currentPendingAgentPresetGeneratedProjectionLatch()
   let mutationState = $state<'idle' | 'saving' | 'queued'>(initialProjectionLatch ? 'queued' : 'idle')
   let queuedProjectionLatch = $state<AgentPresetGeneratedProjectionLatch | null>(initialProjectionLatch)
@@ -96,6 +105,11 @@
     commandError = ''
   }
 
+  function openEditPresetById(presetId: string): void {
+    const preset = uniqueAgentPresetById(presets, presetId)
+    if (preset) openEditEditor(preset)
+  }
+
   function closeEditor(): void {
     editorMode = null
     editingPresetId = null
@@ -132,15 +146,73 @@
     handleResult(result)
   }
 
-  async function deletePreset(preset: AgentPresetRecord): Promise<void> {
+  function openDeletePreview(
+    preset: AgentPresetRecord,
+    event: MouseEvent & { currentTarget: HTMLButtonElement },
+  ): void {
     if (mutationLocked) return
-    if (!window.confirm(language.agentPresets.deletePresetConfirm(preset.name))) return
+    deleteTrigger = event.currentTarget
+    deleteError = ''
+    mutationMessage = ''
+    deleteImpact = getAgentPresetDeleteImpact(preset.id)
+  }
+
+  function retryDeleteImpact(): void {
+    if (!deleteImpact || deleteSubmitting) return
+    deleteError = ''
+    deleteImpact = getAgentPresetDeleteImpact(
+      deleteImpact.status === 'ready' ? deleteImpact.presetId : presetIdForDelete(),
+    )
+  }
+
+  function presetIdForDelete(): string {
+    const id = deleteTrigger?.closest<HTMLElement>('[data-preset-id]')?.dataset.presetId
+    return id ?? ''
+  }
+
+  async function closeDeletePreview(): Promise<void> {
+    if (deleteSubmitting) return
+    deleteImpact = null
+    deleteError = ''
+    await tick()
+    if (deleteTrigger?.isConnected) deleteTrigger.focus()
+    deleteTrigger = null
+  }
+
+  async function confirmDeletePreset(): Promise<void> {
+    if (mutationLocked || deleteSubmitting || deleteImpact?.status !== 'ready') return
+    const refreshedImpact = getAgentPresetDeleteImpact(deleteImpact.presetId)
+    if (refreshedImpact.status !== 'ready' || JSON.stringify(refreshedImpact) !== JSON.stringify(deleteImpact)) {
+      deleteImpact = refreshedImpact
+      deleteError = language.agentPresets.deleteImpactChanged
+      return
+    }
+    const impactAtSubmit = deleteImpact
+    deleteSubmitting = true
     busy = true
     mutationState = 'saving'
     commandError = ''
-    const result = await deleteAgentPreset(preset.id)
+    mutationMessage = language.agentPresets.deleteSaving(impactAtSubmit.presetName)
+    const result = await deleteAgentPreset(impactAtSubmit.presetId)
     busy = false
-    handleResult(result)
+    deleteSubmitting = false
+    const succeeded = handleResult(result)
+    if (result.status === 'accepted') {
+      mutationMessage = language.agentPresets.deleteAccepted(
+        impactAtSubmit.presetName,
+        result.result.clearedDefault,
+        result.result.clearedChatCount,
+        result.result.clearedLoadoutCount,
+      )
+      await closeDeletePreview()
+      return
+    }
+    if (result.status === 'queued') {
+      mutationMessage = language.agentPresets.deleteQueued(impactAtSubmit.presetName)
+      await closeDeletePreview()
+      return
+    }
+    if (!succeeded) deleteError = commandError || language.agentPresets.deleteFailed(impactAtSubmit.presetName)
   }
 
   async function movePreset(preset: AgentPresetRecord, delta: -1 | 1): Promise<void> {
@@ -350,10 +422,15 @@
     <p class="text-sm text-textcolor2">{language.agentPresets.settingsDescription}</p>
   </div>
 
-  <AgentSettingsSection />
+  <AgentSettingsSection onEditPreset={openEditPresetById} />
 
   {#if commandError}
-    <div class="rounded-md border border-draculared p-3 text-sm text-draculared">{commandError}</div>
+    <div role="alert" class="rounded-md border border-draculared p-3 text-sm text-draculared">{commandError}</div>
+  {/if}
+  {#if mutationMessage}
+    <div class="rounded-md border border-darkborderc p-3 text-sm text-textcolor2" role="status" aria-live="polite">
+      {mutationMessage}
+    </div>
   {/if}
   <div class="mt-4 flex flex-col gap-2">
     <label class="flex flex-col gap-1">
@@ -440,8 +517,13 @@
                     ><CopyIcon size={14} />{language.agentPresets.duplicate}</span>
                 </Button>
               </span>
-              <span data-risu-agent-preset-delete>
-                <Button size="sm" styled="danger" disabled={mutationLocked} onclick={() => deletePreset(preset)}>
+              <span class="border-l border-darkborderc pl-2" data-risu-agent-preset-delete data-risu-danger-action>
+                <Button
+                  size="sm"
+                  styled="danger"
+                  disabled={mutationLocked}
+                  ariaLabel={language.agentPresets.deletePresetAccessibleName(preset.name)}
+                  onclick={(event) => openDeletePreview(preset, event)}>
                   <span class="inline-flex items-center gap-1"
                     ><TrashIcon size={14} />{language.agentPresets.delete}</span>
                 </Button>
@@ -482,5 +564,15 @@
         onSave={saveEditor}
         onCancel={closeEditor} />
     {/key}
+  {/if}
+
+  {#if deleteImpact}
+    <AgentPresetDeleteDialog
+      impact={deleteImpact}
+      busy={deleteSubmitting}
+      error={deleteError}
+      onRetry={retryDeleteImpact}
+      onConfirm={confirmDeletePreset}
+      onCancel={closeDeletePreview} />
   {/if}
 </section>

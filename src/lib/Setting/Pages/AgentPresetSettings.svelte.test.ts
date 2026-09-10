@@ -11,7 +11,18 @@ const presetSpies = vi.hoisted(() => ({
   createAgentPreset: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   updateAgentPreset: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   duplicateAgentPreset: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
-  deleteAgentPreset: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
+  deleteAgentPreset: vi.fn(async () => ({
+    status: 'accepted',
+    result: { status: 'ok', clearedDefault: false, clearedChatCount: 0, clearedLoadoutCount: 0 },
+  })),
+  getAgentPresetDeleteImpact: vi.fn((presetId: string): any => ({
+    status: 'ready',
+    presetId,
+    presetName: 'Research Preset',
+    globalDefault: { affected: false, postDeleteSelection: { source: 'none' } },
+    chats: [],
+    loadouts: [],
+  })),
   reorderAgentPresets: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   setAgentPresetDefault: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   currentPendingAgentPresetGeneratedProjectionLatch: vi.fn(() => null),
@@ -133,6 +144,14 @@ beforeEach(() => {
   target = document.createElement('div')
   document.body.appendChild(target)
   for (const spy of [...Object.values(presetSpies), ...Object.values(agentSpies)]) spy.mockClear()
+  presetSpies.getAgentPresetDeleteImpact.mockImplementation((presetId: string) => ({
+    status: 'ready',
+    presetId,
+    presetName: preset.name,
+    globalDefault: { affected: false, postDeleteSelection: { source: 'none' } },
+    chats: [],
+    loadouts: [],
+  }))
   agentSpies.agentUsageCount.mockReturnValue(1)
   vi.stubGlobal(
     'confirm',
@@ -802,6 +821,221 @@ describe('modular Agent Preset settings', () => {
 
     const deleteButton = target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[4]
     expect(deleteButton.disabled).toBe(true)
+    expect(deleteButton.getAttribute('aria-label')).toContain(agent.name)
+  })
+
+  it('identifies every Preset blocking Agent deletion and opens the selected dependency', async () => {
+    const secondPreset = {
+      ...preset,
+      id: 'ap_second',
+      name: 'Second Preset',
+      agentUses: [{ ...preset.agentUses![0], id: 'apu_second' }],
+    }
+    seed([agent], [preset, secondPreset])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    const dependencies = target.querySelector<HTMLDetailsElement>('[data-risu-agent-dependencies]')!
+    expect(dependencies.textContent).toContain(language.agentPresets.usedByPresets(2))
+    expect(dependencies.textContent).toContain(language.agentPresets.presetUseCount(preset.name, 1))
+    expect(dependencies.textContent).toContain(language.agentPresets.presetUseCount(secondPreset.name, 1))
+    dependencies.open = true
+    await tick()
+    clickButtonContaining(dependencies, language.agentPresets.openBlockingPreset(secondPreset.name))
+    await tick()
+
+    expect(target.querySelector<HTMLInputElement>('[data-risu-agent-preset-name-input] input')?.value).toBe(
+      secondPreset.name,
+    )
+  })
+
+  it('previews bounded Preset deletion impact and restores focus when cancelled', async () => {
+    presetSpies.getAgentPresetDeleteImpact.mockReturnValue({
+      status: 'ready',
+      presetId: preset.id,
+      presetName: preset.name,
+      globalDefault: {
+        affected: false,
+        beforePresetId: 'ap_default',
+        beforePresetName: 'Everyday',
+        postDeleteSelection: { source: 'globalDefault', presetId: 'ap_default', presetName: 'Everyday' },
+      },
+      chats: Array.from({ length: 6 }, (_, index) => ({
+        characterId: `character-${index}`,
+        characterName: `Character ${index}`,
+        chatId: `chat-${index}`,
+        chatName: `Chat ${index}`,
+        postDeleteSelection: { source: 'globalDefault' as const, presetId: 'ap_default', presetName: 'Everyday' },
+      })),
+      loadouts: [
+        {
+          loadoutId: 'loadout-a',
+          loadoutName: 'Research setup',
+          postDeleteSelection: { source: 'none' as const },
+        },
+      ],
+    })
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    const trigger = target.querySelector<HTMLButtonElement>('[data-risu-agent-preset-delete] button')!
+    trigger.click()
+    await tick()
+    const dialog = target.querySelector<HTMLElement>('[data-risu-agent-preset-delete-dialog]')!
+    expect(dialog.textContent).toContain(preset.name)
+    expect(dialog.textContent).toContain('Character 4 / Chat 4')
+    expect(dialog.textContent).not.toContain('Character 5 / Chat 5')
+    expect(dialog.textContent).toContain(language.agentPresets.deleteImpactMore(1))
+    expect(dialog.textContent).toContain('Research setup')
+    expect(dialog.textContent).toContain(language.agentPresets.deleteImpactFallbackGlobal('Everyday'))
+
+    clickButtonContaining(dialog, language.agentPresets.cancel)
+    await tick()
+    expect(presetSpies.deleteAgentPreset).not.toHaveBeenCalled()
+    expect(target.querySelector('[data-risu-agent-preset-delete-dialog]')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('blocks Preset deletion until unavailable impact owners can be read', async () => {
+    presetSpies.getAgentPresetDeleteImpact
+      .mockReturnValueOnce({ status: 'unavailable', owner: 'characters', reason: 'loading' })
+      .mockReturnValueOnce({
+        status: 'ready',
+        presetId: preset.id,
+        presetName: preset.name,
+        globalDefault: { affected: true, postDeleteSelection: { source: 'none' } },
+        chats: [],
+        loadouts: [],
+      })
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelector<HTMLButtonElement>('[data-risu-agent-preset-delete] button')!.click()
+    await tick()
+    const dialog = target.querySelector<HTMLElement>('[data-risu-agent-preset-delete-dialog]')!
+    expect(
+      [...dialog.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+        button.textContent?.includes(language.agentPresets.deletePermanently),
+      )?.disabled,
+    ).toBe(true)
+    expect(dialog.textContent).toContain(language.agentPresets.deleteImpactOwnerChats)
+    expect(presetSpies.deleteAgentPreset).not.toHaveBeenCalled()
+    clickButtonContaining(dialog, language.agentPresets.deleteImpactRetry)
+    await tick()
+    expect(dialog.querySelector('[data-risu-agent-preset-delete-default]')).not.toBeNull()
+  })
+
+  it('announces accepted Preset cleanup counts only after server acceptance', async () => {
+    presetSpies.deleteAgentPreset.mockResolvedValueOnce({
+      status: 'accepted',
+      result: { status: 'ok', clearedDefault: true, clearedChatCount: 2, clearedLoadoutCount: 1 },
+    })
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelector<HTMLButtonElement>('[data-risu-agent-preset-delete] button')!.click()
+    await tick()
+    target
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${language.agentPresets.confirmDeletePreset(preset.name)}"]`,
+      )!
+      .click()
+    await flush()
+
+    expect(presetSpies.deleteAgentPreset).toHaveBeenCalledWith(preset.id)
+    expect(target.querySelector('[role="status"]')?.textContent).toContain(
+      language.agentPresets.deleteAccepted(preset.name, true, 2, 1),
+    )
+  })
+
+  it('labels a queued Preset deletion as pending sync rather than server success', async () => {
+    presetSpies.deleteAgentPreset.mockResolvedValueOnce({
+      status: 'queued',
+      result: { status: 'unavailable', clearedDefault: false, clearedChatCount: 0, clearedLoadoutCount: 0 },
+    } as never)
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelector<HTMLButtonElement>('[data-risu-agent-preset-delete] button')!.click()
+    await tick()
+    target
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${language.agentPresets.confirmDeletePreset(preset.name)}"]`,
+      )!
+      .click()
+    await flush()
+
+    const status = target.querySelector('[role="status"]')?.textContent ?? ''
+    expect(status).toContain(language.agentPresets.deleteQueued(preset.name))
+    expect(status).not.toContain('Deleted')
+  })
+
+  it('requires another review when Preset deletion impact changes before submission', async () => {
+    const originalImpact = {
+      status: 'ready' as const,
+      presetId: preset.id,
+      presetName: preset.name,
+      globalDefault: { affected: false, postDeleteSelection: { source: 'none' as const } },
+      chats: [],
+      loadouts: [],
+    }
+    presetSpies.getAgentPresetDeleteImpact.mockReturnValueOnce(originalImpact).mockReturnValueOnce({
+      ...originalImpact,
+      chats: [
+        {
+          characterId: 'character-new',
+          characterName: 'New owner',
+          chatId: 'chat-new',
+          chatName: 'New chat',
+          postDeleteSelection: { source: 'none' as const },
+        },
+      ],
+    })
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelector<HTMLButtonElement>('[data-risu-agent-preset-delete] button')!.click()
+    await tick()
+    target
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${language.agentPresets.confirmDeletePreset(preset.name)}"]`,
+      )!
+      .click()
+    await tick()
+
+    const dialog = target.querySelector<HTMLElement>('[data-risu-agent-preset-delete-dialog]')!
+    expect(presetSpies.deleteAgentPreset).not.toHaveBeenCalled()
+    expect(dialog.querySelector('[role="alert"]')?.textContent).toContain(language.agentPresets.deleteImpactChanged)
+    expect(dialog.textContent).toContain('New owner / New chat')
+  })
+
+  it('keeps a failed Preset deletion recoverable in the impact dialog', async () => {
+    presetSpies.deleteAgentPreset.mockResolvedValueOnce({
+      status: 'failed',
+      result: { status: 'error', error: 'Server rejected deletion' },
+    } as never)
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelector<HTMLButtonElement>('[data-risu-agent-preset-delete] button')!.click()
+    await tick()
+    target
+      .querySelector<HTMLButtonElement>(
+        `button[aria-label="${language.agentPresets.confirmDeletePreset(preset.name)}"]`,
+      )!
+      .click()
+    await flush()
+
+    expect(target.querySelector('[data-risu-agent-preset-delete-dialog]')).not.toBeNull()
+    expect(target.querySelector('[data-risu-agent-preset-delete-dialog] [role="alert"]')?.textContent).toContain(
+      'Server rejected deletion',
+    )
   })
 
   it('fails closed when settings owners contain duplicate stable IDs', async () => {

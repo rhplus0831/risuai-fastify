@@ -3,7 +3,6 @@
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
   import {
-    agentUsageCount,
     createAgent,
     deleteAgent,
     duplicateAgent,
@@ -11,16 +10,23 @@
     updateAgent,
     type AgentMutationOutcome,
   } from 'src/ts/agents'
-  import type { AgentRecord } from 'src/ts/agentPresetRecords'
+  import type { AgentPresetRecord, AgentRecord } from 'src/ts/agentPresetRecords'
   import type { AgentSnapshot } from 'src/ts/server/commands'
   import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
   import AgentEditorDrawer from './AgentEditorDrawer.svelte'
+
+  interface Props {
+    onEditPreset?: (presetId: string) => void
+  }
+
+  let { onEditPreset }: Props = $props()
 
   let mode = $state<'create' | 'edit' | null>(null)
   let editingId = $state<string | null>(null)
   let busy = $state(false)
   let error = $state('')
   let agents = $derived(readAgentOwners(settingsResourceState.value.agents))
+  let presets = $derived(readPresetOwners(settingsResourceState.value.agentPresets))
   let editingAgent = $derived(editingId ? uniqueAgentById(agents, editingId) : undefined)
 
   function readAgentOwners(value: unknown): AgentRecord[] {
@@ -33,6 +39,25 @@
       ids.add(id)
     }
     return value as AgentRecord[]
+  }
+
+  function readPresetOwners(value: unknown): AgentPresetRecord[] {
+    if (!Array.isArray(value)) return []
+    const ids = new Set<string>()
+    for (const candidate of value) {
+      if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) return []
+      const id = (candidate as { id?: unknown }).id
+      if (typeof id !== 'string' || id.trim() !== id || id.length === 0 || ids.has(id)) return []
+      ids.add(id)
+    }
+    return value as AgentPresetRecord[]
+  }
+
+  function referencingPresets(agentId: string): Array<{ preset: AgentPresetRecord; useCount: number }> {
+    return presets.flatMap((preset) => {
+      const useCount = (preset.agentUses ?? []).filter((use) => use.agentId === agentId).length
+      return useCount > 0 ? [{ preset, useCount }] : []
+    })
   }
 
   function uniqueAgentById(rows: readonly AgentRecord[], id: string): AgentRecord | undefined {
@@ -136,6 +161,7 @@
   {:else}
     <div class="grid gap-2 lg:grid-cols-2" data-risu-agent-list>
       {#each agents as agent, index (agent.id)}
+        {@const references = referencingPresets(agent.id)}
         <article class="risu-card flex flex-col gap-2" data-risu-agent-row data-agent-id={agent.id}>
           <div class="flex flex-wrap items-center gap-2">
             <span class="font-medium">{agent.name}</span>
@@ -152,17 +178,41 @@
                 ><PencilIcon size={14} /></Button>
               <Button size="sm" styled="outlined" disabled={busy} onclick={() => copy(agent)}
                 ><CopyIcon size={14} /></Button>
-              <Button
-                size="sm"
-                styled="danger"
-                disabled={busy || agentUsageCount(agent.id) > 0}
-                onclick={() => remove(agent)}><TrashIcon size={14} /></Button>
+              <span class="border-l border-darkborderc pl-1" data-risu-danger-action>
+                <Button
+                  size="sm"
+                  styled="danger"
+                  disabled={busy || references.length > 0}
+                  ariaLabel={references.length > 0
+                    ? language.agentPresets.deleteAgentBlocked(agent.name, references.length)
+                    : language.agentPresets.deleteAgentAccessibleName(agent.name)}
+                  onclick={() => remove(agent)}><TrashIcon size={14} /></Button>
+              </span>
             </div>
           </div>
           {#if agent.description}<p class="text-xs text-textcolor2">{agent.description}</p>{/if}
           <span class="break-all text-xs text-textcolor2">{agent.id}</span>
-          <span class="text-xs text-textcolor2"
-            >{language.agentPresets.agentUsageCount(agentUsageCount(agent.id))}</span>
+          {#if references.length > 0}
+            <details class="text-xs text-textcolor2" data-risu-agent-dependencies>
+              <summary class="cursor-pointer font-medium text-textcolor">
+                {language.agentPresets.usedByPresets(references.length)}
+              </summary>
+              <ul class="mt-2 space-y-1 border-l border-darkborderc pl-3">
+                {#each references as reference (reference.preset.id)}
+                  <li class="flex flex-wrap items-center justify-between gap-2">
+                    <span>{language.agentPresets.presetUseCount(reference.preset.name, reference.useCount)}</span>
+                    {#if onEditPreset}
+                      <Button size="sm" styled="outlined" onclick={() => onEditPreset?.(reference.preset.id)}>
+                        {language.agentPresets.openBlockingPreset(reference.preset.name)}
+                      </Button>
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            </details>
+          {:else}
+            <span class="text-xs text-textcolor2">{language.agentPresets.agentUnused}</span>
+          {/if}
         </article>
       {/each}
     </div>
