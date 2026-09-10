@@ -62,7 +62,7 @@ test('BardWiki settings, manual document, confirmation status, and lifecycle too
 
   const dialog = page.getByRole('dialog', { name: 'BardWiki workspace', exact: true })
   await expect(dialog).toBeVisible()
-  await dialog.getByRole('button', { name: 'New document', exact: true }).click()
+  await dialog.getByRole('button', { name: 'Create first document', exact: true }).click()
   await dialog.getByLabel('Document title', { exact: true }).fill('Old Tavern')
   await dialog.getByLabel('Logical path', { exact: true }).fill('Places/Old Tavern')
   await dialog.getByLabel('Markdown source', { exact: true }).fill('## Old Tavern\n\nMira waits here.')
@@ -86,8 +86,8 @@ test('BardWiki settings, manual document, confirmation status, and lifecycle too
   await expect(dialog).toContainText('Turn bardwiki-user → bardwiki-assistant')
   await expect(dialog).toContainText('Apply confirmed turn')
 
-  await dialog.getByText('Lifecycle and vault tools', { exact: true }).click()
-  await expect(dialog).toContainText('fresh mode replaces derived documents')
+  await dialog.getByText('Build and transfer', { exact: true }).click()
+  await expect(dialog).toContainText('Start fresh replaces model-derived documents')
   await expect(dialog).toContainText('Replace mode overwrites only documents')
 
   await page.reload()
