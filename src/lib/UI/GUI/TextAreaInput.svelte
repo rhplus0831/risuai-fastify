@@ -23,6 +23,7 @@
   interface Props {
     size?: 'xs' | 'sm' | 'md' | 'lg' | 'xl' | 'default'
     autocomplete?: 'on' | 'off'
+    autocompleteOptions?: readonly string[]
     placeholder?: string
     value: string
     id?: string
@@ -45,6 +46,7 @@
   let {
     size = 'default',
     autocomplete = 'off',
+    autocompleteOptions = [],
     placeholder = '',
     value = $bindable(),
     id = undefined,
@@ -72,6 +74,8 @@
   let autoCompleteDom: HTMLDivElement = $state()
   let autocompleteContents: string[] = $state([])
   let inputDom: HTMLDivElement = $state()
+  let textareaDom: HTMLTextAreaElement = $state()
+  let mounted = false
   let highlightTimer: ReturnType<typeof setTimeout> | null = null
   let popupEditorRun = 0
   let popupEditorContextRevision = 0
@@ -88,7 +92,7 @@
     sidebarSettingsReady && Boolean(settingsResourceState.value.longPressToPopupEditor),
   )
 
-  const isInteractionDisabled = () => disabled || Boolean(inputDom?.closest('fieldset[disabled]'))
+  const isInteractionDisabled = () => disabled || Boolean((inputDom ?? textareaDom)?.closest('fieldset[disabled]'))
 
   const isPopupEditorEnabled = () =>
     popupEditor === true ||
@@ -269,7 +273,7 @@
       return
     }
     const qText = splited.pop() ?? ''
-    let filtered = AllCBS.filter((cb) => cb.startsWith(qText))
+    let filtered = [...new Set([...autocompleteOptions, ...AllCBS])].filter((cb) => cb.startsWith(qText))
     if (filtered.length === 0) {
       hideAutoComplete()
       return
@@ -295,7 +299,6 @@
       hideAutoComplete()
       return
     }
-    console.log(insertContent)
     if (replaceSelectionText(insertContent, type)) {
       hideAutoComplete()
     }
@@ -333,10 +336,12 @@
   })
 
   onMount(() => {
+    mounted = true
     scheduleHighlight()
   })
 
   onDestroy(() => {
+    mounted = false
     unregisterPopupDraft()
     popupEditorRun++
     if (activePopupEditorSessionId !== null) {
@@ -408,6 +413,30 @@
     }
   }
 
+  export async function insertAtCaret(text: string): Promise<boolean> {
+    if (!mounted || isInteractionDisabled()) return false
+    if (inputDom) {
+      inputDom.focus()
+      return replaceSelectionText(text)
+    }
+    if (!textareaDom) return false
+    const start = textareaDom.selectionStart ?? textareaDom.value.length
+    const end = textareaDom.selectionEnd ?? start
+    const nextValue = `${textareaDom.value.slice(0, start)}${text}${textareaDom.value.slice(end)}`
+    textareaDom.value = nextValue
+    textareaDom.dispatchEvent(new Event('input', { bubbles: true }))
+    await Promise.resolve()
+    if (!mounted || !textareaDom.isConnected) return false
+    textareaDom.focus()
+    textareaDom.setSelectionRange(start + text.length, start + text.length)
+    return true
+  }
+
+  export function focusEditor(): void {
+    if (!mounted || isInteractionDisabled()) return
+    ;(inputDom ?? textareaDom)?.focus()
+  }
+
   $effect.pre(() => {
     void popupEditorContext
     popupEditorContextRevision++
@@ -474,6 +503,7 @@
       {id}
       {disabled}
       aria-label={ariaLabel}
+      bind:this={textareaDom}
       bind:value
       oninput={(e) => {
         if (optimaizedInput) {

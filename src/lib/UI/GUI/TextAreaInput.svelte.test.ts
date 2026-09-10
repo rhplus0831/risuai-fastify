@@ -42,14 +42,18 @@ function autocompleteSuggestion(label: string): HTMLButtonElement | null {
   return Array.from(target.querySelectorAll('button')).find((button) => button.textContent?.trim() === label) ?? null
 }
 
-async function openAutocomplete(onAncestorKeydown?: (event: KeyboardEvent) => void): Promise<HTMLDivElement> {
+async function openAutocomplete(
+  onAncestorKeydown?: (event: KeyboardEvent) => void,
+  initialValue = '{{cha',
+  autocompleteOptions: readonly string[] = [],
+): Promise<HTMLDivElement> {
   vi.spyOn(Range.prototype, 'getBoundingClientRect').mockReturnValue(DOMRect.fromRect({ x: 10, y: 10 }))
   component = onAncestorKeydown
     ? mount(TextAreaInputTestHost, {
         target,
         props: {
           initialContext: 'autocomplete-owner',
-          initialValue: '{{cha',
+          initialValue,
           highlight: true,
           popupEditor: false,
           onAncestorKeydown,
@@ -58,9 +62,10 @@ async function openAutocomplete(onAncestorKeydown?: (event: KeyboardEvent) => vo
     : mount(TextAreaInput, {
         target,
         props: {
-          value: '{{cha',
+          value: initialValue,
           highlight: true,
           popupEditor: false,
+          autocompleteOptions,
         },
       })
   await tick()
@@ -117,6 +122,31 @@ afterEach(() => {
 })
 
 describe('TextAreaInput popup editor finalization', () => {
+  it('inserts into the plain editor caret and refuses stale post-unmount insertion', async () => {
+    const onInput = vi.fn()
+    component = mount(TextAreaInput, {
+      target,
+      props: { value: 'AlphaBeta', popupEditor: false, onInput },
+    })
+    await tick()
+    const editor = textarea()
+    editor.setSelectionRange(5, 5)
+    const api = component as unknown as {
+      insertAtCaret: (text: string) => Promise<boolean>
+    }
+
+    await expect(api.insertAtCaret(' ')).resolves.toBe(true)
+    expect(editor.value).toBe('Alpha Beta')
+    expect(editor.selectionStart).toBe(6)
+    expect(document.activeElement).toBe(editor)
+    expect(onInput).toHaveBeenLastCalledWith('Alpha Beta')
+
+    unmount(component)
+    component = undefined
+    await expect(api.insertAtCaret('stale')).resolves.toBe(false)
+    expect(onInput).toHaveBeenCalledTimes(1)
+  })
+
   it('does not commit a newer popup session into an earlier field', async () => {
     const firstTarget = document.createElement('div')
     const secondTarget = document.createElement('div')
@@ -499,6 +529,17 @@ describe('TextAreaInput highlighted disabled behavior', () => {
 })
 
 describe('TextAreaInput autocomplete selection', () => {
+  it('offers caller-provided authoring tokens and inserts the complete CBS expression', async () => {
+    const editor = await openAutocomplete(undefined, '{{agentT', ['agentToggle::tone'])
+    const suggestion = autocompleteSuggestion('agentToggle::tone')
+    expect(suggestion).toBeTruthy()
+
+    suggestion!.click()
+    await tick()
+
+    expect(editor.textContent).toBe('{{agentToggle::tone}}')
+  })
+
   it('applies a clicked suggestion after focus moves out of the editor', async () => {
     const editor = await openAutocomplete()
     const suggestion = autocompleteSuggestion('char')
