@@ -683,6 +683,99 @@ describe('BardWiki workspace', () => {
     expect(jobActions.retry).toHaveBeenCalledWith('job-a')
     expect(reads.chat).toHaveBeenCalledTimes(2)
     expect(target.textContent).toContain('Pending')
+    expect(target.querySelector('[data-risu-bardwiki-activity-announcement]')?.textContent).toContain(
+      language.bardWiki.jobRetryRequested(language.bardWiki.jobKinds.apply_turn),
+    )
+  })
+
+  it('summarizes activity and only reopens for newly actionable work', async () => {
+    const runningJob = {
+      id: 'job-running',
+      instanceId: 'instance-running',
+      chatId: 'chat-a',
+      receiptId: null,
+      kind: 'rebuild_chat' as const,
+      status: 'running' as const,
+      errorCode: null,
+      errorSummary: null,
+      attemptCount: 1,
+      maxAttempts: 3,
+      progressCurrent: 2,
+      progressTotal: 5,
+      nextRunAt: '2026-08-29T00:00:00.000Z',
+      createdAt: '2026-08-29T00:00:00.000Z',
+      updatedAt: '2026-08-29T00:01:00.000Z',
+    }
+    const failedJob = {
+      ...runningJob,
+      id: 'job-failed',
+      instanceId: 'instance-failed',
+      kind: 'apply_turn' as const,
+      status: 'failed' as const,
+      errorCode: 'provider_error',
+      errorSummary: 'The analysis provider failed',
+      progressCurrent: undefined,
+      progressTotal: undefined,
+    }
+    const attentionReceipt = {
+      id: 'receipt-attention',
+      chatId: 'chat-a',
+      userMessageId: 'user-a',
+      userContentHash: 'a'.repeat(64),
+      assistantMessageId: 'assistant-a',
+      assistantContentHash: 'b'.repeat(64),
+      confirmationMode: 'explicit' as const,
+      state: 'needs_review' as const,
+      eventDocumentId: null,
+      jobId: null,
+      errorCode: null,
+      errorSummary: null,
+      createdAt: '2026-08-29T00:00:00.000Z',
+      updatedAt: '2026-08-29T00:01:00.000Z',
+      appliedAt: null,
+    }
+    const activityResource = {
+      ...chatResource,
+      revision: 5,
+      receipts: [attentionReceipt],
+      jobs: [runningJob, failedJob],
+    }
+    reads.chat.mockResolvedValueOnce(activityResource)
+    component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+    await settle()
+
+    const activity = target.querySelector<HTMLDetailsElement>('[data-testid="bardwiki-activity"]')!
+    expect(target.querySelector('[data-risu-bardwiki-activity-summary]')?.textContent).toContain(
+      language.bardWiki.activitySummary(1, 1, 1),
+    )
+    expect(activity.open).toBe(true)
+
+    activity.open = false
+    activity.dispatchEvent(new Event('toggle'))
+    await settle()
+    applyBardWikiChatResource({ ...activityResource, revision: 6 })
+    await settle()
+    expect(activity.open).toBe(false)
+
+    applyBardWikiChatResource({
+      ...activityResource,
+      revision: 7,
+      jobs: [runningJob],
+    })
+    await settle()
+    expect(activity.open).toBe(false)
+
+    applyBardWikiChatResource({
+      ...activityResource,
+      revision: 8,
+      jobs: [runningJob],
+      receipts: [{ ...attentionReceipt, id: 'receipt-new', state: 'stale' as const }, attentionReceipt],
+    })
+    await settle()
+    expect(activity.open).toBe(true)
+    expect(target.querySelector('[data-risu-bardwiki-activity-summary]')?.textContent).toContain(
+      language.bardWiki.activitySummary(1, 2, 0),
+    )
   })
 
   it('cancels active jobs and reports operational API failures without hiding status', async () => {
@@ -719,6 +812,10 @@ describe('BardWiki workspace', () => {
     expect(target.textContent).toContain('Running')
     expect(target.querySelector('progress')?.value).toBe(2)
     expect(target.textContent).toContain('2/5 turns')
+    expect(target.querySelector('[data-risu-bardwiki-activity-announcement]')?.textContent).toContain(
+      'bardwiki_job_not_cancellable',
+    )
+    expect(target.querySelectorAll('[data-risu-bardwiki-activity-announcement][aria-live]')).toHaveLength(1)
   })
 
   it('previews and explicitly queues a historical rebuild from lifecycle tools', async () => {

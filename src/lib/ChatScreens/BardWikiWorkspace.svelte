@@ -104,6 +104,10 @@
   let settingsMutationState = $state<MutationState>('idle')
   let settingsMutationError = $state('')
   let jobActionError = $state('')
+  let activityOpen = $state(false)
+  let knownActionableKeys = $state<string[]>([])
+  let activityAnnouncement = $state('')
+  let activityAnnouncementUrgent = $state(false)
   let confirmationBusy = $state(false)
   let confirmationError = $state('')
   let confirmationStatus = $state('')
@@ -142,6 +146,23 @@
   let documentDirty = $derived(editorMode !== 'idle' && JSON.stringify(documentDraft) !== documentBaseline)
   let documentMutationPending = $derived(documentMutationState === 'saving' || documentMutationState === 'queued')
   let settingsMutationPending = $derived(settingsMutationState === 'saving' || settingsMutationState === 'queued')
+  let activityCounts = $derived(activityCountsFor(chatResource))
+  let actionableActivityKeys = $derived(actionableKeys(chatResource))
+
+  $effect(() => {
+    if (actionableActivityKeys.length === 0) {
+      if (knownActionableKeys.length > 0) knownActionableKeys = []
+      return
+    }
+    const knownKeys = new Set(knownActionableKeys)
+    if (actionableActivityKeys.some((key) => !knownKeys.has(key))) activityOpen = true
+    if (
+      actionableActivityKeys.length !== knownActionableKeys.length ||
+      actionableActivityKeys.some((key, index) => key !== knownActionableKeys[index])
+    ) {
+      knownActionableKeys = [...actionableActivityKeys]
+    }
+  })
 
   function emptyDocumentDraft(): DocumentDraft {
     return {
@@ -261,6 +282,52 @@
     return job.status === 'pending' || job.status === 'running'
   }
 
+  function activityCountsFor(resource: typeof chatResource): { running: number; attention: number; failed: number } {
+    if (!resource) return { running: 0, attention: 0, failed: 0 }
+    const failedJobIds = new Set(resource.jobs.filter((job) => job.status === 'failed').map((job) => job.id))
+    return {
+      running: resource.jobs.filter((job) => isActiveJob(job)).length,
+      attention: resource.receipts.filter((receipt) => receipt.state === 'needs_review' || receipt.state === 'stale')
+        .length,
+      failed:
+        failedJobIds.size +
+        resource.receipts.filter((receipt) => receipt.state === 'failed' && !failedJobIds.has(receipt.jobId ?? ''))
+          .length,
+    }
+  }
+
+  function actionableKeys(resource: typeof chatResource): string[] {
+    if (!resource) return []
+    return [
+      ...resource.jobs.filter((job) => job.status === 'failed').map((job) => `job:${job.instanceId}`),
+      ...resource.receipts
+        .filter(
+          (receipt) => receipt.state === 'needs_review' || receipt.state === 'stale' || receipt.state === 'failed',
+        )
+        .map((receipt) => `receipt:${receipt.id}:${receipt.state}`),
+    ].sort()
+  }
+
+  function handleActivityToggle(event: Event): void {
+    activityOpen = (event.currentTarget as HTMLDetailsElement).open
+  }
+
+  function announceActivity(message: string, urgent = false): void {
+    activityAnnouncement = message
+    activityAnnouncementUrgent = urgent
+  }
+
+  async function refreshActivity(): Promise<void> {
+    if (!(await loadChat(false))) return
+    await tick()
+    announceActivity(
+      language.bardWiki.activityUpdated(
+        language.bardWiki.activitySummary(activityCounts.running, activityCounts.attention, activityCounts.failed),
+      ),
+      activityCounts.failed > 0,
+    )
+  }
+
   function setJobActionPending(instanceId: string, pending: boolean): void {
     const next = new Set(jobActionInstanceIds)
     if (pending) next.add(instanceId)
@@ -277,9 +344,15 @@
       jobActionError = language.bardWiki.jobActionFailed(
         result.status === 'error' ? result.error : language.bardWiki.unavailable,
       )
+      announceActivity(jobActionError, true)
       setJobActionPending(job.instanceId, false)
       return
     }
+    announceActivity(
+      action === 'retry'
+        ? language.bardWiki.jobRetryRequested(language.bardWiki.jobKinds[job.kind])
+        : language.bardWiki.jobCancelRequested(language.bardWiki.jobKinds[job.kind]),
+    )
     await loadChat(false)
     setJobActionPending(job.instanceId, false)
   }
@@ -309,14 +382,17 @@
       confirmationStatus = outcome.result.created
         ? language.bardWiki.confirmationQueued
         : language.bardWiki.confirmationAlreadyExists
+      announceActivity(confirmationStatus)
       await loadChat(false)
     } else if (outcome.status === 'queued') {
       confirmationStatus = language.bardWiki.queued
+      announceActivity(confirmationStatus)
       void outcome.settlement.then(async (final) => {
         if (final.status === 'accepted') await loadChat(false)
       })
     } else {
       confirmationError = mutationFailureMessage(outcome.result)
+      announceActivity(confirmationError, true)
     }
     confirmationBusy = false
   }
@@ -758,6 +834,10 @@
     settingsMutationState = 'idle'
     jobActionError = ''
     jobActionInstanceIds = new Set()
+    activityOpen = false
+    knownActionableKeys = []
+    activityAnnouncement = ''
+    activityAnnouncementUrgent = false
     lifecycleBusy = false
     lifecycleError = ''
     lifecycleStatus = ''
@@ -772,10 +852,10 @@
 
   const unsubscribeBardWikiJobs = subscribeServerBardWikiJobEvents(
     (event) => {
-      if (event.chatId === chatId) void loadChat(false)
+      if (event.chatId === chatId) void refreshActivity()
     },
     () => {
-      if (chatLoadState === 'ready') void loadChat(false)
+      if (chatLoadState === 'ready') void refreshActivity()
     },
   )
 
@@ -1104,11 +1184,25 @@
         {#if lifecycleError}<p class="mb-0 text-sm text-red-400" role="alert">{lifecycleError}</p>{/if}
       </details>
 
+      <p
+        class="sr-only"
+        role={activityAnnouncementUrgent ? 'alert' : 'status'}
+        aria-live={activityAnnouncementUrgent ? 'assertive' : 'polite'}
+        aria-atomic="true"
+        data-risu-bardwiki-activity-announcement>
+        {activityAnnouncement}
+      </p>
       <details
         data-testid="bardwiki-activity"
-        open={chatResource.jobs.some((job) => isActiveJob(job) || job.status === 'failed')}
+        bind:open={activityOpen}
+        ontoggle={handleActivityToggle}
         class="border-b border-darkborderc px-4 py-2">
-        <summary class="cursor-pointer font-medium">{language.bardWiki.activity}</summary>
+        <summary class="cursor-pointer font-medium">
+          <span>{language.bardWiki.activity}</span>
+          <span class="ml-2 text-xs font-normal text-textcolor2" data-risu-bardwiki-activity-summary>
+            {language.bardWiki.activitySummary(activityCounts.running, activityCounts.attention, activityCounts.failed)}
+          </span>
+        </summary>
         <div class="mt-3 rounded-md border border-darkborderc p-3 text-sm">
           <p class="mt-0 text-textcolor2">{language.bardWiki.confirmationDescription}</p>
           <button
@@ -1121,8 +1215,8 @@
           {#if !chatResource.confirmationCandidate}
             <p class="mb-0 text-textcolor2">{language.bardWiki.confirmationUnavailable}</p>
           {/if}
-          {#if confirmationStatus}<p class="mb-0 text-textcolor2" role="status">{confirmationStatus}</p>{/if}
-          {#if confirmationError}<p class="mb-0 text-sm text-red-400" role="alert">{confirmationError}</p>{/if}
+          {#if confirmationStatus}<p class="mb-0 text-textcolor2">{confirmationStatus}</p>{/if}
+          {#if confirmationError}<p class="mb-0 text-sm text-red-400">{confirmationError}</p>{/if}
         </div>
         <div class="mt-3 grid gap-4 lg:grid-cols-2">
           <section aria-labelledby="bardwiki-receipts-heading">
@@ -1138,7 +1232,7 @@
                       <span class="text-textcolor2">{language.bardWiki.receiptStates[receipt.state]}</span>
                     </div>
                     {#if receipt.errorSummary}
-                      <p class="mb-0 text-red-400" role="alert">{receipt.errorSummary}</p>
+                      <p class="mb-0 text-red-400">{receipt.errorSummary}</p>
                     {/if}
                   </li>
                 {/each}
@@ -1187,7 +1281,7 @@
                       </div>
                     {/if}
                     {#if job.errorSummary}
-                      <p class="my-1 text-red-400" role="alert">{job.errorSummary}</p>
+                      <p class="my-1 text-red-400">{job.errorSummary}</p>
                     {/if}
                     {#if job.status === 'failed'}
                       <button
@@ -1207,7 +1301,7 @@
               </ul>
             {/if}
             {#if jobActionError}
-              <p class="mb-0 text-sm text-red-400" role="alert">{jobActionError}</p>
+              <p class="mb-0 text-sm text-red-400">{jobActionError}</p>
             {/if}
           </section>
         </div>

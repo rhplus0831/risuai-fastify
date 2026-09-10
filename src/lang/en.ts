@@ -3493,6 +3493,11 @@ export const languageEnglish = {
     confirmationAutomatic: 'Automatic',
     chatOverrides: 'Chat overrides',
     activity: 'Confirmation activity',
+    activitySummary: (running: number, attention: number, failed: number) =>
+      `${running} running · ${attention} need attention · ${failed} failed`,
+    jobRetryRequested: (kind: string) => `Retry requested for ${kind}.`,
+    jobCancelRequested: (kind: string) => `Cancel requested for ${kind}.`,
+    activityUpdated: (summary: string) => `BardWiki activity updated: ${summary}.`,
     receipts: 'Receipts',
     jobs: 'Jobs',
     noReceipts: 'No confirmed turns yet.',
