@@ -22,6 +22,11 @@
 - When tracing is enabled, each response has an `X-Request-UID` header. Use `rg "<uid>" data-agent/trace/*.jsonl` (or `data/trace/*.jsonl` for human mode) to find the matching JSONL entry.
 - Trace entries inline small text bodies; larger captured text bodies are stored as `.gz` sidecars under `trace/bodies/<mode>/` inside the same data directory when the compressed sidecar is at most 10 MiB.
 
+# Remote Production Diagnostics
+
+- When an issue originates on an external server and a support config is available, begin with `pnpm diagnostics:remote --investigate`. Add a generated `--requestUid` or opaque `--operationRef` when one is known; prefer the returned correlation groups over guessing category filters.
+- Treat the result as bounded, privacy-safe operational evidence. Missing or truncated evidence is not proof that an operation did not occur, and content-dependent failures require a separately authorized reproduction path rather than widening the standing channel.
+
 # Search Hygiene
 
 - The root `.ignore` file excludes tracked static/vendor payloads from broad

@@ -1,7 +1,7 @@
 # Testing And Operations
 
 Last audited: 2026-09-03.
-Targeted source check: 2026-09-08 (diagnostic helpers, focused browser proof, and aggregate ownership).
+Targeted source check: 2026-09-10 (v3 facts and correlated remote investigation helper).
 Targeted source check: 2026-09-10 (mobile writer transport-recovery browser proof).
 
 Use `pnpm` for package scripts. Node.js is declared as `>=24.0.0`. The package
@@ -50,7 +50,10 @@ There is no ESLint config or `lint` script.
 
 Remote diagnostics operator tools are `pnpm diagnostics:credential` for local
 mint/rotate/revoke and `pnpm diagnostics:remote` for fixed-origin verified HTTPS
-reads. Setup and rollback live in
+reads. Begin an unfamiliar production failure with
+`pnpm diagnostics:remote --investigate`; it retrieves a finite validated v3
+snapshot, falls back to v2 for an older server, and groups the safe timeline by
+correlation reference. Setup, privacy limits, and rollback live in
 [Remote Support Diagnostics](development-and-observability.md#remote-support-diagnostics).
 Focused diagnostics suites cover exact schemas, separate authority, journal
 limits/restarts, generation/provider/recovery evidence, and browser publishing.

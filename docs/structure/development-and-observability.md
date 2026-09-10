@@ -1,7 +1,7 @@
 # Development And Observability
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-09 (handled display fallbacks and operator evidence).
+Targeted source check: 2026-09-10 (v3 safe facts and correlated remote investigations).
 
 Use this guide for local/full-stack servers, request and generation tracing,
 browser startup telemetry, startup and bundle verification,
@@ -156,18 +156,43 @@ logging and raw tracing; bounded access outcomes contain fixed categories only.
 The route policy is `diagnostics-read`, separate from application `required`.
 Existing deliberately public routes keep their public behavior.
 
-The version-1 envelope remains exact and includes sequenced entries, validated build
-identity (`RISU_BUILD_ID`, otherwise unknown), random process identity, capture
-bounds, source availability, loss, truncation, and pagination. V1 projects known
-server facts from the journal; it excludes browser uploads and rich-only fields.
-Stack coordinates are omitted from all remote output. Request `version=2` for
-exact deployment, HTTP, runtime, display, generation, prompt, provider, persistence,
-script, browser, and compatible legacy event families. V2 adds stamped
-provenance, pending work, operation continuity, and explicit browser clock
-semantics. Journal loss counters describe server admission/retention; browser
-delivery loss remains unknown, with client sequence gaps showing possible
-omissions. No v2 payload is labeled v1. The ordinary version-1 manual report
-stays intact.
+The standing channel is an allowlist of operational evidence, not a redacted
+copy of application state. Authentication credentials and secret material are
+omitted. User- or provider-controlled prompt, preset, input-hook, Hypa memory,
+BardWiki, translation, lorebook, character/module, chat-message, built-prompt,
+request-history prompt, and response text are omitted based on their provenance,
+regardless of field name. The channel does not export plain SHA-256 fingerprints
+of that content. Correlation uses random request IDs and secret-keyed opaque
+operation/attempt references; those references cannot be used to recover the
+source values. The verifier's SHA-256 digest is only for a random high-entropy
+support credential and is not a pattern for diagnostic content.
+
+The version-1 envelope remains exact and includes sequenced entries, validated
+build identity (`RISU_BUILD_ID`, otherwise unknown), random process identity,
+capture bounds, source availability, loss, truncation, and pagination. V1
+projects only its existing known fields from the journal; it excludes browser
+uploads and rich-only fields. Request `version=2` for exact deployment, HTTP,
+runtime, display, generation, prompt, provider, persistence, script, browser,
+and compatible legacy event families. V2 adds stamped provenance, pending work,
+operation continuity, and explicit browser clock semantics.
+
+Version 3 preserves the exact v2 event and may add at most 32 exact, typed facts
+to its journal record. Allowed values are bounded booleans, counts, durations,
+size buckets, opaque references, and application-relative source locations;
+there is no arbitrary-text, URL, header, object, or array fact. Duplicate fact
+IDs and unknown fields reject the record. Facts are revalidated at journal
+admission, restart restoration, reads, and remote export, and v1/v2 projection
+always strips them. Browser uploads cannot attach facts. Sanitized stack
+locations are captured only from server runtime errors when `RISU_BUILD_ID` is a
+valid 40–64 character lowercase hexadecimal coordinate. V3 exports a location
+only while its record process matches the response's current build instance, so
+an operator can resolve it against that exact build; error messages, absolute
+paths, plugin/eval frames, and locations from old/unknown builds remain absent.
+
+Journal loss counters describe server admission/retention; browser delivery
+loss remains unknown, with client sequence gaps showing possible omissions. No
+v2 or v3 payload is labeled v1. The ordinary version-1 manual report stays
+intact, and authenticated manual joined reads remain v2.
 
 Failed display-source batches and handled display-scope incompatibilities emit
 one request-correlated, v2-only `display` event. Its fixed fields distinguish
@@ -290,22 +315,40 @@ In the development environment, set `RISU_DIAGNOSTICS_REMOTE_CONFIG` to the
 private transferred config, then run:
 
 ```sh
+pnpm diagnostics:remote --investigate
+pnpm diagnostics:remote --investigate --requestUid=<generated-request-uid>
+pnpm diagnostics:remote --investigate --operationRef=<opaque-operation-reference>
+pnpm diagnostics:remote --investigate --version=2 # explicitly force an older server contract
 pnpm diagnostics:remote --limit=50
 pnpm diagnostics:remote --version=2 --requestUid=<generated-request-uid>
 pnpm diagnostics:remote --version=2 --category=display-performance --requestUid=<generated-request-uid>
-pnpm diagnostics:remote --version=2 --operationRef=<opaque-operation-reference>
 pnpm diagnostics:remote --version=2 --cursor=<returned-cursor>
 ```
 
-`util/diagnostics-remote.ts` accepts only the finite query flags above; it has no
-per-request destination/header/output-file override. It verifies TLS, rejects
-redirects and unexpected content types, bounds both compressed and expanded
-responses to 512 KiB, and validates the complete exact schema before printing
-one JSON envelope. Failures print only a fixed category to stderr. Remote HTML,
-headers, stacks, and arbitrary error bodies never become fallback output.
+Start an unfamiliar production investigation without a category filter, then
+follow the returned request/operation/attempt groups rather than repeatedly
+guessing categories. `--investigate` is local-only: it prefers v3, falls back
+once to v2 only when an older server rejects the initial v3 query, forces
+200-record pages, and follows cursor-only continuations for at most 20 snapshot
+pages (plus the one rejected v3 negotiation on an older server).
+It emits one deterministic JSON value after the whole snapshot validates, with
+source/loss metadata, level/category counts, correlation groups, and the safe
+timeline. `collection.complete` means cursor traversal completed; it does not
+override `loss.truncated`, dropped, rejected, or pruned counters. An explicit
+`--version=2` skips v3 negotiation. Without `--investigate`, the helper preserves
+the original single-page raw-envelope behavior.
+
+`util/diagnostics-remote.ts` accepts only the finite query flags above; it has
+no per-request destination/header/output-file override. It verifies TLS,
+rejects redirects and unexpected content types, bounds both compressed and
+expanded responses to 512 KiB, and validates each complete exact response
+before retaining it. Failures print only a fixed category to stderr, and a
+failed investigation never prints partial pages. Remote HTML, headers, stacks,
+and arbitrary error bodies never become fallback output.
 `util/diagnostics-remote.test.ts` exercises the real CLI with temporary HTTPS
 fixtures, including a trust chain, rejected TLS/redirects, compressed limits,
-timeout, malformed schemas, and credential/content canaries.
+timeout, v3/v2 negotiation, immutable paging, malformed schemas, and
+credential/content canaries.
 
 Source owners are `server/fastify/src/remoteDiagnostics.ts`,
 `server/fastify/src/supportDiagnosticsAuth.ts`, and the exact contract in
@@ -359,6 +402,13 @@ comparisons are explicit. Browser V3 output listeners emit only invoked/failed
 counts and duration under client provenance; host-call counts and content-change
 comparisons remain explicitly unmeasured. They never import Lua/plugin logs,
 hashes, or sidecars.
+
+Remote diagnostics can establish where and in which correlated operation a
+known class of failure occurred; they cannot explain content-dependent failures
+whose inputs are deliberately absent or events that were never instrumented.
+Those cases require a separately authorized reproduction path with synthetic or
+operator-approved data. Do not widen the standing channel or add content hashes
+merely because an investigation has no matching evidence.
 
 To roll back remote collection, disable `RISU_SUPPORT_DIAGNOSTICS` and
 `RISU_BROWSER_DIAGNOSTICS`, and revoke the support credential. Keep

@@ -1,7 +1,7 @@
 # API Security, Runtime, and Network Boundaries
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-08 (paired import recovery and remote diagnostic access/privacy contracts).
+Targeted source check: 2026-09-10 (v3 fact privacy and correlated helper pagination).
 
 This area covers the Fastify composition boundary: authentication, single-writer ownership, route policy, bootstrap and resource hydration, configuration and shutdown, agent data sandboxing, static serving, request tracing, Web Push, generic and permissioned egress, and local stream jobs.
 
@@ -93,7 +93,8 @@ permissions, bounded lifecycle storage, and fixed operator output.
 protected route with a valid support token, opt-in/auth states, useful sanitized
 failure metadata, query/rate limits, no raw diagnostic transport artifacts,
 display-source load/decode stage metadata without persisted values or IDs,
-volatile loss, and immutable cursor pages. The protocol grammar/privacy suite is
+volatile loss, immutable cursor pages, exact v2 fact stripping, and build-bound
+v3 source locations. The protocol grammar/privacy suite is
 `packages/protocol/src/remoteDiagnostics.test.ts`. Manual Diagnostics remains
 covered by the existing client collector and panel tests.
 
@@ -109,4 +110,7 @@ local provider, failed SQLite commit, restart recovery, and the actual HTTPS
 CLI helper; browser upload uses the independent focused journey in
 `server/fastify/browser-smoke/remoteDiagnostics.spec.ts`. Fixtures are disposable
 synthetic data with temporary credentials and a test CA; these checks do not
-claim a production configuration audit.
+claim a production configuration audit. `util/diagnostics-remote.test.ts`
+additionally covers v3 preference, v2 fallback, complete bounded pagination,
+correlation summaries, cursor cycles, metadata/order inconsistencies, and
+credential/content canaries through real CLI subprocesses and temporary HTTPS.
