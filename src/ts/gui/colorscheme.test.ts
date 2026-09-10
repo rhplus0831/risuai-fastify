@@ -73,6 +73,9 @@ vi.mock('../filePicker', () => ({
 import {
   builtInColorSchemes,
   changeColorScheme,
+  colorContrastRatio,
+  colorSchemeAccessibilityIssues,
+  compositeColor,
   exportColorScheme,
   importColorScheme,
   migrateLegacyBuiltInColorScheme,
@@ -340,31 +343,36 @@ describe('importColorScheme freshness', () => {
   })
 })
 
-function relativeLuminance(hex: string): number {
-  const channels = hex
-    .slice(1)
-    .match(/.{2}/g)!
-    .map((channel) => Number.parseInt(channel, 16) / 255)
-    .map((channel) => (channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4))
-  return channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
-}
-
-function contrastRatio(first: string, second: string): number {
-  const lighter = Math.max(relativeLuminance(first), relativeLuminance(second))
-  const darker = Math.min(relativeLuminance(first), relativeLuminance(second))
-  return (lighter + 0.05) / (darker + 0.05)
-}
-
 describe('built-in color scheme contrast', () => {
   it.each(Object.entries(builtInColorSchemes))(
-    '%s keeps primary and secondary text readable on its main surfaces',
+    '%s keeps reviewed text and interaction relationships distinguishable',
     (_name, colorScheme) => {
-      for (const background of [colorScheme.bgcolor, colorScheme.darkbg]) {
-        expect(contrastRatio(colorScheme.textcolor, background)).toBeGreaterThanOrEqual(4.5)
-        expect(contrastRatio(colorScheme.textcolor2, background)).toBeGreaterThanOrEqual(4.5)
-      }
+      expect(colorSchemeAccessibilityIssues(colorScheme)).toEqual([])
     },
   )
+
+  it('reports custom palette gaps without rewriting the supplied values', () => {
+    const custom = {
+      ...builtInColorSchemes.default,
+      borderc: '#282a36',
+      darkBorderc: '#282a36',
+      textcolor2: '#282a36',
+      draculared: '#282a36',
+    } as ColorScheme
+    const before = structuredClone(custom)
+
+    expect(colorSchemeAccessibilityIssues(custom)).toEqual(
+      expect.arrayContaining(['mutedText', 'focusIndicator', 'controlBorder', 'destructiveState']),
+    )
+    expect(custom).toEqual(before)
+  })
+
+  it.each(Object.entries(builtInColorSchemes))('%s keeps a modal edge visible over the 70% scrim', (_name, scheme) => {
+    const scrimmedPage = compositeColor('#000000', scheme.bgcolor, 0.7)
+    expect(
+      Math.max(colorContrastRatio(scheme.darkbg, scrimmedPage), colorContrastRatio(scheme.darkBorderc, scrimmedPage)),
+    ).toBeGreaterThanOrEqual(3)
+  })
 })
 
 describe('native control color scheme', () => {
@@ -410,6 +418,22 @@ describe('legacy built-in color scheme migration', () => {
 
     expect(migrateLegacyBuiltInColorScheme('custom', custom)).toBe(custom)
     expect(migrateLegacyBuiltInColorScheme('default', custom)).toBe(custom)
+  })
+
+  it('upgrades the complete previous interaction palette only when every field is still built-in', () => {
+    const legacyNature = {
+      ...builtInColorSchemes.nature,
+      darkbg: '#2d6a4f',
+      selected: '#4d908e',
+      draculared: '#ff5555',
+      darkBorderc: '#457b9d',
+    } as ColorScheme
+
+    expect(migrateLegacyBuiltInColorScheme('nature', legacyNature)).toEqual(builtInColorSchemes.nature)
+    expect(migrateLegacyBuiltInColorScheme('nature', { ...legacyNature, bgcolor: '#123456' })).toEqual({
+      ...legacyNature,
+      bgcolor: '#123456',
+    })
   })
 
   it('persists the migration when applying an existing built-in theme', () => {

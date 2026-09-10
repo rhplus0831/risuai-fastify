@@ -50,7 +50,7 @@ export const defaultColorScheme: ColorScheme = {
   draculared: '#ff5555',
   textcolor: '#f8f8f2',
   textcolor2: '#94a3b8',
-  darkBorderc: '#4b5563',
+  darkBorderc: '#6272a4',
   darkbutton: '#374151',
   type: 'dark',
 }
@@ -60,12 +60,12 @@ export const builtInColorSchemes = {
   dark: {
     bgcolor: '#1a1a1a',
     darkbg: '#141414',
-    borderc: '#525252',
+    borderc: '#737373',
     selected: '#3d3d3d',
     draculared: '#ff5555',
     textcolor: '#f5f5f5',
     textcolor2: '#a3a3a3',
-    darkBorderc: '#404040',
+    darkBorderc: '#737373',
     darkbutton: '#2e2e2e',
     type: 'dark',
   },
@@ -74,22 +74,22 @@ export const builtInColorSchemes = {
     darkbg: '#f0f0f0',
     borderc: '#0f172a',
     selected: '#e0e0e0',
-    draculared: '#ff5555',
+    draculared: '#be123c',
     textcolor: '#0f172a',
     textcolor2: '#5b677a',
-    darkBorderc: '#d1d5db',
+    darkBorderc: '#0f172a',
     darkbutton: '#e5e7eb',
     type: 'light',
   },
   cherry: {
     bgcolor: '#450a0a',
     darkbg: '#7f1d1d',
-    borderc: '#ea580c',
-    selected: '#d97706',
+    borderc: '#fb923c',
+    selected: '#9a3412',
     draculared: '#ff5555',
     textcolor: '#f8f8f2',
     textcolor2: '#fca5a5',
-    darkBorderc: '#92400e',
+    darkBorderc: '#fdba74',
     darkbutton: '#b45309',
     type: 'dark',
   },
@@ -97,7 +97,7 @@ export const builtInColorSchemes = {
     bgcolor: '#0f172a',
     darkbg: '#1f2a48',
     borderc: '#8be9fd',
-    selected: '#457b9d',
+    selected: '#3b6f8f',
     draculared: '#ff5555',
     textcolor: '#f8f8f2',
     textcolor2: '#8be9fd',
@@ -107,13 +107,13 @@ export const builtInColorSchemes = {
   },
   nature: {
     bgcolor: '#1b4332',
-    darkbg: '#2d6a4f',
+    darkbg: '#24553f',
     borderc: '#a8dadc',
-    selected: '#4d908e',
-    draculared: '#ff5555',
+    selected: '#2f6f63',
+    draculared: '#fda4af',
     textcolor: '#f8f8f2',
     textcolor2: '#c4e4d4',
-    darkBorderc: '#457b9d',
+    darkBorderc: '#a8dadc',
     darkbutton: '#2d6a4f',
     type: 'dark',
   },
@@ -125,7 +125,7 @@ export const builtInColorSchemes = {
     draculared: '#fb7185',
     textcolor: '#e6f6fb',
     textcolor2: '#8fc7d5',
-    darkBorderc: '#155e75',
+    darkBorderc: '#38bdf8',
     darkbutton: '#0f3a4a',
     type: 'dark',
   },
@@ -137,7 +137,7 @@ export const builtInColorSchemes = {
     draculared: '#fb7185',
     textcolor: '#ecfdf5',
     textcolor2: '#a7f3d0',
-    darkBorderc: '#2f6f63',
+    darkBorderc: '#5eead4',
     darkbutton: '#21443c',
     type: 'dark',
   },
@@ -149,7 +149,7 @@ export const builtInColorSchemes = {
     draculared: '#f43f5e',
     textcolor: '#f8f5ff',
     textcolor2: '#c4b5fd',
-    darkBorderc: '#4c3575',
+    darkBorderc: '#c084fc',
     darkbutton: '#2e2348',
     type: 'dark',
   },
@@ -161,7 +161,7 @@ export const builtInColorSchemes = {
     draculared: '#ff5555',
     textcolor: '#f8f8f2',
     textcolor2: '#718096',
-    darkBorderc: '#4b5563',
+    darkBorderc: '#6272a4',
     darkbutton: '#374151',
     type: 'dark',
   },
@@ -171,9 +171,9 @@ export const builtInColorSchemes = {
     borderc: '#75715e',
     selected: '#d8d8d0',
     draculared: '#f92672',
-    textcolor: '#272822',
+    textcolor: '#181910',
     textcolor2: '#696555',
-    darkBorderc: '#c0c0b8',
+    darkBorderc: '#75715e',
     darkbutton: '#d0d0c8',
     type: 'light',
   },
@@ -185,7 +185,7 @@ export const builtInColorSchemes = {
     draculared: '#f92672',
     textcolor: '#f8f8f2',
     textcolor2: '#a6a68a',
-    darkBorderc: '#3e3d32',
+    darkBorderc: '#75715e',
     darkbutton: '#3e3d32',
     type: 'dark',
   },
@@ -197,7 +197,7 @@ export const builtInColorSchemes = {
     draculared: '#e11d48',
     textcolor: '#0f172a',
     textcolor2: '#516174',
-    darkBorderc: '#b7d7ea',
+    darkBorderc: '#0284c7',
     darkbutton: '#dbeafe',
     type: 'light',
   },
@@ -207,9 +207,9 @@ export const builtInColorSchemes = {
     borderc: '#3f6212',
     selected: '#d9e8d3',
     draculared: '#dc2626',
-    textcolor: '#1f2933',
+    textcolor: '#111827',
     textcolor2: '#586a52',
-    darkBorderc: '#b7c9ad',
+    darkBorderc: '#3f6212',
     darkbutton: '#dce8d6',
     type: 'light',
   },
@@ -221,7 +221,7 @@ export const builtInColorSchemes = {
     draculared: '#e11d48',
     textcolor: '#1e1b4b',
     textcolor2: '#5b5680',
-    darkBorderc: '#c4b5fd',
+    darkBorderc: '#6d28d9',
     darkbutton: '#e0e7ff',
     type: 'light',
   },
@@ -233,31 +233,122 @@ export const builtInColorSchemes = {
     draculared: '#dc2626',
     textcolor: '#020617',
     textcolor2: '#475569',
-    darkBorderc: '#94a3b8',
+    darkBorderc: '#334155',
     darkbutton: '#cbd5e1',
     type: 'light',
   },
   lite: {
     bgcolor: '#1f2937',
     darkbg: '#1C2533',
-    borderc: '#475569',
+    borderc: '#94a3b8',
     selected: '#475569',
     draculared: '#ff5555',
     textcolor: '#f8f8f2',
     textcolor2: '#94a3b8',
-    darkBorderc: '#030712',
+    darkBorderc: '#94a3b8',
     darkbutton: '#374151',
     type: 'dark',
   },
 } as const
 
-const legacyBuiltInSecondaryTextColors: Partial<Record<keyof typeof builtInColorSchemes, string>> = {
-  default: '#64748b',
-  light: '#64748b',
-  nature: '#4d908e',
-  realblack: '#64748b',
-  'monokai-light': '#75715e',
-  lite: '#64748b',
+export type ColorSchemeAccessibilityIssue =
+  | 'primaryText'
+  | 'mutedText'
+  | 'focusIndicator'
+  | 'controlBorder'
+  | 'selectedState'
+  | 'controlState'
+  | 'disabledState'
+  | 'destructiveState'
+
+function colorChannels(value: string): [number, number, number] | null {
+  const match = /^#([\da-f]{2})([\da-f]{2})([\da-f]{2})$/i.exec(value)
+  return match ? [Number.parseInt(match[1], 16), Number.parseInt(match[2], 16), Number.parseInt(match[3], 16)] : null
+}
+
+function relativeLuminance(value: string): number | null {
+  const channels = colorChannels(value)
+  if (!channels) return null
+  const linear = channels.map((channel) => {
+    const normalized = channel / 255
+    return normalized <= 0.04045 ? normalized / 12.92 : ((normalized + 0.055) / 1.055) ** 2.4
+  })
+  return linear[0] * 0.2126 + linear[1] * 0.7152 + linear[2] * 0.0722
+}
+
+export function colorContrastRatio(first: string, second: string): number {
+  const firstLuminance = relativeLuminance(first)
+  const secondLuminance = relativeLuminance(second)
+  if (firstLuminance === null || secondLuminance === null) return 1
+  const lighter = Math.max(firstLuminance, secondLuminance)
+  const darker = Math.min(firstLuminance, secondLuminance)
+  return (lighter + 0.05) / (darker + 0.05)
+}
+
+export function compositeColor(foreground: string, background: string, opacity: number): string {
+  const foregroundChannels = colorChannels(foreground)
+  const backgroundChannels = colorChannels(background)
+  if (!foregroundChannels || !backgroundChannels) return background
+  return `#${foregroundChannels
+    .map((channel, index) =>
+      Math.round(channel * opacity + backgroundChannels[index] * (1 - opacity))
+        .toString(16)
+        .padStart(2, '0'),
+    )
+    .join('')}`
+}
+
+function minimumSurfaceContrast(color: string, scheme: ColorScheme): number {
+  return Math.min(colorContrastRatio(color, scheme.bgcolor), colorContrastRatio(color, scheme.darkbg))
+}
+
+/** Report interaction-critical contrast gaps without mutating a custom palette. */
+export function colorSchemeAccessibilityIssues(scheme: ColorScheme): ColorSchemeAccessibilityIssue[] {
+  const issues: ColorSchemeAccessibilityIssue[] = []
+  if (minimumSurfaceContrast(scheme.textcolor, scheme) < 4.5) issues.push('primaryText')
+  if (minimumSurfaceContrast(scheme.textcolor2, scheme) < 4.5) issues.push('mutedText')
+  if (minimumSurfaceContrast(scheme.borderc, scheme) < 3) issues.push('focusIndicator')
+  if (minimumSurfaceContrast(scheme.darkBorderc, scheme) < 3) issues.push('controlBorder')
+  if (colorContrastRatio(scheme.textcolor, scheme.selected) < 4.5) issues.push('selectedState')
+  if (colorContrastRatio(scheme.textcolor, scheme.darkbutton) < 4.5) issues.push('controlState')
+  if (
+    Math.min(
+      colorContrastRatio(compositeColor(scheme.textcolor, scheme.bgcolor, 0.5), scheme.bgcolor),
+      colorContrastRatio(compositeColor(scheme.textcolor, scheme.darkbg, 0.5), scheme.darkbg),
+    ) < 3
+  ) {
+    issues.push('disabledState')
+  }
+  if (minimumSurfaceContrast(scheme.draculared, scheme) < 3) issues.push('destructiveState')
+  return issues
+}
+
+type LegacyBuiltInFields = Partial<Record<keyof ColorScheme, readonly string[]>>
+
+const legacyBuiltInFieldValues: Partial<Record<keyof typeof builtInColorSchemes, LegacyBuiltInFields>> = {
+  default: { textcolor2: ['#64748b'], darkBorderc: ['#4b5563'] },
+  dark: { borderc: ['#525252'], darkBorderc: ['#404040'] },
+  light: { textcolor2: ['#64748b'], draculared: ['#ff5555'], darkBorderc: ['#d1d5db'] },
+  cherry: { borderc: ['#ea580c'], selected: ['#d97706'], darkBorderc: ['#92400e'] },
+  galaxy: { selected: ['#457b9d'] },
+  nature: {
+    darkbg: ['#2d6a4f'],
+    selected: ['#4d908e'],
+    draculared: ['#ff5555'],
+    textcolor2: ['#4d908e'],
+    darkBorderc: ['#457b9d'],
+  },
+  ocean: { darkBorderc: ['#155e75'] },
+  aurora: { darkBorderc: ['#2f6f63'] },
+  twilight: { darkBorderc: ['#4c3575'] },
+  realblack: { textcolor2: ['#64748b'], darkBorderc: ['#4b5563'] },
+  'monokai-light': { textcolor: ['#272822'], textcolor2: ['#75715e'], darkBorderc: ['#c0c0b8'] },
+  'monokai-black': { darkBorderc: ['#3e3d32'] },
+  'sky-light': { darkBorderc: ['#b7d7ea'] },
+  'sage-light': { textcolor: ['#1f2933'], darkBorderc: ['#b7c9ad'] },
+  'lavender-light': { darkBorderc: ['#c4b5fd'] },
+  'slate-light': { darkBorderc: ['#94a3b8'] },
+  lite: { borderc: ['#475569'], textcolor2: ['#64748b'], darkBorderc: ['#030712'] },
 }
 
 /** Upgrade only exact legacy built-in palettes; never rewrite custom themes. */
@@ -267,13 +358,15 @@ export function migrateLegacyBuiltInColorScheme(name: unknown, scheme: ColorSche
 
   const schemeName = name as keyof typeof builtInColorSchemes
   const current = builtInColorSchemes[schemeName]
-  const legacyTextColor = legacyBuiltInSecondaryTextColors[schemeName]
-  if (!legacyTextColor || scheme.textcolor2.toLowerCase() !== legacyTextColor) return scheme
-
-  const unchangedFields = (Object.keys(current) as Array<keyof ColorScheme>)
-    .filter((key) => key !== 'textcolor2')
-    .every((key) => scheme[key] === current[key])
-  return unchangedFields ? ({ ...current } as ColorScheme) : scheme
+  const legacyFields = legacyBuiltInFieldValues[schemeName] ?? {}
+  let matchedLegacyValue = false
+  for (const key of Object.keys(current) as Array<keyof ColorScheme>) {
+    if (scheme[key].toLowerCase() === current[key].toLowerCase()) continue
+    const matchesLegacy = legacyFields[key]?.some((value) => value.toLowerCase() === scheme[key].toLowerCase())
+    if (!matchesLegacy) return scheme
+    matchedLegacyValue = true
+  }
+  return matchedLegacyValue ? ({ ...current } as ColorScheme) : scheme
 }
 
 export const ColorSchemeTypeStore = writable<'dark' | 'light'>(

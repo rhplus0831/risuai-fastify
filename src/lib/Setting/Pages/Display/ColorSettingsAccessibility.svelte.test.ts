@@ -5,6 +5,7 @@ const colorSettingsState = vi.hoisted(() => ({
   database: {} as Record<string, any>,
   applyServerBackedSetting: vi.fn(),
   changeColorScheme: vi.fn(),
+  colorSchemeAccessibilityIssues: vi.fn(() => ['focusIndicator']),
   updateCustomColorScheme: vi.fn(),
 }))
 
@@ -41,6 +42,7 @@ vi.mock('src/ts/server/settingsOwner.svelte', () => ({
 vi.mock('src/ts/gui/colorscheme', () => ({
   changeColorScheme: colorSettingsState.changeColorScheme,
   changeColorSchemeType: vi.fn(),
+  colorSchemeAccessibilityIssues: colorSettingsState.colorSchemeAccessibilityIssues,
   colorSchemeList: ['default', 'dark'],
   colorSchemePresets: { default: darkPalette, dark: darkPalette },
   defaultColorScheme: darkPalette,
@@ -105,6 +107,7 @@ beforeEach(() => {
   document.body.appendChild(target)
   colorSettingsState.applyServerBackedSetting.mockClear()
   colorSettingsState.changeColorScheme.mockClear()
+  colorSettingsState.colorSchemeAccessibilityIssues.mockClear()
   colorSettingsState.updateCustomColorScheme.mockClear()
 })
 
@@ -139,6 +142,17 @@ describe('display color setting names', () => {
     await tick()
 
     await expectColorInputsMatchVisibleLabels(9)
+  })
+
+  it('warns about weak custom relationships without rewriting the palette', async () => {
+    component = mount(CustomColorSchemeEditor, { target })
+    await tick()
+
+    const warning = target.querySelector('[data-risu-custom-color-contrast-warning]')
+    expect(warning?.getAttribute('role')).toBe('status')
+    expect(warning?.textContent).toContain(language.customColorContrastWarning(1))
+    expect(warning?.textContent).toContain(language.colorSchemeContrastIssues.focusIndicator)
+    expect(colorSettingsState.updateCustomColorScheme).not.toHaveBeenCalled()
   })
 
   it('updates a custom palette from the lightweight native color controls', async () => {

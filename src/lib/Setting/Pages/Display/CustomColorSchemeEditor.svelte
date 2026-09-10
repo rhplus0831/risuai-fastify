@@ -3,6 +3,7 @@
   import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
   import {
     changeColorSchemeType,
+    colorSchemeAccessibilityIssues,
     defaultColorScheme,
     exportColorScheme,
     importColorScheme,
@@ -10,26 +11,27 @@
   } from 'src/ts/gui/colorscheme'
   import SelectInput from 'src/lib/UI/GUI/SelectInput.svelte'
   import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
-  import { DownloadIcon, HardDriveUploadIcon } from '@lucide/svelte'
+  import { DownloadIcon, HardDriveUploadIcon, TriangleAlertIcon } from '@lucide/svelte'
 
   const colors = [
-    ['bgcolor', 'Background'],
-    ['darkbg', 'Dark Background'],
-    ['borderc', 'Color 1'],
-    ['selected', 'Color 2'],
-    ['draculared', 'Color 3'],
-    ['darkBorderc', 'Color 4'],
-    ['darkbutton', 'Color 5'],
-    ['textcolor', 'Text Color'],
-    ['textcolor2', 'Text Color 2'],
+    'bgcolor',
+    'darkbg',
+    'borderc',
+    'selected',
+    'draculared',
+    'darkBorderc',
+    'darkbutton',
+    'textcolor',
+    'textcolor2',
   ] as const
 
   let displaySettings = $derived(
     settingsResourceState.groupStatuses.display === 'ready' ? settingsResourceState.value : undefined,
   )
   let customColorScheme = $derived(displaySettings?.customColorScheme ?? defaultColorScheme)
+  let contrastIssues = $derived(colorSchemeAccessibilityIssues(customColorScheme))
 
-  function setColorSchemeValue(key: (typeof colors)[number][0], value: string) {
+  function setColorSchemeValue(key: (typeof colors)[number], value: string) {
     updateCustomColorScheme({
       ...customColorScheme,
       [key]: value,
@@ -54,12 +56,30 @@
         <input
           type="color"
           class="native-color-input"
-          value={customColorScheme[color[0]]}
-          aria-label={color[1]}
-          oninput={(event) => setColorSchemeValue(color[0], event.currentTarget.value)} />
-        <span class="ml-2">{color[1]}</span>
+          value={customColorScheme[color]}
+          aria-label={language.colorSchemeFields[color]}
+          oninput={(event) => setColorSchemeValue(color, event.currentTarget.value)} />
+        <span class="ml-2">{language.colorSchemeFields[color]}</span>
       </div>
     {/each}
+
+    {#if contrastIssues.length > 0}
+      <div
+        class="mt-3 rounded-md border border-borderc p-3 text-sm"
+        role="status"
+        aria-live="polite"
+        data-risu-custom-color-contrast-warning>
+        <p class="m-0 flex items-start gap-2 font-medium">
+          <TriangleAlertIcon class="mt-0.5 shrink-0" size={18} aria-hidden="true" />
+          <span>{language.customColorContrastWarning(contrastIssues.length)}</span>
+        </p>
+        <ul class="mb-0 mt-2 pl-5 text-textcolor2">
+          {#each contrastIssues as issue}
+            <li>{language.colorSchemeContrastIssues[issue]}</li>
+          {/each}
+        </ul>
+      </div>
+    {/if}
 
     <div class="grow flex justify-end">
       <button
