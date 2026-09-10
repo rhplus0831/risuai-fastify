@@ -170,11 +170,13 @@ and reviews the scheduled/manual differential.
 `pnpm test:agent` uses the same bounded scheduler and failure aggregation as
 `test:all`. It runs `check:server`, current-document validation, topology, the
 frontend suite with the six UI sentinel files restored as ordinary
-uninstrumented tests, `pnpm check`, the isolated server suite, and an isolated
-`build:smoke`. It explicitly disables the
-two frontend performance probes and does not launch Playwright. The smoke build
-waits for `check:server`; every selected lane still finishes after another lane
-fails. `RISU_TEST_ALL_JOBS`, `--jobs`, `--dry-run`, and `--timings=json` work for
+uninstrumented tests, `pnpm check`, `build:smoke`, and the isolated server suite.
+The smoke build fills a free regular-lane slot after `check:server`, at lower
+priority than the other checks, overlapping remaining frontend tests.
+Typechecks use `noEmit`, so they do not share build outputs. The agent profile
+explicitly disables the two frontend performance probes and does not launch
+Playwright. Every selected lane still finishes after another lane fails.
+`RISU_TEST_ALL_JOBS`, `--jobs`, `--dry-run`, and `--timings=json` work for
 both commands.
 
 `pnpm test:all` runs up to two ordinary lanes concurrently by default and
@@ -182,8 +184,8 @@ preserves any failure in the final aggregate result. Set
 `RISU_TEST_ALL_JOBS` or pass `--jobs <count>` to tune that outer limit, and use
 `--dry-run` to inspect the lane graph. Its topology lane validates discovery
 before the ordinary frontend lane starts. Browser smoke runs outside that pool and
-waits for `check:server` because declaration checking and the smoke build both
-use `dist/`; its stateful tests remain serial within each spec, while local runs
+waits for `check:server`; the real browser tests retain load-sensitive isolation.
+Its stateful tests remain serial within each spec, while local runs
 use 75% of available CPUs up to four workers. Set
 `RISU_BROWSER_SMOKE_WORKERS=<count>` for an explicit local or CI override; CI
 defaults to one worker. The direct-link owner is the narrow exception to
@@ -206,7 +208,11 @@ changing concurrency or isolation.
 
 Config details: `vitest.config.ts` composes three isolated thread-pool projects,
 and `vitest.frontend-routing.ts` owns their disjoint filename/registration
-contract. Plain `*.test.ts` files default to Node; `*.svelte-node.test.ts` uses
+contract. `vitest.sequencer.ts` interleaves the projects after Vitest's default
+sort, so long Node/CLI suites can start alongside DOM suites. It preserves
+each project's failure/duration ordering, explicit execution groups, shard
+selection, and file isolation. Plain `*.test.ts` files default to Node;
+`*.svelte-node.test.ts` uses
 client-mode Svelte transformation against Node globals; `.svelte.test.ts` and
 `.dom.test.ts` use Svelte/Happy-DOM. The DOM project also explicitly includes
 the reviewed pre-suffix owners in `legacyDomTestFiles` in

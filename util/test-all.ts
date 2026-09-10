@@ -110,7 +110,7 @@ export const qualityLanes: readonly QualityLane[] = [
     id: 'browser-smoke',
     label: 'browser smoke tests',
     args: ['smoke:fastify-browser'],
-    // check:server emits declarations under dist/, which the smoke build replaces.
+    // Keep full browser verification after static checks and outside the pool.
     after: ['server-check'],
     isolated: true,
   },
@@ -169,7 +169,10 @@ export const agentQualityLanes: readonly QualityLane[] = [
     label: 'browser-smoke build',
     args: ['build:smoke'],
     after: ['server-check'],
-    isolated: true,
+    // This build has no timing assertions, and all typechecks use noEmit.
+    // Fill a free slot at lower priority while frontend tests are still running.
+    // Actual browser/server tests retain their isolated phases.
+    priority: 3,
   },
 ]
 

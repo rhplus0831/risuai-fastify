@@ -43,12 +43,12 @@ describe('test:all orchestration', () => {
     expect(byId.get('browser-smoke-build')).toMatchObject({
       args: ['build:smoke'],
       after: ['server-check'],
-      isolated: true,
     })
+    expect(byId.get('browser-smoke-build')?.isolated).toBeUndefined()
     expect(() => validateQualityLanePhases(agentQualityLanes)).not.toThrow()
   })
 
-  it('keeps dist and duplicate-test conflicts ordered and performance gates isolated', () => {
+  it('keeps browser verification and duplicate-test owners ordered and performance gates isolated', () => {
     const byId = new Map(qualityLanes.map((lane) => [lane.id, lane]))
 
     expect(byId.get('browser-smoke')).toMatchObject({ after: ['server-check'], isolated: true })

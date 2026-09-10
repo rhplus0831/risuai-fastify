@@ -134,7 +134,9 @@ report-only; only the focused UI map has thresholds.
 
 The agent-final `test:agent` command uses the same scheduler but selects only
 `check:server`, current-document validation, topology, ordinary frontend tests,
-`pnpm check`, isolated server tests, and `build:smoke`. Its frontend subprocess
+`pnpm check`, `build:smoke`, and isolated server tests. The build fills a free
+regular-lane slot after `check:server`, at lower priority than the other checks,
+while frontend tests finish. Its frontend subprocess
 runs the six UI-map sentinel files without coverage instrumentation and excludes
 the two explicit performance probes. It never launches Playwright.
 
