@@ -26,6 +26,7 @@ import {
   duplicateAgentPreset,
   duplicateAgentPresetStep,
   getAgentPresetById,
+  getAgentPresetDeleteImpact,
   getAgentPresetDefaultId,
   getAgentPresets,
   isAgentPresetGeneratedProjectionResolved,
@@ -201,6 +202,37 @@ afterEach(() => {
 })
 
 describe('Agent Preset resource owners', () => {
+  it('reads a certified delete preview from ready settings, character, and loadout owners', () => {
+    seedAgentPresetDeleteReferences()
+    expect(getAgentPresetDeleteImpact('ap_a')).toMatchObject({
+      status: 'ready',
+      presetName: 'Preset A',
+      globalDefault: { affected: true, postDeleteSelection: { source: 'none' } },
+      chats: [{ characterId: 'char_a', chatId: 'chat_a', postDeleteSelection: { source: 'none' } }],
+      loadouts: [{ loadoutId: 'loadout_a', postDeleteSelection: { source: 'none' } }],
+    })
+  })
+
+  it('keeps delete preview unavailable until every reference owner is ready and unambiguous', () => {
+    seedAgentPresetDeleteReferences()
+    charactersResourceState.rowStatuses.char_a = 'loading'
+    expect(getAgentPresetDeleteImpact('ap_a')).toEqual({
+      status: 'unavailable',
+      owner: 'characters',
+      reason: 'loading',
+    })
+
+    charactersResourceState.rowStatuses.char_a = 'ready'
+    charactersResourceState.characters[0].chats.push({
+      ...clonePlain(charactersResourceState.characters[0].chats[0]),
+    })
+    expect(getAgentPresetDeleteImpact('ap_a')).toEqual({
+      status: 'unavailable',
+      owner: 'characters',
+      reason: 'invalid',
+    })
+  })
+
   it('fails closed on duplicate ready owner ids without falling back to the compatibility projection', async () => {
     resetServerResourceState()
     setDatabaseLite(

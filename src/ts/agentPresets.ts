@@ -1,5 +1,10 @@
 import { canUseClientWriteAccess } from './clientSession'
 import {
+  projectAgentPresetDeleteImpact,
+  type AgentPresetDeleteImpactResult,
+  type AgentPresetDeleteImpactUnavailableReason,
+} from './agentPresetDeletionImpact'
+import {
   AGENT_PRESET_SCHEMA_VERSION,
   normalizeAgentPresets,
   type AgentPresetRecord,
@@ -269,6 +274,52 @@ export function getAgentPresetById(presetId: string): AgentPresetRecord | undefi
 
 export function getAgentPresetDefaultId(): string | undefined {
   return agentPresetDefaultOwnerRead()
+}
+
+export function getAgentPresetDeleteImpact(presetId: string): AgentPresetDeleteImpactResult {
+  const settingsStatus = settingsResourceState.groupStatuses.agents
+  if (settingsStatus !== 'ready' || settingsResourceState.status === 'error') {
+    return unavailableDeleteImpact('settings', settingsStatus === 'error' ? 'error' : 'loading')
+  }
+  const presets = readyAgentPresetCollectionOwner()
+  if (!presets) return unavailableDeleteImpact('settings', 'invalid')
+
+  if (charactersResourceState.status !== 'ready') {
+    return unavailableDeleteImpact('characters', charactersResourceState.status === 'error' ? 'error' : 'loading')
+  }
+  for (const character of charactersResourceState.characters) {
+    const characterId = nonBlankId(character?.chaId)
+    if (!characterId) return unavailableDeleteImpact('characters', 'invalid')
+    const rowStatus = charactersResourceState.rowStatuses[characterId]
+    if (rowStatus !== 'ready') {
+      return unavailableDeleteImpact('characters', rowStatus === 'error' ? 'error' : 'loading')
+    }
+  }
+
+  const loadoutStatus = collectionsResourceState.statuses.loadouts
+  if (loadoutStatus !== 'ready' || collectionsResourceState.status === 'error') {
+    return unavailableDeleteImpact(
+      'loadouts',
+      loadoutStatus === 'error' || collectionsResourceState.status === 'error' ? 'error' : 'loading',
+    )
+  }
+  const loadouts = readyLoadoutCollectionOwner()
+  if (!loadouts) return unavailableDeleteImpact('loadouts', 'invalid')
+
+  return projectAgentPresetDeleteImpact({
+    presetId,
+    presets,
+    defaultPresetId: (settingsResourceState.value as DatabaseRecord).agentPresetDefaultId,
+    characters: charactersResourceState.characters,
+    loadouts,
+  })
+}
+
+function unavailableDeleteImpact(
+  owner: 'settings' | 'characters' | 'loadouts',
+  reason: AgentPresetDeleteImpactUnavailableReason,
+): AgentPresetDeleteImpactResult {
+  return { status: 'unavailable', owner, reason }
 }
 
 export function createAgentPreset(

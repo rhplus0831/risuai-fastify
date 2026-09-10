@@ -73,3 +73,20 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
 - Fixture limit: these pure fixtures pin diagnostic states but do not constitute
   DOM interaction or browser geometry evidence. Next slice: certified deletion
   impact and the Phase 0 DOM/browser baseline.
+
+### 2026-09-10 — Phase 0 deletion-impact slice
+
+- Source base: `6fd14a0c9`.
+- Changed owners: `src/ts/agentPresetDeletionImpact.ts` and
+  `src/ts/agentPresets.ts`.
+- Added a fail-closed projection for global-default, explicit chat, and loadout
+  references. It predicts chat fallback to a different surviving global default,
+  names affected owners with stable-ID fallbacks, and reports unavailable owners
+  instead of undercounting malformed, ambiguous, loading, or failed projections.
+  The projection reads chat metadata/settings only and does not inspect transcript
+  messages.
+- Passed `pnpm test -- src/ts/agentPresetDeletionImpact.test.ts` (5 tests) and
+  `pnpm test -- src/ts/agentPresets.test.ts` (39 tests).
+- Fixture limit: the projection is not yet exposed in the confirmation UI; that
+  is Phase 2 work. Next slice: Phase 0 safety DOM assertions and browser journey
+  scaffold.
