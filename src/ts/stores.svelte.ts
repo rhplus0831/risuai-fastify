@@ -54,6 +54,11 @@ export const MobileGUI = writable(false)
 export const MobileGUIStack = writable(0)
 export const MobileSideBar = writable(0)
 export const SettingsMenuIndex = writable(-1)
+export interface BardWikiWorkspaceOpenRequest {
+  characterId: string
+  chatId?: string
+}
+export const bardWikiWorkspaceOpenRequest = writable<BardWikiWorkspaceOpenRequest | null>(null)
 export const ReloadGUIPointer = writable(0)
 export const VariableReloadGUIPointer = writable(0)
 export const ReloadChatPointer = writable({} as Record<number, number>)

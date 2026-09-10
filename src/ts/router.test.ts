@@ -64,6 +64,7 @@ vi.mock('./stores.svelte', async () => {
     PlaygroundStore: writable(0),
     ScrollToMessageStore: { value: -1 },
     SettingsMenuIndex: writable(1),
+    bardWikiWorkspaceOpenRequest: writable(null),
     botMakerMode: writable(false),
     selectedCharID: writable(-1),
     settingsOpen: writable(false),
@@ -450,6 +451,32 @@ describe('router grid history', () => {
 })
 
 describe('router settings history', () => {
+  it('offers the BardWiki workspace only when Settings was opened from a chat', async () => {
+    const router = await importRouterAt('/character/char-a/chat-a')
+    const { bardWikiWorkspaceOpenRequest } = await import('./stores.svelte')
+    const back = vi.spyOn(window.history, 'back').mockImplementation(() => {})
+
+    router.openSettingsRoute('/settings/bardwiki')
+
+    expect(router.canOpenBardWikiWorkspaceFromSettings()).toBe(true)
+    router.openBardWikiWorkspaceFromSettings()
+    expect(get(bardWikiWorkspaceOpenRequest)).toEqual({ characterId: 'char-a', chatId: 'chat-a' })
+    expect(back).toHaveBeenCalledOnce()
+
+    bardWikiWorkspaceOpenRequest.set(null)
+    back.mockRestore()
+  })
+
+  it('does not queue a BardWiki workspace request from a direct Settings entry', async () => {
+    const router = await importRouterAt('/settings/bardwiki')
+    const { bardWikiWorkspaceOpenRequest } = await import('./stores.svelte')
+
+    expect(router.canOpenBardWikiWorkspaceFromSettings()).toBe(false)
+    router.openBardWikiWorkspaceFromSettings()
+    expect(get(bardWikiWorkspaceOpenRequest)).toBeNull()
+    expect(window.location.pathname).toBe('/settings/bardwiki')
+  })
+
   it('keeps the current Settings section when an active module editor cancels navigation', async () => {
     const router = await importRouterAt('/settings/modules')
     const { registerModuleEditorLeaveGuard } = await import('./moduleEditorLeaveGuard')

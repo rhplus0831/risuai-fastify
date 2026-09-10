@@ -52,8 +52,13 @@ as appropriate.
 The standalone BardWiki page under Settings > Tools & Extensions is available at
 `/settings/bardwiki`. It chooses default enablement, Hypa/BardWiki/Hybrid mode,
 model and prompt owners, automatic and canonical update policy, total/partition
-token budgets, selected-document cap, link hops, and recent-query depth. New
+token budgets, selected-document cap, link hops, and recent-query depth. The UI
+groups these controls by default behavior, reply-time retrieval, and background
+updates; it hides retrieval controls that do not affect the selected mode,
+previews effective hybrid budget clamping, and reports autosave settlement. New
 chats inherit globals; the workspace can persist nullable per-chat overrides.
+When Settings was opened from a chat, the global page can return directly to
+that chat's BardWiki workspace.
 
 The active-chat overflow menu opens the lazy, focus-trapped workspace. It owns:
 

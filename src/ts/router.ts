@@ -6,6 +6,7 @@ import {
   OpenRealmStore,
   PlaygroundStore,
   ScrollToMessageStore,
+  bardWikiWorkspaceOpenRequest,
   botMakerMode,
   selectedCharID,
   settingsOpen,
@@ -186,6 +187,25 @@ export function closeSettingsRoute(): void {
 
   settingsHistoryTraversalPending = false
   navigate('/', { replace: true })
+}
+
+export function canOpenBardWikiWorkspaceFromSettings(): boolean {
+  return bardWikiWorkspaceOriginFromSettings() !== null
+}
+
+export function openBardWikiWorkspaceFromSettings(): void {
+  const origin = bardWikiWorkspaceOriginFromSettings()
+  if (!origin) return
+  bardWikiWorkspaceOpenRequest.set({ characterId: origin.chaId, ...(origin.chatId ? { chatId: origin.chatId } : {}) })
+  closeSettingsRoute()
+}
+
+function bardWikiWorkspaceOriginFromSettings(): Extract<AppRoute, { kind: 'character' }> | null {
+  if (typeof window === 'undefined') return null
+  const originPath = settingsOriginPath(window.history.state)
+  if (!originPath) return null
+  const origin = parseRoute(originPath)
+  return origin.kind === 'character' ? origin : null
 }
 
 export function openGridRoute(): void {

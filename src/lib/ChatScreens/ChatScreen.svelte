@@ -20,7 +20,7 @@
 
   import { isServerCharacterShell, type character } from 'src/ts/storage/database.svelte'
   import { charactersResourceState, getChatMetadataOwnerState } from 'src/ts/server/resourceState.svelte'
-  import { CharEmotion, selectedCharID } from '../../ts/stores.svelte'
+  import { bardWikiWorkspaceOpenRequest, CharEmotion, selectedCharID } from '../../ts/stores.svelte'
   import ResizeBox from './ResizeBox.svelte'
   import DefaultChatScreen from './DefaultChatScreen.svelte'
   import ChatScreenLayout from './ChatScreenLayout.svelte'
@@ -105,6 +105,14 @@
       return
     }
     if (bardWikiChatId !== selectedChatId) openBardWiki = false
+  })
+
+  $effect(() => {
+    const request = $bardWikiWorkspaceOpenRequest
+    if (!request || !selectedChatId || selectedCharacter?.chaId !== request.characterId) return
+    if (request.chatId && request.chatId !== selectedChatId) return
+    openBardWiki = true
+    bardWikiWorkspaceOpenRequest.set(null)
   })
 
   let displaySettings = $derived(displaySettingsForPaint())

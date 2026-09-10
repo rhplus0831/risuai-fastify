@@ -76,8 +76,12 @@ the image-handling beta toggle. BardWiki is a separate Tools & Extensions item a
 Hypa/BardWiki/Hybrid selection, confirmation policy, model/prompt owners,
 canonical updates, and token/query/link limits. The page explains that automatic
 confirmation and rebuild can make background provider calls and therefore incur
-provider cost. Per-chat overrides belong to the active-chat workspace rather
-than this global page; see
+provider cost. It presents a live effective-default summary, reveals only the
+retrieval controls relevant to the selected mode, shows hybrid clamping before
+save, and renders retained autosave failure/retry state. When Settings has a
+chat-route origin, its document-management action returns to that chat and asks
+the chat shell to open the lazy workspace. Per-chat overrides belong to that
+workspace rather than this global page; see
 [BardWiki Memory](../../docs/structure/bardwiki.md#settings-and-workspace).
 
 The Data group contains Backup & Restore plus Request History. The latter reads

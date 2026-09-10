@@ -472,8 +472,8 @@ describe('BardWiki workspace', () => {
       canonicalUpdatesOverride: true,
       totalTokenBudgetOverride: 4096,
     })
-    expect(target.textContent).toContain('Automatic confirmation')
-    expect(target.textContent).toContain('canonical updates')
+    expect(target.textContent).toContain(language.bardWiki.automaticConfirmation)
+    expect(target.textContent).toContain(language.bardWiki.canonicalUpdates)
   })
 
   it('marks documents that require review in the chat index', async () => {

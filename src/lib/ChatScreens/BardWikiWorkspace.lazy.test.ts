@@ -11,6 +11,10 @@ describe('BardWiki workspace loading boundary', () => {
     expect(source).not.toMatch(/import\s+BardWikiWorkspace\s+from/)
     expect(source).toContain('testId="bardwiki-workspace"')
     expect(source).toContain('if (bardWikiChatId !== selectedChatId) openBardWiki = false')
+    expect(source).toContain(
+      'if (!request || !selectedChatId || selectedCharacter?.chaId !== request.characterId) return',
+    )
+    expect(source).toContain('bardWikiWorkspaceOpenRequest.set(null)')
     expect(workspace).toContain('grid-cols-1 md:grid-cols-[minmax(13rem,18rem)_1fr]')
     expect(workspace).toContain('aria-modal="true"')
   })
