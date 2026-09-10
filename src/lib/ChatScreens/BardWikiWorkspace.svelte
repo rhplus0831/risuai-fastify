@@ -913,7 +913,7 @@
   use:modalBackdropDismiss={requestClose}
   data-modal-root
   data-testid="bardwiki-workspace-dialog-root"
-  class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-2 sm:p-4">
+  class="fixed inset-0 z-[100] flex items-center justify-center bg-black/70 p-2 backdrop-blur-sm sm:p-4">
   <div
     use:modalFocusTrap
     bind:this={workspaceDialog}
@@ -922,7 +922,7 @@
     aria-labelledby="bardwiki-workspace-title"
     tabindex="-1"
     onkeydown={handleDialogKeydown}
-    class="flex h-[min(52rem,calc(100dvh-1rem))] w-full max-w-6xl flex-col overflow-hidden rounded-md border border-darkborderc bg-darkbg text-textcolor sm:h-[min(52rem,calc(100dvh-2rem))]">
+    class="flex h-[min(52rem,calc(100dvh-1rem))] w-full max-w-6xl flex-col overflow-hidden rounded-md border border-darkborderc bg-darkbg text-textcolor shadow-2xl sm:h-[min(52rem,calc(100dvh-2rem))]">
     <header class="flex items-start gap-3 border-b border-darkborderc p-4">
       <BookOpenIcon class="mt-1 shrink-0" aria-hidden="true" />
       <div class="min-w-0 grow">
@@ -940,7 +940,7 @@
         data-modal-initial-focus
         type="button"
         aria-label={language.close}
-        class="rounded-md p-2 text-textcolor2 transition-colors hover:bg-selected hover:text-textcolor"
+        class="flex min-h-11 min-w-11 items-center justify-center rounded-md border border-darkborderc bg-darkbutton p-2 text-textcolor transition-colors hover:bg-selected focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
         onclick={requestClose}><XIcon /></button>
     </header>
 

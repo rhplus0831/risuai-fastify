@@ -270,6 +270,37 @@ describe('BardWiki workspace', () => {
     expect(target.textContent).toContain('Version 1')
   })
 
+  it('visually isolates the modal while keeping the background inert and restoring focus', async () => {
+    const opener = document.createElement('button')
+    opener.textContent = 'Open BardWiki'
+    target.appendChild(opener)
+    opener.focus()
+
+    component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+    await settle()
+
+    const backdrop = target.querySelector<HTMLElement>('[data-testid="bardwiki-workspace-dialog-root"]')!
+    const dialog = backdrop.querySelector<HTMLElement>('[role="dialog"]')!
+    const close = dialog.querySelector<HTMLButtonElement>('[data-modal-initial-focus]')!
+    expect(backdrop.classList).toContain('bg-black/70')
+    expect(backdrop.classList).toContain('backdrop-blur-sm')
+    expect(dialog.classList).toContain('shadow-2xl')
+    expect(close.classList).toContain('min-h-11')
+    expect(close.classList).toContain('min-w-11')
+    expect(opener.inert).toBe(true)
+    expect(opener.getAttribute('aria-hidden')).toBe('true')
+    expect(document.body.style.overflow).toBe('hidden')
+    expect(document.activeElement).toBe(close)
+
+    unmount(component)
+    component = undefined
+    await settle()
+    expect(opener.inert).toBe(false)
+    expect(opener.hasAttribute('aria-hidden')).toBe(false)
+    expect(document.body.style.overflow).toBe('')
+    expect(document.activeElement).toBe(opener)
+  })
+
   it('uses list-then-detail mobile navigation without discarding the active document draft', async () => {
     vi.stubGlobal(
       'matchMedia',
