@@ -42,7 +42,7 @@
     type AgentPresetUseRecord,
   } from 'src/ts/agentPresetRecords'
   import type { AgentPresetSnapshot, AgentPresetUseSnapshot, AgentSnapshot } from 'src/ts/server/commands'
-  import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
+  import { collectionsResourceState, settingsResourceState } from 'src/ts/server/resourceState.svelte'
   import {
     isModelProfileDividerSelectValue,
     modelProfileDividerSelectValue,
@@ -52,6 +52,12 @@
   import AgentPresetDiagnosticsPanel from './AgentPresetDiagnosticsPanel.svelte'
   import AgentEditorDrawer from './AgentEditorDrawer.svelte'
   import type { AgentPresetGeneratedProjectionLatch } from 'src/ts/agentPresets'
+  import {
+    agentPresetModuleIntegrationOptions,
+    parseAgentPresetModuleIntegration,
+    serializeAgentPresetModuleIntegration,
+    unknownAgentPresetModuleIntegrations,
+  } from 'src/ts/agentPresetModuleIntegration'
 
   interface Props {
     mode: 'create' | 'edit'
@@ -84,7 +90,8 @@
   const presetId = initialPreset?.id ?? ''
   let name = $state(initialPreset?.name ?? language.agentPresets.newPresetName)
   let description = $state(initialPreset?.description ?? '')
-  let moduleIntergration = $state(initialPreset?.moduleIntergration ?? '')
+  let moduleIntegrations = $state(parseAgentPresetModuleIntegration(initialPreset?.moduleIntergration))
+  let moduleIntegrationDraft = $state('')
   let finalOutputTemplate = $state(initialPreset?.finalOutputTemplate ?? '')
   let enabled = $state(initialPreset?.enabled ?? true)
   let limitConcurrency = $state(initialPreset?.maxConcurrency !== undefined)
@@ -130,6 +137,10 @@
       : safeAgentPreset(initialPreset),
   )
   let agents = $derived(readAgentOwners(settingsResourceState.value.agents))
+  let moduleIntegrationOptions = $derived(agentPresetModuleIntegrationOptions(collectionsResourceState.values.modules))
+  let unknownModuleIntegrations = $derived(
+    unknownAgentPresetModuleIntegrations(moduleIntegrations, moduleIntegrationOptions),
+  )
   let uses = $derived(livePreset?.agentUses ?? [])
   let resolvedSteps = $derived(
     livePreset && hasUniqueAgentPresetStepIds(livePreset) ? resolveAgentPresetSteps(livePreset, agents) : [],
@@ -314,7 +325,7 @@
     return {
       name: name.trim(),
       description: description.trim() || null,
-      moduleIntergration: moduleIntergration.trim() || null,
+      moduleIntergration: serializeAgentPresetModuleIntegration(moduleIntegrations) || null,
       finalOutputTemplate: finalOutputTemplate.trim() ? finalOutputTemplate : null,
       enabled,
       maxConcurrency: limitConcurrency
@@ -334,8 +345,8 @@
       name: name.trim(),
       enabled,
       ...(description.trim() ? { description: description.trim() } : { description: undefined }),
-      ...(moduleIntergration.trim()
-        ? { moduleIntergration: moduleIntergration.trim() }
+      ...(serializeAgentPresetModuleIntegration(moduleIntegrations)
+        ? { moduleIntergration: serializeAgentPresetModuleIntegration(moduleIntegrations) }
         : { moduleIntergration: undefined }),
       ...(finalOutputTemplate.trim() ? { finalOutputTemplate } : { finalOutputTemplate: undefined }),
       ...(limitConcurrency
@@ -621,6 +632,24 @@
     return Number.isFinite(number) ? Math.max(min, Math.min(max, number)) : min
   }
 
+  function addModuleIntegration(value: string = moduleIntegrationDraft): void {
+    const normalized = value.trim()
+    if (!normalized || locked) return
+    moduleIntegrations = parseAgentPresetModuleIntegration([...moduleIntegrations, normalized].join(', '))
+    moduleIntegrationDraft = ''
+  }
+
+  function removeModuleIntegration(value: string): void {
+    if (locked) return
+    moduleIntegrations = moduleIntegrations.filter((candidate) => candidate !== value)
+  }
+
+  function handleModuleIntegrationKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Enter' && event.key !== ',') return
+    event.preventDefault()
+    addModuleIntegration()
+  }
+
   function requestClose(): void {
     if (locked || nestedAgentOpen) return
     if (metadataDirty && !window.confirm(language.agentPresets.discardChangesConfirm)) return
@@ -635,7 +664,15 @@
   }
 
   function metadataRecoveryDraft() {
-    return { name, description, moduleIntergration, finalOutputTemplate, enabled, limitConcurrency, maxConcurrency }
+    return {
+      name,
+      description,
+      moduleIntergration: serializeAgentPresetModuleIntegration(moduleIntegrations),
+      finalOutputTemplate,
+      enabled,
+      limitConcurrency,
+      maxConcurrency,
+    }
   }
   function useRecoveryDraft() {
     return {
@@ -732,21 +769,70 @@
           class="min-h-20 rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
           bind:value={description}></textarea>
       </label>
-      <label class="mt-3 flex flex-col gap-1" data-risu-agent-preset-module-integration>
-        <span class="text-sm font-medium">{language.agentPresets.moduleIntegrationLabel}</span>
-        <span class="text-xs text-textcolor2">{language.agentPresets.moduleIntegrationDescription}</span>
-        <textarea
-          class="min-h-20 rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
-          placeholder={language.agentPresets.moduleIntegrationPlaceholder}
-          bind:value={moduleIntergration}></textarea>
-      </label>
+      <section class="mt-3" data-risu-agent-preset-module-integration>
+        <h4 class="text-sm font-medium">{language.agentPresets.moduleIntegrationLabel}</h4>
+        <p class="text-xs text-textcolor2">{language.agentPresets.moduleIntegrationDescription}</p>
+        <div class="mt-2 flex flex-wrap items-end gap-2">
+          <label class="min-w-56 flex-1" for="agent-preset-module-value">
+            <span class="mb-1 block text-xs font-medium">{language.agentPresets.moduleIntegrationValueLabel}</span>
+            <input
+              id="agent-preset-module-value"
+              list="agent-preset-module-options"
+              class="min-h-10 w-full rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
+              placeholder={language.agentPresets.moduleIntegrationPlaceholder}
+              bind:value={moduleIntegrationDraft}
+              onkeydown={handleModuleIntegrationKeydown} />
+          </label>
+          <Button disabled={locked || !moduleIntegrationDraft.trim()} onclick={() => addModuleIntegration()}>
+            {language.agentPresets.addModuleIntegration}
+          </Button>
+          <datalist id="agent-preset-module-options">
+            {#each moduleIntegrationOptions as option (option.value)}
+              <option value={option.value}
+                >{option.label} — {option.kind === 'id'
+                  ? language.agentPresets.moduleIdKind
+                  : language.agentPresets.moduleNamespaceKind}</option>
+            {/each}
+          </datalist>
+        </div>
+        {#if moduleIntegrations.length === 0}
+          <p class="mt-2 text-xs text-textcolor2">{language.agentPresets.noModuleIntegrations}</p>
+        {:else}
+          <ul class="mt-2 flex flex-wrap gap-2" aria-label={language.agentPresets.moduleIntegrationLabel}>
+            {#each moduleIntegrations as value (value)}
+              <li>
+                <button
+                  type="button"
+                  class="inline-flex min-h-9 items-center gap-2 rounded-full border border-darkborderc bg-darkbutton px-3 py-1 text-sm hover:bg-darkbuttonhover"
+                  aria-label={language.agentPresets.removeModuleIntegration(value)}
+                  disabled={locked}
+                  onclick={() => removeModuleIntegration(value)}>
+                  <span>{value}</span><XIcon size={14} aria-hidden="true" />
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        {#if unknownModuleIntegrations.length > 0}
+          <ul class="mt-2 space-y-1 text-xs text-yellow-600" data-risu-agent-preset-module-warnings>
+            {#each unknownModuleIntegrations as value (value)}
+              <li>{language.agentPresets.unknownModuleIntegration(value)}</li>
+            {/each}
+          </ul>
+        {/if}
+      </section>
       {#if limitConcurrency}
-        <label class="mt-3 flex max-w-xs flex-col gap-1"
-          ><span class="text-sm font-medium">{language.agentPresets.maxConcurrency}</span><NumberInput
+        <label class="mt-3 flex max-w-xs flex-col gap-1">
+          <span class="text-sm font-medium">{language.agentPresets.maxConcurrency}</span><NumberInput
             bind:value={maxConcurrency}
             min={AGENT_PRESET_MAX_CONCURRENCY_MIN}
             max={AGENT_PRESET_MAX_CONCURRENCY_MAX}
-            fullwidth /></label>
+            fullwidth />
+          <span class="text-xs text-textcolor2">
+            {language.agentPresets.runtimeRange(AGENT_PRESET_MAX_CONCURRENCY_MIN, AGENT_PRESET_MAX_CONCURRENCY_MAX)}
+            {language.agentPresets.maxConcurrencyEffect(Number(maxConcurrency))}
+          </span>
+        </label>
       {/if}
 
       <section class="mt-5 rounded-md border border-darkborderc p-3" data-risu-agent-preset-final-output>

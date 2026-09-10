@@ -115,12 +115,13 @@ const preset: AgentPresetRecord = {
   ],
 }
 
-function seed(agents: AgentRecord[] = [agent], presets: AgentPresetRecord[] = [preset]): void {
+function seed(agents: AgentRecord[] = [agent], presets: AgentPresetRecord[] = [preset], modules: unknown[] = []): void {
   setDatabaseLite({
     agents,
     agentPresets: presets,
     agentPresetDefaultId: presets[0]?.id,
     modelProfiles: [],
+    modules,
     characters: [],
     loadouts: [],
   } as never)
@@ -844,18 +845,32 @@ describe('modular Agent Preset settings', () => {
   })
 
   it('saves module IDs and namespaces as Agent Preset metadata', async () => {
-    seed([agent], [{ ...preset, moduleIntergration: 'old-space' }])
+    seed(
+      [agent],
+      [{ ...preset, moduleIntergration: 'old-space, old-space' }],
+      [{ id: 'module-id', name: 'Research tools', namespace: 'research-tools' }],
+    )
     component = mount(AgentPresetSettings, { target })
     await tick()
 
     clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
     await tick()
     const editor = target.querySelector('[data-risu-agent-preset-editor]')!
-    const integration = editor.querySelector<HTMLTextAreaElement>(
-      '[data-risu-agent-preset-module-integration] textarea',
-    )!
-    integration.value = ' research-tools, module-id '
-    integration.dispatchEvent(new Event('input', { bubbles: true }))
+    const integration = editor.querySelector<HTMLInputElement>('#agent-preset-module-value')!
+    expect(editor.querySelectorAll(`[aria-label="${language.agentPresets.moduleIntegrationLabel}"] > li`)).toHaveLength(
+      1,
+    )
+    expect(editor.querySelector('[data-risu-agent-preset-module-warnings]')?.textContent).toContain('old-space')
+
+    editor
+      .querySelector<HTMLButtonElement>(`[aria-label="${language.agentPresets.removeModuleIntegration('old-space')}"]`)!
+      .click()
+    for (const value of ['research-tools', 'module-id', 'research-tools']) {
+      integration.value = value
+      integration.dispatchEvent(new Event('input', { bubbles: true }))
+      await tick()
+      clickButtonContaining(editor, language.agentPresets.addModuleIntegration)
+    }
     await tick()
     clickButtonContaining(editor, language.agentPresets.save)
     await flush()

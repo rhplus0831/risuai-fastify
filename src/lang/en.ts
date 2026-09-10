@@ -3664,11 +3664,20 @@ export const languageEnglish = {
     descriptionPlaceholder: 'Optional author note',
     moduleIntegrationLabel: 'Module Integration',
     moduleIntegrationDescription:
-      'Comma-separated module IDs or namespaces activated while this Agent Preset is selected.',
+      'Add module IDs or namespaces activated while this Agent Preset is selected. Custom namespaces are retained.',
     moduleIntegrationPlaceholder: 'research-tools, module-id',
+    moduleIntegrationValueLabel: 'Module ID or namespace',
+    addModuleIntegration: 'Add module value',
+    removeModuleIntegration: (value: string) => `Remove module value ${value}`,
+    noModuleIntegrations: 'No module values selected.',
+    moduleIdKind: 'module ID',
+    moduleNamespaceKind: 'namespace',
+    unknownModuleIntegration: (value: string) =>
+      `${value} is not exposed by an available module. It will be kept as a custom namespace.`,
     enabledLabel: 'Enabled',
     limitConcurrency: 'Limit concurrency',
     maxConcurrency: 'Max Concurrency',
+    maxConcurrencyEffect: (count: number) => `Runs at most ${count} independent Agents at the same time.`,
     finalOutputTemplateLabel: 'Final output CBS',
     finalOutputTemplateDescription:
       'Optional CBS evaluated after the main response and all Agents complete. It takes precedence over a direct Final output destination.',
