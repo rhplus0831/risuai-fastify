@@ -528,6 +528,30 @@ describe('modular Agent Preset settings', () => {
     expect(target.querySelectorAll('[data-risu-agent-preset-step]')).toHaveLength(1)
   })
 
+  it('keeps Agent and Preset actions outside their scrolling drawer bodies', async () => {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const agentDrawer = target.querySelector('[data-risu-agent-editor]')!
+    const agentBody = agentDrawer.querySelector('[data-risu-agent-editor-scroll-body]')!
+    const agentFooter = agentDrawer.querySelector('[data-risu-agent-editor-footer]')!
+    expect(agentBody.contains(agentFooter)).toBe(false)
+    expect(agentBody.parentElement).toBe(agentFooter.parentElement)
+
+    agentDrawer.querySelector<HTMLButtonElement>('button')!.click()
+    await tick()
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const presetDrawer = target.querySelector('[data-risu-agent-preset-editor]')!
+    const presetBody = presetDrawer.querySelector('[data-risu-agent-preset-editor-scroll-body]')!
+    const presetFooter = presetDrawer.querySelector('[data-risu-agent-preset-editor-footer]')!
+    expect(presetBody.contains(presetFooter)).toBe(false)
+    expect(presetBody.parentElement).toBe(presetFooter.parentElement)
+  })
+
   it('fails closed when the ready Agent settings owner does not contain the preset', async () => {
     resetServerResourceState()
     settingsResourceState.value.agents = [agent]

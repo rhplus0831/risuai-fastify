@@ -361,7 +361,7 @@
       </h3>
       <Button size="sm" styled="outlined" disabled={busy} onclick={requestClose}><XIcon size={16} /></Button>
     </div>
-    <div class="flex-1 overflow-y-auto p-4">
+    <div class="flex-1 overflow-y-auto p-4" data-risu-agent-editor-scroll-body>
       {#if commandError}<div class="mb-3 rounded-md border border-draculared p-3 text-sm text-draculared">
           {commandError}
         </div>{/if}
@@ -593,7 +593,7 @@
         </div>
       </div>
     </div>
-    <div class="flex justify-end gap-2 border-t border-darkborderc p-4">
+    <div class="flex justify-end gap-2 border-t border-darkborderc p-4" data-risu-agent-editor-footer>
       <Button styled="outlined" disabled={busy} onclick={requestClose}>{language.agentPresets.cancel}</Button>
       <Button disabled={!canSave} onclick={() => onSave(sparseSnapshot())}>
         <span class="inline-flex items-center gap-2"

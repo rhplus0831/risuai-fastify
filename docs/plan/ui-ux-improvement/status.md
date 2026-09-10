@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 0 in progress — shared diagnostics implemented.**
-- Next action: add the certified preset-delete impact projection and baseline UI/browser fixtures.
+- State: **Phase 0 accepted; Phase 1 is next.**
+- Next action: implement [Phase 1 — Effective state and validation](phases/phase-1-effective-state-and-validation.md).
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -18,7 +18,7 @@
 
 | Phase | State | Outcome |
 | --- | --- | --- |
-| [0. Shared contracts and acceptance baseline](phases/phase-0-shared-contracts-and-baseline.md) | Pending | Lock the presentation contracts, pure diagnostics, fixtures, and measurable acceptance baseline. |
+| [0. Shared contracts and acceptance baseline](phases/phase-0-shared-contracts-and-baseline.md) | Accepted | Shared diagnostics, certified deletion impact, safety DOM assertions, and a disposable-data compact browser scaffold are in place. |
 | [1. Effective state and validation](phases/phase-1-effective-state-and-validation.md) | Pending | Make no-op, inherited, unchanged, invalid, and ineffective configurations explicit. |
 | [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Pending | Preview dependency consequences and preserve the existing accepted/queued/failed contract. |
 | [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Pending | Clarify the responsive drawer, reduce row-action crowding, and strengthen hierarchy and overflow cues. |
@@ -90,3 +90,33 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
 - Fixture limit: the projection is not yet exposed in the confirmation UI; that
   is Phase 2 work. Next slice: Phase 0 safety DOM assertions and browser journey
   scaffold.
+
+### 2026-09-10 — Phase 0 safety and browser-baseline slice
+
+- Source base: `d5b98e643`.
+- Changed owners: Agent and Preset drawers, Input Hook DOM tests, responsive
+  workspace DOM tests, and
+  `server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts`.
+- Pinned drawer footer placement outside the scroll body, responsive dialog
+  inertness and focus restoration, Input Hook Saving/queued/failed/accepted
+  presentation with retained newer text, and the existing nested modal behavior.
+- Added a dedicated temporary-Fastify/temporary-SQLite Chromium scaffold with
+  deterministic ready, Empty, invalid, stale-output, prepared-input mismatch,
+  Input Hook, and zero-document BardWiki data. It opens writer navigation and all
+  reviewed routes at 550×775 and 655×691 without sleeps or command mutations.
+- Passed `pnpm test -- src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`
+  (21 tests), `pnpm test -- src/lib/Setting/Pages/InputHookSettings.svelte.test.ts`
+  (9 tests), `pnpm test -- src/lib/Workspace.svelte.test.ts` (32 tests),
+  `pnpm test -- src/ts/gui/modalFocusTrap.test.ts` (7 tests),
+  `pnpm test -- src/ts/server/settingsOwner.svelte.test.ts` (52 tests), and
+  `pnpm test -- src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts` (16 tests).
+- Passed `pnpm build:smoke` and
+  `pnpm exec playwright test -c playwright.fastify-smoke.config.ts server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts`
+  (Chromium, 1 test). The build retained its existing CSS Highlight API and
+  browser-externalization warnings.
+- Fixture limit: Phase 0 proves route reachability and safety baselines, not the
+  complete keyboard/zoom/lifecycle matrix owned by Phase 6. Existing component
+  fixtures cover one-document, failed-job, pending-job, and running-job BardWiki
+  states; the browser scaffold intentionally starts at zero documents.
+- Phase 0 accepted. Next slice: truthful effective/Empty states and field-linked
+  authoring validation in Phase 1.

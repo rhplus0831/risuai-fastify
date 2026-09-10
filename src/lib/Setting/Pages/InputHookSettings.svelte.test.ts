@@ -299,4 +299,20 @@ describe('InputHookSettings editing', () => {
     await tick()
     expect(target.querySelector('[role="status"]')?.textContent).toContain(language.inputHookSettings.saved)
   })
+
+  it('announces saving before settlement and lets a newer edit survive an older accepted outcome', async () => {
+    const editor = hookCard('Legacy Hook').querySelector('textarea')!
+    editor.value = 'First pending edit'
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    inputHookSettingsMocks.reportPersistence('saving')
+    await tick()
+    expect(target.querySelector('[role="status"]')?.textContent).toContain(language.inputHookSettings.saving)
+
+    editor.value = 'Newer pending edit'
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    inputHookSettingsMocks.reportPersistence('accepted')
+    await tick()
+    expect(editor.value).toBe('Newer pending edit')
+    expect(inputHookSettingsMocks.readInputHooks()[0].prompt).toBe('Newer pending edit')
+  })
 })
