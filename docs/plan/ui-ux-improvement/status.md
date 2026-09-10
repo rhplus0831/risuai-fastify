@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 0 accepted; Phase 1 is next.**
-- Next action: implement [Phase 1 — Effective state and validation](phases/phase-1-effective-state-and-validation.md).
+- State: **Phase 1 in progress — truthful preset status implemented.**
+- Next action: add nested Agent creation, field-linked issues, save reasons, and BardWiki inherited values.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -120,3 +120,17 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   states; the browser scaffold intentionally starts at zero documents.
 - Phase 0 accepted. Next slice: truthful effective/Empty states and field-linked
   authoring validation in Phase 1.
+
+### 2026-09-10 — Phase 1 truthful preset-state slice
+
+- Source base: `adbd7bce8`.
+- Changed owners: `src/lib/Setting/Pages/AgentPresetSettings.svelte`,
+  `src/ts/agentPresetPresentation.ts`, and localized Agent Preset copy.
+- Preset cards now reserve Ready for executable plans, show
+  **Empty — no Agents configured** for valid no-op presets, retain blocked-state
+  precedence, keep plain-language phase/use summaries visible, and move raw IDs
+  and concurrency metadata into a Technical details disclosure.
+- Passed `pnpm test -- src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`
+  (22 tests), including rendered Ready/Empty/Disabled/Invalid/Incomplete/model
+  status assertions.
+- Next slice: no-Agent creation workflow and editor issue/save feedback.

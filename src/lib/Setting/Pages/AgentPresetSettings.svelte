@@ -16,6 +16,7 @@
     type AgentPresetMutationOutcome,
   } from 'src/ts/agentPresets'
   import { createAgentPresetStatusSummary, planAgentPreset } from 'src/ts/agentPresetResolver'
+  import { agentPresetPresentationStatus, type AgentPresetPresentationStatusKind } from 'src/ts/agentPresetPresentation'
   import {
     resolveAgentPresetSteps,
     type AgentRecord,
@@ -220,12 +221,17 @@
   }
 
   function statusForPreset(preset: AgentPresetRecord): StatusPresentation {
-    if (!preset.enabled) return { label: language.agentPresets.statusDisabled, tone: 'muted' }
-    const planning = planAgentPreset({ database: resolverDatabase, preset })
-    if (!planning.plan) return { label: language.agentPresets.statusInvalid, tone: 'error' }
-    if (planning.incompleteIssues.length > 0) return { label: language.agentPresets.statusIncomplete, tone: 'warning' }
-    if (!planning.ready) return { label: language.agentPresets.statusModelNotReady, tone: 'warning' }
-    return { label: language.agentPresets.statusReady, tone: 'ready' }
+    const status = agentPresetPresentationStatus({ database: resolverDatabase, preset })
+    return { label: statusLabel(status.kind), tone: status.tone }
+  }
+
+  function statusLabel(kind: AgentPresetPresentationStatusKind): string {
+    if (kind === 'empty') return language.agentPresets.statusEmpty
+    if (kind === 'disabled') return language.agentPresets.statusDisabled
+    if (kind === 'invalid') return language.agentPresets.statusInvalid
+    if (kind === 'incomplete') return language.agentPresets.statusIncomplete
+    if (kind === 'model_not_ready') return language.agentPresets.statusModelNotReady
+    return language.agentPresets.statusReady
   }
 
   function statusClass(tone: StatusPresentation['tone']): string {
@@ -442,7 +448,6 @@
               </span>
             </div>
           </div>
-          <span class="break-all text-xs text-textcolor2">{preset.id}</span>
           {#if preset.description}
             <span class="text-xs text-textcolor2">{preset.description}</span>
           {/if}
@@ -450,9 +455,17 @@
             {language.agentPresets.stepCount(enabledSteps(preset).length)} · {phaseSummary(preset)}
           </span>
           <span class="text-xs text-textcolor2">
-            {language.agentPresets.usageCount(usageCount(preset.id))} · {language.agentPresets.maxConcurrency}:
-            {preset.maxConcurrency ?? language.agentPresets.unlimited}
+            {language.agentPresets.usageCount(usageCount(preset.id))}
           </span>
+          <details class="text-xs text-textcolor2" data-risu-agent-preset-technical-details>
+            <summary class="cursor-pointer">{language.agentPresets.technicalDetails}</summary>
+            <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-2 gap-y-1">
+              <dt>{language.agentPresets.presetIdLabel}</dt>
+              <dd class="break-all font-mono">{preset.id}</dd>
+              <dt>{language.agentPresets.maxConcurrency}</dt>
+              <dd>{preset.maxConcurrency ?? language.agentPresets.unlimited}</dd>
+            </dl>
+          </details>
         </article>
       {/each}
     </div>

@@ -160,6 +160,54 @@ describe('modular Agent Preset settings', () => {
     expect(target.querySelector('[data-risu-agent-preset-row]')?.textContent).toContain(
       language.agentPresets.stepCount(1),
     )
+    const details = target.querySelector<HTMLDetailsElement>('[data-risu-agent-preset-technical-details]')!
+    expect(details.open).toBe(false)
+    expect(details.textContent).toContain(preset.id)
+  })
+
+  it('renders Empty only for a valid no-op while retaining blocked status precedence', async () => {
+    const variants: AgentPresetRecord[] = [
+      preset,
+      { ...preset, id: 'ap_empty', name: 'Empty preset', agentUses: [] },
+      { ...preset, id: 'ap_disabled', name: 'Disabled preset', enabled: false, agentUses: [] },
+      {
+        ...preset,
+        id: 'ap_invalid',
+        name: 'Invalid preset',
+        agentUses: [{ ...preset.agentUses![0], id: 'use_invalid', agentId: 'missing_agent' }],
+      },
+      {
+        ...preset,
+        id: 'ap_incomplete',
+        name: 'Incomplete preset',
+        finalOutputTemplate: '{{agent::missing_output}}',
+      },
+      {
+        ...preset,
+        id: 'ap_model',
+        name: 'Model preset',
+        agentUses: [
+          {
+            ...preset.agentUses![0],
+            id: 'use_model',
+            modelOverride: { mode: 'modelProfile', profileId: 'missing_profile' },
+          },
+        ],
+      },
+    ]
+    seed([agent], variants)
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    const statusByName = (name: string) =>
+      Array.from(target.querySelectorAll('[data-risu-agent-preset-row]')).find((row) => row.textContent?.includes(name))
+        ?.textContent
+    expect(statusByName('Research Preset')).toContain(language.agentPresets.statusReady)
+    expect(statusByName('Empty preset')).toContain(language.agentPresets.statusEmpty)
+    expect(statusByName('Disabled preset')).toContain(language.agentPresets.statusDisabled)
+    expect(statusByName('Invalid preset')).toContain(language.agentPresets.statusInvalid)
+    expect(statusByName('Incomplete preset')).toContain(language.agentPresets.statusIncomplete)
+    expect(statusByName('Model preset')).toContain(language.agentPresets.statusModelNotReady)
   })
 
   it('creates a standalone Agent through the Agent command helper', async () => {
