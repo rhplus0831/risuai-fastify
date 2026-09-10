@@ -890,6 +890,14 @@
     })
   }
 
+  function openModalFromChatMenu(open: () => void): void {
+    // Modal focus restoration must capture a connected opener, not the menu
+    // item that is removed as this menu closes.
+    if (chatMenuButton?.isConnected) chatMenuButton.focus()
+    open()
+    closeChatMenu()
+  }
+
   function handleChatMenuKeydown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       event.preventDefault()
@@ -3599,10 +3607,7 @@
               data-testid="default-chat-open-chat-list"
               data-default-chat-menu-item
               class="flex w-full items-center cursor-pointer text-left hover:text-green-500 transition-colors"
-              onclick={() => {
-                openChatList = true
-                closeChatMenu()
-              }}>
+              onclick={() => openModalFromChatMenu(() => (openChatList = true))}>
               <DatabaseIcon />
               <span class="ml-2">{language.chatList}</span>
             </button>
@@ -3615,10 +3620,7 @@
             data-default-chat-menu-item
             disabled={!currentChatId}
             class="flex w-full items-center cursor-pointer text-left hover:text-green-500 transition-colors disabled:cursor-not-allowed disabled:text-textcolor2"
-            onclick={() => {
-              openBardWiki = true
-              closeChatMenu()
-            }}>
+            onclick={() => openModalFromChatMenu(() => (openBardWiki = true))}>
             <BookOpenIcon />
             <span class="ml-2">{language.bardWiki.workspaceTitle}</span>
           </button>
@@ -3728,10 +3730,7 @@
             data-testid="default-chat-open-modules"
             data-default-chat-menu-item
             class="flex w-full items-center cursor-pointer text-left hover:text-green-500 transition-colors"
-            onclick={() => {
-              openModuleList = true
-              closeChatMenu()
-            }}>
+            onclick={() => openModalFromChatMenu(() => (openModuleList = true))}>
             <PackageIcon />
             <span class="ml-2">{language.modules}</span>
           </button>

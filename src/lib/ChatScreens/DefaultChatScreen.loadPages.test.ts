@@ -1284,6 +1284,12 @@ describe('DefaultChatScreen overflow menu accessibility', () => {
     expect(pinItem?.getAttribute('aria-checked')).toBe('false')
     expect(pinItem?.textContent?.trim()).toBe('pinChat')
     expect(document.activeElement).toBe(items[0])
+
+    const bardWikiItem = target.querySelector<HTMLButtonElement>('[data-testid="default-chat-open-bardwiki"]')!
+    bardWikiItem.click()
+    expect(document.activeElement).toBe(menuButton)
+    await settle()
+    expect(target.querySelector('[data-testid="default-chat-overflow-menu"]')).toBeNull()
   })
 
   it('supports arrow, Home, and End navigation and restores opener focus on Escape', async () => {
