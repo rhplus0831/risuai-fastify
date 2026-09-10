@@ -1311,6 +1311,89 @@ describe('Durable generation', () => {
     expect(providerCalls).toBeLessThanOrEqual(1)
   })
 
+  it('settles a cancellation before provider dispatch and admits the next send without a restart', async () => {
+    let markAssemblyStarted!: () => void
+    const assemblyStarted = new Promise<void>((resolve) => {
+      markAssemblyStarted = resolve
+    })
+    let releaseAssembly!: () => void
+    const assemblyGate = new Promise<void>((resolve) => {
+      releaseAssembly = resolve
+    })
+    durableLifecycleHook = async (transition) => {
+      if (transition !== 'assembly_started') return
+      markAssemblyStarted()
+      await assemblyGate
+    }
+    let providerCalls = 0
+    providerImpl = () => {
+      providerCalls += 1
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+
+    try {
+      const authority = await operationAuthority()
+      const operationId = randomUUID()
+      const submit = await postAtomicOperation(
+        authority.databaseLineage,
+        atomicSendRequest({
+          operationId,
+          acceptedMessageId: randomUUID(),
+          baseRevision: authority.revision,
+        }),
+      )
+      expect(submit.status).toBe(201)
+      await assemblyStarted
+
+      const cancellation = await fetch(
+        `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
+        {
+          method: 'PUT',
+          headers: authHeaders({
+            'content-type': 'application/json',
+            'risu-database-lineage': authority.databaseLineage,
+            'risu-writer-session': 'writer-a',
+          }),
+          body: JSON.stringify({ reason: 'user_stop' }),
+        },
+      )
+      expect(cancellation.status).toBe(202)
+      expect(await cancellation.json()).toMatchObject({
+        disposition: 'cancelling',
+        operation: { operationId, state: 'stopping' },
+      })
+      releaseAssembly()
+
+      await waitFor(async () => {
+        const status = await operationStatus(operationId)
+        return status.operation.state === 'cancelled' ? status : undefined
+      })
+      expect(providerCalls).toBe(0)
+
+      const followUpAuthority = await operationAuthority()
+      const followUpOperationId = randomUUID()
+      const followUp = await postAtomicOperation(
+        followUpAuthority.databaseLineage,
+        atomicSendRequest({
+          operationId: followUpOperationId,
+          acceptedMessageId: randomUUID(),
+          baseRevision: followUpAuthority.revision,
+          text: 'follow-up after assembly cancellation',
+        }),
+      )
+      expect(followUp.status).toBe(201)
+      await waitFor(async () => {
+        const status = await operationStatus(followUpOperationId)
+        return status.operation.state === 'completed' ? status : undefined
+      })
+      expect(providerCalls).toBe(1)
+    } finally {
+      releaseAssembly?.()
+    }
+  })
+
   it('rejects synchronous generation-settings readiness before append or intent commit', async () => {
     await seedDatabase({
       ...fixtureDatabase,

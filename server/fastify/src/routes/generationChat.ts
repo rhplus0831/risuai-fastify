@@ -282,6 +282,7 @@ export interface GenerationChatRouteOptions {
   onDurableLifecycleTransition?: (
     transition:
       | 'registered'
+      | 'assembly_started'
       | 'viewer_write_started'
       | 'viewer_attached'
       | 'runner_tracked'
@@ -5297,6 +5298,7 @@ async function runGenerationJob(args: {
     emit({ type: 'stage', stage: 'prompt', status: 'start' })
 
     try {
+      await options.onDurableLifecycleTransition?.('assembly_started', job)
       if (deferredFailure) throw deferredFailure.error
       assertGenerationOperationTargetCurrent(db, job)
       if (preparedAssembly) retargetAssemblySignal(preparedAssembly, signal)
@@ -5793,10 +5795,19 @@ async function runGenerationJob(args: {
         })
       }
     } catch (err) {
-      emit({
-        type: 'error',
-        error: err instanceof Error ? err.message : 'prompt assembly failed',
-      })
+      if (signal.aborted && signal.reason === 'user_stop' && !providerMayHaveRun) {
+        // Stop can arrive while prompt assembly is still using the job signal.
+        // No provider output exists to persist in this window, but the durable
+        // operation still has to leave `stopping`; otherwise its SQLite live-chat
+        // claim blocks every later send until the next server startup sweep.
+        emit({ type: 'done', outcome: 'cancelled', result: '', generationId })
+        terminalDoneEmitted = true
+      } else {
+        emit({
+          type: 'error',
+          error: err instanceof Error ? err.message : 'prompt assembly failed',
+        })
+      }
     }
 
     if (!terminalDoneEmitted && !signal.aborted) {
