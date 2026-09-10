@@ -1,7 +1,7 @@
 # Svelte Chat UI Guide
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-09 (late initial display-body commits and fractional anchor retention).
+Targeted source check: 2026-09-10 (chat-menu modal opener and guided BardWiki workspace).
 
 This guide owns the visible chat frame, transcript, message rows, composer
 variants, generation/loading feedback, and in-chat confirmations. Return to the
@@ -51,8 +51,13 @@ soft-deletes manual documents with version/hash fences, and exposes explicit
 current-turn confirmation plus receipt/job cancel/retry state. Rebuild preview,
 vault export, and dry-run/apply import remain explicit lifecycle actions with
 provider-cost and destructive/replace warnings. The dialog reflows to a
-single-column mobile layout and never treats queued intent as accepted. The
-cross-layer contract is in [BardWiki Memory](../../docs/structure/bardwiki.md).
+single-column, list-then-detail mobile layout with a retained Back path; desktop
+keeps both panes. Its zero-document state routes to create/import/build,
+inherited controls name their effective values, and Activity summarizes
+running/attention/failed work. The chat menu focuses its persistent button
+before removing the transient menu so modal teardown restores a connected
+opener. The workspace never treats queued intent as accepted. The cross-layer
+contract is in [BardWiki Memory](../../docs/structure/bardwiki.md).
 
 ## Transcript Hydration And Paging
 

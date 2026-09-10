@@ -1,7 +1,7 @@
 # Svelte Settings UI Guide
 
 Last audited: 2026-09-04.
-Targeted source check: 2026-09-08 (reader gates and originating editor drafts).
+Targeted source check: 2026-09-10 (guided Agent, Preset, Input Hook, and theme accessibility states).
 
 This guide owns settings navigation, data-driven rows, shared controls,
 authoring editors, model-profile presentation, and visible settings persistence
@@ -260,6 +260,14 @@ wheel and `aria-pressed` selection. The custom card previews
 durable object is absent. Selecting custom reveals the registered
 `CustomColorSchemeEditor`.
 
+`colorSchemeAccessibilityIssues()` measures primary/muted text and selected or
+control text at 4.5:1, and focus, identifying borders, 50%-opacity disabled
+text, and destructive text at 3:1 across both main surfaces. Built-in palettes
+meet those relationships. Exact legacy built-in palettes migrate to their
+current tokens; modified and custom palettes are never silently rewritten. The
+custom editor instead presents a polite, relationship-specific contrast
+warning while retaining every supplied value.
+
 `displayNonRendererServerSettingKeys` explicitly includes `colorScheme`,
 `colorSchemeName`, `customColorScheme`, background, and custom text theme, so
 custom controls and page watchers own those durable writes instead of ordinary
@@ -277,12 +285,34 @@ creates, edits, duplicates, deletes, and reorders records; chooses the global
 default; attaches existing Agents; and shows status, save, and queued/failure
 feedback.
 
-The Agent editor exposes instructions, prepared-input scopes, output format,
-toggle definitions, Agent-only lorebook inputs, and model/runtime defaults. It
-names selected CBS inputs and can validate role-tagged ChatML before save.
+Preset cards distinguish executable **Ready** from legal no-op **Empty**, while
+Disabled, Incomplete, Invalid, and Model not ready continue to come from the
+canonical planner. Plain-language phase/use summaries stay visible; raw IDs,
+output keys, concurrency, and module metadata live under Technical details.
+Preset deletion uses the fail-closed impact projection in `agentPresets.ts` to
+show bounded global-default, chat, and loadout consequences and their effective
+fallbacks. An unavailable owner disables confirmation and exposes Retry. Agent
+cards list the blocking presets that prevent deletion and link to them.
+
+The Agent editor groups Basics, Instructions, Context, Model & limits, and a
+collapsed Advanced section. It exposes prepared-input scopes, output format,
+toggle definitions, Agent-only lorebook inputs, and model/runtime defaults.
+Selected-but-unused prepared inputs can insert their exact token or be
+deselected; used-but-unselected inputs can be enabled. The same field-linked
+issue list covers invalid ChatML, output/model mismatches, missing definitions,
+empty instructions, and generated names. Valid ChatML renders a role-row
+preview, authoring text supports caret insertion/autocomplete, and numeric
+fields state their bounds and effects.
+
 Preset-use editing exposes phase, dependency/output wiring, destination,
 failure policy, model/runtime overrides, module integration, and final-output
-CBS text. `src/lib/SideBars/LoreBook/LoreBookData.svelte` owns Agent-only entry
+CBS text. Authors choose Before Main or After Main before adding a use; nested
+Agent creation returns to the retained preset draft. Module integration is a
+deduplicating chip editor, output references have insertion/repair actions, and
+explicit sample values render a provider-free final-output preview. Both
+drawers keep footer actions outside the scroll body and explain disabled Save
+as No changes, Fix N issues, Waiting for the current change, or an unavailable
+owner. `src/lib/SideBars/LoreBook/LoreBookData.svelte` owns Agent-only entry
 controls and disables ordinary activation controls for those entries.
 `packages/shared-core/src/agentOnlyLorebook.ts` identifies the marker, while
 `packages/shared-core/src/agentLorebookInputs.ts` validates the supported runtime
@@ -344,6 +374,10 @@ independent expansion state. New hooks open their prompt and focus their name;
 deletion names the hook in the shared confirmation and moves focus to another
 hook or Add. The prompt uses the shared popup editor with a stable, derived hook
 ID as its context, so changing another row does not invalidate an open editor.
+Draft and BTW storage values stay compatible, while options/cards supplement
+them with **Before send** and **On-demand result** outcomes. A collapsed prompt
+exposes its complete value on hover or keyboard focus, and Translation help
+states which draft reaches the model and which reviewed result is stored/sent.
 
 This page opts into whole-field draft persistence feedback and failed-draft
 retention in `createServerBackedSettingDraft`. Saving, queued, accepted, and
@@ -491,6 +525,7 @@ Shell, renderer, and authoring guards include
 `src/lib/Setting/Wrappers/SettingAccordion.svelte.test.ts`,
 `src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`,
 `src/lib/Setting/Pages/InputHookSettings.svelte.test.ts`,
+`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts`,
 `src/ts/agentLorebookInputs.test.ts`, and
 `src/lib/Setting/pickerGenerationSettings.test.ts`.
 

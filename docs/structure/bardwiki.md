@@ -1,7 +1,7 @@
 # BardWiki Memory
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-05 (automatic confirmation and transcript invalidation owners).
+Targeted source check: 2026-09-10 (guided workspace, effective values, activity, and responsive navigation).
 
 BardWiki is the server-owned, per-chat Markdown memory system. It stores manual
 and model-derived documents with stable ids, logical paths, aliases, wikilinks,
@@ -69,6 +69,22 @@ The active-chat overflow menu opens the lazy, focus-trapped workspace. It owns:
 - resumable full or missing-only rebuild preview and confirmation;
 - deterministic vault export plus dry-run skip/rename/replace import;
 - lazy document bodies/version history and responsive desktop/mobile layout.
+
+With zero documents, the workspace presents one guided state: Create first
+document, Import vault, and Build from chat enter the existing fenced flows.
+Inherited controls label the server-provided effective value but keep the
+stored draft nullable. Compact layout is list-then-detail with a Back to
+documents action and retained unsaved drafts; desktop remains split-pane.
+Lifecycle copy leads with Start fresh/Fill missing and Import vault outcomes,
+while hashes, replacement counts, sources, and conflict strategy stay in
+Technical details.
+
+The activity disclosure summarizes running, attention, and failed counts.
+Newly actionable work opens it, but unchanged or resolved work does not reopen
+a disclosure the user closed. Confirmation, Retry, Cancel, and refreshed job
+results share one live announcement owner. The modal uses the established
+70%-black scrim, inert/hidden background branches, body scroll lock, a
+44-pixel Close action, top-modal Escape ownership, and opener restoration.
 
 Visible help text states that confirmation, automatic updates, and rebuilds can
 call the configured provider in the background. Full rebuild warns that it

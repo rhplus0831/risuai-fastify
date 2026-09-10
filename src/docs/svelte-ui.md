@@ -1,7 +1,7 @@
 # Svelte UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-09 (shared conversation frame, geometry and transition stability).
+Targeted source check: 2026-09-10 (modal opener ownership, theme contrast, and compact reflow).
 
 This guide owns the Svelte application shell, routing, shared frontend
 platform behavior, localization, styling, responsive behavior, and Playground.
@@ -165,6 +165,13 @@ pointer gesture to start and end on the backdrop. Guards are
 both actions. For a focus escape or clickable background, inspect the local
 `data-modal-root`, `use:modalFocusTrap`, and `use:modalBackdropDismiss` wiring
 instead of assuming the shared backdrop behavior is present.
+
+When a transient menu opens a blocking modal, focus a connected persistent
+opener before removing the menu. The active-chat menu does this for Chat List,
+BardWiki, and Modules so modal teardown can restore the menu button rather than
+a disconnected menu item. Popup menus opened from a modal are explicit focus
+extensions: the top modal can admit that one portal while all unrelated
+background branches stay inert and hidden.
 
 ## Routes And Stores
 
@@ -347,6 +354,14 @@ clears only live Custom CSS, not its cache. The visual palette selector and
 durable custom scheme are documented in
 [Settings UI](svelte-settings-ui.md#display-and-theme-controls).
 
+`colorSchemeAccessibilityIssues()` is the palette-level accessibility oracle.
+It requires 4.5:1 for primary/muted text and text on selected/control surfaces,
+and 3:1 for focus indicators, identifying control borders, composited disabled
+text, and destructive text. Built-ins also require a 3:1 modal edge against the
+page under the established 70%-black scrim. Exact old built-in token sets may
+migrate; custom or user-modified schemes keep their values and receive a
+visible warning in Display settings.
+
 `updateColorScheme()` also publishes the active light/dark type as the root
 `color-scheme`. Global base styles give native select options and option groups
 the active theme foreground and dark-surface background; fixed-palette selects
@@ -429,6 +444,13 @@ reader-only media-query threshold. `sideBarStore`, `sideBarClosing`,
 `MobileSideBar`, and `MobileSearch` coordinate responsive state. The responsive
 reader drawer remains mounted while hidden to preserve local navigation state,
 but its dialog focus trap is active only while open.
+
+At 550×775 and 655×691, shared shell geometry preserves a 56-pixel scrim target
+and reduces configured rail columns only when needed to keep the drawer within
+the viewport. Compact/touch actions use a 44-pixel minimum target. The UI/UX
+browser journey additionally checks the equivalent 640-CSS-pixel reflow of a
+1280-pixel desktop at 200% zoom, long labels, footer reachability, rail
+overflow, reduced motion, and BardWiki list/detail navigation.
 
 The full `MobileHeader`, `MobileBody`, and `MobileFooter` shell is not mounted
 from `src/App.svelte`. Do not start there for a live mobile bug unless the work

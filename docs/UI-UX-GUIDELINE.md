@@ -31,6 +31,8 @@
 * Use consistent terminology for the same concepts.
 * Give unfamiliar icons visible text labels.
 * Give all interactive controls accessible names.
+* Keep implementation identifiers, syntax, and hashes under Technical details when an outcome-oriented label can lead the task.
+* When text is truncated, retain the complete accessible name and reveal the full value on hover or keyboard focus.
 
 ## 6. Handle Relevant UI States
 
@@ -39,6 +41,9 @@
 * Explain how to recover from errors.
 * Explain disabled actions when the reason is not obvious.
 * Prevent accidental duplicate submissions.
+* Distinguish saving, queued/pending sync, accepted/saved, and failed outcomes. Starting a request is not success.
+* Show inherited values beside their effective result without silently materializing an override.
+* Turn an empty state into a workflow with one primary next action and only relevant secondary routes.
 
 ## 7. Protect User Input and Prevent Mistakes
 
@@ -47,6 +52,8 @@
 * Preserve user input when validation or network requests fail.
 * Provide confirmation or recovery for destructive, difficult-to-reverse actions.
 * Make cancellation and navigation out of a flow straightforward.
+* Name the destructive target, separate the action visually from routine controls, and preview affected dependencies and fallbacks when they can be computed.
+* Fail closed when a complete destructive-impact check depends on unavailable or ambiguous data; provide a retry path.
 
 ## 8. Meet Basic Accessibility Requirements
 
@@ -54,6 +61,10 @@
 * Support keyboard operation with a visible focus indicator and logical focus order.
 * Do not communicate meaning through color alone.
 * Prefer targets of at least 44 × 44 CSS pixels for touch-oriented interfaces. The clickable area may be larger than the visible icon.
+* Keep blocking dialogs focus-trapped, make background branches inert and hidden from assistive technology, own Escape at the top dialog, and restore a connected opener.
+* Preserve a meaningful dismissal target when a responsive drawer overlays content; do not let configured width or columns push Close or the scrim off-screen.
+* Measure normal and muted text at 4.5:1, and identifying borders, focus indicators, disabled/destructive states, and modal edges at 3:1. Warn about custom-theme gaps without silently rewriting user colors.
+* Test reduced motion, long labels, compact widths, and 200% reflow without horizontal page scrolling, clipped final controls, hidden sticky actions, or lost return paths.
 
 ## References
 

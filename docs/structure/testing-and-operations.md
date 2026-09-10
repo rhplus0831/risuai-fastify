@@ -395,6 +395,16 @@ vault warnings, and persistence through reload. Repository/route/component
 tests retain the destructive, conflict, restart, and privacy edge cases that do
 not belong in a browser journey.
 
+`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts` is the integrated
+navigation/settings/BardWiki review journey. Its read-only case records seven
+screenshots at 550×775 and 655×691 without command mutations. Its mutation case
+uses a separate valid disposable fixture and verifies keyboard activation,
+menu/disclosure movement, focus restoration, modal inertness, nested drawers,
+footer reachability, long-label rail overflow, real accepted Agent/Input Hook/
+BardWiki changes, reduced-motion CSS, desktop split view, and 640-CSS-pixel
+reflow equivalent to a 1280-pixel viewport at 200% zoom. It is Chromium reflow
+evidence, not native browser-chrome zoom or external production validation.
+
 ## TypeScript And Formatting
 
 - Root `tsconfig.json` is browser-oriented, `strict: false`, allows JS, and uses

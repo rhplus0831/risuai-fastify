@@ -1,7 +1,7 @@
 # Svelte Navigation UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-09 (shared conversation-shell geometry and role-transition motion policy).
+Targeted source check: 2026-09-10 (compact modal geometry, overflow menus, hierarchy, and focus restoration).
 
 This guide owns the sidebar, navigation controls, character and chat selection,
 character configuration, and list organization.
@@ -53,10 +53,15 @@ so individual badges and folder aggregates avoid repeating global chat scans.
 slot, main-content column, and responsive dialog semantics. On wide layouts
 `src/App.svelte` supplies the writer sidebar beside chat. On responsive layouts
 the shell mounts it as a focus-trapped dialog when `sideBarStore` is open;
-Escape closes that dialog. `shellGeometry.ts` normalizes the shared 1024-pixel
-boundary, one-to-four desktop or one-to-two mobile rail columns, and the
-24/28/32/36-rem panel sizes. Route/store synchronization and history ownership
-belong to [Svelte UI](svelte-ui.md#routes-and-stores).
+Escape closes that dialog. The writer and reader adapters keep a visible
+44-pixel Close Menu action inside the panel, a strong scrim with at least a
+56-pixel dismissal target at the reviewed compact widths, and inert underlying
+content. `shellGeometry.ts` normalizes the shared 1024-pixel boundary,
+one-to-four desktop or one-to-two mobile rail columns, and the 24/28/32/36-rem
+panel sizes. It preserves configured columns when they fit and reduces them
+only to keep the panel, close action, and scrim inside the viewport.
+Route/store synchronization and history ownership belong to
+[Svelte UI](svelte-ui.md#routes-and-stores).
 
 `sideBarTransitionCause` separates explicit open/close requests from automatic
 mount, startup, role resolution, promotion, demotion, reconnect, and recovery.
@@ -190,6 +195,16 @@ not a second writable selection. Stable chat and folder IDs are the
 organization keys. The component surfaces pending, queued, and failed
 structural operations and blocks conflicting actions while an operation is
 pending.
+
+Chat selection and folder disclosure remain the primary row controls. Copy,
+persona binding, rename, export, organization, and Delete use the shared
+target-named popup-menu contract; Delete is last in a separated danger section.
+Folder children use native disclosure state plus semantic list/group
+relationships, indentation, and connectors rather than claiming a full ARIA
+tree model. Truncated rows retain their complete accessible name and title,
+missing images use an initial fallback, and compact controls expose at least a
+44-pixel target. `NavigationRail.svelte` scrolls instead of clipping its last
+item.
 
 Folder folding/color/name and chat renaming capture only the affected previous
 and attempted metadata fields plus stable owner IDs through

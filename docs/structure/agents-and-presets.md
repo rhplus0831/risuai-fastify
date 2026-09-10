@@ -1,7 +1,7 @@
 # Agents And Presets
 
 Last audited: 2026-08-09.
-Targeted source check: 2026-09-05 (Agent owner, command boundary, and immutable reader inputs).
+Targeted source check: 2026-09-10 (authoring diagnostics, presentation state, and certified deletion impact).
 
 This guide owns reusable Agents, Agent Preset records and selection, model
 resolution, module/reference inputs, lorebook inputs, dependency execution,
@@ -79,6 +79,24 @@ phase-local dependency graphs, resolves every model, assigns stable dependency
 levels, registers named outputs, and checks references before any Agent step or
 main prompt is run. The same summary helpers drive settings diagnostics; the UI
 does not maintain a second readiness model.
+
+## Authoring And Safety Projections
+
+`src/ts/agentPresetPresentation.ts` maps the canonical planner to visible
+Ready, Empty, Disabled, Incomplete, Invalid, and Model not ready states. Empty
+is a legal no-op presentation state, not a new resolver failure.
+`src/ts/agentAuthoringIssues.ts` and the shared-core input/output-reference
+analyzers produce field-linked authoring warnings and blocking errors without
+changing runtime validation. The Svelte editor owns insertion, autocomplete,
+compiled ChatML rows, sample-value output preview, and repair focus.
+
+`src/ts/agentPresetDeletionImpact.ts` projects deletion consequences over the
+ready settings, character/chat metadata, and loadout owners. It reports the
+global default, explicit chat selections, loadouts, and post-delete effective
+selection with stable-ID name fallbacks. Missing, loading, malformed, or
+ambiguous owners return unavailable rather than a partial count. The dialog
+rechecks this projection before submitting the existing server command; server
+validation and cleanup remain authoritative.
 
 ## Module Overlay
 
