@@ -40,6 +40,40 @@ test('reviewed UI/UX surfaces open from disposable data at both compact viewport
   expect((await closeNavigation.boundingBox())?.height).toBeGreaterThanOrEqual(44)
   expect((await navigationScrim.boundingBox())?.width).toBeGreaterThanOrEqual(56)
   expect(await navigation.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+
+  const pinnedChats = navigation.locator('[data-risu-pinned-chats]')
+  const characterControls = navigation.locator('[data-risu-sidebar-character-controls]')
+  const characterAvatars = characterControls.locator('[data-char-id]')
+  const firstDropTarget = characterControls.locator('[data-risu-character-drop="first"]')
+  await expect(pinnedChats).toBeVisible()
+  await expect(characterControls).toBeVisible()
+  await expect(firstDropTarget).toBeVisible()
+  const characterColumns = Number(await characterControls.getAttribute('data-risu-sidebar-character-columns'))
+  expect(Number.isInteger(characterColumns)).toBe(true)
+  expect(characterColumns).toBeGreaterThanOrEqual(1)
+  const firstAvatar = characterAvatars.nth(0)
+  const nextRowAvatar = characterAvatars.nth(characterColumns)
+  await expect(firstAvatar).toBeVisible()
+  await expect(nextRowAvatar).toBeVisible()
+  const [pinnedBox, firstDropTargetBox, firstAvatarBox, nextRowAvatarBox] = await Promise.all([
+    pinnedChats.boundingBox(),
+    firstDropTarget.boundingBox(),
+    firstAvatar.boundingBox(),
+    nextRowAvatar.boundingBox(),
+  ])
+  expect(pinnedBox).not.toBeNull()
+  expect(firstDropTargetBox).not.toBeNull()
+  expect(firstAvatarBox).not.toBeNull()
+  expect(nextRowAvatarBox).not.toBeNull()
+  expect(firstDropTargetBox!.height).toBeGreaterThanOrEqual(16)
+  const pinnedToFirstAvatarGap = firstAvatarBox!.y - (pinnedBox!.y + pinnedBox!.height)
+  const characterRowGap = nextRowAvatarBox!.y - (firstAvatarBox!.y + firstAvatarBox!.height)
+  expect(pinnedToFirstAvatarGap).toBeGreaterThanOrEqual(firstDropTargetBox!.height - 1)
+  expect(characterRowGap).toBeGreaterThan(0)
+  expect(
+    pinnedToFirstAvatarGap,
+    'the pinned-chat boundary should not add more whitespace than an ordinary character row',
+  ).toBeLessThanOrEqual(characterRowGap + 1)
   await screenshotEvidence(page, testInfo, 'after-sidebar-550x775.png')
 
   const backToChatList = navigation.locator('[data-risu-chat-action="back-to-chat-list"]')
@@ -407,6 +441,7 @@ function uiUxImprovementFixture(): Record<string, unknown> {
     chatFolders?: Array<Record<string, unknown>>
   }>
   const currentCharacter = characters[0]!
+  currentCharacter.chats[0]!.pinned = true
   currentCharacter.chatFolders = [
     {
       id: 'ui-ux-long-folder',

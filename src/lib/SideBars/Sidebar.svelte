@@ -889,7 +889,7 @@
       }}
       isInert={menuMode === 1} />
     <div
-      class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-4 overflow-x-hidden overflow-y-auto pt-1"
+      class="grid grow w-full auto-rows-min grid-flow-row content-start items-start gap-y-2 overflow-x-hidden overflow-y-auto"
       style:grid-template-columns={`repeat(${sidebarColumns}, minmax(0, 1fr))`}
       data-risu-sidebar-character-controls
       data-risu-sidebar-character-columns={sidebarColumns}
@@ -905,8 +905,9 @@
           {language.mutationStatusFailed}
         </span>
       {/each}
+      <!-- Preserve the full pre-list drop target without adding a second gap before the first bot. -->
       <div
-        class="col-span-full h-4 min-h-4 w-full"
+        class="col-span-full -mb-3 h-4 min-h-4 w-full"
         data-risu-character-drop="first"
         role="presentation"
         ondragover={dropZoneDragOver}
