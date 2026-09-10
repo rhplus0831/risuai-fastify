@@ -58,7 +58,7 @@ vi.mock('src/ts/process/request/serverBardWikiJobs', () => ({
 }))
 
 import BardWikiWorkspace from './BardWikiWorkspace.svelte'
-import { resetBardWikiResource } from 'src/ts/server/bardWikiResource'
+import { applyBardWikiChatResource, resetBardWikiResource } from 'src/ts/server/bardWikiResource'
 import { language } from 'src/lang'
 
 type MountedComponent = Parameters<typeof unmount>[0]
@@ -476,6 +476,61 @@ describe('BardWiki workspace', () => {
     })
     expect(target.textContent).toContain(language.bardWiki.automaticConfirmation)
     expect(target.textContent).toContain(language.bardWiki.canonicalUpdates)
+  })
+
+  it('shows refreshed effective inherited values without materializing them in an unrelated override', async () => {
+    component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+    await settle()
+
+    const enabled = target.querySelector<HTMLSelectElement>('[data-risu-bardwiki-override="enabled"] select')!
+    const memory = target.querySelector<HTMLSelectElement>('[data-risu-bardwiki-override="memory-mode"] select')!
+    const confirmation = target.querySelector<HTMLSelectElement>('[data-risu-bardwiki-override="confirmation"] select')!
+    const canonical = target.querySelector<HTMLSelectElement>(
+      '[data-risu-bardwiki-override="canonical-updates"] select',
+    )!
+    const budget = target.querySelector<HTMLInputElement>('[data-risu-bardwiki-override="total-token-budget"] input')!
+    expect(enabled.options[0]?.textContent).toContain(language.bardWiki.enabled)
+    expect(memory.options[0]?.textContent).toContain(language.bardWiki.modeHypa)
+    expect(confirmation.options[0]?.textContent).toContain(language.bardWiki.confirmationManual)
+    expect(canonical.options[0]?.textContent).toContain(language.bardWiki.disabled)
+    expect(budget.placeholder).toContain('2,048')
+
+    enabled.value = 'disabled'
+    enabled.dispatchEvent(new Event('change', { bubbles: true }))
+    await settle()
+    applyBardWikiChatResource({
+      ...chatResource,
+      revision: chatResource.revision + 1,
+      effectiveSettings: {
+        ...chatResource.effectiveSettings,
+        memoryMode: 'hybrid',
+        confirmationPolicy: 'automatic',
+        canonicalUpdates: true,
+        totalTokenBudget: 4096,
+      },
+    })
+    await settle()
+
+    expect(enabled.value).toBe('disabled')
+    expect(memory.value).toBe('inherit')
+    expect(memory.options[0]?.textContent).toContain(language.bardWiki.modeHybrid)
+    expect(confirmation.options[0]?.textContent).toContain(language.bardWiki.confirmationAutomatic)
+    expect(canonical.options[0]?.textContent).toContain(language.bardWiki.enabled)
+    expect(budget.value).toBe('')
+    expect(budget.placeholder).toContain('4,096')
+
+    const save = Array.from(target.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
+      button.textContent?.includes(language.bardWiki.saveOverrides),
+    )
+    save?.click()
+    await settle()
+    expect(mutations.settings).toHaveBeenCalledWith('chat-a', {
+      enabledOverride: false,
+      memoryModeOverride: null,
+      confirmationPolicyOverride: null,
+      canonicalUpdatesOverride: null,
+      totalTokenBudgetOverride: null,
+    })
   })
 
   it('marks documents that require review in the chat index', async () => {

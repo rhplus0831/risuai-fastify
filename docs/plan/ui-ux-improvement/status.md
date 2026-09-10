@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 1 in progress — truthful preset status implemented.**
-- Next action: add nested Agent creation, field-linked issues, save reasons, and BardWiki inherited values.
+- State: **Phase 2 in progress — destructive safety and persistence feedback.**
+- Next action: expose certified Preset/Agent dependency impact and preserve mutation outcome feedback.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -19,7 +19,7 @@
 | Phase | State | Outcome |
 | --- | --- | --- |
 | [0. Shared contracts and acceptance baseline](phases/phase-0-shared-contracts-and-baseline.md) | Accepted | Shared diagnostics, certified deletion impact, safety DOM assertions, and a disposable-data compact browser scaffold are in place. |
-| [1. Effective state and validation](phases/phase-1-effective-state-and-validation.md) | Pending | Make no-op, inherited, unchanged, invalid, and ineffective configurations explicit. |
+| [1. Effective state and validation](phases/phase-1-effective-state-and-validation.md) | Accepted | No-op, inherited, unchanged, invalid, and ineffective configurations are explicit before save or generation. |
 | [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Pending | Preview dependency consequences and preserve the existing accepted/queued/failed contract. |
 | [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Pending | Clarify the responsive drawer, reduce row-action crowding, and strengthen hierarchy and overflow cues. |
 | [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Pending | Replace implementation-first copy with outcomes and add insertion, completion, and preview assistance. |
@@ -173,3 +173,19 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   draft retention, waiting feedback, and stale-save fencing are covered.
 - Next slice: expose BardWiki effective values beside inherited choices without
   persisting them as overrides.
+
+### 2026-09-10 — Phase 1 inherited BardWiki settings slice
+
+- Source base: `06e87d186`.
+- Changed owners: `src/lib/ChatScreens/BardWikiWorkspace.svelte`, its focused
+  component test, and localized BardWiki copy.
+- Every inherited chat override now names its current effective value directly
+  from `chatResource.effectiveSettings`, including the numeric token-budget
+  placeholder. Effective labels react to resource refresh while an unrelated
+  draft choice stays unchanged, and blank/inherit values are still submitted as
+  `null` rather than materializing the inherited values.
+- Passed `pnpm test -- src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts` (17
+  tests). The focused fixture changes effective settings after mount, retains a
+  separate explicit draft, and asserts the exact sparse override payload.
+- Phase 1 accepted. Next slice: dependency-aware destructive confirmations and
+  deletion safety in Phase 2.

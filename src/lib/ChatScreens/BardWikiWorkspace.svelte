@@ -202,6 +202,20 @@
     settingsRecoveryBaseline = JSON.stringify(settingsRecoveryDraft())
   }
 
+  function effectiveToggleLabel(value: boolean): string {
+    return value ? language.bardWiki.enabled : language.bardWiki.disabled
+  }
+
+  function effectiveMemoryModeLabel(value: 'hypa' | 'bardwiki' | 'hybrid'): string {
+    if (value === 'bardwiki') return language.bardWiki.modeBardWiki
+    if (value === 'hybrid') return language.bardWiki.modeHybrid
+    return language.bardWiki.modeHypa
+  }
+
+  function effectiveConfirmationLabel(value: 'manual' | 'automatic'): string {
+    return value === 'automatic' ? language.bardWiki.confirmationAutomatic : language.bardWiki.confirmationManual
+  }
+
   function readFailure(result: { status: string; error?: string }): { state: LoadState; error: string } {
     if (result.status === 'unavailable') return { state: 'unavailable', error: language.bardWiki.unavailable }
     return { state: 'error', error: result.error || language.bardWiki.loadFailed }
@@ -812,31 +826,37 @@
       <details class="border-b border-darkborderc px-4 py-2">
         <summary class="cursor-pointer font-medium">{language.bardWiki.chatOverrides}</summary>
         <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          <label class="flex flex-col gap-1">
+          <label class="flex flex-col gap-1" data-risu-bardwiki-override="enabled">
             <span>{language.bardWiki.enabledForChat}</span>
             <select
               class="rounded-md border border-darkborderc bg-darkbg p-2"
               value={enabledOverrideDraft}
               onchange={(event) => (enabledOverrideDraft = event.currentTarget.value as typeof enabledOverrideDraft)}>
-              <option value="inherit">{language.bardWiki.inherit}</option>
+              <option value="inherit"
+                >{language.bardWiki.inheritCurrently(
+                  effectiveToggleLabel(chatResource.effectiveSettings.enabledByDefault),
+                )}</option>
               <option value="enabled">{language.bardWiki.enabled}</option>
               <option value="disabled">{language.bardWiki.disabled}</option>
             </select>
           </label>
-          <label class="flex flex-col gap-1">
+          <label class="flex flex-col gap-1" data-risu-bardwiki-override="memory-mode">
             <span>{language.bardWiki.memoryMode}</span>
             <select
               class="rounded-md border border-darkborderc bg-darkbg p-2"
               value={memoryModeOverrideDraft}
               onchange={(event) =>
                 (memoryModeOverrideDraft = event.currentTarget.value as typeof memoryModeOverrideDraft)}>
-              <option value="inherit">{language.bardWiki.inherit}</option>
+              <option value="inherit"
+                >{language.bardWiki.inheritCurrently(
+                  effectiveMemoryModeLabel(chatResource.effectiveSettings.memoryMode),
+                )}</option>
               <option value="hypa">{language.bardWiki.modeHypa}</option>
               <option value="bardwiki">{language.bardWiki.modeBardWiki}</option>
               <option value="hybrid">{language.bardWiki.modeHybrid}</option>
             </select>
           </label>
-          <label class="flex flex-col gap-1">
+          <label class="flex flex-col gap-1" data-risu-bardwiki-override="confirmation">
             <span>{language.bardWiki.automaticConfirmation}</span>
             <select
               class="rounded-md border border-darkborderc bg-darkbg p-2"
@@ -844,31 +864,39 @@
               onchange={(event) =>
                 (confirmationPolicyOverrideDraft = event.currentTarget
                   .value as typeof confirmationPolicyOverrideDraft)}>
-              <option value="inherit">{language.bardWiki.inherit}</option>
+              <option value="inherit"
+                >{language.bardWiki.inheritCurrently(
+                  effectiveConfirmationLabel(chatResource.effectiveSettings.confirmationPolicy),
+                )}</option>
               <option value="manual">{language.bardWiki.disabled}</option>
               <option value="automatic">{language.bardWiki.enabled}</option>
             </select>
           </label>
-          <label class="flex flex-col gap-1">
+          <label class="flex flex-col gap-1" data-risu-bardwiki-override="canonical-updates">
             <span>{language.bardWiki.canonicalUpdates}</span>
             <select
               class="rounded-md border border-darkborderc bg-darkbg p-2"
               value={canonicalUpdatesOverrideDraft}
               onchange={(event) =>
                 (canonicalUpdatesOverrideDraft = event.currentTarget.value as typeof canonicalUpdatesOverrideDraft)}>
-              <option value="inherit">{language.bardWiki.inherit}</option>
+              <option value="inherit"
+                >{language.bardWiki.inheritCurrently(
+                  effectiveToggleLabel(chatResource.effectiveSettings.canonicalUpdates),
+                )}</option>
               <option value="enabled">{language.bardWiki.enabled}</option>
               <option value="disabled">{language.bardWiki.disabled}</option>
             </select>
           </label>
-          <label class="flex flex-col gap-1">
+          <label class="flex flex-col gap-1" data-risu-bardwiki-override="total-token-budget">
             <span>{language.bardWiki.totalTokenBudgetOverride}</span>
             <input
               type="number"
               min="0"
               max="32768"
               class="rounded-md border border-darkborderc bg-transparent p-2"
-              placeholder={language.bardWiki.inherit}
+              placeholder={language.bardWiki.inheritCurrently(
+                chatResource.effectiveSettings.totalTokenBudget.toLocaleString(),
+              )}
               value={totalTokenBudgetOverrideDraft}
               oninput={(event) => (totalTokenBudgetOverrideDraft = event.currentTarget.value)} />
           </label>
