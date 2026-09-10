@@ -63,13 +63,13 @@
     error = ''
   }
 
-  async function save(snapshot: AgentSnapshot): Promise<void> {
-    if (!mode || busy) return
+  async function save(snapshot: AgentSnapshot): Promise<boolean> {
+    if (!mode || busy) return false
     busy = true
     error = ''
     const result = mode === 'create' ? await createAgent(snapshot) : await updateAgent(editingId!, snapshot)
     busy = false
-    if (handle(result)) close()
+    return handle(result)
   }
 
   async function copy(agent: AgentRecord): Promise<void> {

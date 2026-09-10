@@ -55,7 +55,7 @@
     agent?: AgentRecord
     busy?: boolean
     commandError?: string
-    onSave: (agent: AgentSnapshot) => void | Promise<void>
+    onSave: (agent: AgentSnapshot) => boolean | void | Promise<boolean | void>
     onCancel: () => void
   }
 
@@ -413,6 +413,14 @@
     requestClose()
   }
 
+  async function saveAgent(): Promise<void> {
+    if (!canSave) return
+    const attempted = sparseSnapshot()
+    const recoveryAtSave = JSON.stringify(agentRecoveryDraft())
+    const accepted = await onSave(attempted)
+    if (accepted === true && JSON.stringify(agentRecoveryDraft()) === recoveryAtSave) onCancel()
+  }
+
   function agentRecoveryDraft() {
     return {
       name,
@@ -748,7 +756,7 @@
           {saveDisabledReason}
         </span>{/if}
       <Button styled="outlined" disabled={busy} onclick={requestClose}>{language.agentPresets.cancel}</Button>
-      <Button disabled={!canSave} onclick={() => onSave(sparseSnapshot())}>
+      <Button disabled={!canSave} onclick={saveAgent}>
         <span class="inline-flex items-center gap-2"
           ><SaveIcon size={16} />{busy ? language.agentPresets.saving : language.agentPresets.save}</span>
       </Button>

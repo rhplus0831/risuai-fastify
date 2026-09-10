@@ -102,10 +102,10 @@
     commandError = ''
   }
 
-  async function saveEditor(snapshot: AgentPresetSnapshot): Promise<void> {
+  async function saveEditor(snapshot: AgentPresetSnapshot): Promise<boolean> {
     const modeAtSave = editorMode
     const presetIdAtSave = editingPresetId
-    if (!modeAtSave || mutationLocked) return
+    if (!modeAtSave || mutationLocked) return false
     commandError = ''
     busy = true
     mutationState = 'saving'
@@ -119,7 +119,7 @@
               result: { status: 'error', error: language.agentPresets.editTargetMissing },
             } as AgentPresetMutationOutcome)
     busy = false
-    if (handleResult(result)) closeEditor()
+    return handleResult(result)
   }
 
   async function duplicatePreset(preset: AgentPresetRecord): Promise<void> {

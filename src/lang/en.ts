@@ -3609,6 +3609,8 @@ export const languageEnglish = {
     selectAgent: 'Select Agent',
     addAgent: 'Add to Preset',
     noAgentsAvailable: 'Create an Agent before adding one to a preset.',
+    createAnotherAgent: 'Create another Agent',
+    createdAgentReady: (name: string) => `${name} is ready to add to this preset.`,
     invocationsTitle: 'Preset Agents',
     noInvocationsInPhase: 'No Agents in this phase.',
     editInvocation: 'Edit Preset Use',

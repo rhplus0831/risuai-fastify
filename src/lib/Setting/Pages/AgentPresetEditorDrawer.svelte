@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, untrack } from 'svelte'
+  import { onDestroy, tick, untrack } from 'svelte'
   import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
 
   import { ArrowDownIcon, ArrowUpIcon, CopyIcon, PlusIcon, SaveIcon, TrashIcon, XIcon } from '@lucide/svelte'
@@ -13,12 +13,14 @@
   import { modalFocusTrap } from 'src/ts/gui/modalFocusTrap'
   import {
     addAgentToPreset,
+    createAgent,
     defaultAgentPresetUse,
     removeAgentFromPreset,
     reorderAgentPresetUses,
     updateAgentPresetUse,
     type AgentMutationOutcome,
   } from 'src/ts/agents'
+  import { planAgentPreset } from 'src/ts/agentPresetResolver'
   import {
     AGENT_PRESET_MAX_CONCURRENCY_MAX,
     AGENT_PRESET_MAX_CONCURRENCY_MIN,
@@ -39,7 +41,7 @@
     type AgentPresetStepRecord,
     type AgentPresetUseRecord,
   } from 'src/ts/agentPresetRecords'
-  import type { AgentPresetSnapshot, AgentPresetUseSnapshot } from 'src/ts/server/commands'
+  import type { AgentPresetSnapshot, AgentPresetUseSnapshot, AgentSnapshot } from 'src/ts/server/commands'
   import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
   import {
     isModelProfileDividerSelectValue,
@@ -48,6 +50,7 @@
     type ModelProfileRecord,
   } from 'src/ts/model/modelProfileRecords'
   import AgentPresetDiagnosticsPanel from './AgentPresetDiagnosticsPanel.svelte'
+  import AgentEditorDrawer from './AgentEditorDrawer.svelte'
   import type { AgentPresetGeneratedProjectionLatch } from 'src/ts/agentPresets'
 
   interface Props {
@@ -55,7 +58,7 @@
     preset?: AgentPresetRecord
     busy?: boolean
     commandError?: string
-    onSave: (preset: AgentPresetSnapshot) => void | Promise<void>
+    onSave: (preset: AgentPresetSnapshot) => boolean | void | Promise<boolean | void>
     onCancel: () => void
     onQueuedProjection?: (latch: AgentPresetGeneratedProjectionLatch) => void | Promise<void>
   }
@@ -111,6 +114,13 @@
   let maxOutputChars = $state(1_200)
   let temperature = $state(1)
   let structuredOutputStrict = $state(false)
+  let nestedAgentOpen = $state(false)
+  let nestedAgentBusy = $state(false)
+  let nestedAgentError = $state('')
+  let nestedAgentNotice = $state('')
+  let pendingCreatedAgentId = $state('')
+  let pendingCreatedAgentName = $state('')
+  let createAgentInvoker = $state<HTMLElement>()
 
   const ownerPresetValue = $derived(settingsResourceState.value.agentPresets)
   let ownerPresets = $derived(readAgentPresetOwners(ownerPresetValue))
@@ -139,7 +149,17 @@
   let metadataPatch = $derived(sparseMetadata(initialMetadata, metadataForSave()))
   let metadataDirty = $derived(Object.keys(metadataPatch).length > 0)
   let locked = $derived(busy || useBusy)
-  let canSaveMetadata = $derived(name.trim().length > 0 && !locked && (mode === 'create' || metadataDirty))
+  let metadataIssueCount = $derived.by(() => draftPresetIssueCount())
+  let canSaveMetadata = $derived(metadataIssueCount === 0 && !locked && (mode === 'create' || metadataDirty))
+  let metadataSaveDisabledReason = $derived(
+    locked
+      ? language.agentPresets.saveWaiting
+      : metadataIssueCount > 0
+        ? language.agentPresets.saveFixIssues(metadataIssueCount)
+        : !canSaveMetadata
+          ? language.agentPresets.saveNoChanges
+          : '',
+  )
   let canSaveUse = $derived(
     !!editingUseId &&
       isValidAgentPresetOutputKey(useOutputKey.trim()) &&
@@ -273,6 +293,23 @@
     }
   })
 
+  $effect(() => {
+    if (!pendingCreatedAgentId && !pendingCreatedAgentName) return
+    const idMatch = pendingCreatedAgentId
+      ? agents.find((candidate) => candidate.id === pendingCreatedAgentId)
+      : undefined
+    const nameMatches = pendingCreatedAgentName
+      ? agents.filter((candidate) => candidate.name === pendingCreatedAgentName)
+      : []
+    const resolved = idMatch ?? (nameMatches.length === 1 ? nameMatches[0] : undefined)
+    if (!resolved) return
+    selectedAgentId = resolved.id
+    selectedAgentRecoveryBaseline = resolved.id
+    pendingCreatedAgentId = ''
+    pendingCreatedAgentName = ''
+    nestedAgentNotice = language.agentPresets.createdAgentReady(resolved.name)
+  })
+
   function metadataForSave(): AgentPresetSnapshot {
     return {
       name: name.trim(),
@@ -284,6 +321,80 @@
         ? clamp(maxConcurrency, AGENT_PRESET_MAX_CONCURRENCY_MIN, AGENT_PRESET_MAX_CONCURRENCY_MAX)
         : null,
     }
+  }
+
+  function draftPresetIssueCount(): number {
+    const draft: AgentPresetRecord = {
+      ...(livePreset ?? {
+        id: 'draft-agent-preset',
+        version: 1,
+        steps: [],
+        agentUses: [],
+      }),
+      name: name.trim(),
+      enabled,
+      ...(description.trim() ? { description: description.trim() } : { description: undefined }),
+      ...(moduleIntergration.trim()
+        ? { moduleIntergration: moduleIntergration.trim() }
+        : { moduleIntergration: undefined }),
+      ...(finalOutputTemplate.trim() ? { finalOutputTemplate } : { finalOutputTemplate: undefined }),
+      ...(limitConcurrency
+        ? { maxConcurrency: clamp(maxConcurrency, AGENT_PRESET_MAX_CONCURRENCY_MIN, AGENT_PRESET_MAX_CONCURRENCY_MAX) }
+        : { maxConcurrency: undefined }),
+    }
+    const planning = planAgentPreset({
+      database: {
+        agents,
+        agentPresets: ownerPresets,
+        modelProfiles,
+      },
+      preset: draft,
+    })
+    return planning.issues.length + planning.incompleteIssues.length
+  }
+
+  function openNestedAgent(): void {
+    if (nestedAgentBusy) return
+    nestedAgentError = ''
+    nestedAgentNotice = ''
+    nestedAgentOpen = true
+  }
+
+  async function closeNestedAgent(): Promise<void> {
+    if (nestedAgentBusy) return
+    nestedAgentOpen = false
+    nestedAgentError = ''
+    await tick()
+    createAgentInvoker?.querySelector<HTMLButtonElement>('button')?.focus()
+  }
+
+  async function saveNestedAgent(snapshot: AgentSnapshot): Promise<boolean> {
+    if (nestedAgentBusy) return false
+    nestedAgentBusy = true
+    nestedAgentError = ''
+    const outcome = await createAgent(snapshot)
+    nestedAgentBusy = false
+    if (outcome.status === 'failed') {
+      nestedAgentError =
+        outcome.result.status === 'conflict'
+          ? language.agentPresets.commandConflict
+          : outcome.result.status === 'error'
+            ? outcome.result.error
+            : language.agentPresets.commandUnavailable
+      return false
+    }
+    pendingCreatedAgentName = typeof snapshot.name === 'string' ? snapshot.name.trim() : ''
+    pendingCreatedAgentId = outcome.status === 'accepted' ? outcome.result.agentId : ''
+    nestedAgentNotice = outcome.status === 'queued' ? language.agentPresets.commandQueued : ''
+    return true
+  }
+
+  async function saveMetadata(): Promise<void> {
+    if (!canSaveMetadata) return
+    const attempted = mode === 'create' ? metadataForSave() : metadataPatch
+    const recoveryAtSave = JSON.stringify(metadataRecoveryDraft())
+    const accepted = await onSave(attempted)
+    if (accepted === true && JSON.stringify(metadataRecoveryDraft()) === recoveryAtSave) onCancel()
   }
 
   function handleModelProfileChange(event: Event): void {
@@ -511,9 +622,16 @@
   }
 
   function requestClose(): void {
-    if (locked) return
+    if (locked || nestedAgentOpen) return
     if (metadataDirty && !window.confirm(language.agentPresets.discardChangesConfirm)) return
     onCancel()
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape' || nestedAgentOpen) return
+    event.preventDefault()
+    event.stopPropagation()
+    requestClose()
   }
 
   function metadataRecoveryDraft() {
@@ -579,6 +697,7 @@
     aria-modal="true"
     aria-busy={locked}
     data-risu-agent-preset-editor
+    onkeydown={handleKeydown}
     onclick={(event) => event.stopPropagation()}>
     <div class="flex items-start justify-between gap-3 border-b border-darkborderc p-4">
       <h3 class="text-xl font-semibold">
@@ -666,8 +785,28 @@
         {#if mode === 'create'}<p class="mt-2 text-sm text-textcolor2">
             {language.agentPresets.savePresetBeforeSteps}
           </p>{/if}
-        {#if agents.length === 0}<p class="mt-2 text-sm text-textcolor2">
-            {language.agentPresets.noAgentsAvailable}
+        {#if agents.length === 0}
+          <div class="mt-3 rounded-md border border-darkborderc p-3" data-risu-agent-preset-no-agents>
+            <p class="text-sm text-textcolor2">{language.agentPresets.noAgentsAvailable}</p>
+            <span class="mt-2 inline-block" bind:this={createAgentInvoker}>
+              <Button disabled={nestedAgentBusy} onclick={openNestedAgent}>
+                <span class="inline-flex items-center gap-2"
+                  ><PlusIcon size={16} />{language.agentPresets.createAgent}</span>
+              </Button>
+            </span>
+          </div>
+        {:else}
+          <span class="mt-2 inline-block" bind:this={createAgentInvoker}>
+            <Button size="sm" styled="outlined" disabled={nestedAgentBusy} onclick={openNestedAgent}>
+              {language.agentPresets.createAnotherAgent}
+            </Button>
+          </span>
+        {/if}
+        {#if nestedAgentNotice}<p
+            class="mt-2 text-sm text-textcolor2"
+            aria-live="polite"
+            data-risu-agent-created-notice>
+            {nestedAgentNotice}
           </p>{/if}
       </div>
 
@@ -838,11 +977,13 @@
       {#if mode === 'edit' && livePreset}<AgentPresetDiagnosticsPanel presetId={livePreset.id} />{/if}
     </div>
     <div class="flex justify-end gap-2 border-t border-darkborderc p-4" data-risu-agent-preset-editor-footer>
+      {#if metadataSaveDisabledReason}<span
+          class="mr-auto self-center text-sm text-textcolor2"
+          data-risu-agent-preset-save-reason>{metadataSaveDisabledReason}</span
+        >{/if}
       <Button styled="outlined" disabled={locked} onclick={requestClose}>{language.agentPresets.cancel}</Button>
       <span data-risu-agent-preset-save
-        ><Button
-          disabled={!canSaveMetadata}
-          onclick={() => onSave(mode === 'create' ? metadataForSave() : metadataPatch)}
+        ><Button disabled={!canSaveMetadata} onclick={saveMetadata}
           ><span class="inline-flex items-center gap-2"
             ><SaveIcon size={16} />{busy ? language.agentPresets.saving : language.agentPresets.save}</span
           ></Button
@@ -850,3 +991,12 @@
     </div>
   </div>
 </div>
+
+{#if nestedAgentOpen}
+  <AgentEditorDrawer
+    mode="create"
+    busy={nestedAgentBusy}
+    commandError={nestedAgentError}
+    onSave={saveNestedAgent}
+    onCancel={closeNestedAgent} />
+{/if}

@@ -22,7 +22,10 @@ const presetSpies = vi.hoisted(() => ({
 }))
 
 const agentSpies = vi.hoisted(() => ({
-  createAgent: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
+  createAgent: vi.fn(async (_snapshot?: unknown) => ({
+    status: 'accepted',
+    result: { status: 'ok', agentId: 'ag_created' },
+  })),
   updateAgent: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   duplicateAgent: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   deleteAgent: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
@@ -438,6 +441,44 @@ describe('modular Agent Preset settings', () => {
     )
   })
 
+  it('keeps a newer Agent issue open when an older Save resolves', async () => {
+    let resolveSave: ((value: { status: 'accepted'; result: { status: 'ok' } }) => void) | undefined
+    agentSpies.updateAgent.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    const instruction = editor.querySelectorAll<HTMLTextAreaElement>('textarea')[1]
+    instruction.value = 'First submitted change {{currentUserMessage}}'
+    instruction.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    clickButtonContaining(editor, language.agentPresets.save)
+    await flush()
+    expect(editor.querySelector('[data-risu-agent-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveWaiting,
+    )
+
+    const name = editor.querySelector<HTMLInputElement>('[data-risu-agent-field="name"] input')!
+    name.value = ''
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    resolveSave?.({ status: 'accepted', result: { status: 'ok' } })
+    await flush()
+
+    expect(target.querySelector('[data-risu-agent-editor]')).toBe(editor)
+    expect(editor.querySelector('[data-risu-agent-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveFixIssues(1),
+    )
+  })
+
   it('shows only the CBS variables for currently selected prepared inputs below the instruction', async () => {
     seed()
     component = mount(AgentPresetSettings, { target })
@@ -536,6 +577,146 @@ describe('modular Agent Preset settings', () => {
       expect.objectContaining({ agentId: agent.id, phase: 'beforeMain' }),
     )
     expect(agentSpies.createAgent).not.toHaveBeenCalled()
+  })
+
+  it('creates an Agent inside an empty preset without losing the preset draft', async () => {
+    const emptyPreset = { ...preset, agentUses: [] }
+    const createdAgent = { ...agent, id: 'ag_created', name: 'Nested Critic' }
+    agentSpies.createAgent.mockImplementationOnce(async () => {
+      settingsResourceState.value.agents = [createdAgent]
+      return { status: 'accepted', result: { status: 'ok', agentId: createdAgent.id } }
+    })
+    seed([], [emptyPreset])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const presetEditor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    const presetName = presetEditor.querySelector<HTMLInputElement>('[data-risu-agent-preset-name-input] input')!
+    presetName.value = 'Draft preserved'
+    presetName.dispatchEvent(new Event('input', { bubbles: true }))
+    clickButtonContaining(presetEditor, language.agentPresets.createAgent)
+    await tick()
+
+    const agentEditor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    const agentName = agentEditor.querySelector<HTMLInputElement>('input[type="text"]')!
+    agentName.value = createdAgent.name
+    agentName.dispatchEvent(new Event('input', { bubbles: true }))
+    clickButtonContaining(agentEditor, language.agentPresets.save)
+    await flush()
+
+    expect(target.querySelector('[data-risu-agent-editor]')).toBeNull()
+    expect(target.querySelector<HTMLInputElement>('[data-risu-agent-preset-name-input] input')?.value).toBe(
+      'Draft preserved',
+    )
+    const select = Array.from(presetEditor.querySelectorAll<HTMLLabelElement>('label'))
+      .find((label) => label.textContent?.includes(language.agentPresets.selectAgent))
+      ?.querySelector<HTMLSelectElement>('select')
+    expect(select?.value).toBe(createdAgent.id)
+    expect(document.activeElement?.textContent).toContain(language.agentPresets.createAnotherAgent)
+
+    clickButtonContaining(presetEditor, language.agentPresets.addAgent)
+    await flush()
+    expect(agentSpies.addAgentToPreset).toHaveBeenCalledWith(
+      emptyPreset.id,
+      expect.objectContaining({ agentId: createdAgent.id }),
+    )
+  })
+
+  it('refreshes the nested Agent picker when a queued create later reconciles', async () => {
+    const emptyPreset = { ...preset, agentUses: [] }
+    const createdAgent = { ...agent, id: 'ag_queued', name: 'Queued Critic' }
+    agentSpies.createAgent.mockResolvedValueOnce({
+      status: 'queued',
+      result: { status: 'unavailable' },
+      mutationId: 'mutation-agent-create',
+    } as never)
+    seed([], [emptyPreset])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const presetEditor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    clickButtonContaining(presetEditor, language.agentPresets.createAgent)
+    await tick()
+    const agentEditor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    const name = agentEditor.querySelector<HTMLInputElement>('input[type="text"]')!
+    name.value = createdAgent.name
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    clickButtonContaining(agentEditor, language.agentPresets.save)
+    await flush()
+
+    expect(presetEditor.querySelector('[data-risu-agent-created-notice]')?.textContent).toContain(
+      language.agentPresets.commandQueued,
+    )
+    settingsResourceState.value.agents = [createdAgent]
+    await tick()
+    const select = Array.from(presetEditor.querySelectorAll<HTMLLabelElement>('label'))
+      .find((label) => label.textContent?.includes(language.agentPresets.selectAgent))
+      ?.querySelector<HTMLSelectElement>('select')
+    expect(select?.value).toBe(createdAgent.id)
+    expect(presetEditor.querySelector('[data-risu-agent-created-notice]')?.textContent).toContain(createdAgent.name)
+  })
+
+  it('keeps a newer Preset issue open when an older Save resolves', async () => {
+    let resolveSave: ((value: { status: 'accepted'; result: { status: 'ok' } }) => void) | undefined
+    presetSpies.updateAgentPreset.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSave = resolve
+        }),
+    )
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    const description = editor.querySelector<HTMLTextAreaElement>('[data-risu-agent-preset-description-input]')!
+    description.value = 'First submitted change'
+    description.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    clickButtonContaining(editor, language.agentPresets.save)
+    await flush()
+    expect(presetSpies.updateAgentPreset).toHaveBeenCalled()
+    expect(editor.querySelector('[data-risu-agent-preset-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveWaiting,
+    )
+
+    const name = editor.querySelector<HTMLInputElement>('[data-risu-agent-preset-name-input] input')!
+    name.value = ''
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    resolveSave?.({ status: 'accepted', result: { status: 'ok' } })
+    await flush()
+
+    expect(target.querySelector('[data-risu-agent-preset-editor]')).toBe(editor)
+    expect(editor.querySelector('[data-risu-agent-preset-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveFixIssues(1),
+    )
+  })
+
+  it('explains unchanged and invalid Preset Save states', async () => {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    expect(editor.querySelector('[data-risu-agent-preset-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveNoChanges,
+    )
+    const name = editor.querySelector<HTMLInputElement>('[data-risu-agent-preset-name-input] input')!
+    name.value = ''
+    name.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    expect(editor.querySelector('[data-risu-agent-preset-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveFixIssues(1),
+    )
   })
 
   it('updates only invocation-owned fields in the preset composer', async () => {

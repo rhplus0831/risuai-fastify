@@ -154,3 +154,22 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   tests), and `pnpm check` with no diagnostics.
 - Next slice: nested Agent creation from an empty Preset and Preset footer
   validation feedback.
+
+### 2026-09-10 — Phase 1 nested creation and stale-save slice
+
+- Source base: `ad73d3d3b`.
+- Changed owners: Agent/Preset settings, both editor drawers, their component
+  tests, and localized Agent Preset copy.
+- An empty Preset now explains the create-then-add workflow and opens a nested
+  Agent drawer. The parent Preset draft remains mounted, focus returns to the
+  invoking control, and accepted or later-reconciled queued Agents are selected
+  in the refreshed picker.
+- Preset metadata uses the canonical planner for blocking validation and its
+  sticky footer now reports **No changes**, **Fix N issues**, or **Waiting for
+  the current change**. Agent and Preset saves retain a newer draft/issue state
+  when an older accepted request resolves instead of closing the drawer.
+- Passed `pnpm test -- src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`
+  (30 tests). Nested accepted/queued reconciliation, focus restoration, parent
+  draft retention, waiting feedback, and stale-save fencing are covered.
+- Next slice: expose BardWiki effective values beside inherited choices without
+  persisting them as overrides.
