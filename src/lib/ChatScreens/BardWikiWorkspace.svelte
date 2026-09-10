@@ -1,7 +1,7 @@
 <script lang="ts">
   import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
 
-  import { onDestroy } from 'svelte'
+  import { onDestroy, tick } from 'svelte'
   import {
     BookOpenIcon,
     DownloadIcon,
@@ -108,6 +108,9 @@
   let lifecycleBusy = $state(false)
   let lifecycleError = $state('')
   let lifecycleStatus = $state('')
+  let lifecycleOpen = $state(false)
+  let rebuildPreviewButton = $state<HTMLButtonElement>()
+  let importVaultControl = $state<HTMLInputElement>()
   let rebuildPolicy = $state<BardWikiRebuildPolicy>('full')
   let rebuildPreview = $state<BardWikiRebuildPreview | null>(null)
   let importStrategy = $state<BardWikiVaultConflictStrategy>('skip')
@@ -453,6 +456,13 @@
     documentMutationError = ''
   }
 
+  async function openLifecycleTool(tool: 'rebuild' | 'import'): Promise<void> {
+    lifecycleOpen = true
+    await tick()
+    if (tool === 'rebuild') rebuildPreviewButton?.focus()
+    else importVaultControl?.focus()
+  }
+
   async function selectDocument(documentId: string, force = false): Promise<void> {
     if (!force && selectedDocumentId !== documentId && !confirmDiscard()) return
     const request = ++documentRequest
@@ -712,6 +722,7 @@
     lifecycleBusy = false
     lifecycleError = ''
     lifecycleStatus = ''
+    lifecycleOpen = false
     rebuildPreview = null
     importPlan = null
     importArchiveBase64 = ''
@@ -798,11 +809,13 @@
         <h2 id="bardwiki-workspace-title" class="m-0 text-lg">{language.bardWiki.workspaceTitle}</h2>
         <p class="m-0 text-sm text-textcolor2">{language.bardWiki.workspaceDescription}</p>
       </div>
-      <button
-        type="button"
-        disabled={documentMutationPending}
-        class="flex items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected disabled:opacity-50"
-        onclick={beginCreate}><PlusIcon size={18} />{language.bardWiki.newDocument}</button>
+      {#if chatResource && chatResource.documents.length > 0}
+        <button
+          type="button"
+          disabled={documentMutationPending}
+          class="flex min-h-11 items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected disabled:opacity-50"
+          onclick={beginCreate}><PlusIcon size={18} />{language.bardWiki.newDocument}</button>
+      {/if}
       <button
         data-modal-initial-focus
         type="button"
@@ -825,7 +838,7 @@
     {:else if chatResource}
       <details class="border-b border-darkborderc px-4 py-2">
         <summary class="cursor-pointer font-medium">{language.bardWiki.chatOverrides}</summary>
-        <div class="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           <label class="flex flex-col gap-1" data-risu-bardwiki-override="enabled">
             <span>{language.bardWiki.enabledForChat}</span>
             <select
@@ -839,6 +852,7 @@
               <option value="enabled">{language.bardWiki.enabled}</option>
               <option value="disabled">{language.bardWiki.disabled}</option>
             </select>
+            <span class="text-xs text-textcolor2">{language.bardWiki.overrideEnabledHelp}</span>
           </label>
           <label class="flex flex-col gap-1" data-risu-bardwiki-override="memory-mode">
             <span>{language.bardWiki.memoryMode}</span>
@@ -855,6 +869,7 @@
               <option value="bardwiki">{language.bardWiki.modeBardWiki}</option>
               <option value="hybrid">{language.bardWiki.modeHybrid}</option>
             </select>
+            <span class="text-xs text-textcolor2">{language.bardWiki.overrideMemoryModeHelp}</span>
           </label>
           <label class="flex flex-col gap-1" data-risu-bardwiki-override="confirmation">
             <span>{language.bardWiki.automaticConfirmation}</span>
@@ -871,6 +886,7 @@
               <option value="manual">{language.bardWiki.disabled}</option>
               <option value="automatic">{language.bardWiki.enabled}</option>
             </select>
+            <span class="text-xs text-textcolor2">{language.bardWiki.overrideConfirmationHelp}</span>
           </label>
           <label class="flex flex-col gap-1" data-risu-bardwiki-override="canonical-updates">
             <span>{language.bardWiki.canonicalUpdates}</span>
@@ -886,6 +902,7 @@
               <option value="enabled">{language.bardWiki.enabled}</option>
               <option value="disabled">{language.bardWiki.disabled}</option>
             </select>
+            <span class="text-xs text-textcolor2">{language.bardWiki.overrideCanonicalHelp}</span>
           </label>
           <label class="flex flex-col gap-1" data-risu-bardwiki-override="total-token-budget">
             <span>{language.bardWiki.totalTokenBudgetOverride}</span>
@@ -899,6 +916,7 @@
               )}
               value={totalTokenBudgetOverrideDraft}
               oninput={(event) => (totalTokenBudgetOverrideDraft = event.currentTarget.value)} />
+            <span class="text-xs text-textcolor2">{language.bardWiki.overrideBudgetHelp}</span>
           </label>
         </div>
         <div class="mt-3 flex flex-wrap items-center gap-3">
@@ -913,7 +931,7 @@
         </div>
       </details>
 
-      <details data-testid="bardwiki-lifecycle" class="border-b border-darkborderc px-4 py-2">
+      <details bind:open={lifecycleOpen} data-testid="bardwiki-lifecycle" class="border-b border-darkborderc px-4 py-2">
         <summary class="cursor-pointer font-medium">{language.bardWiki.lifecycleTools}</summary>
         <div class="mt-3 grid gap-4 lg:grid-cols-2">
           <section class="rounded-md border border-darkborderc p-3" aria-labelledby="bardwiki-rebuild-heading">
@@ -933,6 +951,7 @@
                 <option value="missing">{language.bardWiki.rebuildMissing}</option>
               </select>
               <button
+                bind:this={rebuildPreviewButton}
                 type="button"
                 disabled={lifecycleBusy}
                 class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected disabled:opacity-50"
@@ -941,12 +960,6 @@
             {#if rebuildPreview}
               <div class="mt-3 rounded-md bg-darkbg2 p-2 text-sm" data-testid="bardwiki-rebuild-preview">
                 <p class="m-0">{language.bardWiki.rebuildSourceCount(rebuildPreview.sourceCount)}</p>
-                <p class="m-0">
-                  {language.bardWiki.rebuildDocumentCounts(
-                    rebuildPreview.replaceDerivedDocumentCount,
-                    rebuildPreview.preserveUserDocumentCount,
-                  )}
-                </p>
                 {#if rebuildPreview.activeJobId}
                   <p class="mb-0 text-textcolor2">{language.bardWiki.rebuildAlreadyActive}</p>
                 {:else}
@@ -958,6 +971,18 @@
                 {/if}
               </div>
             {/if}
+            <details class="mt-3 border-t border-darkborderc pt-2" data-risu-bardwiki-rebuild-technical-details>
+              <summary class="cursor-pointer text-xs font-semibold">{language.agentPresets.technicalDetails}</summary>
+              <p class="mb-0 text-xs text-textcolor2">{language.bardWiki.rebuildTechnicalDescription}</p>
+              {#if rebuildPreview}
+                <p class="mb-0 text-xs text-textcolor2">
+                  {language.bardWiki.rebuildDocumentCounts(
+                    rebuildPreview.replaceDerivedDocumentCount,
+                    rebuildPreview.preserveUserDocumentCount,
+                  )}
+                </p>
+              {/if}
+            </details>
           </section>
 
           <section class="rounded-md border border-darkborderc p-3" aria-labelledby="bardwiki-vault-heading">
@@ -970,29 +995,46 @@
                 class="flex items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected disabled:opacity-50"
                 onclick={() => void downloadVault()}><DownloadIcon size={16} />{language.bardWiki.exportVault}</button>
               <label
-                class="flex cursor-pointer items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected">
+                class="flex min-h-11 cursor-pointer items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected focus-within:ring-2 focus-within:ring-borderc">
                 <UploadIcon size={16} />{language.bardWiki.chooseVault}
                 <input
+                  bind:this={importVaultControl}
                   class="sr-only"
                   type="file"
                   accept=".zip,application/zip"
                   disabled={lifecycleBusy}
                   onchange={(event) => void selectImportArchive(event)} />
               </label>
-              <select
-                aria-label={language.bardWiki.importStrategy}
-                class="rounded-md border border-darkborderc bg-darkbg p-2"
-                value={importStrategy}
-                disabled={lifecycleBusy}
-                onchange={(event) => {
-                  importStrategy = event.currentTarget.value as BardWikiVaultConflictStrategy
-                  void previewImport(importArchiveBase64, importStrategy)
-                }}>
-                <option value="skip">{language.bardWiki.importSkip}</option>
-                <option value="rename">{language.bardWiki.importRename}</option>
-                <option value="replace">{language.bardWiki.importReplace}</option>
-              </select>
             </div>
+            <details class="mt-3 border-t border-darkborderc pt-2" data-risu-bardwiki-vault-technical-details>
+              <summary class="cursor-pointer text-xs font-semibold">{language.agentPresets.technicalDetails}</summary>
+              <label class="mt-2 flex max-w-sm flex-col gap-1 text-xs">
+                <span>{language.bardWiki.importStrategy}</span>
+                <select
+                  aria-label={language.bardWiki.importStrategy}
+                  class="rounded-md border border-darkborderc bg-darkbg p-2"
+                  value={importStrategy}
+                  disabled={lifecycleBusy}
+                  onchange={(event) => {
+                    importStrategy = event.currentTarget.value as BardWikiVaultConflictStrategy
+                    void previewImport(importArchiveBase64, importStrategy)
+                  }}>
+                  <option value="skip">{language.bardWiki.importSkip}</option>
+                  <option value="rename">{language.bardWiki.importRename}</option>
+                  <option value="replace">{language.bardWiki.importReplace}</option>
+                </select>
+              </label>
+              {#if importExpectedTargets.length > 0}
+                <ul class="mt-2 space-y-1 text-xs text-textcolor2">
+                  {#each importExpectedTargets as target (target.documentId)}
+                    <li>
+                      <code class="break-all select-all"
+                        >{target.documentId} · v{target.version} · {target.contentHash}</code>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+            </details>
             {#if importFilename}<p class="mb-0 text-xs text-textcolor2">{importFilename}</p>{/if}
             {#if importPlan}
               <div class="mt-3 rounded-md bg-darkbg2 p-2 text-sm" data-testid="bardwiki-import-preview">
@@ -1131,191 +1173,218 @@
         </div>
       </details>
 
-      <div class="grid min-h-0 grow grid-cols-1 md:grid-cols-[minmax(13rem,18rem)_1fr]">
-        <aside class="flex min-h-0 flex-col border-b border-darkborderc md:border-r md:border-b-0">
-          <div class="flex items-center justify-between gap-3 p-3">
-            <h3 class="m-0 text-base">{language.bardWiki.documents}</h3>
-            <span class="text-xs text-textcolor2">{chatResource.documents.length}</span>
+      {#if chatResource.documents.length === 0 && editorMode === 'idle'}
+        <section
+          class="flex min-h-0 grow flex-col items-center justify-center gap-4 overflow-y-auto p-6 text-center"
+          data-risu-bardwiki-guided-empty>
+          <div class="max-w-xl">
+            <h3 class="m-0 text-xl font-semibold">{language.bardWiki.emptyWorkspaceTitle}</h3>
+            <p class="mt-2 text-sm text-textcolor2">{language.bardWiki.emptyWorkspaceDescription}</p>
           </div>
-          {#if chatResource.documents.length === 0}
-            <p class="p-4 text-sm text-textcolor2">{language.bardWiki.emptyDocuments}</p>
-          {:else}
-            <ul
-              class="m-0 flex max-h-48 list-none flex-col overflow-y-auto p-2 md:max-h-none md:grow"
-              aria-label={language.bardWiki.documents}>
-              {#each chatResource.documents as document (document.id)}
-                <li>
-                  <button
-                    type="button"
-                    aria-label={language.bardWiki.openDocument(document.title)}
-                    aria-pressed={selectedDocumentId === document.id}
-                    class="w-full rounded-md p-2 text-left transition-colors hover:bg-selected"
-                    class:bg-selected={selectedDocumentId === document.id}
-                    onclick={() => void selectDocument(document.id)}>
-                    <span class="block truncate font-medium">{document.title}</span>
-                    <span class="block truncate text-xs text-textcolor2">{document.logicalPath}</span>
-                    {#if document.reviewState === 'needs_review'}
-                      <span class="block text-xs text-red-400">{language.bardWiki.reviewStates.needs_review}</span>
-                    {/if}
-                  </button>
-                </li>
-              {/each}
-            </ul>
-          {/if}
-        </aside>
-
-        <main class="min-h-0 overflow-y-auto p-4">
-          {#if editorMode === 'idle' && selectedDocumentId === null}
-            <p class="text-textcolor2">{language.bardWiki.noDocumentSelected}</p>
-          {:else if documentLoadState === 'loading'}
-            <p role="status" aria-live="polite">{language.bardWiki.documentLoading}</p>
-          {:else if documentLoadState === 'error' || documentLoadState === 'unavailable'}
-            <div role="alert">
-              <p>{documentLoadError || language.bardWiki.documentLoadFailed}</p>
-              <button
-                class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
-                onclick={() => selectedDocumentId && void selectDocument(selectedDocumentId, true)}
-                >{language.retry}</button>
+          <div class="flex flex-wrap justify-center gap-2">
+            <button
+              type="button"
+              class="flex min-h-11 items-center gap-2 rounded-md border border-selected bg-selected px-4 py-2 font-medium"
+              onclick={beginCreate}><PlusIcon size={18} />{language.bardWiki.createFirstDocument}</button>
+            <button
+              type="button"
+              class="flex min-h-11 items-center gap-2 rounded-md border border-darkborderc px-4 py-2 hover:bg-selected"
+              onclick={() => void openLifecycleTool('import')}
+              ><UploadIcon size={18} />{language.bardWiki.importVault}</button>
+            <button
+              type="button"
+              class="flex min-h-11 items-center gap-2 rounded-md border border-darkborderc px-4 py-2 hover:bg-selected"
+              onclick={() => void openLifecycleTool('rebuild')}
+              ><RotateCcwIcon size={18} />{language.bardWiki.buildFromChat}</button>
+          </div>
+        </section>
+      {:else}
+        <div class="grid min-h-0 grow grid-cols-1 md:grid-cols-[minmax(13rem,18rem)_1fr]">
+          <aside class="flex min-h-0 flex-col border-b border-darkborderc md:border-r md:border-b-0">
+            <div class="flex items-center justify-between gap-3 p-3">
+              <h3 class="m-0 text-base">{language.bardWiki.documents}</h3>
+              <span class="text-xs text-textcolor2">{chatResource.documents.length}</span>
             </div>
-          {:else if editorMode !== 'idle'}
-            <form
-              class="flex flex-col gap-4"
-              data-testid="bardwiki-document-detail"
-              onsubmit={(event) => {
-                event.preventDefault()
-                void saveDocument()
-              }}>
-              <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                <label class="flex flex-col gap-1">
-                  <span>{language.bardWiki.documentTitle}</span>
-                  <input
-                    class="rounded-md border border-darkborderc bg-transparent p-2"
-                    required
-                    bind:value={documentDraft.title} />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span>{language.bardWiki.logicalPath}</span>
-                  <input
-                    class="rounded-md border border-darkborderc bg-transparent p-2"
-                    required
-                    bind:value={documentDraft.logicalPath} />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span>{language.bardWiki.kind}</span>
-                  <select class="rounded-md border border-darkborderc bg-darkbg p-2" bind:value={documentDraft.kind}>
-                    {#each DOCUMENT_KINDS as kind}
-                      <option value={kind}>{language.bardWiki.documentKinds[kind]}</option>
-                    {/each}
-                  </select>
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span>{language.bardWiki.aliases}</span>
-                  <input
-                    class="rounded-md border border-darkborderc bg-transparent p-2"
-                    placeholder={language.bardWiki.aliasesHint}
-                    bind:value={documentDraft.aliases} />
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span>{language.bardWiki.contextPolicy}</span>
-                  <select
-                    class="rounded-md border border-darkborderc bg-darkbg p-2"
-                    bind:value={documentDraft.contextPolicy}>
-                    {#each CONTEXT_POLICIES as policy}
-                      <option value={policy}>{language.bardWiki.contextPolicies[policy]}</option>
-                    {/each}
-                  </select>
-                </label>
-                <label class="flex flex-col gap-1">
-                  <span>{language.bardWiki.reviewState}</span>
-                  <select
-                    class="rounded-md border border-darkborderc bg-darkbg p-2"
-                    bind:value={documentDraft.reviewState}>
-                    {#each REVIEW_STATES as state}
-                      <option value={state}>{language.bardWiki.reviewStates[state]}</option>
-                    {/each}
-                  </select>
-                </label>
-              </div>
-              <label class="flex flex-col gap-1">
-                <span>{language.bardWiki.markdownSource}</span>
-                <textarea
-                  class="min-h-64 w-full resize-y rounded-md border border-darkborderc bg-transparent p-3 font-mono text-sm"
-                  bind:value={documentDraft.markdown}></textarea>
-              </label>
-
-              {#if documentMutationState === 'conflict'}
-                <div class="rounded-md border border-yellow-500 p-3" role="alert">
-                  <p class="mt-0">{documentMutationError}</p>
-                  <div class="flex flex-wrap gap-2">
+            {#if chatResource.documents.length === 0}
+              <p class="p-4 text-sm text-textcolor2">{language.bardWiki.emptyDocuments}</p>
+            {:else}
+              <ul
+                class="m-0 flex max-h-48 list-none flex-col overflow-y-auto p-2 md:max-h-none md:grow"
+                aria-label={language.bardWiki.documents}>
+                {#each chatResource.documents as document (document.id)}
+                  <li>
                     <button
                       type="button"
-                      class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
-                      onclick={() => void retryConflict()}>{language.bardWiki.keepDraftAndRetry}</button>
-                    <button
-                      type="button"
-                      class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
-                      onclick={() => void discardAndReload()}>{language.bardWiki.discardAndReload}</button>
-                  </div>
-                </div>
-              {/if}
+                      aria-label={language.bardWiki.openDocument(document.title)}
+                      aria-pressed={selectedDocumentId === document.id}
+                      class="w-full rounded-md p-2 text-left transition-colors hover:bg-selected"
+                      class:bg-selected={selectedDocumentId === document.id}
+                      onclick={() => void selectDocument(document.id)}>
+                      <span class="block truncate font-medium">{document.title}</span>
+                      <span class="block truncate text-xs text-textcolor2">{document.logicalPath}</span>
+                      {#if document.reviewState === 'needs_review'}
+                        <span class="block text-xs text-red-400">{language.bardWiki.reviewStates.needs_review}</span>
+                      {/if}
+                    </button>
+                  </li>
+                {/each}
+              </ul>
+            {/if}
+          </aside>
 
-              <div class="flex flex-wrap items-center gap-2">
+          <main class="min-h-0 overflow-y-auto p-4">
+            {#if editorMode === 'idle' && selectedDocumentId === null}
+              <p class="text-textcolor2">{language.bardWiki.noDocumentSelected}</p>
+            {:else if documentLoadState === 'loading'}
+              <p role="status" aria-live="polite">{language.bardWiki.documentLoading}</p>
+            {:else if documentLoadState === 'error' || documentLoadState === 'unavailable'}
+              <div role="alert">
+                <p>{documentLoadError || language.bardWiki.documentLoadFailed}</p>
                 <button
-                  type="submit"
-                  disabled={documentMutationPending || !documentDirty}
-                  aria-busy={documentMutationState === 'saving'}
-                  class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected disabled:opacity-50"
-                  >{editorMode === 'create' ? language.bardWiki.createDocument : language.save}</button>
-                {#if editorMode === 'edit'}
-                  <button
-                    type="button"
-                    disabled={documentMutationPending}
-                    class="flex items-center gap-2 rounded-md border border-red-500 px-3 py-2 text-red-400 hover:bg-red-500 hover:text-white disabled:opacity-50"
-                    onclick={() => void deleteDocument()}><Trash2Icon size={18} />{language.remove}</button>
-                  <button
-                    type="button"
-                    aria-expanded={versionsVisible}
-                    class="flex items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
-                    onclick={() => void toggleVersions()}
-                    ><HistoryIcon size={18} />{versionsVisible
-                      ? language.bardWiki.hideVersions
-                      : language.bardWiki.showVersions}</button>
-                {/if}
-                <span class="text-sm text-textcolor2" role="status" aria-live="polite"
-                  >{mutationStatusText(documentMutationState, documentMutationError)}</span>
+                  class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
+                  onclick={() => selectedDocumentId && void selectDocument(selectedDocumentId, true)}
+                  >{language.retry}</button>
               </div>
-
-              {#if versionsVisible}
-                <section aria-label={language.bardWiki.versions}>
-                  <h4>{language.bardWiki.versions}</h4>
-                  {#if versionsLoadState === 'loading'}
-                    <p role="status" aria-live="polite">{language.bardWiki.versionsLoading}</p>
-                  {:else if versionsLoadState === 'error' || versionsLoadState === 'unavailable'}
-                    <p role="alert">{versionsLoadError || language.bardWiki.versionsLoadFailed}</p>
-                  {:else if versionsResource?.versions.length === 0}
-                    <p class="text-textcolor2">{language.bardWiki.emptyVersions}</p>
-                  {:else if versionsResource}
-                    <ol class="flex flex-col gap-2 pl-5">
-                      {#each versionsResource.versions as version (version.version)}
-                        <li>
-                          <details>
-                            <summary class="cursor-pointer"
-                              >{language.bardWiki.versionLabel(version.version)} · {language.bardWiki.versionActors[
-                                version.actor
-                              ]} · {language.bardWiki.versionReasons[version.reason]}</summary>
-                            <pre
-                              class="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap rounded-md border border-darkborderc bg-bgcolor p-3 text-sm">{version.markdown}</pre>
-                          </details>
-                        </li>
+            {:else if editorMode !== 'idle'}
+              <form
+                class="flex flex-col gap-4"
+                data-testid="bardwiki-document-detail"
+                onsubmit={(event) => {
+                  event.preventDefault()
+                  void saveDocument()
+                }}>
+                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <label class="flex flex-col gap-1">
+                    <span>{language.bardWiki.documentTitle}</span>
+                    <input
+                      class="rounded-md border border-darkborderc bg-transparent p-2"
+                      required
+                      bind:value={documentDraft.title} />
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span>{language.bardWiki.logicalPath}</span>
+                    <input
+                      class="rounded-md border border-darkborderc bg-transparent p-2"
+                      required
+                      bind:value={documentDraft.logicalPath} />
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span>{language.bardWiki.kind}</span>
+                    <select class="rounded-md border border-darkborderc bg-darkbg p-2" bind:value={documentDraft.kind}>
+                      {#each DOCUMENT_KINDS as kind}
+                        <option value={kind}>{language.bardWiki.documentKinds[kind]}</option>
                       {/each}
-                    </ol>
+                    </select>
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span>{language.bardWiki.aliases}</span>
+                    <input
+                      class="rounded-md border border-darkborderc bg-transparent p-2"
+                      placeholder={language.bardWiki.aliasesHint}
+                      bind:value={documentDraft.aliases} />
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span>{language.bardWiki.contextPolicy}</span>
+                    <select
+                      class="rounded-md border border-darkborderc bg-darkbg p-2"
+                      bind:value={documentDraft.contextPolicy}>
+                      {#each CONTEXT_POLICIES as policy}
+                        <option value={policy}>{language.bardWiki.contextPolicies[policy]}</option>
+                      {/each}
+                    </select>
+                  </label>
+                  <label class="flex flex-col gap-1">
+                    <span>{language.bardWiki.reviewState}</span>
+                    <select
+                      class="rounded-md border border-darkborderc bg-darkbg p-2"
+                      bind:value={documentDraft.reviewState}>
+                      {#each REVIEW_STATES as state}
+                        <option value={state}>{language.bardWiki.reviewStates[state]}</option>
+                      {/each}
+                    </select>
+                  </label>
+                </div>
+                <label class="flex flex-col gap-1">
+                  <span>{language.bardWiki.markdownSource}</span>
+                  <textarea
+                    class="min-h-64 w-full resize-y rounded-md border border-darkborderc bg-transparent p-3 font-mono text-sm"
+                    bind:value={documentDraft.markdown}></textarea>
+                </label>
+
+                {#if documentMutationState === 'conflict'}
+                  <div class="rounded-md border border-yellow-500 p-3" role="alert">
+                    <p class="mt-0">{documentMutationError}</p>
+                    <div class="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
+                        onclick={() => void retryConflict()}>{language.bardWiki.keepDraftAndRetry}</button>
+                      <button
+                        type="button"
+                        class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
+                        onclick={() => void discardAndReload()}>{language.bardWiki.discardAndReload}</button>
+                    </div>
+                  </div>
+                {/if}
+
+                <div class="flex flex-wrap items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={documentMutationPending || !documentDirty}
+                    aria-busy={documentMutationState === 'saving'}
+                    class="rounded-md border border-darkborderc px-3 py-2 hover:bg-selected disabled:opacity-50"
+                    >{editorMode === 'create' ? language.bardWiki.createDocument : language.save}</button>
+                  {#if editorMode === 'edit'}
+                    <button
+                      type="button"
+                      disabled={documentMutationPending}
+                      class="flex items-center gap-2 rounded-md border border-red-500 px-3 py-2 text-red-400 hover:bg-red-500 hover:text-white disabled:opacity-50"
+                      onclick={() => void deleteDocument()}><Trash2Icon size={18} />{language.remove}</button>
+                    <button
+                      type="button"
+                      aria-expanded={versionsVisible}
+                      class="flex items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected"
+                      onclick={() => void toggleVersions()}
+                      ><HistoryIcon size={18} />{versionsVisible
+                        ? language.bardWiki.hideVersions
+                        : language.bardWiki.showVersions}</button>
                   {/if}
-                </section>
-              {/if}
-            </form>
-          {/if}
-        </main>
-      </div>
+                  <span class="text-sm text-textcolor2" role="status" aria-live="polite"
+                    >{mutationStatusText(documentMutationState, documentMutationError)}</span>
+                </div>
+
+                {#if versionsVisible}
+                  <section aria-label={language.bardWiki.versions}>
+                    <h4>{language.bardWiki.versions}</h4>
+                    {#if versionsLoadState === 'loading'}
+                      <p role="status" aria-live="polite">{language.bardWiki.versionsLoading}</p>
+                    {:else if versionsLoadState === 'error' || versionsLoadState === 'unavailable'}
+                      <p role="alert">{versionsLoadError || language.bardWiki.versionsLoadFailed}</p>
+                    {:else if versionsResource?.versions.length === 0}
+                      <p class="text-textcolor2">{language.bardWiki.emptyVersions}</p>
+                    {:else if versionsResource}
+                      <ol class="flex flex-col gap-2 pl-5">
+                        {#each versionsResource.versions as version (version.version)}
+                          <li>
+                            <details>
+                              <summary class="cursor-pointer"
+                                >{language.bardWiki.versionLabel(version.version)} · {language.bardWiki.versionActors[
+                                  version.actor
+                                ]} · {language.bardWiki.versionReasons[version.reason]}</summary>
+                              <pre
+                                class="mt-2 max-w-full overflow-x-auto whitespace-pre-wrap rounded-md border border-darkborderc bg-bgcolor p-3 text-sm">{version.markdown}</pre>
+                            </details>
+                          </li>
+                        {/each}
+                      </ol>
+                    {/if}
+                  </section>
+                {/if}
+              </form>
+            {/if}
+          </main>
+        </div>
+      {/if}
     {/if}
   </div>
 </div>

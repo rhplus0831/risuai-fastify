@@ -210,6 +210,39 @@ afterEach(() => {
 })
 
 describe('BardWiki workspace', () => {
+  it('offers one guided zero-document workflow and routes each CTA into the existing safe stage', async () => {
+    reads.chat.mockResolvedValue({ ...chatResource, documents: [] })
+    component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+    await settle()
+
+    const empty = target.querySelector<HTMLElement>('[data-risu-bardwiki-guided-empty]')!
+    expect(empty.textContent).toContain(language.bardWiki.emptyWorkspaceTitle)
+    expect(target.querySelector('aside')).toBeNull()
+
+    const build = Array.from(empty.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent?.trim() === language.bardWiki.buildFromChat,
+    )!
+    build.click()
+    await settle()
+    expect(target.querySelector<HTMLDetailsElement>('[data-testid="bardwiki-lifecycle"]')?.open).toBe(true)
+    expect(document.activeElement?.textContent).toBe(language.bardWiki.previewRebuild)
+
+    const importVault = Array.from(empty.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent?.trim() === language.bardWiki.importVault,
+    )!
+    importVault.click()
+    await settle()
+    expect(document.activeElement).toBe(target.querySelector('input[type="file"]'))
+
+    const create = Array.from(empty.querySelectorAll<HTMLButtonElement>('button')).find(
+      (button) => button.textContent?.trim() === language.bardWiki.createFirstDocument,
+    )!
+    create.click()
+    await settle()
+    expect(target.querySelector('[data-testid="bardwiki-document-detail"]')).not.toBeNull()
+    expect(target.querySelector('[data-risu-bardwiki-guided-empty]')).toBeNull()
+  })
+
   it('loads only the chat index until a document and its history are requested', async () => {
     component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
     await settle()
