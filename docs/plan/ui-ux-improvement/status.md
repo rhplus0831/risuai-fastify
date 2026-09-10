@@ -134,3 +134,23 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   (22 tests), including rendered Ready/Empty/Disabled/Invalid/Incomplete/model
   status assertions.
 - Next slice: no-Agent creation workflow and editor issue/save feedback.
+
+### 2026-09-10 — Phase 1 Agent authoring-feedback slice
+
+- Source base: `a5636116b`.
+- Changed owners: `src/lib/Setting/Pages/AgentEditorDrawer.svelte`,
+  `src/ts/agentAuthoringIssues.ts`, their focused tests, and localized Agent
+  Preset copy.
+- The Agent editor now presents field-linked warning/error summaries. Prepared
+  inputs have one-step Insert, Deselect, and Enable repairs; empty instructions
+  and generated names remain nonblocking; blank names, invalid ChatML, strict
+  text output, model selection, and undefined toggle/lorebook definitions block
+  Save. Issue actions move focus to the relevant authoring field.
+- The sticky footer now explains disabled Save as **No changes**, **Fix N
+  issues**, or **Waiting for the current change**. Escape uses the same
+  dirty-draft confirmation as backdrop and Cancel dismissal.
+- Passed `pnpm test -- src/ts/agentAuthoringIssues.test.ts` (3 tests),
+  `pnpm test -- src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts` (25
+  tests), and `pnpm check` with no diagnostics.
+- Next slice: nested Agent creation from an empty Preset and Preset footer
+  validation feedback.

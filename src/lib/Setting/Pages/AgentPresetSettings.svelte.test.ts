@@ -365,6 +365,77 @@ describe('modular Agent Preset settings', () => {
       button.textContent?.includes(language.agentPresets.save),
     )
     expect(save?.disabled).toBe(true)
+    expect(editor.querySelector('[data-risu-agent-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveFixIssues(1),
+    )
+  })
+
+  it('surfaces prepared-input mismatches and repairs them at the instruction caret', async () => {
+    seed([{ ...agent, instruction: 'Research this request.' }])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    const issue = editor.querySelector<HTMLElement>('[data-risu-agent-issue="warning"]')!
+    expect(issue.textContent).toContain('{{currentUserMessage}}')
+    clickButtonContaining(issue, language.agentPresets.insertToken)
+    await tick()
+
+    const instruction = editor.querySelectorAll<HTMLTextAreaElement>('textarea')[1]
+    expect(instruction.value).toBe('Research this request.{{currentUserMessage}}')
+    expect(document.activeElement).toBe(instruction)
+    expect(editor.querySelector('[data-risu-agent-issue="warning"]')).toBeNull()
+  })
+
+  it('links undefined local references to the blocking field while legal guidance stays nonblocking', async () => {
+    seed([{ ...agent, instruction: '{{agentToggle::missing}}' }])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    const error = editor.querySelector<HTMLElement>('[data-risu-agent-issue="error"]')!
+    expect(error.textContent).toContain(language.agentPresets.issueInvalidToggleDefinition)
+    error.querySelector<HTMLButtonElement>('button')!.click()
+    await tick()
+
+    expect(document.activeElement).toBe(editor.querySelector('[data-risu-agent-field="toggles"]'))
+    expect(
+      [...editor.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+        button.textContent?.includes(language.agentPresets.save),
+      )?.disabled,
+    ).toBe(true)
+    expect(editor.querySelector('[data-risu-agent-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveFixIssues(1),
+    )
+
+    editor.querySelector<HTMLButtonElement>('button')!.click()
+    await tick()
+    clickButtonContaining(target.querySelector('[data-risu-agent-settings]')!, language.agentPresets.createAgent)
+    await tick()
+    const createEditor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    expect(createEditor.querySelectorAll('[data-risu-agent-issue="warning"]').length).toBeGreaterThan(0)
+    expect(
+      [...createEditor.querySelectorAll<HTMLButtonElement>('button')].find((button) =>
+        button.textContent?.includes(language.agentPresets.save),
+      )?.disabled,
+    ).toBe(false)
+  })
+
+  it('explains that an unchanged Agent has no changes to save', async () => {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+
+    expect(target.querySelector('[data-risu-agent-save-reason]')?.textContent).toContain(
+      language.agentPresets.saveNoChanges,
+    )
   })
 
   it('shows only the CBS variables for currently selected prepared inputs below the instruction', async () => {

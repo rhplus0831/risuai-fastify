@@ -53,4 +53,15 @@ describe('Agent authoring issues', () => {
       { id: 'output-format-strict', severity: 'error', field: 'outputFormat' },
     ])
   })
+
+  it('links a missing required name to the name field', () => {
+    expect(issues({ name: '' })).toContainEqual(
+      expect.objectContaining({
+        id: 'name-required',
+        severity: 'error',
+        field: 'name',
+        recoveryActions: [{ kind: 'focusField', field: 'name' }],
+      }),
+    )
+  })
 })

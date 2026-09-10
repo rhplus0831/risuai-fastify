@@ -3,14 +3,25 @@ import type { AgentPresetStepInputScope, AgentPresetStepOutputFormat } from './a
 import { parseChatMLRows } from '@risuai/shared-core/chatml-rows'
 
 export type AgentAuthoringIssueSeverity = 'warning' | 'error'
-export type AgentAuthoringIssueField = 'name' | 'instruction' | 'inputScopes' | 'outputFormat'
+export type AgentAuthoringIssueField =
+  | 'name'
+  | 'instruction'
+  | 'inputScopes'
+  | 'outputFormat'
+  | 'model'
+  | 'toggles'
+  | 'lorebookInputs'
 export type AgentAuthoringIssueMessageKey =
   | 'issuePreparedInputSelectedButUnused'
   | 'issuePreparedInputUsedButUnselected'
   | 'issueEmptyInstruction'
   | 'issueGeneratedName'
+  | 'issueNameRequired'
   | 'issueInvalidChatML'
   | 'issueStrictOutputRequiresJson'
+  | 'issueInvalidModel'
+  | 'issueInvalidToggleDefinition'
+  | 'issueInvalidLorebookDefinition'
 
 export type AgentAuthoringRecoveryAction =
   | { kind: 'insertPreparedInput'; scope: AgentPresetStepInputScope; token: string }
@@ -38,6 +49,16 @@ export function agentAuthoringIssues(input: {
 }): AgentAuthoringIssue[] {
   const issues: AgentAuthoringIssue[] = []
   const inputReferences = analyzeAgentPresetPreparedInputReferences(input.instruction, input.inputScopes)
+
+  if (input.name.trim().length === 0) {
+    issues.push({
+      id: 'name-required',
+      severity: 'error',
+      field: 'name',
+      messageKey: 'issueNameRequired',
+      recoveryActions: [{ kind: 'focusField', field: 'name' }],
+    })
+  }
 
   for (const scope of inputReferences.selectedWithoutReference) {
     issues.push({

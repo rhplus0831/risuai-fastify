@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy, untrack } from 'svelte'
+  import { onDestroy, tick, untrack } from 'svelte'
   import { registerWriterDraftCapture } from 'src/ts/server/writerDraftRecovery'
 
   import { PlusIcon, SaveIcon, Trash2Icon, XIcon } from '@lucide/svelte'
@@ -13,6 +13,12 @@
   import { modalBackdropDismiss } from 'src/ts/gui/modalBackdropDismiss'
   import { modalFocusTrap } from 'src/ts/gui/modalFocusTrap'
   import { parseChatMLRows } from '@risuai/shared-core/chatml-rows'
+  import {
+    agentAuthoringIssues,
+    type AgentAuthoringIssue,
+    type AgentAuthoringIssueField,
+    type AgentAuthoringRecoveryAction,
+  } from 'src/ts/agentAuthoringIssues'
   import { confirmSettingsItemRemoval } from 'src/ts/setting/confirmSettingsItemRemoval'
   import {
     AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MAX,
@@ -33,6 +39,7 @@
     type AgentPresetStepOutputFormat,
     type AgentRecord,
     type AgentToggleDefinition,
+    validateAgentRecord,
   } from 'src/ts/agentPresetRecords'
   import type { AgentSnapshot } from 'src/ts/server/commands'
   import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
@@ -81,6 +88,8 @@
     })),
   )
   let lorebookInputs = $state<AgentLorebookInput[]>((initial?.lorebookInputs ?? []).map((input) => ({ ...input })))
+  let drawerNode: HTMLElement
+  let instructionInput: HTMLTextAreaElement
   let modelProfiles = $derived(readModelProfileOwners(settingsResourceState.value.modelProfiles))
   let modelProfileItems = $derived(
     hasUniqueModelProfileOrder(settingsResourceState.value.modelProfileOrder)
@@ -90,13 +99,35 @@
   const initialSnapshot = agentSnapshotFromRecord(initial)
   let snapshot = $derived(agentSnapshot())
   let dirty = $derived(JSON.stringify(snapshot) !== JSON.stringify(initialSnapshot))
+  let guidanceIssues = $derived(
+    agentAuthoringIssues({
+      name,
+      generatedDefaultName: language.agentPresets.newAgentName,
+      instruction,
+      useChatML,
+      inputScopes,
+      outputFormat,
+      structuredOutputStrict,
+    }),
+  )
+  let definitionIssues = $derived.by(() => canonicalDefinitionIssues())
+  let surfaceIssues = $derived([...guidanceIssues, ...definitionIssues])
+  let blockingIssueCount = $derived(surfaceIssues.filter((issue) => issue.severity === 'error').length)
   let canSave = $derived(
     name.trim().length > 0 &&
       (modelMode === 'inheritMain' || profileId.trim().length > 0) &&
-      (!useChatML || parseChatMLRows(instruction) !== null) &&
-      definitionsValid() &&
+      blockingIssueCount === 0 &&
       !busy &&
       (mode === 'create' || dirty),
+  )
+  let saveDisabledReason = $derived(
+    busy
+      ? language.agentPresets.saveWaiting
+      : blockingIssueCount > 0
+        ? language.agentPresets.saveFixIssues(blockingIssueCount)
+        : !canSave
+          ? language.agentPresets.saveNoChanges
+          : '',
   )
 
   function readModelProfileOwners(value: unknown): ModelProfileRecord[] {
@@ -262,35 +293,106 @@
     lorebookInputs.splice(index, 1)
   }
 
-  function definitionsValid(): boolean {
-    const identifier = /^[A-Za-z_][A-Za-z0-9_]{0,63}$/
-    const toggleKeys = toggles.map((toggle) => toggle.key.trim())
-    const lorebookKeys = lorebookInputs.map((input) => input.key.trim())
-    const referencedToggleKeys = [...instruction.matchAll(/\{\{\s*agentToggle::([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map(
-      (match) => match[1],
+  function canonicalDefinitionIssues(): AgentAuthoringIssue[] {
+    const issues = validateAgentRecord(
+      {
+        id: initial?.id ?? 'draft-agent',
+        version: initial?.version ?? 1,
+        name: name.trim(),
+        instruction,
+        useChatML,
+        modelDefaults:
+          modelMode === 'modelProfile'
+            ? { mode: 'modelProfile', profileId: profileId.trim() }
+            : { mode: 'inheritMain' },
+        runtimeDefaults: snapshot.runtimeDefaults ?? {},
+        inputScopes,
+        toggles: snapshot.toggles ?? [],
+        lorebookInputs: snapshot.lorebookInputs ?? [],
+        outputFormat,
+      },
+      'agent',
     )
-    const referencedLorebookKeys = [...instruction.matchAll(/\{\{\s*agentInput::([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g)].map(
-      (match) => match[1],
-    )
-    return (
-      toggleKeys.every((key) => identifier.test(key)) &&
-      new Set(toggleKeys).size === toggleKeys.length &&
-      toggles.every(
-        (toggle) =>
-          toggle.label.trim().length > 0 &&
-          (toggle.kind !== 'select' || toggle.optionText.split(',').some((option) => option.trim().length > 0)),
-      ) &&
-      lorebookKeys.every((key) => identifier.test(key)) &&
-      new Set(lorebookKeys).size === lorebookKeys.length &&
-      toggles.length <= AGENT_TOGGLE_DEFINITION_LIMIT &&
-      lorebookInputs.length <= AGENT_LOREBOOK_INPUT_LIMIT &&
-      lorebookInputs.every(
-        (input) =>
-          input.displayName.trim().length > 0 && (!input.required || referencedLorebookKeys.includes(input.key.trim())),
-      ) &&
-      referencedToggleKeys.every((key) => toggleKeys.includes(key)) &&
-      referencedLorebookKeys.every((key) => lorebookKeys.includes(key))
-    )
+    return issues
+      .filter(
+        (issue) =>
+          issue.code === 'invalid_model' || issue.code === 'invalid_toggle' || issue.code === 'invalid_lorebook_input',
+      )
+      .map((issue) => {
+        const field: AgentAuthoringIssueField =
+          issue.code === 'invalid_model' ? 'model' : issue.code === 'invalid_toggle' ? 'toggles' : 'lorebookInputs'
+        return {
+          id: `${issue.code}:${issue.path}:${issue.message}`,
+          severity: 'error',
+          field,
+          messageKey:
+            issue.code === 'invalid_model'
+              ? 'issueInvalidModel'
+              : issue.code === 'invalid_toggle'
+                ? 'issueInvalidToggleDefinition'
+                : 'issueInvalidLorebookDefinition',
+          recoveryActions: [{ kind: 'focusField', field }],
+        }
+      })
+  }
+
+  function issueMessage(issue: AgentAuthoringIssue): string {
+    const scope = issue.scope
+    if (issue.messageKey === 'issuePreparedInputSelectedButUnused' && scope) {
+      return language.agentPresets.issuePreparedInputSelectedButUnused(
+        language.agentPresets.inputScopeLabels[scope],
+        `{{${scope}}}`,
+      )
+    }
+    if (issue.messageKey === 'issuePreparedInputUsedButUnselected' && scope) {
+      return language.agentPresets.issuePreparedInputUsedButUnselected(
+        language.agentPresets.inputScopeLabels[scope],
+        `{{${scope}}}`,
+      )
+    }
+    switch (issue.messageKey) {
+      case 'issueEmptyInstruction':
+      case 'issueGeneratedName':
+      case 'issueNameRequired':
+      case 'issueInvalidChatML':
+      case 'issueStrictOutputRequiresJson':
+      case 'issueInvalidModel':
+      case 'issueInvalidToggleDefinition':
+      case 'issueInvalidLorebookDefinition':
+        return language.agentPresets[issue.messageKey]
+      default:
+        return ''
+    }
+  }
+
+  function focusIssue(issue: AgentAuthoringIssue): void {
+    focusField(issue.field)
+  }
+
+  function focusField(field: AgentAuthoringIssueField): void {
+    drawerNode.querySelector<HTMLElement>(`[data-risu-agent-field="${field}"]`)?.focus()
+  }
+
+  async function applyRecovery(action: AgentAuthoringRecoveryAction): Promise<void> {
+    if (action.kind === 'insertPreparedInput') {
+      const start = instructionInput.selectionStart ?? instruction.length
+      const end = instructionInput.selectionEnd ?? start
+      instruction = `${instruction.slice(0, start)}${action.token}${instruction.slice(end)}`
+      await tick()
+      instructionInput.focus()
+      instructionInput.setSelectionRange(start + action.token.length, start + action.token.length)
+      return
+    }
+    if (action.kind === 'deselectPreparedInput') toggleScope(action.scope, false)
+    else if (action.kind === 'enablePreparedInput') toggleScope(action.scope, true)
+    else focusField(action.field)
+  }
+
+  function recoveryLabel(action: AgentAuthoringRecoveryAction): string {
+    if (action.kind === 'insertPreparedInput') return language.agentPresets.insertToken
+    if (action.kind === 'deselectPreparedInput') return language.agentPresets.deselectInput
+    if (action.kind === 'enablePreparedInput') return language.agentPresets.enableInput
+    return language.agentPresets.goToField
   }
 
   function clamp(value: unknown, min: number, max: number): number {
@@ -302,6 +404,13 @@
     if (busy) return
     if (dirty && !window.confirm(language.agentPresets.discardChangesConfirm)) return
     onCancel()
+  }
+
+  function handleKeydown(event: KeyboardEvent): void {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    event.stopPropagation()
+    requestClose()
   }
 
   function agentRecoveryDraft() {
@@ -348,12 +457,14 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     use:modalFocusTrap
+    bind:this={drawerNode}
     class="flex h-full w-full max-w-3xl flex-col border-l border-darkborderc bg-bgcolor text-textcolor shadow-xl"
     role="dialog"
     tabindex="-1"
     aria-modal="true"
     aria-busy={busy}
     data-risu-agent-editor
+    onkeydown={handleKeydown}
     onclick={(event) => event.stopPropagation()}>
     <div class="flex items-center justify-between border-b border-darkborderc p-4">
       <h3 class="text-xl font-semibold">
@@ -366,11 +477,11 @@
           {commandError}
         </div>{/if}
       <div class="grid gap-3 md:grid-cols-2">
-        <label class="flex flex-col gap-1">
+        <label class="flex flex-col gap-1" data-risu-agent-field="name" tabindex="-1">
           <span class="text-sm font-medium">{language.agentPresets.nameLabel}</span>
-          <TextInput bind:value={name} fullwidth />
+          <TextInput bind:value={name} fullwidth className="scroll-mt-4" />
         </label>
-        <label class="flex flex-col gap-1">
+        <label class="flex flex-col gap-1" data-risu-agent-field="outputFormat" tabindex="-1">
           <span class="text-sm font-medium">{language.agentPresets.outputFormatLabel}</span>
           <SelectInput bind:value={outputFormat} className="w-full">
             <option value="text">{language.agentPresets.outputFormatText}</option>
@@ -384,10 +495,11 @@
           class="min-h-20 rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
           bind:value={description}></textarea>
       </label>
-      <label class="mt-3 flex flex-col gap-1">
+      <label class="mt-3 flex flex-col gap-1" data-risu-agent-field="instruction" tabindex="-1">
         <span class="text-sm font-medium">{language.agentPresets.instructionLabel}</span>
         <textarea
           class="min-h-36 rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
+          bind:this={instructionInput}
           bind:value={instruction}></textarea>
         {#if inputScopes.length > 0}
           <span
@@ -400,6 +512,36 @@
           </span>
         {/if}
       </label>
+      {#if surfaceIssues.length > 0}
+        <section
+          class="mt-3 rounded-md border border-darkborderc p-3"
+          aria-label={language.agentPresets.issueSummary(surfaceIssues.length)}
+          data-risu-agent-issue-summary>
+          <h4 class="text-sm font-semibold">{language.agentPresets.issueSummary(surfaceIssues.length)}</h4>
+          <ul class="mt-2 space-y-2">
+            {#each surfaceIssues as issue (issue.id)}
+              <li
+                class="rounded-md border p-2 text-sm"
+                class:border-draculared={issue.severity === 'error'}
+                class:border-yellow-600={issue.severity === 'warning'}
+                data-risu-agent-issue={issue.severity}>
+                <button type="button" class="text-left underline" onclick={() => focusIssue(issue)}>
+                  {issueMessage(issue)}
+                </button>
+                {#if issue.recoveryActions.length > 0}
+                  <div class="mt-2 flex flex-wrap gap-2">
+                    {#each issue.recoveryActions as action}
+                      <Button size="sm" styled="outlined" onclick={() => applyRecovery(action)}>
+                        {recoveryLabel(action)}
+                      </Button>
+                    {/each}
+                  </div>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        </section>
+      {/if}
       <div class="mt-3" data-risu-agent-use-chatml>
         <CheckInput
           bind:check={useChatML}
@@ -410,7 +552,11 @@
           <p class="pl-7 text-xs text-draculared">{language.agentPresets.invalidChatMLInstruction}</p>
         {/if}
       </div>
-      <section class="mt-4 rounded-md border border-darkborderc p-3" data-risu-agent-toggles>
+      <section
+        class="mt-4 rounded-md border border-darkborderc p-3"
+        data-risu-agent-toggles
+        data-risu-agent-field="toggles"
+        tabindex="-1">
         <div class="flex items-start justify-between gap-3">
           <div>
             <h4 class="text-sm font-semibold">{language.agentPresets.agentTogglesLabel}</h4>
@@ -470,7 +616,11 @@
           </div>
         {/if}
       </section>
-      <section class="mt-4 rounded-md border border-darkborderc p-3" data-risu-agent-lorebook-inputs>
+      <section
+        class="mt-4 rounded-md border border-darkborderc p-3"
+        data-risu-agent-lorebook-inputs
+        data-risu-agent-field="lorebookInputs"
+        tabindex="-1">
         <div class="flex items-start justify-between gap-3">
           <div>
             <h4 class="text-sm font-semibold">{language.agentPresets.lorebookInputsLabel}</h4>
@@ -517,7 +667,7 @@
           </div>
         {/if}
       </section>
-      <div class="mt-3 grid gap-3 md:grid-cols-2">
+      <div class="mt-3 grid gap-3 md:grid-cols-2" data-risu-agent-field="model" tabindex="-1">
         <label class="flex flex-col gap-1">
           <span class="text-sm font-medium">{language.agentPresets.modelModeLabel}</span>
           <SelectInput bind:value={modelMode} className="w-full">
@@ -574,7 +724,7 @@
           name={language.agentPresets.structuredOutputStrict}
           onChange={(value) => (structuredOutputStrict = value)} />
       </div>
-      <div class="mt-4 rounded-md border border-darkborderc p-3">
+      <div class="mt-4 rounded-md border border-darkborderc p-3" data-risu-agent-field="inputScopes" tabindex="-1">
         <h4 class="inline-flex items-center gap-1 text-sm font-semibold">
           {language.agentPresets.preparedInputScopesLabel}
           <Help key="agentPresetPreparedInputs" name={language.agentPresets.preparedInputScopesLabel} />
@@ -594,6 +744,9 @@
       </div>
     </div>
     <div class="flex justify-end gap-2 border-t border-darkborderc p-4" data-risu-agent-editor-footer>
+      {#if saveDisabledReason}<span class="mr-auto self-center text-sm text-textcolor2" data-risu-agent-save-reason>
+          {saveDisabledReason}
+        </span>{/if}
       <Button styled="outlined" disabled={busy} onclick={requestClose}>{language.agentPresets.cancel}</Button>
       <Button disabled={!canSave} onclick={() => onSave(sparseSnapshot())}>
         <span class="inline-flex items-center gap-2"
