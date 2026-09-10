@@ -178,6 +178,38 @@ describe('bounded diagnostics journal', () => {
     expect((await stat(path.join(directory, 'journal.sqlite'))).mode & 0o777).toBe(0o600)
   })
 
+  it('persists only validated server facts and revalidates them across restart', async () => {
+    const facts = [
+      { id: 'runtime.retryable', type: 'boolean', value: true },
+      { id: 'runtime.retry-count', type: 'count', value: 2 },
+      { id: 'runtime.location.0', type: 'location', value: 'server/fastify/src/app.ts:12:3' },
+    ] as const
+    const journal = create()
+    expect(journal.record(event(), { kind: 'server' }, facts)).toBe(true)
+    await journal.ready
+    await waitUntil(() => journal.read().entries.length === 1)
+    expect(journal.read().entries[0].facts).toEqual(facts)
+    await journal.close()
+
+    const restarted = create({ instanceId: 'b'.repeat(32) })
+    await restarted.ready
+    expect(restarted.read().entries[0].facts).toEqual(facts)
+    expect(
+      restarted.record(event(), { kind: 'server' }, [
+        { id: 'runtime.private', type: 'string', value: CANARY } as never,
+      ]),
+    ).toBe(false)
+    expect(
+      restarted.record(
+        browserEvent(),
+        { kind: 'browser', sourceId: 'c'.repeat(32), eventId: 'd'.repeat(32), clientSequence: 1 },
+        [{ id: 'runtime.retryable', type: 'boolean', value: true }],
+      ),
+    ).toBe(false)
+    expect(JSON.stringify(restarted.read())).not.toContain(CANARY)
+    expect((await readFile(path.join(directory, 'journal.sqlite'))).includes(Buffer.from(CANARY))).toBe(false)
+  })
+
   it('refuses newer journal versions without modifying existing database bytes', async () => {
     const journal = create()
     journal.record(event())

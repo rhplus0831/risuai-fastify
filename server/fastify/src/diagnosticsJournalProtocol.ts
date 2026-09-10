@@ -1,4 +1,4 @@
-import type { DiagnosticJournalRecord } from '@risuai/protocol/remote-diagnostics'
+import type { RemoteDiagnosticRecordV3 } from '@risuai/protocol/remote-diagnostics'
 
 export const DIAGNOSTICS_JOURNAL_VERSION = 1
 
@@ -30,7 +30,7 @@ export interface DiagnosticsJournalCounters {
   pruned: number
 }
 
-export type PendingDiagnosticRecord = Omit<DiagnosticJournalRecord, 'sequence'>
+export type PendingDiagnosticRecord = Omit<RemoteDiagnosticRecordV3, 'sequence'>
 
 export interface StoredDiagnosticRow {
   sequence: number

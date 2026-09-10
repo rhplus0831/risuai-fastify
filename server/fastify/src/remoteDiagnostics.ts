@@ -7,12 +7,14 @@ import {
   parseRemoteDiagnosticsQuery,
   projectRemoteDiagnosticRecord,
   projectDiagnosticJournalRecord,
+  projectRemoteDiagnosticRecordV3,
   promoteRemoteDiagnosticRecord,
   downgradeDiagnosticJournalRecord,
-  type DiagnosticJournalRecord,
   type RemoteDiagnosticsResponseV1,
   type RemoteDiagnosticsResponseV2,
+  type RemoteDiagnosticsResponseV3,
   type RemoteDiagnosticRecord,
+  type RemoteDiagnosticRecordV3,
   type RemoteDiagnosticsError,
   type RemoteDiagnosticsQuery,
   type RemoteDiagnosticsResponse,
@@ -26,11 +28,23 @@ const SNAPSHOT_MAX_ENTRIES = 2_000
 const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024
 const SNAPSHOT_MAX_COUNT = 32
 const reference = () => randomBytes(16).toString('hex')
+const projectV2Record = (value: unknown) => {
+  const record = projectRemoteDiagnosticRecordV3(value)
+  return record
+    ? projectDiagnosticJournalRecord({
+        sequence: record.sequence,
+        receivedAt: record.receivedAt,
+        instanceId: record.instanceId,
+        provenance: record.provenance,
+        entry: record.entry,
+      })
+    : null
+}
 
 export interface RemoteDiagnosticsSource {
   enabled: boolean
   read(): {
-    entries: Array<RemoteDiagnosticRecord | DiagnosticJournalRecord>
+    entries: Array<RemoteDiagnosticRecord | RemoteDiagnosticRecordV3>
     epoch: string
     source: 'volatile' | 'journal' | 'unavailable'
     dropped: number
@@ -75,11 +89,12 @@ export function createVolatileRemoteDiagnostics(
 interface Snapshot {
   expiresAt: number
   epoch: string
-  pages: Array<Array<RemoteDiagnosticRecord | DiagnosticJournalRecord>>
+  pages: Array<Array<RemoteDiagnosticRecord | RemoteDiagnosticRecordV3>>
   cursors: string[]
   metadata:
     | Omit<RemoteDiagnosticsResponseV1, 'entries' | 'pagination' | 'serverTime'>
     | Omit<RemoteDiagnosticsResponseV2, 'entries' | 'pagination' | 'serverTime'>
+    | Omit<RemoteDiagnosticsResponseV3, 'entries' | 'pagination' | 'serverTime'>
   snapshotSequence: number
 }
 
@@ -104,17 +119,23 @@ export function createRemoteDiagnosticsReader(
         lastSequence: snapshot.pages[index].at(-1)?.sequence ?? 0,
       },
     }
-    return snapshot.metadata.version === 2
+    return snapshot.metadata.version === 3
       ? {
           ...snapshot.metadata,
           ...common,
-          entries: snapshot.pages[index].map((entry) => projectDiagnosticJournalRecord(entry)!),
+          entries: snapshot.pages[index].map((entry) => projectRemoteDiagnosticRecordV3(entry)!),
         }
-      : {
-          ...snapshot.metadata,
-          ...common,
-          entries: snapshot.pages[index].map((entry) => projectRemoteDiagnosticRecord(entry)!),
-        }
+      : snapshot.metadata.version === 2
+        ? {
+            ...snapshot.metadata,
+            ...common,
+            entries: snapshot.pages[index].map((entry) => projectV2Record(entry)!),
+          }
+        : {
+            ...snapshot.metadata,
+            ...common,
+            entries: snapshot.pages[index].map((entry) => projectRemoteDiagnosticRecord(entry)!),
+          }
   }
   return {
     clear: () => {
@@ -134,23 +155,27 @@ export function createRemoteDiagnosticsReader(
       }
       let bytes = 0
       let truncated = false
-      const records: Array<RemoteDiagnosticRecord | DiagnosticJournalRecord> = []
+      const records: Array<RemoteDiagnosticRecord | RemoteDiagnosticRecordV3> = []
       let rejected = current.rejected
       for (const value of current.entries) {
         const persisted = 'provenance' in value
-        const validated = persisted ? projectDiagnosticJournalRecord(value) : projectRemoteDiagnosticRecord(value)
+        const validated = persisted ? projectRemoteDiagnosticRecordV3(value) : projectRemoteDiagnosticRecord(value)
         if (!validated) {
           rejected++
           continue
         }
         const record =
-          query.version === 2
+          query.version === 3
             ? persisted
-              ? (validated as DiagnosticJournalRecord)
-              : promoteRemoteDiagnosticRecord(validated as RemoteDiagnosticRecord)
-            : persisted
-              ? downgradeDiagnosticJournalRecord(validated as DiagnosticJournalRecord)
-              : (validated as RemoteDiagnosticRecord)
+              ? (validated as RemoteDiagnosticRecordV3)
+              : projectRemoteDiagnosticRecordV3(promoteRemoteDiagnosticRecord(validated as RemoteDiagnosticRecord))
+            : query.version === 2
+              ? persisted
+                ? projectV2Record(validated)
+                : promoteRemoteDiagnosticRecord(validated as RemoteDiagnosticRecord)
+              : persisted
+                ? downgradeDiagnosticJournalRecord(validated as RemoteDiagnosticRecordV3)
+                : (validated as RemoteDiagnosticRecord)
         if (!record) continue
         if (record.receivedAt < query.from || record.receivedAt > query.to) continue
         if (query.requestUid && record.entry.requestUid !== query.requestUid) continue
@@ -169,7 +194,7 @@ export function createRemoteDiagnosticsReader(
         bytes += size
         records.push(record)
       }
-      const pages: Array<Array<RemoteDiagnosticRecord | DiagnosticJournalRecord>> = [[]]
+      const pages: Array<Array<RemoteDiagnosticRecord | RemoteDiagnosticRecordV3>> = [[]]
       let pageBytes = 0
       for (const record of records) {
         const size = Buffer.byteLength(JSON.stringify(record)) + 1
@@ -192,7 +217,7 @@ export function createRemoteDiagnosticsReader(
           sources: {
             server: current.source,
             browser:
-              query.version === 2 && current.browserSupported
+              query.version >= 2 && current.browserSupported
                 ? records.some((record) => record.entry.source === 'browser')
                   ? 'available'
                   : 'none'
@@ -203,7 +228,7 @@ export function createRemoteDiagnosticsReader(
             to: records.length ? Math.max(...records.map((record) => record.receivedAt)) : null,
           },
           loss: { dropped: current.dropped, rejected, pruned: current.pruned, truncated },
-          ...(query.version === 2
+          ...(query.version >= 2
             ? {
                 clock: {
                   ordering: 'server-sequence' as const,

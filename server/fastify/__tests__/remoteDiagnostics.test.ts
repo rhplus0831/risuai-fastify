@@ -15,7 +15,11 @@ import { applyImport } from '../src/repository.js'
 import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { assertSupportDiagnosticsConfig, loadConfig } from '../src/config.js'
 import { createClientDiagnostics } from '../src/clientDiagnostics.js'
-import { createRemoteDiagnosticsReader, createVolatileRemoteDiagnostics } from '../src/remoteDiagnostics.js'
+import {
+  createRemoteDiagnosticsReader,
+  createVolatileRemoteDiagnostics,
+  type RemoteDiagnosticsSource,
+} from '../src/remoteDiagnostics.js'
 import { findProtocolRouteDecision } from '../src/routeManifest.js'
 import { parseRouteTree } from './helpers/routeCatalog.js'
 import { setupAuthedClient } from './helpers/auth.js'
@@ -86,6 +90,47 @@ async function harness(options: { enabled?: boolean; collection?: boolean; bypas
 }
 
 describe('remote support diagnostics', () => {
+  it('returns validated facts only in explicit v3 reads', () => {
+    const now = Date.now()
+    const enriched = {
+      sequence: 1,
+      receivedAt: now,
+      instanceId: 'a'.repeat(32),
+      provenance: { kind: 'server' as const },
+      entry: {
+        timestamp: now,
+        source: 'server' as const,
+        level: 'error' as const,
+        correlation: 'background' as const,
+        category: 'runtime' as const,
+        kind: 'runtime-error' as const,
+        errorName: 'TypeError' as const,
+      },
+      facts: [{ id: 'runtime.location.0', type: 'location' as const, value: 'server/fastify/src/app.ts:12:3' }],
+    }
+    const source: RemoteDiagnosticsSource = {
+      enabled: true,
+      read: () => ({
+        entries: [enriched],
+        epoch: 'b'.repeat(32),
+        source: 'journal',
+        dropped: 0,
+        rejected: 0,
+        pruned: 0,
+      }),
+    }
+    const reader = createRemoteDiagnosticsReader(source, { build: 'c'.repeat(40), instanceId: 'a'.repeat(32) })
+    const v3 = reader.read(parseRemoteDiagnosticsQuery({ version: '3' }, now)!)
+    const v2 = reader.read(parseRemoteDiagnosticsQuery({ version: '2' }, now)!)
+    if (typeof v3 === 'string' || typeof v2 === 'string') throw new Error('unexpected diagnostic error')
+    const { facts: _facts, ...plain } = enriched
+    expect(v3.entries).toEqual([enriched])
+    expect(v2.entries).toEqual([plain])
+    expect(JSON.stringify(v2)).not.toContain('facts')
+    expect(isRemoteDiagnosticsResponse(v3)).toBe(true)
+    expect(isRemoteDiagnosticsResponse(v2)).toBe(true)
+  })
+
   it('exports display preparation and conversion timings with cache counts even when raw metrics are off', async () => {
     vi.stubEnv('RISU_PROTOCOL_METRICS', '0')
     const h = await harness()
@@ -615,7 +660,7 @@ describe('remote support diagnostics', () => {
 
   it('distinguishes bad query, empty result, expired cursor and effective throttling', async () => {
     const h = await harness()
-    for (const query of ['raw=true', 'limit=201', 'limit=1&limit=2', 'version=3', 'from=0&to=86400001']) {
+    for (const query of ['raw=true', 'limit=201', 'limit=1&limit=2', 'version=4', 'from=0&to=86400001']) {
       const response = await h.app.inject({ url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?${query}`, headers: h.headers })
       expect(response.statusCode).toBe(400)
       expect(response.json()).toEqual({ error: 'invalid-query' })
