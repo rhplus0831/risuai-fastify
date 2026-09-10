@@ -537,6 +537,57 @@ describe('modular Agent Preset settings', () => {
     expect(editor.querySelector('[data-risu-agent-instruction-placeholders]')).toBeNull()
   })
 
+  it('organizes Agent authoring, inserts available values at the caret, and explains runtime limits', async () => {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-editor]')!
+    const sectionNames = [...editor.querySelectorAll<HTMLElement>('[data-risu-agent-section]')].map(
+      (section) => section.dataset.risuAgentSection,
+    )
+    expect(sectionNames).toEqual(['basics', 'instructions', 'context', 'model-limits', 'advanced'])
+    expect(editor.querySelector<HTMLDetailsElement>('[data-risu-agent-section="advanced"]')?.open).toBe(false)
+
+    const instruction = editor.querySelectorAll<HTMLTextAreaElement>('textarea')[1]
+    instruction.focus()
+    instruction.setSelectionRange(9, 9)
+    editor
+      .querySelector<HTMLButtonElement>('[data-risu-agent-insert-token][data-token="{{currentUserMessage}}"]')!
+      .click()
+    await tick()
+    expect(instruction.value).toBe('Research {{currentUserMessage}}{{currentUserMessage}}.')
+    expect(instruction.selectionStart).toBe(31)
+
+    const modelSection = editor.querySelector('[data-risu-agent-section="model-limits"]')!
+    expect(modelSection.textContent).toContain(language.agentPresets.runtimeRange(250, 300_000))
+    expect(modelSection.textContent).toContain(language.agentPresets.timeoutEffect(30))
+    expect(editor.querySelector('[data-risu-agent-technical-details]')?.textContent).toContain(agent.id)
+  })
+
+  it('previews valid ChatML as ordered role rows without exposing hidden thought text', async () => {
+    seed([
+      {
+        ...agent,
+        useChatML: true,
+        instruction:
+          '<|im_start|>system\nSystem context<|im_end|><|im_start|>user\nVisible <Thoughts>private chain</Thoughts><|im_end|>',
+      },
+    ])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    target.querySelectorAll<HTMLButtonElement>('[data-risu-agent-row] button')[2].click()
+    await tick()
+    const preview = target.querySelector('[data-risu-agent-chatml-preview]')!
+    expect(preview.querySelectorAll('[data-risu-chatml-role]')).toHaveLength(2)
+    expect(preview.textContent).toContain(language.agentPresets.chatMLRole('system', 1))
+    expect(preview.textContent).toContain(language.agentPresets.chatMLThoughtCount(1))
+    expect(preview.textContent).not.toContain('private chain')
+  })
+
   it('saves Agent-local toggles and required lorebook input aliases', async () => {
     seed()
     component = mount(AgentPresetSettings, { target })
