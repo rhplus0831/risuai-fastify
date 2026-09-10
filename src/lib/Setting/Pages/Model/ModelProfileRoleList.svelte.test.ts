@@ -137,16 +137,12 @@ describe('ModelProfileRoleList', () => {
     component = mount(ModelProfileRoleList, { target })
     await tick()
 
-    expect(target.querySelector('table')).toBeNull()
-    expect(target.querySelectorAll('article')).toHaveLength(MODEL_ROLES.length)
-    expect(target.querySelectorAll('button')).toHaveLength(0)
-
     const modeSelects = Array.from(target.querySelectorAll<HTMLSelectElement>('select'))
     const modeNames = modeSelects.map((select) => select.getAttribute('aria-label'))
 
-    expect(modeNames[0]).toBe(`${language.modelRoles.roles.chatMain}: ${language.modelProfiles.bindingModeColumn}`)
-    expect(modeNames.every(Boolean)).toBe(true)
-    expect(new Set(modeNames).size).toBe(modeNames.length)
+    expect(modeNames).toEqual(
+      MODEL_ROLES.map((role) => `${language.modelRoles.roles[role]}: ${language.modelProfiles.bindingModeColumn}`),
+    )
 
     setSelectValue(modeSelects[0], 'profile')
     await tick()

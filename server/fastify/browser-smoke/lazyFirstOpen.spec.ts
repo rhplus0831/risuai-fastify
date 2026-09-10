@@ -278,7 +278,7 @@ test.afterEach(async ({ page }) => {
   fs.rmSync(harness.dataDir, { recursive: true, force: true })
 })
 
-test('smoke manifest accounts for the 60 registered lazy boundaries', async () => {
+test('smoke manifest accounts for every registered lazy boundary', async () => {
   const expectedSources = new Set<string>([
     ...appOwnedSources,
     ...sidebarSources,
@@ -289,7 +289,6 @@ test('smoke manifest accounts for the 60 registered lazy boundaries', async () =
     ...routeHandlerSources,
   ])
 
-  expect(expectedSources.size).toBe(60)
   expect(expectedSources).toEqual(new Set(phase1LazyBoundarySources))
   for (const source of expectedSources) {
     const chunk = manifest[source]

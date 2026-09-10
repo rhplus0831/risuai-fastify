@@ -663,16 +663,20 @@ test('core chat controls and blocking alerts remain accessible across responsive
     }
 
     const composer = page.getByTestId('default-chat-composer')
+    const sendButton = page.getByTestId('default-chat-send-button')
+    const menuButton = page.getByTestId('default-chat-menu-button')
     const composerDock = page.locator('[data-default-chat-composer-dock]')
     const transcript = page.locator('[data-default-chat-transcript]')
     await expect(composer).toBeVisible()
+    await expect(sendButton).toBeVisible()
+    await expect(menuButton).toBeVisible()
     await expect(composerDock).toBeVisible()
     await expect(transcript).toBeVisible()
     await expect(composerDock.locator('[data-testid="default-chat-composer"]')).toHaveCount(1)
     await expect(transcript.locator('[data-testid="default-chat-composer"]')).toHaveCount(0)
     await expect(composer).toHaveAccessibleName(/.+/)
-    await expect(page.getByTestId('default-chat-send-button')).toHaveAccessibleName(/.+/)
-    await expect(page.getByTestId('default-chat-menu-button')).toHaveAccessibleName(/.+/)
+    await expect(sendButton).toHaveAccessibleName(/.+/)
+    await expect(menuButton).toHaveAccessibleName(/.+/)
     await expect(page.locator('button button')).toHaveCount(0)
 
     await composer.focus()
@@ -691,12 +695,31 @@ test('core chat controls and blocking alerts remain accessible across responsive
         transcriptBottom: transcriptRect.bottom,
         transcriptOverflowY: getComputedStyle(transcriptElement).overflowY,
         dockTop: dockRect.top,
+        controlsUsable: [
+          document.querySelector<HTMLElement>('[data-testid="default-chat-composer"]'),
+          document.querySelector<HTMLElement>('[data-testid="default-chat-send-button"]'),
+          document.querySelector<HTMLElement>('[data-testid="default-chat-menu-button"]'),
+        ].map((control) => {
+          if (!control) return false
+          const bounds = control.getBoundingClientRect()
+          const hitTarget = document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2)
+          return (
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            bounds.left >= shellRect.left &&
+            bounds.right <= shellRect.right &&
+            bounds.top >= shellRect.top &&
+            bounds.bottom <= shellRect.bottom &&
+            (hitTarget === control || control.contains(hitTarget))
+          )
+        }),
       }
     })
     expect(chatGeometry).not.toBeNull()
     expect(chatGeometry!.transcriptOverflowY).toBe('auto')
     expect(Math.abs(chatGeometry!.dockBottom - chatGeometry!.shellBottom)).toBeLessThanOrEqual(1)
     expect(chatGeometry!.transcriptBottom).toBeLessThanOrEqual(chatGeometry!.dockTop + 1)
+    expect(chatGeometry!.controlsUsable).toEqual([true, true, true])
     await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.showAlert('Accessibility smoke alert'))
     const dialog = page.getByRole('dialog')
     await expect(dialog).toBeVisible()
@@ -704,18 +727,32 @@ test('core chat controls and blocking alerts remain accessible across responsive
     await expect.poll(() => dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true)
     await page.keyboard.press('Tab')
     await expect.poll(() => dialog.evaluate((node) => node.contains(document.activeElement))).toBe(true)
-    await expect(page).toHaveScreenshot(`blocking-alert-${viewport.name}.png`, {
-      animations: 'disabled',
-      caret: 'hide',
+    const dialogFocusPaint = await dialog.evaluate((node) => {
+      const active = document.activeElement
+      if (!(active instanceof HTMLElement) || !node.contains(active)) return null
+      const style = getComputedStyle(active)
+      return {
+        focusVisible: active.matches(':focus-visible'),
+        hasPaintedIndicator:
+          (style.outlineStyle !== 'none' && style.outlineWidth !== '0px') || style.boxShadow !== 'none',
+      }
     })
+    expect(dialogFocusPaint).toEqual({ focusVisible: true, hasPaintedIndicator: true })
     await page.getByRole('button', { name: 'OK' }).click()
     await expect(dialog).toBeHidden()
     await expect(composer).toBeFocused()
-
-    await expect(page).toHaveScreenshot(`core-chat-${viewport.name}.png`, {
-      animations: 'disabled',
-      caret: 'hide',
+    const focusedComposerPaint = await composer.evaluate((node) => {
+      const style = getComputedStyle(node)
+      return [style.backgroundColor, style.borderColor, style.boxShadow, style.outlineColor, style.outlineWidth]
     })
+    await composer.blur()
+    const blurredComposerPaint = await composer.evaluate((node) => {
+      const style = getComputedStyle(node)
+      return [style.backgroundColor, style.borderColor, style.boxShadow, style.outlineColor, style.outlineWidth]
+    })
+    expect(focusedComposerPaint).not.toEqual(blurredComposerPaint)
+    await composer.focus()
+    await expect(composer).toBeFocused()
   }
 })
 

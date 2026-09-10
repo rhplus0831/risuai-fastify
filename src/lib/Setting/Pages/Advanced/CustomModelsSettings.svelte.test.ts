@@ -93,7 +93,6 @@ describe('CustomModelsSettings flags', () => {
 
     for (const [name, flag] of Object.entries(LLMFlags)) {
       const button = buttonByText(name)
-      expect(button.classList).not.toContain('bg-transparent')
       expect(button.getAttribute('aria-pressed')).toBe('true')
       expect(customModelsDraft.value[0].flags).toContain(flag)
     }

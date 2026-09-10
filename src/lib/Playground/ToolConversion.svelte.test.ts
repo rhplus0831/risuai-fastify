@@ -29,10 +29,6 @@ function buttonByText(text: string) {
   return button
 }
 
-function fileNames() {
-  return Array.from(target.querySelectorAll('.items-center span:last-child')).map((span) => span.textContent)
-}
-
 beforeEach(() => {
   target = document.createElement('div')
   document.body.appendChild(target)
@@ -91,7 +87,8 @@ describe('ToolConversion file list', () => {
     firstDelete!.click()
     await tick()
 
-    expect(fileNames()).toEqual(['sampler.json'])
+    expect(target.textContent).not.toContain('context.json')
+    expect(target.textContent).toContain('sampler.json')
 
     buttonByText('Run').click()
     expect(conversionMocks.promptConvertion).toHaveBeenCalledWith([

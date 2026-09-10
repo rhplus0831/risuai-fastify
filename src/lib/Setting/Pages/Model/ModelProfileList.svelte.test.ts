@@ -166,17 +166,12 @@ afterEach(() => {
 })
 
 describe('ModelProfileList', () => {
-  it.each([
-    ['name', '[data-model-profile-row] > button span'],
-    ['edit icon', '[data-model-profile-row] .lucide-pencil'],
-  ])('opens the model editor when clicking the %s', async (_case, selector) => {
+  it('opens the model editor from its named edit control', async () => {
     component = mount(ModelProfileList, { target })
     await tick()
 
     expect(target.querySelector('[role="dialog"]')).toBeNull()
-    const editTarget = target.querySelector(selector)
-    if (!editTarget) throw new Error(`Model edit target not found: ${selector}`)
-    editTarget.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    profileEditTrigger().click()
     await tick()
 
     const dialog = target.querySelector('[role="dialog"]')
@@ -409,9 +404,6 @@ describe('ModelProfileList', () => {
     } as any
     component = mount(ModelProfileList, { target })
     await tick()
-
-    expect(target.querySelector('table')).toBeNull()
-    expect(target.querySelectorAll('article')).toHaveLength(1)
 
     const editTrigger = profileEditTrigger()
     if (!editTrigger) throw new Error('Profile edit button not found')

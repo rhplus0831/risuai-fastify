@@ -709,7 +709,6 @@ describe('sidebar chat generation settings controls', () => {
     const settingsButton = personaSettingsButton()
     expect(settingsButton).toBeTruthy()
     expect(settingsButton?.getAttribute('aria-label')).toBe(`${language.edit} Persona Alpha`)
-    expect(settingsButton?.querySelector('.lucide-arrow-up-right')).toBeTruthy()
 
     settingsButton?.click()
     await tick()

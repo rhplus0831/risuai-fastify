@@ -96,20 +96,20 @@ describe('HotkeySettings recorder keyboard behavior', () => {
   })
 
   it('updates the layout when the viewport crosses the mobile breakpoint', async () => {
-    expect(target.querySelector('table')).toBeTruthy()
+    expect(recorder().getAttribute('aria-label')).toBe(`${language.hotkeyDesc.send} ${language.hotkey}`)
 
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 500 })
     window.dispatchEvent(new Event('resize'))
     await tick()
 
-    expect(target.querySelector('table')).toBeNull()
+    expect(target.querySelector('input')).toBeNull()
     expect(target.textContent).toContain(language.screenTooSmall)
 
     Object.defineProperty(window, 'innerWidth', { configurable: true, value: 1024 })
     window.dispatchEvent(new Event('resize'))
     await tick()
 
-    expect(target.querySelector('table')).toBeTruthy()
+    expect(recorder().getAttribute('aria-label')).toBe(`${language.hotkeyDesc.send} ${language.hotkey}`)
     expect(target.textContent).not.toContain(language.screenTooSmall)
   })
 

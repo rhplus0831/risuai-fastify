@@ -106,17 +106,12 @@ afterEach(() => {
 })
 
 describe('ProviderCredentialList', () => {
-  it.each([
-    ['name', 'article button span'],
-    ['edit icon', 'article .lucide-pencil'],
-  ])('opens the credential editor when clicking the %s', async (_case, selector) => {
+  it('opens the credential editor from its named edit control', async () => {
     component = mount(ProviderCredentialList, { target })
     await tick()
 
     expect(target.querySelector('[data-provider-credential-editor]')).toBeNull()
-    const editTarget = target.querySelector(selector)
-    if (!editTarget) throw new Error(`Credential edit target not found: ${selector}`)
-    editTarget.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+    button(language.modelProfiles.edit).click()
     await tick()
 
     const editor = target.querySelector('[data-provider-credential-editor]')
@@ -153,9 +148,6 @@ describe('ProviderCredentialList', () => {
   it('renames a credential while preserving its masked secret and disables deletion while in use', async () => {
     component = mount(ProviderCredentialList, { target })
     await tick()
-
-    expect(target.querySelector('table')).toBeNull()
-    expect(target.querySelectorAll('article')).toHaveLength(1)
 
     await openActions()
     const deleteButton = button(language.modelProfiles.delete)

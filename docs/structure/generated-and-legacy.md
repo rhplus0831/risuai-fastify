@@ -33,7 +33,6 @@ generated, local-only, historical, vendored, or intentionally no-port.
 | `src/ts/process/__fixtures__/expected/` | Prompt/generation golden fixtures; regenerate with `UPDATE_FIXTURES=1`. |
 | `src/ts/process/__fixtures__/upstream/` | Upstream fixture corpus for request/provider tests. |
 | `*.snap` under test fixtures | Tracked Vitest snapshots; update through the relevant test workflow. |
-| `server/fastify/browser-smoke/*-snapshots/*.png` | Tracked Playwright visual baselines, not scratch output. Update only for an intentional visible change through the smoke workflow. |
 
 `.archived-docs/` contains historical documentation, not current implementation
 guidance. Prefer `STRUCTURE.md`, `docs/structure/`, code, and current behavioral

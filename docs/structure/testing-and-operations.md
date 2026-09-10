@@ -287,10 +287,10 @@ additionally emits HTML on demand. The repository ignores `coverage/`; keep all
 coverage reports local unless a plan slice explicitly asks for extracted
 results.
 
-Browser smoke also owns tracked desktop/mobile screenshot baselines under
-`server/fastify/browser-smoke/*-snapshots/`. The core-chat and blocking-alert
-assertions are part of the user/CI browser-smoke suite, so update those PNGs only
-for an intentional visible change.
+Browser smoke checks desktop/mobile chat and alert usability through accessible
+names, focus containment/restoration, ownership, scrolling, and viewport
+geometry. It deliberately avoids broad page screenshots so harmless visual
+restyling does not obscure failures in those contracts.
 
 Smoke mode keeps the built SPA, resource/command protocol, Fastify, SQLite, and
 Chromium journeys real, but makes selected surroundings deterministic. It uses

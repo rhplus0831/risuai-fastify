@@ -25,10 +25,16 @@ type MountedComponent = Parameters<typeof unmount>[0]
 let component: MountedComponent | undefined
 let target: HTMLElement
 
-function buttonNamed(name: string): HTMLButtonElement {
-  const button = Array.from(target.querySelectorAll('button')).find(
-    (candidate) => candidate.textContent?.trim() === name,
+function queryButtonNamed(name: string): HTMLButtonElement | null {
+  return (
+    Array.from(target.querySelectorAll('button')).find(
+      (candidate): candidate is HTMLButtonElement => candidate.textContent?.trim() === name,
+    ) ?? null
   )
+}
+
+function buttonNamed(name: string): HTMLButtonElement {
+  const button = queryButtonNamed(name)
   if (!button) throw new Error(`button not found: ${name}`)
   return button
 }
@@ -59,7 +65,6 @@ describe('DisplaySettings navigation semantics', () => {
     const chat = buttonNamed(language.settingsTabChatAppearance)
     const sound = buttonNamed(language.settingsTabSoundNotifications)
 
-    expect(theme.parentElement?.classList.contains('shrink-0')).toBe(true)
     expect(theme.getAttribute('aria-pressed')).toBe('true')
     expect(layout.getAttribute('aria-pressed')).toBe('false')
     expect(chat.getAttribute('aria-pressed')).toBe('false')
@@ -78,14 +83,20 @@ describe('DisplaySettings navigation semantics', () => {
     component = mount(DisplaySettings, { target })
     await tick()
 
-    expect(target.querySelectorAll('button')).toHaveLength(4)
+    const panelNames = [
+      language.theme,
+      language.settingsTabLayoutSizing,
+      language.settingsTabChatAppearance,
+      language.settingsTabSoundNotifications,
+    ]
+    for (const name of panelNames) expect(queryButtonNamed(name)).not.toBeNull()
 
     displaySettingsMocks.setLegacyGUI(true)
     await tick()
-    expect(target.querySelectorAll('button')).toHaveLength(0)
+    for (const name of panelNames) expect(queryButtonNamed(name)).toBeNull()
 
     displaySettingsMocks.setLegacyGUI(false)
     await tick()
-    expect(target.querySelectorAll('button')).toHaveLength(4)
+    for (const name of panelNames) expect(queryButtonNamed(name)).not.toBeNull()
   })
 })
