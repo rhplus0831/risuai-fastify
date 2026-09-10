@@ -270,6 +270,44 @@ describe('BardWiki workspace', () => {
     expect(target.textContent).toContain('Version 1')
   })
 
+  it('uses list-then-detail mobile navigation without discarding the active document draft', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true })),
+    )
+    component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+    await settle()
+
+    const list = target.querySelector<HTMLElement>('[data-risu-bardwiki-pane="documents"]')!
+    const detail = target.querySelector<HTMLElement>('[data-risu-bardwiki-pane="detail"]')!
+    expect(list.classList.contains('hidden')).toBe(false)
+    expect(detail.classList.contains('hidden')).toBe(true)
+
+    const documentButton = target.querySelector<HTMLButtonElement>('[data-risu-bardwiki-document-id="document-a"]')!
+    documentButton.click()
+    await settle()
+    expect(list.classList.contains('hidden')).toBe(true)
+    expect(detail.classList.contains('hidden')).toBe(false)
+    const back = target.querySelector<HTMLButtonElement>('[data-risu-bardwiki-back-to-documents]')!
+    expect(document.activeElement).toBe(back)
+
+    const markdown = detail.querySelector<HTMLTextAreaElement>('textarea')!
+    markdown.value = '# Unsaved mobile draft'
+    markdown.dispatchEvent(new Event('input', { bubbles: true }))
+    await settle()
+    back.click()
+    await settle()
+    expect(list.classList.contains('hidden')).toBe(false)
+    expect(detail.classList.contains('hidden')).toBe(true)
+    expect(document.activeElement).toBe(documentButton)
+
+    documentButton.click()
+    await settle()
+    expect(markdown.value).toBe('# Unsaved mobile draft')
+    expect(reads.document).toHaveBeenCalledTimes(1)
+    expect(document.activeElement).toBe(back)
+  })
+
   it('explicitly confirms the authoritative latest source candidate', async () => {
     component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
     await settle()

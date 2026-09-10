@@ -3457,6 +3457,8 @@ export const languageEnglish = {
     createFirstDocument: 'Create first document',
     importVault: 'Import vault',
     buildFromChat: 'Build from chat',
+    backToDocuments: 'Back to documents',
+    returnToNewDocumentDraft: 'Return to new document draft',
     loadFailed: 'BardWiki could not be loaded.',
     unavailable: 'BardWiki is unavailable while the server connection is offline.',
     retryLoad: 'Retry loading BardWiki',

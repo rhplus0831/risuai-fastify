@@ -3,6 +3,7 @@
 
   import { onDestroy, tick } from 'svelte'
   import {
+    ArrowLeftIcon,
     BookOpenIcon,
     DownloadIcon,
     HistoryIcon,
@@ -88,6 +89,8 @@
   let chatLoadState = $state<LoadState>('idle')
   let chatLoadError = $state('')
   let selectedDocumentId = $state<string | null>(null)
+  let mobilePane = $state<'list' | 'detail'>('list')
+  let workspaceDialog = $state<HTMLElement>()
   let documentLoadState = $state<LoadState>('idle')
   let documentLoadError = $state('')
   let versionsVisible = $state(false)
@@ -184,6 +187,7 @@
     documentBaseline = ''
     documentMutationState = 'idle'
     documentMutationError = ''
+    mobilePane = 'list'
   }
 
   function syncChatSettings(): void {
@@ -454,6 +458,8 @@
     documentLoadState = 'ready'
     documentMutationState = 'idle'
     documentMutationError = ''
+    mobilePane = 'detail'
+    void focusMobileDetail()
   }
 
   async function openLifecycleTool(tool: 'rebuild' | 'import'): Promise<void> {
@@ -476,16 +482,49 @@
     documentLoadError = ''
     documentMutationState = 'idle'
     documentMutationError = ''
+    mobilePane = 'detail'
+    void focusMobileDetail()
     const result = await loadBardWikiDocumentResource(targetChatId, documentId)
     if (request !== documentRequest || targetChatId !== chatId || selectedDocumentId !== documentId) return
     if (result.status === 'ok') {
       documentLoadState = 'ready'
       adoptDocumentDraft(result.document)
+      await focusMobileDetail()
       return
     }
     const failure = readFailure(result)
     documentLoadState = failure.state
     documentLoadError = failure.error
+  }
+
+  function openDocumentFromList(documentId: string): void {
+    if (selectedDocumentId === documentId && editorMode !== 'idle') {
+      mobilePane = 'detail'
+      void focusMobileDetail()
+      return
+    }
+    void selectDocument(documentId)
+  }
+
+  async function focusMobileDetail(): Promise<void> {
+    await tick()
+    if (!isCompactWorkspace()) return
+    workspaceDialog?.querySelector<HTMLButtonElement>('[data-risu-bardwiki-back-to-documents]')?.focus()
+  }
+
+  async function backToDocuments(): Promise<void> {
+    mobilePane = 'list'
+    await tick()
+    if (!isCompactWorkspace()) return
+    const current = selectedDocumentId
+      ? workspaceDialog?.querySelector<HTMLButtonElement>(`[data-risu-bardwiki-document-id="${selectedDocumentId}"]`)
+      : workspaceDialog?.querySelector<HTMLButtonElement>('[data-risu-bardwiki-resume-draft]')
+    const focusTarget = current ?? workspaceDialog?.querySelector<HTMLElement>('[data-risu-bardwiki-documents-heading]')
+    focusTarget?.focus()
+  }
+
+  function isCompactWorkspace(): boolean {
+    return typeof globalThis.matchMedia === 'function' && globalThis.matchMedia('(max-width: 767px)').matches
   }
 
   async function toggleVersions(): Promise<void> {
@@ -797,6 +836,7 @@
   class="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 p-2 sm:p-4">
   <div
     use:modalFocusTrap
+    bind:this={workspaceDialog}
     role="dialog"
     aria-modal="true"
     aria-labelledby="bardwiki-workspace-title"
@@ -1200,11 +1240,26 @@
         </section>
       {:else}
         <div class="grid min-h-0 grow grid-cols-1 md:grid-cols-[minmax(13rem,18rem)_1fr]">
-          <aside class="flex min-h-0 flex-col border-b border-darkborderc md:border-r md:border-b-0">
+          <aside
+            class="flex min-h-0 flex-col border-b border-darkborderc md:flex md:border-r md:border-b-0"
+            class:hidden={mobilePane === 'detail'}
+            data-risu-bardwiki-pane="documents">
             <div class="flex items-center justify-between gap-3 p-3">
-              <h3 class="m-0 text-base">{language.bardWiki.documents}</h3>
+              <h3 class="m-0 text-base" tabindex="-1" data-risu-bardwiki-documents-heading>
+                {language.bardWiki.documents}
+              </h3>
               <span class="text-xs text-textcolor2">{chatResource.documents.length}</span>
             </div>
+            {#if editorMode === 'create'}
+              <button
+                type="button"
+                class="mx-2 mb-2 min-h-11 rounded-md border border-selected bg-selected p-2 text-left"
+                data-risu-bardwiki-resume-draft
+                onclick={() => {
+                  mobilePane = 'detail'
+                  void focusMobileDetail()
+                }}>{language.bardWiki.returnToNewDocumentDraft}</button>
+            {/if}
             {#if chatResource.documents.length === 0}
               <p class="p-4 text-sm text-textcolor2">{language.bardWiki.emptyDocuments}</p>
             {:else}
@@ -1215,11 +1270,12 @@
                   <li>
                     <button
                       type="button"
+                      data-risu-bardwiki-document-id={document.id}
                       aria-label={language.bardWiki.openDocument(document.title)}
                       aria-pressed={selectedDocumentId === document.id}
                       class="w-full rounded-md p-2 text-left transition-colors hover:bg-selected"
                       class:bg-selected={selectedDocumentId === document.id}
-                      onclick={() => void selectDocument(document.id)}>
+                      onclick={() => openDocumentFromList(document.id)}>
                       <span class="block truncate font-medium">{document.title}</span>
                       <span class="block truncate text-xs text-textcolor2">{document.logicalPath}</span>
                       {#if document.reviewState === 'needs_review'}
@@ -1232,7 +1288,17 @@
             {/if}
           </aside>
 
-          <main class="min-h-0 overflow-y-auto p-4">
+          <main
+            class="min-h-0 overflow-y-auto p-4 md:block"
+            class:hidden={mobilePane === 'list'}
+            data-risu-bardwiki-pane="detail">
+            <button
+              type="button"
+              class="mb-3 flex min-h-11 items-center gap-2 rounded-md border border-darkborderc px-3 py-2 hover:bg-selected md:hidden"
+              data-risu-bardwiki-back-to-documents
+              onclick={() => void backToDocuments()}>
+              <ArrowLeftIcon size={18} />{language.bardWiki.backToDocuments}
+            </button>
             {#if editorMode === 'idle' && selectedDocumentId === null}
               <p class="text-textcolor2">{language.bardWiki.noDocumentSelected}</p>
             {:else if documentLoadState === 'loading'}
