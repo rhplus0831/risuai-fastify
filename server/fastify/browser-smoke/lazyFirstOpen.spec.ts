@@ -520,25 +520,45 @@ test('preset and persona lazy dialogs stay within the viewport after first-open 
   await expect(personaSurface).toHaveCount(0)
 })
 
-test('offline first open preserves reader browsing and loads the writer grid after reconnect', async ({
+test('offline first open retains the inert writer page and loads the grid after reconnect', async ({
   page,
   context,
 }) => {
+  const requestOracle = observeTransitionRequests(page)
+  const gridAssetPath = assetPath('src/lib/Others/GridCatalog.svelte')
   await openLoadedHome(page)
   const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+  await page.locator('[data-chat-screen-layout]').evaluate((node) => {
+    node.setAttribute('data-previous-route-sentinel', 'true')
+  })
+  const retainedPage = page.locator('[data-previous-route-sentinel="true"]')
+  expect(requestOracle.paths).not.toContain(gridAssetPath)
 
   await context.setOffline(true)
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(false)
-  await expect(page.locator('[data-reader-lifecycle-status]')).toContainText(
+  await expect(page.locator('[data-writer-connection-recovery]')).toContainText(
     'Connection interrupted. Showing the last received content.',
   )
+  await expect(page.locator('[data-risu-shell-main]')).toHaveJSProperty('inert', true)
+  await expect(retainedPage).toBeVisible()
+  await expect(page.locator('[data-risu-workspace][data-reader-layout]')).toHaveCount(0)
+  await expect
+    .poll(() =>
+      page.evaluate(() => {
+        const smoke = window.__RISU_FASTIFY_BROWSER_SMOKE__!
+        const { canMutate, canGenerate } = smoke.getStartupCoordinatorSnapshot().capabilities
+        return { lifecycle: smoke.getClientSessionSnapshot().lifecycle, canMutate, canGenerate }
+      }),
+    )
+    .toEqual({ lifecycle: 'recovering-writer', canMutate: false, canGenerate: false })
+
+  // A route requested during recovery waits until writer access is revalidated.
   await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo('/grid'))
 
   await expect(page).toHaveURL(/\/grid$/)
-  await expect(page.locator('[data-risu-grid-catalog]')).toBeVisible()
-  await expect(page.locator('[data-reader-use-this-device]')).toBeDisabled()
+  await expect(retainedPage).toBeVisible()
   await expect(lazySurface(page, 'character-grid')).toHaveCount(0)
-  await expect(page.getByTestId('default-chat-composer')).toHaveCount(0)
+  expect(requestOracle.paths).not.toContain(gridAssetPath)
 
   await context.setOffline(false)
   await expect.poll(() => page.evaluate(() => navigator.onLine)).toBe(true)
@@ -550,6 +570,11 @@ test('offline first open preserves reader browsing and loads the writer grid aft
   await waitForLoaded(page)
   await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo('/grid'))
   await expect(lazySurface(page, 'character-grid')).toHaveAttribute('data-risu-lazy-state', 'ready')
+  await expect(page.locator('[data-risu-grid-catalog]')).toBeVisible()
+  await expect(page.locator('[data-risu-shell-main]')).toHaveJSProperty('inert', false)
+  await expect(page.locator('[data-writer-connection-recovery]')).toHaveCount(0)
+  await expect(retainedPage).toHaveCount(0)
+  expect(requestOracle.paths.filter((pathname) => pathname === gridAssetPath)).toHaveLength(1)
   expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
 })
 
