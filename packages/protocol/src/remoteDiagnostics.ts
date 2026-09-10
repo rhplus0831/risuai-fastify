@@ -1,9 +1,10 @@
-import { Type, type Static } from '@sinclair/typebox'
+import { Type, type Static, type TSchema } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
 import { DiagnosticEntrySchema, projectDiagnosticEntry } from './diagnostics.js'
 export * from './browserDiagnostics.js'
 import {
   DIAGNOSTIC_EVENT_CATEGORIES,
+  DIAGNOSTIC_SIZE_BUCKETS,
   DiagnosticJournalRecordSchema,
   projectDiagnosticJournalRecord,
   type DiagnosticJournalRecord,
@@ -33,6 +34,35 @@ const count = Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
 const timestamp = Type.Integer({ minimum: 0, maximum: 8_640_000_000_000_000 })
 const nullableTime = Type.Union([timestamp, Type.Null()])
 export const DiagnosticReferenceSchema = Type.String({ pattern: '^[a-f0-9]{32}$' })
+export const REMOTE_DIAGNOSTIC_FACT_LIMIT = 32
+const remoteDiagnosticFactId = Type.String({
+  minLength: 3,
+  maxLength: 96,
+  pattern: '^[a-z][a-z0-9-]{0,31}(?:\\.[a-z0-9][a-z0-9-]{0,31}){1,3}$',
+})
+const remoteDiagnosticFact = <K extends string, T extends TSchema>(type: K, value: T) =>
+  Type.Object(
+    {
+      id: remoteDiagnosticFactId,
+      type: Type.Literal(type),
+      value,
+    },
+    { additionalProperties: false },
+  )
+const diagnosticSourceLocation = Type.String({
+  maxLength: 200,
+  pattern:
+    '^(?!.*\\.\\.)(?:(?:server/fastify/src|src)/[a-zA-Z0-9_./-]+\\.(?:ts|js|svelte)|assets/[a-zA-Z0-9_.-]+\\.js):[0-9]+:[0-9]+$',
+})
+export const RemoteDiagnosticFactSchema = Type.Union([
+  remoteDiagnosticFact('boolean', Type.Boolean()),
+  remoteDiagnosticFact('count', Type.Integer({ minimum: 0, maximum: 1_000_000_000 })),
+  remoteDiagnosticFact('duration-ms', Type.Number({ minimum: 0, maximum: 86_400_000 })),
+  remoteDiagnosticFact('size-bucket', enumOf(DIAGNOSTIC_SIZE_BUCKETS)),
+  remoteDiagnosticFact('reference', DiagnosticReferenceSchema),
+  remoteDiagnosticFact('location', diagnosticSourceLocation),
+])
+export type RemoteDiagnosticFact = Static<typeof RemoteDiagnosticFactSchema>
 export const RemoteDiagnosticRecordSchema = Type.Object(
   {
     sequence: count,
@@ -43,6 +73,15 @@ export const RemoteDiagnosticRecordSchema = Type.Object(
   { additionalProperties: false },
 )
 export type RemoteDiagnosticRecord = Static<typeof RemoteDiagnosticRecordSchema>
+
+export const RemoteDiagnosticRecordV3Schema = Type.Object(
+  {
+    ...DiagnosticJournalRecordSchema.properties,
+    facts: Type.Optional(Type.Array(RemoteDiagnosticFactSchema, { maxItems: REMOTE_DIAGNOSTIC_FACT_LIMIT })),
+  },
+  { additionalProperties: false },
+)
+export type RemoteDiagnosticRecordV3 = Static<typeof RemoteDiagnosticRecordV3Schema>
 
 export const RemoteDiagnosticsResponseV1Schema = Type.Object(
   {
@@ -102,17 +141,28 @@ export const RemoteDiagnosticsResponseV2Schema = Type.Object(
   },
   { additionalProperties: false },
 )
+export const RemoteDiagnosticsResponseV3Schema = Type.Object(
+  {
+    ...RemoteDiagnosticsResponseV2Schema.properties,
+    version: Type.Literal(3),
+    entries: Type.Array(RemoteDiagnosticRecordV3Schema, { maxItems: 200 }),
+  },
+  { additionalProperties: false },
+)
 export const RemoteDiagnosticsResponseSchema = Type.Union([
   RemoteDiagnosticsResponseV1Schema,
   RemoteDiagnosticsResponseV2Schema,
+  RemoteDiagnosticsResponseV3Schema,
 ])
 export type RemoteDiagnosticsResponseV1 = Static<typeof RemoteDiagnosticsResponseV1Schema>
 export type RemoteDiagnosticsResponseV2 = Static<typeof RemoteDiagnosticsResponseV2Schema>
+export type RemoteDiagnosticsResponseV3 = Static<typeof RemoteDiagnosticsResponseV3Schema>
 export type RemoteDiagnosticsResponse = Static<typeof RemoteDiagnosticsResponseSchema>
 export function isRemoteDiagnosticsResponse(value: unknown): value is RemoteDiagnosticsResponse {
   try {
     if (!Value.Check(RemoteDiagnosticsResponseSchema, value)) return false
     if (value.version === 2 && value.entries.some((entry) => !projectDiagnosticJournalRecord(entry))) return false
+    if (value.version === 3 && value.entries.some((entry) => !projectRemoteDiagnosticRecordV3(entry))) return false
     return true
   } catch {
     return false
@@ -136,7 +186,7 @@ export const RemoteDiagnosticsErrorSchema = Type.Object(
 )
 
 export interface RemoteDiagnosticsQuery {
-  version: 1 | 2
+  version: 1 | 2 | 3
   from: number
   to: number
   limit: number
@@ -159,8 +209,9 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
     )
       return null
     if (Object.values(values).some((value) => typeof value !== 'string' || value.length > 64)) return null
-    if (values.version !== undefined && values.version !== '1' && values.version !== '2') return null
-    const version = values.version === '2' ? 2 : 1
+    if (values.version !== undefined && values.version !== '1' && values.version !== '2' && values.version !== '3')
+      return null
+    const version = values.version === '3' ? 3 : values.version === '2' ? 2 : 1
     const integer = (value: unknown, fallback: number) =>
       value === undefined
         ? fallback
@@ -183,7 +234,7 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
     if (values.operationRef !== undefined && !/^[a-f0-9]{32}$/.test(String(values.operationRef))) return null
     if (
       values.category !== undefined &&
-      !(version === 2 ? DIAGNOSTIC_EVENT_CATEGORIES : REMOTE_DIAGNOSTICS_CATEGORIES).some(
+      !(version >= 2 ? DIAGNOSTIC_EVENT_CATEGORIES : REMOTE_DIAGNOSTICS_CATEGORIES).some(
         (category) => category === values.category,
       )
     )
@@ -203,6 +254,42 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
       ...(values.category ? { category: values.category as RemoteDiagnosticsQuery['category'] } : {}),
       ...(values.cursor ? { cursor: String(values.cursor) } : {}),
     }
+  } catch {
+    return null
+  }
+}
+
+/** V3 enrichment facts are exact, bounded values rather than rendered text. */
+export function projectRemoteDiagnosticFact(value: unknown): RemoteDiagnosticFact | null {
+  try {
+    return Value.Check(RemoteDiagnosticFactSchema, value) ? structuredClone(value) : null
+  } catch {
+    return null
+  }
+}
+
+/** Restoration and complete-response checks reject malformed or ambiguous v3 facts. */
+export function projectRemoteDiagnosticRecordV3(value: unknown): RemoteDiagnosticRecordV3 | null {
+  try {
+    if (!Value.Check(RemoteDiagnosticRecordV3Schema, value)) return null
+    const record = projectDiagnosticJournalRecord({
+      sequence: value.sequence,
+      receivedAt: value.receivedAt,
+      instanceId: value.instanceId,
+      provenance: value.provenance,
+      entry: value.entry,
+    })
+    if (!record) return null
+    if (value.facts === undefined) return record
+    const ids = new Set<string>()
+    const facts: RemoteDiagnosticFact[] = []
+    for (const valueFact of value.facts) {
+      const fact = projectRemoteDiagnosticFact(valueFact)
+      if (!fact || ids.has(fact.id)) return null
+      ids.add(fact.id)
+      facts.push(fact)
+    }
+    return { ...record, facts }
   } catch {
     return null
   }
