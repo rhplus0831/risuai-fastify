@@ -154,6 +154,7 @@ describe('database defaults', () => {
     expect(database.useMonacoEditorOnMobile).toBe(false)
     expect(database.applyAdditionalParamsToAll).toBe(false)
     expect(database.openAIFlexProcessing).toBe(false)
+    expect(database.colorScheme).toMatchObject({ darkBorderc: '#6272a4' })
     expect(database.customColorScheme).toEqual(database.colorScheme)
     expect(database.customColorScheme).not.toBe(database.colorScheme)
     expect(database.autoTranslate).toBeUndefined()

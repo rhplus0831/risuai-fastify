@@ -82,7 +82,7 @@ const DEFAULT_COLOR_SCHEME = {
   draculared: '#ff5555',
   textcolor: '#f8f8f2',
   textcolor2: '#94a3b8',
-  darkBorderc: '#4b5563',
+  darkBorderc: '#6272a4',
   darkbutton: '#374151',
   type: 'dark',
 }
