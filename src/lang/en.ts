@@ -1442,10 +1442,15 @@ export const languageEnglish = {
   inputHookDelete: 'Delete hook',
   inputHookSettings: {
     newHookType: 'New hook type',
+    draftOutcome: 'Before send',
+    btwOutcome: 'On-demand result',
+    draftOption: 'Draft — Before send',
+    btwOption: 'BTW — On-demand result',
     description:
       'Draft processes your input for review before sending. BTW runs on demand and displays a separate result.',
     translationDescription:
-      'Sends the reviewed result and keeps your original text as its translation. The prompt determines how the text is translated.',
+      'Flow: your input → the selected model → reviewed text → the stored and sent result. Your original input is kept as the translation.',
+    fullPromptPreview: 'Full prompt preview',
     promptConfigured: 'Prompt configured',
     noPrompt: 'No prompt yet',
     empty: 'No input hooks yet. Add a Draft or BTW hook to get started.',

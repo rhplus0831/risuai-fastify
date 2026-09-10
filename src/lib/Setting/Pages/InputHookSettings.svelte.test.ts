@@ -187,6 +187,36 @@ function hookCard(name: string): HTMLElement {
 }
 
 describe('InputHookSettings editing', () => {
+  it('pairs Draft and BTW names with outcomes and exposes the full prompt on focus or hover', async () => {
+    inputHookSettingsMocks.setInputHooks([
+      {
+        id: 'draft-hook',
+        name: 'Before-send editor',
+        type: 'draft',
+        prompt: 'First line\nSecond line with the complete instruction.',
+        translation: true,
+      },
+      { id: 'btw-hook', name: 'On-demand helper', type: 'btw', prompt: 'Return a separate result.' },
+    ])
+    await tick()
+
+    const draft = hookCard('Before-send editor')
+    const btw = hookCard('On-demand helper')
+    expect(draft.querySelector('[data-risu-hook-outcome]')?.textContent).toContain(
+      language.inputHookSettings.draftOutcome,
+    )
+    expect(btw.querySelector('[data-risu-hook-outcome]')?.textContent).toContain(language.inputHookSettings.btwOutcome)
+    const toggle = draft.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+    expect(toggle.title).toBe('First line\nSecond line with the complete instruction.')
+    expect(draft.querySelector('[data-risu-input-hook-full-prompt-preview]')?.textContent).toContain(
+      'Second line with the complete instruction.',
+    )
+    expect(draft.querySelector('[data-risu-input-hook-translation-flow]')?.textContent).toContain(
+      language.inputHookSettings.translationDescription,
+    )
+    expect(inputHookSettingsMocks.readInputHooks().map((hook) => hook.type)).toEqual(['draft', 'btw'])
+  })
+
   it('keeps independent disclosures and edited prompts attached to hook IDs across list changes', async () => {
     inputHookSettingsMocks.setInputHooks([
       { id: 'first', name: 'First', type: 'draft', prompt: '<|im_start|>user\nRewrite this.' },
