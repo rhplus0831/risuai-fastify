@@ -529,6 +529,27 @@ describe('TextAreaInput highlighted disabled behavior', () => {
 })
 
 describe('TextAreaInput autocomplete selection', () => {
+  it('offers caller tokens from the plain textarea without replacing text after the caret', async () => {
+    component = mount(TextAreaInput, {
+      target,
+      props: {
+        value: 'Prefix {{agentT suffix',
+        popupEditor: false,
+        autocompleteOptions: ['agentToggle::tone'],
+      },
+    })
+    await tick()
+    const editor = textarea()
+    editor.setSelectionRange('Prefix {{agentT'.length, 'Prefix {{agentT'.length)
+    editor.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+
+    autocompleteSuggestion('agentToggle::tone')!.click()
+    await tick()
+
+    expect(editor.value).toBe('Prefix {{agentToggle::tone}} suffix')
+  })
+
   it('offers caller-provided authoring tokens and inserts the complete CBS expression', async () => {
     const editor = await openAutocomplete(undefined, '{{agentT', ['agentToggle::tone'])
     const suggestion = autocompleteSuggestion('agentToggle::tone')

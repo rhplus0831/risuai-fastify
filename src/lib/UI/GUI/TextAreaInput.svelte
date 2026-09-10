@@ -253,20 +253,45 @@
     return true
   }
 
+  const replaceTextareaSelectionText = (insertContent: string, type: 'autoComplete' | 'paste' = 'paste') => {
+    if (!textareaDom) return false
+    const start = textareaDom.selectionStart ?? textareaDom.value.length
+    const end = textareaDom.selectionEnd ?? start
+    let contentStart = textareaDom.value.substring(0, Math.min(start, end))
+    const contentEnd = textareaDom.value.substring(Math.max(start, end))
+    if (type === 'autoComplete') {
+      contentStart = contentStart.substring(0, contentStart.lastIndexOf('{{'))
+      insertContent = insertContent.endsWith(':')
+        ? `{{${insertContent}:`
+        : insertContent.startsWith('#')
+          ? `{{${insertContent} `
+          : `{{${insertContent}}}`
+    }
+    const next = contentStart + insertContent + contentEnd
+    textareaDom.value = next
+    textareaDom.dispatchEvent(new Event('input', { bubbles: true }))
+    textareaDom.focus()
+    textareaDom.setSelectionRange(
+      contentStart.length + insertContent.length,
+      contentStart.length + insertContent.length,
+    )
+    return true
+  }
+
   const autoComplete = () => {
     if (isInteractionDisabled() || isMobile) {
       hideAutoComplete()
       return
     }
     selectingAutoComplete = 0
-    const selection = getSelectionInInput()
-    if (!selection || !highlightDom || !autoCompleteDom || !inputDom) {
-      return
-    }
-
-    const { range } = selection
-    const caretOffset = getRangeOffset(range, range.startContainer, range.startOffset)
-    const qValue = inputDom.textContent ?? ''
+    if (!highlightDom || !autoCompleteDom || (!inputDom && !textareaDom)) return
+    const selection = inputDom ? getSelectionInInput() : null
+    if (inputDom && !selection) return
+    const range = selection?.range
+    const caretOffset = inputDom
+      ? getRangeOffset(range!, range!.startContainer, range!.startOffset)
+      : (textareaDom?.selectionStart ?? 0)
+    const qValue = inputDom?.textContent ?? textareaDom?.value ?? ''
     const splited = qValue.substring(0, caretOffset).split('{{')
     if (splited.length === 1) {
       hideAutoComplete()
@@ -282,13 +307,9 @@
     autocompleteContents = filtered
 
     const hlRect = highlightDom.getBoundingClientRect()
-    const rect = range.getBoundingClientRect()
-    if (rect.top === 0 && rect.left === 0) {
-      hideAutoComplete()
-      return
-    }
-    const top = rect.top - hlRect.top + 15
-    const left = rect.left - hlRect.left
+    const rect = range?.getBoundingClientRect()
+    const top = rect && (rect.top !== 0 || rect.left !== 0) ? rect.top - hlRect.top + 15 : highlightDom.clientHeight
+    const left = rect && (rect.top !== 0 || rect.left !== 0) ? rect.left - hlRect.left : 0
     autoCompleteDom.style.top = top + 'px'
     autoCompleteDom.style.left = left + 'px'
     autoCompleteDom.style.display = 'flex'
@@ -299,7 +320,10 @@
       hideAutoComplete()
       return
     }
-    if (replaceSelectionText(insertContent, type)) {
+    if (
+      (inputDom && replaceSelectionText(insertContent, type)) ||
+      (textareaDom && replaceTextareaSelectionText(insertContent, type))
+    ) {
       hideAutoComplete()
     }
   }
@@ -513,6 +537,7 @@
           value = e.currentTarget.value
           onInput(value)
         }
+        if (autocompleteOptions.length > 0) autoComplete()
       }}
       onchange={(e) => {
         if (optimaizedInput) {
@@ -522,6 +547,29 @@
         onchange()
       }}
       onkeydown={async (e) => {
+        if (autocompleteContents.length > 0) {
+          if (e.key === 'ArrowDown') {
+            selectingAutoComplete = Math.min(selectingAutoComplete + 1, autocompleteContents.length - 1)
+            e.preventDefault()
+            return
+          }
+          if (e.key === 'ArrowUp') {
+            selectingAutoComplete = Math.max(selectingAutoComplete - 1, 0)
+            e.preventDefault()
+            return
+          }
+          if (e.key === 'Enter' || e.key === 'Tab') {
+            e.preventDefault()
+            insertContent(autocompleteContents[selectingAutoComplete])
+            return
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            hideAutoComplete()
+            return
+          }
+        }
         if (
           isPopupEditorEnabled() &&
           popupEditorHotkey &&
