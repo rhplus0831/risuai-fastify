@@ -70,18 +70,42 @@ test('reviewed UI/UX surfaces open from disposable data at both compact viewport
   const agentDrawer = page.locator('[data-risu-agent-editor]')
   await expect(agentDrawer).toBeVisible()
   await expect(agentDrawer.locator('[data-risu-agent-editor-footer]')).toBeVisible()
+  await expect(agentDrawer.locator('[data-risu-agent-section]').first()).toHaveAttribute(
+    'data-risu-agent-section',
+    'basics',
+  )
+  await expect(agentDrawer.locator('[data-risu-agent-section="advanced"]')).not.toHaveAttribute('open', '')
+  expect(await agentDrawer.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  const instruction = agentDrawer.locator('textarea').nth(1)
+  await instruction.evaluate((node) => (node as HTMLTextAreaElement).setSelectionRange(0, 0))
+  await agentDrawer.locator('[data-risu-agent-insert-token][data-token="{{currentUserMessage}}"]').click()
+  await expect(instruction).toHaveValue(/^\{\{currentUserMessage\}\}/)
+  page.once('dialog', (dialog) => dialog.accept())
   await agentDrawer.locator('button').first().click()
   await agentSettings.getByRole('button', { name: 'Edit', exact: true }).first().click()
   const presetDrawer = page.locator('[data-risu-agent-preset-editor]')
   await expect(presetDrawer).toBeVisible()
   await expect(presetDrawer.locator('[data-risu-agent-preset-editor-footer]')).toBeVisible()
+  await expect(presetDrawer.locator('[data-risu-agent-add-phase] select')).toHaveValue('beforeMain')
+  await presetDrawer.locator('[data-risu-agent-preset-insert-output="mainOutput"]').click()
+  await expect(presetDrawer.locator('[data-risu-agent-preset-final-output] textarea')).toHaveValue(
+    '{{slot::mainOutput}}',
+  )
+  expect(await presetDrawer.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
+  page.once('dialog', (dialog) => dialog.accept())
   await presetDrawer.locator('button').first().click()
 
   await page.setViewportSize({ width: 655, height: 691 })
   await page.goto(`${harness.baseUrl}/settings/input-hooks`)
   await waitForLoaded(page)
   await expect(page.locator('[data-risu-input-hook-settings]')).toBeVisible()
-  await expect(page.getByRole('article', { name: 'Before-send rewrite' })).toBeVisible()
+  const hook = page.getByRole('article', { name: 'Before-send rewrite' })
+  await expect(hook).toBeVisible()
+  await expect(hook.locator('[data-risu-hook-outcome]')).toContainText('Before send')
+  const promptToggle = hook.getByRole('button', { name: 'Hook prompt: Before-send rewrite' })
+  await expect(promptToggle).toHaveAttribute('title', 'Rewrite this message clearly.')
+  await promptToggle.focus()
+  await expect(hook.locator('[data-risu-input-hook-full-prompt-preview]')).toBeVisible()
 
   await openChat(page)
   await page.getByTestId('default-chat-menu-button').click()

@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 4 in progress — outcome language and authoring tools.**
-- Next action: replace implementation-first authoring copy and add insertion, preview, and completion assistance.
+- State: **Phase 5 in progress — guided BardWiki workspace.**
+- Next action: turn BardWiki empty, lifecycle, activity, and mobile states into a guided workspace.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -22,7 +22,7 @@
 | [1. Effective state and validation](phases/phase-1-effective-state-and-validation.md) | Accepted | No-op, inherited, unchanged, invalid, and ineffective configurations are explicit before save or generation. |
 | [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Accepted | Dependency consequences are previewed and accepted/queued/failed recovery semantics remain explicit. |
 | [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Accepted | Responsive drawers, consolidated row menus, nested hierarchy, complete names, fallbacks, and overflow cues are verified at both compact viewports. |
-| [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Pending | Replace implementation-first copy with outcomes and add insertion, completion, and preview assistance. |
+| [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Accepted | Agent, Preset, and Hook authoring now expose outcomes, insertion, autocomplete, diagnostics, previews, phase choice, and technical disclosures. |
 | [5. Guided BardWiki workspace](phases/phase-5-guided-bardwiki-workspace.md) | Pending | Turn the empty workspace, overrides, lifecycle tools, and mobile flow into guided tasks. |
 | [6. Accessibility, visual evidence, and closeout](phases/phase-6-accessibility-and-closeout.md) | Pending | Complete interaction, contrast, zoom, browser, documentation, and rollout evidence. |
 
@@ -273,3 +273,44 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   existing CSS Highlight API and browser-externalization warnings.
 - Phase 3 accepted. Next slice: outcome-first Input Hook and Agent/Preset
   authoring assistance in Phase 4.
+
+### 2026-09-10 — Phase 4 outcome language and authoring slice
+
+- Source bases: `a1cf26a5e`, `aca612c2e`, `e9a68c2bf`, `6f93bbbe4`,
+  `18c21cba4`, and `4df6e7e7a`.
+- Changed owners: the shared `TextAreaInput`, Agent and Preset editor drawers,
+  the module-integration authoring helper, Input Hook settings, localized copy,
+  focused component/helper tests, and the compact Chromium journey.
+- Agent authoring is ordered as **Basics**, **Instructions**, **Context**,
+  **Model & limits**, and **Advanced**. Empty advanced controls collapse; runtime
+  fields state bounds and effects; selected prepared inputs, Agent toggles, and
+  lorebook inputs can be inserted or autocompleted at the live caret; valid
+  ChatML renders as ordered role rows without exposing hidden thought bodies.
+- Preset module integration is a deduplicating chip editor backed by live module
+  IDs and namespaces. Unknown custom namespaces are retained with a warning and
+  persist through the compatibility-spelled `moduleIntergration` field. Final
+  output values are caret-insertable, missing/disabled references explain and
+  offer repair, and explicit sample values drive a provider-free preview.
+- Preset composition asks for Before Main/After Main before add, chooses a valid
+  default destination, reopens a reconciled new use, and announces add/reorder
+  position. Human position is primary; Agent/Preset IDs, output keys, module
+  values, and phase metadata remain copyable in Technical details.
+- Draft/BTW values remain unchanged while options and cards supplement them with
+  **Before send** and **On-demand result**. Collapsed prompts expose the complete
+  text on hover/focus, and Translation mode states its input → model → reviewed
+  text → stored/sent result flow.
+- Passed `pnpm test -- src/lib/UI/GUI/TextAreaInput.svelte.test.ts` (20 tests),
+  `pnpm test -- src/ts/agentPresetModuleIntegration.test.ts` (2 tests), `pnpm
+  test -- packages/shared-core/src/agentPresetOutputReferences.test.ts` (14
+  tests), `pnpm test -- src/ts/agentPresetResolver.test.ts` (13 tests), `pnpm
+  test -- src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts` (43 tests),
+  `pnpm test -- src/lib/Setting/Pages/InputHookSettings.svelte.test.ts` (10
+  tests), and `pnpm check` with no diagnostics.
+- Passed `pnpm build:smoke` and the dedicated Chromium browser journey at
+  550×775 and 655×691. It verifies ordered Agent sections, collapsed Advanced,
+  caret insertion, phase-before-add, final-output insertion, Hook outcome/full
+  prompt access, footer reachability, no horizontal drawer overflow, and no
+  command requests. The build retained its existing CSS Highlight API and
+  browser-externalization warnings.
+- Phase 4 accepted. Next slice: coherent zero-document BardWiki guidance and
+  list/detail mobile navigation in Phase 5.
