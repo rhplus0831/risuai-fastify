@@ -3625,6 +3625,14 @@ export const languageEnglish = {
     deleteAgentConfirm: (name: string) => `Delete Agent “${name}”?`,
     selectAgent: 'Select Agent',
     addAgent: 'Add to Preset',
+    addAgentPhaseLabel: 'Run this Agent',
+    agentAddedPosition: (name: string, phase: string, position: number, total: number) =>
+      `${name} was added to ${phase}, position ${position} of ${total}. Its Preset Use is ready to edit.`,
+    agentMovedPosition: (name: string, phase: string, position: number, total: number) =>
+      `${name} moved in ${phase} to position ${position} of ${total}.`,
+    agentUsePosition: (position: number, total: number) => `Position ${position} of ${total}`,
+    moveAgentUseUp: (name: string) => `Move ${name} up`,
+    moveAgentUseDown: (name: string) => `Move ${name} down`,
     noAgentsAvailable: 'Create an Agent before adding one to a preset.',
     createAnotherAgent: 'Create another Agent',
     createdAgentReady: (name: string) => `${name} is ready to add to this preset.`,
@@ -3820,6 +3828,9 @@ export const languageEnglish = {
     temperatureEffectBalanced: 'Balanced variation.',
     temperatureEffectVaried: 'More varied and less predictable output.',
     agentIdLabel: 'Agent ID',
+    outputKeyTechnicalLabel: 'Output key',
+    phaseTechnicalLabel: 'Phase value',
+    moduleValuesTechnicalLabel: 'Module IDs and namespaces',
     preparedInputScopesLabel: 'Prepared inputs',
     preparedInputScopesDescription:
       'Select the context this Agent can use. A selected input is included only where its instruction placeholder appears.',

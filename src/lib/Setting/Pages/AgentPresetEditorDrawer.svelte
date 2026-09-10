@@ -112,7 +112,13 @@
   const initialMetadata = metadataSnapshot(initialPreset)
 
   let selectedAgentId = $state('')
+  let selectedAddPhase = $state<AgentPresetStepPhase>('beforeMain')
   let selectedAgentRecoveryBaseline = ''
+  let pendingAddedUseId = $state('')
+  let pendingAddedAgentId = $state('')
+  let pendingAddedOutputKey = $state('')
+  let pendingAddedPhase = $state<AgentPresetStepPhase>('beforeMain')
+  let usePositionAnnouncement = $state('')
   let editingUseId = $state<string | null>(null)
   let useRecoveryBaseline = ''
   let useBusy = $state(false)
@@ -141,6 +147,7 @@
   let pendingCreatedAgentId = $state('')
   let pendingCreatedAgentName = $state('')
   let createAgentInvoker = $state<HTMLElement>()
+  let drawerNode = $state<HTMLElement>()
 
   const ownerPresetValue = $derived(settingsResourceState.value.agentPresets)
   let ownerPresets = $derived(readAgentPresetOwners(ownerPresetValue))
@@ -218,6 +225,24 @@
   $effect(() => {
     for (const key of finalOutputAgentKeys)
       sampleAgentOutputs[key] ??= language.agentPresets.finalOutputSampleAgentDefault(key)
+  })
+
+  $effect(() => {
+    if (!pendingAddedUseId && !pendingAddedOutputKey) return
+    const added = resolvedSteps.find(
+      (step) =>
+        (pendingAddedUseId && step.id === pendingAddedUseId) ||
+        (!pendingAddedUseId &&
+          step.agentId === pendingAddedAgentId &&
+          step.outputKey === pendingAddedOutputKey &&
+          step.phase === pendingAddedPhase),
+    )
+    if (!added) return
+    pendingAddedUseId = ''
+    pendingAddedAgentId = ''
+    pendingAddedOutputKey = ''
+    startEdit(added)
+    void focusUseEditor()
   })
 
   function readAgentOwners(value: unknown): AgentRecord[] {
@@ -550,12 +575,27 @@
     const agent = agents.find((candidate) => candidate.id === selectedAgentId)
     if (!agent) return
     const use = defaultAgentPresetUse(agent)
-    use.outputKey = uniqueOutputKey(use.outputKey, 'beforeMain')
+    use.phase = selectedAddPhase
+    use.destination = selectedAddPhase === 'beforeMain' ? 'promptOutput' : 'intermediate'
+    use.outputKey = uniqueOutputKey(use.outputKey, selectedAddPhase)
+    const addedPosition = resolvedSteps.filter((step) => step.phase === use.phase).length + 1
     useBusy = true
     useError = ''
     const result = await addAgentToPreset(presetId, use)
     useBusy = false
-    if (handleUseResult(result) && selectedAgentId === agent.id) selectedAgentRecoveryBaseline = selectedAgentId
+    if (handleUseResult(result) && selectedAgentId === agent.id) {
+      selectedAgentRecoveryBaseline = selectedAgentId
+      pendingAddedUseId = result.status === 'accepted' ? result.result.useId : ''
+      pendingAddedAgentId = agent.id
+      pendingAddedOutputKey = use.outputKey
+      pendingAddedPhase = use.phase
+      usePositionAnnouncement = language.agentPresets.agentAddedPosition(
+        agent.name,
+        phaseLabel(use.phase),
+        addedPosition,
+        addedPosition,
+      )
+    }
   }
 
   async function saveUse(): Promise<void> {
@@ -605,7 +645,14 @@
     useBusy = true
     const result = await reorderAgentPresetUses(presetId, ids)
     useBusy = false
-    handleUseResult(result)
+    if (handleUseResult(result)) {
+      usePositionAnnouncement = language.agentPresets.agentMovedPosition(
+        step.name,
+        phaseLabel(step.phase),
+        nextIndex + 1,
+        phaseSteps.length,
+      )
+    }
   }
 
   function handleUseResult(outcome: AgentMutationOutcome<any>): boolean {
@@ -651,6 +698,21 @@
     if (phase === 'beforeMain' && destination === 'finalOutput') return 'promptOutput'
     if (phase === 'afterMain' && destination === 'userInput') return 'intermediate'
     return destination
+  }
+
+  function phaseLabel(phase: AgentPresetStepPhase): string {
+    return phase === 'beforeMain' ? language.agentPresets.beforeMain : language.agentPresets.afterMain
+  }
+
+  async function focusUseEditor(): Promise<void> {
+    await tick()
+    drawerNode?.querySelector<HTMLElement>('[data-risu-agent-preset-use-form]')?.focus()
+  }
+
+  function temperatureEffect(value: number): string {
+    if (value < 0.7) return language.agentPresets.temperatureEffectFocused
+    if (value <= 1.1) return language.agentPresets.temperatureEffectBalanced
+    return language.agentPresets.temperatureEffectVaried
   }
 
   function uniqueOutputKey(base: string, phase: AgentPresetStepPhase): string {
@@ -759,8 +821,14 @@
       const use = editingUseId ? useRecoveryDraft() : null
       const metadataChanged = JSON.stringify(metadata) !== metadataRecoveryBaseline
       const useChanged = use !== null && JSON.stringify(use) !== useRecoveryBaseline
-      if (!metadataChanged && !useChanged && selectedAgentId === selectedAgentRecoveryBaseline) return null
-      const data = { metadata, use, selectedAgentId }
+      if (
+        !metadataChanged &&
+        !useChanged &&
+        selectedAgentId === selectedAgentRecoveryBaseline &&
+        selectedAddPhase === 'beforeMain'
+      )
+        return null
+      const data = { metadata, use, selectedAgentId, selectedAddPhase }
       return $state.snapshot({
         key: `agent-preset:${presetId || 'new'}`,
         label: name || language.agentPresets.newPresetName,
@@ -770,6 +838,7 @@
           metadata: JSON.parse(metadataRecoveryBaseline),
           use: useRecoveryBaseline ? JSON.parse(useRecoveryBaseline) : null,
           selectedAgentId: selectedAgentRecoveryBaseline,
+          selectedAddPhase: 'beforeMain',
         },
       })
     }),
@@ -785,6 +854,7 @@
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     use:modalFocusTrap
+    bind:this={drawerNode}
     class="flex h-full w-full max-w-4xl flex-col border-l border-darkborderc bg-bgcolor text-textcolor shadow-xl"
     role="dialog"
     tabindex="-1"
@@ -977,6 +1047,17 @@
               {#each agents as agent (agent.id)}<option value={agent.id}>{agent.name}</option>{/each}
             </SelectInput>
           </label>
+          <label class="min-w-44" data-risu-agent-add-phase>
+            <span class="mb-1 block text-sm font-medium">{language.agentPresets.addAgentPhaseLabel}</span>
+            <SelectInput
+              bind:value={selectedAddPhase}
+              className="w-full"
+              disabled={mode !== 'edit'}
+              onchange={(event) => (selectedAddPhase = event.currentTarget.value as AgentPresetStepPhase)}>
+              <option value="beforeMain">{language.agentPresets.beforeMain}</option>
+              <option value="afterMain">{language.agentPresets.afterMain}</option>
+            </SelectInput>
+          </label>
           <Button disabled={mode !== 'edit' || !selectedAgentId || locked} onclick={addSelectedAgent}>
             <span class="inline-flex items-center gap-2"><PlusIcon size={16} />{language.agentPresets.addAgent}</span>
           </Button>
@@ -1007,6 +1088,9 @@
             data-risu-agent-created-notice>
             {nestedAgentNotice}
           </p>{/if}
+        <p class="sr-only" aria-live="polite" data-risu-agent-use-position-announcement>
+          {usePositionAnnouncement}
+        </p>
       </div>
 
       {#if mode === 'edit'}
@@ -1026,20 +1110,25 @@
                   <article
                     class="rounded-md border border-darkborderc p-3"
                     data-risu-agent-preset-step
-                    data-step-id={step.id}>
+                    data-step-id={step.id}
+                    aria-label={`${step.name}, ${phaseLabel(step.phase)}, ${language.agentPresets.agentUsePosition(index + 1, phaseSteps.length)}`}>
                     <div class="flex flex-wrap items-center gap-2">
                       <span class="font-medium">{step.name}</span>
-                      <span class="text-xs text-textcolor2">{language.agentPresets.outputKey}: {step.outputKey}</span>
+                      <span class="text-xs text-textcolor2" data-risu-agent-use-position>
+                        {language.agentPresets.agentUsePosition(index + 1, phaseSteps.length)}
+                      </span>
                       <div class="ml-auto flex gap-1">
                         <Button
                           size="sm"
                           styled="outlined"
                           disabled={locked || index === 0}
+                          ariaLabel={language.agentPresets.moveAgentUseUp(step.name)}
                           onclick={() => moveUse(step, -1)}><ArrowUpIcon size={14} /></Button>
                         <Button
                           size="sm"
                           styled="outlined"
                           disabled={locked || index === phaseSteps.length - 1}
+                          ariaLabel={language.agentPresets.moveAgentUseDown(step.name)}
                           onclick={() => moveUse(step, 1)}><ArrowDownIcon size={14} /></Button>
                         <Button size="sm" styled="outlined" disabled={locked} onclick={() => startEdit(step)}
                           >{language.agentPresets.edit}</Button>
@@ -1049,7 +1138,17 @@
                           ><TrashIcon size={14} /></Button>
                       </div>
                     </div>
-                    <span class="text-xs text-textcolor2">{step.agentId}</span>
+                    <details class="mt-2 text-xs" data-risu-agent-use-technical-details>
+                      <summary class="cursor-pointer text-textcolor2">{language.agentPresets.technicalDetails}</summary>
+                      <dl class="mt-2 grid gap-1 sm:grid-cols-[auto_1fr]">
+                        <dt class="text-textcolor2">{language.agentPresets.agentIdLabel}</dt>
+                        <dd><code class="break-all select-all">{step.agentId}</code></dd>
+                        <dt class="text-textcolor2">{language.agentPresets.outputKeyTechnicalLabel}</dt>
+                        <dd><code class="break-all select-all">{step.outputKey}</code></dd>
+                        <dt class="text-textcolor2">{language.agentPresets.phaseTechnicalLabel}</dt>
+                        <dd><code class="break-all select-all">{step.phase}</code></dd>
+                      </dl>
+                    </details>
                   </article>
                 {/each}
               </div>
@@ -1059,7 +1158,7 @@
       {/if}
 
       {#if editingUseId && editingStep}
-        <section class="mt-4 rounded-md border border-selected p-3" data-risu-agent-preset-use-form>
+        <section class="mt-4 rounded-md border border-selected p-3" data-risu-agent-preset-use-form tabindex="-1">
           <div class="flex items-center justify-between">
             <h4 class="font-semibold">{language.agentPresets.editInvocation}: {editingStep.name}</h4>
             <Button size="sm" styled="outlined" onclick={closeUseEditor}>{language.agentPresets.cancel}</Button>
@@ -1146,20 +1245,60 @@
                   {/each}</SelectInput
                 >{/if}
             </div>{/if}
-          {#if overrideRuntime}<div class="mt-2 grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-              <NumberInput
-                bind:value={timeoutMs}
-                min={AGENT_PRESET_RUNTIME_TIMEOUT_MS_MIN}
-                max={AGENT_PRESET_RUNTIME_TIMEOUT_MS_MAX}
-                fullwidth /><NumberInput
-                bind:value={maxInputChars}
-                min={AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MIN}
-                max={AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MAX}
-                fullwidth /><NumberInput
-                bind:value={maxOutputChars}
-                min={AGENT_PRESET_RUNTIME_MAX_OUTPUT_CHARS_MIN}
-                max={AGENT_PRESET_RUNTIME_MAX_OUTPUT_CHARS_MAX}
-                fullwidth /><NumberInput bind:value={temperature} min={0} max={2} step={0.01} fullwidth />
+          {#if overrideRuntime}<div class="mt-2 grid gap-3 sm:grid-cols-2">
+              <label class="flex flex-col gap-1">
+                <span class="text-sm">{language.agentPresets.timeoutMsLabel}</span>
+                <NumberInput
+                  bind:value={timeoutMs}
+                  min={AGENT_PRESET_RUNTIME_TIMEOUT_MS_MIN}
+                  max={AGENT_PRESET_RUNTIME_TIMEOUT_MS_MAX}
+                  fullwidth />
+                <span class="text-xs text-textcolor2">
+                  {language.agentPresets.runtimeRange(
+                    AGENT_PRESET_RUNTIME_TIMEOUT_MS_MIN,
+                    AGENT_PRESET_RUNTIME_TIMEOUT_MS_MAX,
+                  )}
+                  {language.agentPresets.timeoutEffect(Math.round(Number(timeoutMs) / 1000))}
+                </span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-sm">{language.agentPresets.maxInputCharsLabel}</span>
+                <NumberInput
+                  bind:value={maxInputChars}
+                  min={AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MIN}
+                  max={AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MAX}
+                  fullwidth />
+                <span class="text-xs text-textcolor2">
+                  {language.agentPresets.runtimeRange(
+                    AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MIN,
+                    AGENT_PRESET_RUNTIME_MAX_INPUT_CHARS_MAX,
+                  )}
+                  {language.agentPresets.maxInputEffect(Number(maxInputChars))}
+                </span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-sm">{language.agentPresets.maxOutputCharsLabel}</span>
+                <NumberInput
+                  bind:value={maxOutputChars}
+                  min={AGENT_PRESET_RUNTIME_MAX_OUTPUT_CHARS_MIN}
+                  max={AGENT_PRESET_RUNTIME_MAX_OUTPUT_CHARS_MAX}
+                  fullwidth />
+                <span class="text-xs text-textcolor2">
+                  {language.agentPresets.runtimeRange(
+                    AGENT_PRESET_RUNTIME_MAX_OUTPUT_CHARS_MIN,
+                    AGENT_PRESET_RUNTIME_MAX_OUTPUT_CHARS_MAX,
+                  )}
+                  {language.agentPresets.maxOutputEffect(Number(maxOutputChars))}
+                </span>
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class="text-sm">{language.agentPresets.temperatureLabel}</span>
+                <NumberInput bind:value={temperature} min={0} max={2} step={0.01} fullwidth />
+                <span class="text-xs text-textcolor2">
+                  {language.agentPresets.runtimeRange(0, 2)}
+                  {temperatureEffect(Number(temperature))}
+                </span>
+              </label>
             </div>
             <div class="mt-2">
               <CheckInput
@@ -1172,6 +1311,18 @@
           </div>
         </section>
       {/if}
+
+      <details class="mt-4 rounded-md border border-darkborderc p-3" data-risu-agent-preset-technical-details>
+        <summary class="cursor-pointer text-sm font-semibold">{language.agentPresets.technicalDetails}</summary>
+        <dl class="mt-2 grid gap-2 text-xs sm:grid-cols-[auto_1fr]">
+          <dt class="text-textcolor2">{language.agentPresets.presetIdLabel}</dt>
+          <dd><code class="break-all select-all">{presetId || 'new'}</code></dd>
+          <dt class="text-textcolor2">{language.agentPresets.moduleValuesTechnicalLabel}</dt>
+          <dd>
+            <code class="break-all select-all">{serializeAgentPresetModuleIntegration(moduleIntegrations) || '—'}</code>
+          </dd>
+        </dl>
+      </details>
 
       {#if mode === 'edit' && livePreset}<AgentPresetDiagnosticsPanel presetId={livePreset.id} />{/if}
     </div>

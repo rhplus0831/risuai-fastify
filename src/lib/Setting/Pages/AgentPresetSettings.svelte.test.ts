@@ -41,7 +41,10 @@ const agentSpies = vi.hoisted(() => ({
   duplicateAgent: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   deleteAgent: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   reorderAgents: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
-  addAgentToPreset: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
+  addAgentToPreset: vi.fn(async (_presetId?: string, use?: { agentId?: string }) => ({
+    status: 'accepted',
+    result: { status: 'ok', useId: 'apu_added', agentId: use?.agentId },
+  })),
   updateAgentPresetUse: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   removeAgentFromPreset: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
   reorderAgentPresetUses: vi.fn(async () => ({ status: 'accepted', result: { status: 'ok' } })),
@@ -648,6 +651,71 @@ describe('modular Agent Preset settings', () => {
       expect.objectContaining({ agentId: agent.id, phase: 'beforeMain' }),
     )
     expect(agentSpies.createAgent).not.toHaveBeenCalled()
+  })
+
+  it('chooses the phase before add, uses a phase-valid destination, and returns to the new use', async () => {
+    const emptyPreset = { ...preset, agentUses: [] }
+    agentSpies.addAgentToPreset.mockImplementationOnce(async (_presetId, use) => {
+      settingsResourceState.value.agentPresets = [
+        { ...emptyPreset, agentUses: [{ ...use, id: 'apu_added' }] as never[] },
+      ]
+      return {
+        status: 'accepted',
+        result: { status: 'ok', useId: 'apu_added', agentId: use?.agentId },
+      }
+    })
+    seed([agent], [emptyPreset])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    const phase = editor.querySelector<HTMLSelectElement>('[data-risu-agent-add-phase] select')!
+    phase.value = 'afterMain'
+    phase.dispatchEvent(new Event('input', { bubbles: true }))
+    phase.dispatchEvent(new Event('change', { bubbles: true }))
+    await tick()
+    clickButtonContaining(editor, language.agentPresets.addAgent)
+    await flush()
+
+    expect(agentSpies.addAgentToPreset).toHaveBeenCalledWith(
+      preset.id,
+      expect.objectContaining({ agentId: agent.id, phase: 'afterMain', destination: 'intermediate' }),
+    )
+    const useForm = editor.querySelector<HTMLElement>('[data-risu-agent-preset-use-form]')!
+    expect(useForm).not.toBeNull()
+    expect(document.activeElement).toBe(useForm)
+    expect(editor.querySelector('[data-risu-agent-use-position-announcement]')?.textContent).toContain(
+      language.agentPresets.agentAddedPosition(agent.name, language.agentPresets.afterMain, 1, 1),
+    )
+  })
+
+  it('announces stable keyboard reorder positions and keeps raw use metadata in details', async () => {
+    const secondUse = {
+      ...preset.agentUses![0],
+      id: 'apu_second',
+      outputKey: 'second',
+    }
+    seed([agent], [{ ...preset, agentUses: [preset.agentUses![0], secondUse] }])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const editor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    const first = editor.querySelector<HTMLElement>('[data-step-id="apu_research"]')!
+    expect(first.textContent).toContain(language.agentPresets.agentUsePosition(1, 2))
+    expect(first.querySelector('[data-risu-agent-use-technical-details]')?.textContent).toContain(agent.id)
+
+    first
+      .querySelector<HTMLButtonElement>(`[aria-label="${language.agentPresets.moveAgentUseDown(agent.name)}"]`)!
+      .click()
+    await flush()
+    expect(agentSpies.reorderAgentPresetUses).toHaveBeenCalledWith(preset.id, ['apu_second', 'apu_research'])
+    expect(editor.querySelector('[data-risu-agent-use-position-announcement]')?.textContent).toContain(
+      language.agentPresets.agentMovedPosition(agent.name, language.agentPresets.beforeMain, 2, 2),
+    )
   })
 
   it('creates an Agent inside an empty preset without losing the preset draft', async () => {
