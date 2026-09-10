@@ -844,6 +844,78 @@ describe('modular Agent Preset settings', () => {
     })
   })
 
+  it('inserts final-output values at the caret and previews explicit samples locally', async () => {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    const composer = target.querySelector<HTMLElement>('[data-risu-agent-preset-final-output]')!
+    const template = composer.querySelector<HTMLTextAreaElement>('textarea')!
+    template.value = 'AB'
+    template.dispatchEvent(new Event('input', { bubbles: true }))
+    template.focus()
+    template.setSelectionRange(1, 1)
+    composer.querySelector<HTMLButtonElement>('[data-risu-agent-preset-insert-output="research"]')!.click()
+    await tick()
+    expect(template.value).toBe('A{{agent::research}}B')
+    expect(template.selectionStart).toBe(20)
+
+    const preview = composer.querySelector<HTMLDetailsElement>('[data-risu-agent-preset-final-output-preview]')!
+    preview.open = true
+    await tick()
+    const sample = preview.querySelectorAll<HTMLInputElement>('input')[1]
+    sample.value = 'Reviewed research'
+    sample.dispatchEvent(new Event('input', { bubbles: true }))
+    await tick()
+    expect(preview.querySelector('[data-risu-agent-preset-final-output-preview-value]')?.textContent).toBe(
+      'AReviewed researchB',
+    )
+    expect(preview.textContent).toContain(language.agentPresets.finalOutputPreviewDescription)
+  })
+
+  it('explains and repairs missing or disabled final-output references', async () => {
+    seed([agent], [{ ...preset, finalOutputTemplate: '{{agent::missing}}' }])
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    let diagnostics = target.querySelector<HTMLElement>('[data-risu-agent-preset-final-output-diagnostics]')!
+    expect(diagnostics.textContent).toContain(
+      language.agentPresets.finalOutputReferenceMissing('{{agent::missing}}', 'missing'),
+    )
+    clickButtonContaining(diagnostics, language.agentPresets.removeReference)
+    await tick()
+    expect(target.querySelector('[data-risu-agent-preset-final-output-diagnostics]')).toBeNull()
+
+    unmount(component!)
+    component = undefined
+    target.replaceChildren()
+    seed(
+      [agent],
+      [
+        {
+          ...preset,
+          finalOutputTemplate: '{{agent::research}}',
+          agentUses: [{ ...preset.agentUses![0], enabled: false }],
+        },
+      ],
+    )
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+    clickButtonContaining(target.querySelector('[data-risu-agent-preset-row]')!, language.agentPresets.edit)
+    await tick()
+    diagnostics = target.querySelector<HTMLElement>('[data-risu-agent-preset-final-output-diagnostics]')!
+    expect(diagnostics.textContent).toContain(
+      language.agentPresets.finalOutputReferenceDisabled('{{agent::research}}', 'research'),
+    )
+    clickButtonContaining(diagnostics, language.agentPresets.editProducer)
+    await tick()
+    expect(target.querySelector('[data-risu-agent-preset-use-form]')).not.toBeNull()
+  })
+
   it('saves module IDs and namespaces as Agent Preset metadata', async () => {
     seed(
       [agent],

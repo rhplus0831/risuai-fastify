@@ -8,6 +8,7 @@
   import CheckInput from 'src/lib/UI/GUI/CheckInput.svelte'
   import NumberInput from 'src/lib/UI/GUI/NumberInput.svelte'
   import SelectInput from 'src/lib/UI/GUI/SelectInput.svelte'
+  import TextAreaInput from 'src/lib/UI/GUI/TextAreaInput.svelte'
   import TextInput from 'src/lib/UI/GUI/TextInput.svelte'
   import { modalBackdropDismiss } from 'src/ts/gui/modalBackdropDismiss'
   import { modalFocusTrap } from 'src/ts/gui/modalFocusTrap'
@@ -20,7 +21,12 @@
     updateAgentPresetUse,
     type AgentMutationOutcome,
   } from 'src/ts/agents'
-  import { planAgentPreset } from 'src/ts/agentPresetResolver'
+  import {
+    diagnoseAgentPresetOutputReferences,
+    planAgentPreset,
+    type AgentPresetOutputReferenceDiagnostic,
+  } from 'src/ts/agentPresetResolver'
+  import { expandAgentPresetOutputCbs } from '@risuai/shared-core/agent-preset-output-references'
   import {
     AGENT_PRESET_MAX_CONCURRENCY_MAX,
     AGENT_PRESET_MAX_CONCURRENCY_MIN,
@@ -84,6 +90,10 @@
     'enabled',
     'maxConcurrency',
   ]
+  type AuthoringEditorApi = {
+    insertAtCaret: (text: string) => Promise<boolean>
+    focusEditor: () => void
+  }
   let { mode, preset, busy = false, commandError = '', onSave, onCancel }: Props = $props()
   // svelte-ignore state_referenced_locally
   const initialPreset = preset
@@ -93,6 +103,9 @@
   let moduleIntegrations = $state(parseAgentPresetModuleIntegration(initialPreset?.moduleIntergration))
   let moduleIntegrationDraft = $state('')
   let finalOutputTemplate = $state(initialPreset?.finalOutputTemplate ?? '')
+  let finalOutputEditor: AuthoringEditorApi | undefined
+  let sampleMainOutput = $state(language.agentPresets.finalOutputSampleMainDefault)
+  let sampleAgentOutputs = $state<Record<string, string>>({})
   let enabled = $state(initialPreset?.enabled ?? true)
   let limitConcurrency = $state(initialPreset?.maxConcurrency !== undefined)
   let maxConcurrency = $state(initialPreset?.maxConcurrency ?? 4)
@@ -150,6 +163,10 @@
   let finalOutputAgentKeys = $derived([
     ...new Set(resolvedSteps.filter((step) => step.enabled).map((step) => step.outputKey)),
   ])
+  let finalOutputAutocompleteOptions = $derived([
+    'slot::mainOutput',
+    ...finalOutputAgentKeys.map((key) => `agent::${key}`),
+  ])
   let modelProfiles = $derived(readModelProfileOwners(settingsResourceState.value.modelProfiles))
   let modelProfileItems = $derived(
     hasUniqueModelProfileOrder(settingsResourceState.value.modelProfileOrder)
@@ -178,6 +195,30 @@
       !locked,
   )
   let dependencyOptions = $derived(availableDependencies())
+  let presetPlanning = $derived(
+    planAgentPreset({
+      database: { agents, agentPresets: ownerPresets, modelProfiles },
+      preset: draftPreset(),
+    }),
+  )
+  let finalOutputDiagnostics = $derived(
+    presetPlanning.plan
+      ? diagnoseAgentPresetOutputReferences(resolvedSteps, presetPlanning.plan, finalOutputTemplate).filter(
+          (diagnostic) => diagnostic.path === 'agentPreset.finalOutputTemplate',
+        )
+      : [],
+  )
+  let finalOutputPreview = $derived(
+    expandAgentPresetOutputCbs(
+      finalOutputTemplate.replace(/\{\{\s*slot::mainOutput\s*\}\}/g, sampleMainOutput),
+      (key) => sampleAgentOutputs[key],
+    ),
+  )
+
+  $effect(() => {
+    for (const key of finalOutputAgentKeys)
+      sampleAgentOutputs[key] ??= language.agentPresets.finalOutputSampleAgentDefault(key)
+  })
 
   function readAgentOwners(value: unknown): AgentRecord[] {
     if (!Array.isArray(value)) return []
@@ -334,8 +375,8 @@
     }
   }
 
-  function draftPresetIssueCount(): number {
-    const draft: AgentPresetRecord = {
+  function draftPreset(): AgentPresetRecord {
+    return {
       ...(livePreset ?? {
         id: 'draft-agent-preset',
         version: 1,
@@ -353,15 +394,10 @@
         ? { maxConcurrency: clamp(maxConcurrency, AGENT_PRESET_MAX_CONCURRENCY_MIN, AGENT_PRESET_MAX_CONCURRENCY_MAX) }
         : { maxConcurrency: undefined }),
     }
-    const planning = planAgentPreset({
-      database: {
-        agents,
-        agentPresets: ownerPresets,
-        modelProfiles,
-      },
-      preset: draft,
-    })
-    return planning.issues.length + planning.incompleteIssues.length
+  }
+
+  function draftPresetIssueCount(): number {
+    return presetPlanning.issues.length + presetPlanning.incompleteIssues.length
   }
 
   function openNestedAgent(): void {
@@ -650,6 +686,27 @@
     addModuleIntegration()
   }
 
+  async function insertFinalOutputValue(token: string): Promise<void> {
+    if (locked) return
+    await finalOutputEditor?.insertAtCaret(token)
+  }
+
+  function finalOutputDiagnosticMessage(diagnostic: AgentPresetOutputReferenceDiagnostic): string {
+    if (diagnostic.reason === 'disabled_output') {
+      return language.agentPresets.finalOutputReferenceDisabled(diagnostic.token, diagnostic.key)
+    }
+    return language.agentPresets.finalOutputReferenceMissing(diagnostic.token, diagnostic.key)
+  }
+
+  function removeFinalOutputReference(diagnostic: AgentPresetOutputReferenceDiagnostic): void {
+    finalOutputTemplate = finalOutputTemplate.replace(diagnostic.token, '')
+  }
+
+  function editFinalOutputProducer(diagnostic: AgentPresetOutputReferenceDiagnostic): void {
+    const producer = resolvedSteps.find((step) => diagnostic.producerStepIds.includes(step.id))
+    if (producer) startEdit(producer)
+  }
+
   function requestClose(): void {
     if (locked || nestedAgentOpen) return
     if (metadataDirty && !window.confirm(language.agentPresets.discardChangesConfirm)) return
@@ -836,21 +893,77 @@
       {/if}
 
       <section class="mt-5 rounded-md border border-darkborderc p-3" data-risu-agent-preset-final-output>
-        <label class="flex flex-col gap-1">
-          <span class="text-sm font-medium">{language.agentPresets.finalOutputTemplateLabel}</span>
-          <span class="text-xs text-textcolor2">{language.agentPresets.finalOutputTemplateDescription}</span>
-          <textarea
-            class="mt-1 min-h-32 rounded-md border border-darkborderc bg-transparent px-3 py-2 font-mono text-sm"
+        <h4 class="text-sm font-medium">{language.agentPresets.finalOutputTemplateLabel}</h4>
+        <p class="text-xs text-textcolor2">{language.agentPresets.finalOutputTemplateDescription}</p>
+        <div class="mt-1 font-mono">
+          <TextAreaInput
+            bind:this={finalOutputEditor}
+            bind:value={finalOutputTemplate}
+            fullwidth
+            height="32"
+            popupEditor={true}
+            autocompleteOptions={finalOutputAutocompleteOptions}
             placeholder={language.agentPresets.finalOutputTemplatePlaceholder}
-            bind:value={finalOutputTemplate}></textarea>
-        </label>
+            ariaLabel={language.agentPresets.finalOutputTemplateLabel} />
+        </div>
         <div class="mt-2 flex flex-wrap items-center gap-1.5" data-risu-agent-preset-final-output-variables>
           <span class="mr-1 text-xs text-textcolor2">{language.agentPresets.finalOutputVariablesLabel}</span>
-          <code class="rounded-sm bg-darkbg px-1.5 py-0.5 text-xs">{'{{slot::mainOutput}}'}</code>
+          <button
+            type="button"
+            class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-xs hover:bg-darkbuttonhover"
+            aria-label={language.agentPresets.insertValue('main output')}
+            data-risu-agent-preset-insert-output="mainOutput"
+            onclick={() => insertFinalOutputValue('{{slot::mainOutput}}')}
+            ><code>{'{{slot::mainOutput}}'}</code></button>
           {#each finalOutputAgentKeys as outputKey (outputKey)}
-            <code class="rounded-sm bg-darkbg px-1.5 py-0.5 text-xs">{`{{agent::${outputKey}}}`}</code>
+            <button
+              type="button"
+              class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-xs hover:bg-darkbuttonhover"
+              aria-label={language.agentPresets.insertValue(outputKey)}
+              data-risu-agent-preset-insert-output={outputKey}
+              onclick={() => insertFinalOutputValue(`{{agent::${outputKey}}}`)}
+              ><code>{`{{agent::${outputKey}}}`}</code></button>
           {/each}
         </div>
+        {#if finalOutputDiagnostics.length > 0}
+          <ul class="mt-3 space-y-2" data-risu-agent-preset-final-output-diagnostics>
+            {#each finalOutputDiagnostics as diagnostic (`${diagnostic.index}:${diagnostic.token}`)}
+              <li class="rounded-md border border-yellow-600 p-2 text-sm text-yellow-500">
+                <p>{finalOutputDiagnosticMessage(diagnostic)}</p>
+                <div class="mt-2 flex flex-wrap gap-2">
+                  {#if diagnostic.producerStepIds.length > 0}
+                    <Button size="sm" styled="outlined" onclick={() => editFinalOutputProducer(diagnostic)}>
+                      {language.agentPresets.editProducer}
+                    </Button>
+                  {/if}
+                  <Button size="sm" styled="outlined" onclick={() => removeFinalOutputReference(diagnostic)}>
+                    {language.agentPresets.removeReference}
+                  </Button>
+                </div>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <details class="mt-3 border-t border-darkborderc pt-3" data-risu-agent-preset-final-output-preview>
+          <summary class="cursor-pointer text-sm font-semibold"
+            >{language.agentPresets.finalOutputPreviewTitle}</summary>
+          <p class="mt-1 text-xs text-textcolor2">{language.agentPresets.finalOutputPreviewDescription}</p>
+          <div class="mt-3 grid gap-3 sm:grid-cols-2">
+            <label class="flex flex-col gap-1">
+              <span class="text-xs font-medium">{language.agentPresets.finalOutputSampleMainLabel}</span>
+              <TextInput bind:value={sampleMainOutput} fullwidth />
+            </label>
+            {#each finalOutputAgentKeys as outputKey (outputKey)}
+              <label class="flex flex-col gap-1">
+                <span class="text-xs font-medium">{language.agentPresets.finalOutputSampleAgentLabel(outputKey)}</span>
+                <TextInput bind:value={sampleAgentOutputs[outputKey]} fullwidth />
+              </label>
+            {/each}
+          </div>
+          <pre
+            class="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-darkbg p-3 text-sm"
+            data-risu-agent-preset-final-output-preview-value>{finalOutputPreview}</pre>
+        </details>
       </section>
 
       <div class="mt-5 border-t border-darkborderc pt-4">

@@ -3683,6 +3683,19 @@ export const languageEnglish = {
       'Optional CBS evaluated after the main response and all Agents complete. It takes precedence over a direct Final output destination.',
     finalOutputTemplatePlaceholder: '{{slot::mainOutput}}\n\nStatus:\n{{agent::status}}',
     finalOutputVariablesLabel: 'Available values:',
+    finalOutputPreviewTitle: 'Sample preview',
+    finalOutputPreviewDescription:
+      'Enter explicit sample values to preview composition locally. This does not contact a model provider.',
+    finalOutputSampleMainLabel: 'Sample main response',
+    finalOutputSampleAgentLabel: (key: string) => `Sample output for ${key}`,
+    finalOutputSampleMainDefault: 'Example main response',
+    finalOutputSampleAgentDefault: (key: string) => `Example ${key} output`,
+    finalOutputReferenceMissing: (token: string, key: string) =>
+      `${token} is unavailable because no Agent use has output key “${key}”.`,
+    finalOutputReferenceDisabled: (token: string, key: string) =>
+      `${token} is unavailable because every Agent use with output key “${key}” is disabled.`,
+    removeReference: 'Remove reference',
+    editProducer: 'Edit matching use',
     unlimited: 'Unlimited',
     defaultBadge: 'Default',
     statusReady: 'Ready',
