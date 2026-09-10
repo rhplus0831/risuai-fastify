@@ -111,8 +111,64 @@ test('reviewed UI/UX surfaces open from disposable data at both compact viewport
   await page.getByTestId('default-chat-menu-button').click()
   await page.getByTestId('default-chat-open-bardwiki').click()
   const bardWiki = page.getByRole('dialog', { name: 'BardWiki workspace', exact: true })
+  const bardWikiBackdrop = page.getByTestId('bardwiki-workspace-dialog-root')
   await expect(bardWiki).toBeVisible()
-  await expect(bardWiki.getByText('This chat has no BardWiki documents yet.', { exact: true })).toBeVisible()
+  await expect(bardWikiBackdrop).toHaveCSS('background-color', /(?:oklab\(0 0 0 \/ 0\.7\)|rgba\(0, 0, 0, 0\.7\))/)
+  expect(await bardWiki.evaluate((node) => getComputedStyle(node).boxShadow)).not.toBe('none')
+  const closeBardWiki = bardWiki.getByRole('button', { name: 'Close', exact: true })
+  expect((await closeBardWiki.boundingBox())?.height).toBeGreaterThanOrEqual(44)
+  expect((await closeBardWiki.boundingBox())?.width).toBeGreaterThanOrEqual(44)
+  expect(await modalBackgroundIsInert(bardWikiBackdrop)).toBe(true)
+
+  const chatOverrides = bardWiki.locator('details').filter({ hasText: 'Chat overrides' }).first()
+  await chatOverrides.locator('summary').click()
+  await expect(chatOverrides.locator('[data-risu-bardwiki-override="enabled"] option').first()).toHaveText(
+    'Inherit — currently Enabled',
+  )
+  await expect(chatOverrides.locator('[data-risu-bardwiki-override="memory-mode"] option').first()).toHaveText(
+    'Inherit — currently BardWiki only',
+  )
+  await expect(chatOverrides.locator('[data-risu-bardwiki-override="confirmation"] option').first()).toHaveText(
+    'Inherit — currently Manual',
+  )
+  await chatOverrides.locator('[data-risu-bardwiki-override="enabled"] select').selectOption('disabled')
+
+  const guidedEmpty = bardWiki.locator('[data-risu-bardwiki-guided-empty]')
+  await expect(guidedEmpty.getByRole('heading', { name: 'Create this chat’s first memory document' })).toBeVisible()
+  await expect(guidedEmpty.getByRole('button', { name: 'Create first document' })).toBeVisible()
+  await expect(guidedEmpty.getByRole('button', { name: 'Import vault' })).toBeVisible()
+  const buildFromChat = guidedEmpty.getByRole('button', { name: 'Build from chat' })
+  await expect(buildFromChat).toBeVisible()
+  await buildFromChat.click()
+  const lifecycle = bardWiki.getByTestId('bardwiki-lifecycle')
+  await expect(lifecycle).toHaveAttribute('open', '')
+  await expect(lifecycle.getByRole('heading', { name: 'Rebuild from chat' })).toBeVisible()
+  await expect(lifecycle.getByRole('option', { name: 'Start fresh from chat' })).toBeAttached()
+  await expect(lifecycle.getByRole('option', { name: 'Fill missing topics' })).toBeAttached()
+  await expect(lifecycle.getByRole('button', { name: 'Preview rebuild' })).toBeFocused()
+  await guidedEmpty.getByRole('button', { name: 'Import vault' }).click()
+  await expect(lifecycle.locator('input[type="file"]')).toBeFocused()
+
+  await guidedEmpty.getByRole('button', { name: 'Create first document' }).click()
+  const documentPane = bardWiki.locator('[data-risu-bardwiki-pane="documents"]')
+  const detailPane = bardWiki.locator('[data-risu-bardwiki-pane="detail"]')
+  const backToDocuments = detailPane.getByRole('button', { name: 'Back to documents' })
+  await expect(documentPane).toBeHidden()
+  await expect(detailPane).toBeVisible()
+  await expect(backToDocuments).toBeFocused()
+  await detailPane.getByLabel('Markdown source').fill('# Unsaved browser draft')
+  await backToDocuments.click()
+  await expect(documentPane).toBeVisible()
+  await expect(detailPane).toBeHidden()
+  const resumeDraft = documentPane.getByRole('button', { name: 'Return to new document draft' })
+  await expect(resumeDraft).toBeFocused()
+  await resumeDraft.click()
+  await expect(detailPane.getByLabel('Markdown source')).toHaveValue('# Unsaved browser draft')
+  await expect(chatOverrides.locator('[data-risu-bardwiki-override="enabled"] select')).toHaveValue('disabled')
+  await expect(bardWiki.locator('[data-risu-bardwiki-activity-summary]')).toHaveText(
+    '0 running · 0 need attention · 0 failed',
+  )
+  expect(await bardWiki.evaluate((node) => node.scrollWidth <= node.clientWidth)).toBe(true)
 
   expect(commandRequests).toEqual([])
 })
@@ -215,4 +271,25 @@ async function openChat(page: Page): Promise<void> {
 async function waitForLoaded(page: Page): Promise<void> {
   await expect.poll(() => page.evaluate(() => Boolean(window.__RISU_FASTIFY_BROWSER_SMOKE__))).toBe(true)
   await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.waitForLoaded(20_000))
+}
+
+async function modalBackgroundIsInert(modalRoot: ReturnType<Page['locator']>): Promise<boolean> {
+  return modalRoot.evaluate((root) => {
+    let activeBranch: Element = root
+    while (activeBranch.parentElement) {
+      const parent = activeBranch.parentElement
+      for (const sibling of parent.children) {
+        if (
+          sibling !== activeBranch &&
+          sibling instanceof HTMLElement &&
+          (!sibling.inert || sibling.getAttribute('aria-hidden') !== 'true')
+        ) {
+          return false
+        }
+      }
+      if (parent === document.body) break
+      activeBranch = parent
+    }
+    return true
+  })
 }

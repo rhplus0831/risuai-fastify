@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 5 in progress — guided BardWiki workspace.**
-- Next action: turn BardWiki empty, lifecycle, activity, and mobile states into a guided workspace.
+- State: **Phase 6 in progress — accessibility, visual evidence, and closeout.**
+- Next action: run the cross-surface accessibility/zoom matrix, update current guides, and archive the accepted plan.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -23,7 +23,7 @@
 | [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Accepted | Dependency consequences are previewed and accepted/queued/failed recovery semantics remain explicit. |
 | [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Accepted | Responsive drawers, consolidated row menus, nested hierarchy, complete names, fallbacks, and overflow cues are verified at both compact viewports. |
 | [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Accepted | Agent, Preset, and Hook authoring now expose outcomes, insertion, autocomplete, diagnostics, previews, phase choice, and technical disclosures. |
-| [5. Guided BardWiki workspace](phases/phase-5-guided-bardwiki-workspace.md) | Pending | Turn the empty workspace, overrides, lifecycle tools, and mobile flow into guided tasks. |
+| [5. Guided BardWiki workspace](phases/phase-5-guided-bardwiki-workspace.md) | Accepted | Empty, inherited, lifecycle, activity, mobile, and modal states form one guided and safely fenced workspace. |
 | [6. Accessibility, visual evidence, and closeout](phases/phase-6-accessibility-and-closeout.md) | Pending | Complete interaction, contrast, zoom, browser, documentation, and rollout evidence. |
 
 ## Decisions
@@ -314,3 +314,42 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   browser-externalization warnings.
 - Phase 4 accepted. Next slice: coherent zero-document BardWiki guidance and
   list/detail mobile navigation in Phase 5.
+
+### 2026-09-10 — Phase 5 guided BardWiki workspace
+
+- Source bases: `12af6ac09`, `ded13dee9`, `55cbbf31f`, and `9e2311650`.
+- Changed owners: `src/lib/ChatScreens/BardWikiWorkspace.svelte`, localized
+  BardWiki copy, its focused component tests, and the compact Chromium journey.
+- A zero-document chat now presents one guided workflow with **Create first
+  document** as the primary action and **Import vault** / **Build from chat** as
+  secondary routes into the existing preview-fenced stages. Inherited controls
+  show their effective server value in a responsive grid without materializing
+  it as an override.
+- Compact BardWiki uses list-then-detail navigation with a named Back action,
+  retains unsaved document and settings drafts, and restores logical focus.
+  Desktop keeps its split view. Lifecycle controls use outcome names while
+  hashes, source distinctions, document replacement counts, and conflict
+  strategy remain in Technical details; preview and explicit apply/confirmation
+  fences are unchanged.
+- Activity summarizes running, attention, and failed counts. Newly actionable
+  failures/review states open the disclosure, resolved or unchanged work does
+  not override a user's closed choice, and confirmation/Retry/Cancel/results
+  share one polite or urgent live announcement owner.
+- The workspace uses a stronger established scrim, theme-owned surface and
+  border colors, a 44px Close target, and a shadowed modal surface. No shared
+  theme token was changed because focused inspection found no proven global
+  token weakness; modal focus trapping, background inertness, scroll lock,
+  Escape/backdrop safety, nesting, and restoration remain owned by the existing
+  primitives.
+- Passed `pnpm test -- src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts`
+  (21 tests), `pnpm check` with no diagnostics, focused Prettier, and
+  `git diff --check`.
+- Passed `pnpm build:smoke` and the dedicated Chromium journey at 550×775 and
+  655×691. It verifies the coherent empty workflow, all three CTA destinations,
+  live inherited labels, outcome-named lifecycle choices, 44px Close geometry,
+  stronger scrim/shadow, programmatic background inertness, one-pane compact
+  navigation, focus restoration, unsaved document/settings draft retention,
+  Activity counts, no horizontal overflow, and no command requests. The build
+  retained its existing CSS Highlight API and browser-externalization warnings.
+- Phase 5 accepted. Next slice: cross-surface keyboard, contrast, theme, zoom,
+  reduced-motion, and documentation closeout in Phase 6.
