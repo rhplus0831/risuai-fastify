@@ -58,13 +58,13 @@
         onpointerenter={() => onPrefetch(item)}
         onfocusin={() => onPrefetch(item)}>
         <SidebarAvatar
-          src={item.characterImage ? resolveImage(item.characterImage) : '/none.webp'}
+          src={item.characterImage ? resolveImage(item.characterImage) : ''}
           size="42"
           {rounded}
           name={`${item.characterName} · ${item.chatName}`}
           {isCurrent}
           onClick={() => onOpen(item)} />
-        <span class="mt-0.5 w-16 truncate text-center text-[10px] leading-tight text-textcolor2">
+        <span class="mt-0.5 w-16 truncate text-center text-[10px] leading-tight text-textcolor2" title={item.chatName}>
           {item.chatName}
         </span>
         {#if warningChatIds.has(item.chatId)}

@@ -375,7 +375,18 @@ vi.mock('src/lang', () => ({
     chatStructurePending: (action: string) => `Saving ${action}`,
     chatStructureQueued: (action: string) => `${action} queued`,
     chatOptions: 'Chat options',
+    chatFolders: 'Chat folders',
+    chats: 'Chats',
+    chatFolderContents: (name: string) => `Chats in ${name}`,
+    emptyChatFolder: (name: string) => `${name} has no chats`,
     changeFolderColor: 'Change folder color',
+    createCopy: 'Create a copy',
+    bindPersona: 'Bind persona',
+    unbindPersona: 'Unbind persona',
+    renameChat: 'Rename chat',
+    renameFolder: 'Rename folder',
+    organize: 'Organize',
+    moreActions: 'More actions',
     doYouWantToBindCurrentPersona: 'Bind persona?',
     doYouWantToUnbindCurrentPersona: 'Unbind persona?',
     errors: { onlyOneChat: 'Only one chat' },
@@ -513,7 +524,7 @@ vi.mock('./Toggles.svelte', async () => {
 
 import { currentChatStateSnapshot } from 'src/ts/chatCommands'
 import SideChatListHarness from './SideChatList.testHarness.svelte'
-import { selectedCharID } from 'src/ts/stores.svelte'
+import { popupStore, selectedCharID } from 'src/ts/stores.svelte'
 
 import { charactersResourceState, replaceResourceDatabase as setDatabaseLite } from 'src/ts/server/resourceState.svelte'
 import type { Chat, ChatFolder, character } from 'src/ts/storage/database.svelte'
@@ -776,6 +787,9 @@ describe('SideChatList DOM contract harness', () => {
     vi.clearAllMocks()
     generationJobLifecycles.set({})
     resetChatUnreadForTests()
+    popupStore.children = null
+    popupStore.openId = 0
+    popupStore.trigger = null
   })
 
   afterEach(() => {
@@ -790,6 +804,9 @@ describe('SideChatList DOM contract harness', () => {
     setDatabaseLite({} as never)
     generationJobLifecycles.set({})
     resetChatUnreadForTests()
+    popupStore.children = null
+    popupStore.openId = 0
+    popupStore.trigger = null
   })
 
   it('renders seeded root and folder chat rows with selected and folder selectors', async () => {
@@ -809,6 +826,68 @@ describe('SideChatList DOM contract harness', () => {
     expectRowSelected('chat-root-b', false)
     expect(sidebarRoot().dataset.risuChatOpen).toBe('false')
     expect(target.querySelector('[data-testid="side-chat-list-toggles-stub"]')).toBeNull()
+  })
+
+  it('exposes target-named secondary actions in a keyboard menu with a separated danger section', async () => {
+    seedSidebarDatabase()
+
+    component = mount(SideChatListHarness, { target })
+    await tick()
+
+    const row = rowByChatId('chat-root-a')
+    const trigger = rowActionButton(row, 'more-actions') as HTMLButtonElement
+    expect(trigger.getAttribute('aria-label')).toBe(`${language.moreActions}: Root Chat A`)
+    expect(trigger.classList.contains('min-h-11')).toBe(true)
+    expect(trigger.classList.contains('min-w-11')).toBe(true)
+
+    trigger.click()
+    await flushCommandWork()
+
+    const menu = target.querySelector<HTMLElement>('[role="menu"]')
+    expect(menu).toBeTruthy()
+    const actions = Array.from(menu!.querySelectorAll<HTMLButtonElement>('[data-risu-chat-menu-action]'))
+    expect(actions.map((action) => action.dataset.risuChatMenuAction)).toEqual([
+      'copy',
+      'persona',
+      'rename',
+      'export',
+      'organize',
+      'delete',
+    ])
+    expect(actions.every((action) => action.getAttribute('role') === 'menuitem')).toBe(true)
+    expect(actions.every((action) => action.getAttribute('aria-label')?.includes('Root Chat A'))).toBe(true)
+    expect(menu!.querySelector('[data-risu-danger-menu-section] [data-risu-chat-menu-action="delete"]')).toBe(
+      actions.at(-1),
+    )
+
+    actions[0].dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'End' }))
+    expect(document.activeElement).toBe(actions.at(-1))
+    actions.at(-1)!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }))
+    await flushCommandWork()
+    expect(target.querySelector('[role="menu"]')).toBeNull()
+    expect(document.activeElement).toBe(trigger)
+  })
+
+  it('presents folders as disclosed nested groups with explicit empty-state text', async () => {
+    const character = seedSidebarDatabase()
+    withTestDatabaseWrite(() => {
+      character.chatFolders.push({ id: 'folder-empty', name: 'Empty Folder', folded: false })
+    })
+
+    component = mount(SideChatListHarness, { target })
+    await tick()
+
+    const folderList = sidebarRoot().querySelector<HTMLElement>('[role="list"][aria-label="Chat folders"]')
+    const folder = folderElementById('folder-empty')
+    const disclosure = folderHeader(folder)
+    const panel = folderPanelById('folder-empty')
+    expect(folderList).toBeTruthy()
+    expect(folder.getAttribute('role')).toBe('listitem')
+    expect(disclosure.getAttribute('aria-expanded')).toBe('true')
+    expect(disclosure.querySelector('svg')).toBeTruthy()
+    expect(panel.getAttribute('role')).toBe('group')
+    expect(panel.getAttribute('aria-label')).toBe(language.chatFolderContents('Empty Folder'))
+    expect(panel.textContent).toContain(language.emptyChatFolder('Empty Folder'))
   })
 
   it('renders chat names from the hydrated owner when aggregate metadata conflicts', async () => {

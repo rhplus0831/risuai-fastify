@@ -22,6 +22,8 @@
     FolderPlusIcon,
     BookmarkCheckIcon,
     ArrowLeftIcon,
+    ChevronDownIcon,
+    ChevronRightIcon,
   } from '@lucide/svelte'
 
   import type { Chat, ChatFolder, character } from 'src/ts/storage/database.svelte'
@@ -38,6 +40,7 @@
 
   import CheckInput from '../UI/GUI/CheckInput.svelte'
   import Button from '../UI/GUI/Button.svelte'
+  import PopupButton from '../UI/PopupButton.svelte'
   import TextInput from '../UI/GUI/TextInput.svelte'
 
   import { alertChatOptions, alertConfirm, alertError, alertNormal, alertSelect, alertStore } from 'src/ts/alert'
@@ -1552,6 +1555,86 @@
   )
 </script>
 
+{#snippet chatActionsMenu(chat: Chat, index: number)}
+  <div
+    class="flex min-w-56 flex-col gap-1"
+    role="group"
+    aria-label={`${language.moreActions}: ${renderedChatName(chat)}`}>
+    <button
+      type="button"
+      data-risu-chat-menu-action="copy"
+      aria-label={`${language.createCopy}: ${renderedChatName(chat)}`}
+      class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected"
+      onclick={() => void forkChat(chat)}>{language.createCopy}</button>
+    <button
+      type="button"
+      data-risu-chat-menu-action="persona"
+      aria-label={`${language.bindPersona}: ${renderedChatName(chat)}`}
+      class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected"
+      onclick={() => void togglePersonaBinding(chat.id)}>
+      {resolveChatBoundPersonaId(chat) ? language.unbindPersona : language.bindPersona}
+    </button>
+    <button
+      type="button"
+      data-risu-chat-menu-action="rename"
+      aria-label={`${language.edit}: ${renderedChatName(chat)}`}
+      class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected"
+      onclick={() => (editMode = true)}>{language.renameChat}</button>
+    <button
+      type="button"
+      data-risu-chat-menu-action="export"
+      aria-label={`${language.export}: ${renderedChatName(chat)}`}
+      class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected"
+      onclick={() => {
+        if (chara.chaId && chat.id) void exportChatOnDemand(chat.id)
+      }}>{language.export}</button>
+    {#if chat.id && organizerIdsStable}
+      <button
+        type="button"
+        data-risu-chat-menu-action="organize"
+        aria-label={`${language.organize}: ${renderedChatName(chat)}`}
+        class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected"
+        onclick={() => void openChatOrganizerActions(chat)}>{language.organize}</button>
+    {/if}
+    <div class="mt-1 border-t border-darkborderc pt-1" data-risu-danger-menu-section>
+      <button
+        type="button"
+        data-risu-chat-menu-action="delete"
+        aria-label={`${language.remove}: ${renderedChatName(chat)}`}
+        disabled={isChatStructuralActionPending(chat.id)}
+        class="min-h-11 w-full rounded-md px-3 py-2 text-left font-medium text-draculared hover:bg-red-950/40 disabled:opacity-50"
+        onclick={() => void deleteChat(chat, index)}>{language.remove}</button>
+    </div>
+  </div>
+{/snippet}
+
+{#snippet folderActionsMenu(folder: ChatFolder, index: number)}
+  <div class="flex min-w-56 flex-col gap-1" role="group" aria-label={`${language.moreActions}: ${folder.name}`}>
+    <button
+      type="button"
+      data-risu-chat-menu-action="rename-folder"
+      aria-label={`${language.edit}: ${folder.name}`}
+      class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected"
+      onclick={() => (editMode = true)}>{language.renameFolder}</button>
+    <button
+      type="button"
+      data-risu-chat-menu-action="organize-folder"
+      aria-label={`${language.organize}: ${folder.name}`}
+      disabled={isFolderStructurePending(folder.id)}
+      class="min-h-11 w-full rounded-md px-3 py-2 text-left hover:bg-selected disabled:opacity-50"
+      onclick={() => void openChatFolderOrganizerActions(folder)}>{language.organize}</button>
+    <div class="mt-1 border-t border-darkborderc pt-1" data-risu-danger-menu-section>
+      <button
+        type="button"
+        data-risu-chat-menu-action="delete-folder"
+        aria-label={`${language.remove}: ${folder.name}`}
+        disabled={isFolderStructuralActionPending(folder.id)}
+        class="min-h-11 w-full rounded-md px-3 py-2 text-left font-medium text-draculared hover:bg-red-950/40 disabled:opacity-50"
+        onclick={() => void deleteChatFolder(folder, index)}>{language.remove}</button>
+    </div>
+  </div>
+{/snippet}
+
 <div
   data-risu-chat-list="sidebar"
   class="flex flex-col w-full h-[calc(100%-2rem)] max-h-[calc(100%-2rem)]"
@@ -1562,7 +1645,7 @@
     <div class="flex flex-col gap-3">
       <button
         data-risu-chat-action="back-to-chat-list"
-        class="flex items-center gap-2 text-textcolor2 hover:text-green-500 cursor-pointer mb-1"
+        class="mb-1 flex min-h-11 items-center gap-2 rounded-md px-2 text-textcolor2 hover:bg-selected hover:text-textcolor cursor-pointer"
         onclick={backToChatList}>
         <ArrowLeftIcon size={18} />
         <span>{language.goback}</span>
@@ -1581,7 +1664,7 @@
       data-risu-chat-action="create"
       data-risu-chat-mutation-status={hasConflictingStructureMutation([chatOrderConflictKey()]) ? 'pending' : ''}>
       <Button
-        className="relative bottom-2 w-full"
+        className="relative bottom-2 min-h-11 w-full"
         disabled={hasConflictingStructureMutation([chatOrderConflictKey()])}
         onclick={() => void createChat()}>{language.newChat}</Button>
     </div>
@@ -1600,7 +1683,7 @@
 
     {#key sorted}
       <div class="flex flex-col mt-2 overflow-y-auto grow" bind:this={listEle}>
-        <div class="flex flex-col" bind:this={folderEles}>
+        <div class="flex flex-col" bind:this={folderEles} role="list" aria-label={language.chatFolders}>
           {#each chara.chatFolders as folder, i}
             <div
               data-risu-chat-folder-idx={i}
@@ -1608,13 +1691,14 @@
               data-risu-chat-folder-folded={folder.folded ? 'true' : 'false'}
               data-risu-chat-mutation-status={structureMutationForTarget('folder', folder.id)?.status ?? ''}
               aria-busy={isFolderStructurePending(folder.id)}
+              role="listitem"
               class="flex flex-col mb-2 border-solid border-1 border-darkborderc cursor-pointer rounded-md">
               <!-- The nested native button retains keyboard semantics; the row handler restores the larger pointer target. -->
               <!-- svelte-ignore a11y_click_events_have_key_events -->
               <!-- svelte-ignore a11y_no_static_element_interactions -->
               <div
                 data-risu-chat-folder-header
-                class="flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"
+                class="flex min-h-11 items-center text-textcolor border-solid border-0 border-darkborderc p-1 cursor-pointer rounded-md"
                 class:bg-red-900={folder.color === 'red'}
                 class:bg-yellow-900={folder.color === 'yellow'}
                 class:bg-green-900={folder.color === 'green'}
@@ -1637,23 +1721,32 @@
                     aria-expanded={!folder.folded}
                     aria-controls={`risu-chat-folder-panel-${folder.id}`}
                     disabled={isFolderStructurePending(folder.id)}
-                    class="min-w-0 grow cursor-pointer text-left"
+                    class="flex min-h-11 min-w-0 grow cursor-pointer items-center gap-2 px-2 text-left"
                     class:opacity-50={isFolderStructurePending(folder.id)}
                     onclick={(event) => {
                       event.stopPropagation()
                       void toggleChatFolder(folder)
                     }}>
-                    <span>{folder.name}</span>
+                    {#if folder.folded}<ChevronRightIcon size={18} aria-hidden="true" />{:else}<ChevronDownIcon
+                        size={18}
+                        aria-hidden="true" />{/if}
+                    <span class="truncate" title={folder.name}>{folder.name}</span>
                   </button>
                 {/if}
                 <div class="ml-auto flex shrink-0 justify-end">
+                  <PopupButton
+                    dataAction="folder-more-actions"
+                    ariaLabel={`${language.moreActions}: ${folder.name}`}
+                    disabled={isFolderStructurePending(folder.id)}>
+                    {@render folderActionsMenu(folder, i)}
+                  </PopupButton>
                   <button
                     type="button"
                     data-risu-chat-action="folder-options"
                     data-risu-chat-folder-organizer-action={folder.id}
                     aria-label={`${language.options}: ${folder.name}`}
                     disabled={isFolderStructurePending(folder.id)}
-                    class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                    class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                     class:opacity-50={isFolderStructurePending(folder.id)}
                     onclick={(e) => {
                       e.stopPropagation()
@@ -1666,7 +1759,7 @@
                     data-risu-chat-action="folder-edit"
                     aria-label={`${language.edit}: ${folder.name}`}
                     disabled={isFolderStructurePending(folder.id)}
-                    class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                    class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                     class:opacity-50={isFolderStructurePending(folder.id)}
                     onclick={(e) => {
                       e.stopPropagation()
@@ -1679,7 +1772,7 @@
                     data-risu-chat-action="folder-delete"
                     aria-label={`${language.remove}: ${folder.name}`}
                     disabled={isFolderStructuralActionPending(folder.id)}
-                    class="text-textcolor2 hover:text-green-500 cursor-pointer"
+                    class="hidden text-textcolor2 hover:text-green-500 cursor-pointer"
                     class:opacity-50={isFolderStructuralActionPending(folder.id)}
                     onclick={async (e) => {
                       e.stopPropagation()
@@ -1694,16 +1787,21 @@
                 data-risu-chat-folder-panel-id={folder.id}
                 data-risu-sidebar-chat-sortable-list
                 hidden={folder.folded}
-                class="flex flex-col w-full text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md {folder.folded
+                role="group"
+                aria-label={language.chatFolderContents(folder.name)}
+                class="ml-3 flex w-[calc(100%-0.75rem)] flex-col border-l border-darkborderc py-2 pl-2 pr-1 text-textcolor {folder.folded
                   ? 'hidden'
                   : ''}">
                 {#if (chatsByFolderId.get(folder.id) ?? []).length == 0}
-                  <span class="no-sort flex justify-center text-textcolor2">Empty</span>
+                  <span class="no-sort flex min-h-11 items-center px-2 text-sm text-textcolor2" role="status">
+                    {language.emptyChatFolder(folder.name)}
+                  </span>
                   <div></div>
                 {:else}
                   {#each chatsByFolderId.get(folder.id) ?? [] as { chat, index }}
                     <!-- svelte-ignore a11y_click_events_have_key_events -->
                     <!-- svelte-ignore a11y_no_static_element_interactions -->
+                    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
                     <div
                       data-risu-chat-idx={index}
                       data-risu-chat-id={chat.id ?? ''}
@@ -1715,7 +1813,9 @@
                         : undefined}
                       data-risu-chat-unread={chat.id && $unreadChatIds.has(chat.id) ? 'true' : undefined}
                       aria-busy={isChatStructurePending(chat.id)}
-                      class="risu-chats relative flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"
+                      aria-current={index === chara.chatPage ? 'page' : undefined}
+                      role="listitem"
+                      class="risu-chats relative flex min-h-11 items-center text-textcolor border-solid border-0 border-darkborderc cursor-pointer rounded-md"
                       class:bg-selected={index === chara.chatPage}
                       class:ring-1={chat.id && reattachWarningChatIds.has(chat.id)}
                       class:ring-yellow-500={chat.id && reattachWarningChatIds.has(chat.id)}
@@ -1745,6 +1845,14 @@
                           onActivate={() => activateChatRow(index)} />
                       {/if}
                       <div class="ml-auto flex shrink-0 justify-end">
+                        <PopupButton
+                          dataAction="more-actions"
+                          ariaLabel={`${language.moreActions}: ${renderedChatName(chat)}`}
+                          disabled={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
+                          ariaBusy={(pendingPersonaBindings[chat.id ?? ''] ?? false) ||
+                            isChatStructurePending(chat.id)}>
+                          {@render chatActionsMenu(chat, index)}
+                        </PopupButton>
                         {#if editMode && chat.id && organizerIdsStable}
                           <button
                             type="button"
@@ -1769,7 +1877,7 @@
                           aria-disabled={(pendingPersonaBindings[chat.id ?? ''] ?? false) ||
                             isChatStructurePending(chat.id)}
                           disabled={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
-                          class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                          class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                           class:opacity-50={(pendingPersonaBindings[chat.id ?? ''] ?? false) ||
                             isChatStructurePending(chat.id)}
                           onclick={async (e) => {
@@ -1793,7 +1901,7 @@
                           type="button"
                           data-risu-chat-action="edit"
                           aria-label={`${language.edit}: ${renderedChatName(chat)}`}
-                          class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                          class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                           onclick={(e) => {
                             e.stopPropagation()
                             editMode = !editMode
@@ -1804,7 +1912,7 @@
                           type="button"
                           data-risu-chat-action="export"
                           aria-label={`${language.export}: ${renderedChatName(chat)}`}
-                          class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                          class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                           onclick={async (e) => {
                             e.stopPropagation()
                             if (chara.chaId && chat.id) {
@@ -1818,7 +1926,7 @@
                           data-risu-chat-action="delete"
                           aria-label={`${language.remove}: ${renderedChatName(chat)}`}
                           disabled={isChatStructuralActionPending(chat.id)}
-                          class="text-textcolor2 hover:text-green-500 cursor-pointer"
+                          class="hidden text-textcolor2 hover:text-green-500 cursor-pointer"
                           class:opacity-50={isChatStructuralActionPending(chat.id)}
                           onclick={async (e) => {
                             e.stopPropagation()
@@ -1834,10 +1942,11 @@
             </div>
           {/each}
         </div>
-        <div data-risu-sidebar-chat-sortable-list class="flex flex-col">
+        <div data-risu-sidebar-chat-sortable-list class="flex flex-col" role="list" aria-label={language.chats}>
           {#each chatsByFolderId.get('') ?? [] as { chat, index }}
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
             <div
               data-risu-chat-idx={index}
               data-risu-chat-id={chat.id ?? ''}
@@ -1847,7 +1956,9 @@
               data-risu-chat-reattach-warning={chat.id && reattachWarningChatIds.has(chat.id) ? 'true' : undefined}
               data-risu-chat-unread={chat.id && $unreadChatIds.has(chat.id) ? 'true' : undefined}
               aria-busy={isChatStructurePending(chat.id)}
-              class="relative flex items-center text-textcolor border-solid border-0 border-darkborderc p-2 cursor-pointer rounded-md"
+              aria-current={index === chara.chatPage ? 'page' : undefined}
+              role="listitem"
+              class="relative flex min-h-11 items-center text-textcolor border-solid border-0 border-darkborderc cursor-pointer rounded-md"
               class:bg-selected={index === chara.chatPage}
               class:ring-1={chat.id && reattachWarningChatIds.has(chat.id)}
               class:ring-yellow-500={chat.id && reattachWarningChatIds.has(chat.id)}
@@ -1877,6 +1988,13 @@
                   onActivate={() => activateChatRow(index)} />
               {/if}
               <div class="ml-auto flex shrink-0 justify-end">
+                <PopupButton
+                  dataAction="more-actions"
+                  ariaLabel={`${language.moreActions}: ${renderedChatName(chat)}`}
+                  disabled={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
+                  ariaBusy={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}>
+                  {@render chatActionsMenu(chat, index)}
+                </PopupButton>
                 {#if editMode && chat.id && organizerIdsStable}
                   <button
                     type="button"
@@ -1899,7 +2017,7 @@
                   aria-busy={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
                   aria-disabled={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
                   disabled={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
-                  class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                  class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                   class:opacity-50={(pendingPersonaBindings[chat.id ?? ''] ?? false) || isChatStructurePending(chat.id)}
                   onclick={async (e) => {
                     e.stopPropagation()
@@ -1922,7 +2040,7 @@
                   type="button"
                   data-risu-chat-action="edit"
                   aria-label={`${language.edit}: ${renderedChatName(chat)}`}
-                  class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                  class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                   onclick={(e) => {
                     e.stopPropagation()
                     editMode = !editMode
@@ -1933,7 +2051,7 @@
                   type="button"
                   data-risu-chat-action="export"
                   aria-label={`${language.export}: ${renderedChatName(chat)}`}
-                  class="text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
+                  class="hidden text-textcolor2 hover:text-green-500 mr-1 cursor-pointer"
                   onclick={async (e) => {
                     e.stopPropagation()
                     if (chara.chaId && chat.id) {
@@ -1947,7 +2065,7 @@
                   data-risu-chat-action="delete"
                   aria-label={`${language.remove}: ${renderedChatName(chat)}`}
                   disabled={isChatStructuralActionPending(chat.id)}
-                  class="text-textcolor2 hover:text-green-500 cursor-pointer"
+                  class="hidden text-textcolor2 hover:text-green-500 cursor-pointer"
                   class:opacity-50={isChatStructuralActionPending(chat.id)}
                   onclick={async (e) => {
                     e.stopPropagation()
@@ -1967,7 +2085,7 @@
         <button
           data-risu-chat-action="export-all"
           aria-label={language.chatListExportAll}
-          class="text-textcolor2 hover:text-green-500 mr-2 cursor-pointer"
+          class="mr-1 flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md text-textcolor2 hover:bg-selected hover:text-textcolor"
           onclick={() => {
             void exportAllAndMaybeResetChats()
           }}>
@@ -1976,7 +2094,7 @@
         <button
           data-risu-chat-action="import"
           aria-label={language.chatListImport}
-          class="text-textcolor2 hover:text-green-500 mr-2 cursor-pointer"
+          class="mr-1 flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md text-textcolor2 hover:bg-selected hover:text-textcolor"
           onclick={() => {
             void importChatOnDemand()
           }}>
@@ -1986,7 +2104,7 @@
           data-risu-chat-action="edit-list"
           aria-label={language.chatListEdit}
           aria-pressed={editMode}
-          class="text-textcolor2 hover:text-green-500 mr-2 cursor-pointer"
+          class="mr-1 flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md text-textcolor2 hover:bg-selected hover:text-textcolor"
           onclick={() => {
             editMode = !editMode
           }}>
@@ -1995,7 +2113,7 @@
         <button
           data-risu-chat-action="branches"
           aria-label={language.branch}
-          class="text-textcolor2 hover:text-green-500 mr-2 cursor-pointer"
+          class="mr-1 flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md text-textcolor2 hover:bg-selected hover:text-textcolor"
           onclick={async () => {
             if (!hasStableOrganizationIds()) return
             const ownerCharacterId = chara.chaId
@@ -2026,7 +2144,7 @@
         <button
           data-risu-chat-action="bookmarks"
           aria-label={language.bookmarks}
-          class="text-textcolor2 hover:text-green-500 mr-2 cursor-pointer"
+          class="mr-1 flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md text-textcolor2 hover:bg-selected hover:text-textcolor"
           onclick={() => {
             $bookmarkListOpen = true
           }}>
@@ -2037,7 +2155,7 @@
           aria-label={language.chatListCreateFolder}
           aria-busy={hasConflictingStructureMutation([folderOrderConflictKey()])}
           disabled={hasConflictingStructureMutation([folderOrderConflictKey()])}
-          class="ml-auto text-textcolor2 hover:text-green-500 mr-2 cursor-pointer"
+          class="ml-auto mr-1 flex min-h-11 min-w-11 cursor-pointer items-center justify-center rounded-md text-textcolor2 hover:bg-selected hover:text-textcolor"
           class:opacity-50={hasConflictingStructureMutation([folderOrderConflictKey()])}
           onclick={() => void createChatFolder()}>
           <FolderPlusIcon size={18} />

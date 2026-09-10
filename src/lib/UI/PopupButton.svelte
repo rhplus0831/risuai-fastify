@@ -4,10 +4,20 @@
   import { sleep } from 'src/ts/util'
   import { language } from 'src/lang'
 
-  const {
+  let {
     children,
+    ariaLabel = language.moreActions,
+    disabled = false,
+    className = '',
+    dataAction,
+    ariaBusy = false,
   }: {
     children: import('svelte').Snippet
+    ariaLabel?: string
+    disabled?: boolean
+    className?: string
+    dataAction?: string
+    ariaBusy?: boolean
   } = $props()
 
   let buttonId = Math.random()
@@ -17,11 +27,16 @@
 <button
   bind:this={buttonElement}
   type="button"
-  aria-label={language.moreActions}
+  aria-label={ariaLabel}
+  title={ariaLabel}
   aria-haspopup="menu"
   aria-controls="risu-popup-menu"
+  aria-busy={ariaBusy}
   aria-expanded={popupStore.openId === buttonId && Boolean(popupStore.children)}
+  {disabled}
+  data-risu-chat-action={dataAction}
   onclick={async (e: MouseEvent) => {
+    e.stopPropagation()
     if (popupStore.openId === buttonId) {
       popupStore.children = null
       popupStore.openId = 0
@@ -39,6 +54,6 @@
     popupStore.openId = buttonId
     popupStore.trigger = buttonElement
   }}
-  class="hover:text-blue-500 transition-colors button-icon-menu">
+  class="button-icon-menu flex min-h-11 min-w-11 items-center justify-center rounded-md text-textcolor2 transition-colors hover:bg-selected hover:text-textcolor focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 disabled:opacity-50 {className}">
   <MenuIcon size={20} />
 </button>

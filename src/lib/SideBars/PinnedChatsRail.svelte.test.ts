@@ -122,6 +122,11 @@ describe('PinnedChatsRail current route', () => {
     expect(rail?.dataset.risuPinnedChatColumns).toBe('4')
     expect(rail?.style.gridTemplateColumns).toBe('repeat(4, minmax(0, 1fr))')
     expect(rail?.querySelectorAll('[data-risu-pinned-chat]')).toHaveLength(2)
+    expect(pinnedAction('chat-a').getAttribute('aria-label')).toBe('Alpha · Alpha Chat')
+    expect(pinnedAction('chat-a').classList.contains('min-h-11')).toBe(true)
+    expect(pinnedAction('chat-a').textContent).toContain('A')
+    expect(pinnedAction('chat-a').querySelector('img')).toBeNull()
+    expect(pinnedRow('chat-a').querySelector('span[title="Alpha Chat"]')).toBeTruthy()
   })
 
   it('tracks exactly one current pinned chat across chat, character-only, and non-chat routes', async () => {

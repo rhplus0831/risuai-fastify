@@ -40,11 +40,40 @@
     chaId,
     isCurrent = false,
   }: Props = $props()
+
+  let imageFailed = $state(false)
+  const initials = $derived.by(() => {
+    const parts = name.trim().split(/\s+/).filter(Boolean)
+    if (parts.length === 0) return '?'
+    return parts
+      .slice(0, 2)
+      .map((part) => part[0])
+      .join('')
+      .toLocaleUpperCase()
+  })
+
+  $effect(() => {
+    void src
+    imageFailed = false
+  })
 </script>
+
+{#snippet fallback()}
+  <div
+    class="bg-skin-border sidebar-avatar flex items-center justify-center bg-selected font-semibold text-textcolor"
+    style:width={size + 'px'}
+    style:height={size + 'px'}
+    style:minWidth={size + 'px'}
+    class:rounded-md={!rounded}
+    class:rounded-full={rounded}
+    aria-hidden="true">
+    <span class="select-none" style:font-size={`${Math.max(10, Number(size) * 0.34)}px`}>{initials}</span>
+  </div>
+{/snippet}
 
 <button
   type="button"
-  class="flex shrink-0 items-center justify-center avatar"
+  class="avatar flex min-h-11 min-w-11 shrink-0 items-center justify-center"
   class:border={bordered}
   class:border-selected={bordered}
   class:rounded-md={bordered}
@@ -119,34 +148,26 @@
       {/await}
     {:else}
       {#await src}
-        <div
-          class="bg-skin-border sidebar-avatar rounded-md bg-top"
-          style:width={size + 'px'}
-          style:height={size + 'px'}
-          style:minWidth={size + 'px'}
-          class:rounded-md={!rounded}
-          class:rounded-full={rounded}>
-        </div>
+        {@render fallback()}
       {:then img}
-        <img
-          src={img}
-          class="bg-skin-border sidebar-avatar rounded-md object-cover object-top"
-          style:width={size + 'px'}
-          style:height={size + 'px'}
-          style:minWidth={size + 'px'}
-          class:rounded-md={!rounded}
-          class:rounded-full={rounded}
-          alt="avatar" />
+        {#if img && !imageFailed}
+          <img
+            src={img}
+            class="bg-skin-border sidebar-avatar object-cover object-top"
+            style:width={size + 'px'}
+            style:height={size + 'px'}
+            style:minWidth={size + 'px'}
+            class:rounded-md={!rounded}
+            class:rounded-full={rounded}
+            alt=""
+            aria-hidden="true"
+            onerror={() => (imageFailed = true)} />
+        {:else}
+          {@render fallback()}
+        {/if}
       {/await}
     {/if}
   {:else}
-    <div
-      class="bg-skin-border sidebar-avatar rounded-md bg-top"
-      style:width={size + 'px'}
-      style:height={size + 'px'}
-      style:minWidth={size + 'px'}
-      class:rounded-md={!rounded}
-      class:rounded-full={rounded}>
-    </div>
+    {@render fallback()}
   {/if}
 </button>

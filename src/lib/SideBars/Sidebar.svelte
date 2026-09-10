@@ -963,7 +963,7 @@
           <div>
             {#if char.type === 'normal'}
               <SidebarAvatar
-                src={char.img ? getCharImage(char.img, 'plain') : '/none.webp'}
+                src={char.img ? getCharImage(char.img, 'plain') : ''}
                 size="56"
                 rounded={IconRounded}
                 name={char.name}
@@ -1103,7 +1103,7 @@
                   <SidebarIndicator isActive={$selectedCharID === char2.index && sideBarMode !== 1} />
                   <div>
                     <SidebarAvatar
-                      src={char2.img ? getCharImage(char2.img, 'plain') : '/none.webp'}
+                      src={char2.img ? getCharImage(char2.img, 'plain') : ''}
                       size="56"
                       rounded={IconRounded}
                       name={char2.name}
@@ -1305,6 +1305,7 @@
   <button
     type="button"
     aria-label={language.close}
+    data-risu-responsive-navigation-scrim
     class:hidden
     onclick={() => {
       if ($sideBarClosing) {
