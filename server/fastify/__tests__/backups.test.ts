@@ -443,13 +443,22 @@ describe('backups', () => {
       headers: { 'risu-auth': assertion },
       payload: { label: 'a' },
     })
-    await new Promise((r) => setTimeout(r, 15))
     const b = await harness.app.inject({
       method: 'POST',
       url: '/api/v1/backups',
       headers: { 'risu-auth': assertion },
       payload: { label: 'b' },
     })
+    const aId = a.json().id as string
+    const bId = b.json().id as string
+    for (const [id, createdAt] of [
+      [aId, '2020-01-01T00:00:00.000Z'],
+      [bId, '2020-01-02T00:00:00.000Z'],
+    ] as const) {
+      const manifestPath = path.join(harness.dataDir, 'backups', id, 'manifest.json')
+      const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
+      writeFileSync(manifestPath, JSON.stringify({ ...manifest, createdAt }))
+    }
     const list = await harness.app.inject({
       method: 'GET',
       url: '/api/v1/backups',
@@ -457,7 +466,7 @@ describe('backups', () => {
     })
     expect(list.statusCode).toBe(200)
     const ids = list.json().backups.map((m: { id: string }) => m.id)
-    expect(ids).toEqual([b.json().id, a.json().id])
+    expect(ids).toEqual([bId, aId])
   })
 
   it('lists empty on a fresh data dir', async () => {

@@ -54,6 +54,23 @@ type MountedComponent = Parameters<typeof unmount>[0]
 let component: MountedComponent | undefined
 let target: HTMLElement
 
+function buttonContaining(text: string): HTMLButtonElement {
+  const button = Array.from(target.querySelectorAll('button')).find((candidate) =>
+    candidate.textContent?.includes(text),
+  )
+  if (!button) throw new Error(`button not found: ${text}`)
+  return button
+}
+
+function embeddingRunButton(): HTMLButtonElement {
+  const label = language.run?.toLocaleUpperCase()
+  const button = Array.from(target.querySelectorAll('button')).find(
+    (candidate) => candidate.textContent?.trim() === label,
+  )
+  if (!button) throw new Error(`button not found: ${label}`)
+  return button
+}
+
 beforeEach(() => {
   target = document.createElement('div')
   document.body.append(target)
@@ -77,15 +94,12 @@ describe('playground run-state recovery', () => {
     runMocks.generateAIImage.mockRejectedValue(new Error('image failed'))
     component = mount(PlaygroundImageGen, { target })
 
-    const button = Array.from(target.querySelectorAll('button')).find((candidate) =>
-      candidate.textContent?.includes('Generate'),
-    )
-    expect(button).toBeTruthy()
-    button!.click()
+    buttonContaining(language.playground.generateImage).click()
 
     await vi.waitFor(() => expect(runMocks.alertError).toHaveBeenCalledWith(expect.any(Error)))
-    expect(target.querySelector('.loadmove')).toBeNull()
-    expect(target.textContent).toContain('Generate')
+    await vi.waitFor(() => expect(buttonContaining(language.playground.generateImage).disabled).toBe(false))
+    buttonContaining(language.playground.generateImage).click()
+    await vi.waitFor(() => expect(runMocks.generateAIImage).toHaveBeenCalledTimes(2))
   })
 
   it('discards an image generation result when its submitted prompts are stale', async () => {
@@ -165,12 +179,12 @@ describe('playground run-state recovery', () => {
     runMocks.addText.mockRejectedValue(new Error('embedding failed'))
     component = mount(PlaygroundEmbedding, { target })
 
-    const button = Array.from(target.querySelectorAll('button')).at(-1)
-    expect(button).toBeTruthy()
-    button!.click()
+    embeddingRunButton().click()
 
     await vi.waitFor(() => expect(runMocks.alertError).toHaveBeenCalledWith(expect.any(Error)))
-    expect(target.querySelector('.loadmove')).toBeNull()
+    await vi.waitFor(() => expect(embeddingRunButton().disabled).toBe(false))
+    embeddingRunButton().click()
+    await vi.waitFor(() => expect(runMocks.addText).toHaveBeenCalledTimes(2))
   })
 
   it('keeps an embedding run bound to its submitted inputs and discards a stale completion', async () => {

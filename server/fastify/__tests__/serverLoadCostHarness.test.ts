@@ -94,17 +94,6 @@ async function startHarness(generationChat?: GenerationChatRouteOptions): Promis
   return { app, dataDir }
 }
 
-beforeEach(async () => {
-  harness = await startHarness()
-  ;({ assertion } = await setupAuthedClient(harness.app))
-})
-
-afterEach(async () => {
-  resetTriggerCloneInstrumentation()
-  await harness.app.close()
-  rmSync(harness.dataDir, { recursive: true, force: true })
-})
-
 async function restartHarness(generationChat: GenerationChatRouteOptions): Promise<void> {
   await harness.app.close()
   rmSync(harness.dataDir, { recursive: true, force: true })
@@ -468,6 +457,17 @@ describe('classifyCorpusStatement', () => {
 })
 
 describe('server load-count harness on the large-corpus fixture', () => {
+  beforeEach(async () => {
+    harness = await startHarness()
+    ;({ assertion } = await setupAuthedClient(harness.app))
+  })
+
+  afterEach(async () => {
+    resetTriggerCloneInstrumentation()
+    await harness.app.close()
+    rmSync(harness.dataDir, { recursive: true, force: true })
+  })
+
   it('passes a scoped hot path: hydration of a chat with messages AND hypaV3Data', async () => {
     const fixture = buildLargeCorpusFixture()
     await importDatabase(fixture.database)
@@ -1877,38 +1877,6 @@ describe('server load-count harness on the large-corpus fixture', () => {
     expect(metricsRun.loadCountByTable.command_events).toBeGreaterThanOrEqual(1)
   })
 
-  it('metric fields are not built when metrics are off (and are identical when on)', async () => {
-    // Unit guarantee on the real emitter: the thunk only runs after the
-    // enabled guard.
-    const thunk = vi.fn(() => ({ payloadBytes: 123 }))
-    await withProtocolMetricsEnv('', async () => {
-      emitProtocolMetric('m5_probe', thunk)
-    })
-    expect(thunk).not.toHaveBeenCalled()
-
-    const logged: Record<string, unknown>[] = []
-    const observed: Readonly<Record<string, unknown>>[] = []
-    const logger = { info: (payload: Record<string, unknown>) => logged.push(payload) }
-    const unsubscribe = subscribeProtocolMetrics((metric) => observed.push(metric))
-    await withProtocolMetricsEnv('1', async () => {
-      emitProtocolMetric('m5_probe', thunk, logger as never)
-      emitProtocolMetric('m5_probe_eager', { payloadBytes: 123 }, logger as never)
-    })
-    unsubscribe()
-    expect(thunk).toHaveBeenCalledTimes(1)
-    expect(logged[0]).toEqual({ metric: 'm5_probe', payloadBytes: 123 })
-    expect(logged[1]).toEqual({ metric: 'm5_probe_eager', payloadBytes: 123 })
-    expect(observed).toEqual(logged)
-
-    const unsubscribeThrowing = subscribeProtocolMetrics(() => {
-      throw new Error('measurement sink failed')
-    })
-    await withProtocolMetricsEnv('1', async () => {
-      expect(() => emitProtocolMetric('m5_probe_listener_failure', {}, logger as never)).not.toThrow()
-    })
-    unsubscribeThrowing()
-  })
-
   it('resource and bootstrap responses add metric serialization only when enabled', async () => {
     const fixture = buildLargeCorpusFixture()
     await importDatabase(fixture.database)
@@ -1954,7 +1922,43 @@ describe('server load-count harness on the large-corpus fixture', () => {
     const bootstrapOn = await withProtocolMetricsEnv('1', () => countResponseStringifies(bootstrap, bootstrapShaped))
     expect(bootstrapOn).toBe(bootstrapOff + 1)
   })
+})
 
+describe('protocol metric emission', () => {
+  it('metric fields are not built when metrics are off (and are identical when on)', async () => {
+    // Unit guarantee on the real emitter: the thunk only runs after the
+    // enabled guard.
+    const thunk = vi.fn(() => ({ payloadBytes: 123 }))
+    await withProtocolMetricsEnv('', async () => {
+      emitProtocolMetric('m5_probe', thunk)
+    })
+    expect(thunk).not.toHaveBeenCalled()
+
+    const logged: Record<string, unknown>[] = []
+    const observed: Readonly<Record<string, unknown>>[] = []
+    const logger = { info: (payload: Record<string, unknown>) => logged.push(payload) }
+    const unsubscribe = subscribeProtocolMetrics((metric) => observed.push(metric))
+    await withProtocolMetricsEnv('1', async () => {
+      emitProtocolMetric('m5_probe', thunk, logger as never)
+      emitProtocolMetric('m5_probe_eager', { payloadBytes: 123 }, logger as never)
+    })
+    unsubscribe()
+    expect(thunk).toHaveBeenCalledTimes(1)
+    expect(logged[0]).toEqual({ metric: 'm5_probe', payloadBytes: 123 })
+    expect(logged[1]).toEqual({ metric: 'm5_probe_eager', payloadBytes: 123 })
+    expect(observed).toEqual(logged)
+
+    const unsubscribeThrowing = subscribeProtocolMetrics(() => {
+      throw new Error('measurement sink failed')
+    })
+    await withProtocolMetricsEnv('1', async () => {
+      expect(() => emitProtocolMetric('m5_probe_listener_failure', {}, logger as never)).not.toThrow()
+    })
+    unsubscribeThrowing()
+  })
+})
+
+describe('server load-count instrumentation', () => {
   it('restores the statement primitives when the instrumented body throws', async () => {
     const { StatementSync } = await import('node:sqlite')
     const originalAll = StatementSync.prototype.all

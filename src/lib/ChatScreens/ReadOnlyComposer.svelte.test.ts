@@ -30,7 +30,7 @@ describe('read-only composer presentation', () => {
     )
   })
 
-  it('has no delegated callback or mutable state behind synthetic input and clicks', () => {
+  it('lets synthetic input and send clicks bubble without opening writer UI', () => {
     const input = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
     const listener = vi.fn()
     target.addEventListener('input', listener)

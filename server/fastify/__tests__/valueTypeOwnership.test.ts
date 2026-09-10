@@ -33,7 +33,21 @@ describe('Fastify value type ownership', () => {
         'regexOutputSizeLimitMiB?': 'number',
       },
     ],
-  ] as const)('keeps %s behind its exported server-owned value interface', (file, name, properties) => {
+    [
+      'server/fastify/src/prompt/triggerRunCache.ts',
+      'TriggerTranscriptMessage',
+      {
+        data: 'string',
+      },
+    ],
+    [
+      'server/fastify/src/prompt/triggerRunCache.ts',
+      'TriggerTranscriptChat',
+      {
+        message: 'TriggerTranscriptMessage[]',
+      },
+    ],
+  ] as const)('keeps %s:%s behind its exported server-owned value interface', (file, name, properties) => {
     const owner = parseSource(file, fs.readFileSync(path.join(repoRoot, file), 'utf8'))
     expect(exportedInterfaceProperties(owner, name)).toMatchObject(properties)
     for (const specifier of moduleSpecifiers(owner)) {

@@ -96,9 +96,9 @@ function card(id = 'realm-card'): hubType {
   }
 }
 
-function iconButton(iconClass: string): HTMLButtonElement {
-  const match = target.querySelector<SVGElement>(`svg.${iconClass}`)?.closest('button')
-  if (!match) throw new Error(`button not found for ${iconClass}`)
+function labelledButton(label: string): HTMLButtonElement {
+  const match = target.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`)
+  if (!match) throw new Error(`button not found: ${label}`)
   return match
 }
 
@@ -138,10 +138,13 @@ describe('RealmPopUp removal ownership', () => {
   it('uses the projected account id and sends only a stable card id', async () => {
     const confirmation = deferred<boolean>()
     popupMocks.alertConfirm.mockReturnValue(confirmation.promise)
+    const response = new Response('removed')
+    const text = vi.spyOn(response, 'text')
+    popupMocks.authenticatedHubFetch.mockResolvedValue(response)
     const openedData = card('original-card')
     component = mount(RealmPopUp, { target, props: { openedData } })
 
-    iconButton('lucide-trash').click()
+    labelledButton(language.realm.removeCharacter).click()
     openedData.id = 'replacement-card'
     confirmation.resolve(true)
 
@@ -150,8 +153,9 @@ describe('RealmPopUp removal ownership', () => {
     expect(url).toBe('/api/v1/hub/hub/remove')
     expect(JSON.parse(String(init.body))).toEqual({ id: 'original-card' })
     expect(JSON.parse(String(init.body))).not.toHaveProperty('token')
-    await tick()
-    expect(popupMocks.alertNormal).toHaveBeenCalledWith('removed')
+    await vi.waitFor(() => expect(popupMocks.alertNormal).toHaveBeenCalledWith('removed'))
+    expect(text).toHaveBeenCalledTimes(1)
+    expect(popupMocks.alertError).not.toHaveBeenCalled()
   })
 
   it('does not offer removal when the card has no creator identity', () => {
@@ -159,14 +163,14 @@ describe('RealmPopUp removal ownership', () => {
     openedData.creator = undefined
     component = mount(RealmPopUp, { target, props: { openedData } })
 
-    expect(target.querySelector('svg.lucide-trash')).toBeNull()
+    expect(target.querySelector(`button[aria-label="${language.realm.removeCharacter}"]`)).toBeNull()
   })
 
   it('does not offer removal when the signed-in account does not own the card', () => {
     popupMocks.database.account.id = 'different-account'
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    expect(target.querySelector('svg.lucide-trash')).toBeNull()
+    expect(target.querySelector(`button[aria-label="${language.realm.removeCharacter}"]`)).toBeNull()
     expect(target.querySelector(`button[aria-label="${language.realm.reportCharacter}"]`)).not.toBeNull()
   })
 
@@ -177,7 +181,7 @@ describe('RealmPopUp removal ownership', () => {
     const onRemoved = vi.fn()
     component = mount(RealmPopUp, { target, props: { openedData: card('delete-once'), onRemoved } })
 
-    const remove = iconButton('lucide-trash')
+    const remove = labelledButton(language.realm.removeCharacter)
     remove.click()
     await vi.waitFor(() => expect(popupMocks.authenticatedHubFetch).toHaveBeenCalledOnce())
     expect(remove.disabled).toBe(true)
@@ -196,7 +200,7 @@ describe('RealmPopUp report actions', () => {
     popupMocks.alertConfirm.mockResolvedValue(false)
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    iconButton('lucide-flag').click()
+    labelledButton(language.realm.reportCharacter).click()
 
     await vi.waitFor(() => expect(popupMocks.alertConfirm).toHaveBeenCalledWith(language.realm.reportConfirm))
     expect(popupMocks.alertInput).not.toHaveBeenCalled()
@@ -208,7 +212,7 @@ describe('RealmPopUp report actions', () => {
     popupMocks.alertInput.mockResolvedValue('   ')
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    iconButton('lucide-flag').click()
+    labelledButton(language.realm.reportCharacter).click()
 
     await vi.waitFor(() => expect(popupMocks.alertInput).toHaveBeenCalledWith(language.realm.reportPrompt))
     expect(popupMocks.authenticatedHubFetch).not.toHaveBeenCalled()
@@ -222,7 +226,7 @@ describe('RealmPopUp report actions', () => {
     const openedData = card('original-card')
     component = mount(RealmPopUp, { target, props: { openedData } })
 
-    iconButton('lucide-flag').click()
+    labelledButton(language.realm.reportCharacter).click()
     openedData.id = 'replacement-card'
     confirmation.resolve(true)
 
@@ -246,7 +250,7 @@ describe('RealmPopUp action responses', () => {
     popupMocks.authenticatedHubFetch.mockResolvedValue(response)
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    iconButton('lucide-flag').click()
+    labelledButton(language.realm.reportCharacter).click()
 
     await vi.waitFor(() =>
       expect(popupMocks.alertError).toHaveBeenCalledWith(
@@ -264,7 +268,7 @@ describe('RealmPopUp action responses', () => {
     popupMocks.authenticatedHubFetch.mockResolvedValue(response)
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    iconButton('lucide-trash').click()
+    labelledButton(language.realm.removeCharacter).click()
 
     await vi.waitFor(() =>
       expect(popupMocks.alertError).toHaveBeenCalledWith(`${language.errors.httpError} HTTP 500: Realm unavailable`),
@@ -273,20 +277,17 @@ describe('RealmPopUp action responses', () => {
     expect(popupMocks.alertNormal).not.toHaveBeenCalled()
   })
 
-  it.each([
-    { action: 'report', icon: 'lucide-flag', body: 'reported' },
-    { action: 'remove', icon: 'lucide-trash', body: 'removed' },
-  ])('reports a successful $action response body once', async ({ icon, body }) => {
-    const response = new Response(body, { status: 200 })
+  it('reports a successful report response body once', async () => {
+    const response = new Response('reported', { status: 200 })
     const text = vi.spyOn(response, 'text')
     popupMocks.alertConfirm.mockResolvedValue(true)
     popupMocks.alertInput.mockResolvedValue('actionable report')
     popupMocks.authenticatedHubFetch.mockResolvedValue(response)
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    iconButton(icon).click()
+    labelledButton(language.realm.reportCharacter).click()
 
-    await vi.waitFor(() => expect(popupMocks.alertNormal).toHaveBeenCalledWith(body))
+    await vi.waitFor(() => expect(popupMocks.alertNormal).toHaveBeenCalledWith('reported'))
     expect(text).toHaveBeenCalledTimes(1)
     expect(popupMocks.alertError).not.toHaveBeenCalled()
   })
@@ -297,7 +298,7 @@ describe('RealmPopUp clipboard and modal accessibility', () => {
     popupMocks.clipboardWrite.mockRejectedValue(new Error('permission denied'))
     component = mount(RealmPopUp, { target, props: { openedData: card() } })
 
-    iconButton('lucide-paperclip').click()
+    labelledButton(language.realm.copyLink).click()
 
     await vi.waitFor(() => expect(popupMocks.alertError).toHaveBeenCalledWith(language.realm.clipboardFailed))
     expect(popupMocks.alertNormal).not.toHaveBeenCalledWith(language.clipboardSuccess)

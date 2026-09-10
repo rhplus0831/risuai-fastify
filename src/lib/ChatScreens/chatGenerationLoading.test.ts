@@ -33,8 +33,20 @@ describe('chat generation loading stage mapping', () => {
   })
 
   it('simulates bounded progress for post-generation scripts', () => {
-    expect(getPostGenerationScriptProgress(1_000, 1_000, 0)).toBe(18)
-    expect(getPostGenerationScriptProgress(1_000, 20_000, 3)).toBe(92)
-    expect(getPostGenerationScriptProgress(1_000, 60_000, 100)).toBe(94)
+    const baseline = getPostGenerationScriptProgress(1_000, 1_000, 0)
+    const timeProgress = getPostGenerationScriptProgress(1_000, 10_000, 0)
+    const callProgress = getPostGenerationScriptProgress(1_000, 1_000, 3)
+    const combinedProgress = getPostGenerationScriptProgress(1_000, 10_000, 3)
+    const maximumProgress = getPostGenerationScriptProgress(1_000, 60_000, 100)
+
+    expect(baseline).toBeGreaterThanOrEqual(0)
+    expect(getPostGenerationScriptProgress(1_000, 0, 0)).toBe(baseline)
+    expect(getPostGenerationScriptProgress(1_000, 1_000, -1)).toBe(baseline)
+    expect(timeProgress).toBeGreaterThan(baseline)
+    expect(callProgress).toBeGreaterThan(baseline)
+    expect(combinedProgress).toBeGreaterThanOrEqual(timeProgress)
+    expect(combinedProgress).toBeGreaterThanOrEqual(callProgress)
+    expect(maximumProgress).toBe(94)
+    expect(maximumProgress).toBeLessThan(100)
   })
 })

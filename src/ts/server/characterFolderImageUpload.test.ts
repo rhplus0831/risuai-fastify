@@ -10,6 +10,10 @@ import {
   type CharacterFolderImageUploadOperation,
   type CharacterFolderImageUploadPatch,
 } from './characterFolderImageUpload'
+import {
+  expectCanceledPickerKeepsOperationCurrent,
+  expectNewerOperationWins,
+} from '../__tests__/latestOperationTestAssertions'
 
 function folder(input: Partial<CharacterFolderImageRecord> & { id?: string } = {}): CharacterFolderImageRecord {
   return {
@@ -68,38 +72,39 @@ describe('character folder image upload freshness', () => {
 
   it('lets the newer upload for the same folder win over an older delayed upload', () => {
     const characterOrder = [folder({ id: 'folder-a', imgFile: 'asset-old', img: 'old-src' })]
-    const older = beginUpload({ characterOrder })
-    const newer = beginUpload({ characterOrder })
 
-    try {
-      expect(resolveUpload(newer, characterOrder, { imgFile: 'asset-newer', img: 'newer-src' })).toEqual({
+    expectNewerOperationWins({
+      begin: () => beginUpload({ characterOrder }),
+      complete: (operation, attempt) =>
+        resolveUpload(operation, characterOrder, {
+          imgFile: `asset-${attempt}`,
+          img: `${attempt}-src`,
+        }),
+      expectedNewer: {
         imgFile: 'asset-newer',
         img: 'newer-src',
-      })
-      expect(resolveUpload(older, characterOrder, { imgFile: 'asset-older', img: 'older-src' })).toBeNull()
-    } finally {
-      clearCharacterFolderImageUpload(older)
-      clearCharacterFolderImageUpload(newer)
-    }
+      },
+      clear: clearCharacterFolderImageUpload,
+    })
   })
 
   it('does not let a canceled newer picker invalidate an older selected upload', () => {
     const characterOrder = [folder({ id: 'folder-a', imgFile: 'asset-old', img: 'old-src' })]
-    const older = beginUpload({ characterOrder })
-    const canceledTarget = captureCharacterFolderImageUploadTarget({
-      characterOrder,
-      folderId: 'folder-a',
-    })
 
-    try {
-      expect(canceledTarget).not.toBeNull()
-      expect(resolveUpload(older, characterOrder)).toEqual({
+    expectCanceledPickerKeepsOperationCurrent({
+      begin: () => beginUpload({ characterOrder }),
+      captureCanceledTarget: () =>
+        captureCharacterFolderImageUploadTarget({
+          characterOrder,
+          folderId: 'folder-a',
+        }),
+      complete: (operation) => resolveUpload(operation, characterOrder),
+      expected: {
         imgFile: 'asset-new',
         img: '/api/v1/assets/asset-new',
-      })
-    } finally {
-      clearCharacterFolderImageUpload(older)
-    }
+      },
+      clear: clearCharacterFolderImageUpload,
+    })
   })
 
   it('allows folder reorder, rename, and color changes when image fields are unchanged', () => {

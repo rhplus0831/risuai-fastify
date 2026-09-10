@@ -859,7 +859,6 @@ describe('App route/refreeze mounted DOM behavior', () => {
       expect(target.querySelector('[data-risu-lazy-surface="settings"]')).not.toBeNull()
       expect(get(router.currentRoute)).toEqual(nextRoute)
       expect(window.location.pathname).toBe('/settings/language')
-      expect(target.querySelector('[data-risu-lazy-surface="settings"]')).not.toBeNull()
       expect(target.querySelector('[data-rendered-route="/character/char-a/chat-a"]')).toBeNull()
     } finally {
       nextApplication.resolve(false)

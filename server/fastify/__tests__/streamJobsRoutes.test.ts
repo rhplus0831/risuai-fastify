@@ -1,6 +1,6 @@
 import http from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -8,6 +8,7 @@ import { webcrypto } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import type { WebSocket } from 'ws'
 import { buildApp } from '../src/app.js'
+import { JobRegistry, type StreamJob } from '../src/streamJobs.js'
 
 const subtle = webcrypto.subtle
 
@@ -72,6 +73,63 @@ async function setupAuthedClient(app: FastifyInstance): Promise<{ assertion: str
     payload: { password: 'hunter2', publicKey },
   })
   return { assertion: await signAssertion(keypair.privateKey, publicKey) }
+}
+
+interface JobCompletionBarrier {
+  waitFor(jobId: string): Promise<void>
+  restore(): void
+}
+
+function observeJobCompletion(): JobCompletionBarrier {
+  const completed = new Set<string>()
+  const waiters = new Map<string, () => void>()
+  const originalMarkDone = JobRegistry.prototype.markDone
+  const spy = vi.spyOn(JobRegistry.prototype, 'markDone').mockImplementation(function (
+    this: JobRegistry,
+    job: StreamJob,
+    now?: number,
+  ): void {
+    originalMarkDone.call(this, job, now)
+    completed.add(job.id)
+    waiters.get(job.id)?.()
+  })
+
+  return {
+    waitFor(jobId) {
+      if (completed.has(jobId)) return Promise.resolve()
+      return new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          waiters.delete(jobId)
+          reject(new Error(`stream job ${jobId} did not complete`))
+        }, 5_000)
+        waiters.set(jobId, () => {
+          clearTimeout(timer)
+          waiters.delete(jobId)
+          resolve()
+        })
+      })
+    },
+    restore() {
+      spy.mockRestore()
+    },
+  }
+}
+
+async function createCompletedStreamJob(app: FastifyInstance, assertion: string, url: string): Promise<string> {
+  const completion = observeJobCompletion()
+  try {
+    const create = await app.inject({
+      method: 'POST',
+      url: '/api/v1/proxy/stream-jobs',
+      headers: { 'risu-auth': assertion },
+      payload: { url },
+    })
+    const { jobId } = create.json() as { jobId: string }
+    await completion.waitFor(jobId)
+    return jobId
+  } finally {
+    completion.restore()
+  }
 }
 
 interface CapturedRequest {
@@ -421,16 +479,7 @@ describe('WebSocket /api/v1/proxy/stream-jobs/:id/ws', () => {
       res.end('hello')
     })
     const { assertion } = await setupAuthedClient(harness.app)
-    const create = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/proxy/stream-jobs',
-      headers: { 'risu-auth': assertion },
-      payload: { url: echo.url },
-    })
-    const { jobId } = create.json() as { jobId: string }
-
-    // Let upstream complete before WS attaches.
-    await new Promise((r) => setTimeout(r, 80))
+    const jobId = await createCompletedStreamJob(harness.app, assertion, echo.url)
 
     const { ws, events, chunks } = await injectAndCollect(
       harness.app,
@@ -451,16 +500,7 @@ describe('WebSocket /api/v1/proxy/stream-jobs/:id/ws', () => {
       res.end('hello')
     })
     const { assertion } = await setupAuthedClient(harness.app)
-    const create = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/proxy/stream-jobs',
-      headers: { 'risu-auth': assertion },
-      payload: { url: echo.url },
-    })
-    const { jobId } = create.json() as { jobId: string }
-
-    // Let the upstream complete so the job is done before the viewer attaches.
-    await new Promise((r) => setTimeout(r, 80))
+    const jobId = await createCompletedStreamJob(harness.app, assertion, echo.url)
 
     // A real socket (not the inject transport): the assertion is that the
     // SERVER initiates the close handshake — the viewer never hangs up.

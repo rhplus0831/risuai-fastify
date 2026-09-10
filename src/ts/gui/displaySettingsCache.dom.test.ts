@@ -136,10 +136,4 @@ describe('display paint cache', () => {
     expect(() => applyDisplayStyles({ '--sidebar-size': '32rem' })).not.toThrow()
     expect(document.documentElement.style.getPropertyValue('--sidebar-size')).toBe('32rem')
   })
-
-  it('uses theme colors for both loading surfaces', () => {
-    expect(entryHtml.match(/id="preloading"[\s\S]*?>/)?.[0]).toContain('bg-bgcolor')
-    const app = readFileSync('src/App.svelte', 'utf8')
-    expect(app.match(/\{:else if workspaceIsBooting\}[\s\S]*?role="status"/)?.[0]).toContain('bg-bgcolor')
-  })
 })

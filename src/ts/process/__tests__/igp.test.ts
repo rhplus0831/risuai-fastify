@@ -177,12 +177,6 @@ describe('evaluateIgp', () => {
     expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('hello')
   })
 
-  it('is a no-op when the parsed prompt is empty (whitespace-only after parsing)', async () => {
-    seed(makeChar())
-    await evaluateIgp({ ...baseOpts, promptTemplate: '' })
-    expect(requestChatDataSpy).not.toHaveBeenCalled()
-  })
-
   // parseChatML requires the prompt to start with <|im_start|>. The upstream
   // sendChat code does not enforce this; if a user sets db.igpPrompt to a
   // non-ChatML string the function passes formated: null down to

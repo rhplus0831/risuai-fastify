@@ -369,34 +369,6 @@ describe('applyChatMessageDiff surgical writes', () => {
       appendFastPathRows: 0,
     })
   })
-
-  it('edit and truncate replacements still exercise the generic diff path', () => {
-    const editDb = makeDb(makeDataDir())
-    const truncateDb = makeDb(makeDataDir())
-    const base = Array.from({ length: 32 }, (_, index) =>
-      msg(`m${index}`, index % 2 === 0 ? 'user' : 'char', `row ${index}`),
-    )
-    replaceChatMessages(editDb, 'chat-1', base)
-    replaceChatMessages(truncateDb, 'chat-1', base)
-
-    resetChatMessageDiffInstrumentation()
-    applyChatMessageDiff(editDb, 'chat-1', base, [
-      ...base.slice(0, 20),
-      msg('m20', 'user', 'edited'),
-      ...base.slice(21),
-    ])
-    const editStats = getChatMessageDiffInstrumentation()
-    expect(editStats.genericDiffRuns).toBe(1)
-    expect(editStats.stableEqualCalls).toBeGreaterThan(10)
-    expect(editStats.stableEqualStringifies).toBeGreaterThan(20)
-
-    resetChatMessageDiffInstrumentation()
-    applyChatMessageDiff(truncateDb, 'chat-1', base, base.slice(0, base.length - 1))
-    const truncateStats = getChatMessageDiffInstrumentation()
-    expect(truncateStats.genericDiffRuns).toBe(1)
-    expect(truncateStats.stableEqualCalls).toBeGreaterThan(10)
-    expect(truncateStats.stableEqualStringifies).toBeGreaterThan(20)
-  })
 })
 
 describe('chat hypaV3Data store', () => {

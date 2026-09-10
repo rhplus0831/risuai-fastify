@@ -75,10 +75,12 @@ describe('requestStoredMcpOAuthRefresh', () => {
   })
 
   it('sanitizes failures and rejects malformed, masked, or oversized responses', async () => {
-    fetchMock.mockResolvedValueOnce(jsonResponse({ error: 'leaked-refresh-token' }, 502))
-    await expect(requestStoredMcpOAuthRefresh('https://mcp.example/messages')).rejects.toThrow(
-      'Stored MCP OAuth refresh failed (502)',
-    )
+    const secretCanary = 'leaked-refresh-token'
+    fetchMock.mockResolvedValueOnce(jsonResponse({ error: secretCanary }, 502))
+    const error = await requestStoredMcpOAuthRefresh('https://mcp.example/messages').catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe('Stored MCP OAuth refresh failed (502)')
+    expect((error as Error).message).not.toContain(secretCanary)
 
     for (const response of [
       new Response('not-json'),

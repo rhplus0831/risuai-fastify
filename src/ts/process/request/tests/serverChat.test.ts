@@ -143,6 +143,15 @@ function sendGenerationReadyFrames(stream: ReturnType<typeof controlledGeneratio
   })
 }
 
+async function waitForAcceptedServerChatJob(jobId: string): Promise<void> {
+  await vi.waitFor(() => {
+    expect(generationOperationMocks.applySseEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'job_accepted', jobId }),
+      expect.objectContaining({ chatId: 'chat-1', mode: 'send' }),
+    )
+  })
+}
+
 const incompleteChatSettingsBody = {
   statusCode: 409,
   error: 'chat_generation_settings_incomplete',
@@ -611,6 +620,12 @@ describe('requestServerChat', () => {
         alternates: ['second reply', 'third reply'],
         generationId: 'uuid-0',
       },
+    })
+    const calls = getServerChatCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toMatchObject({
+      method: 'POST',
+      callerHeader: 'chat-generate',
     })
   })
 
@@ -1255,24 +1270,6 @@ describe('requestServerChat', () => {
     await expect(res.terminal).resolves.toMatchObject({
       status: 'done',
       done: { result: 'buffered reply', generationId: 'gen-buffered' },
-    })
-  })
-
-  it('labels generation POST requests with x-risu-caller: chat-generate', async () => {
-    setServerChatDispatchResult('server reply', {
-      model: 'echo_model',
-      inputTokens: 7,
-      outputTokens: 50,
-    })
-    vi.stubGlobal('fetch', serverChatFetch)
-
-    const res = await requestServerChatGeneration(baseInput, null)
-    expect(res.status).toBe('ok')
-    const calls = getServerChatCalls()
-    expect(calls).toHaveLength(1)
-    expect(calls[0]).toMatchObject({
-      method: 'POST',
-      callerHeader: 'chat-generate',
     })
   })
 
@@ -1991,12 +1988,14 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     const { deletes } = stubDurableStreamFetch('job-xyz')
     const controller = new AbortController()
     const pending = requestServerChatGeneration({ ...baseInput, durable: true }, controller.signal)
-    await new Promise((r) => setTimeout(r, 15))
+    await waitForAcceptedServerChatJob('job-xyz')
+
     controller.abort()
-    const res = await pending
-    expect(res.status).toBe('aborted')
-    await new Promise((r) => setTimeout(r, 5))
-    expect(deletes).toContain('/api/v1/generate/chat/job-xyz')
+
+    await expect(pending).resolves.toMatchObject({ status: 'aborted' })
+    await vi.waitFor(() => {
+      expect(deletes).toContain('/api/v1/generate/chat/job-xyz')
+    })
   })
 
   it('DELETEs the accepted job when stopped before the first SSE frame arrives', async () => {
@@ -2304,10 +2303,11 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     const { deletes } = stubDurableStreamFetch('job-xyz')
     const controller = new AbortController()
     const pending = requestServerChatGeneration({ ...baseInput, durable: false }, controller.signal)
-    await new Promise((r) => setTimeout(r, 15))
+    await waitForAcceptedServerChatJob('job-xyz')
+
     controller.abort()
-    await pending
-    await new Promise((r) => setTimeout(r, 5))
+
+    await expect(pending).resolves.toMatchObject({ status: 'aborted' })
     expect(deletes).toEqual([])
   })
 
@@ -2402,7 +2402,6 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     expect(removeAbortListener.mock.calls.some(([type]) => type === 'abort')).toBe(true)
 
     owner.abort()
-    await new Promise((resolve) => setTimeout(resolve, 5))
     expect(deletes).toEqual([])
     expect(get(activeGenerationJobs)).toEqual([{ chatId: 'chat-1', jobId: 'job-consumer-detach', mode: 'send' }])
 
@@ -2531,13 +2530,14 @@ describe('requestServerChatGeneration reattach mode', () => {
   it('cancels the job on abort even though durable is not set (reattach implies durable)', async () => {
     const { deletes } = stubReattachFetch('job-reattach', { hang: true })
     const controller = new AbortController()
-    const pending = requestServerChatGeneration(baseInput, controller.signal, 'job-reattach')
-    await new Promise((r) => setTimeout(r, 15))
+    const served = await requestServerChatGeneration(baseInput, controller.signal, 'job-reattach')
+    expect(served.status).toBe('ok')
+    if (served.status !== 'ok') return
+    await waitForAcceptedServerChatJob('job-reattach')
+
     controller.abort()
-    const served = await pending
-    if (served.status === 'ok') {
-      await expect(served.terminal).resolves.toMatchObject({ status: 'error', reattachOutcome: 'aborted' })
-    }
+
+    await expect(served.terminal).resolves.toMatchObject({ status: 'error', reattachOutcome: 'aborted' })
     await vi.waitFor(() => {
       expect(deletes).toEqual(['/api/v1/generate/chat/job-reattach'])
     })

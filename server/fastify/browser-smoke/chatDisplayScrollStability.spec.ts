@@ -367,16 +367,6 @@ function makeSelectedCharacterDisplayIncompatible(dataDir: string, characterId: 
   }
 }
 
-function displayResponseEntries(value: unknown): Array<{ status: string; reason?: string }> {
-  if (!value || typeof value !== 'object' || !Array.isArray((value as { entries?: unknown }).entries)) return []
-  return (value as { entries: unknown[] }).entries.flatMap((entry) => {
-    if (!entry || typeof entry !== 'object' || typeof (entry as { status?: unknown }).status !== 'string') return []
-    const status = (entry as { status: string }).status
-    const reason = (entry as { reason?: unknown }).reason
-    return [{ status, ...(typeof reason === 'string' ? { reason } : {}) }]
-  })
-}
-
 async function displayViewport(page: Page): Promise<ViewportFrame> {
   return page.locator(TRANSCRIPT).evaluate((transcript, marker) => {
     const viewport = transcript.getBoundingClientRect()

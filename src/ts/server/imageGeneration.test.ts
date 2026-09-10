@@ -93,17 +93,22 @@ describe('requestImageGeneration', () => {
   })
 
   it('does not include a sanitized server error body in the thrown browser error', async () => {
+    const providerSecretCanary = 'provider-secret-detail'
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => Promise.resolve(new Response('{"error":"provider secret detail"}', { status: 502 }))),
+      vi.fn(async () =>
+        Promise.resolve(new Response(JSON.stringify({ error: providerSecretCanary }), { status: 502 })),
+      ),
     )
-    await expect(
-      requestImageGeneration({
-        provider: 'dalle',
-        credential: { source: 'provided', apiKey: 'browser-secret' },
-        prompt: 'prompt',
-        quality: 'standard',
-      }),
-    ).rejects.toThrow(language.errors.imageGenerationFailed(502))
+    const error = await requestImageGeneration({
+      provider: 'dalle',
+      credential: { source: 'provided', apiKey: 'browser-secret' },
+      prompt: 'prompt',
+      quality: 'standard',
+    }).catch((caught: unknown) => caught)
+
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(language.errors.imageGenerationFailed(502))
+    expect((error as Error).message).not.toContain(providerSecretCanary)
   })
 })

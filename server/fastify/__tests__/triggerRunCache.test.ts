@@ -1,6 +1,3 @@
-import fs from 'node:fs'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { describe, expect, it, vi } from 'vitest'
 import {
   createTriggerRunCache,
@@ -10,8 +7,6 @@ import {
   invalidateTriggerTranscriptCache,
   type TriggerTranscriptChat,
 } from '../src/prompt/triggerRunCache.js'
-
-const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 
 describe('trigger run cache', () => {
   it('reuses message-array identity until explicit invalidation', () => {
@@ -32,13 +27,5 @@ describe('trigger run cache', () => {
     invalidateTriggerTranscriptCache(cache)
     expect(getRecentTranscriptRaw(cache, chat, 2)).toBe('Alpha beta Changed')
     expect(slice).toHaveBeenCalledTimes(2)
-  })
-
-  it('owns its transcript inputs in Fastify', () => {
-    const source = fs.readFileSync(path.join(repoRoot, 'server/fastify/src/prompt/triggerRunCache.ts'), 'utf8')
-
-    expect(source).not.toContain('src/ts/storage/database.svelte')
-    expect(source).toContain('export interface TriggerTranscriptChat')
-    expect(source).toContain('WeakMap<TriggerTranscriptMessage[]')
   })
 })

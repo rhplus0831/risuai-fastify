@@ -855,65 +855,60 @@ describe('assets', () => {
     expect(res.json()).toEqual({ missing: [otherId] })
   })
 
-  it('POST /assets/exists with empty array returns empty missing', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets/exists',
-      payload: { ids: [] },
-    })
-    expect(res.statusCode).toBe(200)
-    expect(res.json()).toEqual({ missing: [] })
-  })
+  it('POST /assets/exists handles empty and malformed lookup envelopes', async () => {
+    const cases = [
+      {
+        label: 'empty array',
+        payload: { ids: [] },
+        expectedStatus: 200,
+        expectedBody: { missing: [] },
+      },
+      {
+        label: 'non-array ids',
+        payload: { ids: 'not-an-array' },
+        expectedStatus: 400,
+        expectedBody: { error: 'ids: string[] required' },
+      },
+      {
+        label: 'missing ids',
+        payload: {},
+        expectedStatus: 400,
+        expectedBody: { error: 'ids: string[] required' },
+      },
+      {
+        label: 'non-string id',
+        payload: { ids: [123] },
+        expectedStatus: 400,
+        expectedBody: { error: 'ids must be sha256 hex strings' },
+      },
+      {
+        label: 'non-SHA id',
+        payload: { ids: ['not-a-sha'] },
+        expectedStatus: 400,
+        expectedBody: { error: 'ids must be sha256 hex strings' },
+      },
+      {
+        label: '1,025 ids',
+        payload: { ids: Array.from({ length: 1025 }, (_, index) => index.toString(16).padStart(64, '0')) },
+        expectedStatus: 400,
+        expectedBody: { error: 'ids must contain at most 1024 items' },
+      },
+    ]
 
-  it('POST /assets/exists rejects non-array ids', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets/exists',
-      payload: { ids: 'not-an-array' },
-    })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toEqual({ error: 'ids: string[] required' })
-  })
+    const results = []
+    for (const testCase of cases) {
+      const response = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/assets/exists',
+        payload: testCase.payload,
+      })
+      results.push({ testCase, response })
+    }
 
-  it('POST /assets/exists rejects missing ids with the route error shape', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets/exists',
-      payload: {},
-    })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toEqual({ error: 'ids: string[] required' })
-  })
-
-  it('POST /assets/exists rejects non-string ids with the sha error shape', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets/exists',
-      payload: { ids: [123] },
-    })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toEqual({ error: 'ids must be sha256 hex strings' })
-  })
-
-  it('POST /assets/exists rejects ids that are not sha256 hex', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets/exists',
-      payload: { ids: ['not-a-sha'] },
-    })
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toEqual({ error: 'ids must be sha256 hex strings' })
-  })
-
-  it('POST /assets/exists rejects oversized lookup batches', async () => {
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets/exists',
-      payload: { ids: Array.from({ length: 1025 }, (_, index) => index.toString(16).padStart(64, '0')) },
-    })
-
-    expect(res.statusCode).toBe(400)
-    expect(res.json()).toEqual({ error: 'ids must contain at most 1024 items' })
+    for (const { testCase, response } of results) {
+      expect.soft(response.statusCode, `${testCase.label}: ${response.body}`).toBe(testCase.expectedStatus)
+      expect.soft(response.json(), testCase.label).toEqual(testCase.expectedBody)
+    }
   })
 
   it('POST /assets/bulk rejects malformed asset payloads', async () => {
@@ -944,24 +939,6 @@ describe('assets', () => {
       payload: Buffer.from([0, 0, 0, 20, 123]),
     })
     expect(badBinary.statusCode).toBe(400)
-  })
-
-  it('uploaded asset appears in SQLite', async () => {
-    const { assertion } = await setupAuthedClient(harness.app)
-    await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/assets',
-      headers: { 'content-type': 'image/png', 'risu-auth': assertion },
-      payload: PNG_BYTES,
-    })
-    const seedDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
-    try {
-      expect(getAllAssetMetadata(seedDb)).toEqual([
-        { id: PNG_SHA, ext: 'png', size: PNG_BYTES.length, contentType: 'image/png' },
-      ])
-    } finally {
-      seedDb.close()
-    }
   })
 })
 
@@ -1036,39 +1013,5 @@ describe('asset byte read fanout measurement', () => {
     expect(reads[0].assetId).toBe(missing)
     expect(reads[0].found).toBe(false)
     expect(reads[0].size).toBeUndefined()
-  })
-
-  it('summarizes byte-read fanout when RISU_ASSET_BYTE_SUMMARY=1', async () => {
-    const { assertion } = await setupAuthedClient(harness.app)
-    await uploadPng(assertion)
-    capturedMetrics.length = 0
-
-    const ids = [PNG_SHA, PNG_SHA, PNG_SHA, 'b'.repeat(64)]
-    for (const id of ids) {
-      await harness.app.inject({ method: 'GET', url: `/api/v1/assets/${id}` })
-    }
-
-    const reads = byteReads()
-    expect(reads).toHaveLength(ids.length)
-    const counts = new Map<string, number>()
-    for (const read of reads) {
-      counts.set(read.assetId ?? '', (counts.get(read.assetId ?? '') ?? 0) + 1)
-    }
-    const summary = {
-      requests: reads.length,
-      uniqueIds: counts.size,
-      repeatedReads: reads.length - counts.size,
-      maxReadsForSingleId: Math.max(...counts.values()),
-    }
-    expect(summary).toEqual({
-      requests: 4,
-      uniqueIds: 2,
-      repeatedReads: 2,
-      maxReadsForSingleId: 3,
-    })
-
-    if (process.env.RISU_ASSET_BYTE_SUMMARY === '1') {
-      console.log(JSON.stringify(summary, null, 2))
-    }
   })
 })

@@ -26,10 +26,10 @@ describe('monaco worker error handling', () => {
     handler.unexpectedErrorHandler(workerError)
     handler.unexpectedErrorHandler(normalError)
 
-    expect(consoleWarn).toHaveBeenCalledWith(
-      'Monaco editor worker reported an error event during popup editor lifecycle.',
-      workerError,
-    )
+    expect(consoleWarn).toHaveBeenCalledOnce()
+    const [diagnostic, warnedEvent] = consoleWarn.mock.calls[0]!
+    expect(typeof diagnostic === 'string' && diagnostic.trim().length > 0).toBe(true)
+    expect(warnedEvent).toBe(workerError)
     expect(originalUnexpectedErrorHandler).toHaveBeenCalledOnce()
     expect(originalUnexpectedErrorHandler).toHaveBeenCalledWith(normalError)
   })

@@ -79,12 +79,15 @@ afterEach(() => {
 })
 
 describe('applyOobaSystemHoist', () => {
-  it('returns the same messages array when no system rows are present', () => {
+  it('leaves messages unchanged when no system rows are present', () => {
     const msgs = [
       { role: 'user', content: 'hi' },
       { role: 'assistant', content: 'hello' },
     ]
-    expect(applyOobaSystemHoist(msgs)).toBe(msgs)
+    const before = structuredClone(msgs)
+
+    expect(applyOobaSystemHoist(msgs)).toEqual(before)
+    expect(msgs).toEqual(before)
   })
 
   it('removes systems in place and appends a single trailing system with joined content', () => {

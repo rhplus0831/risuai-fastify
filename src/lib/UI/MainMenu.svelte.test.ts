@@ -250,7 +250,9 @@ describe('MainMenu home dashboard', () => {
     expect(
       target.querySelector('[data-risu-home-pinned-chat="pinned-2"] [data-risu-generation-indicator="warning"]'),
     ).toBeTruthy()
-    expect(target.querySelector('[data-risu-home-pinned-chat="pinned-3"] .animate-spin')).toBeTruthy()
+    expect(
+      target.querySelector('[data-risu-home-pinned-chat="pinned-3"] [data-risu-generation-indicator="generating"]'),
+    ).toBeTruthy()
     expect(target.querySelector('[data-risu-home-pinned-chat="pinned-4"] [data-risu-unread-indicator]')).toBeTruthy()
 
     target.querySelector<HTMLButtonElement>('[data-risu-home-pinned-chat="pinned-1"]')!.click()

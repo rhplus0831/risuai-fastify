@@ -609,10 +609,7 @@ function stubMessagePersistenceFetch(): CapturedFetch[] {
 }
 
 async function waitForCallCount(calls: CapturedFetch[], expected: number): Promise<void> {
-  for (let attempt = 0; attempt < 20 && calls.length < expected; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  }
-  expect(calls).toHaveLength(expected)
+  await vi.waitFor(() => expect(calls).toHaveLength(expected), { interval: 1 })
 }
 
 function jsonClone<T>(value: T): T {
@@ -3939,6 +3936,8 @@ describe('chat command projection helpers', () => {
     }
   })
 
+  // This fixture performs 101 real encrypted IndexedDB stages; parallel quality lanes may exceed the default
+  // test budget, which is not a five-second product latency contract.
   it('durably pre-stages imports containing more than one hundred chats', async () => {
     vi.stubGlobal('indexedDB', new IDBFactory())
     resetPendingMutationOutboxForTests()
@@ -3991,7 +3990,7 @@ describe('chat command projection helpers', () => {
       await clearPendingMutationOutbox()
       resetPendingMutationOutboxForTests()
     }
-  })
+  }, 15_000)
 
   it('keeps an accepted chunked-import prefix when a later tail is terminally rejected', async () => {
     vi.stubGlobal('indexedDB', new IDBFactory())

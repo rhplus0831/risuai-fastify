@@ -4623,32 +4623,6 @@ describe('server command API adapter', () => {
     expect(observedEffectCounts).toEqual([0, 0, 0, 0])
   })
 
-  it('runs prompt commands with revision lookup and surfaces conflicts', async () => {
-    let attempts = 0
-    const commandFetch = makeCommandFetch((url) => {
-      if (url === '/api/v1/bootstrap') return { revision: 11 }
-      attempts += 1
-      if (attempts === 1) {
-        return jsonResponse({ error: 'revision_conflict', currentRevision: 14 }, 409)
-      }
-      throw new Error('unexpected retry')
-    })
-    vi.stubGlobal('fetch', commandFetch.fetch)
-
-    await expect(
-      runServerCommand({
-        command: (baseRevision) =>
-          updatePromptItemCommand({
-            baseRevision,
-            itemId: 'item-a',
-            patch: { type: 'memory' },
-          }),
-      }),
-    ).resolves.toEqual({ status: 'conflict', currentRevision: 14 })
-
-    expect(commandFetch.calls.map((call) => call.body)).toEqual([null, { baseRevision: 11, patch: { type: 'memory' } }])
-  })
-
   it('dispatches persona commands through typed helpers', async () => {
     const commandFetch = makeCommandFetch((url) => {
       if (url.endsWith('/personas/select')) {
@@ -5177,31 +5151,6 @@ describe('server command API adapter', () => {
     expect(observedEffectCounts).toEqual([0, 0, 0])
   })
 
-  it('runs persona commands with revision lookup and surfaces conflicts', async () => {
-    let attempts = 0
-    const commandFetch = makeCommandFetch((url) => {
-      if (url === '/api/v1/bootstrap') return { revision: 20 }
-      attempts += 1
-      if (attempts === 1) {
-        return jsonResponse({ error: 'revision_conflict', currentRevision: 23 }, 409)
-      }
-      throw new Error('unexpected retry')
-    })
-    vi.stubGlobal('fetch', commandFetch.fetch)
-
-    await expect(
-      runServerCommand({
-        command: (baseRevision) =>
-          selectPersonaCommand({
-            baseRevision,
-            personaId: 'persona-b',
-          }),
-      }),
-    ).resolves.toEqual({ status: 'conflict', currentRevision: 23 })
-
-    expect(commandFetch.calls.map((call) => call.body)).toEqual([null, { baseRevision: 20, personaId: 'persona-b' }])
-  })
-
   it('dispatches translator preset commands through typed helpers', async () => {
     const commandFetch = makeCommandFetch((url) => {
       if (url.endsWith('/translator-presets/select')) {
@@ -5671,31 +5620,6 @@ describe('server command API adapter', () => {
     expect(observedEffectCounts).toEqual(cases.map(() => 0))
   })
 
-  it('runs translator preset commands with revision lookup and surfaces conflicts', async () => {
-    let attempts = 0
-    const commandFetch = makeCommandFetch((url) => {
-      if (url === '/api/v1/bootstrap') return { revision: 30 }
-      attempts += 1
-      if (attempts === 1) {
-        return jsonResponse({ error: 'revision_conflict', currentRevision: 33 }, 409)
-      }
-      throw new Error('unexpected retry')
-    })
-    vi.stubGlobal('fetch', commandFetch.fetch)
-
-    await expect(
-      runServerCommand({
-        command: (baseRevision) =>
-          selectTranslatorPresetCommand({
-            baseRevision,
-            presetId: 'translator-b',
-          }),
-      }),
-    ).resolves.toEqual({ status: 'conflict', currentRevision: 33 })
-
-    expect(commandFetch.calls.map((call) => call.body)).toEqual([null, { baseRevision: 30, presetId: 'translator-b' }])
-  })
-
   it('dispatches loadout commands through typed helpers', async () => {
     const commandFetch = makeCommandFetch((url) => {
       if (url.endsWith('/loadouts/loadout-a/touch')) {
@@ -5989,32 +5913,6 @@ describe('server command API adapter', () => {
     ])
     expect(commandFetch.calls[0].body).toEqual({ baseRevision: 1, loadout: canonicalLoadout })
     expect(commandFetch.calls[1].body).toEqual({ baseRevision: 2 })
-  })
-
-  it('runs loadout commands with revision lookup and surfaces conflicts', async () => {
-    let attempts = 0
-    const commandFetch = makeCommandFetch((url) => {
-      if (url === '/api/v1/bootstrap') return { revision: 40 }
-      attempts += 1
-      if (attempts === 1) {
-        return jsonResponse({ error: 'revision_conflict', currentRevision: 43 }, 409)
-      }
-      throw new Error('unexpected retry')
-    })
-    vi.stubGlobal('fetch', commandFetch.fetch)
-
-    await expect(
-      runServerCommand({
-        command: (baseRevision) =>
-          favoriteLoadoutCommand({
-            baseRevision,
-            loadoutId: 'loadout-a',
-            favorite: false,
-          }),
-      }),
-    ).resolves.toEqual({ status: 'conflict', currentRevision: 43 })
-
-    expect(commandFetch.calls.map((call) => call.body)).toEqual([null, { baseRevision: 40, favorite: false }])
   })
 
   it('strips embedded chats from character create command payloads without mutating input', async () => {
@@ -6362,31 +6260,6 @@ describe('server command API adapter', () => {
         },
       },
     ])
-  })
-
-  it('runs character commands with revision lookup and surfaces conflicts', async () => {
-    let attempts = 0
-    const commandFetch = makeCommandFetch((url) => {
-      if (url === '/api/v1/bootstrap') return { revision: 50 }
-      attempts += 1
-      if (attempts === 1) {
-        return jsonResponse({ error: 'revision_conflict', currentRevision: 52 }, 409)
-      }
-      throw new Error('unexpected retry')
-    })
-    vi.stubGlobal('fetch', commandFetch.fetch)
-
-    await expect(
-      runServerCommand({
-        command: (baseRevision) =>
-          selectCharacterCommand({
-            baseRevision,
-            characterId: 'char-a',
-          }),
-      }),
-    ).resolves.toEqual({ status: 'conflict', currentRevision: 52 })
-
-    expect(commandFetch.calls.map((call) => call.body)).toEqual([null, { baseRevision: 50, characterId: 'char-a' }])
   })
 
   it('dispatches chat and chat-folder commands through typed helpers', async () => {

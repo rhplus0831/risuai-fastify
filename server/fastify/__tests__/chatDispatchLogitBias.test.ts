@@ -30,39 +30,43 @@ describe('OpenAI logit-bias parity', () => {
     vi.unstubAllGlobals()
   })
 
-  it('constructs the exact baseline punctuation-adjacent variants and bans only token zero when non-punctuation', () => {
+  it('bans the first token of every required punctuation-adjacent variant without depending on traversal order', () => {
     expect(OPENAI_STRONG_BAN_PUNCTUATION).toBe(' !"#$%&\'()*+,-./:;<=>?@[\\]^_`{|}~“”‘’«»「」…–―※')
 
     const text = 'Ban'
-    const variants = [text, text.trim(), text.toLocaleUpperCase(), text.toLocaleLowerCase(), 'Ban', 'ban']
+    const variants = new Set([text, text.trim(), text.toLocaleUpperCase(), text.toLocaleLowerCase(), 'Ban', 'ban'])
     const punctuation = [...OPENAI_STRONG_BAN_PUNCTUATION]
-    const punctuationIds = new Map(punctuation.map((char, index) => [char, index + 1]))
-    const nonPunctuationIds = new Map<string, number>()
-    const calls: Array<{ text: string; encoding: string }> = []
-    let nextToken = 1_000
+    const requiredInputs = new Set([
+      ...punctuation,
+      ...punctuation.flatMap((char) => [...variants].flatMap((variant) => [variant + char, char + variant])),
+    ])
+    const punctuationTokenByChar = new Map(punctuation.map((char, index) => [char, index + 1_000]))
+    const nonPunctuationTokenByInput = new Map(
+      [...requiredInputs]
+        .filter((input) => !punctuationTokenByChar.has([...input][0] ?? ''))
+        .map((input, index) => [input, index + 10_000]),
+    )
+    const requestedInputs = new Set<string>()
+    const requestedEncodings = new Set<string>()
     const fixtureEncode = (value: string, encoding: TokenEncoding): readonly number[] => {
-      calls.push({ text: value, encoding })
-      const first = punctuationIds.get([...value][0] ?? '')
-      if (first !== undefined) return [first, 9_999]
-      let token = nonPunctuationIds.get(value)
-      if (token === undefined) {
-        token = nextToken++
-        nonPunctuationIds.set(value, token)
-      }
+      if (!requiredInputs.has(value)) throw new Error(`Unexpected encoder input: ${JSON.stringify(value)}`)
+      requestedInputs.add(value)
+      requestedEncodings.add(encoding)
+      const token = punctuationTokenByChar.get([...value][0] ?? '') ?? nonPunctuationTokenByInput.get(value)
+      if (token === undefined) throw new Error(`Missing token fixture for: ${JSON.stringify(value)}`)
       return [token, 9_999]
     }
 
     const bias = resolveOpenAILogitBias([[text, -101]], 'ignored-model', 'o200k_base', fixtureEncode)
-    const expectedCalls = [
-      ...punctuation,
-      ...punctuation.flatMap((char) => [char, ...variants.flatMap((variant) => [variant + char, char + variant])]),
-    ]
+    const expectedBias = Object.fromEntries(
+      [...nonPunctuationTokenByInput.values()].map((token) => [String(token), -100]),
+    )
 
-    expect(calls.map((call) => call.text)).toEqual(expectedCalls)
-    expect(new Set(calls.map((call) => call.encoding))).toEqual(new Set(['o200k_base']))
-    expect(new Set(Object.keys(bias))).toEqual(new Set([...nonPunctuationIds.values()].map((token) => String(token))))
-    expect(new Set(Object.values(bias))).toEqual(new Set([-100]))
-    expect(bias['9999']).toBeUndefined()
+    expect(requestedInputs).toEqual(requiredInputs)
+    expect(requestedEncodings).toEqual(new Set(['o200k_base']))
+    expect(bias).toEqual(expectedBias)
+    for (const token of punctuationTokenByChar.values()) expect(bias).not.toHaveProperty(String(token))
+    expect(bias).not.toHaveProperty('9999')
   })
 
   it('forwards ordinary and direct-token bias values without clamping', () => {

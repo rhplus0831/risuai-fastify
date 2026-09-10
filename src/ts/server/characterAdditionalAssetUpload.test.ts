@@ -8,6 +8,10 @@ import {
   type CharacterAdditionalAssetEntry,
   type CharacterAdditionalAssetUploadOperation,
 } from './characterAdditionalAssetUpload'
+import {
+  expectCanceledPickerKeepsOperationCurrent,
+  expectNewerOperationWins,
+} from '../__tests__/latestOperationTestAssertions'
 
 const asset = (name: string, path = `asset-${name}`, extension = 'png'): CharacterAdditionalAssetEntry => [
   name,
@@ -101,63 +105,45 @@ describe('character additional asset upload freshness', () => {
   })
 
   it('lets the newer upload for the same character win over an older delayed upload', () => {
-    const older = beginUpload({ characterId: 'char-a', additionalAssets: [] })
-    const newer = beginUpload({ characterId: 'char-a', additionalAssets: [] })
-
-    try {
-      const newerResult = appendFreshCharacterAdditionalAssets({
-        operation: newer,
-        freshness: {
-          currentCharacterId: 'char-a',
-          rowCharacterId: 'char-a',
-          additionalAssets: [],
-        },
-        entries: [asset('newer')],
-      })
-
-      expect(newerResult).toEqual([asset('newer')])
-
-      const olderResult = appendFreshCharacterAdditionalAssets({
-        operation: older,
-        freshness: {
-          currentCharacterId: 'char-a',
-          rowCharacterId: 'char-a',
-          additionalAssets: [],
-        },
-        entries: [asset('older')],
-      })
-
-      expect(olderResult).toBeNull()
-    } finally {
-      clearCharacterAdditionalAssetUpload(older)
-      clearCharacterAdditionalAssetUpload(newer)
-    }
+    expectNewerOperationWins({
+      begin: () => beginUpload({ characterId: 'char-a', additionalAssets: [] }),
+      complete: (operation, attempt) =>
+        appendFreshCharacterAdditionalAssets({
+          operation,
+          freshness: {
+            currentCharacterId: 'char-a',
+            rowCharacterId: 'char-a',
+            additionalAssets: [],
+          },
+          entries: [asset(attempt)],
+        }),
+      expectedNewer: [asset('newer')],
+      clear: clearCharacterAdditionalAssetUpload,
+    })
   })
 
   it('does not let a canceled newer picker invalidate an older pending upload', () => {
     const baseAssets = [asset('base')]
-    const older = beginUpload({ characterId: 'char-a', additionalAssets: baseAssets })
 
-    const canceledTarget = captureCharacterAdditionalAssetUploadTarget({
-      characterId: 'char-a',
-      additionalAssets: baseAssets,
-    })
-
-    try {
-      expect(canceledTarget).not.toBeNull()
-      const result = appendFreshCharacterAdditionalAssets({
-        operation: older,
-        freshness: {
-          currentCharacterId: 'char-a',
-          rowCharacterId: 'char-a',
+    expectCanceledPickerKeepsOperationCurrent({
+      begin: () => beginUpload({ characterId: 'char-a', additionalAssets: baseAssets }),
+      captureCanceledTarget: () =>
+        captureCharacterAdditionalAssetUploadTarget({
+          characterId: 'char-a',
           additionalAssets: baseAssets,
-        },
-        entries: [asset('older')],
-      })
-
-      expect(result).toEqual([...baseAssets, asset('older')])
-    } finally {
-      clearCharacterAdditionalAssetUpload(older)
-    }
+        }),
+      complete: (operation) =>
+        appendFreshCharacterAdditionalAssets({
+          operation,
+          freshness: {
+            currentCharacterId: 'char-a',
+            rowCharacterId: 'char-a',
+            additionalAssets: baseAssets,
+          },
+          entries: [asset('older')],
+        }),
+      expected: [...baseAssets, asset('older')],
+      clear: clearCharacterAdditionalAssetUpload,
+    })
   })
 })

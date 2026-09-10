@@ -29,19 +29,12 @@ describe('coerceBedrockCredentials', () => {
     expect(coerceBedrockCredentials(null)).toBeNull()
   })
 
-  it('returns error when accessKeyId is missing', () => {
-    const r = coerceBedrockCredentials({ secretAccessKey: 's', region: 'r' })
-    expect(r).toEqual({ ok: false, error: 'options.bedrock.accessKeyId is required' })
-  })
-
-  it('returns error when secretAccessKey is missing', () => {
-    const r = coerceBedrockCredentials({ accessKeyId: 'a', region: 'r' })
-    expect(r).toEqual({ ok: false, error: 'options.bedrock.secretAccessKey is required' })
-  })
-
-  it('returns error when region is missing', () => {
-    const r = coerceBedrockCredentials({ accessKeyId: 'a', secretAccessKey: 's' })
-    expect(r).toEqual({ ok: false, error: 'options.bedrock.region is required' })
+  it.each([
+    [{ secretAccessKey: 's', region: 'r' }, 'options.bedrock.accessKeyId is required'],
+    [{ accessKeyId: 'a', region: 'r' }, 'options.bedrock.secretAccessKey is required'],
+    [{ accessKeyId: 'a', secretAccessKey: 's' }, 'options.bedrock.region is required'],
+  ])('returns a precise error when a required credential is missing', (credentials, error) => {
+    expect(coerceBedrockCredentials(credentials)).toEqual({ ok: false, error })
   })
 
   it('passes optional sessionToken through', () => {

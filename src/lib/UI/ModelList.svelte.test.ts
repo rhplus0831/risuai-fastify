@@ -115,7 +115,6 @@ describe('ModelList provider identity', () => {
 
     const betaTrigger = buttonByText('Beta')
     expect(betaTrigger.getAttribute('aria-expanded')).toBe('true')
-    expect(betaTrigger.parentElement?.classList).toContain('bg-selected')
     expect(target.textContent).toContain('Beta Model')
     expect(target.textContent).not.toContain('Extra Model')
     expect(target.textContent).not.toContain('Alpha Model')

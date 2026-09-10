@@ -2,14 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { webcrypto } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { openDatabase } from '../src/db.js'
 import { claimNextBardWikiJob, enqueueBardWikiJob, retryOrFailBardWikiJob } from '../src/bardWikiJobs.js'
 import type { MemoryEvent } from '../src/memoryEvents.js'
+import { setupAuthedClient } from './helpers/auth.js'
 
-const subtle = webcrypto.subtle
 const HASH_A = 'a'.repeat(64)
 const HASH_B = 'b'.repeat(64)
 let app: FastifyInstance
@@ -35,7 +34,7 @@ beforeEach(async () => {
     bardWikiWorker: false,
     memoryEvents: (event) => events.push(event),
   }))
-  assertion = await setupAuthedClient(app)
+  ;({ assertion } = await setupAuthedClient(app))
   seedJob()
 })
 
@@ -159,29 +158,3 @@ describe('BardWiki operational job routes', () => {
     expect(publicEnqueue.json()).toEqual({ error: 'kind must be one of: chunk, embed, summarize' })
   })
 })
-
-async function setupAuthedClient(target: FastifyInstance): Promise<string> {
-  const setup = await target.inject({ method: 'POST', url: '/api/v1/auth/setup', payload: { password: 'hunter2' } })
-  expect(setup.statusCode).toBe(200)
-  const keypair = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
-    'sign',
-    'verify',
-  ])) as CryptoKeyPair
-  const publicKey = await subtle.exportKey('jwk', keypair.publicKey)
-  const login = await target.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { password: 'hunter2', publicKey },
-  })
-  expect(login.statusCode).toBe(200)
-  const now = Math.floor(Date.now() / 1000)
-  const headerB64 = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT' })).toString('base64url')
-  const payloadB64 = Buffer.from(JSON.stringify({ iat: now, exp: now + 60, pub: publicKey })).toString('base64url')
-  const signingInput = `${headerB64}.${payloadB64}`
-  const signature = await subtle.sign(
-    { name: 'ECDSA', hash: { name: 'SHA-256' } },
-    keypair.privateKey,
-    Buffer.from(signingInput),
-  )
-  return `${signingInput}.${Buffer.from(signature).toString('base64url')}`
-}

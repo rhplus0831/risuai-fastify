@@ -7,30 +7,6 @@ import {
 } from './shellGeometry'
 
 describe('conversation shell geometry', () => {
-  it('captures the former reader/writer mismatch at the shared responsive boundary', () => {
-    const viewportWidth = 800
-    const settings = {
-      sideBarSize: 3,
-      desktopSidebarColumns: 4,
-      mobileSidebarColumns: 2,
-    }
-    const legacyWriter = {
-      responsive: viewportWidth <= 1024,
-      railWidthRem: settings.mobileSidebarColumns * 5,
-      panelWidthRem: 24 + settings.sideBarSize * 4,
-    }
-    const legacyReader = {
-      responsive: viewportWidth <= 767,
-      railWidthRem: 5,
-      panelWidthRem: 24 + settings.sideBarSize * 4,
-    }
-    expect(legacyReader).not.toEqual(legacyWriter)
-
-    const writer = resolveShellGeometry({ responsive: isResponsiveShellWidth(viewportWidth), ...settings })
-    const reader = resolveShellGeometry({ responsive: isResponsiveShellWidth(viewportWidth), ...settings })
-    expect(reader).toEqual(writer)
-  })
-
   it('preserves the settled writer matrix for every supported size and desktop column count', () => {
     const matrix = [
       [29, 34, 39, 44],

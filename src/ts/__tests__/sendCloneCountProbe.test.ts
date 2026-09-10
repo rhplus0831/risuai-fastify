@@ -111,12 +111,8 @@ describe('send clone-count probe', () => {
         callCount: 1,
         mode: 'send',
         userMessageLength: 'probe plain send'.length,
-        durable: true,
       },
     })
-    expect(result.commands.messageAppendCommandCount).toBe(1)
-    expect(result.commands.messageReplaceCommandCount).toBe(0)
-    expect(result.commands.persistedWholeTranscript).toBe(false)
     expect(result.jsonCloneCount).toBeLessThan(result.fixture.messageCountBeforeSend)
     expect(result.maxClonedSize).toBeLessThan(result.fixture.transcriptJsonSizeBeforeSend)
     expect(result.maxClonedSize).toBeLessThan(result.fixture.activeCharacterJsonSizeBeforeSend)

@@ -191,15 +191,15 @@ describe('HypaV3 summary item keyboard navigation', () => {
     const availableActionButtons = () =>
       Array.from(target.querySelectorAll<HTMLButtonElement>('button')).filter((button) => !button.disabled)
 
-    expect(availableActionButtons()).toHaveLength(9)
     expect(availableActionButtons().every((button) => button.tabIndex === 0)).toBe(true)
 
-    const importantButton = target.querySelector<HTMLButtonElement>('[data-summary-action="important"]')
-    const rerollButton = importantButton?.nextElementSibling as HTMLButtonElement | undefined
-    expect(rerollButton).toBeTruthy()
-    rerollButton?.click()
+    actionButton('reroll').click()
 
-    await vi.waitFor(() => expect(availableActionButtons()).toHaveLength(12))
+    await vi.waitFor(() => {
+      expect(actionButton('reroll')).toBeTruthy()
+      expect(actionButton('cancel-rerolled')).toBeTruthy()
+      expect(actionButton('apply-rerolled').disabled).toBe(false)
+    })
     expect(availableActionButtons().every((button) => button.tabIndex === 0)).toBe(true)
 
     const chatMemoButton = availableActionButtons().find((button) => button.textContent?.trim() === 'message-1')

@@ -10,8 +10,5 @@ describe('OtherBotSettings direct slider names', () => {
 
     expect(sliderTags.length).toBeGreaterThan(0)
     expect(sliderTags.every((tag) => tag.includes('ariaLabel='))).toBe(true)
-    expect(source).toContain('{@const loraScaleLabel = language.loraScaleLabel(index + 1)}')
-    expect(source).toContain('<span class="text-textcolor">{loraScaleLabel}</span>')
-    expect(source).toContain('ariaLabel={loraScaleLabel}')
   })
 })

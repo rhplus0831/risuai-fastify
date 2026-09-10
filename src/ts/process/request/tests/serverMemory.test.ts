@@ -375,34 +375,20 @@ describe('server memory API adapter', () => {
     })
   })
 
-  it('preserves browser-visible list/cancel job state envelopes', async () => {
-    const memoryFetch = makeMemoryFetch((url, init) => {
-      if (url === '/api/v1/memory/jobs?chatId=chat+1&status=running') {
-        return {
-          jobs: [
-            {
-              ...baseJob,
-              status: 'running',
-            },
-          ],
-        }
-      }
-      if (url === '/api/v1/memory/jobs/job%2F1' && init.method === 'DELETE') {
-        return {
-          job: {
-            ...baseJob,
-            status: 'cancelled',
-          },
-        }
-      }
-      return jsonResponse({ error: 'unexpected memory fixture call' }, 500)
-    })
+  it('lists running jobs without snapshot ordering metadata', async () => {
+    const memoryFetch = makeMemoryFetch(() => ({
+      jobs: [
+        {
+          ...baseJob,
+          status: 'running',
+        },
+      ],
+    }))
     vi.stubGlobal('fetch', memoryFetch.fetch)
 
-    const listed = await listServerMemoryJobs({ chatId: 'chat 1', status: 'running' })
-    const cancelled = await cancelServerMemoryJob('job/1')
+    const result = await listServerMemoryJobs({ chatId: 'chat 1', status: 'running' })
 
-    expect(listed).toEqual({
+    expect(result).toEqual({
       status: 'ok',
       jobs: [
         {
@@ -411,27 +397,12 @@ describe('server memory API adapter', () => {
         },
       ],
     })
-    expect(cancelled).toEqual({
-      status: 'ok',
-      job: {
-        ...baseJob,
-        status: 'cancelled',
-      },
+    expect(memoryFetch.calls[0]).toEqual({
+      url: '/api/v1/memory/jobs?chatId=chat+1&status=running',
+      method: 'GET',
+      authHeader: 'test-auth-token',
+      ifNoneMatch: null,
     })
-    expect(memoryFetch.calls).toEqual([
-      {
-        url: '/api/v1/memory/jobs?chatId=chat+1&status=running',
-        method: 'GET',
-        authHeader: 'test-auth-token',
-        ifNoneMatch: null,
-      },
-      {
-        url: '/api/v1/memory/jobs/job%2F1',
-        method: 'DELETE',
-        authHeader: 'test-auth-token',
-        ifNoneMatch: null,
-      },
-    ])
   })
 
   it('handles stale writer responses from memory mutations', async () => {

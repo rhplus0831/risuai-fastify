@@ -42,13 +42,7 @@ import { replaceResourceDatabase } from 'src/ts/server/resourceState.svelte'
 import { resolveActiveChatGenerationSettings } from 'src/ts/activeChatGenerationSettings'
 import { clearCachedServerCommandRevision } from 'src/ts/server/commands'
 import { waitForPendingChatGenerationSettingsSave } from 'src/ts/chatCommands'
-import {
-  classifyDifferential,
-  isInScopeFinding,
-  readJailbreakSelected,
-  readToggleGroupLabels,
-  readToggleSelected,
-} from './domStateOracle'
+import { readJailbreakSelected, readToggleGroupLabels, readToggleSelected } from './domStateOracle'
 import { getResourceDatabase } from 'src/ts/__tests__/resourceDatabaseState'
 
 type MountedComponent = Parameters<typeof unmount>[0]
@@ -316,10 +310,8 @@ describe('optimistic toggle paint (DOM oracle)', () => {
       },
     ])
 
-    // Classify: the optimistic store write set jailbreakToggle=false; the DOM
-    // must agree. No bug iff DOM == store.
-    const storeSelected = resolveActiveChatGenerationSettings().settings?.jailbreakToggle === true
-    expect(classifyDifferential({ dom: domSelected, store: storeSelected, expected: false })).toBe('dom-matches-store')
+    const storeSelected = resolveActiveChatGenerationSettings().settings?.jailbreakToggle
+    expect(storeSelected).toBe(false)
 
     await releaseAndDrainCommandTransport()
   })
@@ -355,9 +347,7 @@ describe('optimistic toggle paint (DOM oracle)', () => {
       },
     ])
     const storeValue = resolveActiveChatGenerationSettings().settings?.sidebarToggles?.flag
-    expect(classifyDifferential({ dom: domSelected, store: storeValue === '1', expected: false })).toBe(
-      'dom-matches-store',
-    )
+    expect(storeValue).toBe('0')
 
     await releaseAndDrainCommandTransport()
   })
@@ -374,14 +364,7 @@ describe('grouped toggle rendering (DOM oracle)', () => {
 
     const domGroupLabels = readToggleGroupLabels(target)
     expect(domGroupLabels).toEqual(['Preset Group'])
-
-    const verdict = classifyDifferential({
-      dom: domGroupLabels,
-      store: storeGroupLabels(),
-      expected: ['Preset Group'],
-    })
-    expect(verdict).toBe('dom-matches-store')
-    expect(isInScopeFinding(verdict)).toBe(false)
+    expect(storeGroupLabels()).toEqual(['Preset Group'])
 
     const group = target.querySelector<HTMLElement>(
       '[data-risu-generation-toggle-group][data-risu-toggle-label="Preset Group"]',

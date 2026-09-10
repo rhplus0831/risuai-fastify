@@ -12,6 +12,10 @@ import {
   type CharacterTtsAssetUploadKind,
   type CharacterTtsAssetUploadOperation,
 } from './characterTtsAssetUpload'
+import {
+  expectCanceledPickerKeepsOperationCurrent,
+  expectNewerOperationWins,
+} from '../__tests__/latestOperationTestAssertions'
 
 const vitsModel = (id: string): OnnxModelFiles => ({
   id,
@@ -182,43 +186,39 @@ describe('character TTS asset upload freshness', () => {
   })
 
   it('lets the newer same-target upload win over an older delayed upload', () => {
-    const older = beginUpload({ kind: 'vits-model', characterId: 'char-a' })
-    const newer = beginUpload({ kind: 'vits-model', characterId: 'char-a' })
-
-    try {
-      expect(applyVitsUpload(newer)).toEqual(vitsModel('uploaded'))
-      expect(applyVitsUpload(older)).toBeNull()
-    } finally {
-      clearCharacterTtsAssetUpload(older)
-      clearCharacterTtsAssetUpload(newer)
-    }
+    expectNewerOperationWins({
+      begin: () => beginUpload({ kind: 'vits-model', characterId: 'char-a' }),
+      complete: (operation) => applyVitsUpload(operation),
+      expectedNewer: vitsModel('uploaded'),
+      clear: clearCharacterTtsAssetUpload,
+    })
   })
 
   it('does not let a canceled newer picker invalidate an older in-flight upload', () => {
     const baseAudio = refAudio('base')
-    const older = beginUpload({
-      kind: 'gptsovits-ref-audio',
-      characterId: 'char-a',
-      refAudioData: baseAudio,
-    })
-    const canceledTarget = captureCharacterTtsAssetUploadTarget({
-      characterId: 'char-a',
-      draftCharacterId: 'char-a',
-      kind: 'gptsovits-ref-audio',
-      ttsMode: 'gptsovits',
-      refAudioData: baseAudio,
-    })
 
-    try {
-      expect(canceledTarget).not.toBeNull()
-      expect(
-        applyRefAudioUpload(older, {
+    expectCanceledPickerKeepsOperationCurrent({
+      begin: () =>
+        beginUpload({
+          kind: 'gptsovits-ref-audio',
+          characterId: 'char-a',
+          refAudioData: baseAudio,
+        }),
+      captureCanceledTarget: () =>
+        captureCharacterTtsAssetUploadTarget({
+          characterId: 'char-a',
+          draftCharacterId: 'char-a',
+          kind: 'gptsovits-ref-audio',
+          ttsMode: 'gptsovits',
+          refAudioData: baseAudio,
+        }),
+      complete: (operation) =>
+        applyRefAudioUpload(operation, {
           refAudioData: baseAudio,
           uploadedRefAudioData: refAudio('older-upload'),
         }),
-      ).toEqual(refAudio('older-upload'))
-    } finally {
-      clearCharacterTtsAssetUpload(older)
-    }
+      expected: refAudio('older-upload'),
+      clear: clearCharacterTtsAssetUpload,
+    })
   })
 })

@@ -214,7 +214,6 @@ describe('BardWiki prompt snapshot and selection', () => {
       throw error
     }
 
-    const startedAt = performance.now()
     const query = buildBardWikiQuery({ currentInput: 'needle', recentMessages: [], recentMessageCount: 12 })
     const snapshot = loadBardWikiPromptSnapshot(db, { chatId: 'chat-a', query, maxLinkHops: 1 })
     const selection = selectBardWikiPromptRows({
@@ -225,11 +224,6 @@ describe('BardWiki prompt snapshot and selection', () => {
       tokenBudget: 32_768,
       countRowTokens: (content) => Math.ceil(content.length / 4),
     })
-    const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100
-
-    console.info(
-      `[bardwiki-benchmark] documents=2000 candidates=${selection.diagnostics.candidateCount} selected=${selection.rows.length} elapsedMs=${elapsedMs}`,
-    )
     expect(snapshot.directCandidateIds).toHaveLength(512)
     expect(selection.diagnostics.candidateCount).toBe(512)
     expect(selection.rows).toHaveLength(32)

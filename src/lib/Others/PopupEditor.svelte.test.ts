@@ -23,7 +23,7 @@ vi.mock('../SideBars/Toggles.svelte', async () => {
   return { default: mock.default }
 })
 vi.mock('./MonacoEditor.svelte', async () => {
-  const mock = await import('../ChatScreens/DefaultChatScreen.testChat.svelte')
+  const mock = await import('./PopupEditor.testMonacoStub.svelte')
   return { default: mock.default }
 })
 vi.mock('src/lang', () => ({
@@ -107,6 +107,7 @@ describe('PopupEditor', () => {
     await settle()
 
     expect(target.querySelector('textarea')).toBeNull()
+    await vi.waitFor(() => expect(target.querySelector('[data-popup-editor-monaco-stub]')).not.toBeNull())
     await vi.waitFor(() => expect(target.textContent).not.toContain('Loading'))
   })
 
@@ -126,7 +127,7 @@ describe('PopupEditor', () => {
 
     expect(popupMocks.applyServerBackedSetting).toHaveBeenLastCalledWith('useMonacoEditorOnDesktop', true)
     expect(target.querySelector('textarea')).toBeNull()
-    await vi.waitFor(() => expect(target.querySelector('.risu-chat')).not.toBeNull())
+    await vi.waitFor(() => expect(target.querySelector('[data-popup-editor-monaco-stub]')).not.toBeNull())
     expect(target.querySelector<HTMLInputElement>('input[aria-label="Monaco editor"]')?.checked).toBe(true)
 
     target.querySelector<HTMLInputElement>('input[aria-label="Monaco editor"]')!.click()

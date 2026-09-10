@@ -3,7 +3,7 @@ import type { RisuModule } from 'src/ts/process/modules'
 import { replaceResourceDatabase as setDatabaseLite } from 'src/ts/server/resourceState.svelte'
 import type { customscript, Database, loreBook } from 'src/ts/storage/database.svelte'
 import { beforeEach, expect, test, vi } from 'vitest'
-import type { RPCToolCallTextContent } from '../../mcplib'
+import type { RPCToolCallContent, RPCToolCallTextContent } from '../../mcplib'
 import { ModuleHandler } from '../modules'
 import { getResourceDatabase as getDatabase } from 'src/ts/__tests__/resourceDatabaseState'
 
@@ -66,6 +66,18 @@ const makeToolResponse = (text: unknown): RPCToolCallTextContent[] => [
   },
 ]
 
+function expectJsonToolResponse(actual: RPCToolCallContent[] | null, expected: unknown): void {
+  expect(actual).toEqual([
+    {
+      text: expect.any(String),
+      type: 'text',
+    },
+  ])
+  const entry = actual?.[0]
+  if (entry?.type !== 'text') throw new Error('Expected a text tool response')
+  expect(JSON.parse(entry.text)).toEqual(expected)
+}
+
 beforeEach(() => {
   vi.resetAllMocks()
   setDatabaseLite({ characters: [], enabledModules: [], modules: [] } as unknown as Database)
@@ -80,9 +92,17 @@ test('lists installed modules with pagination', async () => {
   getDatabase().modules = modules
   getDatabase().enabledModules = [modules[0].id, modules[2].id]
 
-  expect(await instance.handle('risu-list-modules', { count: 3 })).toMatchSnapshot()
-  expect(await instance.handle('risu-list-modules', { count: 3, offset: 3 })).toMatchSnapshot()
-  expect(await instance.handle('risu-list-modules', { count: 3, offset: 10 })).toMatchSnapshot()
+  expectJsonToolResponse(await instance.handle('risu-list-modules', { count: 3 }), [
+    { description: '0Description', enabled: true, id: '0', name: '0' },
+    { description: '1Description', enabled: false, id: '1', name: '1' },
+    { description: '2Description', enabled: true, id: '2', name: '2' },
+  ])
+  expectJsonToolResponse(await instance.handle('risu-list-modules', { count: 3, offset: 3 }), [
+    { description: '3Description', enabled: false, id: '3', name: '3' },
+    { description: '4Description', enabled: false, id: '4', name: '4' },
+    { description: '5Description', enabled: false, id: '5', name: '5' },
+  ])
+  expectJsonToolResponse(await instance.handle('risu-list-modules', { count: 3, offset: 10 }), [])
 
   getDatabase().modules = []
   getDatabase().enabledModules = []
@@ -143,9 +163,17 @@ test('lists lorebooks of a module with pagination', async () => {
   }
   getDatabase().modules = [module]
 
-  expect(await instance.handle('risu-list-module-lorebooks', { count: 3, id: 'A' })).toMatchSnapshot()
-  expect(await instance.handle('risu-list-module-lorebooks', { count: 3, offset: 3, id: 'A' })).toMatchSnapshot()
-  expect(await instance.handle('risu-list-module-lorebooks', { count: 3, offset: 10, id: 'A' })).toMatchSnapshot()
+  expectJsonToolResponse(await instance.handle('risu-list-module-lorebooks', { count: 3, id: 'A' }), [
+    { alwaysActive: false, keys: '0Key', name: '0' },
+    { alwaysActive: false, keys: '1Key', name: '1' },
+    { alwaysActive: false, keys: '2Key', name: '2' },
+  ])
+  expectJsonToolResponse(await instance.handle('risu-list-module-lorebooks', { count: 3, offset: 3, id: 'A' }), [
+    { alwaysActive: false, keys: '3Key', name: '3' },
+    { alwaysActive: false, keys: '4Key', name: '4' },
+    { alwaysActive: false, keys: '5Key', name: '5' },
+  ])
+  expectJsonToolResponse(await instance.handle('risu-list-module-lorebooks', { count: 3, offset: 10, id: 'A' }), [])
 
   getDatabase().modules[0].lorebook = []
 
@@ -163,7 +191,10 @@ test('retrieves fields of a lorebook', async () => {
   }
   getDatabase().modules = [module]
 
-  expect(await instance.handle('risu-get-module-lorebook', { id: 'A', names: ['0', '2', '99'] })).toMatchSnapshot()
+  expectJsonToolResponse(await instance.handle('risu-get-module-lorebook', { id: 'A', names: ['0', '2', '99'] }), [
+    { alwaysActive: false, content: '0Content', keys: '0Key', name: '0' },
+    { alwaysActive: false, content: '2Content', keys: '2Key', name: '2' },
+  ])
 })
 
 test('lists all regex scripts of a module', async () => {
@@ -177,7 +208,17 @@ test('lists all regex scripts of a module', async () => {
   }
   getDatabase().modules = [module]
 
-  expect(await instance.handle('risu-get-module-regex-scripts', { id: 'A' })).toMatchSnapshot()
+  expectJsonToolResponse(
+    await instance.handle('risu-get-module-regex-scripts', { id: 'A' }),
+    Array.from({ length: 10 }, (_, i) => ({
+      ableFlag: true,
+      comment: String(i),
+      flag: '',
+      in: `${i}In`,
+      out: `${i}Out`,
+      type: 'editdisplay',
+    })),
+  )
 
   getDatabase().modules[0].regex = []
 

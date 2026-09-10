@@ -6,6 +6,7 @@ import * as fflate from 'fflate'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   createBardWikiDocument,
+  hashBardWikiDocumentContent,
   listBardWikiDocumentVersions,
   listBardWikiDocuments,
 } from '../src/bardWikiRepository.js'
@@ -198,7 +199,42 @@ describe('BardWiki Markdown vault import', () => {
     expect(() => decodeBardWikiVault(archive)).toThrowError(expect.objectContaining({ code: 'bardwiki_invalid_vault' }))
   })
 
-  it('rejects duplicate normalized paths, malformed UTF-8, and content hash mismatches before mutation', () => {
+  it('rejects duplicate normalized logical paths before mutation', () => {
+    createDocument('document-a', 'Lore/A')
+    createDocument('document-b', 'Lore/B')
+    const entries = fflate.unzipSync(encodeBardWikiVault(db, 'chat-a'))
+    const manifest = JSON.parse(Buffer.from(entries['manifest.json']).toString('utf8')) as {
+      documents: Array<{
+        bardwikiId: string
+        kind: 'concept'
+        title: string
+        logicalPath: string
+        aliases: string[]
+        contextPolicy: 'relevant'
+        reviewState: 'active'
+        version: number
+        contentHash: string
+        exportPath: string
+      }>
+    }
+    const colliding = manifest.documents[1]
+    const markdownFile = Buffer.from(entries[colliding.exportPath]).toString('utf8')
+    const frontmatterEnd = markdownFile.indexOf('\n---\n', 4)
+    const markdown = markdownFile.slice(frontmatterEnd + 5)
+    colliding.logicalPath = 'lore/a'
+    colliding.contentHash = hashBardWikiDocumentContent({ ...colliding, markdown })
+    const { exportPath, ...frontmatter } = colliding
+    entries[exportPath] = new TextEncoder().encode(`---\n${JSON.stringify(frontmatter)}\n---\n${markdown}`)
+    entries['manifest.json'] = new TextEncoder().encode(JSON.stringify(manifest))
+    expect(() => decodeBardWikiVault(fflate.zipSync(entries))).toThrowError(
+      expect.objectContaining({
+        code: 'bardwiki_invalid_vault',
+        message: 'Vault manifest contains duplicate logical paths',
+      }),
+    )
+  })
+
+  it('rejects content hash mismatches before mutation', () => {
     createDocument('document-a', 'Lore/A')
     const archive = encodeBardWikiVault(db, 'chat-a')
     const entries = fflate.unzipSync(archive)
@@ -210,7 +246,10 @@ describe('BardWiki Markdown vault import', () => {
     expect(() => decodeBardWikiVault(fflate.zipSync(entries))).toThrowError(
       expect.objectContaining({ code: 'bardwiki_invalid_vault' }),
     )
+  })
 
+  it('rejects malformed UTF-8 before mutation', () => {
+    createDocument('document-a', 'Lore/A')
     expect(() =>
       decodeBardWikiVault(
         fflate.zipSync({

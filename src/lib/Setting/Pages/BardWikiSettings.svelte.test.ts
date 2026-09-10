@@ -44,6 +44,22 @@ type MountedComponent = Parameters<typeof unmount>[0]
 let component: MountedComponent | undefined
 let target: HTMLElement
 
+function memoryModeButton(label: string): HTMLButtonElement {
+  const button = Array.from(target.querySelectorAll<HTMLButtonElement>('button[data-segment-btn]')).find(
+    (candidate) => candidate.textContent?.trim() === label,
+  )
+  expect(button, `memory mode ${label}`).toBeTruthy()
+  return button!
+}
+
+async function remountFromSavedDraft(): Promise<void> {
+  if (component) unmount(component)
+  component = undefined
+  target.replaceChildren()
+  component = mount(BardWikiSettings, { target })
+  await tick()
+}
+
 beforeEach(() => {
   bardWikiMocks.draft.value = structuredClone(DEFAULT_BARDWIKI_GLOBAL_SETTINGS)
   bardWikiMocks.draft.retryPersistence.mockReset()
@@ -111,7 +127,8 @@ describe('BardWiki settings', () => {
     target.querySelector<HTMLInputElement>(`input[aria-label="${language.bardWiki.enabledByDefault}"]`)?.click()
     target.querySelector<HTMLInputElement>(`input[aria-label="${language.bardWiki.automaticConfirmation}"]`)?.click()
     target.querySelector<HTMLInputElement>(`input[aria-label="${language.bardWiki.canonicalUpdates}"]`)?.click()
-    target.querySelectorAll<HTMLButtonElement>('button[data-segment-btn]').item(2).click()
+    const hybridMode = memoryModeButton(language.bardWiki.modeHybrid)
+    hybridMode.click()
     const profile = target.querySelector<HTMLSelectElement>('#bardwiki-model-profile')!
     profile.value = 'profile-a'
     profile.dispatchEvent(new Event('change', { bubbles: true }))
@@ -124,6 +141,8 @@ describe('BardWiki settings', () => {
       confirmationPolicy: 'automatic',
       canonicalUpdates: true,
     })
+    await remountFromSavedDraft()
+    expect(memoryModeButton(language.bardWiki.modeHybrid).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('shows the effective hybrid allocation and preserves hidden values when modes change', async () => {
@@ -141,20 +160,20 @@ describe('BardWiki settings', () => {
     expect(target.querySelector('[data-testid="bardwiki-hybrid-budget-status"]')?.textContent).toContain('1,800 Hypa')
     expect(target.querySelector('[data-testid="bardwiki-hybrid-budget-status"]')?.textContent).toContain('248 BardWiki')
 
-    target.querySelectorAll<HTMLButtonElement>('button[data-segment-btn]').item(0).click()
-    component && unmount(component)
-    component = undefined
-    target.replaceChildren()
-    component = mount(BardWikiSettings, { target })
+    const hypaMode = memoryModeButton(language.bardWiki.modeHypa)
+    hypaMode.click()
     await tick()
+    expect(bardWikiMocks.draft.value.memoryMode).toBe('hypa')
+    await remountFromSavedDraft()
+    expect(memoryModeButton(language.bardWiki.modeHypa).getAttribute('aria-pressed')).toBe('true')
     expect(target.querySelector('[data-testid="bardwiki-advanced-retrieval"]')).toBeNull()
 
-    target.querySelectorAll<HTMLButtonElement>('button[data-segment-btn]').item(2).click()
-    component && unmount(component)
-    component = undefined
-    target.replaceChildren()
-    component = mount(BardWikiSettings, { target })
+    const hybridMode = memoryModeButton(language.bardWiki.modeHybrid)
+    hybridMode.click()
     await tick()
+    expect(bardWikiMocks.draft.value.memoryMode).toBe('hybrid')
+    await remountFromSavedDraft()
+    expect(memoryModeButton(language.bardWiki.modeHybrid).getAttribute('aria-pressed')).toBe('true')
     expect(
       target.querySelector<HTMLInputElement>(`input[aria-label="${language.bardWiki.hybridHypaTokenBudget}"]`)?.value,
     ).toBe('1800')

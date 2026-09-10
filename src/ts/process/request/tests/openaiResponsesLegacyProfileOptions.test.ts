@@ -378,37 +378,51 @@ describe('requestOpenAIResponseAPI profile provider options', () => {
     ).resolves.toEqual({ type: 'success', result: 'extracted' })
   })
 
-  it('parses buffered reasoning content and rejects incomplete or failed payloads', async () => {
+  function setupTerminalResponseProfile(): ResolvedModelProfile {
     const profile = resolveDurableProfile(
       db({ aiModel: 'gpt-5-response-api' } as Partial<Database>),
       { providerId: 'openai', modelId: 'gpt-5-response-api' },
       'sk-profile-openai',
     )
     setDatabase(db({ aiModel: 'gpt-5-response-api', openAIKey: 'sk-flat-openai' } as Partial<Database>))
-    globalFetchMock
-      .mockResolvedValueOnce({
-        ok: true,
-        data: {
-          output: [
-            { id: 'rs_stale', type: 'reasoning', content: [{ type: 'reasoning_text', text: 'reasoned' }] },
-            { type: 'message', content: [{ type: 'output_text', text: 'answer' }] },
-          ],
-        },
-      })
-      .mockResolvedValueOnce({
-        ok: true,
-        data: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: 'partial' },
-      })
-      .mockResolvedValueOnce({ ok: true, data: { status: 'failed', error: { message: 'bad request' } } })
+    return profile
+  }
+
+  it('parses buffered reasoning content', async () => {
+    const profile = setupTerminalResponseProfile()
+    globalFetchMock.mockResolvedValueOnce({
+      ok: true,
+      data: {
+        output: [
+          { id: 'rs_stale', type: 'reasoning', content: [{ type: 'reasoning_text', text: 'reasoned' }] },
+          { type: 'message', content: [{ type: 'output_text', text: 'answer' }] },
+        ],
+      },
+    })
 
     await expect(requestOpenAIResponseAPI(makeArg(profile, { previewBody: false }))).resolves.toEqual({
       type: 'success',
       result: '<Thoughts>\n\nreasoned\n\n</Thoughts>\nanswer',
     })
+  })
+
+  it('rejects an incomplete buffered response', async () => {
+    const profile = setupTerminalResponseProfile()
+    globalFetchMock.mockResolvedValueOnce({
+      ok: true,
+      data: { status: 'incomplete', incomplete_details: { reason: 'max_output_tokens' }, output_text: 'partial' },
+    })
+
     await expect(requestOpenAIResponseAPI(makeArg(profile, { previewBody: false }))).resolves.toEqual({
       type: 'fail',
       result: 'Incomplete response: max_output_tokens\npartial',
     })
+  })
+
+  it('rejects a failed buffered response', async () => {
+    const profile = setupTerminalResponseProfile()
+    globalFetchMock.mockResolvedValueOnce({ ok: true, data: { status: 'failed', error: { message: 'bad request' } } })
+
     await expect(requestOpenAIResponseAPI(makeArg(profile, { previewBody: false }))).resolves.toEqual({
       type: 'fail',
       result: '{"message":"bad request"}',

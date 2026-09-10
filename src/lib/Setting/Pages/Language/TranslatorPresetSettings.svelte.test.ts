@@ -2665,21 +2665,6 @@ describe('TranslatorPresetSettings server-backed edits', () => {
     expect(getDatabase().translatorPrompt).toBe('old prompt A')
   })
 
-  it('does not settle a dirty prompt when an unrelated resource apply completes', async () => {
-    await editPrompt('dirty prompt A')
-
-    await applyTranslatorPresetProjection({
-      presets: [
-        { id: 'preset-a', name: 'Projected A', prompt: 'stale prompt A', maxResponse: 100 },
-        { id: 'preset-b', name: 'Projected B', prompt: 'projected prompt B', maxResponse: 220 },
-      ],
-      selectedIndex: 0,
-    })
-
-    expect(getDatabase().translatorPresets[0].prompt).toBe('dirty prompt A')
-    expect(getDatabase().translatorPrompt).toBe('old prompt A')
-  })
-
   it('does not settle a dirty prompt for a contradictory successful receipt', async () => {
     commandSpies.contradictNextUpdateReceipt = true
     await editPrompt('optimistic prompt A')

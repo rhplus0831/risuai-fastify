@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { describe, expect, it } from 'vitest'
+import { moduleSpecifiers, parseSource, resolveModule } from '../../../util/test-support/source-contract.js'
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
 const serverRoots = ['server/fastify/src', 'server/fastify/__tests__', 'server/fastify/browser-smoke']
@@ -16,24 +17,57 @@ function typescriptFiles(root: string): string[] {
   })
 }
 
-function importedSpecifiers(file: string): string[] {
-  const text = fs.readFileSync(file, 'utf8')
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true)
-  return source.statements.flatMap((node) => {
-    if (!ts.isImportDeclaration(node) || !ts.isStringLiteral(node.moduleSpecifier)) return []
-    return [node.moduleSpecifier.text]
+function forbiddenDependencyOffenders(files: string[], forbiddenFiles: string[]): string[] {
+  const forbiddenTargets = new Map(
+    forbiddenFiles.map((file) => [fs.realpathSync(path.join(repoRoot, file)), file] as const),
+  )
+
+  return files.flatMap((file) => {
+    const absolute = path.join(repoRoot, file)
+    const source = parseSource(file, fs.readFileSync(absolute, 'utf8'))
+    return moduleSpecifiers(source).flatMap((specifier) => {
+      const target = resolveModule(repoRoot, file, specifier)
+      const forbidden = target ? forbiddenTargets.get(target) : undefined
+      return forbidden ? [`${file} -> ${specifier} (${forbidden})`] : []
+    })
   })
+}
+
+function relativeTypescriptFiles(root: string): string[] {
+  return typescriptFiles(root).map((file) => path.relative(repoRoot, file))
 }
 
 describe('Fastify application-model type ownership', () => {
   it('has no production, server-test, or browser-smoke import of the browser aggregate database module', () => {
-    const offenders = serverRoots.flatMap(typescriptFiles).flatMap((file) =>
-      importedSpecifiers(file)
-        .filter((specifier) => specifier.includes('src/ts/storage/database.svelte'))
-        .map((specifier) => `${path.relative(repoRoot, file)} -> ${specifier}`),
-    )
+    const offenders = forbiddenDependencyOffenders(serverRoots.flatMap(relativeTypescriptFiles), [
+      'src/ts/storage/database.svelte.ts',
+    ])
 
     expect(offenders).toEqual([])
+  })
+
+  it.each([
+    {
+      name: 'Lua runtime stays independent from the browser parser',
+      consumers: ['server/fastify/src/prompt/luaRuntime.ts'],
+      forbidden: ['src/ts/parser/parser.svelte.ts'],
+    },
+    {
+      name: 'memory embedding stays independent from browser Hypa memory',
+      consumers: [
+        'server/fastify/src/embeddingOperations.ts',
+        'server/fastify/src/memoryEmbeddingModel.ts',
+        'server/fastify/src/memoryEmbedJobHandler.ts',
+      ],
+      forbidden: ['src/ts/process/memory/hypamemory.ts'],
+    },
+    {
+      name: 'legacy generation defaults stay independent from browser prompt templates',
+      consumers: ['server/fastify/src/databaseDefaults.ts', 'server/fastify/src/legacyGenerationDefaults.ts'],
+      forbidden: ['src/ts/process/templates/templates.ts'],
+    },
+  ])('$name', ({ consumers, forbidden }) => {
+    expect(forbiddenDependencyOffenders(consumers, forbidden)).toEqual([])
   })
 
   it('exports finite selected database and row contracts without aggregate escape types', () => {

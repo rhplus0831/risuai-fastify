@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createVerify, generateKeyPairSync } from 'node:crypto'
 import {
   _resetVertexTokenCacheForTesting,
@@ -20,6 +20,9 @@ function makeKeyPair(): KeyPair {
   return { publicKeyPem: publicKey, privateKeyPem: privateKey }
 }
 
+let primaryKeyPair!: Readonly<KeyPair>
+let distinctKeyPair!: Readonly<KeyPair>
+
 function decodeBase64UrlJson<T>(segment: string): T {
   return JSON.parse(Buffer.from(segment, 'base64url').toString('utf-8')) as T
 }
@@ -37,6 +40,11 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve()
 }
 
+beforeAll(() => {
+  primaryKeyPair = Object.freeze(makeKeyPair())
+  distinctKeyPair = Object.freeze(makeKeyPair())
+})
+
 beforeEach(() => {
   _resetVertexTokenCacheForTesting()
 })
@@ -48,7 +56,7 @@ afterEach(() => {
 
 describe('signServiceAccountJWT', () => {
   it('produces a header.claim.signature triple with RS256 + valid claim set', () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     const jwt = signServiceAccountJWT('svc@example.iam.gserviceaccount.com', privateKeyPem, 1700000000)
     const [encHeader, encClaim, encSig] = jwt.split('.')
     expect(encHeader && encClaim && encSig).toBeTruthy()
@@ -73,7 +81,7 @@ describe('signServiceAccountJWT', () => {
   })
 
   it('signs a JWT that verifies against the matching public key', () => {
-    const { publicKeyPem, privateKeyPem } = makeKeyPair()
+    const { publicKeyPem, privateKeyPem } = primaryKeyPair
     const jwt = signServiceAccountJWT('svc@example.iam.gserviceaccount.com', privateKeyPem)
     const [encHeader, encClaim, encSig] = jwt.split('.')
     const signingInput = `${encHeader}.${encClaim}`
@@ -113,7 +121,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('signs a JWT, posts to oauth2.googleapis.com/token, and returns the access_token', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     let captured: { url: string; init: RequestInit } | null = null
     vi.stubGlobal('fetch', async (url: string, init: RequestInit) => {
       captured = { url, init }
@@ -134,7 +142,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('returns a cached token instead of re-signing on the next call', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     let fetchCount = 0
     vi.stubGlobal('fetch', async () => {
       fetchCount++
@@ -157,7 +165,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('shares one in-flight token exchange for concurrent cold callers', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     const exchange = deferredResponse()
     let fetchCount = 0
     vi.stubGlobal('fetch', async () => {
@@ -195,7 +203,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('clears a failed in-flight exchange so the next caller can retry', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     let fetchCount = 0
     vi.stubGlobal('fetch', async () => {
       fetchCount++
@@ -232,8 +240,8 @@ describe('resolveVertexBearer', () => {
   })
 
   it('keeps distinct private keys from sharing an in-flight token exchange', async () => {
-    const firstKey = makeKeyPair()
-    const secondKey = makeKeyPair()
+    const firstKey = primaryKeyPair
+    const secondKey = distinctKeyPair
     let fetchCount = 0
     vi.stubGlobal('fetch', async () => {
       fetchCount++
@@ -251,7 +259,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('refreshes a token whose expiry is within the safety margin', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     let fetchCount = 0
     vi.stubGlobal('fetch', async () => {
       fetchCount++
@@ -276,7 +284,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('returns an error with the upstream body when the token exchange returns non-2xx', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     vi.stubGlobal(
       'fetch',
       async () =>
@@ -295,7 +303,7 @@ describe('resolveVertexBearer', () => {
   })
 
   it('returns an error when the response JSON lacks access_token', async () => {
-    const { privateKeyPem } = makeKeyPair()
+    const { privateKeyPem } = primaryKeyPair
     vi.stubGlobal(
       'fetch',
       async () =>

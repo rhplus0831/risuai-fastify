@@ -1,12 +1,25 @@
 import { describe, expect, it } from 'vitest'
-import {
+import * as browserMutationCertificates from '../../../src/ts/personaMutationCertificate'
+import * as sharedMutationCertificates from './mutationCertificates.js'
+
+const {
   serializePersonaCollectionDigestInput,
   serializePersonaIdsDigestInput,
   serializePersonaProfileDigestInput,
   serializeScriptDefinitionCollectionDigestInput,
-} from './mutationCertificates.js'
+} = sharedMutationCertificates
 
 describe('mutation certificate serialization', () => {
+  it('keeps the browser compatibility facade exports identical', () => {
+    for (const key of [
+      'serializePersonaCollectionDigestInput',
+      'serializePersonaIdsDigestInput',
+      'serializePersonaProfileDigestInput',
+    ] as const) {
+      expect(browserMutationCertificates[key]).toBe(sharedMutationCertificates[key])
+    }
+  })
+
   it('preserves version prefixes and persona profile field order', () => {
     expect(serializePersonaIdsDigestInput(['persona-b', 'persona-a'])).toBe(
       'persona-mutation-ids-v1:["persona-b","persona-a"]',

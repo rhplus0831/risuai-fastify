@@ -1,3 +1,4 @@
+import fc from 'fast-check'
 import { describe, expect, it, vi } from 'vitest'
 import { parseChatMLRows } from './chatMLRows.js'
 
@@ -8,6 +9,28 @@ interface OracleRow {
   content: string
   thoughts: string[]
 }
+
+const starter = '<|im_start|>'
+const separator = '<|im_sep|>'
+const ender = '<|im_end|>'
+const thoughtsOpen = '<Thoughts>'
+const thoughtsClose = '</Thoughts>'
+const controlTokens = [starter, separator, ender, thoughtsOpen, thoughtsClose]
+const plainField = fc
+  .string({ unit: 'grapheme' })
+  .filter((value) => controlTokens.every((token) => !value.includes(token)))
+const nonEmptyPlainField = plainField.filter((value) => value.length > 0)
+const role = fc.constantFrom('assistant', 'system', 'user')
+const roleSeparator = fc.constantFrom(separator, '\n', ' ')
+const unknownHeader = fc.tuple(nonEmptyPlainField, fc.constantFrom(separator, '\n')).filter(([prefix, suffix]) => {
+  const header = `${prefix}${suffix}`
+  return !(['assistant', 'system', 'user'] as const).some(
+    (knownRole) =>
+      header.startsWith(knownRole + separator) ||
+      header.startsWith(knownRole + '\n') ||
+      header.startsWith(knownRole + ' '),
+  )
+})
 
 function parseBeforeExtraction(
   data: string,
@@ -80,5 +103,62 @@ describe('ChatML row parsing', () => {
     expect(parseChatMLRows(input, actualTransform)).toEqual(parseBeforeExtraction(input, oracleTransform))
     expect(actualTransform.mock.calls).toEqual(oracleTransform.mock.calls)
     expect(actualTransform.mock.calls).toEqual([['first'], ['second']])
+  })
+
+  it('returns null for arbitrary input that does not trim to a ChatML starter', () => {
+    fc.assert(
+      fc.property(
+        fc.string({ unit: 'grapheme' }).filter((input) => !input.trim().startsWith(starter)),
+        (input) => {
+          expect(parseChatMLRows(input)).toBeNull()
+        },
+      ),
+    )
+  })
+
+  it('parses arbitrary plain role rows without treating field data as syntax', () => {
+    fc.assert(
+      fc.property(role, role, plainField, roleSeparator, (role1, role2, content, rowSeparator) => {
+        const input =
+          `${starter}${role1}${rowSeparator}${content}${ender}` + `${starter}${role2}${rowSeparator}${content}${ender}`
+
+        expect(parseChatMLRows(input)).toEqual([
+          { role: role1, content: content.trimStart(), thoughts: [] },
+          { role: role2, content: content.trimStart(), thoughts: [] },
+        ])
+      }),
+    )
+  })
+
+  it('extracts arbitrary nonempty plain thoughts without changing adjacent content', () => {
+    fc.assert(
+      fc.property(nonEmptyPlainField, plainField, (thoughts, content) => {
+        const input = `${starter}assistant${separator}${thoughtsOpen}${thoughts}${thoughtsClose}${content}${ender}`
+
+        expect(parseChatMLRows(input)).toEqual([
+          {
+            role: 'assistant',
+            content,
+            thoughts: [thoughts],
+          },
+        ])
+      }),
+    )
+  })
+
+  it('keeps arbitrary unknown plain headers in user content', () => {
+    fc.assert(
+      fc.property(unknownHeader, plainField, ([prefix, headerSeparator], content) => {
+        const input = `${starter}${prefix}${headerSeparator}${content}${ender}`
+
+        expect(parseChatMLRows(input)).toEqual([
+          {
+            role: 'user',
+            content: `${prefix}${headerSeparator}${content}`.trimStart(),
+            thoughts: [],
+          },
+        ])
+      }),
+    )
   })
 })

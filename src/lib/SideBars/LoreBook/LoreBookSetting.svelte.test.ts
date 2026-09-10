@@ -375,23 +375,66 @@ describe('scoped lorebook persistence outcomes', () => {
     expect(target.querySelector('[data-risu-lorebook-scope="character:character-a"]')).toBeNull()
   })
 
-  it('tracks an imported collection until its exact operation is accepted', async () => {
+  it('locks same-scope mutations while an imported collection is pending, then unlocks on acceptance', async () => {
+    setDatabaseLite({
+      bulkEnabling: true,
+      characters: [
+        {
+          chaId: 'character-a',
+          chatPage: 0,
+          chats: [{ id: 'chat-a', localLore: [], message: [] }],
+          globalLore: [],
+          lorePlus: false,
+        },
+      ],
+    } as any)
     const deferred = deferredOperation('character:character-a')
-    editorActions.importLoreBook.mockResolvedValueOnce(deferred.operation)
+    editorActions.importLoreBook.mockResolvedValueOnce(deferred.operation).mockResolvedValueOnce(null)
     component = mount(LoreBookSetting, { target })
     await tick()
 
-    target.querySelector<HTMLButtonElement>('[aria-label="Import: Lorebook"]')!.click()
+    const add = target.querySelector<HTMLButtonElement>('[aria-label="Add: Lorebook"]')!
+    const addFolder = target.querySelector<HTMLButtonElement>('[aria-label="Add: Folder"]')!
+    const importButton = target.querySelector<HTMLButtonElement>('[aria-label="Import: Lorebook"]')!
+    const characterBulk = [...target.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'CHAR',
+    )!
+    const chatBulk = [...target.querySelectorAll<HTMLButtonElement>('button')].find(
+      (button) => button.textContent?.trim() === 'CHAT',
+    )!
+
+    importButton.click()
     await flushAsyncWork()
     expect(editorActions.importLoreBook).toHaveBeenCalledWith('global')
-    expect(target.querySelector('[data-risu-lorebook-persistence="pending"]')).toBeNull()
+    expect(add.disabled).toBe(true)
+    expect(addFolder.disabled).toBe(true)
+    expect(importButton.disabled).toBe(true)
+    expect(characterBulk.disabled).toBe(true)
+    expect(chatBulk.disabled).toBe(false)
+    expect(target.textContent).not.toContain('Saving lorebook changes')
+
+    importButton.click()
+    add.click()
+    addFolder.click()
+    characterBulk.click()
+    expect(editorActions.importLoreBook).toHaveBeenCalledTimes(1)
+    expect(editorActions.addLorebook).not.toHaveBeenCalled()
+    expect(editorActions.addLorebookFolder).not.toHaveBeenCalled()
+    expect(lorebookOwnerActions.replaceCharacterLorebookCollectionWithOutcome).not.toHaveBeenCalled()
 
     deferred.resolve({ status: 'accepted' })
     await flushAsyncWork()
-    expect(target.querySelector('[data-risu-lorebook-persistence="pending"]')).toBeNull()
+    expect(add.disabled).toBe(false)
+    expect(addFolder.disabled).toBe(false)
+    expect(importButton.disabled).toBe(false)
+    expect(characterBulk.disabled).toBe(false)
+
+    importButton.click()
+    await flushAsyncWork()
+    expect(editorActions.importLoreBook).toHaveBeenCalledTimes(2)
   })
 
-  it('restores a queued scope label after the lorebook setting remounts', async () => {
+  it('does not replay transient queued feedback or keep controls locked after remount', async () => {
     const deferred = deferredOperation('character:character-a')
     editorActions.addLorebook.mockReturnValueOnce(deferred.operation)
     component = mount(LoreBookSetting, { target })
@@ -411,6 +454,14 @@ describe('scoped lorebook persistence outcomes', () => {
 
     expect(target.querySelector('[data-risu-lorebook-scope="character:character-a"]')).toBeNull()
     expect(alertSpies.alertNormal).not.toHaveBeenCalled()
+    const remountedAdd = target.querySelector<HTMLButtonElement>('[aria-label="Add: Lorebook"]')!
+    expect(remountedAdd.disabled).toBe(false)
+    expect(target.querySelector<HTMLButtonElement>('[aria-label="Add: Folder"]')?.disabled).toBe(false)
+    expect(target.querySelector<HTMLButtonElement>('[aria-label="Import: Lorebook"]')?.disabled).toBe(false)
+
+    remountedAdd.click()
+    await tick()
+    expect(editorActions.addLorebook).toHaveBeenCalledTimes(2)
   })
 
   it('disables an exact bulk scope while pending and reports terminal failure', async () => {

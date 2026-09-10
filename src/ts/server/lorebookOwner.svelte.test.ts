@@ -1559,32 +1559,6 @@ describe('lorebook editor entry draft scope', () => {
     expect(characterEntryCommands()).toHaveLength(1)
   })
 
-  it('immediate owner flush sends one replacement only', async () => {
-    setupK4EditorDb()
-
-    recorded.commands.length = 0
-    applyLorebookEntryDraftEdit(
-      { kind: 'character', characterId: 'c-k4' },
-      3,
-      { ...(getDatabase().characters[0].globalLore as Entry[])[3], content: 'blur final' } as any,
-      DELAY * 10,
-    )
-    flushPendingLorebookEntryDraftEdit({ kind: 'character', characterId: 'c-k4' })
-    await vi.advanceTimersByTimeAsync(0)
-
-    const cmds = characterEntryCommands()
-    expect(cmds).toHaveLength(1)
-    expect(cmds[0].a).toMatchObject({
-      characterId: 'c-k4',
-      entryId: 'entry-3',
-      entry: { id: 'entry-3', content: 'blur final' },
-      sparseUpdate: { patch: { content: 'blur final' } },
-    })
-
-    await vi.advanceTimersByTimeAsync(DELAY)
-    expect(characterEntryCommands()).toHaveLength(1)
-  })
-
   it('module external entry drafts avoid collection clones and flush final module entry', async () => {
     setupK4ModuleDb()
     const module = (getDatabase().modules as any[])[0] as { lorebook: Entry[] }

@@ -464,11 +464,7 @@ describe('server .risu fixture harness', () => {
     }
   })
 
-  it('keeps malformed fixture cases available for later decoder rejection tests', () => {
-    const unknown = risuSaveFixtureCases.find((fixture) => fixture.name === 'malformed-unknown-envelope')
-    expect(unknown).toBeDefined()
-    expect(classifyRisuSaveEnvelope(unknown!.bytes)).toBe('unknown')
-
+  it('rejects the malformed truncated-block fixture', () => {
     const truncated = risuSaveFixtureCases.find((fixture) => fixture.name === 'malformed-truncated-block')
     expect(truncated).toBeDefined()
     expect(() => decodeRisuSaveBlockEnvelope(truncated!.bytes)).toThrow(/Malformed RISUSAVE block/)

@@ -47,12 +47,12 @@ describe('shared Agent lorebook input resolution', () => {
   })
 
   it('preserves activation, entry-shape, and content validation', () => {
-    expect(resolveAgentLorebookInput(requiredInput, { globalLore: [entry({ alwaysActive: true })] }, {})).toMatchObject(
-      {
+    for (const invalidActivation of [{ alwaysActive: true }, { key: 'primary' }, { secondkey: 'secondary' }]) {
+      expect(resolveAgentLorebookInput(requiredInput, { globalLore: [entry(invalidActivation)] }, {})).toMatchObject({
         status: 'invalid_activation',
         scope: 'character',
-      },
-    )
+      })
+    }
     expect(resolveAgentLorebookInput(requiredInput, { globalLore: [entry({ mode: 'child' })] }, {})).toMatchObject({
       status: 'invalid_entry',
       scope: 'character',

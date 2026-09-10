@@ -454,6 +454,26 @@ describe('getInlayAssetBlob', () => {
 
     const result = await getInlayAssetBlob('legacy-id')
     expect(result!.data).toBeInstanceOf(Blob)
+    expect(await (result!.data as Blob).text()).toBe('hello')
+
+    const expectedBytes = new TextEncoder().encode('hello')
+    const expectedAssetId = fakeAssetId(expectedBytes)
+    await vi.waitFor(() => {
+      expect(store.get('legacy-id')).toMatchObject({
+        ext: 'png',
+        height: 32,
+        name: 'legacy.png',
+        serverAssetId: expectedAssetId,
+        type: 'image',
+        width: 32,
+      })
+    })
+
+    expect(uploadServerAssetBytes).toHaveBeenCalledTimes(1)
+    const [uploadedBytes, uploadedContentType] = vi.mocked(uploadServerAssetBytes).mock.calls[0]
+    expect(uploadedBytes).toEqual(expectedBytes)
+    expect(uploadedContentType).toBe('image/png')
+    expect((store.get('legacy-id') as InlayAsset).data).toBeUndefined()
   })
 
   test('returns a legacy Blob without an unhandled rejection when background migration fails', async () => {

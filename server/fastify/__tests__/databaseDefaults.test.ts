@@ -432,22 +432,18 @@ describe('database defaults', () => {
     })
   })
 
-  it('preserves an enabled app reduced-motion preference', () => {
-    const database = normalizeDatabaseDefaults({ reducedMotion: true }, { providerDefaults: false })
+  it.each([
+    ['preserves an enabled app reduced-motion preference', 'reducedMotion', true],
+    ['preserves the all-model additional-parameters opt-in', 'applyAdditionalParamsToAll', true],
+    ['preserves an enabled OpenAI Flex processing preference', 'openAIFlexProcessing', true],
+    ['preserves an explicit floating-input opt-out', 'floatingChatInput', false],
+    ['preserves an explicit saving-icon opt-out', 'showSavingIcon', false],
+    ['preserves an existing chat screen width', 'chatScreenWidth', 1240],
+    ['preserves an existing translation-notification defer cap', 'autoTranslateNotificationDeferCapSeconds', 0],
+  ] as const)('%s', (_label, key, value) => {
+    const database = normalizeDatabaseDefaults({ [key]: value }, { providerDefaults: false })
 
-    expect(database.reducedMotion).toBe(true)
-  })
-
-  it('preserves the all-model additional-parameters opt-in', () => {
-    const database = normalizeDatabaseDefaults({ applyAdditionalParamsToAll: true }, { providerDefaults: false })
-
-    expect(database.applyAdditionalParamsToAll).toBe(true)
-  })
-
-  it('preserves an enabled OpenAI Flex processing preference', () => {
-    const database = normalizeDatabaseDefaults({ openAIFlexProcessing: true }, { providerDefaults: false })
-
-    expect(database.openAIFlexProcessing).toBe(true)
+    expect(database).toMatchObject({ [key]: value })
   })
 
   it('preserves legacy custom palettes separately from the active palette', () => {
@@ -472,18 +468,6 @@ describe('database defaults', () => {
     expect(database.customColorScheme).not.toBe(database.colorScheme)
   })
 
-  it('preserves an explicit floating-input opt-out', () => {
-    const database = normalizeDatabaseDefaults({ floatingChatInput: false }, { providerDefaults: false })
-
-    expect(database.floatingChatInput).toBe(false)
-  })
-
-  it('preserves an explicit saving-icon opt-out', () => {
-    const database = normalizeDatabaseDefaults({ showSavingIcon: false }, { providerDefaults: false })
-
-    expect(database.showSavingIcon).toBe(false)
-  })
-
   it('preserves explicit Monaco editor preferences', () => {
     const database = normalizeDatabaseDefaults(
       { useMonacoEditorOnDesktop: true, useMonacoEditorOnMobile: true },
@@ -492,12 +476,6 @@ describe('database defaults', () => {
 
     expect(database.useMonacoEditorOnDesktop).toBe(true)
     expect(database.useMonacoEditorOnMobile).toBe(true)
-  })
-
-  it('preserves an existing chat screen width', () => {
-    const database = normalizeDatabaseDefaults({ chatScreenWidth: 1240 }, { providerDefaults: false })
-
-    expect(database.chatScreenWidth).toBe(1240)
   })
 
   it('preserves valid sidebar columns and clamps imported values to each device limit', () => {
@@ -514,15 +492,6 @@ describe('database defaults', () => {
     expect(valid.mobileSidebarColumns).toBe(2)
     expect(clamped.desktopSidebarColumns).toBe(4)
     expect(clamped.mobileSidebarColumns).toBe(2)
-  })
-
-  it('preserves an existing translation-notification defer cap', () => {
-    const database = normalizeDatabaseDefaults(
-      { autoTranslateNotificationDeferCapSeconds: 0 },
-      { providerDefaults: false },
-    )
-
-    expect(database.autoTranslateNotificationDeferCapSeconds).toBe(0)
   })
 
   it('preserves existing sentence paragraph display preferences', () => {

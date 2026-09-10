@@ -260,17 +260,7 @@ async function waitForPresetCommand(calls: CapturedFetch[], path: string): Promi
 }
 
 async function waitForState(assertion: () => void): Promise<void> {
-  let lastError: unknown
-  for (let attempt = 0; attempt < 40; attempt += 1) {
-    try {
-      assertion()
-      return
-    } catch (error) {
-      lastError = error
-      await new Promise((resolve) => setTimeout(resolve, 0))
-    }
-  }
-  throw lastError
+  await vi.waitFor(assertion, { interval: 1 })
 }
 
 async function captureFullLegacyPresetSavePayload(settings: Partial<Database> = {}): Promise<botPreset> {

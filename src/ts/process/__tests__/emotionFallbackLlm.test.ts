@@ -178,31 +178,25 @@ describe('runEmotionLlmFallback', () => {
     expect(throwErrorSpy).not.toHaveBeenCalled()
   })
 
-  it('on streaming, calls throwError with Unexpected response type', async () => {
-    requestChatDataSpy.mockResolvedValue({ type: 'streaming', result: new ReadableStream() })
-    const state = freshState()
-    await runEmotionLlmFallback({
-      result: 'r',
-      currentChar: makeChar([['happy', 'h.png']]),
-      abortSignal: new AbortController().signal,
-      throwError: throwErrorSpy,
-      ...state,
-    })
-    expect(throwErrorSpy).toHaveBeenCalledWith('Unexpected response type')
-  })
-
-  it('on multiline, calls throwError with Unexpected response type', async () => {
-    requestChatDataSpy.mockResolvedValue({ type: 'multiline', result: [['user', 'a']] })
-    const state = freshState()
-    await runEmotionLlmFallback({
-      result: 'r',
-      currentChar: makeChar([['happy', 'h.png']]),
-      abortSignal: new AbortController().signal,
-      throwError: throwErrorSpy,
-      ...state,
-    })
-    expect(throwErrorSpy).toHaveBeenCalledWith('Unexpected response type')
-  })
+  it.each(['streaming', 'multiline'] as const)(
+    'on %s, calls throwError with Unexpected response type',
+    async (responseType) => {
+      requestChatDataSpy.mockResolvedValue(
+        responseType === 'streaming'
+          ? { type: 'streaming', result: new ReadableStream() }
+          : { type: 'multiline', result: [['user', 'a']] },
+      )
+      const state = freshState()
+      await runEmotionLlmFallback({
+        result: 'r',
+        currentChar: makeChar([['happy', 'h.png']]),
+        abortSignal: new AbortController().signal,
+        throwError: throwErrorSpy,
+        ...state,
+      })
+      expect(throwErrorSpy).toHaveBeenCalledWith('Unexpected response type')
+    },
+  )
 
   it('exact-match strategy: response equals an emotion name → pushes that emotion', async () => {
     requestChatDataSpy.mockResolvedValue({ type: 'success', result: 'happy' })

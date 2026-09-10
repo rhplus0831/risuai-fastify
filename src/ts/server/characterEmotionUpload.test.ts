@@ -8,6 +8,10 @@ import {
   type CharacterEmotionImageEntry,
   type CharacterEmotionUploadOperation,
 } from './characterEmotionUpload'
+import {
+  expectCanceledPickerKeepsOperationCurrent,
+  expectNewerOperationWins,
+} from '../__tests__/latestOperationTestAssertions'
 
 const emotion = (name: string, path = `emotion-${name}`): CharacterEmotionImageEntry => [name, path]
 
@@ -116,64 +120,46 @@ describe('character emotion image upload freshness', () => {
   })
 
   it('lets the newer upload for the same character win over an older delayed upload', () => {
-    const older = beginUpload({ characterId: 'char-a', emotionImages: [] })
-    const newer = beginUpload({ characterId: 'char-a', emotionImages: [] })
-
-    try {
-      const newerResult = appendFreshCharacterEmotionImages({
-        operation: newer,
-        freshness: {
-          currentCharacterId: 'char-a',
-          rowCharacterId: 'char-a',
-          emotionImages: [],
-        },
-        entries: [emotion('newer')],
-      })
-
-      expect(newerResult).toEqual([emotion('newer')])
-
-      const olderResult = appendFreshCharacterEmotionImages({
-        operation: older,
-        freshness: {
-          currentCharacterId: 'char-a',
-          rowCharacterId: 'char-a',
-          emotionImages: [],
-        },
-        entries: [emotion('older')],
-      })
-
-      expect(olderResult).toBeNull()
-    } finally {
-      clearCharacterEmotionUpload(older)
-      clearCharacterEmotionUpload(newer)
-    }
+    expectNewerOperationWins({
+      begin: () => beginUpload({ characterId: 'char-a', emotionImages: [] }),
+      complete: (operation, attempt) =>
+        appendFreshCharacterEmotionImages({
+          operation,
+          freshness: {
+            currentCharacterId: 'char-a',
+            rowCharacterId: 'char-a',
+            emotionImages: [],
+          },
+          entries: [emotion(attempt)],
+        }),
+      expectedNewer: [emotion('newer')],
+      clear: clearCharacterEmotionUpload,
+    })
   })
 
   it('does not let a canceled newer picker invalidate an older pending upload', () => {
     const baseImages = [emotion('base')]
-    const older = beginUpload({ characterId: 'char-a', emotionImages: baseImages })
 
-    const canceledTarget = captureCharacterEmotionUploadTarget({
-      characterId: 'char-a',
-      emotionImages: baseImages,
-    })
-
-    try {
-      expect(canceledTarget).not.toBeNull()
-      const result = appendFreshCharacterEmotionImages({
-        operation: older,
-        freshness: {
-          currentCharacterId: 'char-a',
-          rowCharacterId: 'char-a',
+    expectCanceledPickerKeepsOperationCurrent({
+      begin: () => beginUpload({ characterId: 'char-a', emotionImages: baseImages }),
+      captureCanceledTarget: () =>
+        captureCharacterEmotionUploadTarget({
+          characterId: 'char-a',
           emotionImages: baseImages,
-        },
-        entries: [emotion('older')],
-      })
-
-      expect(result).toEqual([...baseImages, emotion('older')])
-    } finally {
-      clearCharacterEmotionUpload(older)
-    }
+        }),
+      complete: (operation) =>
+        appendFreshCharacterEmotionImages({
+          operation,
+          freshness: {
+            currentCharacterId: 'char-a',
+            rowCharacterId: 'char-a',
+            emotionImages: baseImages,
+          },
+          entries: [emotion('older')],
+        }),
+      expected: [...baseImages, emotion('older')],
+      clear: clearCharacterEmotionUpload,
+    })
   })
 
   it('appends only when the character and emotion snapshot still match', () => {

@@ -8,7 +8,7 @@ import {
   pluginsReady,
 } from './src/ts/startupReadiness'
 
-describe('Vitest structured clone baseline', () => {
+describe('Vitest shared setup baseline', () => {
   it('opens the exact post-startup capability baseline promised by global setup', () => {
     expect({
       canRenderShell: canRenderShell(),

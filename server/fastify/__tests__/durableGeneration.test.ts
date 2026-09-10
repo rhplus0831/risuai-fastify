@@ -2109,6 +2109,26 @@ describe('Durable generation', () => {
     // Persisted exactly once; generationId makes the write idempotent.
     const boot = await bootstrap()
     expect((await chatMessages(boot)).filter((m) => m.role === 'char')).toHaveLength(1)
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT key_type AS keyType, key_id AS keyId, COUNT(*) AS count
+             FROM generation_effects WHERE generation_id = ? GROUP BY key_type, key_id`,
+          )
+          .get(jobId),
+      ).toEqual({ keyType: 'generation', keyId: jobId, count: 7 })
+      expect(
+        db
+          .prepare(
+            "SELECT status FROM generation_effects WHERE generation_id = ? AND effect_kind = 'generated_translation'",
+          )
+          .get(jobId),
+      ).toEqual({ status: 'skipped' })
+    } finally {
+      db.close()
+    }
   })
 
   it('persists the prompt preset name and active toggle snapshot on the assistant row', async () => {
@@ -3925,42 +3945,6 @@ describe('Durable generation', () => {
     expect(terminalRow.failure_count).toBeGreaterThan(0)
     expect(terminalRow.terminal_error).toContain('Chat not found')
     controller.abort()
-  })
-
-  // A bare disconnect must NOT cancel — the job runs to completion (let-it-finish).
-  it('does not cancel on a bare disconnect (the generation completes) ', async () => {
-    const gated = makeGatedProvider({ before: 'Hel', after: 'lo' })
-    providerImpl = gated.dispatchProvider
-
-    const controller = newController()
-    const res = await postDurable({}, { signal: controller.signal })
-    const events = await readSse(res, (ev) => ev.type === 'token')
-    const jobId = jobIdFromEvents(events)
-    controller.abort() // disconnect only — no DELETE
-
-    gated.release()
-    const message = await waitForAssistantMessage()
-    expect(message.data).toBe('Hello')
-    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
-    try {
-      expect(
-        db
-          .prepare(
-            `SELECT key_type AS keyType, key_id AS keyId, COUNT(*) AS count
-             FROM generation_effects WHERE generation_id = ? GROUP BY key_type, key_id`,
-          )
-          .get(jobId),
-      ).toEqual({ keyType: 'generation', keyId: jobId, count: 7 })
-      expect(
-        db
-          .prepare(
-            "SELECT status FROM generation_effects WHERE generation_id = ? AND effect_kind = 'generated_translation'",
-          )
-          .get(jobId),
-      ).toEqual({ status: 'skipped' })
-    } finally {
-      db.close()
-    }
   })
 
   it('returns 404 reattaching/cancelling an unknown job', async () => {

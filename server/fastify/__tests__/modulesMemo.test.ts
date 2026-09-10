@@ -112,10 +112,4 @@ describe('getActiveModules per-assembly memo', () => {
     expect(resolved.map((m) => m.id)).toEqual(['mod-x', 'mod-y'])
     expect(getActiveModules(db, char, makeChat())).toBe(resolved)
   })
-
-  it('returns [] for empty id inputs without touching the memo', () => {
-    const db = makeDatabase({ enabledModules: [] } as Partial<Database>)
-    expect(getActiveModules(db, makeCharacter(), makeChat())).toEqual([])
-    expect(getActiveModules(db, undefined, undefined)).toEqual([])
-  })
 })

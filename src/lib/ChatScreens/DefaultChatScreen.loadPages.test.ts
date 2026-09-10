@@ -2428,7 +2428,7 @@ describe('DefaultChatScreen transcript window state', () => {
     expect(messageRowIndexes()).toContain(10)
   })
 
-  it('offers the Stop TTS action for every active synthesis mode', async () => {
+  it('offers the Stop TTS action for configured gptsovits synthesis', async () => {
     seedDatabase([2])
     getResourceDatabase().characters[0].ttsMode = 'gptsovits'
     mountScreen()
@@ -3941,7 +3941,7 @@ describe('DefaultChatScreen transcript window state', () => {
       }),
     )
 
-    const removeFileButton = target.querySelector<HTMLButtonElement>('.relative > button')
+    const removeFileButton = target.querySelector<HTMLButtonElement>('button[aria-label="remove: asset-a"]')
     expect(removeFileButton).toBeTruthy()
     removeFileButton!.click()
     textarea.value = 'Newer draft after removing file'

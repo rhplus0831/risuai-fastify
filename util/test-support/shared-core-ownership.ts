@@ -9,7 +9,10 @@ export const requiredImports: Record<string, readonly string[]> = {
   './chatGenerationSettings.js': ['packages/shared-core/src/agentPresetResolver.ts'],
   './chatGenerationTogglePresetRecords.js': ['packages/shared-core/src/chatGenerationSettings.ts'],
   './chatMLRows.js': ['packages/shared-core/src/agentPresetRecords.ts'],
+  './cbsCallbackMemo.js': ['server/fastify/src/prompt/assemble.ts', 'server/fastify/src/prompt/variables.ts'],
   './effectivePromptTemplate.js': ['packages/shared-core/src/cbsRegistry.ts'],
+  './englishFixture.js': ['server/fastify/browser-smoke/lazyFirstOpen.spec.ts'],
+  './fastBootstrapDirectLinks.js': ['server/fastify/browser-smoke/startupDirectLinks.spec.ts'],
   './modelProfileRecords.js': [
     'packages/shared-core/src/modelProfileResolver.ts',
     'packages/shared-core/src/presetSplit.ts',
@@ -89,7 +92,9 @@ export const requiredImports: Record<string, readonly string[]> = {
     'server/fastify/src/prompt/triggerDataEffects.ts',
     'src/ts/process/infunctions.ts',
   ],
+  '@risuai/shared-core/cbs-contracts': ['server/fastify/src/prompt/cbsCallbackMemo.ts'],
   '@risuai/shared-core/cbs-registry': ['src/ts/cbs.ts'],
+  '@risuai/shared-core/browser-smoke': ['server/fastify/browser-smoke/globals.d.ts'],
   '@risuai/shared-core/chat-display-tail-count': [
     'server/fastify/src/databaseDefaults.ts',
     'src/ts/storage/database.svelte.ts',
@@ -328,6 +333,8 @@ export const requiredImports: Record<string, readonly string[]> = {
     'src/ts/setting/advancedSettingsData.ts',
     'src/ts/storage/database.svelte.ts',
   ],
+  '@risuai/shared-core/resource-manifest': ['server/fastify/browser-smoke/fastBootstrapDirectLinks.ts'],
+  '@risuai/shared-core/router-route': ['server/fastify/browser-smoke/fastBootstrapDirectLinks.ts'],
   '@risuai/shared-core/risuchat-parser': ['src/ts/parser/risuChatParser.ts'],
   '@risuai/shared-core/risuchat-parser-helpers': [
     'server/fastify/src/displaySourceService.ts',
@@ -372,6 +379,10 @@ export const requiredImports: Record<string, readonly string[]> = {
     'server/fastify/__tests__/triggerCompatibilityOwnership.test.ts',
     'src/ts/process/triggerServerSupport.ts',
   ],
+  '@risuai/protocol/startup-telemetry': [
+    'server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts',
+    'server/fastify/browser-smoke/startupRecoveryIntegrationMatrix.spec.ts',
+  ],
   'src/ts/process/triggerServerSupport': [
     'src/lib/SideBars/Scripts/RegexData.svelte',
     'src/lib/SideBars/Scripts/TriggerList.svelte',
@@ -394,6 +405,8 @@ export const forwardingFacades: Record<string, readonly [module: string, exports
   'src/ts/process/promptBlockRole.ts': ['@risuai/shared-core/prompt-block-role', ['*']],
   'src/ts/process/request/providerCapability.ts': ['@risuai/shared-core/provider-capability', ['*']],
   'src/ts/process/triggerServerSupport.ts': ['@risuai/shared-core/trigger-compatibility', ['*']],
+  'src/ts/routerRoute.ts': ['@risuai/shared-core/router-route', ['*']],
+  'src/ts/server/resourceManifest.ts': ['@risuai/shared-core/resource-manifest', ['*']],
   'src/ts/translator/pipeline.ts': ['@risuai/shared-core/translator-pipeline', ['*']],
 }
 

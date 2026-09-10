@@ -58,8 +58,12 @@ describe('requestOpenAITranscription', () => {
 
   it('rejects failed and malformed server responses', async () => {
     const file = new File(['audio'], 'sample.mp3')
-    fetchMock.mockResolvedValueOnce(new Response('private upstream detail', { status: 502 }))
-    await expect(requestOpenAITranscription(file)).rejects.toThrow(language.errors.openAITranscriptionFailed(502))
+    const secretCanary = 'private-upstream-detail'
+    fetchMock.mockResolvedValueOnce(new Response(secretCanary, { status: 502 }))
+    const error = await requestOpenAITranscription(file).catch((caught: unknown) => caught)
+    expect(error).toBeInstanceOf(Error)
+    expect((error as Error).message).toBe(language.errors.openAITranscriptionFailed(502))
+    expect((error as Error).message).not.toContain(secretCanary)
 
     fetchMock.mockResolvedValueOnce(new Response('{"text":"not vtt"}'))
     await expect(requestOpenAITranscription(file)).rejects.toThrow(language.errors.openAITranscriptionResponseMalformed)

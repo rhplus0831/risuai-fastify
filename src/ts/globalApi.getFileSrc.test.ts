@@ -34,41 +34,21 @@ beforeEach(() => {
 })
 
 describe('getFileSrc Fastify-mode shape gate', () => {
-  it('returns absolute /api/v1/assets URLs unchanged', async () => {
-    const url = '/api/v1/assets/' + 'a'.repeat(64)
-    expect(await getFileSrc(url)).toBe(url)
-  })
+  const assetUrl = '/api/v1/assets/' + 'a'.repeat(64)
+  const rawId = 'b'.repeat(64)
+  const legacyId = 'c'.repeat(64)
 
-  it('returns data: URLs unchanged', async () => {
-    const url = 'data:image/png;base64,iVBORw0KGgo='
-    expect(await getFileSrc(url)).toBe(url)
-  })
-
-  it('returns blob: URLs unchanged', async () => {
-    const url = 'blob:http://localhost/abc-123'
-    expect(await getFileSrc(url)).toBe(url)
-  })
-
-  it('resolves a raw 64-char asset id to /api/v1/assets/<id>', async () => {
-    const id = 'b'.repeat(64)
-    expect(await getFileSrc(id)).toBe(`/api/v1/assets/${id}`)
-  })
-
-  it('resolves a legacy assets/<sha>.<ext> path to /api/v1/assets/<id>', async () => {
-    const id = 'c'.repeat(64)
-    expect(await getFileSrc(`assets/${id}.png`)).toBe(`/api/v1/assets/${id}`)
-  })
-
-  it('rejects arbitrary http URLs with empty string (no fingerprint fetch)', async () => {
-    expect(await getFileSrc('http://attacker.invalid/poisoned.png')).toBe('')
-  })
-
-  it('rejects arbitrary https URLs with empty string', async () => {
-    expect(await getFileSrc('https://attacker.invalid/poisoned.png')).toBe('')
-  })
-
-  it('rejects empty or garbage strings with empty string', async () => {
-    expect(await getFileSrc('')).toBe('')
-    expect(await getFileSrc('definitely-not-an-asset')).toBe('')
+  it.each<[string, string, string]>([
+    ['absolute /api/v1/assets URLs unchanged', assetUrl, assetUrl],
+    ['data: URLs unchanged', 'data:image/png;base64,iVBORw0KGgo=', 'data:image/png;base64,iVBORw0KGgo='],
+    ['blob: URLs unchanged', 'blob:http://localhost/abc-123', 'blob:http://localhost/abc-123'],
+    ['a raw 64-char asset id to /api/v1/assets/<id>', rawId, `/api/v1/assets/${rawId}`],
+    ['a legacy assets/<sha>.<ext> path to /api/v1/assets/<id>', `assets/${legacyId}.png`, `/api/v1/assets/${legacyId}`],
+    ['an arbitrary http URL with empty string (no fingerprint fetch)', 'http://attacker.invalid/poisoned.png', ''],
+    ['an arbitrary https URL with empty string', 'https://attacker.invalid/poisoned.png', ''],
+    ['an empty string with empty string', '', ''],
+    ['a garbage string with empty string', 'definitely-not-an-asset', ''],
+  ])('resolves %s', async (_case, input, expected) => {
+    expect(await getFileSrc(input)).toBe(expected)
   })
 })

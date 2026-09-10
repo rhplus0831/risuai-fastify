@@ -26,18 +26,20 @@ afterEach(() => {
 })
 
 describe('attachAbort (non-durable deadline)', () => {
-  it('the default deadline mirrors the durable 600s reference (generous, not aggressive)', () => {
+  it('applies the shared 600s default through its exact deadline boundary', () => {
+    vi.useFakeTimers()
     expect(NON_DURABLE_REQUEST_DEADLINE_MS).toBe(600_000)
     expect(NON_DURABLE_REQUEST_DEADLINE_MS).toBe(PROXY_STREAM_DEFAULT_TIMEOUT_MS)
-  })
 
-  it('a slow-but-valid request is NOT aborted while inside the generous bound', () => {
-    vi.useFakeTimers()
     const req = fakeReq()
     const reply = fakeReply()
     const { signal, cleanup } = attachAbort(req, reply)
-    vi.advanceTimersByTime(50)
+
+    vi.advanceTimersByTime(NON_DURABLE_REQUEST_DEADLINE_MS - 1)
     expect(signal.aborted).toBe(false)
+    vi.advanceTimersByTime(1)
+    expect(signal.aborted).toBe(true)
+
     cleanup()
   })
 
@@ -153,16 +155,6 @@ describe('attachAbort (non-durable deadline)', () => {
 })
 
 describe('createDetachedAbort', () => {
-  it('keeps server-owned work alive when an unrelated request closes', () => {
-    const req = fakeReq()
-    const { signal, cleanup } = createDetachedAbort()
-
-    req.raw.emit('close')
-
-    expect(signal.aborted).toBe(false)
-    cleanup()
-  })
-
   it('still aborts detached work at the configured deadline', () => {
     vi.useFakeTimers()
     const { signal, cleanup } = createDetachedAbort({ deadlineMs: 20 })

@@ -556,8 +556,6 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       await scriptBody.locator('summary').click()
       await expect(scriptBody.locator('details')).toHaveAttribute('open', '')
       await expect(scriptBody.getByText('Passive detail content')).toBeVisible()
-      await expect(scriptBody).not.toHaveClass(/prose-invert/u)
-      await expect(scriptBody.locator('.prose-invert')).toHaveCount(0)
       evidence.initialContrast = await expectReadingContrast(reader, 'mobilechat')
       await screenshotEvidence(reader, testInfo, `read-only-${viewport}-mobilechat.png`)
       const popupPromise = readerContext.waitForEvent('page')

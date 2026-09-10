@@ -51,19 +51,23 @@ describe('browser lifecycle recovery', () => {
   it('isolates a throwing recovery domain from the remaining subscribers', async () => {
     const failure = new Error('generation recovery failed')
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => undefined)
-    cleanups.push(
-      subscribeBrowserLifecycleRecovery(() => {
-        throw failure
-      }),
-    )
-    const resources = vi.fn()
-    cleanups.push(subscribeBrowserLifecycleRecovery(resources))
+    try {
+      cleanups.push(
+        subscribeBrowserLifecycleRecovery(() => {
+          throw failure
+        }),
+      )
+      const resources = vi.fn()
+      cleanups.push(subscribeBrowserLifecycleRecovery(resources))
 
-    window.dispatchEvent(new Event('online'))
-    await Promise.resolve()
+      window.dispatchEvent(new Event('online'))
+      await Promise.resolve()
 
-    expect(consoleError).toHaveBeenCalledWith(failure)
-    expect(resources).toHaveBeenCalledWith('online')
+      expect(consoleError).toHaveBeenCalledWith(failure)
+      expect(resources).toHaveBeenCalledWith('online')
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 
   it('cancels queued work after the final unsubscribe and reinstalls cleanly', async () => {

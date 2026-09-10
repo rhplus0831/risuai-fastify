@@ -283,7 +283,7 @@
         },
         {
           "file": "src/lib/Setting/Pages/Module/ModuleSettings.svelte.test.ts",
-          "count": 20
+          "count": 19
         },
         {
           "file": "src/ts/agentPresets.test.ts",
@@ -343,7 +343,7 @@
         },
         {
           "file": "src/ts/server/lorebookOwner.svelte.test.ts",
-          "count": 192
+          "count": 191
         }
       ]
     },
@@ -355,7 +355,7 @@
       "files": [
         {
           "file": "src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte.test.ts",
-          "count": 206
+          "count": 204
         },
         {
           "file": "src/lib/Setting/Pages/Model/ModelPresetList.svelte.test.ts",
@@ -791,7 +791,7 @@
         },
         {
           "file": "src/lib/SideBars/LoreBook/LoreBookSetting.svelte.test.ts",
-          "count": 5
+          "count": 6
         },
         {
           "file": "src/ts/process/__tests__/lorebook.owner.test.ts",

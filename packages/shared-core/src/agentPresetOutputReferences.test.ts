@@ -7,6 +7,7 @@ import {
 } from './agentPresetOutputReferences.js'
 
 const AGENT_PRESET_OUTPUT_CBS_RE_BEFORE_EXTRACTION = /\{\{\s*agent::([A-Za-z_][A-Za-z0-9_]{0,63})\s*\}\}/g
+const CASE_VARIANT_AGENT_REFERENCE_NEGATIVES = ['{{Agent::result}}', '{{AGENT::result}}']
 
 function referencesBeforeExtraction(input: string): AgentPresetOutputReference[] {
   const references: AgentPresetOutputReference[] = []
@@ -37,6 +38,7 @@ describe('agent-preset output references', () => {
     `{{agent::${key64}}}`,
     `{{agent::${key65}}}`,
     '{{agent::9invalid}} {{agent::has-dash}} {{agent::한글}}',
+    ...CASE_VARIANT_AGENT_REFERENCE_NEGATIVES,
     '🙂{{agent::utf16_index}}',
     '{{agent::a}}{{agent::b}}{{agent::c}}',
   ])('preserves discovery metadata for %o', (input) => {
@@ -44,10 +46,19 @@ describe('agent-preset output references', () => {
   })
 
   it('preserves exact tokens, UTF-16 indexes, boundaries, and repeated order', () => {
-    expect(agentPresetOutputReferences('🙂 {{ agent::_a1 }} / {{agent::_a1}}')).toEqual([
+    const input = '🙂 {{ agent::_a1 }} / {{agent::_a1}}'
+    const expected = [
       { key: '_a1', token: '{{ agent::_a1 }}', index: 3 },
       { key: '_a1', token: '{{agent::_a1}}', index: 22 },
-    ])
+    ]
+    expect(agentPresetOutputReferences(input)).toEqual(expected)
+    expect(
+      [...input.matchAll(AGENT_PRESET_OUTPUT_CBS_RE)].map((match) => ({
+        key: match[1],
+        token: match[0],
+        index: match.index,
+      })),
+    ).toEqual(expected)
     expect(agentPresetOutputReferences(`{{agent::${key64}}} {{agent::${key65}}}`)).toEqual([
       { key: key64, token: `{{agent::${key64}}}`, index: 0 },
     ])
@@ -68,10 +79,5 @@ describe('agent-preset output references', () => {
     const resolveOutput = (key: string): string | undefined => outputs[key]
 
     expect(expandAgentPresetOutputCbs(input, resolveOutput)).toBe(expandBeforeExtraction(input, resolveOutput))
-  })
-
-  it('keeps the exported matcher exact', () => {
-    expect(AGENT_PRESET_OUTPUT_CBS_RE.source).toBe(AGENT_PRESET_OUTPUT_CBS_RE_BEFORE_EXTRACTION.source)
-    expect(AGENT_PRESET_OUTPUT_CBS_RE.flags).toBe(AGENT_PRESET_OUTPUT_CBS_RE_BEFORE_EXTRACTION.flags)
   })
 })

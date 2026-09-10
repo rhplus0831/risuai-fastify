@@ -1470,7 +1470,7 @@ describe('chat message hydration owner', () => {
     expect(acknowledgeMessageMutationLocalEffect('missing-chat')).toBe(false)
   })
 
-  it('fences a deferred stale hydration that begins after an optimistic transcript mutation', async () => {
+  it('applies hydration that starts after an unacknowledged direct transcript edit', async () => {
     const optimisticMessage = { role: 'user', data: 'optimistic edit', chatId: 'm-resident' }
     db().characters[0].chats[0].message.push(optimisticMessage)
     const optimisticProjectionEpoch = captureChatBodyProjectionEpoch('chat-1')

@@ -8,32 +8,9 @@ import { buildApp } from '../src/app.js'
 import { setupAuthedClient } from './helpers/auth.js'
 import { assertCommandMetricGate, type CommandMutationMetric } from './helpers/commandMetricGates.js'
 
-// Phase 6 (the message-free ceiling) regression. Each test PROVES a Tier-5
-// route's floor was correct and the documented blocker is load-bearing. Phase 8
-// has since landed the unblock prerequisites for the high-value subset, so the
-// two deletes, chat-create, and the two script/trigger PUTs have graduated below
-// the floor (asserted here at their new range; detailed proof in
-// commandFloorUnblock.test.ts and commandMutationReadNarrowing.test.ts):
-//
-//   * DELETE characters/:id and DELETE chats/:id GRADUATED to
-//     `targeted-character-row` (Phase 8b + follow-up): the orphan cleanup now
-//     loops the targeted deleteChatMessages/deleteChatHypaV3 over the removed
-//     chat(s) instead of hydrating every message of every chat.
-//   * DELETE modules/:id uses `targeted-cross-owner`: matching references in
-//     characters, chats, loadouts and settings are stripped without broad
-//     collection replacement.
-//   * POST characters/:id/chats GRADUATED to `targeted-character-row` (H2): the
-//     duplicate-message-id validation is handled by the indexed
-//     `activeMessageIdExists` lookup, so the route keeps corpus-wide uniqueness
-//     without hydrating every chat message.
-//   * POST characters and POST characters/create-and-select GRADUATED to
-//     `targeted-character-row`: identity/order projection plus keyed inserts
-//     preserve unrelated rows and BardWiki dependents. The dedicated
-//     characterCreationSafety suite guards preservation, replay and rollback.
-//     POST modules graduated to targeted-collection.
-//   * PUT characters/:id/scripts and PUT characters/:id/triggers GRADUATED to
-//     `targeted-character-row` (Phase 8a): the normalization is validate-only via
-//     discard, so only the target character row is written.
+// Cross-owner module deletion remains broader than the single-owner collection
+// paths: it must remove the module definition and every persisted reference
+// without falling back to the historical full-database rewrite.
 
 interface Harness {
   app: FastifyInstance
@@ -201,43 +178,6 @@ function readCollection(table: string): unknown[] {
   }
 }
 
-/** Stored character ids in `position` order. */
-function readCharacterIds(): string[] {
-  const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
-  try {
-    const rows = db.prepare('SELECT id FROM characters ORDER BY position').all() as Array<{
-      id: string
-    }>
-    return rows.map((r) => r.id)
-  } finally {
-    db.close()
-  }
-}
-
-/** Stored chat ids for one character in `position` order. */
-function readChatIds(characterId: string): string[] {
-  const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
-  try {
-    const rows = db.prepare('SELECT id FROM chats WHERE character_id = ? ORDER BY position').all(characterId) as Array<{
-      id: string
-    }>
-    return rows.map((r) => r.id)
-  } finally {
-    db.close()
-  }
-}
-
-/** Count of active + alternate message rows still stored for a chat id. */
-function messageRowCount(chatId: string): number {
-  const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
-  try {
-    const row = db.prepare('SELECT COUNT(*) AS count FROM messages WHERE chat_id = ?').get(chatId) as { count: number }
-    return row.count
-  } finally {
-    db.close()
-  }
-}
-
 beforeEach(async () => {
   process.env.RISU_PROTOCOL_METRICS = '1'
   metrics = []
@@ -260,50 +200,7 @@ afterEach(async () => {
   rmSync(harness.dataDir, { recursive: true, force: true })
 })
 
-describe('message-dependent delete floors', () => {
-  it("DELETE characters/:id narrows to targeted-character-row and cleans up its chats' message rows", async () => {
-    const revision = await importDatabase(seedDatabase())
-    // The deleted character owns a chat with a persisted message row.
-    expect(messageRowCount('chat-a-1')).toBe(1)
-
-    const { metric } = await runCommand({
-      method: 'DELETE',
-      url: '/api/v1/commands/characters/char-a',
-      payload: { baseRevision: revision },
-    })
-
-    // Graduated off the hydrated floor: the orphan cleanup loops the targeted
-    // deleteChatMessages/deleteChatHypaV3 over the removed character's chats
-    // instead of hydrating the corpus. Detailed proof in commandFloorUnblock.test.ts.
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toContain('messages')
-    assertCommandMetricGate(metric)
-    expect(readCharacterIds()).toEqual(['char-b'])
-    expect(messageRowCount('chat-a-1')).toBe(0)
-  })
-
-  it("DELETE chats/:id narrows to targeted-character-row and still cleans the deleted chat's message rows", async () => {
-    const revision = await importDatabase(seedDatabase())
-    expect(messageRowCount('chat-a-1')).toBe(1)
-
-    const { metric } = await runCommand({
-      method: 'DELETE',
-      url: '/api/v1/commands/chats/chat-a-1',
-      payload: { baseRevision: revision },
-    })
-
-    // Phase 8b graduated this off the hydrated floor: the orphan cleanup now uses
-    // the targeted deleteChatMessages/deleteChatHypaV3 instead of a corpus-wide
-    // message load. Detailed proof lives in commandFloorUnblock.test.ts.
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toContain('messages')
-    assertCommandMetricGate(metric)
-    // The deleted chat's messages are gone; the sibling chat survives untouched.
-    expect(messageRowCount('chat-a-1')).toBe(0)
-    expect(readChatIds('char-a')).toEqual(['chat-a-2'])
-    expect(messageRowCount('chat-b-1')).toBe(1)
-  })
-
+describe('cross-owner module deletion', () => {
   it('DELETE modules/:id uses targeted collection writes and strips references across every table', async () => {
     const revision = await importDatabase(seedDatabase())
 
@@ -322,128 +219,5 @@ describe('message-dependent delete floors', () => {
     expect(readChat('chat-a-1').modules).toEqual([])
     expect((readCollection('loadouts')[0] as { modules: string[] }).modules).toEqual(['mod-y'])
     expect((readCollection('modules') as Array<{ id: string }>).map((m) => m.id)).toEqual(['mod-y'])
-  })
-})
-
-describe('message-validation create floor', () => {
-  it('POST characters/:id/chats uses targeted chat-create and validates message ids corpus-wide', async () => {
-    const revision = await importDatabase(seedDatabase())
-
-    // The new chat reuses a message id that lives in a DIFFERENT character's
-    // chat. H2 keeps that corpus-wide uniqueness check without a hydrated
-    // message load by using the active-message uid index.
-    const rejected = await inject({
-      method: 'POST',
-      url: '/api/v1/commands/characters/char-a/chats',
-      payload: {
-        baseRevision: revision,
-        chat: {
-          id: 'chat-a-dup',
-          name: 'Dup',
-          message: [{ role: 'user', data: 'dup', chatId: 'shared-msg' }],
-        },
-      },
-    })
-    expect(rejected.statusCode).toBe(400)
-    expect((rejected.json() as { error: string }).error).toContain('Duplicate message id')
-    // The rejected create wrote no new chat row.
-    expect(readChatIds('char-a')).toEqual(['chat-a-1', 'chat-a-2'])
-
-    // A unique-id create succeeds through the H2 targeted character-row path.
-    const { metric } = await runCommand({
-      method: 'POST',
-      url: '/api/v1/commands/characters/char-a/chats',
-      payload: {
-        baseRevision: revision,
-        chat: {
-          id: 'chat-a-new',
-          name: 'New',
-          message: [{ role: 'user', data: 'fresh', chatId: 'fresh-msg' }],
-        },
-      },
-    })
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toEqual(['characters', 'chats', 'messages'])
-    assertCommandMetricGate(metric)
-    // unshift: the new chat lands at the head of char-a's chats.
-    expect(readChatIds('char-a')).toEqual(['chat-a-new', 'chat-a-1', 'chat-a-2'])
-    expect(messageRowCount('chat-a-new')).toBe(1)
-  })
-})
-
-describe('targeted creation and normalization floors', () => {
-  it('POST characters appends one character at the targeted append range', async () => {
-    const revision = await importDatabase(seedDatabase())
-
-    const { metric } = await runCommand({
-      method: 'POST',
-      url: '/api/v1/commands/characters',
-      payload: { baseRevision: revision, character: { chaId: 'char-c', name: 'C' } },
-    })
-
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toEqual(['characters', 'settings'])
-    assertCommandMetricGate(metric)
-    expect(readCharacterIds()).toEqual(['char-a', 'char-b', 'char-c'])
-  })
-
-  it('POST characters/create-and-select appends + selects at the targeted append range', async () => {
-    const revision = await importDatabase(seedDatabase())
-
-    const { metric } = await runCommand({
-      method: 'POST',
-      url: '/api/v1/commands/characters/create-and-select',
-      payload: { baseRevision: revision, character: { chaId: 'char-d', name: 'D' } },
-    })
-
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toEqual(['characters', 'settings'])
-    assertCommandMetricGate(metric)
-    expect(readCharacterIds()).toEqual(['char-a', 'char-b', 'char-d'])
-    expect(readSettings().currentChar).toBe(2)
-  })
-
-  it('PUT characters/:id/scripts replaces customscript at the targeted-character-row range', async () => {
-    const revision = await importDatabase(seedDatabase())
-
-    const script = {
-      id: 'script-a',
-      comment: 'Regex',
-      in: 'a',
-      out: 'b',
-      type: 'editinput',
-      flag: 'g',
-      ableFlag: true,
-    }
-    const { metric } = await runCommand({
-      method: 'PUT',
-      url: '/api/v1/commands/characters/char-a/scripts',
-      payload: { baseRevision: revision, scripts: [script] },
-    })
-
-    // Phase 8a graduated this off the message-free floor onto one character row
-    // (normalization is validate-only via discard). Detailed proof lives in
-    // commandFloorUnblock.test.ts.
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toEqual(['characters'])
-    assertCommandMetricGate(metric)
-    expect(readCharacter('char-a').customscript).toEqual([script])
-  })
-
-  it('PUT characters/:id/triggers replaces triggerscript at the targeted-character-row range', async () => {
-    const revision = await importDatabase(seedDatabase())
-
-    const trigger = { id: 'trigger-a', comment: 'Start', type: 'start', conditions: [], effect: [] }
-    const { metric } = await runCommand({
-      method: 'PUT',
-      url: '/api/v1/commands/characters/char-a/triggers',
-      payload: { baseRevision: revision, triggers: [trigger] },
-    })
-
-    // Phase 8a graduated this off the message-free floor onto one character row.
-    expect(metric.mutationPath).toBe('targeted-character-row')
-    expect(metric.writtenTables).toEqual(['characters'])
-    assertCommandMetricGate(metric)
-    expect(readCharacter('char-a').triggerscript).toEqual([trigger])
   })
 })

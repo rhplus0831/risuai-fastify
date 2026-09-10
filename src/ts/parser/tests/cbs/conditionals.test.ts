@@ -359,7 +359,9 @@ ABC
       expect(risuChatParser(nestedTemplate('0', '0'))).toBe(`ABC`)
     })
 
-    test('works in an #each', () => {
+    test('keeps a bare loop slot name literal in #when after #each reinjection', () => {
+      // Compatibility behavior: the #when header compares the literal "n";
+      // {{slot::n}} is expanded later in the selected body.
       const template = `{{#each [1, 2, 3] as n}}
 {{#when::n::is::2}}
 CBS{{slot::n}}

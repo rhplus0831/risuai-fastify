@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -9,7 +9,9 @@ import { openDatabase } from '../src/db.js'
 import { loadChatHydration, loadPersisted, loadPersistedForChatMutation } from '../src/repository.js'
 import { applyTargetedCommandMutation } from '../src/commands/mutations.js'
 import { normalizeAllCharacterChats } from '../src/commands/chats.js'
+import { subscribeProtocolMetrics } from '../src/protocolMetrics.js'
 import { setupAuthedClient } from './helpers/auth.js'
+import { assertCommandMetricGate, type CommandMutationMetric } from './helpers/commandMetricGates.js'
 import { assertScopedLoadOnHotPath, withServerLoadInstrumentation } from './helpers/loadCostHarness.js'
 import { buildLargeCorpusFixture } from '../../../test/fixtures/largeCorpusFixture.js'
 
@@ -305,23 +307,36 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     const existingHotMessages = (await hydrationGet(fixture.hot.chatId)).json().message as Array<{
       chatId: string
     }>
-
-    const { result: created, loadCountByTable } = await withServerLoadInstrumentation(() =>
-      command('POST', `/api/v1/commands/characters/${targetCharacterId}/chats`, {
-        baseRevision: revision,
-        select: false,
-        chat: {
-          id: 'h2-created-chat',
-          name: 'H2 created',
-          note: '',
-          localLore: [],
-          message: [
-            { role: 'user', data: 'targeted create 1', chatId: 'h2-created-msg-1' },
-            { role: 'char', data: 'targeted create 2', chatId: 'h2-created-msg-2' },
-          ],
-        },
-      }),
-    )
+    const metrics: CommandMutationMetric[] = []
+    const previousProtocolMetrics = process.env.RISU_PROTOCOL_METRICS
+    process.env.RISU_PROTOCOL_METRICS = '1'
+    const infoSpy = vi.spyOn(console, 'info').mockImplementation(() => {})
+    const unsubscribe = subscribeProtocolMetrics((metric) => metrics.push(metric as CommandMutationMetric))
+    const { result: created, loadCountByTable } = await (async () => {
+      try {
+        return await withServerLoadInstrumentation(() =>
+          command('POST', `/api/v1/commands/characters/${targetCharacterId}/chats`, {
+            baseRevision: revision,
+            select: false,
+            chat: {
+              id: 'h2-created-chat',
+              name: 'H2 created',
+              note: '',
+              localLore: [],
+              message: [
+                { role: 'user', data: 'targeted create 1', chatId: 'h2-created-msg-1' },
+                { role: 'char', data: 'targeted create 2', chatId: 'h2-created-msg-2' },
+              ],
+            },
+          }),
+        )
+      } finally {
+        unsubscribe()
+        infoSpy.mockRestore()
+        if (previousProtocolMetrics === undefined) delete process.env.RISU_PROTOCOL_METRICS
+        else process.env.RISU_PROTOCOL_METRICS = previousProtocolMetrics
+      }
+    })()
 
     expect(created.statusCode).toBe(200)
     expect(created.json()).toMatchObject({
@@ -341,6 +356,11 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     // message payload families. The targeted path only does id/scoped lookups.
     expect(loadCountByTable.messages ?? 0).toBe(0)
     expect(loadCountByTable.chat_hypa_v3 ?? 0).toBe(0)
+    const metric = metrics.find((entry) => entry.metric === 'command_mutation' && entry.status === 'ok')
+    expect(metric).toBeTruthy()
+    expect(metric?.mutationPath).toBe('targeted-character-row')
+    expect(metric?.writtenTables).toEqual(['characters', 'chats', 'messages'])
+    assertCommandMetricGate(metric as CommandMutationMetric)
 
     const db = openDatabase(harness.dataDir)
     try {

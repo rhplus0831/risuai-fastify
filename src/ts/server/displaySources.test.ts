@@ -419,7 +419,7 @@ describe('browser display source batching client', () => {
           role: 'char',
           firstMessage: false,
           layer: 'original',
-          source: 'a'.repeat(512 * 1024),
+          source: '안'.repeat((512 * 1024 - 2) / 3) + 'aa',
         }),
       ),
     )

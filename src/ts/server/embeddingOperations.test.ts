@@ -114,13 +114,15 @@ describe('embedding operation client', () => {
       ),
     )
 
-    await expect(
-      requestRemoteEmbeddingTexts({
-        model: 'openai3small',
-        inputType: 'query',
-        input: ['hello'],
-        credential: { source: 'stored' },
-      }),
-    ).rejects.toThrow('embedding_credential_unavailable')
+    const failure = await requestRemoteEmbeddingTexts({
+      model: 'openai3small',
+      inputType: 'query',
+      input: ['hello'],
+      credential: { source: 'stored' },
+    }).catch((error: unknown) => error)
+
+    expect(failure).toBeInstanceOf(Error)
+    expect((failure as Error).message).toBe('embedding_credential_unavailable')
+    expect((failure as Error).message).not.toContain('must-not-surface')
   })
 })

@@ -1,0 +1,130 @@
+{
+  "aggregateElapsedMs": 407813.048893,
+  "jobs": 2,
+  "lanes": [
+    {
+      "elapsedMs": 28156.784013,
+      "exitCode": 0,
+      "finishedOffsetMs": 28156.994071999998,
+      "id": "server-check",
+      "label": "server and browser-smoke typecheck",
+      "startedOffsetMs": 0.2100590000000011
+    },
+    {
+      "elapsedMs": 4319.653539000001,
+      "exitCode": 0,
+      "finishedOffsetMs": 4321.535057,
+      "id": "test-topology",
+      "label": "test topology validation",
+      "startedOffsetMs": 1.8815179999999998
+    },
+    {
+      "elapsedMs": 514.0657099999999,
+      "exitCode": 0,
+      "finishedOffsetMs": 4835.813120999999,
+      "id": "docs",
+      "label": "current documentation validation",
+      "startedOffsetMs": 4321.747410999999
+    },
+    {
+      "after": ["test-topology"],
+      "elapsedMs": 109691.506516,
+      "exitCode": 0,
+      "finishedOffsetMs": 114527.49230700001,
+      "id": "frontend-tests",
+      "label": "frontend tests",
+      "startedOffsetMs": 4835.985791
+    },
+    {
+      "elapsedMs": 966.650909,
+      "exitCode": 0,
+      "finishedOffsetMs": 29123.836875999998,
+      "id": "compat-registers",
+      "label": "compatibility register validation",
+      "startedOffsetMs": 28157.185966999998
+    },
+    {
+      "after": ["compat-registers"],
+      "elapsedMs": 7566.991001999995,
+      "exitCode": 0,
+      "finishedOffsetMs": 135795.475913,
+      "id": "compat-current",
+      "isolated": true,
+      "label": "current compatibility harness",
+      "startedOffsetMs": 128228.484911
+    },
+    {
+      "elapsedMs": 44708.85170599999,
+      "exitCode": 0,
+      "finishedOffsetMs": 180504.446095,
+      "id": "server-tests",
+      "isolated": true,
+      "label": "server tests",
+      "startedOffsetMs": 135795.594389
+    },
+    {
+      "after": ["server-tests"],
+      "elapsedMs": 4822.960586000001,
+      "exitCode": 0,
+      "finishedOffsetMs": 185327.56429100002,
+      "id": "realm-scale",
+      "isolated": true,
+      "label": "Realm import scale gate",
+      "startedOffsetMs": 180504.60370500002
+    },
+    {
+      "after": ["server-check"],
+      "elapsedMs": 20603.141783,
+      "exitCode": 0,
+      "finishedOffsetMs": 97689.44079000001,
+      "id": "browser-smoke-build",
+      "label": "browser-smoke build",
+      "startedOffsetMs": 77086.29900700001
+    },
+    {
+      "after": ["browser-smoke-build"],
+      "elapsedMs": 216506.30242400002,
+      "exitCode": 0,
+      "finishedOffsetMs": 401834.036357,
+      "id": "browser-smoke",
+      "isolated": true,
+      "label": "browser smoke tests",
+      "startedOffsetMs": 185327.733933
+    },
+    {
+      "elapsedMs": 47962.146289,
+      "exitCode": 0,
+      "finishedOffsetMs": 77086.128693,
+      "id": "frontend-check",
+      "label": "frontend check",
+      "startedOffsetMs": 29123.982404
+    },
+    {
+      "after": ["frontend-tests"],
+      "elapsedMs": 13700.594318000003,
+      "exitCode": 0,
+      "finishedOffsetMs": 128228.28673400001,
+      "id": "ui-coverage",
+      "label": "UI coverage gate",
+      "startedOffsetMs": 114527.692416
+    },
+    {
+      "elapsedMs": 17757.544695000004,
+      "exitCode": 0,
+      "finishedOffsetMs": 115447.888323,
+      "id": "format",
+      "label": "format check",
+      "startedOffsetMs": 97690.343628
+    },
+    {
+      "elapsedMs": 5978.703197999974,
+      "exitCode": 0,
+      "finishedOffsetMs": 407812.90507,
+      "id": "performance-gates",
+      "isolated": true,
+      "label": "frontend performance gates",
+      "startedOffsetMs": 401834.201872
+    }
+  ],
+  "schemaVersion": 1
+}

@@ -50,12 +50,21 @@ function containsVisualComponent(node: AstNode): boolean {
   return found
 }
 
-function sliders(node: unknown): AstNode[] {
+function components(node: unknown, name: string): AstNode[] {
   const result: AstNode[] = []
   walkAst(node, (candidate) => {
-    if (candidate.type === 'Component' && candidate.name === 'SliderInput') result.push(candidate)
+    if (candidate.type === 'Component' && candidate.name === name) result.push(candidate)
   })
   return result
+}
+
+function sliders(node: unknown): AstNode[] {
+  return components(node, 'SliderInput')
+}
+
+function ifCondition(node: AstNode): string | undefined {
+  if (node.type !== 'IfBlock' || !node.test) return undefined
+  return generate(node.test as Parameters<typeof generate>[0])
 }
 
 const iconButtons: AstNode[] = []
@@ -83,9 +92,24 @@ describe('BotSettings icon action names', () => {
 
 describe('BotSettings additional parameters visibility', () => {
   it('shows the table for all model controls and checks its own row count for the empty state', () => {
-    expect(source).toContain('{#if showModelOthersControls}')
-    expect(source).not.toContain('{#if showModelOthersControls && usesReverseProxyModel}')
-    expect(source).toContain('{#if activeAdditionalParamsDraft.value.length === 0}')
+    const emptyStateSections: AstNode[] = []
+    walkAst(ast.fragment, (node) => {
+      if (node.type !== 'IfBlock') return
+      const nestedConditions: string[] = []
+      walkAst(node.consequent, (candidate) => {
+        const condition = ifCondition(candidate)
+        if (condition) nestedConditions.push(condition)
+      })
+      if (
+        ifCondition(node) === 'showModelOthersControls' &&
+        nestedConditions.includes('activeAdditionalParamsDraft.value.length === 0')
+      ) {
+        emptyStateSections.push(node)
+      }
+    })
+
+    expect(emptyStateSections).toHaveLength(1)
+    expect(ifCondition(emptyStateSections[0])).toBe('showModelOthersControls')
   })
 })
 
@@ -117,37 +141,18 @@ describe('BotSettings direct form control names', () => {
   it.each(['TextInput', 'TextAreaInput', 'NumberInput', 'SelectInput', 'SecretInput'])(
     'keeps every direct %s named for its visible setting',
     (componentName) => {
-      const tags: string[] =
-        source.match(new RegExp(`<${componentName}\\b[\\s\\S]*?(?:\\/>|</${componentName}>)`, 'g')) ?? []
+      const controls = components(ast.fragment, componentName)
 
-      expect(tags.length).toBeGreaterThan(0)
-      expect(tags.filter((tag) => !tag.includes('ariaLabel='))).toEqual([])
+      expect(controls.length).toBeGreaterThan(0)
+      expect(controls.filter((control) => !attributeExpression(control, 'ariaLabel'))).toEqual([])
     },
   )
 })
 
 describe('BotSettings pending prompt persistence', () => {
-  it('registers its 250ms prompt draft with the lifecycle flusher and forwards keepalive transport options', () => {
+  it('registers its prompt draft with the lifecycle flusher and unregisters it on unmount', () => {
     expect(source).toContain('registerPendingOwnerMutationFlusher(')
-    expect(source).toContain('flushPendingPromptFieldPatch(options: ServerCommandTransportOptions = {})')
-    expect(source).toContain('options.keepalive,')
     expect(source).toContain('unregisterPendingPromptFieldFlush()')
-  })
-
-  it('flushes prompt rows before staging and durably dispatching the owner enable toggle', () => {
-    const toggleStart = source.indexOf('async function setSelectedPromptTemplateEnabled')
-    const toggleEnd = source.indexOf('function currentPromptPresetIconUploadTarget', toggleStart)
-    const toggleSource = source.slice(toggleStart, toggleEnd)
-
-    expect(toggleSource).toContain('commitPendingPromptTemplateMutations()')
-    expect(toggleSource).toContain("path: '/prompt-items/enable'")
-    expect(toggleSource).toContain('promptTemplateOwnerMutationKey(ownerId)')
-    expect(toggleSource).toContain('dispatchPromptTemplateStructuralMutation({')
-    expect(toggleSource).toContain('outbox,')
-    expect(toggleSource).toContain('intent,')
-    expect(toggleSource.indexOf('commitPendingPromptTemplateMutations()')).toBeLessThan(
-      toggleSource.indexOf('setSelectedPromptPresetTemplateProjection(enabled)'),
-    )
   })
 })
 

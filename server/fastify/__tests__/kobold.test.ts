@@ -63,37 +63,23 @@ describe('runKobold', () => {
     expect(sent.n).toBe(1)
   })
 
-  it('keeps a baseUrl that already includes /api/v1/generate', async () => {
-    let capturedUrl = ''
-    vi.stubGlobal('fetch', async (url: string) => {
-      capturedUrl = url
-      return ok({ results: [{ text: 'x' }] })
-    })
-    const resolved = resolveKoboldRequest({
-      messages: [{ role: 'user', content: 'hi' }],
+  it.each([
+    {
+      name: 'keeps a baseUrl that already includes /api/v1/generate',
       baseUrl: 'http://localhost:5001/api/v1/generate',
-      signal: new AbortController().signal,
-    })!
-    await runKobold(resolved)
-    expect(capturedUrl).toBe('http://localhost:5001/api/v1/generate')
-  })
-
-  it('posts to a user-supplied non-root path verbatim', async () => {
-    let capturedUrl = ''
-    vi.stubGlobal('fetch', async (url: string) => {
-      capturedUrl = url
-      return ok({ results: [{ text: 'x' }] })
-    })
-    const resolved = resolveKoboldRequest({
-      messages: [{ role: 'user', content: 'hi' }],
+      expectedUrl: 'http://localhost:5001/api/v1/generate',
+    },
+    {
+      name: 'posts to a user-supplied non-root path verbatim',
       baseUrl: 'http://localhost:5001/api/v1',
-      signal: new AbortController().signal,
-    })!
-    await runKobold(resolved)
-    expect(capturedUrl).toBe('http://localhost:5001/api/v1')
-  })
-
-  it('preserves custom paths and query strings verbatim', async () => {
+      expectedUrl: 'http://localhost:5001/api/v1',
+    },
+    {
+      name: 'preserves custom paths and query strings verbatim',
+      baseUrl: 'http://localhost:5001/custom/generate?profile=legacy',
+      expectedUrl: 'http://localhost:5001/custom/generate?profile=legacy',
+    },
+  ])('$name', async ({ baseUrl, expectedUrl }) => {
     let capturedUrl = ''
     vi.stubGlobal('fetch', async (url: string) => {
       capturedUrl = url
@@ -101,11 +87,11 @@ describe('runKobold', () => {
     })
     const resolved = resolveKoboldRequest({
       messages: [{ role: 'user', content: 'hi' }],
-      baseUrl: 'http://localhost:5001/custom/generate?profile=legacy',
+      baseUrl,
       signal: new AbortController().signal,
     })!
     await runKobold(resolved)
-    expect(capturedUrl).toBe('http://localhost:5001/custom/generate?profile=legacy')
+    expect(capturedUrl).toBe(expectedUrl)
   })
 
   it('applies additional parameters after building the body and injects headers', async () => {

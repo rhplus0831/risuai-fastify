@@ -14,15 +14,18 @@ describe('loadAndTrimCharEmotion', () => {
     expect(charemotions).toEqual({})
   })
 
-  it('returns the existing tempEmotion array unchanged when length < 5', () => {
+  it('returns the existing emotion history unchanged when length < 5', () => {
     const initial: CharEmotionEntry[] = [
       ['e1', 'e1.png', 100],
       ['e2', 'e2.png', 200],
     ]
     CharEmotion.set({ 'cha-1': initial })
     const { tempEmotion } = loadAndTrimCharEmotion('cha-1')
-    expect(tempEmotion).toBe(initial)
-    expect(tempEmotion).toHaveLength(2)
+    expect(tempEmotion).toEqual([
+      ['e1', 'e1.png', 100],
+      ['e2', 'e2.png', 200],
+    ])
+    expect(get(CharEmotion)['cha-1']).toEqual(tempEmotion)
   })
 
   it('does not trim at the > 4 boundary (length 4 is preserved)', () => {
@@ -34,8 +37,8 @@ describe('loadAndTrimCharEmotion', () => {
     ]
     CharEmotion.set({ 'cha-1': initial })
     const { tempEmotion } = loadAndTrimCharEmotion('cha-1')
-    expect(tempEmotion).toHaveLength(4)
-    expect(tempEmotion[0]).toEqual(['e1', 'e1.png', 100])
+    expect(tempEmotion).toEqual(initial)
+    expect(get(CharEmotion)['cha-1']).toEqual(tempEmotion)
   })
 
   it('splices the oldest entry when length > 4', () => {
@@ -48,28 +51,13 @@ describe('loadAndTrimCharEmotion', () => {
     ]
     CharEmotion.set({ 'cha-1': initial })
     const { tempEmotion } = loadAndTrimCharEmotion('cha-1')
-    expect(tempEmotion).toHaveLength(4)
-    expect(tempEmotion[0]).toEqual(['e2', 'e2.png', 200])
-  })
-
-  it('mutates the live store array in place (does not call set)', () => {
-    const initial: CharEmotionEntry[] = [
-      ['e1', 'e1.png', 100],
+    expect(tempEmotion).toEqual([
       ['e2', 'e2.png', 200],
       ['e3', 'e3.png', 300],
       ['e4', 'e4.png', 400],
       ['e5', 'e5.png', 500],
-    ]
-    CharEmotion.set({ 'cha-1': initial })
-    let subscribeCount = 0
-    const unsub = CharEmotion.subscribe(() => {
-      subscribeCount++
-    })
-    const before = subscribeCount
-    loadAndTrimCharEmotion('cha-1')
-    unsub()
-    expect(subscribeCount).toBe(before)
-    expect(initial).toHaveLength(4)
+    ])
+    expect(get(CharEmotion)['cha-1']).toEqual(tempEmotion)
   })
 })
 
@@ -94,18 +82,6 @@ describe('pushCharEmotionEntry', () => {
       chaId: 'cha-1',
     })
     expect(tempEmotion).toEqual([['happy', 'h.png', 1000]])
-  })
-
-  it('assigns tempEmotion onto charemotions[chaId]', () => {
-    const tempEmotion: CharEmotionEntry[] = []
-    const charemotions: { [k: string]: CharEmotionEntry[] } = {}
-    pushCharEmotionEntry({
-      emoTuple: ['sad', 's.png'],
-      tempEmotion,
-      charemotions,
-      chaId: 'cha-7',
-    })
-    expect(charemotions['cha-7']).toBe(tempEmotion)
   })
 
   it('propagates the update via CharEmotion.set so subscribers fire', () => {

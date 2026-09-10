@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 import * as shared from '@risuai/shared-core/trigger-compatibility'
 import * as browser from '../../../src/ts/process/triggerServerSupport'
 import * as server from '../../../server/fastify/src/prompt/triggerCompatibility.js'
-import * as owner from './triggerCompatibility.js'
 
 const unsupportedEffects = [
   '@@emo',
@@ -49,17 +48,6 @@ const unsupportedEffects = [
 ]
 
 describe('shared trigger compatibility', () => {
-  it.each([
-    ['package', shared],
-    ['browser', browser],
-    ['server', server],
-  ] as const)('exposes the same implementation through the %s entry point', (_name, entry) => {
-    expect(Object.keys(entry).sort()).toEqual(Object.keys(owner).sort())
-    for (const name of Object.keys(owner) as Array<keyof typeof owner>) {
-      expect(entry[name], name).toBe(owner[name])
-    }
-  })
-
   it('retains every unsupported classification and exact membership', () => {
     expect([...shared.serverUnsupportedTriggerEffectTypes]).toEqual(unsupportedEffects)
     for (const type of unsupportedEffects) expect(shared.isServerUnsupportedTriggerEffectType(type), type).toBe(true)

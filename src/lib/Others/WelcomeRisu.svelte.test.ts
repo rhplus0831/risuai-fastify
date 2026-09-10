@@ -85,6 +85,7 @@ vi.mock('src/ts/server/settingsOwner.svelte', () => ({
 }))
 
 import WelcomeRisu from './WelcomeRisu.svelte'
+import { language } from 'src/lang'
 import { replaceResourceDatabase as setDatabaseLite } from 'src/ts/server/resourceState.svelte'
 import { getResourceDatabase as getDatabase } from 'src/ts/__tests__/resourceDatabaseState'
 
@@ -164,8 +165,7 @@ function buttonWithText(text: string): HTMLButtonElement {
 }
 
 function sendButton(): HTMLButtonElement {
-  const currentButtons = buttons()
-  const button = currentButtons[currentButtons.length - 1]
+  const button = target.querySelector<HTMLButtonElement>(`button[aria-label="${language.hotkeyDesc.send}"]`)
   if (!button) {
     throw new Error('Send button not found')
   }

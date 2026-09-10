@@ -314,13 +314,13 @@ describe('connected reader transcript', () => {
     expect(target.querySelector('[data-reader-background]')?.textContent).toContain('Confirmed module background')
     expect(target.textContent).not.toContain('Writer module background')
     expect(target.textContent).not.toContain('Pending module background')
-    expect(target.querySelector('.risu-chat')?.textContent).toContain('Reader character')
+    expect(target.querySelector('[data-risu-message-id]')?.textContent).toContain('Reader character')
     applyCollectionsResource({
       revision: 3,
       collections: { modules: modules.map((module) => ({ ...module, hideIcon: true })) },
     })
     await settle()
-    expect(target.querySelector('.risu-chat')?.textContent).not.toContain('Reader character')
+    expect(target.querySelector('[data-risu-message-id]')?.textContent).not.toContain('Reader character')
   })
 
   it('parses only the confirmed character background and discards a late response after authentication loss', async () => {
@@ -403,7 +403,7 @@ describe('connected reader transcript', () => {
       expect(display).not.toHaveBeenCalled()
       expect(greeting).not.toHaveBeenCalled()
       expect(parser.ParseMarkdown).not.toHaveBeenCalled()
-      expect(target.querySelector('.risu-chat')).toBeNull()
+      expect(target.querySelector('[data-risu-message-id]')).toBeNull()
       expect(target.textContent).not.toContain('Raw preview greeting')
       const refresh = target.querySelector<HTMLButtonElement>('[data-reader-refresh]')!
       expect(refresh.disabled).toBe(true)
@@ -499,7 +499,7 @@ describe('connected reader transcript', () => {
       },
     })
     await settle()
-    expect(target.querySelector('.chat-generation-loading')).not.toBeNull()
+    expect(target.querySelector('[data-generation-projection-loading]')).not.toBeNull()
     expect(target.querySelector('[data-risu-message-action]')).toBeNull()
   })
 
@@ -519,7 +519,7 @@ describe('connected reader transcript', () => {
     const projection = liveProjection()
     project(projection)
     await settle()
-    const row = target.querySelector('.chat-message-container[data-generation-display-projection="send"]')
+    const row = target.querySelector('[data-transcript-row-id][data-generation-display-projection="send"]')
     expect(row?.textContent).toContain('Live reader output')
     expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
     expect(JSON.stringify(charactersResourceState.characters)).toBe(writerBefore)
@@ -539,7 +539,7 @@ describe('connected reader transcript', () => {
 
     project({ ...projection, text: 'More live reader output', projectionEpoch: 2 })
     await settle()
-    expect(target.querySelector('.chat-message-container[data-generation-display-projection="send"]')).toBe(row)
+    expect(target.querySelector('[data-transcript-row-id][data-generation-display-projection="send"]')).toBe(row)
     const result: Message = {
       role: 'char',
       chatId: 'canonical-send',
@@ -552,25 +552,25 @@ describe('connected reader transcript', () => {
     }
     hydration.applyServerChatMessagesResource('reader-chat', [...original, result], undefined, [])
     await settle()
-    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('.chat-message-container')).toBe(
+    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('[data-transcript-row-id]')).toBe(
       row,
     )
     expect(row?.textContent).toContain('Final server output')
     expect(target.textContent).not.toContain('More live reader output')
-    expect(target.querySelectorAll('.chat-message-container[data-generation-display-projection="send"]')).toHaveLength(
+    expect(target.querySelectorAll('[data-transcript-row-id][data-generation-display-projection="send"]')).toHaveLength(
       1,
     )
     project(null)
     await settle()
-    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('.chat-message-container')).toBe(
+    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('[data-transcript-row-id]')).toBe(
       row,
     )
-    expect(target.querySelector('.chat-generation-loading')).toBeNull()
+    expect(target.querySelector('[data-generation-projection-loading]')).toBeNull()
     expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual([...original, result])
     project({ ...projection, attemptNo: 2, jobId: 'retry-job', generationId: 'retry-job', text: 'Retried live output' })
     await settle()
-    expect(target.querySelector('.chat-message-container[data-generation-display-projection="send"]')).not.toBe(row)
-    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('.chat-message-container')).toBe(
+    expect(target.querySelector('[data-transcript-row-id][data-generation-display-projection="send"]')).not.toBe(row)
+    expect(target.querySelector('[data-risu-message-id="canonical-send"]')?.closest('[data-transcript-row-id]')).toBe(
       row,
     )
     expect(target.textContent).toContain('Retried live output')
@@ -595,7 +595,7 @@ describe('connected reader transcript', () => {
       await settle()
       const baseRow = target
         .querySelector(`[data-risu-message-id="${base.chatId}"]`)
-        ?.closest('.chat-message-container')
+        ?.closest('[data-transcript-row-id]')
       const projection = liveProjection({
         mode: 'continue',
         continueDisposition: disposition,
@@ -605,7 +605,7 @@ describe('connected reader transcript', () => {
       })
       project(projection)
       await settle()
-      const row = target.querySelector('.chat-message-container[data-generation-display-projection="continue"]')
+      const row = target.querySelector('[data-transcript-row-id][data-generation-display-projection="continue"]')
       expect(row?.textContent).toContain(projection.text)
       expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
       if (disposition === 'extend') expect(row).toBe(baseRow)
@@ -614,7 +614,7 @@ describe('connected reader transcript', () => {
       project({ ...projection, status: 'finalizing', phase: 'finalizing', text: `${projection.text} completed` })
       await settle()
       expect(row?.textContent).toContain(`${projection.text} completed`)
-      expect(row?.querySelector('.chat-generation-loading')).not.toBeNull()
+      expect(row?.querySelector('[data-generation-projection-loading]')).not.toBeNull()
       const result: Message = {
         ...base,
         chatId: disposition === 'extend' ? base.chatId : 'continued-append',
@@ -630,14 +630,14 @@ describe('connected reader transcript', () => {
       await settle()
       expect(row?.textContent).toContain('Authoritative continued output')
       expect(
-        target.querySelector(`[data-risu-message-id="${result.chatId}"]`)?.closest('.chat-message-container'),
+        target.querySelector(`[data-risu-message-id="${result.chatId}"]`)?.closest('[data-transcript-row-id]'),
       ).toBe(row)
       project(null)
       await settle()
       expect(
-        target.querySelector(`[data-risu-message-id="${result.chatId}"]`)?.closest('.chat-message-container'),
+        target.querySelector(`[data-risu-message-id="${result.chatId}"]`)?.closest('[data-transcript-row-id]'),
       ).toBe(row)
-      expect(target.querySelector('.chat-generation-loading')).toBeNull()
+      expect(target.querySelector('[data-generation-projection-loading]')).toBeNull()
       expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(finalMessages)
     },
   )
@@ -655,7 +655,7 @@ describe('connected reader transcript', () => {
     await settle()
     const oldRow = target
       .querySelector(`[data-risu-message-id="${original[0].chatId}"]`)
-      ?.closest('.chat-message-container')
+      ?.closest('[data-transcript-row-id]')
     const unrelatedRow = target.querySelector(`[data-risu-message-id="${original[1].chatId}"]`)
     const projection = liveProjection({
       mode: 'regenerate',
@@ -664,7 +664,7 @@ describe('connected reader transcript', () => {
     })
     project(projection)
     await settle()
-    expect(target.querySelector('.chat-message-container[data-generation-display-projection="regenerate"]')).toBe(
+    expect(target.querySelector('[data-transcript-row-id][data-generation-display-projection="regenerate"]')).toBe(
       oldRow,
     )
     expect(oldRow?.textContent).toContain('Regenerated live text')
@@ -686,10 +686,10 @@ describe('connected reader transcript', () => {
     project(null)
     await settle()
     expect(
-      target.querySelector('[data-risu-message-id="regenerated-result"]')?.closest('.chat-message-container'),
+      target.querySelector('[data-risu-message-id="regenerated-result"]')?.closest('[data-transcript-row-id]'),
     ).toBe(oldRow)
     expect(target.querySelector(`[data-risu-message-id="${original[1].chatId}"]`)).toBe(unrelatedRow)
-    expect(target.querySelectorAll('.risu-chat')).toHaveLength(2)
+    expect(target.querySelectorAll('[data-transcript-row-id]')).toHaveLength(2)
   })
 
   it('isolates the explicit reader path from writer regenerate and half-streaming stores even with a null projection', async () => {
@@ -734,7 +734,7 @@ describe('connected reader transcript', () => {
     await settle()
     expect(target.textContent).toContain(base.data)
     expect(target.textContent).not.toContain('Stale writer overlay')
-    expect(target.querySelector('.chat-generation-loading')).toBeNull()
+    expect(target.querySelector('[data-generation-projection-loading]')).toBeNull()
     expect(get(generationDisplayProjections)).toMatchObject([{ operationId: writer.operationId, status: 'finalizing' }])
     expect(get(halfStreamingProgress)).toHaveLength(1)
   })
@@ -759,7 +759,7 @@ describe('connected reader transcript', () => {
       'Live older regeneration',
     )
     expect(observations[0].input.loadPages()).toBe(2)
-    expect(target.querySelectorAll('.risu-chat').length).toBeLessThanOrEqual(76)
+    expect(target.querySelectorAll('[data-transcript-row-id]').length).toBeLessThanOrEqual(76)
     expect(hydration.getReaderChatMessageOwnerState('reader-chat')!.messages).toEqual(original)
     project(null)
     await settle()
@@ -830,7 +830,7 @@ describe('connected reader transcript', () => {
     observations[0].input.onChange({ status: 'interrupted', projection: liveProjection({ status: 'interrupted' }) })
     await settle()
     expect(target.textContent).toContain('Live reader output')
-    expect(target.querySelector('.chat-generation-loading')).toBeNull()
+    expect(target.querySelector('[data-generation-projection-loading]')).toBeNull()
     requireClientAuthentication()
     await settle()
     expect(observations[0].stop).toHaveBeenCalledOnce()
@@ -850,9 +850,9 @@ describe('connected reader transcript', () => {
     const parserCalls = vi.mocked(parser.ParseMarkdown).mock.calls.length
     project(liveProjection({ halfStreaming: true, text: null, generatedTokens: 42, elapsedMs: 2000 }))
     await settle()
-    const row = target.querySelector('.chat-message-container[data-generation-display-projection="send"]')
+    const row = target.querySelector('[data-transcript-row-id][data-generation-display-projection="send"]')
     expect(row?.textContent).toContain(language.halfStreamingGeneratedTokens(42))
-    expect(row?.querySelector('.chat-generation-loading')).not.toBeNull()
+    expect(row?.querySelector('[data-generation-projection-loading]')).not.toBeNull()
     expect(row?.querySelector('.chat-message-body')).toBeNull()
     expect(vi.mocked(parser.ParseMarkdown).mock.calls).toHaveLength(parserCalls)
     expect(fetch).not.toHaveBeenCalled()
@@ -948,7 +948,7 @@ describe('connected reader transcript', () => {
         settings: { useChatCopy: true, chatLoadInitialPages: 1, chatLoadAdditionalPages: 2 },
       })
       await settle()
-      expect(target.querySelectorAll('.risu-chat')).toHaveLength(1)
+      expect(target.querySelectorAll('[data-transcript-row-id]')).toHaveLength(1)
       expect(target.querySelector('[data-reader-load-more]')).not.toBeNull()
       const copy = target.querySelector<HTMLButtonElement>('[data-risu-message-action="copy"]')
       expect(copy).not.toBeNull()
@@ -1005,12 +1005,12 @@ describe('connected reader transcript', () => {
       props: { characterId: 'reader-character', chatId: 'reader-chat' },
     })
     await settle()
-    expect(target.querySelectorAll('.risu-chat')).toHaveLength(2)
+    expect(target.querySelectorAll('[data-transcript-row-id]')).toHaveLength(2)
     const newest = target.querySelector('[data-risu-message-id="render-cost-message-4"]')
     target.querySelector<HTMLButtonElement>('[data-reader-load-more]')!.click()
     await settle()
     expect(hydration.hydrateReaderChatMessageWindow).toHaveBeenLastCalledWith('reader-chat', 4, { force: false })
-    expect(target.querySelectorAll('.risu-chat')).toHaveLength(4)
+    expect(target.querySelectorAll('[data-transcript-row-id]')).toHaveLength(4)
     expect(target.querySelector('[data-risu-message-id="render-cost-message-4"]')).toBe(newest)
     expect(get(selectedCharID)).toBe(0)
   })
@@ -1069,7 +1069,7 @@ describe('connected reader transcript', () => {
     requireClientAuthentication()
     await settle()
     expect(target.textContent).not.toContain('Reader message 2')
-    expect(target.querySelector('.risu-chat')).toBeNull()
+    expect(target.querySelector('[data-transcript-row-id]')).toBeNull()
   })
   it('keeps staged writer rows and metadata out of a demoted reader during held and failed refresh', async () => {
     setManagedWriterForTest()

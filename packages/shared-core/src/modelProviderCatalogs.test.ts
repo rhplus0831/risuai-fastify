@@ -3,17 +3,8 @@ import { AnthropicModels } from './anthropicModels.js'
 import { GoogleModels } from './googleModels.js'
 import { GPT5Parameters, ClaudeParameters } from './modelTypes.js'
 import { OpenAIModels } from './openaiModels.js'
-import { AnthropicModels as BrowserAnthropicModels } from '../../../src/ts/model/providers/anthropic'
-import { GoogleModels as BrowserGoogleModels } from '../../../src/ts/model/providers/google'
-import { OpenAIModels as BrowserOpenAIModels } from '../../../src/ts/model/providers/openai'
 
 describe('shared model provider catalogs', () => {
-  it('keeps browser facades on the exact shared catalog objects', () => {
-    expect(BrowserOpenAIModels).toBe(OpenAIModels)
-    expect(BrowserAnthropicModels).toBe(AnthropicModels)
-    expect(BrowserGoogleModels).toBe(GoogleModels)
-  })
-
   it('preserves catalog sizes, order, duplicate rows, and metadata references', () => {
     expect(OpenAIModels).toHaveLength(56)
     expect(AnthropicModels).toHaveLength(30)

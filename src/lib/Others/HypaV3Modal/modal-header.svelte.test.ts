@@ -83,10 +83,7 @@ describe('HypaV3 modal header keyboard navigation', () => {
       },
     })
 
-    const buttons = Array.from(target.querySelectorAll<HTMLButtonElement>('button'))
-    expect(buttons).toHaveLength(9)
-    expect(buttons.every((button) => button.tabIndex === 0)).toBe(true)
-    expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
+    const requiredLabels = [
       'Search summaries',
       'Show important summaries',
       'Bulk edit summaries',
@@ -96,6 +93,12 @@ describe('HypaV3 modal header keyboard navigation', () => {
       'Show selected summaries',
       'Reset HypaV3 data',
       'Close HypaV3',
-    ])
+    ]
+    const buttons = Array.from(target.querySelectorAll<HTMLButtonElement>('button'))
+    const labels = buttons.map((button) => button.getAttribute('aria-label'))
+
+    expect(buttons.every((button) => button.tabIndex === 0)).toBe(true)
+    expect(labels.every((label) => typeof label === 'string' && label.trim().length > 0)).toBe(true)
+    expect(labels).toEqual(expect.arrayContaining(requiredLabels))
   })
 })

@@ -9,6 +9,10 @@ import {
   type ColorSchemeImportOperation,
 } from './colorSchemeImport'
 import type { ColorScheme } from '../gui/colorscheme'
+import {
+  expectCanceledPickerKeepsOperationCurrent,
+  expectNewerOperationWins,
+} from '../__tests__/latestOperationTestAssertions'
 
 function scheme(seed: string): ColorScheme {
   return {
@@ -115,66 +119,50 @@ describe('color scheme import freshness', () => {
 
   it('lets the newer selected import win over an older delayed import', () => {
     const originalScheme = scheme('aaa')
-    const older = beginImport({
-      colorSchemeName: 'default',
-      colorScheme: originalScheme,
-    })
-    const newer = beginImport({
-      colorSchemeName: 'default',
-      colorScheme: originalScheme,
-    })
 
-    try {
-      expect(
+    expectNewerOperationWins({
+      begin: () =>
+        beginImport({
+          colorSchemeName: 'default',
+          colorScheme: originalScheme,
+        }),
+      complete: (operation, attempt) =>
         resolveFreshColorSchemeImportPatch({
-          operation: newer,
+          operation,
           freshness: {
             colorSchemeName: 'default',
             colorScheme: originalScheme,
             customColorScheme: originalScheme,
           },
-          colorScheme: scheme('bbb'),
+          colorScheme: scheme(attempt === 'newer' ? 'bbb' : 'ccc'),
         }),
-      ).toEqual({
+      expectedNewer: {
         colorSchemeName: 'custom',
         colorScheme: scheme('bbb'),
         customColorScheme: scheme('bbb'),
-      })
-
-      expect(
-        resolveFreshColorSchemeImportPatch({
-          operation: older,
-          freshness: {
-            colorSchemeName: 'default',
-            colorScheme: originalScheme,
-            customColorScheme: originalScheme,
-          },
-          colorScheme: scheme('ccc'),
-        }),
-      ).toBeNull()
-    } finally {
-      clearColorSchemeImport(older)
-      clearColorSchemeImport(newer)
-    }
+      },
+      clear: clearColorSchemeImport,
+    })
   })
 
   it('does not let a canceled newer picker invalidate an older pending import', () => {
     const originalScheme = scheme('aaa')
-    const older = beginImport({
-      colorSchemeName: 'default',
-      colorScheme: originalScheme,
-    })
 
-    captureColorSchemeImportTarget({
-      colorSchemeName: 'default',
-      colorScheme: originalScheme,
-      customColorScheme: originalScheme,
-    })
-
-    try {
-      expect(
+    expectCanceledPickerKeepsOperationCurrent({
+      begin: () =>
+        beginImport({
+          colorSchemeName: 'default',
+          colorScheme: originalScheme,
+        }),
+      captureCanceledTarget: () =>
+        captureColorSchemeImportTarget({
+          colorSchemeName: 'default',
+          colorScheme: originalScheme,
+          customColorScheme: originalScheme,
+        }),
+      complete: (operation) =>
         resolveFreshColorSchemeImportPatch({
-          operation: older,
+          operation,
           freshness: {
             colorSchemeName: 'default',
             colorScheme: originalScheme,
@@ -182,14 +170,13 @@ describe('color scheme import freshness', () => {
           },
           colorScheme: scheme('bbb'),
         }),
-      ).toEqual({
+      expected: {
         colorSchemeName: 'custom',
         colorScheme: scheme('bbb'),
         customColorScheme: scheme('bbb'),
-      })
-    } finally {
-      clearColorSchemeImport(older)
-    }
+      },
+      clear: clearColorSchemeImport,
+    })
   })
 
   it('parses only color scheme-shaped JSON', () => {

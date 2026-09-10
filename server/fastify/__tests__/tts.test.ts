@@ -40,6 +40,35 @@ function body(init: RequestInit): Record<string, unknown> {
   return JSON.parse(String(init.body)) as Record<string, unknown>
 }
 
+function expectSemanticUrl(actualValue: string, expectedValue: string): void {
+  const actual = new URL(actualValue)
+  const expected = new URL(expectedValue)
+  expect({
+    protocol: actual.protocol,
+    host: actual.host,
+    pathname: actual.pathname,
+    username: actual.username,
+    password: actual.password,
+    hash: actual.hash,
+  }).toEqual({
+    protocol: expected.protocol,
+    host: expected.host,
+    pathname: expected.pathname,
+    username: expected.username,
+    password: expected.password,
+    hash: expected.hash,
+  })
+
+  const sortEntries = (entries: [string, string][]): [string, string][] =>
+    entries.sort(([leftKey, leftValue], [rightKey, rightValue]) =>
+      leftKey === rightKey ? leftValue.localeCompare(rightValue) : leftKey.localeCompare(rightKey),
+    )
+  const actualEntries = Array.from(actual.searchParams.entries())
+  const expectedEntries = Array.from(expected.searchParams.entries())
+  expect(actualEntries).toHaveLength(expectedEntries.length)
+  expect(sortEntries(actualEntries)).toEqual(sortEntries(expectedEntries))
+}
+
 describe('TTS synthesis request allowlist', () => {
   it.each([
     {
@@ -105,7 +134,8 @@ describe('TTS synthesis request allowlist', () => {
     },
   ])('maps $request.operation to a bounded configured target', ({ request, url, authHeader, expectedBody }) => {
     const upstream = resolveTtsUpstreamRequest(request, storedContext)
-    expect(upstream.url).toBe(url)
+    if (request.operation === 'novelai.synthesize') expectSemanticUrl(upstream.url, url)
+    else expect(upstream.url).toBe(url)
     expect(upstream.init.redirect).toBe('error')
     expect(header(upstream.init, authHeader[0])).toBe(authHeader[1])
     if (expectedBody) expect(body(upstream.init)).toEqual(expectedBody)

@@ -1,4 +1,3 @@
-import { webcrypto } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -15,8 +14,7 @@ import {
   enqueueGenerationFinalizationRetry,
   markGenerationFinalizationRetryFailure,
 } from '../src/generationFinalizationRetry.js'
-
-const subtle = webcrypto.subtle
+import { setupAuthedClient } from './helpers/auth.js'
 
 interface Harness {
   app: FastifyInstance
@@ -43,44 +41,6 @@ async function startHarness(): Promise<Harness> {
 async function stopHarness(harness: Harness): Promise<void> {
   await harness.app.close()
   rmSync(harness.dataDir, { recursive: true, force: true })
-}
-
-async function signAssertion(privateKey: CryptoKey, publicJwk: JsonWebKey, ttlSec = 60): Promise<string> {
-  const now = Math.floor(Date.now() / 1000)
-  const header = { alg: 'ES256', typ: 'JWT' }
-  const payload = { iat: now, exp: now + ttlSec, pub: publicJwk }
-  const headerB64 = Buffer.from(JSON.stringify(header)).toString('base64url')
-  const payloadB64 = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  const signingInput = `${headerB64}.${payloadB64}`
-  const signature = await subtle.sign(
-    { name: 'ECDSA', hash: { name: 'SHA-256' } },
-    privateKey,
-    Buffer.from(signingInput),
-  )
-  return `${signingInput}.${Buffer.from(signature).toString('base64url')}`
-}
-
-async function setupAuthedClient(app: FastifyInstance): Promise<{ assertion: string }> {
-  const setup = await app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/setup',
-    payload: { password: 'hunter2' },
-  })
-  expect(setup.statusCode).toBe(200)
-
-  const keypair = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
-    'sign',
-    'verify',
-  ])) as CryptoKeyPair
-  const publicKey = await subtle.exportKey('jwk', keypair.publicKey)
-  const login = await app.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { password: 'hunter2', publicKey },
-  })
-  expect(login.statusCode).toBe(200)
-
-  return { assertion: await signAssertion(keypair.privateKey, publicKey) }
 }
 
 let harness: Harness

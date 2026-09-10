@@ -43,33 +43,17 @@ describe('settings group contracts', () => {
     )
   })
 
-  it('persists reduced motion through the display settings group', () => {
-    expect(SERVER_SETTINGS_GROUP_BY_KEY.reducedMotion).toBe('display')
-    expect(SERVER_SETTINGS_KEYS_BY_GROUP.display).toContain('reducedMotion')
-  })
-
-  it('persists the all-model additional-parameters opt-in with provider settings', () => {
-    expect(SERVER_SETTINGS_GROUP_BY_KEY.applyAdditionalParamsToAll).toBe('providers')
-    expect(SERVER_SETTINGS_KEYS_BY_GROUP.providers).toContain('applyAdditionalParamsToAll')
-  })
-
-  it('persists the floating chat input through the sidebar settings group', () => {
-    expect(SERVER_SETTINGS_GROUP_BY_KEY.floatingChatInput).toBe('sidebar')
-    expect(SERVER_SETTINGS_KEYS_BY_GROUP.sidebar).toContain('floatingChatInput')
-  })
-
-  it('persists sentence paragraph preferences through the display settings group', () => {
-    for (const key of ['paragraphBreakBySentences', 'paragraphBreakSentenceCount']) {
-      expect(SERVER_SETTINGS_GROUP_BY_KEY[key]).toBe('display')
-      expect(SERVER_SETTINGS_KEYS_BY_GROUP.display).toContain(key)
-    }
-  })
-
-  it('persists writer sidebar column preferences through the display settings group', () => {
-    for (const key of ['desktopSidebarColumns', 'mobileSidebarColumns']) {
-      expect(SERVER_SETTINGS_GROUP_BY_KEY[key]).toBe('display')
-      expect(SERVER_SETTINGS_KEYS_BY_GROUP.display).toContain(key)
-    }
+  it.each([
+    ['reducedMotion', 'display'],
+    ['applyAdditionalParamsToAll', 'providers'],
+    ['floatingChatInput', 'sidebar'],
+    ['paragraphBreakBySentences', 'display'],
+    ['paragraphBreakSentenceCount', 'display'],
+    ['desktopSidebarColumns', 'display'],
+    ['mobileSidebarColumns', 'display'],
+  ] as const)('maps %s through the %s settings group', (key, group) => {
+    expect(SERVER_SETTINGS_GROUP_BY_KEY[key]).toBe(group)
+    expect(SERVER_SETTINGS_KEYS_BY_GROUP[group]).toContain(key)
   })
 
   it('does not expose retired Mood Light state as a server-backed setting', () => {

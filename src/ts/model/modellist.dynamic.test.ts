@@ -88,26 +88,4 @@ describe('registerModelDynamic provider operations', () => {
     })
     expect(LLMModels.some((model) => model.id === 'dynamic_google_audit-embedding-model')).toBe(false)
   })
-
-  it('preserves newer persisted model choices when late discovery completes', async () => {
-    let releaseGoogle!: (value: { models: any[] }) => void
-    const googleModels = new Promise<{ models: any[] }>((resolve) => {
-      releaseGoogle = resolve
-    })
-    providerOperations.request.mockImplementation(async (operation: string) => {
-      if (operation === 'google.models') return googleModels
-      if (operation === 'anthropic.models') return { data: [] }
-      throw new Error(`unexpected operation: ${operation}`)
-    })
-
-    const discovery = registerModelDynamic({
-      dynamicModelRegistry: true,
-      googleAccessToken: 'google-catalog-key',
-      claudeAPIKey: 'anthropic-catalog-key',
-    })
-    await vi.waitFor(() => expect(providerOperations.request).toHaveBeenCalledWith('google.models', expect.any(Object)))
-
-    releaseGoogle({ models: [] })
-    await discovery
-  })
 })

@@ -8,17 +8,6 @@ import {
 } from './proxyJobWs'
 
 describe('parseProxyJobWsEvent', () => {
-  it('parses valid proxy job events', () => {
-    const event = parseProxyJobWsEvent(
-      JSON.stringify({
-        type: 'chunk',
-        dataBase64: Buffer.from('hello', 'utf-8').toString('base64'),
-      }),
-    )
-    expect(event).not.toBeNull()
-    expect(event?.type).toBe('chunk')
-  })
-
   it('returns null for invalid input', () => {
     expect(parseProxyJobWsEvent('not-json')).toBeNull()
     expect(parseProxyJobWsEvent(JSON.stringify({ nope: 1 }))).toBeNull()
@@ -37,16 +26,42 @@ describe('parseProxyJobWsEvent', () => {
     expect(parseProxyJobWsEvent(JSON.stringify(event))).toBeNull()
   })
 
-  it('normalizes valid event payloads by discriminator', () => {
-    expect(
-      parseProxyJobWsEvent(
-        JSON.stringify({ type: 'upstream_headers', status: 206, headers: { 'content-type': 'text/plain' } }),
-      ),
-    ).toEqual({ type: 'upstream_headers', status: 206, headers: { 'content-type': 'text/plain' } })
-    expect(parseProxyJobWsEvent(JSON.stringify({ type: 'error', message: 'failed' }))).toEqual({
-      type: 'error',
-      message: 'failed',
-    })
+  it.each([
+    {
+      input: { type: 'job_accepted', jobId: 'job-a', ignored: true },
+      expected: { type: 'job_accepted', jobId: 'job-a' },
+    },
+    {
+      input: {
+        type: 'upstream_headers',
+        status: 206,
+        headers: { 'content-type': 'text/plain' },
+        ignored: true,
+      },
+      expected: { type: 'upstream_headers', status: 206, headers: { 'content-type': 'text/plain' } },
+    },
+    {
+      input: { type: 'chunk', dataBase64: 'YWJj', ignored: true },
+      expected: { type: 'chunk', dataBase64: 'YWJj' },
+    },
+    {
+      input: { type: 'error', message: 'failed', ignored: true },
+      expected: { type: 'error', message: 'failed' },
+    },
+    {
+      input: { type: 'error', status: 502, message: 'failed', ignored: true },
+      expected: { type: 'error', status: 502, message: 'failed' },
+    },
+    {
+      input: { type: 'done', ignored: true },
+      expected: { type: 'done' },
+    },
+    {
+      input: { type: 'ping', ts: 1234, ignored: true },
+      expected: { type: 'ping', ts: 1234 },
+    },
+  ])('normalizes a valid $input.type payload to its exact public keys', ({ input, expected }) => {
+    expect(parseProxyJobWsEvent(JSON.stringify(input))).toEqual(expected)
   })
 })
 

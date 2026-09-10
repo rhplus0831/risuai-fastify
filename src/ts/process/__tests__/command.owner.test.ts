@@ -538,20 +538,35 @@ describe('slash-command durable owner writes', () => {
     expect(setDatabaseSpy.count).toBe(0)
   })
 
-  it('/del removes the last N messages without setDatabase', async () => {
-    const { command, messages } = await runMessageCommand(
-      '/del 2',
-      [
+  it.each([
+    {
+      count: 1,
+      initialMessages: [
+        { role: 'user', data: 'one', chatId: 'm1' },
+        { role: 'char', data: 'two', chatId: 'm2' },
+      ],
+      remainingIds: ['m1'],
+      afterMessageId: 'm1',
+    },
+    {
+      count: 2,
+      initialMessages: [
         { role: 'user', data: 'zero', chatId: 'm0' },
         { role: 'char', data: 'one', chatId: 'm1' },
         { role: 'user', data: 'two', chatId: 'm2' },
         { role: 'char', data: 'three', chatId: 'm3' },
       ],
-      { url: '/api/v1/commands/chats/chat-1/messages/truncate', method: 'POST' },
-    )
+      remainingIds: ['m0', 'm1'],
+      afterMessageId: 'm1',
+    },
+  ])('/del $count removes the requested message tail without setDatabase', async (testCase) => {
+    const { command, messages } = await runMessageCommand(`/del ${testCase.count}`, testCase.initialMessages, {
+      url: '/api/v1/commands/chats/chat-1/messages/truncate',
+      method: 'POST',
+    })
 
-    expect(messages.map((message) => message.chatId)).toEqual(['m0', 'm1'])
-    expect(command.body).toEqual({ baseRevision: 10, afterMessageId: 'm1' })
+    expect(messages.map((message) => message.chatId)).toEqual(testCase.remainingIds)
+    expect(command.body).toEqual({ baseRevision: 10, afterMessageId: testCase.afterMessageId })
     expect(setDatabaseSpy.count).toBe(0)
   })
 
@@ -914,17 +929,6 @@ describe('slash-command durable owner writes', () => {
     expect(setDatabaseSpy.count).toBe(0)
   })
 
-  it('/setvar updates chat scriptstate via the scriptstate command', async () => {
-    const calls = stubCommandFetch()
-    await expect(processMultiCommand('/setvar key=hp 100')).resolves.not.toThrow()
-
-    const cmd = await waitForCommand(
-      calls,
-      (call) => call.url === '/api/v1/commands/chats/chat-1/scriptstate' && call.method === 'PATCH',
-    )
-    expect(cmd.body.patch['$hp']).toBe('100')
-  })
-
   it('/setvar persists scriptstate without re-running the setDatabase normalizer', async () => {
     const calls = stubCommandFetch()
     await expect(processMultiCommand('/setvar key=hp 100')).resolves.not.toThrow()
@@ -953,23 +957,6 @@ describe('slash-command durable owner writes', () => {
       (call) => call.url === '/api/v1/commands/chats/chat-1/scriptstate' && call.method === 'PATCH',
     )
     expect(cmd.body.patch['$damage']).toBe('15')
-    expect(setDatabaseSpy.count).toBe(0)
-  })
-
-  it('/del truncates message history without throwing', async () => {
-    seedDatabase([
-      { role: 'user', data: 'one', chatId: 'm1' },
-      { role: 'char', data: 'two', chatId: 'm2' },
-    ])
-    const calls = stubCommandFetch()
-    await expect(processMultiCommand('/del 1')).resolves.not.toThrow()
-
-    const cmd = await waitForCommand(
-      calls,
-      (call) => call.url === '/api/v1/commands/chats/chat-1/messages/truncate' && call.method === 'POST',
-    )
-    expect(cmd.body).toEqual({ baseRevision: 10, afterMessageId: 'm1' })
-    expect(testDatabaseState.db.characters[0].chats[0].message).toEqual([{ role: 'user', data: 'one', chatId: 'm1' }])
     expect(setDatabaseSpy.count).toBe(0)
   })
 

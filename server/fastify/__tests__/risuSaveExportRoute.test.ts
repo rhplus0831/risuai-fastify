@@ -179,15 +179,31 @@ describe('repository .risu export route', () => {
 
   it('supports compressed block exports with explicit query parameters', async () => {
     persistExportableDatabase(harness.dataDir)
+    const previousProtocolMetrics = process.env.RISU_PROTOCOL_METRICS
+    process.env.RISU_PROTOCOL_METRICS = '1'
+    capturedMetrics.length = 0
+    try {
+      const exported = await authedInject({
+        method: 'GET',
+        url: '/api/v1/export/risusave?envelope=risusave-blocks&compression=true',
+      })
 
-    const exported = await authedInject({
-      method: 'GET',
-      url: '/api/v1/export/risusave?envelope=risusave-blocks&compression=true',
-    })
-
-    expect(exported.statusCode).toBe(200)
-    const blocks = decodeRisuSaveBlockEnvelope(new Uint8Array(exported.rawPayload))
-    expect(blocks.blocks.map((block) => block.compression)).toEqual([true, true, true, true, true, true, true, true])
+      expect(exported.statusCode).toBe(200)
+      const blocks = decodeRisuSaveBlockEnvelope(new Uint8Array(exported.rawPayload))
+      expect(blocks.blocks.map((block) => block.compression)).toEqual([true, true, true, true, true, true, true, true])
+      expect(capturedMetrics.find((entry) => entry.metric === 'risusave_export')).toMatchObject({
+        bundle: false,
+        envelope: 'risusave-blocks',
+        compression: true,
+        outputBytes: exported.rawPayload.length,
+      })
+    } finally {
+      if (previousProtocolMetrics === undefined) {
+        delete process.env.RISU_PROTOCOL_METRICS
+      } else {
+        process.env.RISU_PROTOCOL_METRICS = previousProtocolMetrics
+      }
+    }
   })
 
   it('supports route-ready legacy envelope exports', async () => {
@@ -462,19 +478,20 @@ describe('ordinary .risu export materialization measurement', () => {
     expect(metric.outputBytes).toBe(exported.rawPayload.length)
   })
 
-  it('summarizes export materialization when RISU_EXPORT_MATERIALIZE_SUMMARY=1', async () => {
-    persistExportableDatabase(harness.dataDir)
+  it.skipIf(process.env.RISU_EXPORT_MATERIALIZE_SUMMARY !== '1')(
+    'summarizes export materialization when RISU_EXPORT_MATERIALIZE_SUMMARY=1',
+    async () => {
+      persistExportableDatabase(harness.dataDir)
 
-    for (const url of [
-      '/api/v1/export/risusave?envelope=risusave-blocks',
-      '/api/v1/export/risusave?envelope=risusave-blocks&compression=true',
-      '/api/v1/export/risusave?envelope=legacy-raw',
-    ]) {
-      capturedMetrics.length = 0
-      const exported = await authedInject({ method: 'GET', url })
-      expect(exported.statusCode).toBe(200)
-      const metric = exportMetric()
-      if (process.env.RISU_EXPORT_MATERIALIZE_SUMMARY === '1') {
+      for (const url of [
+        '/api/v1/export/risusave?envelope=risusave-blocks',
+        '/api/v1/export/risusave?envelope=risusave-blocks&compression=true',
+        '/api/v1/export/risusave?envelope=legacy-raw',
+      ]) {
+        capturedMetrics.length = 0
+        const exported = await authedInject({ method: 'GET', url })
+        expect(exported.statusCode).toBe(200)
+        const metric = exportMetric()
         console.log(
           JSON.stringify(
             {
@@ -489,6 +506,6 @@ describe('ordinary .risu export materialization measurement', () => {
           ),
         )
       }
-    }
-  })
+    },
+  )
 })

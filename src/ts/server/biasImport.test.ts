@@ -9,6 +9,10 @@ import {
   type BiasImportOperation,
   type BiasImportValue,
 } from './biasImport'
+import {
+  expectCanceledPickerKeepsOperationCurrent,
+  expectNewerOperationWins,
+} from '../__tests__/latestOperationTestAssertions'
 
 const originalBias: BiasImportValue = [['old', 1]]
 const importedBias: BiasImportValue = [['new', 2]]
@@ -94,40 +98,34 @@ describe('bias import freshness', () => {
   })
 
   it('lets the newer selected import win over an older delayed import', () => {
-    const older = beginImport({
-      selectedPromptPresetId: 'preset-a',
-      bias: originalBias,
+    expectNewerOperationWins({
+      begin: () =>
+        beginImport({
+          selectedPromptPresetId: 'preset-a',
+          bias: originalBias,
+        }),
+      complete: (operation) => resolveImport(operation),
+      expectedNewer: importedBias,
+      clear: clearBiasImport,
     })
-    const newer = beginImport({
-      selectedPromptPresetId: 'preset-a',
-      bias: originalBias,
-    })
-
-    try {
-      expect(resolveImport(newer)).toEqual(importedBias)
-      expect(resolveImport(older)).toBeNull()
-    } finally {
-      clearBiasImport(older)
-      clearBiasImport(newer)
-    }
   })
 
   it('does not let a canceled newer picker invalidate an older pending import', () => {
-    const older = beginImport({
-      selectedPromptPresetId: 'preset-a',
-      bias: originalBias,
+    expectCanceledPickerKeepsOperationCurrent({
+      begin: () =>
+        beginImport({
+          selectedPromptPresetId: 'preset-a',
+          bias: originalBias,
+        }),
+      captureCanceledTarget: () =>
+        captureBiasImportTarget({
+          selectedPromptPresetId: 'preset-a',
+          bias: originalBias,
+        }),
+      complete: (operation) => resolveImport(operation),
+      expected: importedBias,
+      clear: clearBiasImport,
     })
-    const canceledTarget = captureBiasImportTarget({
-      selectedPromptPresetId: 'preset-a',
-      bias: originalBias,
-    })
-
-    try {
-      expect(canceledTarget).not.toBeNull()
-      expect(resolveImport(older)).toEqual(importedBias)
-    } finally {
-      clearBiasImport(older)
-    }
   })
 
   it('parses only JSON arrays without producing a value for invalid input', () => {

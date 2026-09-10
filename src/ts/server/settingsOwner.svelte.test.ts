@@ -1217,7 +1217,15 @@ describe('settings owner mutations', () => {
     await applyProjectionSetting('globalscript', [{ id: 'script-a', in: 'stale server', out: '', type: 'editinput' }])
 
     expect(draft.value).toEqual([{ id: 'script-a', in: 'local dirty', out: '', type: 'editinput' }])
+    expect(testDatabaseState.db.globalscript).toEqual([
+      { id: 'script-a', in: 'local dirty', out: '', type: 'editinput' },
+    ])
     await vi.advanceTimersByTimeAsync(DELAY)
+    expect(recorded.patches.map((entry) => entry.patch)).toEqual([
+      {
+        globalscript: [{ id: 'script-a', in: 'local dirty', out: '', type: 'editinput' }],
+      },
+    ])
     stop()
   })
 
@@ -1399,30 +1407,6 @@ describe('settings owner mutations', () => {
       { id: 'generated-id', in: 'edited', out: '', type: 'editinput' },
     ])
     expect(recorded.patches).toEqual([])
-    stop()
-  })
-
-  it('reasserts a dirty setting draft value to testDatabaseState after a stale projection overwrites it', async () => {
-    setupSettings({
-      globalscript: [{ id: 'script-a', in: 'server old', out: '', type: 'editinput' }],
-    })
-    const { draft, stop } = await createSettingDraft('globalscript', [] as Array<Record<string, string>>)
-
-    draft.value = [{ id: 'script-a', in: 'local dirty', out: '', type: 'editinput' }]
-    await flushAndSettle()
-
-    await applyProjectionSetting('globalscript', [{ id: 'script-a', in: 'stale server', out: '', type: 'editinput' }])
-
-    expect(testDatabaseState.db.globalscript).toEqual([
-      { id: 'script-a', in: 'local dirty', out: '', type: 'editinput' },
-    ])
-
-    await vi.advanceTimersByTimeAsync(DELAY)
-    expect(recorded.patches.map((entry) => entry.patch)).toEqual([
-      {
-        globalscript: [{ id: 'script-a', in: 'local dirty', out: '', type: 'editinput' }],
-      },
-    ])
     stop()
   })
 

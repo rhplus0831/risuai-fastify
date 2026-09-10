@@ -47,7 +47,6 @@ export interface SendCloneCountProbeServerChat {
   callCount: number
   mode: string
   userMessageLength: number
-  durable: boolean
 }
 
 export interface SendCloneCountProbeResult extends CloneInstrumentation {
@@ -301,7 +300,6 @@ function summarizeServerChat(): SendCloneCountProbeServerChat {
     callCount: calls.length,
     mode: first?.mode ?? '',
     userMessageLength: first?.userMessage.length ?? 0,
-    durable: true,
   }
 }
 

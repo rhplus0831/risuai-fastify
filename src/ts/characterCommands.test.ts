@@ -282,10 +282,7 @@ function stubReorderCommandFetch({
 }
 
 async function waitForCallCount(calls: CapturedFetch[], expected: number): Promise<void> {
-  for (let attempt = 0; attempt < 20 && calls.length < expected; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 0))
-  }
-  expect(calls).toHaveLength(expected)
+  await vi.waitFor(() => expect(calls).toHaveLength(expected), { interval: 1 })
 }
 
 function deferredResponse(): {

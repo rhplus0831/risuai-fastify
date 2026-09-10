@@ -2,15 +2,13 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { webcrypto } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance } from 'fastify'
 import { buildApp } from '../src/app.js'
 import { getDatabaseLineage } from '../src/databaseLineage.js'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 import { createInitialDatabase } from '../src/databaseDefaults.js'
-
-const subtle = webcrypto.subtle
+import { setupAuthedClient } from './helpers/auth.js'
 
 let app: FastifyInstance
 let dataDir: string
@@ -31,7 +29,7 @@ beforeEach(async () => {
     },
     bardWikiWorker: false,
   }))
-  assertion = await setupAuthedClient(app)
+  ;({ assertion } = await setupAuthedClient(app))
   const db = new DatabaseSync(path.join(dataDir, 'risu.db'))
   try {
     db.prepare("INSERT INTO characters (id, position, data_json) VALUES ('character-a', 0, '{}')").run()
@@ -47,36 +45,6 @@ afterEach(async () => {
   await app.close()
   rmSync(dataDir, { recursive: true, force: true })
 })
-
-async function setupAuthedClient(target: FastifyInstance): Promise<string> {
-  const setup = await target.inject({
-    method: 'POST',
-    url: '/api/v1/auth/setup',
-    payload: { password: 'hunter2' },
-  })
-  expect(setup.statusCode).toBe(200)
-  const keypair = (await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, [
-    'sign',
-    'verify',
-  ])) as CryptoKeyPair
-  const publicKey = await subtle.exportKey('jwk', keypair.publicKey)
-  const login = await target.inject({
-    method: 'POST',
-    url: '/api/v1/auth/login',
-    payload: { password: 'hunter2', publicKey },
-  })
-  expect(login.statusCode).toBe(200)
-  const now = Math.floor(Date.now() / 1000)
-  const header = Buffer.from(JSON.stringify({ alg: 'ES256', typ: 'JWT' })).toString('base64url')
-  const payload = Buffer.from(JSON.stringify({ iat: now, exp: now + 60, pub: publicKey })).toString('base64url')
-  const signingInput = `${header}.${payload}`
-  const signature = await subtle.sign(
-    { name: 'ECDSA', hash: { name: 'SHA-256' } },
-    keypair.privateKey,
-    Buffer.from(signingInput),
-  )
-  return `${signingInput}.${Buffer.from(signature).toString('base64url')}`
-}
 
 function authHeaders(extra: Record<string, string> = {}): Record<string, string> {
   return { 'risu-auth': assertion, ...extra }
@@ -354,7 +322,7 @@ describe('BardWiki revisioned commands', () => {
     expect(wrongChat.statusCode).toBe(404)
   })
 
-  it('keeps a Phase 0-sized workspace index body-free and records its route timing', async () => {
+  it('keeps a Phase 0-sized workspace index body-free', async () => {
     const db = new DatabaseSync(path.join(dataDir, 'risu.db'))
     try {
       const insert = db.prepare(
@@ -386,16 +354,13 @@ describe('BardWiki revisioned commands', () => {
       db.close()
     }
 
-    const startedAt = performance.now()
     const response = await app.inject({
       method: 'GET',
       url: '/api/v1/bardwiki/chats/chat-a',
       headers: authHeaders(),
     })
-    const elapsedMs = Math.round((performance.now() - startedAt) * 100) / 100
     const body = response.json()
 
-    console.info(`[bardwiki-workspace-benchmark] documents=2000 elapsedMs=${elapsedMs}`)
     expect(response.statusCode).toBe(200)
     expect(body.documents).toHaveLength(2_000)
     expect(body.documents.every((document: Record<string, unknown>) => !('markdown' in document))).toBe(true)

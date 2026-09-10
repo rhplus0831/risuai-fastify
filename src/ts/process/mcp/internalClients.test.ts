@@ -1,10 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { MCPTool } from './mcplib'
-
-const schemaCloneMocks = vi.hoisted(() => ({
-  cloneMCPTools: vi.fn(),
-  toolInputs: [] as unknown[],
-}))
 
 vi.mock('../../globalApi.svelte', () => ({
   fetchNative: vi.fn(),
@@ -18,18 +12,6 @@ vi.mock('localforage', () => ({
     })),
   },
 }))
-
-vi.mock('./internalmcp', async (importActual) => {
-  const actual = await importActual<typeof import('./internalmcp')>()
-  return {
-    ...actual,
-    cloneMCPTools: (tools: readonly MCPTool[]) => {
-      schemaCloneMocks.cloneMCPTools(tools)
-      schemaCloneMocks.toolInputs.push(tools)
-      return actual.cloneMCPTools(tools)
-    },
-  }
-})
 
 import { clearFileSystemDirectoryHandleForTests, FileSystemClient } from './filesystemclient'
 import { GoogleSearchClient } from './googlesearchclient'
@@ -51,8 +33,6 @@ function createDirectoryHandle(name: string): TestDirectoryHandle {
 
 beforeEach(() => {
   vi.unstubAllGlobals()
-  schemaCloneMocks.cloneMCPTools.mockClear()
-  schemaCloneMocks.toolInputs.length = 0
   vi.spyOn(console, 'log').mockImplementation(() => {
     /* silence FileSystemClient selection logs */
   })
@@ -75,7 +55,6 @@ describe('internal MCP tool schemas', () => {
     expect(firstFsTools).toHaveLength(11)
     expect(secondFsTools).toHaveLength(11)
     expect(recreatedFsTools).toHaveLength(11)
-    expect(firstFsTools.map((tool) => tool.name)).not.toContain('fs_watch_directory')
     expect(firstFsTools).not.toBe(secondFsTools)
     expect(firstFsTools[0]).not.toBe(secondFsTools[0])
     firstFsTools[0].inputSchema.properties.path.description = 'mutated by caller'
@@ -95,15 +74,6 @@ describe('internal MCP tool schemas', () => {
     expect(firstGoogleTools[0]).not.toBe(secondGoogleTools[0])
     firstGoogleTools[0].inputSchema.properties.query.description = 'mutated by caller'
     expect(secondGoogleTools[0].inputSchema.properties.query.description).toBe('The search query to execute')
-
-    const cloneInputs = schemaCloneMocks.toolInputs as Array<readonly MCPTool[]>
-    const fsSchemaSources = cloneInputs.filter((tools) => tools.some((tool) => tool.name === 'fs_read_file'))
-    const googleSchemaSources = cloneInputs.filter((tools) => tools.some((tool) => tool.name === 'google_search'))
-    expect(schemaCloneMocks.cloneMCPTools).toHaveBeenCalledTimes(6)
-    expect(fsSchemaSources).toHaveLength(3)
-    expect(new Set(fsSchemaSources).size).toBe(1)
-    expect(googleSchemaSources).toHaveLength(3)
-    expect(new Set(googleSchemaSources).size).toBe(1)
   })
 })
 

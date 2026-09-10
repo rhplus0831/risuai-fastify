@@ -93,9 +93,7 @@ function button(label: string): HTMLButtonElement {
 }
 
 function nextPageButton(): HTMLButtonElement {
-  const match = target.querySelector<SVGElement>('svg.lucide-arrow-right')?.closest('button')
-  if (!match) throw new Error('next page button not found')
-  return match
+  return labelledButton(language.realm.nextPage)
 }
 
 function searchInput(): HTMLInputElement {

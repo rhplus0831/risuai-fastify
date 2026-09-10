@@ -586,29 +586,6 @@ function readGenerationSidecar(dataDir: string, entry: GenerationTraceSidecarEnt
   return JSON.parse(gunzipSync(readFileSync(path.join(dataDir, sidecar.path))).toString('utf8'))
 }
 
-function metricSummary(metric: ProtocolMetric | undefined): Record<string, unknown> | undefined {
-  if (!metric) return undefined
-  return {
-    metric: metric.metric,
-    ...(metric.type ? { type: metric.type } : {}),
-    ...(metric.status ? { status: metric.status } : {}),
-    ...(metric.mode ? { mode: metric.mode } : {}),
-    ...(metric.eventType ? { eventType: metric.eventType } : {}),
-    ...(metric.mutationPath ? { mutationPath: metric.mutationPath } : {}),
-    ...(typeof metric.revision === 'number' ? { revision: metric.revision } : {}),
-    ...(typeof metric.durationMs === 'number' ? { durationMs: metric.durationMs } : {}),
-    ...(typeof metric.promptMs === 'number' ? { promptMs: metric.promptMs } : {}),
-    ...(typeof metric.databaseLoadCount === 'number' ? { databaseLoadCount: metric.databaseLoadCount } : {}),
-    ...(typeof metric.databaseLoadMs === 'number' ? { databaseLoadMs: metric.databaseLoadMs } : {}),
-    ...(metric.stageTimingsMs ? { stageTimingsMs: metric.stageTimingsMs } : {}),
-    ...(typeof metric.chatVarMutationCount === 'number' ? { chatVarMutationCount: metric.chatVarMutationCount } : {}),
-    ...(typeof metric.persistMessages === 'boolean' ? { persistMessages: metric.persistMessages } : {}),
-    ...(typeof metric.hasVarWrite === 'boolean' ? { hasVarWrite: metric.hasVarWrite } : {}),
-    ...(typeof metric.dbJsonWriteMs === 'number' ? { dbJsonWriteMs: metric.dbJsonWriteMs } : {}),
-    ...(typeof metric.totalMs === 'number' ? { totalMs: metric.totalMs } : {}),
-  }
-}
-
 async function listenHarness(): Promise<string> {
   await harness.app.listen({ port: 0, host: '127.0.0.1' })
   const address = harness.app.server.address()
@@ -2173,14 +2150,9 @@ describe('POST /api/v1/generate/chat', () => {
     })
   })
 
-  it('reviews representative generation prompt metric families for next-slice selection', async () => {
+  it('records prompt and persistence metrics for plain, side-effecting, preview, and durable generation paths', async () => {
     await withProtocolMetrics(async (metrics) => {
-      const samples: Array<{ label: string; metrics: ProtocolMetric[] }> = []
-      const collect = (label: string, from: number): ProtocolMetric[] => {
-        const slice = metrics.slice(from)
-        samples.push({ label, metrics: slice })
-        return slice
-      }
+      const collect = (from: number): ProtocolMetric[] => metrics.slice(from)
       const postChat = async (assertion: string, payload: Record<string, unknown>) => {
         const res = await harness.app.inject({
           method: 'POST',
@@ -2196,7 +2168,7 @@ describe('POST /api/v1/generate/chat', () => {
       await seedDatabase(harness.app, auth.assertion, fixtureDatabase)
       let before = metrics.length
       await postChat(auth.assertion, basePayload)
-      const plain = collect('plain-send', before)
+      const plain = collect(before)
       const plainAssembly = plain.find((entry) => entry.metric === 'generation_prompt_assembly')
       expect(plainAssembly).toMatchObject({
         status: 'ok',
@@ -2226,7 +2198,7 @@ describe('POST /api/v1/generate/chat', () => {
       await seedDatabase(harness.app, auth.assertion, chatVarDb)
       before = metrics.length
       await postChat(auth.assertion, basePayload)
-      const chatVar = collect('chat-var-side-effect', before)
+      const chatVar = collect(before)
       expectPromptAssemblyStageTimings(chatVar.find((entry) => entry.metric === 'generation_prompt_assembly'))
       expect(chatVar.find((entry) => entry.metric === 'generation_assembly_persistence')).toMatchObject({
         status: 'ok',
@@ -2256,7 +2228,7 @@ describe('POST /api/v1/generate/chat', () => {
       )
       before = metrics.length
       await postChat(auth.assertion, basePayload)
-      const transcriptRewrite = collect('editinput-transcript-rewrite', before)
+      const transcriptRewrite = collect(before)
       expectPromptAssemblyStageTimings(transcriptRewrite.find((entry) => entry.metric === 'generation_prompt_assembly'))
       expect(transcriptRewrite.find((entry) => entry.metric === 'generation_assembly_persistence')).toMatchObject({
         status: 'ok',
@@ -2286,7 +2258,7 @@ describe('POST /api/v1/generate/chat', () => {
       )
       before = metrics.length
       await postChat(auth.assertion, basePayload)
-      const combinedSideEffects = collect('input-trigger-transcript-and-chat-var', before)
+      const combinedSideEffects = collect(before)
       expectPromptAssemblyStageTimings(
         combinedSideEffects.find((entry) => entry.metric === 'generation_prompt_assembly'),
       )
@@ -2319,7 +2291,7 @@ describe('POST /api/v1/generate/chat', () => {
         },
       })
       expect(preview.statusCode).toBe(200)
-      const previewMetrics = collect('preview-prompt', before)
+      const previewMetrics = collect(before)
       const previewAssembly = previewMetrics.find((entry) => entry.metric === 'generation_prompt_assembly')
       expect(previewAssembly).toMatchObject({
         status: 'ok',
@@ -2353,7 +2325,7 @@ describe('POST /api/v1/generate/chat', () => {
         payload: { ...basePayload, durable: true },
       })
       expect(durableRes.statusCode).toBe(200)
-      const durable = collect('durable-generation', before)
+      const durable = collect(before)
       const durableAssembly = durable.find((entry) => entry.metric === 'generation_prompt_assembly')
       expect(durableAssembly).toMatchObject({
         status: 'ok',
@@ -2401,24 +2373,6 @@ describe('POST /api/v1/generate/chat', () => {
         writtenTables: ['messages'],
       })
       assertCommandMetricGate(durablePersistMetric as CommandMutationMetric)
-
-      if (process.env.RISU_GENERATION_METRIC_SUMMARY === '1') {
-        console.log(
-          JSON.stringify(
-            samples.map(({ label, metrics: slice }) => ({
-              label,
-              promptAssembly: metricSummary(slice.find((entry) => entry.metric === 'generation_prompt_assembly')),
-              assemblyPersistence: metricSummary(
-                slice.find((entry) => entry.metric === 'generation_assembly_persistence'),
-              ),
-              generationPersistence: metricSummary(slice.find((entry) => entry.metric === 'generation_persistence')),
-              commandMutation: metricSummary(slice.find((entry) => entry.metric === 'command_mutation')),
-            })),
-            null,
-            2,
-          ),
-        )
-      }
     })
   })
 

@@ -697,31 +697,45 @@ describe('setupSendChatContext - promptInfo seed', () => {
 })
 
 describe('setupSendChatContext - tokenizer + maxContextTokens', () => {
-  it('uses 5 additional tokens for gpt models when arg.chatAdditonalTokens is unset', () => {
-    seedDb({ aiModel: 'gpt-4o' })
-    const ctx = setupSendChatContext({ chatProcessIndex: -1 })
-    // ChatTokenizer wraps the count internally; we check it was constructed by
-    // verifying maxContextTokens passes through and the tokenizer is defined.
-    expect(ctx.tokenizer).toBeDefined()
-    expect(ctx.maxContextTokens).toBe(4000)
-  })
-
-  it('uses 3 additional tokens for non-gpt models when arg.chatAdditonalTokens is unset', () => {
-    seedDb({ aiModel: 'novelai:something' })
-    const ctx = setupSendChatContext({ chatProcessIndex: -1 })
-    expect(ctx.tokenizer).toBeDefined()
-  })
-
-  it('uses arg.chatAdditonalTokens override when provided', () => {
-    seedDb({ aiModel: 'gpt-4o' })
-    // The tokenizer just stores the value; we test that the helper accepts
-    // the override path without crashing.
-    const ctx = setupSendChatContext({
-      chatProcessIndex: -1,
+  it.each([
+    {
+      caseName: 'gpt model default',
+      aiModel: 'gpt-4o',
+      chatAdditonalTokens: undefined,
+      expectedAdditionalTokens: 5,
+      expectedUseName: 'noName',
+    },
+    {
+      caseName: 'non-gpt model default',
+      aiModel: 'novelai:something',
+      chatAdditonalTokens: undefined,
+      expectedAdditionalTokens: 3,
+      expectedUseName: 'name',
+    },
+    {
+      caseName: 'explicit override',
+      aiModel: 'gpt-4o',
       chatAdditonalTokens: 42,
-    })
-    expect(ctx.tokenizer).toBeDefined()
-  })
+      expectedAdditionalTokens: 42,
+      expectedUseName: 'noName',
+    },
+  ])(
+    'uses the expected tokenizer overhead and name mode for $caseName',
+    ({ aiModel, chatAdditonalTokens, expectedAdditionalTokens, expectedUseName }) => {
+      seedDb({
+        aiModel,
+        modelProfiles: [{ id: 'tokenizer-main', name: 'Tokenizer Main', modelId: aiModel }],
+        modelRoleProfiles: { chatMain: { mode: 'profile', profileId: 'tokenizer-main' } },
+      } as Partial<Database>)
+      const ctx = setupSendChatContext({ chatProcessIndex: -1, chatAdditonalTokens })
+
+      expect(ctx.tokenizer).toMatchObject({
+        chatAdditionalTokens: expectedAdditionalTokens,
+        useName: expectedUseName,
+      })
+      expect(ctx.maxContextTokens).toBe(4000)
+    },
+  )
 
   it('uses the selected durable model profile for tokenizer shape and context budget', () => {
     seedDb({

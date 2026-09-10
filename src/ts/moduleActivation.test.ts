@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Chat, Database, character } from './storage/database.svelte'
-import { resolveActiveModuleStates, resolveModuleActivationStates } from './moduleActivation'
+import { resolveActiveModuleStates } from './moduleActivation'
 
 function database(overrides: Partial<Database> = {}): Database {
   return {
@@ -24,39 +24,6 @@ function chat(overrides: Partial<Chat> = {}): Chat {
     ...overrides,
   } as Chat
 }
-
-describe('resolveModuleActivationStates', () => {
-  it('matches each source by module id or namespace and preserves provenance', () => {
-    const direct = { id: 'direct-module' }
-    const namespaced = { id: 'codex-module', namespace: 'Codex' }
-
-    expect(
-      resolveModuleActivationStates({
-        modules: [direct, namespaced],
-        identifiers: {
-          global: ['direct-module'],
-          chat: ['Codex'],
-          promptPresetIntegration: ['Codex'],
-        },
-      }),
-    ).toEqual([
-      { module: direct, sources: ['global'] },
-      { module: namespaced, sources: ['chat', 'promptPresetIntegration'] },
-    ])
-  })
-
-  it('deduplicates repeated module rows by id', () => {
-    const first = { id: 'module-a', namespace: 'shared' }
-    const duplicate = { id: 'module-a', namespace: 'shared' }
-
-    expect(
-      resolveModuleActivationStates({
-        modules: [first, duplicate],
-        identifiers: { promptPresetIntegration: ['shared'] },
-      }),
-    ).toEqual([{ module: first, sources: ['promptPresetIntegration'] }])
-  })
-})
 
 describe('resolveActiveModuleStates', () => {
   it('activates the Codex namespace from the current chat GPT Prompt Preset', () => {

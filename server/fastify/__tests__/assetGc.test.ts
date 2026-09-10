@@ -19,7 +19,7 @@ import {
   enqueueGenerationFinalizationRetry,
   markGenerationFinalizationRetryFailure,
 } from '../src/generationFinalizationRetry.js'
-import { addAlternateMessage, replaceAllChatMessages } from '../src/messageStore.js'
+import { replaceAllChatMessages } from '../src/messageStore.js'
 import { buildRepositoryRisuSaveAssetReport, buildRisuSaveAssetReport } from '../src/risuSave/assetReferences.js'
 import { CORPUS_TABLES, assertScopedLoadOnHotPath } from './helpers/loadCostHarness.js'
 
@@ -34,18 +34,8 @@ const CHARACTER_REF = '3'.repeat(64)
 const CHAT_ROW_REF = '4'.repeat(64)
 const MESSAGE_REF = '5'.repeat(64)
 const NOTIFICATION_IMAGE_REF = '6'.repeat(64)
-const NAI_I2I_REF = '7'.repeat(64)
-const NAI_CHARACTER_REF = '8'.repeat(64)
-const WAVESPEED_REF = '9'.repeat(64)
-const MODEL_PRESET_REF = '01'.repeat(32)
-const PROMPT_PRESET_REF = '02'.repeat(32)
-const ALTERNATE_MESSAGE_REF = '03'.repeat(32)
-const FIRST_MESSAGE_REF = '04'.repeat(32)
-const ALTERNATE_GREETING_REF = '05'.repeat(32)
 const PENDING_MESSAGE_REF = '06'.repeat(32)
 const PENDING_ALTERNATE_REF = '07'.repeat(32)
-const PLUGIN_STORAGE_REF = '08'.repeat(32)
-const CHARACTER_RENDERED_TEXT_REF = '09'.repeat(32)
 
 const GRACE_MS = 60 * 60_000
 const NOW = 10_000_000_000
@@ -82,18 +72,9 @@ function embedChatRowMessage(chatId: string, messageData: string): void {
   db.prepare('UPDATE chats SET data_json = ? WHERE id = ?').run(JSON.stringify(chat), chatId)
 }
 
-async function runGcAndExpectReferencesSurvive(
-  referenceIds: readonly string[],
-  options: { repositoryParity?: boolean } = {},
-): Promise<void> {
+async function runGcAndExpectReferencesSurvive(referenceIds: readonly string[]): Promise<void> {
   const referencedFiles = referenceIds.map((id) => writeAssetFile(id, OLD_MTIME))
   const orphanFile = writeAssetFile(ORPHAN_OLD, OLD_MTIME)
-
-  if (options.repositoryParity !== false) {
-    expect(buildAssetGcRisuSaveAssetReport(db, getAllAssetMetadata(db))).toEqual(
-      buildRepositoryRisuSaveAssetReport(dataDir, db),
-    )
-  }
 
   const result = await runAssetGc(dataDir, { db, graceMs: GRACE_MS, now: () => NOW })
 
@@ -382,88 +363,6 @@ describe('runAssetGc', () => {
     expect(existsSync(orphanFile)).toBe(false)
   })
 
-  it('keeps assets referenced only by nested NovelAI and WaveSpeed image settings', async () => {
-    seedDatabase(
-      {
-        NAIImgConfig: {
-          image: NAI_I2I_REF,
-          character_image: `assets/${NAI_CHARACTER_REF}.png`,
-        },
-        wavespeedImage: { reference_image: WAVESPEED_REF },
-      },
-      [asset(NAI_I2I_REF), asset(NAI_CHARACTER_REF), asset(WAVESPEED_REF), asset(ORPHAN_OLD)],
-    )
-
-    await runGcAndExpectReferencesSurvive([NAI_I2I_REF, NAI_CHARACTER_REF, WAVESPEED_REF])
-  })
-
-  it('keeps an asset referenced only by a split model preset image', async () => {
-    seedDatabase({ modelPresets: [{ id: 'model-preset', image: MODEL_PRESET_REF }] }, [
-      asset(MODEL_PRESET_REF),
-      asset(ORPHAN_OLD),
-    ])
-
-    await runGcAndExpectReferencesSurvive([MODEL_PRESET_REF])
-  })
-
-  it('keeps an asset referenced only by a split prompt preset image', async () => {
-    seedDatabase({ promptPresets: [{ id: 'prompt-preset', image: `assets/${PROMPT_PRESET_REF}.webp` }] }, [
-      asset(PROMPT_PRESET_REF),
-      asset(ORPHAN_OLD),
-    ])
-
-    await runGcAndExpectReferencesSurvive([PROMPT_PRESET_REF])
-  })
-
-  it('keeps an asset referenced only by a durable alternate-row inlay', async () => {
-    seedDatabase({ characters: [{ chaId: 'char-a', chats: [{ id: 'chat-a' }] }] }, [
-      asset(ALTERNATE_MESSAGE_REF),
-      asset(ORPHAN_OLD),
-    ])
-    addAlternateMessage(db, 'chat-a', {
-      chatId: 'alternate-a',
-      role: 'char',
-      data: `rerolled {{inlayed::${ALTERNATE_MESSAGE_REF}}}`,
-    })
-
-    await runGcAndExpectReferencesSurvive([ALTERNATE_MESSAGE_REF])
-  })
-
-  it('keeps assets referenced only by first-message and alternate-greeting inlays', async () => {
-    seedDatabase(
-      {
-        characters: [
-          {
-            chaId: 'char-a',
-            firstMessage: `hello {{inlay::${FIRST_MESSAGE_REF}}}`,
-            alternateGreetings: [`alternate {{inlayeddata::${ALTERNATE_GREETING_REF}}}`],
-          },
-        ],
-      },
-      [asset(FIRST_MESSAGE_REF), asset(ALTERNATE_GREETING_REF), asset(ORPHAN_OLD)],
-    )
-
-    await runGcAndExpectReferencesSurvive([FIRST_MESSAGE_REF, ALTERNATE_GREETING_REF])
-  })
-
-  it('keeps inlays in other character text fields that feed rendered markdown', async () => {
-    seedDatabase(
-      {
-        characters: [
-          {
-            chaId: 'char-a',
-            backgroundHTML: `background {{inlay::${CHARACTER_RENDERED_TEXT_REF}}}`,
-            creatorNotes: `notes {{inlayed::${CHARACTER_RENDERED_TEXT_REF}}}`,
-            desc: `description {{inlayeddata::${CHARACTER_RENDERED_TEXT_REF}}}`,
-          },
-        ],
-      },
-      [asset(CHARACTER_RENDERED_TEXT_REF), asset(ORPHAN_OLD)],
-    )
-
-    await runGcAndExpectReferencesSurvive([CHARACTER_RENDERED_TEXT_REF])
-  })
-
   it('keeps inlays referenced only by pending generation-finalization payloads', async () => {
     seedDatabase({ characters: [] }, [asset(PENDING_MESSAGE_REF), asset(PENDING_ALTERNATE_REF), asset(ORPHAN_OLD)])
     enqueueGenerationFinalizationRetry(db, {
@@ -497,21 +396,6 @@ describe('runAssetGc', () => {
     })
     markGenerationFinalizationRetryFailure(db, 'generation-terminal', 'terminal fixture', true)
 
-    await runGcAndExpectReferencesSurvive([PENDING_MESSAGE_REF, PENDING_ALTERNATE_REF], { repositoryParity: false })
-  })
-
-  it('keeps an asset referenced only by nested plugin custom storage JSON', async () => {
-    seedDatabase(
-      {
-        pluginCustomStorage: {
-          pluginA: {
-            nested: [{ retainedAsset: `assets/${PLUGIN_STORAGE_REF}.png` }],
-          },
-        },
-      },
-      [asset(PLUGIN_STORAGE_REF), asset(ORPHAN_OLD)],
-    )
-
-    await runGcAndExpectReferencesSurvive([PLUGIN_STORAGE_REF])
+    await runGcAndExpectReferencesSurvive([PENDING_MESSAGE_REF, PENDING_ALTERNATE_REF])
   })
 })

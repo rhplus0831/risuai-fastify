@@ -198,7 +198,7 @@ function makeModule(options: ModuleFixtureOptions): RisuModule {
   return module as unknown as RisuModule
 }
 
-function seedModules(readCounter?: NameReadCounter) {
+function seedModules(readCounter?: NameReadCounter, moduleCount = 4) {
   const modules = [
     makeModule({
       id: 'zulu-id',
@@ -223,6 +223,15 @@ function seedModules(readCounter?: NameReadCounter) {
       readCounter,
     }),
   ]
+  for (let index = modules.length; index < moduleCount; index += 1) {
+    modules.push(
+      makeModule({
+        id: `generated-${index}`,
+        name: `Generated Module ${index}`,
+        readCounter,
+      }),
+    )
+  }
   setDatabaseLite({
     characters: [],
     enabledModules: ['alpha-id'],
@@ -814,21 +823,27 @@ describe('ModuleSettings derived module rows', () => {
     expect(moduleCommandSpies.createGlobalModule.mock.calls[0][0].trigger).toHaveLength(1)
   })
 
-  it('ModuleSettings search recomputes sorted rows once per search edit and reuses them across view switches', async () => {
-    const readCounter = { count: 0 }
-    seedModules(readCounter)
-    mountSettings()
+  it.each([4, 40])(
+    'ModuleSettings search stays within a linear read bound for %i rows and reuses results across view switches',
+    async (moduleCount) => {
+      const readCounter = { count: 0 }
+      seedModules(readCounter, moduleCount)
+      mountSettings()
 
-    readCounter.count = 0
-    await updateSearch('ALPHA')
-    expect(readCounter.count).toBe(getDatabase().modules.length)
+      readCounter.count = 0
+      await updateSearch('ALPHA')
+      expect(readCounter.count).toBeLessThanOrEqual(moduleCount + 2)
+      expect(moduleRowNames()).toEqual(['Alpha Module'])
 
-    readCounter.count = 0
-    await clickModuleSurfaceAction('create')
-    await updateModuleName('New Module')
-    await clickModuleSurfaceAction('submit-create')
-    expect(readCounter.count).toBe(moduleRows().length)
-  })
+      readCounter.count = 0
+      moduleAction('alpha-id', 'edit').click()
+      await tick()
+      await clickModuleSurfaceAction('discard-draft')
+
+      expect(moduleRowNames()).toEqual(['Alpha Module'])
+      expect(readCounter.count).toBeLessThanOrEqual(3)
+    },
+  )
 
   it.each([
     ['empty', ''],

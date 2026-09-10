@@ -8,7 +8,27 @@ import {
 
 describe('provider operation protocol', () => {
   it('publishes and validates the exact operation taxonomy', () => {
-    expect(PROVIDER_OPERATIONS).toHaveLength(18)
+    expect([...PROVIDER_OPERATIONS].sort()).toEqual([
+      'anthropic.models',
+      'deepl.translate',
+      'deeplx.translate',
+      'elevenlabs.voices',
+      'fish.models',
+      'google.count-tokens',
+      'google.models',
+      'llmgateway.models',
+      'nanogpt.balance',
+      'nanogpt.model-providers',
+      'nanogpt.models',
+      'nanogpt.subscription',
+      'nanogpt.subscription-models',
+      'neuralwatt.models',
+      'ollama.cloud-models',
+      'openrouter.models',
+      'openrouter.providers',
+      'wavespeed.models',
+    ])
+    expect(new Set(PROVIDER_OPERATIONS).size).toBe(PROVIDER_OPERATIONS.length)
     for (const operation of PROVIDER_OPERATIONS) expect(isProviderOperation(operation)).toBe(true)
     expect(isProviderOperation('openrouter.proxy')).toBe(false)
   })

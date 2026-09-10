@@ -29,29 +29,12 @@ describe('groupChatsByFolderId', () => {
       { chat: chats[1], index: 1 },
       { chat: chats[4], index: 4 },
     ])
-  })
-
-  it('records indices that match chats.indexOf for every grouped chat', () => {
-    const chats: TestChat[] = [
-      { id: 'a', folderId: 'f1' },
-      { id: 'b', folderId: 'f2' },
-      { id: 'c', folderId: 'f1' },
-    ]
-    for (const entries of groupChatsByFolderId(chats).values()) {
+    for (const entries of groups.values()) {
       for (const { chat, index } of entries) {
         expect(index).toBe(chats.indexOf(chat))
+        expect(chats[index]).toBe(chat)
       }
     }
-  })
-
-  it('never returns chats with a nullish folderId under a real folder id', () => {
-    const chats: TestChat[] = [
-      { id: 'a', folderId: null },
-      { id: 'b', folderId: undefined },
-    ]
-    const groups = groupChatsByFolderId(chats)
-    expect(groups.get('f1')).toBeUndefined()
-    expect(groups.get('')).toHaveLength(2)
   })
 
   it('classifies chats with unknown folder references as ungrouped', () => {

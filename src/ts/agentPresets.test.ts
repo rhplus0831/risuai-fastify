@@ -89,6 +89,16 @@ function clonePlain<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
+function agentPresetProjectionSnapshot(): {
+  agentPresets: AgentPresetRecord[]
+  defaultId: string | undefined
+} {
+  return {
+    agentPresets: clonePlain(getAgentPresets()),
+    defaultId: getAgentPresetDefaultId(),
+  }
+}
+
 async function prepareDurableAgentPresetOutbox(suffix: string): Promise<void> {
   vi.stubGlobal('indexedDB', new IDBFactory())
   resetPendingMutationOutboxForTests()
@@ -627,12 +637,14 @@ describe('Agent Preset optimistic field rollback', () => {
       'fetch',
       vi.fn(async () => response({ error: 'rejected' }, 400)),
     )
+    const before = agentPresetProjectionSnapshot()
 
     await expect(runCommand()).resolves.toEqual({
       status: 'failed',
       result: { status: 'error', error: 'rejected', reason: 'invalid-request' },
     })
 
+    expect(agentPresetProjectionSnapshot()).toEqual(before)
     expect(isSettingsGroupAcknowledgementTainted('agents')).toBe(false)
   })
 

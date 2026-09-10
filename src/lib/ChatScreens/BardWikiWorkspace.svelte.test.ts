@@ -217,7 +217,9 @@ describe('BardWiki workspace', () => {
     expect(reads.chat).toHaveBeenCalledWith('chat-a', undefined)
     expect(reads.document).not.toHaveBeenCalled()
     expect(reads.versions).not.toHaveBeenCalled()
-    expect(target.querySelector('[role="dialog"]')?.getAttribute('aria-labelledby')).toBe('bardwiki-workspace-title')
+    const dialog = target.querySelector('[role="dialog"]')
+    expect(dialog?.getAttribute('aria-modal')).toBe('true')
+    expect(dialog?.getAttribute('aria-labelledby')).toBe('bardwiki-workspace-title')
 
     target.querySelector<HTMLButtonElement>('[aria-label="Open Old Tavern"]')?.click()
     await settle()

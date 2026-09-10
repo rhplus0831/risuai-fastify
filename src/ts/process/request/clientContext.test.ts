@@ -17,12 +17,16 @@ describe('reported browser client context', () => {
   })
 
   it('does not throw when a screen-dimension getter throws', () => {
+    const language = vi.spyOn(navigator, 'language', 'get').mockReturnValue('ko-KR')
+    const width = vi.spyOn(window, 'innerWidth', 'get').mockReturnValue(800)
     const height = vi.spyOn(window, 'innerHeight', 'get').mockImplementation(() => {
       throw new Error('blocked')
     })
     try {
-      expect(() => readBrowserClientContext()).not.toThrow()
+      expect(readBrowserClientContext()).toEqual({ browserLanguage: 'ko-KR', screenWidth: 800 })
     } finally {
+      language.mockRestore()
+      width.mockRestore()
       height.mockRestore()
     }
   })
