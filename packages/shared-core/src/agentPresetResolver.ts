@@ -13,7 +13,7 @@ import {
   resolveAgentPresetSteps,
   validateAgentPresetRecord,
 } from './agentPresetRecords.js'
-import { agentPresetOutputReferences } from './agentPresetOutputReferences.js'
+import { agentPresetOutputReferences, type AgentPresetOutputReference } from './agentPresetOutputReferences.js'
 import type { ChatGenerationSettings } from './chatGenerationSettings.js'
 import {
   modelProfileGenerationBlockReason,
@@ -172,6 +172,22 @@ export interface AgentPresetExecutionPlan {
   namedOutputRegistry: readonly AgentPresetNamedOutputRegistryEntry[]
   userInputModifierStepId?: string
   finalOutputModifierStepId?: string
+}
+
+export type AgentPresetOutputReferenceDiagnosticReason =
+  | 'missing_output'
+  | 'disabled_output'
+  | 'self_reference'
+  | 'future_phase'
+  | 'same_dependency_level'
+  | 'not_ordered_before'
+
+export interface AgentPresetOutputReferenceDiagnostic extends AgentPresetOutputReference {
+  path: string
+  reason: AgentPresetOutputReferenceDiagnosticReason
+  consumerStepId?: string
+  producerStepIds: readonly string[]
+  message: string
 }
 
 export interface AgentPresetStatusSummary {
@@ -519,14 +535,21 @@ function buildExecutionPlan(
   }
 }
 
-function validateAgentOutputReferenceAvailability(
+export function diagnoseAgentPresetOutputReferences(
   steps: readonly AgentPresetStepRecord[],
   plan: AgentPresetExecutionPlan,
   finalOutputTemplate?: string,
-): AgentPresetValidationIssue[] {
-  const issues: AgentPresetValidationIssue[] = []
+): AgentPresetOutputReferenceDiagnostic[] {
+  const diagnostics: AgentPresetOutputReferenceDiagnostic[] = []
   const stepIndexById = new Map(steps.map((step, index) => [step.id, index]))
+  const allStepsByKey = new Map<string, AgentPresetStepRecord[]>()
   const producersByKey = new Map<string, AgentPresetPlannedStep[]>()
+
+  for (const step of steps) {
+    const producers = allStepsByKey.get(step.outputKey) ?? []
+    producers.push(step)
+    allStepsByKey.set(step.outputKey, producers)
+  }
 
   for (const planned of plan.stableSteps) {
     const producers = producersByKey.get(planned.step.outputKey) ?? []
@@ -542,19 +565,30 @@ function validateAgentOutputReferenceAvailability(
     for (const reference of references) {
       const producers = producersByKey.get(reference.key) ?? []
       if (producers.length === 0) {
-        issues.push({
-          code: 'unavailable_agent_output',
+        const disabledProducers = (allStepsByKey.get(reference.key) ?? []).filter((step) => !step.enabled)
+        const reason = disabledProducers.length > 0 ? 'disabled_output' : 'missing_output'
+        diagnostics.push({
+          ...reference,
           path,
-          message: `Agent CBS reference ${reference.token} has no enabled Agent Preset output key "${reference.key}".`,
+          reason,
+          consumerStepId: consumer.step.id,
+          producerStepIds: disabledProducers.map((step) => step.id),
+          message:
+            reason === 'disabled_output'
+              ? `Agent CBS reference ${reference.token} uses output key "${reference.key}", but every matching Agent use is disabled.`
+              : `Agent CBS reference ${reference.token} has no enabled Agent Preset output key "${reference.key}".`,
         })
         continue
       }
 
       if (producers.some((producer) => isAgentOutputAvailableToStep(producer, consumer))) continue
 
-      issues.push({
-        code: 'unavailable_agent_output',
+      diagnostics.push({
+        ...reference,
         path,
+        reason: unavailableAgentOutputReason(consumer, producers),
+        consumerStepId: consumer.step.id,
+        producerStepIds: producers.map((producer) => producer.step.id),
         message: unavailableAgentOutputMessage(reference.token, reference.key, consumer, producers),
       })
     }
@@ -563,15 +597,34 @@ function validateAgentOutputReferenceAvailability(
   if (finalOutputTemplate) {
     for (const reference of agentPresetOutputReferences(finalOutputTemplate)) {
       if (producersByKey.has(reference.key)) continue
-      issues.push({
-        code: 'unavailable_agent_output',
+      const disabledProducers = (allStepsByKey.get(reference.key) ?? []).filter((step) => !step.enabled)
+      const reason = disabledProducers.length > 0 ? 'disabled_output' : 'missing_output'
+      diagnostics.push({
+        ...reference,
         path: 'agentPreset.finalOutputTemplate',
-        message: `Final output CBS reference ${reference.token} has no enabled Agent Preset output key "${reference.key}".`,
+        reason,
+        producerStepIds: disabledProducers.map((step) => step.id),
+        message:
+          reason === 'disabled_output'
+            ? `Final output CBS reference ${reference.token} uses output key "${reference.key}", but every matching Agent use is disabled.`
+            : `Final output CBS reference ${reference.token} has no enabled Agent Preset output key "${reference.key}".`,
       })
     }
   }
 
-  return issues
+  return diagnostics
+}
+
+function validateAgentOutputReferenceAvailability(
+  steps: readonly AgentPresetStepRecord[],
+  plan: AgentPresetExecutionPlan,
+  finalOutputTemplate?: string,
+): AgentPresetValidationIssue[] {
+  return diagnoseAgentPresetOutputReferences(steps, plan, finalOutputTemplate).map((diagnostic) => ({
+    code: 'unavailable_agent_output',
+    path: diagnostic.path,
+    message: diagnostic.message,
+  }))
 }
 
 function isAgentOutputAvailableToStep(producer: AgentPresetPlannedStep, consumer: AgentPresetPlannedStep): boolean {
@@ -602,6 +655,20 @@ function unavailableAgentOutputMessage(
   }
 
   return `Agent CBS reference ${token} is unavailable in step "${consumer.step.name}" at ${consumer.step.phase} level ${consumer.dependencyLevel}; producers: ${producerSummary}.`
+}
+
+function unavailableAgentOutputReason(
+  consumer: AgentPresetPlannedStep,
+  producers: readonly AgentPresetPlannedStep[],
+): AgentPresetOutputReferenceDiagnosticReason {
+  if (producers.every((producer) => producer.step.id === consumer.step.id)) return 'self_reference'
+  if (consumer.step.phase === 'beforeMain' && producers.some((producer) => producer.step.phase === 'afterMain')) {
+    return 'future_phase'
+  }
+  if (producers.some((producer) => producer.dependencyLevel === consumer.dependencyLevel)) {
+    return 'same_dependency_level'
+  }
+  return 'not_ordered_before'
 }
 
 function dependencyLevelsForPhase(steps: readonly AgentPresetStepRecord[]): Map<string, number> {

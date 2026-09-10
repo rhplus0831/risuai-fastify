@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Planning complete; implementation has not started.**
-- Next action: implement [Phase 0 — Shared contracts and acceptance baseline](phases/phase-0-shared-contracts-and-baseline.md).
+- State: **Phase 0 in progress — shared diagnostics implemented.**
+- Next action: add the certified preset-delete impact projection and baseline UI/browser fixtures.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -50,3 +50,26 @@
 Record implementation progress only here. For every completed slice, include the changed owner, source revision, focused commands and results, browser viewport when applicable, remaining limitations, and the next slice. Accept a phase only after every acceptance item in its phase document has evidence.
 
 Do not describe a queued mutation as saved on the server, a static screenshot as interaction evidence, or a focused component test as browser geometry proof. When all phases are accepted, update current architecture/test guides, archive this package under `.archived-docs/ui-and-user-input/`, and update the active/archive indexes.
+
+### 2026-09-10 — Phase 0 shared diagnostics slice
+
+- Source base: `cf2b4bccd`.
+- Changed owners: `packages/shared-core/src/agentPresetInputReferences.ts`,
+  `packages/shared-core/src/agentPresetResolver.ts`,
+  `server/fastify/src/prompt/agentPresetExecution.ts`, and browser presentation
+  helpers under `src/ts/`.
+- Added the canonical prepared-input token analyzer, structured output-reference
+  diagnostics, presentation-only Empty status, and localized field/recovery
+  issue contracts. Runtime no-op, scope collection, and resolver readiness
+  semantics are unchanged.
+- Passed `pnpm test -- packages/shared-core/src/agentPresetInputReferences.test.ts`
+  (3 tests), `pnpm test -- src/ts/agentPresetResolver.test.ts` (13 tests),
+  `pnpm test -- src/ts/agentPresetPresentation.test.ts` (2 tests),
+  `pnpm test -- src/ts/agentAuthoringIssues.test.ts` (2 tests), and
+  `pnpm test -- server/fastify/__tests__/agentPresetExecution.test.ts` (26
+  tests).
+- Passed `pnpm check:shared-core`, `pnpm check`, focused Prettier, and
+  `git diff --check`.
+- Fixture limit: these pure fixtures pin diagnostic states but do not constitute
+  DOM interaction or browser geometry evidence. Next slice: certified deletion
+  impact and the Phase 0 DOM/browser baseline.

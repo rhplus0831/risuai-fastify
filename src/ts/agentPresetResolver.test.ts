@@ -6,7 +6,7 @@ import {
   type ReadonlyAgentRecord,
   type ReadonlyAgentPresetRecord,
 } from './agentPresetRecords'
-import { planAgentPreset, resolveAgentPresetForChat } from './agentPresetResolver'
+import { diagnoseAgentPresetOutputReferences, planAgentPreset, resolveAgentPresetForChat } from './agentPresetResolver'
 import { resolveModelProfile } from './model/modelProfileResolver'
 import type { Database } from './storage/database.svelte'
 
@@ -557,6 +557,38 @@ describe('agent preset resolver', () => {
         path: 'agentPreset.finalOutputTemplate',
         message: expect.stringContaining('{{agent::missing}}'),
       }),
+    )
+  })
+
+  it('returns structured output-reference diagnostics from resolved steps and the current plan', () => {
+    const target = preset({
+      finalOutputTemplate: '{{agent::disabled}} {{agent::missing}}',
+      steps: [
+        step({ id: 'aps_a', outputKey: 'a', instruction: '{{agent::a}} {{agent::later}}' }),
+        step({ id: 'aps_later', outputKey: 'later' }),
+        step({ id: 'aps_disabled', outputKey: 'disabled', enabled: false }),
+      ],
+    })
+    const planning = planAgentPreset({ database: db({ agentPresets: [target] }), preset: target })
+    expect(planning.plan).toBeDefined()
+
+    expect(diagnoseAgentPresetOutputReferences(target.steps, planning.plan!, target.finalOutputTemplate)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          token: '{{agent::a}}',
+          reason: 'self_reference',
+          consumerStepId: 'aps_a',
+          producerStepIds: ['aps_a'],
+        }),
+        expect.objectContaining({ token: '{{agent::later}}', reason: 'same_dependency_level' }),
+        expect.objectContaining({
+          token: '{{agent::disabled}}',
+          path: 'agentPreset.finalOutputTemplate',
+          reason: 'disabled_output',
+          producerStepIds: ['aps_disabled'],
+        }),
+        expect.objectContaining({ token: '{{agent::missing}}', reason: 'missing_output', producerStepIds: [] }),
+      ]),
     )
   })
 

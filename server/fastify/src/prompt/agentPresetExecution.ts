@@ -6,6 +6,10 @@ import type {
 } from '@risuai/shared-core/agent-preset-records'
 import { AGENT_PRESET_STEP_INPUT_SCOPES, agentToggleStorageKey } from '@risuai/shared-core/agent-preset-records'
 import { resolveAgentLorebookInput } from '@risuai/shared-core/agent-lorebook-inputs'
+import {
+  AGENT_PRESET_PREPARED_INPUT_CBS_RE,
+  isAgentPresetPreparedInputScope,
+} from '@risuai/shared-core/agent-preset-input-references'
 import type { AgentPresetPhasePlan } from '@risuai/shared-core/agent-preset-resolver'
 import {
   assertModelProfileGenerationReady,
@@ -53,10 +57,8 @@ const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_TEMPERATURE = 100
 const RECENT_CHAT_TAIL_COUNT = 12
 const CHAT_SEARCH_LIMIT = 6
-const PREPARED_INPUT_CBS_RE = /\{\{\s*([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
 const AGENT_INPUT_CBS_RE = /\{\{\s*agentInput::([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
 const AGENT_TOGGLE_CBS_RE = /\{\{\s*agentToggle::([A-Za-z_][A-Za-z0-9_]*)\s*\}\}/g
-const PREPARED_INPUT_SCOPE_NAMES: ReadonlySet<string> = new Set(AGENT_PRESET_STEP_INPUT_SCOPES)
 
 export interface AgentPresetPreviousOutput {
   stepId: string
@@ -457,8 +459,8 @@ export function resolveAgentPresetStepProfile(input: {
 
 function expandPreparedInputCbs(instruction: string, preparedInputs: AgentPresetPreparedInputCollection): string {
   const contentByScope = new Map(preparedInputs.sections.map((section) => [section.scope, section.content]))
-  return instruction.replace(PREPARED_INPUT_CBS_RE, (match, name: string) => {
-    if (!isPreparedInputScopeName(name)) return match
+  return instruction.replace(AGENT_PRESET_PREPARED_INPUT_CBS_RE, (match, name: string) => {
+    if (!isAgentPresetPreparedInputScope(name)) return match
     return contentByScope.get(name) ?? ''
   })
 }
@@ -499,17 +501,13 @@ function stepWithReferencedPreparedInputScopes(step: AgentPresetStepRecord): Age
 function referencedPreparedInputScopes(step: AgentPresetStepRecord): AgentPresetStepInputScope[] {
   const selectedScopes = new Set(step.inputScopes)
   const referencedScopes = new Set<AgentPresetStepInputScope>()
-  for (const match of step.instruction.matchAll(PREPARED_INPUT_CBS_RE)) {
+  for (const match of step.instruction.matchAll(AGENT_PRESET_PREPARED_INPUT_CBS_RE)) {
     const name = match[1]
-    if (isPreparedInputScopeName(name) && selectedScopes.has(name)) {
+    if (isAgentPresetPreparedInputScope(name) && selectedScopes.has(name)) {
       referencedScopes.add(name)
     }
   }
   return orderedScopes([...referencedScopes])
-}
-
-function isPreparedInputScopeName(value: string): value is AgentPresetStepInputScope {
-  return PREPARED_INPUT_SCOPE_NAMES.has(value)
 }
 
 function agentPromptLocation(input: AgentPresetPreparedInputContext): { selectedCharID?: number; chatPage?: number } {

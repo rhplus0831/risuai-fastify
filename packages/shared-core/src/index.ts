@@ -1,5 +1,6 @@
 export * from './agentOnlyLorebook.js'
 export * from './agentLorebookInputs.js'
+export * from './agentPresetInputReferences.js'
 export * from './agentPresetOutputReferences.js'
 export * from './agentPresetRecords.js'
 export * from './agentPresetResolver.js'

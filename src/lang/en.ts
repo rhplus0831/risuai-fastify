@@ -3683,6 +3683,14 @@ export const languageEnglish = {
     useChatMLDescription:
       'Parse this instruction as role-tagged ChatML and send those messages without the default Agent system prefill.',
     invalidChatMLInstruction: 'A ChatML instruction must start with <|im_start|>.',
+    issuePreparedInputSelectedButUnused: (name: string, token: string) =>
+      `${name} is selected but ${token} is not used in the instruction. Insert the token or deselect the input.`,
+    issuePreparedInputUsedButUnselected: (name: string, token: string) =>
+      `${token} refers to ${name}, but that input is not selected. Enable the input to include it.`,
+    issueEmptyInstruction: 'This Agent has no instructions, so it will send no authored task guidance.',
+    issueGeneratedName: 'Replace the generated name so this Agent is easy to identify in presets and diagnostics.',
+    issueInvalidChatML: 'Fix the ChatML instruction before saving. It must start with <|im_start|>.',
+    issueStrictOutputRequiresJson: 'Strict structured output requires JSON object output.',
     agentTogglesLabel: 'Configurable toggles',
     agentTogglesDescription:
       'Values are stored per chat in an Agent-specific namespace and are available only to this Agent.',
