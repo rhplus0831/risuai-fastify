@@ -17,6 +17,7 @@ import {
 
 const MAX_CONFIG_BYTES = 4 * 1024
 const REQUEST_TIMEOUT_MS = 10_000
+const MAX_INVESTIGATION_READS = 20
 const QUERY_KEYS = new Set(['version', 'from', 'to', 'limit', 'requestUid', 'operationRef', 'category', 'cursor'])
 const TLS_ERRORS = new Set([
   'CERT_HAS_EXPIRED',
@@ -45,6 +46,48 @@ export type RemoteDiagnosticsHelperCategory =
   | 'redirect-rejected'
   | 'bad-response'
   | 'response-too-large'
+
+type RemoteDiagnosticsV2Response = Extract<RemoteDiagnosticsResponse, { version: 2 }>
+type RemoteDiagnosticsV3Response = Extract<RemoteDiagnosticsResponse, { version: 3 }>
+type RemoteDiagnosticsInvestigationResponse = RemoteDiagnosticsV2Response | RemoteDiagnosticsV3Response
+type RemoteDiagnosticsInvestigationRecord = RemoteDiagnosticsInvestigationResponse['entries'][number]
+type RemoteDiagnosticsLevel = RemoteDiagnosticsInvestigationRecord['entry']['level']
+type CorrelationKind = 'request' | 'operation' | 'attempt' | 'background' | 'unavailable' | 'client-asserted'
+
+export interface RemoteDiagnosticsInvestigation {
+  version: 1
+  source: {
+    remoteVersion: 2 | 3
+    serverTime: number
+    identity: RemoteDiagnosticsInvestigationResponse['identity']
+    sources: RemoteDiagnosticsInvestigationResponse['sources']
+    clock: RemoteDiagnosticsInvestigationResponse['clock']
+  }
+  loss: RemoteDiagnosticsInvestigationResponse['loss']
+  collection: {
+    capture: RemoteDiagnosticsInvestigationResponse['capture']
+    pending: number
+    operationContinuity: RemoteDiagnosticsInvestigationResponse['collection']['operationContinuity']
+    pagesRead: number
+    entryCount: number
+    snapshotSequence: number
+    firstSequence: number | null
+    lastSequence: number | null
+    complete: true
+  }
+  counts: {
+    byLevel: Record<RemoteDiagnosticsLevel, number>
+    byCategory: Record<string, number>
+  }
+  correlationGroups: Array<{
+    kind: CorrelationKind
+    reference: string | null
+    entryCount: number
+    firstSequence: number
+    lastSequence: number
+  }>
+  timeline: RemoteDiagnosticsInvestigationRecord[]
+}
 
 /** The only error information allowed to cross the helper's output boundary. */
 export class RemoteDiagnosticsHelperError extends Error {
@@ -133,6 +176,24 @@ export function parseRemoteDiagnosticsArguments(args: readonly string[]): Record
   }
   if (!parseRemoteDiagnosticsQuery(input)) throw failure('invalid-query')
   return input
+}
+
+function parseCliArguments(args: readonly string[]): { investigate: boolean; query: Record<string, string> } {
+  const investigateCount = args.filter((argument) => argument === '--investigate').length
+  const malformedInvestigationFlag = args.some(
+    (argument) => argument.startsWith('--investigate') && argument !== '--investigate',
+  )
+  if (investigateCount > 1 || malformedInvestigationFlag) throw failure('invalid-query')
+  if (investigateCount === 0) return { investigate: false, query: parseRemoteDiagnosticsArguments(args) }
+
+  const query = parseRemoteDiagnosticsArguments(args.filter((argument) => argument !== '--investigate'))
+  if (
+    query.cursor !== undefined ||
+    (query.requestUid !== undefined && query.operationRef !== undefined) ||
+    (query.version !== undefined && query.version !== '2' && query.version !== '3')
+  )
+    throw failure('invalid-query')
+  return { investigate: true, query: { ...query, limit: '200' } }
 }
 
 function byteLimit(): Transform {
@@ -259,11 +320,193 @@ export async function fetchRemoteDiagnostics(
   })
 }
 
+function sameSnapshotMetadata(
+  first: RemoteDiagnosticsInvestigationResponse,
+  page: RemoteDiagnosticsInvestigationResponse,
+): boolean {
+  return (
+    page.version === first.version &&
+    page.pagination.snapshotSequence === first.pagination.snapshotSequence &&
+    page.identity.build === first.identity.build &&
+    page.identity.instanceId === first.identity.instanceId &&
+    page.sources.server === first.sources.server &&
+    page.sources.browser === first.sources.browser &&
+    page.capture.from === first.capture.from &&
+    page.capture.to === first.capture.to &&
+    page.loss.dropped === first.loss.dropped &&
+    page.loss.rejected === first.loss.rejected &&
+    page.loss.pruned === first.loss.pruned &&
+    page.loss.truncated === first.loss.truncated &&
+    page.clock.ordering === first.clock.ordering &&
+    page.clock.browserTime === first.clock.browserTime &&
+    page.clock.skew === first.clock.skew &&
+    page.collection.pending === first.collection.pending &&
+    page.collection.operationContinuity === first.collection.operationContinuity
+  )
+}
+
+function increment(counts: Record<string, number>, key: string): void {
+  counts[key] = (counts[key] ?? 0) + 1
+}
+
+function sortedCounts(counts: Record<string, number>): Record<string, number> {
+  return Object.fromEntries(Object.entries(counts).sort(([left], [right]) => left.localeCompare(right)))
+}
+
+function correlationGroups(
+  timeline: readonly RemoteDiagnosticsInvestigationRecord[],
+): RemoteDiagnosticsInvestigation['correlationGroups'] {
+  const groups = new Map<string, { kind: CorrelationKind; reference: string | null; sequences: number[] }>()
+  const add = (kind: CorrelationKind, reference: string | null, sequence: number): void => {
+    const key = `${kind}:${reference ?? ''}`
+    const group = groups.get(key)
+    if (group) group.sequences.push(sequence)
+    else groups.set(key, { kind, reference, sequences: [sequence] })
+  }
+  for (const record of timeline) {
+    const entry = record.entry
+    let referenced = false
+    if (entry.requestUid) {
+      add('request', entry.requestUid, record.sequence)
+      referenced = true
+    }
+    if (entry.operationRef) {
+      add('operation', entry.operationRef, record.sequence)
+      referenced = true
+    }
+    if (entry.attemptRef) {
+      add('attempt', entry.attemptRef, record.sequence)
+      referenced = true
+    }
+    if (!referenced) add(entry.correlation, null, record.sequence)
+  }
+  const kindOrder: CorrelationKind[] = [
+    'request',
+    'operation',
+    'attempt',
+    'background',
+    'unavailable',
+    'client-asserted',
+  ]
+  return [...groups.values()]
+    .sort(
+      (left, right) =>
+        kindOrder.indexOf(left.kind) - kindOrder.indexOf(right.kind) ||
+        (left.reference ?? '').localeCompare(right.reference ?? ''),
+    )
+    .map(({ kind, reference, sequences }) => ({
+      kind,
+      reference,
+      entryCount: sequences.length,
+      firstSequence: sequences[0],
+      lastSequence: sequences.at(-1)!,
+    }))
+}
+
+function buildInvestigation(
+  first: RemoteDiagnosticsInvestigationResponse,
+  pagesRead: number,
+  timeline: RemoteDiagnosticsInvestigationRecord[],
+): RemoteDiagnosticsInvestigation {
+  const byLevel: Record<RemoteDiagnosticsLevel, number> = { info: 0, warn: 0, error: 0 }
+  const byCategory: Record<string, number> = Object.create(null)
+  for (const record of timeline) {
+    byLevel[record.entry.level]++
+    increment(byCategory, record.entry.category)
+  }
+  return {
+    version: 1,
+    source: {
+      remoteVersion: first.version,
+      serverTime: first.serverTime,
+      identity: first.identity,
+      sources: first.sources,
+      clock: first.clock,
+    },
+    loss: first.loss,
+    collection: {
+      capture: first.capture,
+      pending: first.collection.pending,
+      operationContinuity: first.collection.operationContinuity,
+      pagesRead,
+      entryCount: timeline.length,
+      snapshotSequence: first.pagination.snapshotSequence,
+      firstSequence: timeline[0]?.sequence ?? null,
+      lastSequence: timeline.at(-1)?.sequence ?? null,
+      complete: true,
+    },
+    counts: { byLevel, byCategory: sortedCounts(byCategory) },
+    correlationGroups: correlationGroups(timeline),
+    timeline,
+  }
+}
+
+async function collectInvestigation(
+  config: RemoteDiagnosticsConfig,
+  first: RemoteDiagnosticsInvestigationResponse,
+): Promise<RemoteDiagnosticsInvestigation> {
+  let response = first
+  const timeline: RemoteDiagnosticsInvestigationRecord[] = []
+  const seenCursors = new Set<string>()
+
+  for (let reads = 1; reads <= MAX_INVESTIGATION_READS; reads++) {
+    if (!sameSnapshotMetadata(first, response)) throw failure('bad-response')
+
+    let previousSequence = timeline.at(-1)?.sequence
+    if (response.pagination.lastSequence !== (response.entries.at(-1)?.sequence ?? 0)) throw failure('bad-response')
+    for (const record of response.entries) {
+      if (previousSequence !== undefined && record.sequence <= previousSequence) throw failure('bad-response')
+      previousSequence = record.sequence
+    }
+    timeline.push(...response.entries)
+
+    const cursor = response.pagination.nextCursor
+    if (cursor === null) return buildInvestigation(first, reads, timeline)
+    if (seenCursors.has(cursor) || reads === MAX_INVESTIGATION_READS) throw failure('bad-response')
+    seenCursors.add(cursor)
+    const page = await fetchRemoteDiagnostics(config, { version: String(first.version), cursor })
+    if (page.version !== 2 && page.version !== 3) throw failure('bad-response')
+    response = page
+  }
+  throw failure('bad-response')
+}
+
+/** Collects one complete immutable snapshot, preferring safe v3 facts and falling back to an older v2 server. */
+export async function investigateRemoteDiagnostics(
+  config: RemoteDiagnosticsConfig,
+  input: Record<string, string> = {},
+): Promise<RemoteDiagnosticsInvestigation> {
+  if (
+    input.cursor !== undefined ||
+    (input.requestUid !== undefined && input.operationRef !== undefined) ||
+    (input.version !== undefined && input.version !== '2' && input.version !== '3')
+  )
+    throw failure('invalid-query')
+  const preferredVersion = input.version === '2' ? 2 : 3
+  const initial = (version: 2 | 3) => ({ ...input, version: String(version), limit: '200' })
+  let first: RemoteDiagnosticsResponse
+  try {
+    first = await fetchRemoteDiagnostics(config, initial(preferredVersion))
+  } catch (error) {
+    if (
+      preferredVersion !== 3 ||
+      !(error instanceof RemoteDiagnosticsHelperError) ||
+      error.category !== 'invalid-query'
+    )
+      throw error
+    first = await fetchRemoteDiagnostics(config, initial(2))
+  }
+  if (first.version !== 2 && first.version !== 3) throw failure('bad-response')
+  return collectInvestigation(config, first)
+}
+
 async function run(): Promise<void> {
   try {
-    const query = parseRemoteDiagnosticsArguments(process.argv.slice(2))
+    const { investigate, query } = parseCliArguments(process.argv.slice(2))
     const config = readRemoteDiagnosticsConfig(process.env.RISU_DIAGNOSTICS_REMOTE_CONFIG)
-    const response = await fetchRemoteDiagnostics(config, query)
+    const response = investigate
+      ? await investigateRemoteDiagnostics(config, query)
+      : await fetchRemoteDiagnostics(config, query)
     process.stdout.write(`${JSON.stringify(response)}\n`)
   } catch (error) {
     const category = error instanceof RemoteDiagnosticsHelperError ? error.category : 'bad-response'

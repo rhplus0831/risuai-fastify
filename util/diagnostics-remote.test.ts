@@ -17,6 +17,10 @@ import {
 const token = 'b7'.repeat(32)
 const canary = 'PRIVATE_CHAT_PRESET_BODY_HEADER_ERROR_CANARY'
 const instanceId = '8d'.repeat(16)
+const build = '7a'.repeat(20)
+const requestUid = 'a'.repeat(64)
+const operationRef = 'e'.repeat(32)
+const attemptRef = 'f'.repeat(32)
 const envelope: RemoteDiagnosticsResponse = {
   version: 1,
   serverTime: 1000,
@@ -33,6 +37,101 @@ const envelope: RemoteDiagnosticsResponse = {
   capture: { from: 1000, to: 1000 },
   loss: { dropped: 0, rejected: 0, pruned: 0, truncated: false },
   pagination: { nextCursor: null, snapshotSequence: 1, lastSequence: 1 },
+}
+type RemoteDiagnosticsV2Response = Extract<RemoteDiagnosticsResponse, { version: 2 }>
+type RemoteDiagnosticsV2Record = RemoteDiagnosticsV2Response['entries'][number]
+type RemoteDiagnosticsV3Response = Extract<RemoteDiagnosticsResponse, { version: 3 }>
+type RemoteDiagnosticsV3Record = RemoteDiagnosticsV3Response['entries'][number]
+const requestRecord: RemoteDiagnosticsV2Record = {
+  sequence: 1,
+  receivedAt: 1000,
+  instanceId,
+  provenance: { kind: 'server' },
+  entry: {
+    timestamp: 1000,
+    source: 'server',
+    level: 'error',
+    correlation: 'request',
+    requestUid,
+    category: 'http',
+    routeId: 'unknown',
+    method: 'POST',
+    statusCode: 503,
+    durationMs: 120,
+    requestBytes: 'small',
+    responseBytes: 'none',
+    outcome: 'server-error',
+  },
+}
+const operationRecord: RemoteDiagnosticsV2Record = {
+  sequence: 2,
+  receivedAt: 2000,
+  instanceId,
+  provenance: { kind: 'server' },
+  entry: {
+    timestamp: 2000,
+    source: 'server',
+    level: 'warn',
+    correlation: 'operation',
+    operationRef,
+    attemptRef,
+    category: 'generation',
+    stage: 'dispatch',
+    outcome: 'failed',
+    providerMayHaveRun: false,
+  },
+}
+const backgroundRecord: RemoteDiagnosticsV2Record = {
+  sequence: 3,
+  receivedAt: 3000,
+  instanceId,
+  provenance: { kind: 'server' },
+  entry: {
+    timestamp: 3000,
+    source: 'server',
+    level: 'info',
+    correlation: 'background',
+    category: 'runtime',
+    kind: 'console',
+  },
+}
+const requestRecordV3: RemoteDiagnosticsV3Record = {
+  ...requestRecord,
+  facts: [{ id: 'runtime.location.0', type: 'location', value: 'server/fastify/src/app.ts:12:3' }],
+}
+
+function v2Response(
+  entries: RemoteDiagnosticsV2Record[],
+  nextCursor: string | null,
+  metadata: Partial<RemoteDiagnosticsV2Response> = {},
+): RemoteDiagnosticsV2Response {
+  return {
+    version: 2,
+    serverTime: 1000,
+    identity: { build: 'unknown', instanceId },
+    entries,
+    sources: { server: 'journal', browser: 'available' },
+    capture: { from: 1000, to: 3000 },
+    loss: { dropped: 4, rejected: 2, pruned: 3, truncated: true },
+    pagination: { nextCursor, snapshotSequence: 100, lastSequence: entries.at(-1)?.sequence ?? 0 },
+    clock: { ordering: 'server-sequence', browserTime: 'client-asserted', skew: 'unknown' },
+    collection: { pending: 2, operationContinuity: 'retained' },
+    ...metadata,
+  }
+}
+
+function v3Response(
+  entries: RemoteDiagnosticsV3Record[],
+  nextCursor: string | null,
+  metadata: Partial<RemoteDiagnosticsV3Response> = {},
+): RemoteDiagnosticsV3Response {
+  return {
+    ...v2Response(entries, nextCursor),
+    version: 3,
+    identity: { build, instanceId },
+    entries,
+    ...metadata,
+  }
 }
 type Handler = (request: IncomingMessage, response: ServerResponse) => void
 type CliResult = { code: number | string; stdout: string; stderr: string }
@@ -163,7 +262,6 @@ describe('remote diagnostics helper with real HTTPS and CLI processes', () => {
   })
 
   it('fetches request-correlated v2 display performance through the real CLI', async () => {
-    const requestUid = 'a'.repeat(64)
     const value: RemoteDiagnosticsResponse = {
       ...envelope,
       version: 2,
@@ -222,6 +320,164 @@ describe('remote diagnostics helper with real HTTPS and CLI processes', () => {
       `/api/v1/support/diagnostics?version=2&category=display-performance&requestUid=${requestUid}`,
     )
     expect(result.stdout).not.toContain(token)
+  })
+
+  it('collects every investigation page and emits deterministic summaries and correlations', async () => {
+    const cursor = 'c'.repeat(32)
+    handler = (request, response) => {
+      response.setHeader('Content-Type', 'application/json')
+      response.end(
+        JSON.stringify(
+          request.url?.includes('cursor=')
+            ? v3Response([operationRecord, backgroundRecord], null)
+            : v3Response([requestRecordV3], cursor),
+        ),
+      )
+    }
+    const result = await run(['--investigate', '--from=0', '--to=4000', '--limit=1', `--requestUid=${requestUid}`])
+    expect(result.code).toBe(0)
+    expect(result.stderr).toBe('')
+    expect(JSON.parse(result.stdout)).toEqual({
+      version: 1,
+      source: {
+        remoteVersion: 3,
+        serverTime: 1000,
+        identity: { build, instanceId },
+        sources: { server: 'journal', browser: 'available' },
+        clock: { ordering: 'server-sequence', browserTime: 'client-asserted', skew: 'unknown' },
+      },
+      loss: { dropped: 4, rejected: 2, pruned: 3, truncated: true },
+      collection: {
+        capture: { from: 1000, to: 3000 },
+        pending: 2,
+        operationContinuity: 'retained',
+        pagesRead: 2,
+        entryCount: 3,
+        snapshotSequence: 100,
+        firstSequence: 1,
+        lastSequence: 3,
+        complete: true,
+      },
+      counts: {
+        byLevel: { info: 1, warn: 1, error: 1 },
+        byCategory: { generation: 1, http: 1, runtime: 1 },
+      },
+      correlationGroups: [
+        { kind: 'request', reference: requestUid, entryCount: 1, firstSequence: 1, lastSequence: 1 },
+        { kind: 'operation', reference: operationRef, entryCount: 1, firstSequence: 2, lastSequence: 2 },
+        { kind: 'attempt', reference: attemptRef, entryCount: 1, firstSequence: 2, lastSequence: 2 },
+        { kind: 'background', reference: null, entryCount: 1, firstSequence: 3, lastSequence: 3 },
+      ],
+      timeline: [requestRecordV3, operationRecord, backgroundRecord],
+    })
+    expect(requests).toHaveLength(2)
+    const initialUrl = new URL(requests[0].url!, origin)
+    expect(Object.fromEntries(initialUrl.searchParams)).toEqual({
+      from: '0',
+      to: '4000',
+      limit: '200',
+      requestUid,
+      version: '3',
+    })
+    expect(requests[1]).toEqual({
+      url: `/api/v1/support/diagnostics?version=3&cursor=${cursor}`,
+      authorization: `Bearer ${token}`,
+    })
+    expect(result.stdout).not.toContain(token)
+    expect(result.stdout).not.toContain(canary)
+  })
+
+  it('falls back once to v2 when an older server rejects the initial v3 query', async () => {
+    handler = (request, response) => {
+      response.setHeader('Content-Type', 'application/json')
+      if (request.url?.includes('version=3')) {
+        response.statusCode = 400
+        response.end(JSON.stringify({ error: 'invalid-query' }))
+      } else response.end(JSON.stringify(v2Response([requestRecord], null)))
+    }
+    const result = await run(['--investigate', `--requestUid=${requestUid}`])
+    expect(result.code).toBe(0)
+    expect(JSON.parse(result.stdout).source.remoteVersion).toBe(2)
+    expect(requests.map((value) => value.url)).toEqual([
+      `/api/v1/support/diagnostics?requestUid=${requestUid}&limit=200&version=3`,
+      `/api/v1/support/diagnostics?requestUid=${requestUid}&limit=200&version=2`,
+    ])
+  })
+
+  it('accepts zero or one investigation correlation filter and rejects ambiguous inputs locally', async () => {
+    handler = (_request, response) => {
+      response.setHeader('Content-Type', 'application/json')
+      response.end(JSON.stringify(v3Response([], null)))
+    }
+    const unfiltered = await run(['--investigate'])
+    expect(unfiltered.code).toBe(0)
+    expect(Object.fromEntries(new URL(requests[0].url!, origin).searchParams)).toEqual({
+      version: '3',
+      limit: '200',
+    })
+
+    requests = []
+    const operation = await run(['--investigate', `--operationRef=${operationRef}`])
+    expect(operation.code).toBe(0)
+    expect(Object.fromEntries(new URL(requests[0].url!, origin).searchParams)).toEqual({
+      operationRef,
+      version: '3',
+      limit: '200',
+    })
+
+    requests = []
+    for (const args of [
+      ['--investigate', '--cursor', instanceId],
+      ['--investigate', `--requestUid=${requestUid}`, `--operationRef=${operationRef}`],
+      ['--investigate', '--version=1'],
+      ['--investigate=true'],
+      ['--investigate', '--investigate'],
+    ])
+      expectSafeFailure(await run(args), 'invalid-query')
+    expect(requests).toEqual([])
+  }, 15_000)
+
+  it('rejects cursor cycles without printing partial evidence', async () => {
+    const cursor = 'c'.repeat(32)
+    let page = 0
+    handler = (_request, response) => {
+      page++
+      response.setHeader('Content-Type', 'application/json')
+      response.end(
+        JSON.stringify(v3Response([{ ...requestRecordV3, sequence: page, receivedAt: page * 1000 }], cursor)),
+      )
+    }
+    expectSafeFailure(await run(['--investigate']), 'bad-response')
+    expect(requests).toHaveLength(2)
+  })
+
+  it('stops investigation reads below the server rate limit when cursors do not terminate', async () => {
+    let page = 0
+    handler = (_request, response) => {
+      page++
+      const nextCursor = page.toString(16).padStart(32, '0')
+      response.setHeader('Content-Type', 'application/json')
+      response.end(
+        JSON.stringify(v3Response([{ ...requestRecordV3, sequence: page, receivedAt: page * 1000 }], nextCursor)),
+      )
+    }
+    expectSafeFailure(await run(['--investigate']), 'bad-response')
+    expect(requests).toHaveLength(20)
+    expect(requests.length).toBeLessThan(30)
+  })
+
+  it('does not print credentials, unvalidated content, or partial pages from investigations', async () => {
+    const cursor = 'c'.repeat(32)
+    handler = (request, response) => {
+      response.writeHead(200, { 'Content-Type': 'application/json', 'X-Private': `${canary}${token}` })
+      response.end(
+        request.url?.includes('cursor=')
+          ? JSON.stringify({ ...v3Response([operationRecord], null), message: `${canary}${token}` })
+          : JSON.stringify(v3Response([requestRecordV3], cursor)),
+      )
+    }
+    expectSafeFailure(await run(['--investigate']), 'bad-response')
+    expect(requests).toHaveLength(2)
   })
 
   it.each(['gzip', 'deflate', 'br'] as const)(
