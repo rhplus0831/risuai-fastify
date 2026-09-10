@@ -489,7 +489,9 @@
                 <Button
                   size="sm"
                   styled="outlined"
+                  className="min-h-11"
                   disabled={mutationLocked || index === 0}
+                  ariaLabel={language.agentPresets.movePresetUp(preset.name)}
                   onclick={() => movePreset(preset, -1)}>
                   <span class="inline-flex items-center gap-1"
                     ><ArrowUpIcon size={14} />{language.agentPresets.moveUp}</span>
@@ -499,20 +501,34 @@
                 <Button
                   size="sm"
                   styled="outlined"
+                  className="min-h-11"
                   disabled={mutationLocked || index === presets.length - 1}
+                  ariaLabel={language.agentPresets.movePresetDown(preset.name)}
                   onclick={() => movePreset(preset, 1)}>
                   <span class="inline-flex items-center gap-1"
                     ><ArrowDownIcon size={14} />{language.agentPresets.moveDown}</span>
                 </Button>
               </span>
               <span data-risu-agent-preset-edit>
-                <Button size="sm" styled="outlined" disabled={mutationLocked} onclick={() => openEditEditor(preset)}>
+                <Button
+                  size="sm"
+                  styled="outlined"
+                  className="min-h-11"
+                  disabled={mutationLocked}
+                  ariaLabel={language.agentPresets.editPresetNamed(preset.name)}
+                  onclick={() => openEditEditor(preset)}>
                   <span class="inline-flex items-center gap-1"
                     ><PencilIcon size={14} />{language.agentPresets.edit}</span>
                 </Button>
               </span>
               <span data-risu-agent-preset-duplicate>
-                <Button size="sm" styled="outlined" disabled={mutationLocked} onclick={() => duplicatePreset(preset)}>
+                <Button
+                  size="sm"
+                  styled="outlined"
+                  className="min-h-11"
+                  disabled={mutationLocked}
+                  ariaLabel={language.agentPresets.duplicatePresetNamed(preset.name)}
+                  onclick={() => duplicatePreset(preset)}>
                   <span class="inline-flex items-center gap-1"
                     ><CopyIcon size={14} />{language.agentPresets.duplicate}</span>
                 </Button>
@@ -521,6 +537,7 @@
                 <Button
                   size="sm"
                   styled="danger"
+                  className="min-h-11"
                   disabled={mutationLocked}
                   ariaLabel={language.agentPresets.deletePresetAccessibleName(preset.name)}
                   onclick={(event) => openDeletePreview(preset, event)}>

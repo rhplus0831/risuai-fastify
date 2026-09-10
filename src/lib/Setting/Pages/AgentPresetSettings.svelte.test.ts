@@ -191,6 +191,78 @@ describe('modular Agent Preset settings', () => {
     expect(details.textContent).toContain(preset.id)
   })
 
+  it('gives reviewed compact actions complete target names and touch-sized controls', async () => {
+    seed()
+    component = mount(AgentPresetSettings, { target })
+    await tick()
+
+    const expectedAgentActions = [
+      language.agentPresets.moveAgentUp(agent.name),
+      language.agentPresets.moveAgentDown(agent.name),
+      language.agentPresets.editAgentNamed(agent.name),
+      language.agentPresets.duplicateAgentNamed(agent.name),
+      language.agentPresets.deleteAgentBlocked(agent.name, 1),
+    ]
+    for (const name of expectedAgentActions) {
+      const action = target.querySelector<HTMLButtonElement>(`[data-risu-agent-row] button[aria-label="${name}"]`)
+      expect(action, name).not.toBeNull()
+      expect(action?.classList).toContain('min-h-11')
+    }
+
+    const expectedPresetActions = [
+      language.agentPresets.movePresetUp(preset.name),
+      language.agentPresets.movePresetDown(preset.name),
+      language.agentPresets.editPresetNamed(preset.name),
+      language.agentPresets.duplicatePresetNamed(preset.name),
+      language.agentPresets.deletePresetAccessibleName(preset.name),
+    ]
+    for (const name of expectedPresetActions) {
+      const action = target.querySelector<HTMLButtonElement>(
+        `[data-risu-agent-preset-row] button[aria-label="${name}"]`,
+      )
+      expect(action, name).not.toBeNull()
+      expect(action?.classList).toContain('min-h-11')
+    }
+
+    target
+      .querySelector<HTMLButtonElement>(
+        `[data-risu-agent-row] button[aria-label="${language.agentPresets.editAgentNamed(agent.name)}"]`,
+      )!
+      .click()
+    await tick()
+    const agentClose = target.querySelector<HTMLButtonElement>(
+      `[data-risu-agent-editor] button[aria-label="${language.close}"]`,
+    )!
+    expect(agentClose.classList).toContain('min-h-11')
+    expect(agentClose.classList).toContain('min-w-11')
+    agentClose.click()
+    await tick()
+
+    target
+      .querySelector<HTMLButtonElement>(
+        `[data-risu-agent-preset-row] button[aria-label="${language.agentPresets.editPresetNamed(preset.name)}"]`,
+      )!
+      .click()
+    await tick()
+    const presetEditor = target.querySelector<HTMLElement>('[data-risu-agent-preset-editor]')!
+    const presetClose = presetEditor.querySelector<HTMLButtonElement>(`button[aria-label="${language.close}"]`)!
+    expect(presetClose.classList).toContain('min-h-11')
+    expect(presetClose.classList).toContain('min-w-11')
+    for (const name of [
+      language.agentPresets.moveAgentUseUp(agent.name),
+      language.agentPresets.moveAgentUseDown(agent.name),
+      language.agentPresets.editAgentUse(agent.name),
+      language.agentPresets.duplicateAgentUse(agent.name),
+      language.agentPresets.removeAgentUse(agent.name),
+    ]) {
+      const action = presetEditor.querySelector<HTMLButtonElement>(
+        `[data-risu-agent-preset-step] button[aria-label="${name}"]`,
+      )
+      expect(action, name).not.toBeNull()
+      expect(action?.classList).toContain('min-h-11')
+    }
+  })
+
   it('renders Empty only for a valid no-op while retaining blocked status precedence', async () => {
     const variants: AgentPresetRecord[] = [
       preset,

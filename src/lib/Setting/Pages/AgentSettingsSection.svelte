@@ -167,21 +167,39 @@
             <span class="font-medium">{agent.name}</span>
             <span class="text-xs text-textcolor2">{agent.outputFormat}</span>
             <div class="ml-auto flex gap-1">
-              <Button size="sm" styled="outlined" disabled={busy || index === 0} onclick={() => move(agent, -1)}
-                ><ArrowUpIcon size={14} /></Button>
               <Button
                 size="sm"
                 styled="outlined"
+                className="min-h-11 min-w-11"
+                disabled={busy || index === 0}
+                ariaLabel={language.agentPresets.moveAgentUp(agent.name)}
+                onclick={() => move(agent, -1)}><ArrowUpIcon size={14} /></Button>
+              <Button
+                size="sm"
+                styled="outlined"
+                className="min-h-11 min-w-11"
                 disabled={busy || index === agents.length - 1}
+                ariaLabel={language.agentPresets.moveAgentDown(agent.name)}
                 onclick={() => move(agent, 1)}><ArrowDownIcon size={14} /></Button>
-              <Button size="sm" styled="outlined" disabled={busy} onclick={() => openEdit(agent)}
-                ><PencilIcon size={14} /></Button>
-              <Button size="sm" styled="outlined" disabled={busy} onclick={() => copy(agent)}
-                ><CopyIcon size={14} /></Button>
+              <Button
+                size="sm"
+                styled="outlined"
+                className="min-h-11 min-w-11"
+                disabled={busy}
+                ariaLabel={language.agentPresets.editAgentNamed(agent.name)}
+                onclick={() => openEdit(agent)}><PencilIcon size={14} /></Button>
+              <Button
+                size="sm"
+                styled="outlined"
+                className="min-h-11 min-w-11"
+                disabled={busy}
+                ariaLabel={language.agentPresets.duplicateAgentNamed(agent.name)}
+                onclick={() => copy(agent)}><CopyIcon size={14} /></Button>
               <span class="border-l border-darkborderc pl-1" data-risu-danger-action>
                 <Button
                   size="sm"
                   styled="danger"
+                  className="min-h-11 min-w-11"
                   disabled={busy || references.length > 0}
                   ariaLabel={references.length > 0
                     ? language.agentPresets.deleteAgentBlocked(agent.name, references.length)

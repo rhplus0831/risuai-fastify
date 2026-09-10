@@ -486,7 +486,7 @@
   use:modalBackdropDismiss={requestClose}
   data-modal-root
   role="presentation"
-  class="fixed inset-0 z-50 flex justify-end bg-black/50">
+  class="fixed inset-0 z-50 flex justify-end bg-black/70">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     use:modalFocusTrap
@@ -503,7 +503,13 @@
       <h3 class="text-xl font-semibold">
         {mode === 'create' ? language.agentPresets.createAgent : language.agentPresets.editAgent}
       </h3>
-      <Button size="sm" styled="outlined" disabled={busy} onclick={requestClose}><XIcon size={16} /></Button>
+      <Button
+        size="sm"
+        styled="outlined"
+        className="min-h-11 min-w-11"
+        disabled={busy}
+        ariaLabel={language.close}
+        onclick={requestClose}><XIcon size={16} /></Button>
     </div>
     <div class="flex-1 overflow-y-auto p-4" data-risu-agent-editor-scroll-body>
       {#if commandError}<div class="mb-3 rounded-md border border-draculared p-3 text-sm text-draculared">
@@ -553,7 +559,7 @@
               {#each AGENT_PRESET_STEP_INPUT_SCOPES.filter((scope) => inputScopes.includes(scope)) as scope (scope)}
                 <button
                   type="button"
-                  class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 hover:bg-darkbuttonhover"
+                  class="min-h-11 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 hover:bg-darkbuttonhover"
                   aria-label={language.agentPresets.insertValue(language.agentPresets.inputScopeLabels[scope])}
                   data-risu-agent-insert-token
                   data-token={`{{${scope}}}`}
@@ -562,7 +568,7 @@
               {#each toggles.filter((toggle) => toggle.key.trim()) as toggle (`toggle:${toggle.key}`)}
                 <button
                   type="button"
-                  class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 hover:bg-darkbuttonhover"
+                  class="min-h-11 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 hover:bg-darkbuttonhover"
                   aria-label={language.agentPresets.insertValue(toggle.label || toggle.key)}
                   data-risu-agent-insert-token
                   data-token={`{{agentToggle::${toggle.key.trim()}}}`}
@@ -572,7 +578,7 @@
               {#each lorebookInputs.filter((input) => input.key.trim()) as input (`input:${input.key}`)}
                 <button
                   type="button"
-                  class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 hover:bg-darkbuttonhover"
+                  class="min-h-11 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 hover:bg-darkbuttonhover"
                   aria-label={language.agentPresets.insertValue(input.displayName || input.key)}
                   data-risu-agent-insert-token
                   data-token={`{{agentInput::${input.key.trim()}}}`}

@@ -850,7 +850,7 @@
   use:modalBackdropDismiss={requestClose}
   data-modal-root
   role="presentation"
-  class="fixed inset-0 z-50 flex justify-end bg-black/50">
+  class="fixed inset-0 z-50 flex justify-end bg-black/70">
   <!-- svelte-ignore a11y_click_events_have_key_events -->
   <div
     use:modalFocusTrap
@@ -867,7 +867,13 @@
       <h3 class="text-xl font-semibold">
         {mode === 'create' ? language.agentPresets.createPreset : language.agentPresets.editPreset}
       </h3>
-      <Button size="sm" styled="outlined" disabled={locked} onclick={requestClose}><XIcon size={16} /></Button>
+      <Button
+        size="sm"
+        styled="outlined"
+        className="min-h-11 min-w-11"
+        disabled={locked}
+        ariaLabel={language.close}
+        onclick={requestClose}><XIcon size={16} /></Button>
     </div>
     <div class="flex-1 overflow-y-auto p-4" data-risu-agent-preset-editor-scroll-body>
       {#if commandError}<div class="mb-3 rounded-md border border-draculared p-3 text-sm text-draculared">
@@ -905,7 +911,7 @@
             <input
               id="agent-preset-module-value"
               list="agent-preset-module-options"
-              class="min-h-10 w-full rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
+              class="min-h-11 w-full rounded-md border border-darkborderc bg-transparent px-3 py-2 text-sm"
               placeholder={language.agentPresets.moduleIntegrationPlaceholder}
               bind:value={moduleIntegrationDraft}
               onkeydown={handleModuleIntegrationKeydown} />
@@ -930,7 +936,7 @@
               <li>
                 <button
                   type="button"
-                  class="inline-flex min-h-9 items-center gap-2 rounded-full border border-darkborderc bg-darkbutton px-3 py-1 text-sm hover:bg-darkbuttonhover"
+                  class="inline-flex min-h-11 items-center gap-2 rounded-full border border-darkborderc bg-darkbutton px-3 py-1 text-sm hover:bg-darkbuttonhover"
                   aria-label={language.agentPresets.removeModuleIntegration(value)}
                   disabled={locked}
                   onclick={() => removeModuleIntegration(value)}>
@@ -980,7 +986,7 @@
           <span class="mr-1 text-xs text-textcolor2">{language.agentPresets.finalOutputVariablesLabel}</span>
           <button
             type="button"
-            class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-xs hover:bg-darkbuttonhover"
+            class="min-h-11 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-xs hover:bg-darkbuttonhover"
             aria-label={language.agentPresets.insertValue('main output')}
             data-risu-agent-preset-insert-output="mainOutput"
             onclick={() => insertFinalOutputValue('{{slot::mainOutput}}')}
@@ -988,7 +994,7 @@
           {#each finalOutputAgentKeys as outputKey (outputKey)}
             <button
               type="button"
-              class="min-h-9 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-xs hover:bg-darkbuttonhover"
+              class="min-h-11 rounded-md border border-darkborderc bg-darkbutton px-2 py-1 text-xs hover:bg-darkbuttonhover"
               aria-label={language.agentPresets.insertValue(outputKey)}
               data-risu-agent-preset-insert-output={outputKey}
               onclick={() => insertFinalOutputValue(`{{agent::${outputKey}}}`)}
@@ -1121,21 +1127,38 @@
                         <Button
                           size="sm"
                           styled="outlined"
+                          className="min-h-11 min-w-11"
                           disabled={locked || index === 0}
                           ariaLabel={language.agentPresets.moveAgentUseUp(step.name)}
                           onclick={() => moveUse(step, -1)}><ArrowUpIcon size={14} /></Button>
                         <Button
                           size="sm"
                           styled="outlined"
+                          className="min-h-11 min-w-11"
                           disabled={locked || index === phaseSteps.length - 1}
                           ariaLabel={language.agentPresets.moveAgentUseDown(step.name)}
                           onclick={() => moveUse(step, 1)}><ArrowDownIcon size={14} /></Button>
-                        <Button size="sm" styled="outlined" disabled={locked} onclick={() => startEdit(step)}
-                          >{language.agentPresets.edit}</Button>
-                        <Button size="sm" styled="outlined" disabled={locked} onclick={() => duplicateUse(step)}
-                          ><CopyIcon size={14} /></Button>
-                        <Button size="sm" styled="danger" disabled={locked} onclick={() => removeUse(step)}
-                          ><TrashIcon size={14} /></Button>
+                        <Button
+                          size="sm"
+                          styled="outlined"
+                          className="min-h-11"
+                          disabled={locked}
+                          ariaLabel={language.agentPresets.editAgentUse(step.name)}
+                          onclick={() => startEdit(step)}>{language.agentPresets.edit}</Button>
+                        <Button
+                          size="sm"
+                          styled="outlined"
+                          className="min-h-11 min-w-11"
+                          disabled={locked}
+                          ariaLabel={language.agentPresets.duplicateAgentUse(step.name)}
+                          onclick={() => duplicateUse(step)}><CopyIcon size={14} /></Button>
+                        <Button
+                          size="sm"
+                          styled="danger"
+                          className="min-h-11 min-w-11"
+                          disabled={locked}
+                          ariaLabel={language.agentPresets.removeAgentUse(step.name)}
+                          onclick={() => removeUse(step)}><TrashIcon size={14} /></Button>
                       </div>
                     </div>
                     <details class="mt-2 text-xs" data-risu-agent-use-technical-details>

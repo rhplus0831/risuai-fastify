@@ -73,8 +73,13 @@
           {language.agentPresets.deletePreviewDescription}
         </p>
       </div>
-      <Button size="sm" styled="outlined" disabled={busy} ariaLabel={language.close} onclick={requestClose}
-        ><XIcon size={16} /></Button>
+      <Button
+        size="sm"
+        styled="outlined"
+        className="min-h-11 min-w-11"
+        disabled={busy}
+        ariaLabel={language.close}
+        onclick={requestClose}><XIcon size={16} /></Button>
     </header>
 
     <div class="space-y-3 p-4">
