@@ -4,6 +4,7 @@ Last audited: 2026-08-31.
 Targeted source check: 2026-09-05 (display paint-cache ownership).
 Targeted source check: 2026-09-08 (connected-reader startup and generation reads).
 Targeted source check: 2026-09-10 (role-first unified workspace).
+Targeted source check: 2026-09-10 (revision-identical writer reconnect reuse).
 
 This guide owns the Fastify-to-browser read boundary: bootstrap resources,
 root and targeted REST reads, hash-verified cache substitution, lazy body
@@ -62,13 +63,16 @@ capabilities consumed by the shell and protocol adapters:
   catalog. Strictly validated summaries become marker-bearing compatibility
   shells with message-free chat identity stubs; detail, messages, per-chat Hypa
   V3 data, lore, and reroll alternates remain lazy.
-- The writer path reads and applies one post-replay shell after authority is
-  acquired. That authoritative projection replaces any retained reader
-  summary/detail state, installs the known-server and applied-event
-  cursors, and starts command reconciliation. Startup then records runtime/job
+- Initial writer acquisition and Reader promotion read and apply one post-replay
+  shell. That authoritative projection replaces any retained reader summary/detail
+  state, installs the known-server and applied-event cursors, and starts command
+  reconciliation. An established same-owner writer reconnect may retain its
+  coherent projection only when replay attempted no pending intent and the verified
+  bootstrap revision exactly equals both client revision cursors; any mismatch uses
+  the normal shell replacement path. Startup or reconnect then records runtime/job
   projections, starts owner-mutation and hydration lifecycles, and subscribes to
-  `/api/v1/events` from the applied shell revision. Only an accepted event
-  subscription publishes `writer-ready`.
+  `/api/v1/events` from the applied revision. Only an accepted event subscription
+  publishes `writer-ready`.
 - Managed `canRenderShell` and `canApplyRoutes` admit a coherent authenticated
   read projection. Reader routing keeps its own stable character/chat intent and
   hydrates only the selected view; it does not persist the writer's selection.

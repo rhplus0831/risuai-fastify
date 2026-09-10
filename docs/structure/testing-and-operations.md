@@ -2,6 +2,7 @@
 
 Last audited: 2026-09-03.
 Targeted source check: 2026-09-08 (diagnostic helpers, focused browser proof, and aggregate ownership).
+Targeted source check: 2026-09-10 (mobile writer transport-recovery browser proof).
 
 Use `pnpm` for package scripts. Node.js is declared as `>=24.0.0`. The package
 is root-only; there is no `server/fastify/package.json`. `package.json` pins
@@ -357,6 +358,12 @@ Browser-smoke contracts protect reload/reconciliation behavior:
 repainting of the active generation preset, sidebar-toggle survival through
 command/resource reconciliation, and route/sidebar continuity through an
 old-lineage response, in-place Reader recovery, and explicit writer recovery.
+`server/fastify/browser-smoke/mobileWriterConnectionRecovery.spec.ts` runs the
+active chat under Pixel 7 emulation and independently destroys its real HTTP SSE
+response or toggles the browser context offline. Both cases hold or observe the
+transient recovery boundary, require synchronous authority revocation without a
+Reader/workspace or composer remount, reject unchanged projection hydration, and
+prove restored write access with a post-recovery command.
 `server/fastify/browser-smoke/rerollSwipePersistence.spec.ts` proves persisted
 reroll alternates reconstruct after reload and remain candidate-recoverable. It
 clicks the real message reroll control, observes the operation request and absence

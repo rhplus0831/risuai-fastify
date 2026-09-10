@@ -3,6 +3,7 @@
 Last audited: 2026-09-04.
 
 Targeted source check: 2026-09-09 (read-only conversation-shell parity and role-transition frame sampling).
+Targeted source check: 2026-09-10 (mobile writer reconnect DOM continuity).
 
 This area covers URL/store routing, history and hotkey ownership, character/chat selection, chat folders and forks, transcript hydration, composer and attachment behavior, message rendering/editing/translation, active-chat generation settings, and the browser journeys that prove visible state survives command settlement and reload. Durable command mechanics are analyzed in [Persistence, Commands, and Events](persistence-commands-and-events.md), browser projection mechanics in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md), and generation internals in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
 
@@ -77,6 +78,11 @@ verifies retained content and reconnect after an actual server-instance restart.
 `visibleStateRecovery.spec.ts` separately checks the character sidebar after
 role-first old-lineage reload and after connected import recovery followed by
 explicit same-owner writer promotion.
+`mobileWriterConnectionRecovery.spec.ts` complements those role-change journeys
+with a no-change Pixel 7 writer journey: a destroyed HTTP event stream and a
+temporary offline browser context must retain the same inert composer DOM and
+draft, avoid a transient Reader layout and unchanged resource refresh, and return
+to editable writer state in the same document.
 
 Initial acquisition stays behind the loading boundary, with mounted checks that
 prevent transcript/detail reads before the first resolved role; established

@@ -804,8 +804,12 @@ describe('API-backed client bootstrap', () => {
     expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
   })
 
-  it('revokes writer dispatch on the browser offline signal and revalidates ownership when online', async () => {
+  it('revokes writer dispatch while offline and reuses an unchanged writer projection after revalidation', async () => {
     await loadData()
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ revision: 5, writer: { sessionId: getActiveWriterSessionId(), epoch: 1 } }),
+    )
+    const selectedBeforeRecovery = get(selectedCharID)
     const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     window.dispatchEvent(new Event('offline'))
     expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'recovering-writer', connection: 'interrupted' })
@@ -819,7 +823,52 @@ describe('API-backed client bootstrap', () => {
     expect(bootstrapApi.fetch).toHaveBeenLastCalledWith(null, {
       expectedWriter: { epoch: 1, databaseLineage: 'database-a' },
     })
+    expect(resourceApi.loadInitial).toHaveBeenCalledOnce()
+    expect(hydrationApi.resetChatHydration).toHaveBeenCalledOnce()
+    expect(lorebookApi.resetLorebookHydration).toHaveBeenCalledOnce()
+    expect(get(selectedCharID)).toBe(selectedBeforeRecovery)
     expect(readerApi.start).not.toHaveBeenCalled()
+  })
+
+  it('rehydrates an established writer when reconnect bootstrap has a newer revision', async () => {
+    await loadData()
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ revision: 6, writer: { sessionId: getActiveWriterSessionId(), epoch: 1 } }),
+    )
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ revision: 6, writer: { sessionId: getActiveWriterSessionId(), epoch: 1 } }),
+    )
+    resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 6, scope: 'shell' })
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+
+    window.dispatchEvent(new Event('offline'))
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+
+    await vi.waitFor(() => expect(eventApi.subscriptions).toHaveLength(2))
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe('writing'))
+    expect(resourceApi.loadInitial).toHaveBeenCalledTimes(2)
+    expect(peekAppliedServerResourceRevision()).toBe(6)
+  })
+
+  it('rehydrates an established writer after reconnect replay attempts pending intent', async () => {
+    pendingMutationApi.replay
+      .mockResolvedValueOnce({ attempted: 0, discarded: 0, retained: 0, succeeded: 0 })
+      .mockResolvedValueOnce({ attempted: 1, discarded: 0, retained: 0, succeeded: 1 })
+    await loadData()
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ revision: 5, writer: { sessionId: getActiveWriterSessionId(), epoch: 1 } }),
+    )
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+
+    window.dispatchEvent(new Event('offline'))
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+
+    await vi.waitFor(() => expect(eventApi.subscriptions).toHaveLength(2))
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe('writing'))
+    expect(pendingMutationApi.replay).toHaveBeenCalledTimes(2)
+    expect(resourceApi.loadInitial).toHaveBeenCalledTimes(2)
   })
 
   it('retries a replacement reader read in the new lineage without adopting writer or pending scope', async () => {

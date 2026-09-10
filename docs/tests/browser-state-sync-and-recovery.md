@@ -3,6 +3,7 @@
 Last audited: 2026-08-30.
 
 Targeted source check: 2026-09-08 (connected-reader boundaries and evidence).
+Targeted source check: 2026-09-10 (mobile writer stream/offline recovery).
 
 This area covers browser startup, active-writer ownership, encrypted durable mutation recovery, command
 serialization, compact local acknowledgements, authoritative resource reads, hash-cache validation,
@@ -69,6 +70,14 @@ connected import-replacement cases. The latter waits for a coherent new-lineage
 Reader before releasing the old PATCH's real 409, then verifies reader-only
 traffic, explicit same-owner writer recovery and the restored character sidebar.
 Focused auth/lifecycle tests retain their controlled-response scope.
+
+`mobileWriterConnectionRecovery.spec.ts` covers the no-change mobile writer path
+with two independent faults: destruction of the active HTTP SSE response and
+`browserContext.setOffline(true/false)`. Each journey verifies an inert but
+DOM-identical writer composer during recovery, unchanged tab/URL/draft/lineage/
+owner/epoch/revision, no projection-resource hydration, a new event stream, and a
+successful command after recovery. These are Chromium mobile emulation cases, not
+physical mobile lifecycle assertions.
 
 `selectedLocaleRuntime.spec.ts` also holds a real initial character-handler asset
 while an authorized writer navigates to Settings. The visible language selector
@@ -191,4 +200,4 @@ and UI files are discussed in their focused documents.
 | Invalidation and refresh               | `src/ts/server/resourceInvalidation.test.ts`; `resourceRefresh.test.ts`; `src/lib/_audit/frontendArchitecture.static.test.ts`; `src/ts/storage/database.resourceState.test.ts`                                                                                                                                                                                                                                                                                                                                                 |
 | Owner lifecycle and stale-state guards | `src/ts/server/ownerMutationLifecycle.test.ts`; `pendingOwnerMutationRegistry.test.ts`; `settingsGroups.test.ts`; `staleStateGuards.test.ts`                                                                                                                                                                                                                                                                                                                                                                                   |
 | Replacement/retained ownership         | `src/ts/server/chatRetainedProjection.test.ts`; `persistenceActivity.svelte-node.test.ts`; `replacementDatabaseOwnership.svelte-node.test.ts`                                                                                                                                                                                                                                                                                                                                                                                  |
-| Fast-bootstrap browser evidence        | `server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts`; `startupRecoveryIntegrationMatrix.spec.ts`; `fastBootstrapHarness.ts`                                                                                                                                                                                                                                                                                                                                                                                     |
+| Fast-bootstrap browser evidence        | `server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts`; `startupRecoveryIntegrationMatrix.spec.ts`; `mobileWriterConnectionRecovery.spec.ts`; `fastBootstrapHarness.ts`                                                                                                                                                                                                                                                                                                                                            |

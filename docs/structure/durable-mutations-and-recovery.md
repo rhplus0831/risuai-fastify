@@ -3,6 +3,7 @@
 Last audited: 2026-08-31.
 Targeted source check: 2026-09-05 (module-folder event invalidation).
 Targeted source check: 2026-09-08 (connected-reader recovery and IGP receipts).
+Targeted source check: 2026-09-10 (in-place no-change writer recovery).
 
 This guide owns browser-to-Fastify mutation durability and reconciliation:
 encrypted outbox intent, the serialized command queue, compact optimistic
@@ -147,6 +148,14 @@ authenticated frame parser without writer headers, with its own bounded
 backoff, watchdog, ownership/lineage checks, and read-only reconciliation. It
 never replays mutations. Server writer/memory frames are live-only; only command
 events are persisted and replayed.
+
+An established writer loses mutation and generation authority synchronously when
+its transport is interrupted, but its coherent writer DOM remains mounted and
+inert while recovery is pending. After conditional ownership verification and
+outbox reconciliation, a no-change reconnect skips shell replacement only when
+the bootstrap, known-command, and applied-resource revisions are identical and
+replay attempted no intent. A newer revision, replayed intent, changed ownership,
+or changed lineage retains the authoritative hydration/demotion path.
 
 `refreshInvalidatedServerResources()` sorts and normalizes a single event or a
 coalesced event batch, then converts each resource key into concrete reads:

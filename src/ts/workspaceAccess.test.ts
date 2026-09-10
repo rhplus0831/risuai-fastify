@@ -90,6 +90,25 @@ describe('workspace access presentation model', () => {
     })
   })
 
+  it('retains an established writer surface without retaining writer authority during reconnect', () => {
+    const startup = beginClientSession('client-a')
+    expect(authorizeClientWriterRecovery(startup, ownership('client-a'))).toBe(true)
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    recordWriterReadiness()
+    expect(completeClientWriterRecovery(startup)).toBe(true)
+
+    setClientConnectionState('interrupted')
+
+    expect(getWorkspaceAccessSnapshot()).toEqual({
+      mode: 'recovering-writer',
+      canBrowse: true,
+      canApplyWriterRoute: false,
+      canMutate: false,
+      canGenerate: false,
+    })
+  })
+
   it('revokes writer capabilities synchronously and clears browsing on auth loss', () => {
     const startup = beginClientSession('client-a')
     expect(authorizeClientWriterRecovery(startup, ownership('client-a'))).toBe(true)

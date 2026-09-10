@@ -115,6 +115,7 @@
   let connectedReaderView = $derived(
     $workspaceAccessStore.mode === 'read-only' || $workspaceAccessStore.mode === 'promoting',
   )
+  let recoveringWriterView = $derived($workspaceAccessStore.mode === 'recovering-writer')
   async function signInReader(): Promise<void> {
     if (signingInReader || $clientSessionStore.lifecycle !== 'auth-required') return
     signingInReader = true
@@ -667,8 +668,8 @@
       readerMode={readOnlyWorkspaceMode}
       writerNavigationOpen={$sideBarStore}
       writerNavigationLabel={language.menu}
-      writerContentInert={routeContentBlocked}
-      writerContentBusy={$routeResourceLoadState.status === 'loading'}
+      writerContentInert={routeContentBlocked || recoveringWriterView}
+      writerContentBusy={$routeResourceLoadState.status === 'loading' || recoveringWriterView}
       onWriterCloseNavigation={closeResponsiveSidebar}>
       {#snippet writerNavigation()}
         {#if !$CustomGUISettingMenuStore && renderedRoute.kind !== 'settings'}
@@ -716,6 +717,18 @@
         {/if}
       {/snippet}
     </Workspace>
+  {/if}
+  {#if recoveringWriterView}
+    <div
+      class="pointer-events-none fixed top-3 left-1/2 z-40 max-w-[calc(100vw-2rem)] -translate-x-1/2 rounded-md border border-darkborderc bg-bgcolor/95 px-4 py-2 text-center text-sm text-textcolor shadow-lg"
+      data-writer-connection-recovery
+      role="status"
+      aria-live="polite"
+      aria-busy="true">
+      {$clientSessionStore.connection === 'interrupted'
+        ? language.connectedReaders.interrupted
+        : language.connectedReaders.connecting}
+    </div>
   {/if}
   {#if routeLoadingVisible}
     <div

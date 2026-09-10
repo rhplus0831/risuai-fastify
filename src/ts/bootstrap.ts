@@ -229,6 +229,7 @@ import {
   demoteClientSession,
   failClientSessionOperation,
   getClientSessionSnapshot,
+  hasRetainedClientWriterProjection,
   isClientSessionGenerationCurrent,
   isClientSessionManaged,
   isClientSessionOperationCurrent,
@@ -587,7 +588,11 @@ async function recoverConnectedWriter(
   // been installed. Recovery must establish its own successful subscription.
   setClientConnectionState('connecting', operation.generation)
   beginWriterAccessRecovery()
-  await loadWebInitialDatabase({ preparedBootstrap: runtime, isCurrent })
+  await loadWebInitialDatabase({
+    preparedBootstrap: runtime,
+    isCurrent,
+    reuseExistingProjection: hasRetainedClientWriterProjection(),
+  })
   if (!isCurrent()) throw new Error('Writer recovery was superseded')
   if (!serverResourceEventSubscription) throw new Error('Server event subscription is unavailable')
   if (!isCurrent() || !completeClientWriterRecovery(operation)) throw new Error('Writer recovery is incomplete')
@@ -1369,6 +1374,8 @@ export async function loadWebInitialDatabase(
     coordinated?: boolean
     preparedBootstrap?: ServerBootstrapRuntime
     isCurrent?: () => boolean
+    /** Same-owner reconnect may retain a revision-identical coherent writer projection. */
+    reuseExistingProjection?: boolean
   } = {},
 ) {
   const coordinate: typeof runStartupStep = options.coordinated
@@ -1447,7 +1454,7 @@ export async function loadWebInitialDatabase(
     }
   })
   await runWriterStep('writer-receipt-flush', flushPendingMutationReceiptAcknowledgements)
-  await runWriterStep('writer-pending-replay', async () => {
+  const pendingMutationReplay = await runWriterStep('writer-pending-replay', async () => {
     const pendingMutationReplay = await replayPendingMutations()
     const remainingPendingMutationRecords = await countBlockingPendingMutationRecords()
     if (
@@ -1457,32 +1464,42 @@ export async function loadWebInitialDatabase(
     ) {
       throw new RetainedWriterRecoveryError(language.pendingMutationReplayRetained)
     }
+    return pendingMutationReplay
   })
 
-  const resources = await runWriterStep('writer-resource-hydration', async () => {
-    // From this point on the explicit resource owners are authoritative.
-    // Hydration and reconciliation apply only through those owner boundaries.
-    const result = await loadInitialServerResources({
-      hooks: serverResourceInvalidationHooks,
-      ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}),
-    })
-    if (result.status !== 'ok') {
-      throw new Error(
-        result.status === 'unavailable'
-          ? 'Server resource APIs are unavailable'
-          : `Server resource load failed: ${result.error}`,
-      )
-    }
-    return result
-  })
+  const reuseExistingProjection =
+    options.reuseExistingProjection === true &&
+    pendingMutationReplay.attempted === 0 &&
+    runtime.revision === peekAppliedServerResourceRevision() &&
+    runtime.revision === peekCachedServerCommandRevision()
+  const resources = reuseExistingProjection
+    ? null
+    : await runWriterStep('writer-resource-hydration', async () => {
+        // From this point on the explicit resource owners are authoritative.
+        // Hydration and reconciliation apply only through those owner boundaries.
+        const result = await loadInitialServerResources({
+          hooks: serverResourceInvalidationHooks,
+          ...(options.isCurrent ? { isCurrent: options.isCurrent } : {}),
+        })
+        if (result.status !== 'ok') {
+          throw new Error(
+            result.status === 'unavailable'
+              ? 'Server resource APIs are unavailable'
+              : `Server resource load failed: ${result.error}`,
+          )
+        }
+        return result
+      })
 
   await runWriterStep('writer-projection-install', async () => {
-    selectedCharID.set(initialSelectedCharacterIndex())
-    resetChatHydration()
-    resetLorebookHydration()
-    recordHydratedCharacterLorebooks(charactersResourceState.characters)
-    setCachedServerCommandRevision(resources.revision)
-    setAppliedServerResourceRevision(resources.revision)
+    if (resources) {
+      selectedCharID.set(initialSelectedCharacterIndex())
+      resetChatHydration()
+      resetLorebookHydration()
+      recordHydratedCharacterLorebooks(charactersResourceState.characters)
+      setCachedServerCommandRevision(resources.revision)
+      setAppliedServerResourceRevision(resources.revision)
+    }
     markReplacementDatabaseOwnershipRefreshed({ databaseLineage, writerEpoch })
     setServerCommandSuccessReconciler((event, coalescedEvents, localEffects) =>
       enqueueServerResourceSync(() =>
@@ -1490,19 +1507,22 @@ export async function loadWebInitialDatabase(
       ),
     )
     setServerCommandConflictGapHandler(handleServerCommandConflictGap)
-    // The conservative shell boundary is writer-ready, so every visual and
-    // selection input used by the root UI must be coherent before events can
-    // publish that capability.
-    updateColorScheme()
-    updateTextThemeAndCSS()
-    updateReducedMotion()
-    updateHeightMode()
-    updateGuisize()
-    if (settingsResourceState.value.botSettingAtStart) botMakerMode.set(true)
-    void changeLanguage(settingsResourceState.value.language)
-    await awaitLanguageReady()
+    if (resources) {
+      // The conservative shell boundary is writer-ready, so every visual and
+      // selection input used by the root UI must be coherent before events can
+      // publish that capability. A revision-identical reconnect keeps those
+      // already-applied visual and selection owners in place.
+      updateColorScheme()
+      updateTextThemeAndCSS()
+      updateReducedMotion()
+      updateHeightMode()
+      updateGuisize()
+      if (settingsResourceState.value.botSettingAtStart) botMakerMode.set(true)
+      void changeLanguage(settingsResourceState.value.language)
+      await awaitLanguageReady()
+    }
     assertCurrent()
-    if (isClientSessionManaged()) setClientProjectionReady(true)
+    if (resources && isClientSessionManaged()) setClientProjectionReady(true)
     recordStartupMilestone('reader-ready')
   })
   await runWriterStep('writer-runtime-services', () => {

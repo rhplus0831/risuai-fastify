@@ -2,6 +2,7 @@
 
 Last audited: 2026-08-31.
 Targeted source check: 2026-09-08 (connected-reader startup, role transitions, and display isolation).
+Targeted source check: 2026-09-10 (same-owner writer reconnect presentation and projection reuse).
 
 This file covers browser TypeScript coordinators that influence visible Svelte
 UI. For component ownership and UI triage, start with the
@@ -163,9 +164,12 @@ lineage replacement. Shell readiness and mutation authority remain separate.
 
 If a reader shell or locale read fails before projection readiness,
 `bootstrap.ts` retains the unresolved startup operation only while the same
-authenticated session remains current. A writer that already acquired authority
-stays hidden in fenced `recovering-writer` state and revalidates ownership before
-resuming. Neither case silently exposes a prospective writer as a reader.
+authenticated session remains current. A prospective writer that has not completed
+its first recovery stays hidden. An established writer instead keeps its coherent
+writer surface mounted and inert in `recovering-writer` presentation while ownership
+is revalidated. Neither case exposes mutation or generation authority before the
+writer event stream is live again, and neither presents a prospective writer as a
+Reader.
 
 For a managed reader, `canRenderShell` and `canApplyRoutes` expose the coherent
 read view and local navigation. `App.svelte` separately gates writer route
@@ -178,9 +182,12 @@ viewer described in [Generation Client](generation-client.md#connected-reader-ob
 acquisition against the exact discovered lineage and writer epoch. Disconnect
 confirmation, when required, retains that same precondition. The read stream
 and local route remain usable while confirmation is pending. Writer recovery
-must reconcile retained commands, replace the resource projection, and establish
-writer events before mutation capability opens; plugins, generation effects,
-and chat dependencies still gate `canGenerate`. A current operation's cancellation
+must reconcile retained commands and establish writer events before mutation
+capability opens. A same-owner reconnect may retain the existing projection only
+when no pending intent was replayed and the verified bootstrap, known-command, and
+applied-resource revisions are exactly equal; otherwise it replaces the resource
+projection before continuing. Plugins, generation effects, and chat dependencies
+still gate `canGenerate`. A current operation's cancellation
 or recovery failure returns to reading only while authenticated under the same
 lineage. Superseded attempts cannot change a newer operation's role. Remaining
 intent stays retained, and reader refresh never submits it. On promotion, App

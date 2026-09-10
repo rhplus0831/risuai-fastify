@@ -3,11 +3,12 @@ import {
   canUseClientWriteAccess,
   clientSessionStore,
   getClientSessionSnapshot,
+  hasRetainedClientWriterProjection,
   hasResolvedClientSessionRole,
 } from './clientSession'
 import { canApplyRoutes, canGenerate, canMutate, canRenderShell, startupCoordinatorStore } from './startupReadiness'
 
-export type WorkspacePresentationMode = 'booting' | 'read-only' | 'promoting' | 'writer'
+export type WorkspacePresentationMode = 'booting' | 'read-only' | 'promoting' | 'recovering-writer' | 'writer'
 
 export interface WorkspaceAccessSnapshot {
   /** Presentation only. Operation admission remains in the narrow capability guards. */
@@ -36,6 +37,7 @@ export function getWorkspaceAccessSnapshot(): WorkspaceAccessSnapshot {
 
   let mode: WorkspacePresentationMode = 'booting'
   if (canApplyWriterRoute && mutationReady) mode = 'writer'
+  else if (canBrowse && hasRetainedClientWriterProjection()) mode = 'recovering-writer'
   else if (
     canBrowse &&
     session.managed &&
