@@ -820,7 +820,9 @@
       <LazyComponent loader={loadHypaV3Progress} testId="hypa-v3-progress" />
     {/if}
     {#if popupStore.children}
-      <LazyComponent loader={loadPopupList} testId="popup-list" />
+      <div class="contents" data-modal-focus-extension>
+        <LazyComponent loader={loadPopupList} testId="popup-list" />
+      </div>
     {/if}
     {#if easyPanelStore.open}
       <LazyComponent loader={loadEasyPanel} modal onDismiss={() => (easyPanelStore.open = false)} testId="easy-panel" />

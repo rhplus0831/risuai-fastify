@@ -58,18 +58,41 @@ export function modalFocusTrap(node: HTMLElement) {
       : null
   const modalRoot = node.closest<HTMLElement>('[data-modal-root]') ?? node
   const backgroundStates = new Map<HTMLElement, BackgroundState>()
+  const focusExtensions = new Set<HTMLElement>()
   let active = false
   let destroyed = false
   let controller: ModalTrapController
 
   function makeBackgroundInert(element: HTMLElement): void {
-    if (element === modalRoot || backgroundStates.has(element)) return
+    if (element === modalRoot || focusExtensions.has(element) || backgroundStates.has(element)) return
     backgroundStates.set(element, {
       ariaHidden: element.getAttribute('aria-hidden'),
       inert: element.inert,
     })
     element.inert = true
     element.setAttribute('aria-hidden', 'true')
+  }
+
+  function registerFocusExtensions(records: MutationRecord[]): void {
+    if (!node.contains(document.activeElement)) return
+    for (const record of records) {
+      for (const addedNode of record.addedNodes) {
+        if (!(addedNode instanceof HTMLElement)) continue
+        if (addedNode.hasAttribute('data-modal-focus-extension')) focusExtensions.add(addedNode)
+        for (const extension of addedNode.querySelectorAll<HTMLElement>('[data-modal-focus-extension]')) {
+          focusExtensions.add(extension)
+        }
+      }
+    }
+  }
+
+  function trapContains(target: Node | null): boolean {
+    if (!target) return false
+    return node.contains(target) || Array.from(focusExtensions).some((extension) => extension.contains(target))
+  }
+
+  function getTrapFocusableElements(): HTMLElement[] {
+    return [node, ...focusExtensions].filter((root) => root.isConnected).flatMap((root) => getFocusableElements(root))
   }
 
   function inertBackgroundBranches(observeParents: boolean): void {
@@ -88,7 +111,7 @@ export function modalFocusTrap(node: HTMLElement) {
   function handleKeydown(event: KeyboardEvent): void {
     if (event.key !== 'Tab') return
 
-    const focusable = getFocusableElements(node)
+    const focusable = getTrapFocusableElements()
     if (focusable.length === 0) {
       event.preventDefault()
       node.focus()
@@ -108,12 +131,15 @@ export function modalFocusTrap(node: HTMLElement) {
   }
 
   function handleFocusin(event: FocusEvent): void {
-    if (!active || modalTrapStack.at(-1) !== controller || node.contains(event.target as Node)) return
+    if (!active || modalTrapStack.at(-1) !== controller || trapContains(event.target as Node)) return
     focusInitialElement(node)
   }
 
-  const observer = new MutationObserver(() => {
-    if (active && modalTrapStack.at(-1) === controller) inertBackgroundBranches(true)
+  const observer = new MutationObserver((records) => {
+    if (active && modalTrapStack.at(-1) === controller) {
+      registerFocusExtensions(records)
+      inertBackgroundBranches(true)
+    }
   })
 
   function activate(): void {
@@ -168,6 +194,7 @@ export function modalFocusTrap(node: HTMLElement) {
       const index = modalTrapStack.indexOf(controller)
       const wasTop = index === modalTrapStack.length - 1
       controller.deactivate()
+      focusExtensions.clear()
       if (index >= 0) modalTrapStack.splice(index, 1)
 
       const nextTrap = modalTrapStack.at(-1)

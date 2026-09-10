@@ -240,4 +240,32 @@ describe('modalFocusTrap', () => {
     expect(dynamicBackground.inert).toBe(false)
     expect(dynamicBackground.hasAttribute('aria-hidden')).toBe(false)
   })
+
+  it('admits an explicitly marked popup opened from the active modal into its focus scope', async () => {
+    const { background, first, modal, root } = createModalFixture()
+    const action = modalFocusTrap(modal)
+    await settle()
+    first.focus()
+
+    const popupHost = document.createElement('div')
+    const popupAction = document.createElement('button')
+    popupHost.dataset.modalFocusExtension = ''
+    popupAction.textContent = 'Popup action'
+    popupHost.append(popupAction)
+    root.append(popupHost)
+    await settle()
+
+    expect(popupHost.inert).toBe(false)
+    expect(popupHost.hasAttribute('aria-hidden')).toBe(false)
+    popupAction.focus()
+    expect(document.activeElement).toBe(popupAction)
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }))
+    expect(document.activeElement).toBe(first)
+
+    background.querySelector('button')!.focus()
+    expect(document.activeElement).toBe(first)
+
+    action.destroy()
+  })
 })

@@ -2,8 +2,8 @@
 
 ## Current Cursor
 
-- State: **Phase 3 in progress — compact navigation and action density.**
-- Next action: refine the responsive drawer, chat hierarchy, row menus, and touch targets.
+- State: **Phase 4 in progress — outcome language and authoring tools.**
+- Next action: replace implementation-first authoring copy and add insertion, preview, and completion assistance.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
 - Runtime source is unchanged by this planning package.
@@ -21,7 +21,7 @@
 | [0. Shared contracts and acceptance baseline](phases/phase-0-shared-contracts-and-baseline.md) | Accepted | Shared diagnostics, certified deletion impact, safety DOM assertions, and a disposable-data compact browser scaffold are in place. |
 | [1. Effective state and validation](phases/phase-1-effective-state-and-validation.md) | Accepted | No-op, inherited, unchanged, invalid, and ineffective configurations are explicit before save or generation. |
 | [2. Destructive safety and persistence feedback](phases/phase-2-destructive-safety-and-persistence.md) | Accepted | Dependency consequences are previewed and accepted/queued/failed recovery semantics remain explicit. |
-| [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Pending | Clarify the responsive drawer, reduce row-action crowding, and strengthen hierarchy and overflow cues. |
+| [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Accepted | Responsive drawers, consolidated row menus, nested hierarchy, complete names, fallbacks, and overflow cues are verified at both compact viewports. |
 | [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Pending | Replace implementation-first copy with outcomes and add insertion, completion, and preview assistance. |
 | [5. Guided BardWiki workspace](phases/phase-5-guided-bardwiki-workspace.md) | Pending | Turn the empty workspace, overrides, lifecycle tools, and mobile flow into guided tasks. |
 | [6. Accessibility, visual evidence, and closeout](phases/phase-6-accessibility-and-closeout.md) | Pending | Complete interaction, contrast, zoom, browser, documentation, and rollout evidence. |
@@ -238,3 +238,38 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   test -- src/lib/Workspace.svelte.test.ts` (32 tests).
 - Next slice: consolidate chat/folder secondary actions and strengthen hierarchy,
   names, targets, and avatar fallbacks.
+
+### 2026-09-10 — Phase 3 action-density and hierarchy slice
+
+- Source base: `7cdf3feb3`.
+- Changed owners: writer and reader chat navigation, shared popup controls,
+  avatar/pinned-chat presentation, the modal focus trap, localized navigation
+  copy, and the compact browser journey.
+- Chat selection remains the primary row action. Copy, persona binding, rename,
+  export, organization, and deletion now live in a target-named keyboard menu;
+  deletion is the final action in a visually separated danger section. Folder
+  actions use the same pattern. Responsive row, menu, footer, disclosure, and
+  avatar targets are at least 44px.
+- Folder trees now expose disclosure chevrons, semantic list/group structure,
+  indentation/connectors, current-state cues beyond color, and named empty
+  states. Missing character imagery renders initials; truncated chat labels
+  retain full hover and accessible names. Writer and reader adapters share the
+  presentation without adding reader mutations.
+- The browser journey found that the global popup host was outside the drawer's
+  focus scope. `modalFocusTrap` now admits only dynamically opened, explicitly
+  marked focus extensions while keeping every other sibling inert; menus can
+  receive focus and Escape restores the drawer trigger.
+- Passed `pnpm test -- src/lib/SideBars/SideChatList.svelte.test.ts` (72 tests),
+  `pnpm test -- src/lib/SideBars/PinnedChatsRail.svelte.test.ts` (5 tests),
+  `pnpm test -- src/lib/UI/PopupList.svelte.test.ts` (6 tests), `pnpm test --
+  src/ts/gui/modalFocusTrap.test.ts` (8 tests), `pnpm test --
+  src/lib/SideBars/Sidebar.keyboard.dom.test.ts` (26 tests), `pnpm test --
+  src/lib/SideBars/Sidebar.charList.test.ts` (6 tests), and `pnpm check` with no
+  diagnostics.
+- Passed `pnpm build:smoke` and the dedicated Chromium browser journey at
+  550×775 and 655×691. It proves a 56px visible scrim, 44px Close action, no
+  horizontal drawer overflow, target-named menu reachability, End/Escape focus
+  behavior, focus restoration, and no command requests. The build retained its
+  existing CSS Highlight API and browser-externalization warnings.
+- Phase 3 accepted. Next slice: outcome-first Input Hook and Agent/Preset
+  authoring assistance in Phase 4.
