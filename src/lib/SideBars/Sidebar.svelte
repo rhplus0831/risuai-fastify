@@ -10,13 +10,23 @@
     sideBarTransitionCause,
     PlaygroundStore,
     QuickSettings,
+    SizeStore,
     additionalHamburgerMenu,
   } from '../../ts/stores.svelte'
   import type { character } from '../../ts/storage/database.svelte'
   import BarIcon from './BarIcon.svelte'
   import HamburgerNavigationMenu from './HamburgerNavigationMenu.svelte'
   import SidebarIndicator from './SidebarIndicator.svelte'
-  import { ShellIcon, Settings, FolderIcon, FolderOpenIcon, HomeIcon, WrenchIcon, User2Icon } from '@lucide/svelte'
+  import {
+    ShellIcon,
+    Settings,
+    FolderIcon,
+    FolderOpenIcon,
+    HomeIcon,
+    WrenchIcon,
+    User2Icon,
+    XIcon,
+  } from '@lucide/svelte'
   import { getCharImage } from '../../ts/characterImage'
   import { language } from '../../lang'
   import SidebarAvatar from './SidebarAvatar.svelte'
@@ -509,6 +519,7 @@
       sideBarSize: $sideBarSize,
       desktopSidebarColumns: sidebarNumberSetting('desktopSidebarColumns', 'display', 1),
       mobileSidebarColumns: sidebarNumberSetting('mobileSidebarColumns', 'display', 1),
+      viewportWidthPx: $SizeStore.w,
     }),
   )
   let sidebarColumns = $derived(sidebarGeometry.columns)
@@ -571,9 +582,14 @@
     reseter()
     navigate(characterRoutePath(item.characterId, item.chatId))
     if ($DynamicGUI) {
-      sideBarTransitionCause.set('explicit-close')
-      sideBarClosing.set(true)
+      closeResponsiveNavigation()
     }
+  }
+
+  function closeResponsiveNavigation(): void {
+    if (!$DynamicGUI || $sideBarClosing) return
+    sideBarTransitionCause.set('explicit-close')
+    sideBarClosing.set(true)
   }
 
   function openNarrowPinnedChat(item: PinnedChatItem): void {
@@ -1192,6 +1208,16 @@
       sideBarTransitionCause.set('none')
     }
   }}>
+  {#if $DynamicGUI}
+    <button
+      type="button"
+      data-risu-responsive-navigation-close
+      class="mb-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-selected px-3 py-2 font-medium hover:bg-selected/30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
+      onclick={closeResponsiveNavigation}>
+      <XIcon size={18} aria-hidden="true" />
+      <span>{language.close} {language.menu}</span>
+    </button>
+  {/if}
   {#if sideBarMode === 0}
     {#if $selectedCharID < 0 || $settingsOpen}
       <div>
@@ -1284,10 +1310,9 @@
       if ($sideBarClosing) {
         return
       }
-      sideBarTransitionCause.set('explicit-close')
-      $sideBarClosing = true
+      closeResponsiveNavigation()
     }}
-    class="grow h-full min-w-12 bg-black/50"
+    class="h-full min-w-14 grow bg-black/70"
     class:sidebar-dark-animation={!$sideBarClosing && $sideBarTransitionCause === 'explicit-open'}
     class:sidebar-dark-close-animation={$sideBarClosing && $sideBarTransitionCause === 'explicit-close'}>
   </button>

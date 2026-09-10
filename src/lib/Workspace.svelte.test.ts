@@ -971,6 +971,10 @@ describe('read-only workspace', () => {
     expect(target.querySelector<HTMLElement>('[data-risu-shell-main]')?.inert).toBe(true)
     expect(target.querySelector('[data-risu-shell-main]')?.getAttribute('aria-hidden')).toBe('true')
     expect(target.querySelectorAll('[data-reader-navigation]')).toHaveLength(1)
+    const visibleClose = drawer.querySelector<HTMLButtonElement>('[data-risu-responsive-navigation-close]')!
+    expect(visibleClose).not.toBeNull()
+    expect(visibleClose.textContent).toContain(language.close)
+    expect(visibleClose.className).toContain('min-h-11')
     drawer.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))
     await tick()
     expect(drawer.hidden).toBe(true)

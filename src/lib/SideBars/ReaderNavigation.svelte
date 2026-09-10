@@ -12,6 +12,7 @@
     FolderOpenIcon,
     PlusIcon,
     PuzzleIcon,
+    XIcon,
   } from '@lucide/svelte'
   import NavigationRail from './NavigationRail.svelte'
   import NavigationButton from './NavigationButton.svelte'
@@ -25,6 +26,7 @@
   import { buildSidebarCharacterListItems } from './sidebarCharList'
   import { readerCharacterOrder } from './readerNavigation'
   import { resolveShellGeometry } from 'src/ts/gui/shellGeometry'
+  import { SizeStore } from 'src/ts/stores.svelte'
 
   let {
     characters,
@@ -90,6 +92,7 @@
       sideBarSize: settings.sideBarSize,
       desktopSidebarColumns: settings.desktopSidebarColumns,
       mobileSidebarColumns: settings.mobileSidebarColumns,
+      viewportWidthPx: $SizeStore.w,
     }),
   )
   const folderIds = $derived(new Set(folders.map((folder) => folder.id)))
@@ -130,6 +133,13 @@
       style:min-width={responsive ? undefined : geometry.panelWidth}
       data-reader-back-only
       data-risu-shell-sidebar-panel>
+      {#if responsive}
+        <button
+          type="button"
+          data-risu-responsive-navigation-close
+          class="mb-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-selected px-3 py-2 font-medium"
+          onclick={onClose}><XIcon size={18} aria-hidden="true" />{language.close} {language.menu}</button>
+      {/if}
       <button
         type="button"
         class="flex items-center gap-2 rounded-md border border-selected px-3 py-2 text-left focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
@@ -142,7 +152,7 @@
     </div>
     {#if responsive}
       <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
-      <div aria-hidden="true" class="h-full min-w-12 grow bg-black/50" onclick={onClose}></div>
+      <div aria-hidden="true" class="h-full min-w-14 grow bg-black/70" onclick={onClose}></div>
     {/if}
   {:else}
     <NavigationRail columns={geometry.columns}>
@@ -271,6 +281,13 @@
       style:min-width={responsive ? undefined : geometry.panelWidth}
       data-reader-chat-panel
       data-risu-shell-sidebar-panel>
+      {#if responsive}
+        <button
+          type="button"
+          data-risu-responsive-navigation-close
+          class="mb-3 flex min-h-11 w-full items-center justify-center gap-2 rounded-md border border-selected px-3 py-2 font-medium"
+          onclick={onClose}><XIcon size={18} aria-hidden="true" />{language.close} {language.menu}</button>
+      {/if}
       <label class="mb-3 block text-sm text-textcolor2"
         >{language.search}<input
           class="mt-1 w-full rounded-md border border-darkborderc bg-bgcolor px-3 py-2 text-textcolor"
@@ -342,7 +359,7 @@
       {:else}<p class="text-sm text-textcolor2">{language.connectedReaders.chooseCharacterHelp}</p>{/if}
     </div>
     {#if responsive}
-      <button type="button" aria-label={language.close} class="h-full min-w-12 grow bg-black/50" onclick={onClose}
+      <button type="button" aria-label={language.close} class="h-full min-w-14 grow bg-black/70" onclick={onClose}
       ></button>
     {/if}
   {/if}

@@ -21,7 +21,7 @@
 </script>
 
 <div
-  class="h-full shrink-0 flex-col items-center bg-bgcolor text-textcolor shadow-lg relative rs-sidebar"
+  class="relative h-full shrink-0 flex-col items-center overflow-x-hidden overflow-y-auto overscroll-contain bg-bgcolor pb-3 text-textcolor shadow-lg rs-sidebar [scrollbar-width:thin]"
   class:editMode
   class:risu-sub-sidebar={closing}
   class:risu-sub-sidebar-close={closing}

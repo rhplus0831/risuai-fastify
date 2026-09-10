@@ -58,4 +58,33 @@ describe('conversation shell geometry', () => {
       }),
     ).toMatchObject({ sideBarSize: 0, columns: 4, panelWidth: '24rem', railWidth: '20rem' })
   })
+
+  it.each([
+    { viewportWidthPx: 550, expectedPanelWidthRem: 20.875 },
+    { viewportWidthPx: 655, expectedPanelWidthRem: 27.4375 },
+  ])('keeps a visible compact scrim at $viewportWidthPx px', ({ viewportWidthPx, expectedPanelWidthRem }) => {
+    const geometry = resolveShellGeometry({
+      responsive: true,
+      sideBarSize: 3,
+      desktopSidebarColumns: 4,
+      mobileSidebarColumns: 2,
+      viewportWidthPx,
+    })
+    expect(geometry.columns).toBe(2)
+    expect(geometry.panelWidthRem).toBe(expectedPanelWidthRem)
+    expect(geometry.scrimWidthRem).toBeCloseTo(3.5)
+    expect(geometry.navigationWidthRem * 16).toBeLessThan(viewportWidthPx)
+  })
+
+  it('reduces configured compact rail columns only when a usable panel and scrim cannot both fit', () => {
+    expect(
+      resolveShellGeometry({
+        responsive: true,
+        sideBarSize: 0,
+        desktopSidebarColumns: 4,
+        mobileSidebarColumns: 2,
+        viewportWidthPx: 440,
+      }),
+    ).toMatchObject({ columns: 1, columnsAdjusted: true, railWidthRem: 5, panelWidthRem: 19, scrimWidthRem: 3.5 })
+  })
 })

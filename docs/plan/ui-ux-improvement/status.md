@@ -220,3 +220,21 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   settlement; no working autosave abstraction was replaced.
 - Phase 2 accepted. Next slice: responsive navigation and consolidated compact
   row actions in Phase 3.
+
+### 2026-09-10 — Phase 3 responsive-drawer geometry slice
+
+- Source base: `05315ee4c`.
+- Changed owners: the shared shell geometry helper, writer and connected-reader
+  navigation adapters, navigation rail, and focused geometry/workspace tests.
+- Responsive geometry now preserves configured rail columns when a usable panel
+  fits, reduces them only when necessary, caps the panel at the viewport, and
+  reserves a 56px scrim target at 550×775 and 655×691. The 1024px breakpoint and
+  all desktop geometry remain unchanged.
+- Writer and reader drawers now include a visible 44px-high **Close Menu**
+  action inside the panel, use a stronger scrim, and retain backdrop/Escape
+  dismissal, focus restoration, and inert main content. The rail has bottom
+  padding and a narrow overflow scrollbar instead of clipping its final item.
+- Passed `pnpm test -- src/ts/gui/shellGeometry.test.ts` (6 tests) and `pnpm
+  test -- src/lib/Workspace.svelte.test.ts` (32 tests).
+- Next slice: consolidate chat/folder secondary actions and strengthen hierarchy,
+  names, targets, and avatar fallbacks.
