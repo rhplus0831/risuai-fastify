@@ -34,6 +34,7 @@ and async stale-state work.
 
 | Record                                                                     | Scope                                                                                                    |
 | -------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- |
+| [`ui-ux-improvement/`](ui-ux-improvement/status.md)                        | Accepted navigation, Agent/Preset, Input Hook, BardWiki, responsive, contrast, keyboard, and browser-evidence improvements. |
 | [`chat-screen-width-2026-07-20.md`](chat-screen-width-2026-07-20.md)       | Fixed chat-column width setting, responsive layout contract, and existing-database hydration constraint. |
 | [`saved-toggles-rework-2026-07-20.md`](saved-toggles-rework-2026-07-20.md) | Saved-toggle state model, dialog selection, Pick merge semantics, and historical validation baseline.    |
 | [`data-driven-ui.md`](data-driven-ui.md)                                   | Dated 2026-08-17 inventory of data-dependent UI variants and their implementation owners.                |

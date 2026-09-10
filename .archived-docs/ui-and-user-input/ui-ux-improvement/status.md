@@ -2,17 +2,17 @@
 
 ## Current Cursor
 
-- State: **Phase 6 in progress — accessibility, visual evidence, and closeout.**
-- Next action: run the cross-surface accessibility/zoom matrix, update current guides, and archive the accepted plan.
+- State: **Complete — Phases 0–6 accepted.**
+- Final runtime source: `7f7ee34ea`; the archive-only closeout revision follows this ledger.
 - Review source: `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/REPORT.md`, dated 2026-09-10.
 - Planning baseline: current repository source inspected on 2026-09-10; the screenshot review was reconciled against shipped behavior before work was sequenced.
-- Runtime source is unchanged by this planning package.
+- Runtime behavior and current guides now include the accepted interaction, accessibility, and authoring contracts described below.
 
 ## Document Map
 
 - [PLAN.md](PLAN.md): product contract, reconciled findings, ownership, sequencing, risks, and completion criteria.
 - [Phase index](phases/README.md): bounded implementation phases and validation policy.
-- [Active plans](../README.md): repository planning index.
+- [UI and user input archive](../README.md): archive index for this completed record.
 
 ## Phase Ledger
 
@@ -24,7 +24,7 @@
 | [3. Compact navigation and action density](phases/phase-3-compact-navigation-and-actions.md) | Accepted | Responsive drawers, consolidated row menus, nested hierarchy, complete names, fallbacks, and overflow cues are verified at both compact viewports. |
 | [4. Outcome language and authoring tools](phases/phase-4-outcome-language-and-authoring.md) | Accepted | Agent, Preset, and Hook authoring now expose outcomes, insertion, autocomplete, diagnostics, previews, phase choice, and technical disclosures. |
 | [5. Guided BardWiki workspace](phases/phase-5-guided-bardwiki-workspace.md) | Accepted | Empty, inherited, lifecycle, activity, mobile, and modal states form one guided and safely fenced workspace. |
-| [6. Accessibility, visual evidence, and closeout](phases/phase-6-accessibility-and-closeout.md) | Pending | Complete interaction, contrast, zoom, browser, documentation, and rollout evidence. |
+| [6. Accessibility, visual evidence, and closeout](phases/phase-6-accessibility-and-closeout.md) | Accepted | Theme contrast, names and targets, modal focus, keyboard/reflow browser journeys, current guides, and report disposition are complete. |
 
 ## Decisions
 
@@ -353,3 +353,114 @@ Do not describe a queued mutation as saved on the server, a static screenshot as
   retained its existing CSS Highlight API and browser-externalization warnings.
 - Phase 5 accepted. Next slice: cross-surface keyboard, contrast, theme, zoom,
   reduced-motion, and documentation closeout in Phase 6.
+
+### 2026-09-10 — Phase 6 contrast, accessibility, and closeout
+
+- Source bases: `a82c3b569`, `d8316d8d9`, `66d4415d4`, `cf7d76f7b`,
+  `de0f4e428`, `5aa63c1c7`, and `7f7ee34ea`.
+- Changed owners: built-in color palettes and custom-color diagnostics, the
+  Fastify color default, compact Agent/Preset controls, chat-modal entry focus,
+  the dedicated Chromium review journey, current UI/structure/test guides, and
+  direct Korean UI copy.
+- Theme verification now measures primary and muted text against page and modal
+  backgrounds at 4.5:1, focus indicators and control borders at 3:1, primary
+  text on selected/control backgrounds at 4.5:1, disabled text at the product's
+  50% opacity at 3:1, destructive indicators at 3:1, and the modal edge against
+  the black/70 scrim at 3:1. Every built-in palette passes. Exact legacy
+  built-in values migrate to their repaired equivalents; edited and custom
+  palettes are preserved and receive localized, role-specific warnings instead
+  of silent rewriting.
+- Compact Agent and Preset list, drawer, close, reorder, edit, duplicate,
+  removal, use, and chip controls now have complete target-bearing names and
+  44px targets where touch-oriented. Status, hierarchy, selection, and failure
+  cues do not rely on color alone.
+- Opening Chat List, BardWiki, or Modules from the transient chat menu now
+  establishes the persistent chat-menu button as the restoration owner before
+  the menu is removed. This prevents a disconnected trigger from entering the
+  modal focus stack while preserving nested focus traps, inertness, Escape,
+  scroll lock, and restoration.
+- Passed focused final-source tests: `pnpm test --
+  src/ts/gui/colorscheme.test.ts` (55 tests), `pnpm test --
+  src/lib/Setting/Pages/Display/ColorSettingsAccessibility.svelte.test.ts` (7
+  tests), `pnpm test --
+  src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts` (44 tests), `pnpm
+  test -- src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts` (107 tests),
+  `pnpm test -- server/fastify/__tests__/databaseDefaults.test.ts` (32 tests),
+  and `pnpm exec vitest run src/lang/index.test.ts` (22 tests).
+- The required one-shot `pnpm test:agent` ran after implementation and completed
+  in 2m 40.6s. Server/browser typecheck, topology, current docs, frontend check,
+  all 4,365 server tests (3 skipped), and the browser-smoke build passed. Its
+  frontend lane failed on the then-missing direct Korean paths; the ownership
+  test reported beside it passed immediately in isolation (94 tests) and was a
+  concurrency-only result. Commit `7f7ee34ea` supplied all 167 missing Korean
+  paths. The repaired frontend lane was then run once, without repeating the
+  aggregate: `RISU_TEST_EXCLUDE_UI_MAP=false RISU_TEST_INCLUDE_GATES=false pnpm
+  exec vitest run` passed all 726 files and 9,384 tests (3 skipped). Together
+  these runs cover every aggregate lane on final source; no failing check or
+  product exception remains.
+- Current navigation, settings, shared UI, chat, Agent/Preset, BardWiki, and
+  testing guides describe the shipped contracts. Final-source `pnpm check`
+  reports 0 errors and 0 warnings; `pnpm check:docs`, focused Prettier, and `git
+  diff --check` pass. Existing browser build notices for the CSS Highlight API
+  and browser-externalized modules remain non-failing and are unrelated to these
+  surfaces.
+
+### Phase 6 browser evidence
+
+- Source revision: `de0f4e428` for the journey and screenshots; later revisions
+  contain documentation and localization only.
+- Command: `pnpm exec playwright test -c
+  playwright.fastify-smoke.config.ts
+  server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts
+  server/fastify/browser-smoke/bardWikiLifecycle.spec.ts` — 3 Chromium tests
+  passed in 11.2s.
+- The disposable fixture exercises 550×775, 655×691, 640×450 reflow, and
+  1280×900 desktop layouts, long navigation data, and reduced motion. The
+  640-CSS-pixel case represents a 1280px desktop reflowed at 200%; Playwright
+  does not drive Chromium's native chrome zoom control, and resized desktop
+  Chromium is not proof of touch hardware, a screen reader, or the external
+  production deployment.
+- Interaction assertions cover responsive drawer focus/inertness and footer
+  reachability; rail scrolling; folder disclosure; menu Home/End/Escape;
+  target-bearing names; no horizontal overflow; Agent creation; nested Agent
+  composition; Preset reorder announcements; fail-closed deletion impact with
+  Retry and focus recovery; Hook rename/save/delete cancel/delete accept/Add
+  focus; BardWiki keyboard creation, Back navigation, long lists, Escape
+  restoration, desktop split view, persistence, and Activity disclosure.
+  Browser deletion deliberately proves the safe unavailable/Retry state because
+  that route does not load the loadout projection; the component suite proves
+  the ready global/chat/loadout impact and accepted/queued/failed outcomes.
+- Before screenshots are in
+  `/home/codex/risuai-fastify-sandbox/artifacts/ui-ux-review/` as
+  `fresh-root-sidebar-550x775.png`, `fresh-root-sidebar-655x691.png`,
+  `fresh-agent-presets.png`, `fresh-edit-agent.png`, `fresh-edit-preset.png`,
+  `fresh-input-hooks.png`, and `fresh-bardwiki-workspace-expanded.png`.
+- After screenshots are in
+  `test-results/uiUxImprovementBaseline-re-0b833-a-at-both-compact-viewports/`
+  as `after-sidebar-550x775.png`, `after-sidebar-655x691.png`,
+  `after-agent-presets.png`, `after-agent-editor.png`,
+  `after-preset-editor.png`, `after-input-hooks.png`, and
+  `after-bardwiki-workspace.png`. The Playwright attachment copies in that
+  directory retain their content-addressed names.
+
+### Final report self-review
+
+| Reviewed surface | Findings and disposition |
+| --- | --- |
+| 550×775 navigation | Missing identity fallbacks and complete names, crowded actions, weak drawer affordance, clipped rail overflow, ambiguous branch hierarchy, and weak interaction contrast are **implemented**. The reference-only root grid is **retired** and was not restored. |
+| 655×691 navigation | Drawer width/scrim/close geometry, secondary-action density, hierarchy, truncation access, and rail continuation are **implemented**. The image-only grid and obsolete root badges are **reference-only/retired**. |
+| Agent list | Guided empty creation, certified dependency-aware deletion, Technical details, nested create-from-Preset, touch-sized named actions, density, and reorder announcements are **implemented**. Server-side dependency rejection is **intentionally preserved** as defense in depth. |
+| Agent editor | Two-way prepared-input lint, nonblocking empty/generated-name warnings, grouped sections, ChatML/strict-output guidance, caret insertion/autocomplete, actionable parser/reference diagnostics, numeric effects/reflow, and focus recovery are **implemented**. Existing valid records remain valid, **intentionally preserved**. |
+| Preset editor | Module chips/insertion, output-reference diagnostics and preview, stale-reference repair, phase-before-add nested creation, Save reasons, grouping/footer reachability, and keyboard names are **implemented**. Unknown documented namespaces remain allowed with warnings, **intentionally preserved**. |
+| Input Hooks | Existing autosave, retained newer edits, Retry, and named deletion confirmation are **verified/preserved**. Outcome-first Draft/BTW labels, prompt disclosure, translation-flow copy, compact cards, and focus/browser coverage are **implemented**. Runtime Hook values are **intentionally preserved**. |
+| BardWiki | Guided empty actions, truthful inherited values, modal isolation, responsive list/detail and desktop split views, outcome lifecycle language, Activity summaries, and measured contrast are **implemented**. Preview, version/hash fences, and explicit apply/confirmation are **intentionally preserved**. |
+
+All high-impact report findings are closed. Semantic list/group and native
+disclosure behavior were chosen over a custom ARIA tree because the interaction
+model does not require tree keyboard semantics; visible indentation, connectors,
+expanded state, and redundant current cues provide the reviewed hierarchy. No
+finding remains open solely because it was absent from a screenshot.
+
+Phase 6 accepted. The complete package is archived under
+`.archived-docs/ui-and-user-input/ui-ux-improvement/`; current architecture and
+testing guides are the source of truth for shipped behavior.
