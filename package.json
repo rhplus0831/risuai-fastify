@@ -23,7 +23,7 @@
     "check:docs": "tsx util/current-documentation-validator.ts",
     "check:server": "tsx util/check-server.ts",
     "format": "prettier --write .",
-    "format:check": "prettier --check .",
+    "format:check": "prettier --check . --experimental-cli --no-cache",
     "test": "tsx util/focused-test.ts",
     "test:compat-harness": "tsx test/compat-harness/run.ts",
     "prepare:compat-baseline": "tsx util/compat-baseline.ts --prepare",

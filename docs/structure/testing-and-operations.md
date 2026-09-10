@@ -41,7 +41,7 @@ environment variables live in
 | `pnpm smoke:fastify-browser`       | User/CI command that builds the smoke client without production sourcemaps, then runs the full Playwright Fastify browser smoke suite.                                                     |
 | `pnpm analyze:db <path>`           | Analyze `.risu`, JSON, raw database JSON, or data dirs containing `db.json`; SQLite sidecars are copied when present. Add `--json` for machine-readable output.                            |
 | `pnpm ts:agent <command>`          | Run the tsserver-backed agent debugging wrapper for navigation, diagnostics, symbols, code actions, imports, and renames.                                                                  |
-| `pnpm format`, `pnpm format:check` | Prettier write/check.                                                                                                                                                                      |
+| `pnpm format`, `pnpm format:check` | Prettier write/check; checks use the experimental parallel CLI with caching disabled.                                                                                                      |
 | `pnpm coverage:frontend`           | Run root/browser Vitest tests with broad frontend coverage under `coverage/frontend`.                                                                                                      |
 | `pnpm coverage:backend`            | Run Fastify/server Vitest tests with broad backend coverage under `coverage/backend`.                                                                                                      |
 | `pnpm coverage:all`                | Run frontend and backend coverage, preserving a failing exit code if either side fails.                                                                                                    |
@@ -183,8 +183,10 @@ both commands.
 preserves any failure in the final aggregate result. Set
 `RISU_TEST_ALL_JOBS` or pass `--jobs <count>` to tune that outer limit, and use
 `--dry-run` to inspect the lane graph. Its topology lane validates discovery
-before the ordinary frontend lane starts. Browser smoke runs outside that pool and
-waits for `check:server`; the real browser tests retain load-sensitive isolation.
+before the ordinary frontend lane starts. The smoke build fills a regular-lane
+slot after `check:server`, overlapping remaining frontend work without sharing
+emitted outputs with the typechecks. Browser smoke then consumes that build
+outside the pool; the real browser tests retain load-sensitive isolation.
 Its stateful tests remain serial within each spec, while local runs
 use 75% of available CPUs up to four workers. Set
 `RISU_BROWSER_SMOKE_WORKERS=<count>` for an explicit local or CI override; CI
@@ -198,6 +200,10 @@ Fastify/server lane also runs outside the concurrent pool because it contains
 deadline and load-cost assertions. These isolated phases keep concurrent load
 from invalidating timing checks. Every lane still runs when another lane fails,
 and the aggregate exits nonzero at the end.
+`format:check` uses Prettier's experimental parallel CLI with `--no-cache`,
+checking every file on each run. The pinned Prettier 3.8.3 legacy CLI's content
+cache can miss same-size edits, so it is deliberately unused. The formatter and
+Svelte plugin are unchanged; `pnpm format` retains the ordinary write command.
 Pass `--timings=json` to append a schema-versioned JSON record containing the
 aggregate duration, configured job limit, and each lane's elapsed time plus
 start/finish offsets, dependency metadata, isolation flag, and exit code. This

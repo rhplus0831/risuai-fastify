@@ -111,7 +111,7 @@ test('an authenticated reader uploads browser failures and the HTTPS helper retr
         delete env.NO_COLOR
         execFile(
           process.execPath,
-          ['--import', 'tsx', path.resolve('util/diagnostics-remote.ts'), '--version=2', '--limit=200'],
+          ['--import', 'tsx/esm', path.resolve('util/diagnostics-remote.ts'), '--version=2', '--limit=200'],
           { env, timeout: 15_000, maxBuffer: 1024 * 1024 },
           (error, stdout, stderr) => {
             if (error || stderr) return reject(new Error('helper-fixture-failed'))

@@ -298,7 +298,7 @@ it('diagnoses a real provider disconnect and failed commit through the HTTPS hel
         delete env.NODE_TLS_REJECT_UNAUTHORIZED
         execFile(
           process.execPath,
-          ['--import', 'tsx', helperPath, ...args],
+          ['--import', 'tsx/esm', helperPath, ...args],
           { cwd: repositoryRoot, env, timeout: 15_000, maxBuffer: 1024 * 1024, encoding: 'utf8' },
           (error, stdout, stderr) => resolveResult({ code: error?.code ?? 0, stdout, stderr }),
         )

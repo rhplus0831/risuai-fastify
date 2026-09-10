@@ -51,7 +51,14 @@ describe('test:all orchestration', () => {
   it('keeps browser verification and duplicate-test owners ordered and performance gates isolated', () => {
     const byId = new Map(qualityLanes.map((lane) => [lane.id, lane]))
 
-    expect(byId.get('browser-smoke')).toMatchObject({ after: ['server-check'], isolated: true })
+    expect(byId.get('browser-smoke-build')).toMatchObject({ args: ['build:smoke'], after: ['server-check'] })
+    expect(byId.get('browser-smoke-build')?.isolated).toBeUndefined()
+    expect(byId.get('browser-smoke')).toMatchObject({
+      after: ['browser-smoke-build'],
+      isolated: true,
+      args: ['exec', 'playwright', 'test', '-c', 'playwright.fastify-smoke.config.ts'],
+      env: { VITE_FASTIFY_BROWSER_SMOKE: 'TRUE', RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED: 'true' },
+    })
     expect(byId.get('test-topology')).toMatchObject({ args: ['exec', 'tsx', 'util/test-topology.ts'] })
     expect(byId.get('frontend-tests')).toMatchObject({
       after: ['test-topology'],
@@ -225,6 +232,7 @@ describe('test:all orchestration', () => {
         ],
       ],
       ['browser-smoke', ['smoke', 'pnpm smoke:fastify-browser']],
+      ['browser-smoke-build', ['smoke', 'pnpm smoke:fastify-browser']],
       ['frontend-check', ['check', 'pnpm check']],
       ['ui-coverage', ['ui-coverage', 'pnpm coverage:ui-map']],
       ['format', ['format', 'pnpm format:check']],

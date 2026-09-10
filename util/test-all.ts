@@ -107,11 +107,20 @@ export const qualityLanes: readonly QualityLane[] = [
     isolated: true,
   },
   {
+    id: 'browser-smoke-build',
+    label: 'browser-smoke build',
+    args: ['build:smoke'],
+    after: ['server-check'],
+    // Typechecks use noEmit; only the later browser lane consumes dist.
+    priority: 3,
+  },
+  {
     id: 'browser-smoke',
     label: 'browser smoke tests',
-    args: ['smoke:fastify-browser'],
+    args: ['exec', 'playwright', 'test', '-c', 'playwright.fastify-smoke.config.ts'],
+    env: { VITE_FASTIFY_BROWSER_SMOKE: 'TRUE', RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED: 'true' },
     // Keep full browser verification after static checks and outside the pool.
-    after: ['server-check'],
+    after: ['browser-smoke-build'],
     isolated: true,
   },
   {
@@ -164,16 +173,7 @@ export const agentQualityLanes: readonly QualityLane[] = [
   },
   requiredQualityLane('frontend-check'),
   requiredQualityLane('server-tests'),
-  {
-    id: 'browser-smoke-build',
-    label: 'browser-smoke build',
-    args: ['build:smoke'],
-    after: ['server-check'],
-    // This build has no timing assertions, and all typechecks use noEmit.
-    // Fill a free slot at lower priority while frontend tests are still running.
-    // Actual browser/server tests retain their isolated phases.
-    priority: 3,
-  },
+  requiredQualityLane('browser-smoke-build'),
 ]
 
 function parsePositiveInteger(raw: string, option: string): number {

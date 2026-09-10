@@ -164,7 +164,9 @@ describe('remote diagnostics helper with real HTTPS and CLI processes', () => {
     return new Promise((resolveResult) => {
       execFile(
         process.execPath,
-        ['--import', 'tsx', resolve('util/diagnostics-remote.ts'), ...args],
+        // This CLI is ESM-only. Avoid installing tsx's CommonJS/allowJs
+        // resolver for every subprocess while retaining the real TS entrypoint.
+        ['--import', 'tsx/esm', resolve('util/diagnostics-remote.ts'), ...args],
         {
           env,
           timeout: 15_000,
