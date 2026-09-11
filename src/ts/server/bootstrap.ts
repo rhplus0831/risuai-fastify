@@ -12,6 +12,12 @@ import {
 } from '@risuai/protocol/remote-diagnostics'
 import { isDiagnosticsConfiguration, type DiagnosticsConfiguration } from '@risuai/protocol/diagnostics'
 import { isStartupTelemetryConfiguration, type StartupTelemetryConfiguration } from '@risuai/protocol/startup-telemetry'
+import {
+  isOwnershipResponse,
+  OWNERSHIP_ENDPOINT,
+  type OwnershipResponse,
+  type OwnershipWriter,
+} from '@risuai/protocol/ownership'
 
 const BOOTSTRAP_ENDPOINT = '/api/v1/bootstrap'
 const WRITER_OBSERVER_SESSION_HEADER = 'risu-writer-observer-session'
@@ -19,10 +25,7 @@ export const DISCONNECT_EXISTING_WRITER_HEADER = 'risu-disconnect-existing-write
 export const EXPECTED_WRITER_EPOCH_HEADER = 'risu-expected-writer-epoch'
 export const EXPECTED_DATABASE_LINEAGE_HEADER = 'risu-expected-database-lineage'
 
-export interface BootstrapWriter {
-  sessionId: string | null
-  epoch: number
-}
+export type BootstrapWriter = OwnershipWriter
 
 export interface ActiveGenerationJob {
   chatId: string
@@ -258,8 +261,66 @@ export type ServerBootstrapResult =
 
 type ServerBootstrapReadOnlyResult = Exclude<ServerBootstrapResult, { status: 'active-writer-connected' }>
 
+export type ServerOwnershipResult =
+  | { status: 'ok'; ownership: OwnershipResponse; requestUid?: string }
+  | { status: 'error'; error: string; requestUid?: string; httpStatus?: number }
+  | { status: 'unavailable' }
+
+let ownershipRequest: { generation: number; promise: Promise<ServerOwnershipResult> } | null = null
+
 export function canUseServerBootstrap(): boolean {
   return true
+}
+
+/** Coalesces concurrent recovery checks without sharing writer-acquisition intent. */
+export function fetchServerOwnership(): Promise<ServerOwnershipResult> {
+  const generation = captureClientSessionGeneration()
+  if (ownershipRequest?.generation === generation) return ownershipRequest.promise
+  let promise!: Promise<ServerOwnershipResult>
+  promise = requestServerOwnership(generation).finally(() => {
+    if (ownershipRequest?.promise === promise) ownershipRequest = null
+  })
+  ownershipRequest = { generation, promise }
+  return promise
+}
+
+async function requestServerOwnership(generation: number): Promise<ServerOwnershipResult> {
+  if (!canUseServerBootstrap() || !isClientSessionGenerationCurrent(generation)) return { status: 'unavailable' }
+  const auth = await getNodeServerProxyAuth()
+  if (!isClientSessionGenerationCurrent(generation)) return { status: 'unavailable' }
+
+  let response: Response
+  try {
+    response = await fetch(OWNERSHIP_ENDPOINT, {
+      method: 'GET',
+      cache: 'no-store',
+      headers: { 'risu-auth': auth },
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return { status: 'error', error: `Network error: ${message}` }
+  }
+  const requestUid = response.headers.get('X-Request-UID') || undefined
+  let body: unknown = null
+  try {
+    body = await response.json()
+  } catch {
+    // HTTP status handling below reports non-JSON failures.
+  }
+  if (!response.ok) {
+    if ((response.status === 401 || response.status === 403) && isClientSessionGenerationCurrent(generation))
+      resetBrowserDiagnosticsSession()
+    return {
+      status: 'error',
+      error: errorMessageFromBody(body, `HTTP ${response.status}`),
+      httpStatus: response.status,
+      ...(requestUid ? { requestUid } : {}),
+    }
+  }
+  if (!isOwnershipResponse(body)) {
+    return { status: 'error', error: 'Invalid ownership response', ...(requestUid ? { requestUid } : {}) }
+  }
+  return { status: 'ok', ownership: body, ...(requestUid ? { requestUid } : {}) }
 }
 
 export async function fetchServerBootstrap(

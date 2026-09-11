@@ -66,6 +66,18 @@ export const BROWSER_OPERATION_BINDINGS = [
     owner: 'src/ts/server/bootstrap.ts#fetchServerBootstrap',
   }),
   operation({
+    key: 'ownership-read',
+    family: 'resource',
+    routeOperationId: 'ownership',
+    method: 'GET',
+    examplePath: '/api/v1/ownership',
+    cache: 'no-store',
+    streaming: 'none',
+    durability: 'none',
+    response: 'structured',
+    owner: 'src/ts/server/bootstrap.ts#fetchServerOwnership',
+  }),
+  operation({
     key: 'settings-read',
     family: 'resource',
     routeOperationId: 'settings-read',

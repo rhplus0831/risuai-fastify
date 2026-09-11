@@ -22,6 +22,7 @@
     "./local-file-import": "./src/localFileImport.ts",
     "./lore-token-counts": "./src/loreTokenCounts.ts",
     "./module-organization": "./src/moduleOrganization.ts",
+    "./ownership": "./src/ownership.ts",
     "./provider-operation": "./src/providerOperation.ts",
     "./route-operation": "./src/routeOperation.ts",
     "./server-tool": "./src/serverTool.ts",

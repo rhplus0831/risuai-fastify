@@ -48,6 +48,8 @@ export interface ServerMemoryJobSnapshot {
 export type ServerMemorySnapshotHandler = (snapshot: ServerMemoryJobSnapshot) => void
 
 export interface ServerWriterEvent {
+  /** Present on current servers; absent only for compatibility with older event streams. */
+  databaseLineage?: string
   sessionId: string | null
   epoch: number
 }
@@ -229,7 +231,13 @@ function parseWriterEvent(data: string): ServerWriterEvent | null {
     return null
   }
   if (!Number.isSafeInteger(record.epoch) || (record.epoch as number) < 0) return null
+  if (
+    record.databaseLineage !== undefined &&
+    (typeof record.databaseLineage !== 'string' || record.databaseLineage.length === 0)
+  )
+    return null
   return {
+    ...(typeof record.databaseLineage === 'string' ? { databaseLineage: record.databaseLineage } : {}),
     sessionId: record.sessionId as string | null,
     epoch: record.epoch as number,
   }

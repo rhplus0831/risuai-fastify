@@ -477,7 +477,9 @@ describe('command events stream', () => {
       expect(res.status).toBe(200)
       expect(res.headers.get('content-type')).toContain('text/event-stream')
       const text = await readUntil(reader!, (chunk) => chunk.includes(': connected\n\n'))
-      expect(parseSseJsonEvents(text, 'writer')).toEqual([{ sessionId: null, epoch: 0 }])
+      expect(parseSseJsonEvents(text, 'writer')).toEqual([
+        { databaseLineage: expect.any(String), sessionId: null, epoch: 0 },
+      ])
       expect(text).not.toContain('id: ')
       expect(text).toContain(': connected\n\n')
     } finally {
@@ -525,7 +527,9 @@ describe('command events stream', () => {
 
     try {
       const text = await readUntil(reader!, (chunk) => chunk.includes('writer-new'))
-      expect(parseSseJsonEvents(text, 'writer')).toEqual([{ sessionId: 'writer-new', epoch: 2 }])
+      expect(parseSseJsonEvents(text, 'writer')).toEqual([
+        { databaseLineage: firstWriter.json().databaseLineage, sessionId: 'writer-new', epoch: 2 },
+      ])
     } finally {
       abort.abort()
       reader?.releaseLock()
@@ -550,7 +554,9 @@ describe('command events stream', () => {
     const reader = res.body?.getReader()
     expect(reader).toBeDefined()
     const initial = await readUntil(reader!, (chunk) => chunk.includes(': connected\n\n'))
-    expect(parseSseJsonEvents(initial, 'writer')).toEqual([{ sessionId: 'writer-a', epoch: 1 }])
+    expect(parseSseJsonEvents(initial, 'writer')).toEqual([
+      { databaseLineage: firstWriter.json().databaseLineage, sessionId: 'writer-a', epoch: 1 },
+    ])
 
     const sameWriter = await harness.app.inject({
       method: 'GET',
@@ -567,7 +573,9 @@ describe('command events stream', () => {
 
     try {
       const text = await readUntil(reader!, (chunk) => chunk.includes('writer-b'))
-      expect(parseSseJsonEvents(text, 'writer')).toEqual([{ sessionId: 'writer-b', epoch: 2 }])
+      expect(parseSseJsonEvents(text, 'writer')).toEqual([
+        { databaseLineage: firstWriter.json().databaseLineage, sessionId: 'writer-b', epoch: 2 },
+      ])
     } finally {
       abort.abort()
       reader?.releaseLock()

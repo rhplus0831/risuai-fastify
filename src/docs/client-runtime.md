@@ -422,6 +422,15 @@ Managed startup never acquires a foreign writer just because its event
 connection is absent. **Use this device** performs explicit conditional
 acquisition and recovery against freshly discovered ownership.
 
+Foreground recovery shares a generation-scoped `GET /api/v1/ownership` request
+across consumers. Ordinary focus is ignored while SSE is live and has produced a
+recent frame. Hidden, pagehide, offline, persisted pageshow, stale-stream, or
+disconnected evidence permits the probe; an unchanged lineage/writer tuple
+leaves a healthy stream alone, while changed or uncertain ownership enters the
+existing full-bootstrap recovery path. The endpoint is authenticated, no-store,
+and read-only. Its tuple, bootstrap ownership, and SSE writer frames are all
+derived from the same durable `database_metadata` row.
+
 Managed import/restore observation can replace the lineage in place, enter
 reading even when the server still names the same writer session, and install
 new authoritative resources without reloading the document. Still-valid local

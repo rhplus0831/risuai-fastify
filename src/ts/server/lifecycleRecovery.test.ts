@@ -22,13 +22,15 @@ describe('browser lifecycle recovery', () => {
     cleanups.push(subscribeBrowserLifecycleRecovery(resources))
 
     document.dispatchEvent(new Event('visibilitychange'))
-    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: true }))
+    const pageShow = new PageTransitionEvent('pageshow')
+    Object.defineProperty(pageShow, 'persisted', { value: true })
+    window.dispatchEvent(pageShow)
     await Promise.resolve()
 
     expect(generation).toHaveBeenCalledOnce()
-    expect(generation).toHaveBeenCalledWith('pageshow')
+    expect(generation).toHaveBeenCalledWith('pageshow', { suspensionEvidence: true })
     expect(resources).toHaveBeenCalledOnce()
-    expect(resources).toHaveBeenCalledWith('pageshow')
+    expect(resources).toHaveBeenCalledWith('pageshow', { suspensionEvidence: true })
   })
 
   it('suppresses hidden visibility changes and reports online and focus recovery separately', async () => {
@@ -45,7 +47,10 @@ describe('browser lifecycle recovery', () => {
     window.dispatchEvent(new Event('focus'))
     await Promise.resolve()
 
-    expect(listener.mock.calls).toEqual([['online'], ['focus']])
+    expect(listener.mock.calls).toEqual([
+      ['online', { suspensionEvidence: true }],
+      ['focus', { suspensionEvidence: false }],
+    ])
   })
 
   it('isolates a throwing recovery domain from the remaining subscribers', async () => {
@@ -64,7 +69,7 @@ describe('browser lifecycle recovery', () => {
       await Promise.resolve()
 
       expect(consoleError).toHaveBeenCalledWith(failure)
-      expect(resources).toHaveBeenCalledWith('online')
+      expect(resources).toHaveBeenCalledWith('online', { suspensionEvidence: true })
     } finally {
       consoleError.mockRestore()
     }
@@ -82,6 +87,22 @@ describe('browser lifecycle recovery', () => {
     cleanups.push(subscribeBrowserLifecycleRecovery(reinstalled))
     window.dispatchEvent(new Event('focus'))
     await Promise.resolve()
-    expect(reinstalled).toHaveBeenCalledWith('focus')
+    expect(reinstalled).toHaveBeenCalledWith('focus', { suspensionEvidence: false })
+  })
+
+  it('latches pagehide evidence until the next foreground signal', async () => {
+    const listener = vi.fn()
+    cleanups.push(subscribeBrowserLifecycleRecovery(listener))
+
+    window.dispatchEvent(new Event('pagehide'))
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+
+    expect(listener.mock.calls).toEqual([
+      ['focus', { suspensionEvidence: true }],
+      ['focus', { suspensionEvidence: false }],
+    ])
   })
 })

@@ -396,6 +396,14 @@ confirmation handshake. Changing the writer advances the durable writer
 epoch; guarded routes reject stale sessions with `423 active_writer_stale`,
 including after restart.
 
+Authenticated `GET /api/v1/ownership` is the no-store recovery probe. It returns
+only the protocol version, database lineage, and durable writer tuple, and never
+registers the caller as a writer. The endpoint, bootstrap response, initial SSE
+writer frame, and live writer-change frames all obtain that tuple from the same
+`database_metadata` row through `getDatabaseOwnershipSnapshot()`; the lineage
+and writer values are selected atomically so those transports cannot assemble a
+mixed ownership snapshot.
+
 Connected readers are part of the sole startup path.
 `src/ts/connectedClientStartup.ts` first discovers ownership. An exclusive page
 may acquire an unowned server or conditionally resume its own writer; an

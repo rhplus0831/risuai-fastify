@@ -57,11 +57,11 @@ export function registerActiveWriterSession(state: ActiveWriterState, req: Fasti
   if (sessionId !== null) {
     const previousSessionId = state.sessionId
     const previousEpoch = state.epoch
-    const metadata = registerDatabaseWriterSession(state.db, sessionId)
-    state.sessionId = metadata.sessionId
-    state.epoch = metadata.epoch
-    if (metadata.sessionId !== previousSessionId || metadata.epoch !== previousEpoch) {
-      state.events.emit({ sessionId, epoch: metadata.epoch })
+    const ownership = registerDatabaseWriterSession(state.db, sessionId)
+    state.sessionId = ownership.writer.sessionId
+    state.epoch = ownership.writer.epoch
+    if (ownership.writer.sessionId !== previousSessionId || ownership.writer.epoch !== previousEpoch) {
+      state.events.emit({ databaseLineage: ownership.databaseLineage, ...ownership.writer })
     }
   }
 }

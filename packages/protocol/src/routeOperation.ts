@@ -105,6 +105,16 @@ export const PROTOCOL_ROUTE_OPERATION_CATALOG = [
     response: 'structured',
   },
   {
+    id: 'ownership',
+    methods: ['GET'],
+    path: '/api/v1/ownership',
+    match: 'exact',
+    streaming: 'none',
+    cache: 'no-store',
+    durability: 'none',
+    response: 'structured',
+  },
+  {
     id: 'diagnostics-read',
     methods: ['GET'],
     path: '/api/v1/diagnostics',

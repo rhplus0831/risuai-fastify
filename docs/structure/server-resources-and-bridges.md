@@ -5,6 +5,7 @@ Targeted source check: 2026-09-05 (display paint-cache ownership).
 Targeted source check: 2026-09-08 (connected-reader startup and generation reads).
 Targeted source check: 2026-09-10 (role-first unified workspace).
 Targeted source check: 2026-09-10 (revision-identical writer reconnect reuse).
+Targeted source check: 2026-09-11 (ownership-first foreground recovery).
 
 This guide owns the Fastify-to-browser read boundary: bootstrap resources,
 root and targeted REST reads, hash-verified cache substitution, lazy body
@@ -126,6 +127,14 @@ capabilities consumed by the shell and protocol adapters:
   gaps. Local navigation is restored by stable identity after replacement.
   Reconnect neither acquires a writer nor replays outbox work. Hypa/BardWiki
   operational snapshots and progress use their own stream/version fences.
+- Foreground recovery does not treat an ordinary focus event as proof that a
+  healthy, recently active SSE stream was suspended. Hidden, pagehide, offline,
+  persisted pageshow, stale-stream, and disconnected evidence trigger one shared
+  `GET /api/v1/ownership` probe per client-session generation. Unchanged
+  ownership leaves a healthy stream alone, or reconnects a discarded reader
+  stream from its applied event cursor without a bootstrap. Changed or uncertain
+  ownership retains the full bootstrap recovery path. Generation bootstrap
+  recovery is likewise limited to suspension-backed lifecycle signals.
 - Writer generation recovery treats SQLite `generation_operations`,
   `generation_operation_attempts`, and `generation_effects` as durable
   authority. Active jobs are live attachment hints and local activities are
@@ -158,7 +167,7 @@ capabilities consumed by the shell and protocol adapters:
 
 | Path                                                                        | Role                                                                                                                             |
 | --------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `src/ts/server/bootstrap.ts`                                                | Validates the small runtime bootstrap and exposes writer-intent/read-only variants.                                              |
+| `src/ts/server/bootstrap.ts`                                                | Validates the small runtime bootstrap variants and the shared single-flight ownership probe.                                    |
 | `src/ts/connectedClientStartup.ts`                                          | Discovers ownership and conditionally enters connected reader or authorized writer recovery.                                     |
 | `src/ts/server/connectedReaderSync.ts`                                      | Reader event transport, revision reconciliation, ownership/lineage recovery, and operational snapshots.                          |
 | `src/ts/server/readerTranscriptProjection.svelte.ts`                        | Certified reader navigation/display/transcript ownership and chat-incarnation fences.                                            |
@@ -321,6 +330,7 @@ immediately, so a later refresh still reads the server.
 
 | Data                                                  | Endpoint                                                                                            | Browser owner                                                        |
 | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------- |
+| Database lineage and durable writer tuple             | `GET /api/v1/ownership`                                                                             | Foreground reader/writer ownership validation                        |
 | Minimal coherent application shell                    | `GET /api/v1/resources/shell`                                                                       | `shellHydration.ts`, root startup                                    |
 | One standalone legacy settings value                  | `GET /api/v1/resources/settings/:setting`                                                           | `routeResourceLoader.ts`, standalone setting state                   |
 | Persisted settings fields                             | Cache `POST /api/v1/settings`; full `GET` fallback                                                  | `resourceReads.ts`, `settingsResourceState`                          |

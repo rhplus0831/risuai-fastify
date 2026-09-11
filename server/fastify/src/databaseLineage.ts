@@ -8,6 +8,11 @@ export interface DatabaseWriterMetadata {
   epoch: number
 }
 
+export interface DatabaseOwnershipSnapshot {
+  databaseLineage: string
+  writer: DatabaseWriterMetadata
+}
+
 export class DatabaseLineageConflictError extends Error {
   readonly databaseLineage: string
 
@@ -32,21 +37,36 @@ export function createDatabaseMetadataTable(db: DatabaseSync): void {
   ).run(randomUUID())
 }
 
-export function getDatabaseWriterMetadata(db: DatabaseSync): DatabaseWriterMetadata {
+export function getDatabaseOwnershipSnapshot(db: DatabaseSync): DatabaseOwnershipSnapshot {
   const row = db
     .prepare(
       `
-        SELECT active_writer_session_id AS sessionId,
+        SELECT lineage AS databaseLineage,
+               active_writer_session_id AS sessionId,
                writer_epoch AS epoch
         FROM database_metadata
         WHERE id = 1
       `,
     )
-    .get() as { sessionId: string | null; epoch: number } | undefined
-  if (!row || (row.sessionId !== null && typeof row.sessionId !== 'string') || !Number.isSafeInteger(row.epoch)) {
-    throw new Error('database writer metadata is missing or invalid')
+    .get() as { databaseLineage: string; sessionId: string | null; epoch: number } | undefined
+  if (
+    !row ||
+    typeof row.databaseLineage !== 'string' ||
+    row.databaseLineage.length === 0 ||
+    (row.sessionId !== null && typeof row.sessionId !== 'string') ||
+    !Number.isSafeInteger(row.epoch) ||
+    row.epoch < 0
+  ) {
+    throw new Error('database ownership metadata is missing or invalid')
   }
-  return row
+  return {
+    databaseLineage: row.databaseLineage,
+    writer: { sessionId: row.sessionId, epoch: row.epoch },
+  }
+}
+
+export function getDatabaseWriterMetadata(db: DatabaseSync): DatabaseWriterMetadata {
+  return getDatabaseOwnershipSnapshot(db).writer
 }
 
 /**
@@ -54,7 +74,7 @@ export function getDatabaseWriterMetadata(db: DatabaseSync): DatabaseWriterMetad
  * advances the epoch in the same statement, so restart cannot make a stale
  * tab appear to be the first writer and reclaim an old outbox silently.
  */
-export function registerDatabaseWriterSession(db: DatabaseSync, sessionId: string): DatabaseWriterMetadata {
+export function registerDatabaseWriterSession(db: DatabaseSync, sessionId: string): DatabaseOwnershipSnapshot {
   const row = db
     .prepare(
       `
@@ -65,23 +85,30 @@ export function registerDatabaseWriterSession(db: DatabaseSync, sessionId: strin
             END,
             active_writer_session_id = ?
         WHERE id = 1
-        RETURNING active_writer_session_id AS sessionId,
+        RETURNING lineage AS databaseLineage,
+                  active_writer_session_id AS sessionId,
                   writer_epoch AS epoch
       `,
     )
-    .get(sessionId, sessionId) as { sessionId: string; epoch: number } | undefined
-  if (!row || row.sessionId !== sessionId || !Number.isSafeInteger(row.epoch)) {
+    .get(sessionId, sessionId) as { databaseLineage: string; sessionId: string; epoch: number } | undefined
+  if (
+    !row ||
+    typeof row.databaseLineage !== 'string' ||
+    row.databaseLineage.length === 0 ||
+    row.sessionId !== sessionId ||
+    !Number.isSafeInteger(row.epoch) ||
+    row.epoch < 0
+  ) {
     throw new Error('database writer metadata row is missing or invalid')
   }
-  return row
+  return {
+    databaseLineage: row.databaseLineage,
+    writer: { sessionId: row.sessionId, epoch: row.epoch },
+  }
 }
 
 export function getDatabaseLineage(db: DatabaseSync): string {
-  const row = db.prepare('SELECT lineage FROM database_metadata WHERE id = 1').get() as { lineage: string } | undefined
-  if (!row || typeof row.lineage !== 'string' || row.lineage.length === 0) {
-    throw new Error('database metadata lineage is missing')
-  }
-  return row.lineage
+  return getDatabaseOwnershipSnapshot(db).databaseLineage
 }
 
 export function assertDatabaseLineage(db: DatabaseSync, requestedLineage: string): void {

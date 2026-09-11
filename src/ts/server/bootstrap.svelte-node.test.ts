@@ -14,6 +14,7 @@ import {
   EXPECTED_WRITER_EPOCH_HEADER,
   fetchServerBootstrap,
   fetchServerBootstrapReadOnly,
+  fetchServerOwnership,
 } from './bootstrap'
 import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
 import { clearCachedServerCommandRevision, peekCachedServerCommandRevision } from './commands'
@@ -32,6 +33,7 @@ interface CapturedFetch {
   disconnectExistingWriterHeader: string | null
   expectedWriterEpochHeader: string | null
   expectedDatabaseLineageHeader: string | null
+  cache: RequestCache | null
 }
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -56,6 +58,7 @@ function stubBootstrapFetch(body: unknown | (() => unknown)): CapturedFetch[] {
         disconnectExistingWriterHeader: headers?.[DISCONNECT_EXISTING_WRITER_HEADER] ?? null,
         expectedWriterEpochHeader: headers?.[EXPECTED_WRITER_EPOCH_HEADER] ?? null,
         expectedDatabaseLineageHeader: headers?.[EXPECTED_DATABASE_LINEAGE_HEADER] ?? null,
+        cache: init.cache ?? null,
       })
       const value = typeof body === 'function' ? body() : body
       return value instanceof Response ? value : jsonResponse(value)
@@ -75,6 +78,43 @@ afterEach(() => {
 })
 
 describe('server runtime bootstrap helper', () => {
+  it('single-flights concurrent ownership probes without caching a settled snapshot', async () => {
+    const ownership = {
+      version: 1 as const,
+      databaseLineage: 'database-a',
+      writer: { sessionId: 'writer-a', epoch: 3 },
+    }
+    const calls = stubBootstrapFetch(ownership)
+
+    await expect(Promise.all([fetchServerOwnership(), fetchServerOwnership()])).resolves.toEqual([
+      { status: 'ok', ownership },
+      { status: 'ok', ownership },
+    ])
+    expect(calls).toEqual([
+      expect.objectContaining({
+        url: '/api/v1/ownership',
+        method: 'GET',
+        authHeader: 'bootstrap-auth-token',
+        writerSessionHeader: null,
+        observerSessionHeader: null,
+        cache: 'no-store',
+      }),
+    ])
+
+    await expect(fetchServerOwnership()).resolves.toEqual({ status: 'ok', ownership })
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({ url: '/api/v1/ownership', method: 'GET', cache: 'no-store' })
+  })
+
+  it('fails closed on malformed ownership and preserves HTTP status details', async () => {
+    stubBootstrapFetch({ version: 1, databaseLineage: 'database-a', writer: { sessionId: ' writer-a', epoch: 3 } })
+    await expect(fetchServerOwnership()).resolves.toEqual({ status: 'error', error: 'Invalid ownership response' })
+
+    vi.unstubAllGlobals()
+    stubBootstrapFetch(jsonResponse({ error: 'missing_auth' }, 401))
+    await expect(fetchServerOwnership()).resolves.toEqual({ status: 'error', error: 'missing_auth', httpStatus: 401 })
+  })
+
   it('negotiates browser uploads independently and suppresses the legacy startup transport only when supported', async () => {
     stubBootstrapFetch({
       initialized: true,
@@ -401,6 +441,7 @@ describe('server runtime bootstrap helper', () => {
         disconnectExistingWriterHeader: null,
         expectedWriterEpochHeader: null,
         expectedDatabaseLineageHeader: null,
+        cache: null,
       },
     ])
   })

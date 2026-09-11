@@ -1,24 +1,38 @@
 export type BrowserLifecycleRecoveryTrigger = 'visibility' | 'pageshow' | 'online' | 'focus'
 
-export type BrowserLifecycleRecoveryListener = (trigger: BrowserLifecycleRecoveryTrigger) => void
+export interface BrowserLifecycleRecoveryContext {
+  /** A hidden/offline/pagehide or persisted-page transition preceded this foreground event. */
+  suspensionEvidence: boolean
+}
+
+export type BrowserLifecycleRecoveryListener = (
+  trigger: BrowserLifecycleRecoveryTrigger,
+  context?: BrowserLifecycleRecoveryContext,
+) => void
 
 const listeners = new Set<BrowserLifecycleRecoveryListener>()
 let installed = false
 let queued = false
 let pendingTrigger: BrowserLifecycleRecoveryTrigger | null = null
+let pendingSuspensionEvidence = false
+let suspensionEvidence = false
 
-function queueRecovery(trigger: BrowserLifecycleRecoveryTrigger): void {
+function queueRecovery(trigger: BrowserLifecycleRecoveryTrigger, observedSuspension = suspensionEvidence): void {
   pendingTrigger = trigger
+  pendingSuspensionEvidence ||= observedSuspension
+  if (observedSuspension) suspensionEvidence = false
   if (queued) return
   queued = true
   queueMicrotask(() => {
     queued = false
     const next = pendingTrigger
+    const context = { suspensionEvidence: pendingSuspensionEvidence }
     pendingTrigger = null
+    pendingSuspensionEvidence = false
     if (!next) return
     for (const listener of [...listeners]) {
       try {
-        listener(next)
+        listener(next, context)
       } catch (error) {
         console.error(error)
       }
@@ -27,16 +41,29 @@ function queueRecovery(trigger: BrowserLifecycleRecoveryTrigger): void {
 }
 
 const handleVisibilityChange = (): void => {
+  if (document.visibilityState === 'hidden') {
+    suspensionEvidence = true
+    return
+  }
   if (document.visibilityState === 'visible') queueRecovery('visibility')
 }
-const handlePageShow = (): void => queueRecovery('pageshow')
-const handleOnline = (): void => queueRecovery('online')
+const handlePageHide = (): void => {
+  suspensionEvidence = true
+}
+const handleOffline = (): void => {
+  suspensionEvidence = true
+}
+const handlePageShow = (event: PageTransitionEvent): void =>
+  queueRecovery('pageshow', suspensionEvidence || event.persisted)
+const handleOnline = (): void => queueRecovery('online', true)
 const handleFocus = (): void => queueRecovery('focus')
 
 function installListeners(): void {
   if (installed || typeof window === 'undefined' || typeof document === 'undefined') return
   installed = true
   document.addEventListener('visibilitychange', handleVisibilityChange)
+  window.addEventListener('pagehide', handlePageHide)
+  window.addEventListener('offline', handleOffline)
   window.addEventListener('pageshow', handlePageShow)
   window.addEventListener('online', handleOnline)
   window.addEventListener('focus', handleFocus)
@@ -46,11 +73,15 @@ function uninstallListeners(): void {
   if (!installed || typeof window === 'undefined' || typeof document === 'undefined') return
   installed = false
   document.removeEventListener('visibilitychange', handleVisibilityChange)
+  window.removeEventListener('pagehide', handlePageHide)
+  window.removeEventListener('offline', handleOffline)
   window.removeEventListener('pageshow', handlePageShow)
   window.removeEventListener('online', handleOnline)
   window.removeEventListener('focus', handleFocus)
   queued = false
   pendingTrigger = null
+  pendingSuspensionEvidence = false
+  suspensionEvidence = false
 }
 
 /**

@@ -12,6 +12,7 @@ import type { ServerMemoryJob } from '../process/request/serverMemory'
 
 const api = vi.hoisted(() => ({
   bootstrap: vi.fn(),
+  ownership: vi.fn(),
   subscribe: vi.fn(),
   targeted: vi.fn(),
   full: vi.fn(),
@@ -29,7 +30,10 @@ const api = vi.hoisted(() => ({
   known: null as number | null,
   applied: null as number | null,
 }))
-vi.mock('./bootstrap', () => ({ fetchServerBootstrapReadOnly: api.bootstrap }))
+vi.mock('./bootstrap', () => ({
+  fetchServerBootstrapReadOnly: api.bootstrap,
+  fetchServerOwnership: api.ownership,
+}))
 vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: async () => 'reader-auth' }))
 vi.mock('./events', () => ({ subscribeServerCommandEvents: api.subscribe }))
 vi.mock('./commands', () => ({
@@ -140,6 +144,7 @@ beforeEach(() => {
   api.bootstrap
     .mockReset()
     .mockResolvedValue({ status: 'ok', bootstrap: { initialized: true, revision: 5, ...ownership } })
+  api.ownership.mockReset().mockResolvedValue({ status: 'ok', ownership: { version: 1, ...ownership } })
   api.subscribe.mockReset().mockImplementation(async (input) => {
     const stop = vi.fn()
     streams.push({ input, stop })
@@ -198,6 +203,8 @@ describe('connected reader synchronization', () => {
     api.lifecycle.mock.calls[0]![0]()
     await flush()
     expect(streams).toHaveLength(2)
+    expect(api.ownership).toHaveBeenCalledOnce()
+    expect(api.bootstrap).toHaveBeenCalledOnce()
     expect(streams[1].input).toMatchObject({ mode: 'reader', sinceRevision: 5 })
     expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' })
     expect(canUseClientWriteAccess()).toBe(false)
@@ -273,6 +280,17 @@ describe('connected reader synchronization', () => {
     expect(canUseClientWriteAccess()).toBe(false)
     expect(streams[0].stop).not.toHaveBeenCalled()
     expect(callbacks.onLineageChange).not.toHaveBeenCalled()
+  })
+
+  it('hands an SSE ownership-lineage change directly to the coordinator', async () => {
+    const { sync, callbacks } = start()
+    await sync.ready
+    streams[0].input.onWriterEvent?.({ databaseLineage: 'database-b', sessionId: 'writer-b', epoch: 2 })
+    expect(callbacks.onLineageChange).toHaveBeenCalledWith({
+      databaseLineage: 'database-b',
+      writer: { sessionId: 'writer-b', epoch: 2 },
+    })
+    expect(streams[0].stop).toHaveBeenCalledOnce()
   })
 
   it('serializes event reads and only advances application after each projection callback completes', async () => {
@@ -431,7 +449,7 @@ describe('connected reader synchronization', () => {
     expect(streams[0].stop).toHaveBeenCalledOnce()
   })
 
-  it('silently refreshes a live stream on focus while fencing held responses and old callbacks', async () => {
+  it('skips ordinary focus while live and uses ownership before reconnecting a discarded stream', async () => {
     const held = deferred<any>()
     api.targeted.mockReturnValueOnce(held.promise)
     const { sync } = start()
@@ -441,16 +459,68 @@ describe('connected reader synchronization', () => {
     streams[0].input.onCommandEvent(command(6))
     await flush()
     const read = api.targeted.mock.calls[0][1]
-    api.lifecycle.mock.calls[0][0]('focus')
+
+    api.lifecycle.mock.calls[0]![0]('focus', { suspensionEvidence: false })
     await flush()
-    expect(streams[1].input.sinceRevision).toBe(5)
+    expect(api.ownership).not.toHaveBeenCalled()
+    expect(streams).toHaveLength(1)
+    expect(read.isCurrent()).toBe(true)
+
+    api.lifecycle.mock.calls[0]![0]('visibility', { suspensionEvidence: true })
+    await flush()
+    expect(api.ownership).toHaveBeenCalledOnce()
+    expect(streams).toHaveLength(1)
     expect(connections).toEqual(['live'])
+
+    streams[0].input.onClose?.()
     expect(read.isCurrent()).toBe(false)
+    api.lifecycle.mock.calls[0]![0]('focus', { suspensionEvidence: false })
+    await flush()
+    expect(api.ownership).toHaveBeenCalledTimes(2)
+    expect(api.bootstrap).toHaveBeenCalledOnce()
+    expect(streams).toHaveLength(2)
+    expect(streams[1].input.sinceRevision).toBe(5)
+    expect(getClientSessionSnapshot().connection).toBe('live')
+
     held.resolve({ status: 'ok', scope: 'targeted', revision: 6 })
     streams[0].input.onCommandEvent(command(99))
     await flush()
     expect(api.applied).toBe(5)
     expect(api.known).toBe(6)
+  })
+
+  it.each([
+    [
+      'changed',
+      {
+        status: 'ok',
+        ownership: { version: 1, databaseLineage: 'database-a', writer: { sessionId: 'writer-b', epoch: 2 } },
+      },
+    ],
+    ['uncertain', { status: 'error', error: 'invalid ownership response' }],
+  ] as const)('falls back to full bootstrap when foreground ownership is %s', async (_kind, result) => {
+    const { sync } = start()
+    await sync.ready
+    api.ownership.mockResolvedValueOnce(result)
+    api.lifecycle.mock.calls[0]![0]('visibility', { suspensionEvidence: true })
+    await flush()
+    expect(api.bootstrap).toHaveBeenCalledTimes(2)
+    expect(streams).toHaveLength(2)
+  })
+
+  it('stops foreground recovery after an ownership authentication rejection', async () => {
+    const { sync, callbacks } = start()
+    await sync.ready
+    api.ownership.mockResolvedValueOnce({ status: 'error', error: 'missing_auth', httpStatus: 401 })
+
+    api.lifecycle.mock.calls[0]![0]('visibility', { suspensionEvidence: true })
+    await flush()
+
+    expect(callbacks.onAuthLoss).toHaveBeenCalledOnce()
+    expect(api.bootstrap).toHaveBeenCalledOnce()
+    expect(streams[0].stop).toHaveBeenCalledOnce()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.bootstrap).toHaveBeenCalledOnce()
   })
 
   it('recovers a silent stream with a watchdog and cancels its timers on stop', async () => {
@@ -462,6 +532,8 @@ describe('connected reader synchronization', () => {
     expect(streams).toHaveLength(1)
     await vi.advanceTimersByTimeAsync(2000)
     expect(streams).toHaveLength(2)
+    expect(api.ownership).toHaveBeenCalledOnce()
+    expect(api.bootstrap).toHaveBeenCalledOnce()
     sync.stop()
     await vi.advanceTimersByTimeAsync(120_000)
     expect(streams).toHaveLength(2)

@@ -76,6 +76,31 @@ afterEach(async () => {
 })
 
 describe('active writer session guard', () => {
+  it('reports fresh authenticated ownership without registering a supplied writer session', async () => {
+    const empty = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/ownership',
+      headers: authedHeaders('session-ignored'),
+    })
+    expect(empty.statusCode).toBe(200)
+    expect(empty.headers['cache-control']).toBe('no-store')
+    expect(empty.json()).toEqual({
+      version: 1,
+      databaseLineage: expect.any(String),
+      writer: { sessionId: null, epoch: 0 },
+    })
+
+    await bootstrapSession(harness.app, 'session-a')
+    const owned = await harness.app.inject({ method: 'GET', url: '/api/v1/ownership', headers: authedHeaders() })
+    const bootstrap = await harness.app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: authedHeaders() })
+    expect(owned.statusCode).toBe(200)
+    expect(owned.json()).toEqual({
+      version: 1,
+      databaseLineage: bootstrap.json().databaseLineage,
+      writer: bootstrap.json().writer,
+    })
+  })
+
   it('reports null, own, and foreign durable ownership to read-only clients without SQLite writes', async () => {
     const monitor = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
     const dataVersion = () => monitor.prepare('PRAGMA data_version').get()
@@ -160,9 +185,16 @@ describe('active writer session guard', () => {
 
   it('keeps connected-writer confirmation separate from the acquisition precondition', async () => {
     await bootstrapSession(harness.app, 'session-a')
+    const firstWriterLineage = (
+      await harness.app.inject({ method: 'GET', url: '/api/v1/ownership', headers: authedHeaders() })
+    ).json().databaseLineage
     const connection = await connectWriterEvents(harness.app, 'session-a')
     try {
-      expect(await readWriterFrame(connection.reader)).toEqual({ sessionId: 'session-a', epoch: 1 })
+      expect(await readWriterFrame(connection.reader)).toEqual({
+        databaseLineage: firstWriterLineage,
+        sessionId: 'session-a',
+        epoch: 1,
+      })
       const discovery = await harness.app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: authedHeaders() })
       const headers = { ...authedHeaders('session-b'), ...expectedWriterHeaders(discovery.json()) }
       const changed = await harness.app.inject({
@@ -184,7 +216,10 @@ describe('active writer session guard', () => {
       })
       expect(confirmed.statusCode).toBe(200)
       expect(confirmed.json().writer).toEqual({ sessionId: 'session-b', epoch: 2 })
-      expect(await readWriterFrame(connection.reader)).toEqual(confirmed.json().writer)
+      expect(await readWriterFrame(connection.reader)).toEqual({
+        databaseLineage: confirmed.json().databaseLineage,
+        ...confirmed.json().writer,
+      })
     } finally {
       connection.close()
     }
@@ -206,7 +241,10 @@ describe('active writer session guard', () => {
     expect(current.json().databaseLineage).not.toBe(observed.databaseLineage)
     const connection = await connectWriterEvents(harness.app, 'session-a')
     try {
-      expect(await readWriterFrame(connection.reader)).toEqual(current.json().writer)
+      expect(await readWriterFrame(connection.reader)).toEqual({
+        databaseLineage: current.json().databaseLineage,
+        ...current.json().writer,
+      })
       const staleAcquisition = await harness.app.inject({
         method: 'GET',
         url: '/api/v1/bootstrap',

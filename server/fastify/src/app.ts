@@ -29,6 +29,7 @@ import { registerAuthRoutes } from './routes/auth.js'
 import { registerBackupRoutes } from './routes/backups.js'
 import { registerStorageUsageRoutes } from './routes/storageUsage.js'
 import { registerBootstrapRoutes } from './routes/bootstrap.js'
+import { registerOwnershipRoutes } from './routes/ownership.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerResourceReadRoutes } from './routes/resourceReads.js'
 import { registerEventsRoutes } from './routes/events.js'
@@ -461,6 +462,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     diagnostics.enabled,
     diagnosticsRuntime.browserEnabled,
   )
+  registerOwnershipRoutes(app, db, authState)
   registerActiveWriterGuard(app, activeWriterState)
   registerClientDiagnosticsRoutes(app, authState, diagnostics, diagnosticsRuntime.source, diagnosticIdentity)
   registerRemoteDiagnosticsRoutes(

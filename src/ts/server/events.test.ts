@@ -235,7 +235,7 @@ describe('server command event subscription helper', () => {
         updatedAt: '2026-08-11T00:01:00.000Z',
       },
     }
-    const writerEvent: ServerWriterEvent = { sessionId: 'writer-b', epoch: 2 }
+    const writerEvent: ServerWriterEvent = { databaseLineage: 'database-a', sessionId: 'writer-b', epoch: 2 }
     const calls = stubEventsFetch(
       [
         ': connected',
@@ -311,6 +311,9 @@ describe('server command event subscription helper', () => {
         '',
         'event: writer',
         'data: {"sessionId":null,"epoch":-1}',
+        '',
+        'event: writer',
+        'data: {"databaseLineage":"","sessionId":null,"epoch":0}',
         '',
         'event: writer',
         'data: not-json',

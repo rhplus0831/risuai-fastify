@@ -22,7 +22,7 @@ import {
   protocolNowMs,
 } from '../protocolMetrics.js'
 import { readRequestTraceUid } from '../requestTrace.js'
-import { getDatabaseLineage, getDatabaseWriterMetadata } from '../databaseLineage.js'
+import { getDatabaseOwnershipSnapshot } from '../databaseLineage.js'
 import { assessDatabaseInitialization } from '../databaseInitialization.js'
 import {
   GENERATION_OPERATION_PROTOCOL_VERSION,
@@ -90,16 +90,18 @@ export function registerBootstrapRoutes(
     }
     // No await separates this check, takeover confirmation, and registration.
     // A competing request cannot acquire between discovery validation and registration.
-    if (
-      expectedWriter !== undefined &&
-      (expectedWriter.epoch !== getDatabaseWriterMetadata(db).epoch ||
-        expectedWriter.databaseLineage !== getDatabaseLineage(db))
-    ) {
-      return reply.code(409).send({
-        error: 'active_writer_changed',
-        reason:
-          'Writer ownership or the database changed after discovery. Read current ownership before acquiring write access.',
-      })
+    if (expectedWriter !== undefined) {
+      const discoveredOwnership = getDatabaseOwnershipSnapshot(db)
+      if (
+        expectedWriter.epoch !== discoveredOwnership.writer.epoch ||
+        expectedWriter.databaseLineage !== discoveredOwnership.databaseLineage
+      ) {
+        return reply.code(409).send({
+          error: 'active_writer_changed',
+          reason:
+            'Writer ownership or the database changed after discovery. Read current ownership before acquiring write access.',
+        })
+      }
     }
     if (
       activeWriterState &&
@@ -126,7 +128,8 @@ export function registerBootstrapRoutes(
     const { version, revision } = getSchemaState(db)
     const generationOperationProjectionEpoch = getGenerationOperationProjectionEpoch(db)
     const generationOperations = listGenerationOperationProjections(db)
-    const writer = getDatabaseWriterMetadata(db)
+    const ownership = getDatabaseOwnershipSnapshot(db)
+    const writer = ownership.writer
     const response = {
       // A damaged database with durable user data must never invite the client
       // to run first-use initialization. The initialize command uses this same
@@ -134,7 +137,7 @@ export function registerBootstrapRoutes(
       initialized: assessDatabaseInitialization(db).state !== 'uninitialized',
       revision,
       schemaVersion: version,
-      databaseLineage: getDatabaseLineage(db),
+      databaseLineage: ownership.databaseLineage,
       writerEpoch: writer.epoch,
       writer,
       ...(wasRequestedWriterActive === undefined ? {} : { requestedWriterWasActive: wasRequestedWriterActive }),

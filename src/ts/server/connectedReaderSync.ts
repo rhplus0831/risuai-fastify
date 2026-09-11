@@ -9,7 +9,7 @@ import {
   type ClientSessionOwnership,
 } from '../clientSession'
 import { peekReaderRouteIntent } from '../readerRouteIntent'
-import { fetchServerBootstrapReadOnly } from './bootstrap'
+import { fetchServerBootstrapReadOnly, fetchServerOwnership } from './bootstrap'
 import {
   peekAppliedServerResourceRevision,
   setAppliedServerResourceRevision,
@@ -82,6 +82,8 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
   let stopOffline: (() => void) | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null
+  let foregroundRecovery: Promise<void> | null = null
+  let lastFrameAt = 0
   let chain = Promise.resolve()
   let memoryStream: string | null = null
   let memoryVersion = -1
@@ -109,6 +111,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     unsubscribe = null
     if (watchdogTimer) clearTimeout(watchdogTimer)
     watchdogTimer = null
+    lastFrameAt = 0
   }
 
   function stop(): void {
@@ -151,6 +154,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
 
   function frame(sourceEpoch: number): void {
     if (!current(sourceEpoch)) return
+    lastFrameAt = Date.now()
     if (watchdogTimer) clearTimeout(watchdogTimer)
     watchdogTimer = setTimeout(() => interrupt(sourceEpoch), CONNECTED_READER_STALE_TIMEOUT_MS)
   }
@@ -194,6 +198,29 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     options.onWriterEvent?.(runtime.writer)
     if (!current(sourceEpoch)) return false
     setCachedServerCommandRevision(runtime.revision)
+    return current(sourceEpoch)
+  }
+
+  async function probeOwnership(sourceEpoch: number, signal: AbortSignal): Promise<boolean> {
+    const result = await fetchServerOwnership()
+    if (!current(sourceEpoch)) return false
+    if (result.status === 'error' && result.httpStatus === 401) {
+      notifyAuthLoss()
+      return false
+    }
+    if (result.status !== 'ok') return checkOwnership(sourceEpoch, signal)
+    const state = getClientSessionSnapshot()
+    const unchanged =
+      result.ownership.databaseLineage === lineage &&
+      result.ownership.writer.sessionId === state.writer?.sessionId &&
+      result.ownership.writer.epoch === state.writer?.epoch
+    if (!unchanged) return checkOwnership(sourceEpoch, signal)
+    if (!observeClientWriter(result.ownership.writer)) {
+      interrupt(sourceEpoch)
+      return false
+    }
+    if (!current(sourceEpoch)) return false
+    options.onWriterEvent?.(result.ownership.writer)
     return current(sourceEpoch)
   }
 
@@ -300,7 +327,20 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     return true
   }
 
-  async function connect(connectionOptions: { preserveLiveStatus?: boolean } = {}): Promise<void> {
+  function streamIsHealthyAndRecent(): boolean {
+    return (
+      unsubscribe !== null &&
+      getClientSessionSnapshot().connection === 'live' &&
+      Date.now() - lastFrameAt < CONNECTED_READER_STALE_TIMEOUT_MS
+    )
+  }
+
+  async function connect(
+    connectionOptions: {
+      preserveLiveStatus?: boolean
+      ownershipValidation?: 'probe' | 'full' | 'validated'
+    } = {},
+  ): Promise<void> {
     if (!current()) return
     if (browserIsOffline()) {
       setClientConnectionState('interrupted', generation)
@@ -315,7 +355,14 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       connectionOptions.preserveLiveStatus === true && getClientSessionSnapshot().connection === 'live'
     if (!preserveLiveStatus) setClientConnectionState('connecting', generation)
     try {
-      if (!(await checkOwnership(sourceEpoch, signal))) return
+      const ownershipValidation = connectionOptions.ownershipValidation ?? 'probe'
+      if (
+        ownershipValidation !== 'validated' &&
+        !(await (ownershipValidation === 'full'
+          ? checkOwnership(sourceEpoch, signal)
+          : probeOwnership(sourceEpoch, signal)))
+      )
+        return
       const result = await subscribeServerCommandEvents({
         mode: 'reader',
         signal,
@@ -328,6 +375,14 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
         },
         onWriterEvent: (writer) => {
           if (!current(sourceEpoch)) return
+          if (writer.databaseLineage && writer.databaseLineage !== lineage) {
+            stop()
+            void options.onLineageChange({
+              databaseLineage: writer.databaseLineage,
+              writer: { sessionId: writer.sessionId, epoch: writer.epoch },
+            })
+            return
+          }
           if (observeClientWriter(writer) && current(sourceEpoch)) options.onWriterEvent?.(writer)
         },
         onMemorySnapshot: (snapshot) => {
@@ -394,15 +449,38 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     void connect()
   }
 
-  function recoverForeground(): void {
+  function recoverForeground(_source: string, context?: { suspensionEvidence: boolean }): void {
     if (!current()) return
-    if (reconnectTimer) clearTimeout(reconnectTimer)
-    reconnectTimer = null
-    // Foreground probes deliberately replace a possibly discarded browser
-    // stream. While the established connection is still healthy, keep that
-    // transport refresh out of the reader's visible lifecycle status. A failed
-    // replacement still enters `interrupted` through interrupt().
-    void connect({ preserveLiveStatus: true })
+    if (!context?.suspensionEvidence && streamIsHealthyAndRecent()) return
+    if (foregroundRecovery) return
+    let running!: Promise<void>
+    running = (async () => {
+      const result = await fetchServerOwnership()
+      if (!current()) return
+      if (result.status === 'error' && result.httpStatus === 401) {
+        await notifyAuthLoss()
+        return
+      }
+      const state = getClientSessionSnapshot()
+      const ownershipUnchanged =
+        result.status === 'ok' &&
+        result.ownership.databaseLineage === lineage &&
+        result.ownership.writer.sessionId === state.writer?.sessionId &&
+        result.ownership.writer.epoch === state.writer?.epoch
+      if (ownershipUnchanged && streamIsHealthyAndRecent()) return
+      if (reconnectTimer) clearTimeout(reconnectTimer)
+      reconnectTimer = null
+      // A matching ownership probe can reconnect directly from the applied
+      // event cursor. Changed or uncertain ownership retains the full bootstrap
+      // validation performed by connect().
+      await connect({
+        preserveLiveStatus: true,
+        ownershipValidation: ownershipUnchanged ? 'validated' : 'full',
+      })
+    })().finally(() => {
+      if (foregroundRecovery === running) foregroundRecovery = null
+    })
+    foregroundRecovery = running
   }
 
   if (current() && lineage) {
@@ -417,7 +495,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       window.addEventListener('offline', offline)
       stopOffline = () => window.removeEventListener('offline', offline)
     }
-    void connect()
+    void connect({ ownershipValidation: 'full' })
   } else stop()
   return { stop, retry, ready }
 }

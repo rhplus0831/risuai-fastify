@@ -7,6 +7,7 @@ const identityApi = vi.hoisted(() => ({ exclusive: true }))
 const bootstrapApi = vi.hoisted(() => ({
   fetch: vi.fn(),
   fetchReadOnly: vi.fn(),
+  fetchOwnership: vi.fn(),
 }))
 
 const resourceApi = vi.hoisted(() => ({
@@ -185,6 +186,7 @@ vi.mock('./server/connectedReaderSync', () => ({ startConnectedReaderSync: reade
 vi.mock('./server/bootstrap', () => ({
   fetchServerBootstrap: bootstrapApi.fetch,
   fetchServerBootstrapReadOnly: bootstrapApi.fetchReadOnly,
+  fetchServerOwnership: bootstrapApi.fetchOwnership,
 }))
 
 vi.mock('./storage/fastifyStorage', async (importActual) => {
@@ -472,6 +474,18 @@ function runtimeBootstrap(overrides: Record<string, unknown> = {}) {
   }
 }
 
+function runtimeOwnership(overrides: Record<string, unknown> = {}) {
+  return {
+    status: 'ok' as const,
+    ownership: {
+      version: 1 as const,
+      databaseLineage: 'database-a',
+      writer: { sessionId: getActiveWriterSessionId(), epoch: 1 },
+      ...overrides,
+    },
+  }
+}
+
 function seedResourceDatabase() {
   replaceResourceDatabase(
     {
@@ -582,6 +596,7 @@ beforeEach(() => {
   promptTemplateApi.peekOwnerRevision.mockReturnValue(5)
   bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap())
   bootstrapApi.fetchReadOnly.mockResolvedValue(runtimeBootstrap({ revision: 5 }))
+  bootstrapApi.fetchOwnership.mockResolvedValue(runtimeOwnership())
   resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
   resourceApi.readAll.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
   routeResourceApi.ensure.mockReset().mockResolvedValue(undefined)
@@ -828,6 +843,37 @@ describe('API-backed client bootstrap', () => {
     expect(lorebookApi.resetLorebookHydration).toHaveBeenCalledOnce()
     expect(get(selectedCharID)).toBe(selectedBeforeRecovery)
     expect(readerApi.start).not.toHaveBeenCalled()
+  })
+
+  it('falls back to conditional full bootstrap when the writer ownership probe is uncertain', async () => {
+    await loadData()
+    bootstrapApi.fetchOwnership.mockResolvedValue({ status: 'error', error: 'invalid ownership response' })
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+
+    window.dispatchEvent(new Event('offline'))
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+
+    await vi.waitFor(() => expect(bootstrapApi.fetch).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe('writing'))
+    expect(bootstrapApi.fetch).toHaveBeenLastCalledWith(null, {
+      expectedWriter: { epoch: 1, databaseLineage: 'database-a' },
+    })
+    expect(bootstrapApi.fetchOwnership).toHaveBeenCalledOnce()
+  })
+
+  it('tears down authenticated state when the writer ownership probe is rejected', async () => {
+    await loadData()
+    bootstrapApi.fetchOwnership.mockResolvedValue({ status: 'error', error: 'missing_auth', httpStatus: 401 })
+    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
+
+    window.dispatchEvent(new Event('offline'))
+    online.mockReturnValue(true)
+    window.dispatchEvent(new Event('online'))
+
+    await vi.waitFor(() => expect(projectionLifecycleApi.discard).toHaveBeenCalledExactlyOnceWith('auth-loss'))
+    expect(bootstrapApi.fetchOwnership).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
   })
 
   it('rehydrates an established writer when reconnect bootstrap has a newer revision', async () => {
@@ -1857,10 +1903,13 @@ describe('API-backed client bootstrap', () => {
       await loadWebInitialDatabase()
       const event = { type, revision: 6, resource: 'state' }
       const order: string[] = []
-      bootstrapApi.fetchReadOnly.mockReset()
-      bootstrapApi.fetchReadOnly.mockImplementationOnce(async () => {
-        order.push('bootstrap')
-        return runtimeBootstrap({ revision: 3, databaseLineage: 'database-restored', writerEpoch: 2 })
+      bootstrapApi.fetchOwnership.mockReset()
+      bootstrapApi.fetchOwnership.mockImplementationOnce(async () => {
+        order.push('ownership')
+        return runtimeOwnership({
+          databaseLineage: 'database-restored',
+          writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+        })
       })
       pendingMutationApi.prepare.mockReset()
       pendingMutationApi.prepare.mockImplementationOnce(async (input) => {
@@ -1889,14 +1938,14 @@ describe('API-backed client bootstrap', () => {
 
       try {
         await vi.waitFor(() => expect(projectionLifecycleApi.discard).toHaveBeenCalledExactlyOnceWith('lineage-change'))
-        expect(order).toEqual(['bootstrap', 'prepare', 'reset', 'discard'])
+        expect(order).toEqual(['ownership', 'prepare', 'reset', 'discard'])
         expect(resourceApi.forceReplacement).not.toHaveBeenCalled()
       } finally {
         finishProjectionDiscard()
       }
       await vi.waitFor(() => expect(resourceApi.forceReplacement).toHaveBeenCalledOnce())
-      expect(order).toEqual(['bootstrap', 'prepare', 'reset', 'discard', 'refresh'])
-      expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledWith(null, { cacheRevision: false })
+      expect(order).toEqual(['ownership', 'prepare', 'reset', 'discard', 'refresh'])
+      expect(bootstrapApi.fetchOwnership).toHaveBeenCalledOnce()
       expect(pendingMutationApi.prepare).toHaveBeenCalledWith({
         writerSessionId: getActiveWriterSessionId(),
         writerEpoch: 2,
@@ -1916,8 +1965,11 @@ describe('API-backed client bootstrap', () => {
   it('retries a failed replacement snapshot when the state event is replayed', async () => {
     await loadWebInitialDatabase()
     const event = { type: 'state.restored', revision: 3, resource: 'state' }
-    bootstrapApi.fetchReadOnly.mockResolvedValue(
-      runtimeBootstrap({ revision: 3, databaseLineage: 'database-retry', writerEpoch: 2 }),
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({
+        databaseLineage: 'database-retry',
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+      }),
     )
     resourceApi.forceReplacement
       .mockResolvedValueOnce({ status: 'error', error: 'settings failed' })
@@ -1943,8 +1995,11 @@ describe('API-backed client bootstrap', () => {
     vi.spyOn(Math, 'random').mockReturnValue(0.5)
     await loadWebInitialDatabase()
     const event = { type: 'state.restored', revision: 3, resource: 'state' }
-    bootstrapApi.fetchReadOnly.mockResolvedValue(
-      runtimeBootstrap({ revision: 3, databaseLineage: 'database-reconnect-retry', writerEpoch: 2 }),
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({
+        databaseLineage: 'database-reconnect-retry',
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+      }),
     )
     resourceApi.forceReplacement
       .mockResolvedValueOnce({ status: 'error', error: 'settings failed' })
@@ -1972,8 +2027,11 @@ describe('API-backed client bootstrap', () => {
         eventApi.subscriptions.push(input)
         return { status: 'ok', unsubscribe: eventApi.unsubscribe }
       })
-    bootstrapApi.fetchReadOnly.mockResolvedValue(
-      runtimeBootstrap({ revision: 3, databaseLineage: 'database-replay-retry', writerEpoch: 2 }),
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({
+        databaseLineage: 'database-replay-retry',
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+      }),
     )
     resourceApi.forceReplacement
       .mockResolvedValueOnce({ status: 'error', error: 'settings failed' })
@@ -2007,8 +2065,11 @@ describe('API-backed client bootstrap', () => {
       order.push(reason)
       return { status: 'ok', revision: 3 }
     })
-    bootstrapApi.fetchReadOnly.mockResolvedValue(
-      runtimeBootstrap({ revision: 3, databaseLineage: 'database-local-restore', writerEpoch: 2 }),
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({
+        databaseLineage: 'database-local-restore',
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+      }),
     )
 
     eventApi.subscriptions[0].onCommandEvent({
@@ -5612,8 +5673,11 @@ describe('API-backed client bootstrap', () => {
 
   it('reconciles ownership before replay-unavailable recovery when a disconnected tab missed a restore', async () => {
     eventApi.subscribe.mockResolvedValueOnce({ status: 'replay-unavailable', currentRevision: 3 })
-    bootstrapApi.fetchReadOnly.mockResolvedValue(
-      runtimeBootstrap({ revision: 3, databaseLineage: 'database-missed-restore', writerEpoch: 2 }),
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({
+        databaseLineage: 'database-missed-restore',
+        writer: { sessionId: getActiveWriterSessionId(), epoch: 2 },
+      }),
     )
 
     await loadWebInitialDatabase()
@@ -5707,6 +5771,47 @@ describe('API-backed client bootstrap', () => {
 })
 
 describe('resource event reconnect backoff', () => {
+  it('ignores ordinary focus for a healthy managed writer and uses ownership after suspension evidence', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await loadData()
+    bootstrapApi.fetchOwnership.mockClear()
+
+    window.dispatchEvent(new Event('focus'))
+    await Promise.resolve()
+    expect(bootstrapApi.fetchOwnership).not.toHaveBeenCalled()
+
+    visibility.mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.waitFor(() => expect(bootstrapApi.fetchOwnership).toHaveBeenCalledOnce())
+
+    expect(eventApi.subscribe).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce()
+  })
+
+  it('uses full reader recovery when the foreground ownership probe finds another writer', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await loadData()
+    bootstrapApi.fetchOwnership.mockClear()
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: 'different-writer', epoch: 2 } }),
+    )
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({ writer: { sessionId: 'different-writer', epoch: 2 } }),
+    )
+
+    visibility.mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+
+    await vi.waitFor(() => expect(readerApi.start).toHaveBeenCalledOnce())
+    expect(bootstrapApi.fetchOwnership).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(2)
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+  })
+
   it('uses a live heartbeat to retry retained mutations without a reconnect', async () => {
     await loadWebInitialDatabase()
     expect(pendingMutationApi.replay).toHaveBeenCalledTimes(1)
@@ -6310,6 +6415,9 @@ describe('explicit connected writer switching', () => {
       const acquired = runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } })
       bootstrapApi.fetch.mockImplementationOnce(async () => {
         bootstrapApi.fetchReadOnly.mockResolvedValue(acquired)
+        bootstrapApi.fetchOwnership.mockResolvedValue(
+          runtimeOwnership({ writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } }),
+        )
         return acquired
       })
       const lifecycles: string[] = []

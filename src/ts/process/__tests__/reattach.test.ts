@@ -1433,28 +1433,53 @@ describe('reattach open-chat generation', () => {
     expect(h.setCachedServerCommandRevision).toHaveBeenCalledTimes(1)
   })
 
-  it('routes online, pageshow, focus, and visible wakeups through the shared bootstrap reconciler', async () => {
+  it('routes suspension-backed wakeups through the shared bootstrap reconciler and ignores ordinary focus', async () => {
     startActiveGenerationReattach()
     Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
 
-    const wakeups = [
-      [window, new Event('online')],
-      [window, new Event('pageshow')],
-      [window, new Event('focus')],
-      [document, new Event('visibilitychange')],
-    ] as const
-    for (const [index, [eventTarget, event]] of wakeups.entries()) {
-      eventTarget.dispatchEvent(event)
+    const wakeups: Array<{
+      source: 'online' | 'pageshow' | 'focus' | 'visibility'
+      dispatch: () => void
+    }> = [
+      { source: 'online', dispatch: () => window.dispatchEvent(new Event('online')) },
+      {
+        source: 'pageshow',
+        dispatch: () => {
+          const event = new PageTransitionEvent('pageshow')
+          Object.defineProperty(event, 'persisted', { value: true })
+          window.dispatchEvent(event)
+        },
+      },
+      {
+        source: 'focus',
+        dispatch: () => {
+          window.dispatchEvent(new Event('pagehide'))
+          window.dispatchEvent(new Event('focus'))
+        },
+      },
+      {
+        source: 'visibility',
+        dispatch: () => {
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+          document.dispatchEvent(new Event('visibilitychange'))
+          Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+          document.dispatchEvent(new Event('visibilitychange'))
+        },
+      },
+    ]
+    for (const [index, wakeup] of wakeups.entries()) {
+      wakeup.dispatch()
       await vi.waitFor(() => expect(h.applyGenerationOperationBootstrap).toHaveBeenCalledTimes(index + 1))
       await flushMicrotasks()
     }
 
-    expect(h.applyGenerationOperationBootstrap.mock.calls.map((call) => call[1])).toEqual([
-      'online',
-      'pageshow',
-      'focus',
-      'visibility',
-    ])
+    expect(h.applyGenerationOperationBootstrap.mock.calls.map((call) => call[1])).toEqual(
+      wakeups.map(({ source }) => source),
+    )
+
+    window.dispatchEvent(new Event('focus'))
+    await flushMicrotasks()
+    expect(h.applyGenerationOperationBootstrap).toHaveBeenCalledTimes(wakeups.length)
   })
 
   it('settles and releases a never-ending bootstrap refresh when its authority signal aborts', async () => {
@@ -1487,6 +1512,7 @@ describe('reattach open-chat generation', () => {
     window.dispatchEvent(new Event('online'))
     await vi.waitFor(() => expect(h.fetchRuntimeJobs).toHaveBeenCalledTimes(1))
 
+    window.dispatchEvent(new Event('pagehide'))
     window.dispatchEvent(new Event('pageshow'))
     await vi.waitFor(() => expect(h.fetchRuntimeJobs).toHaveBeenCalledTimes(2))
     await vi.waitFor(() => expect(h.setCachedServerCommandRevision).toHaveBeenCalledWith(22))

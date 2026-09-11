@@ -15,7 +15,12 @@ import { runtimeDisplaySettingsOwner } from './gui/displaySettings'
 import { awaitLanguageReady, changeLanguage, language } from 'src/lang'
 import { resolveUniquePromptPreset } from '@risuai/shared-core/effective-prompt-template'
 import { updateGuisize } from './gui/guisize'
-import { fetchServerBootstrap, fetchServerBootstrapReadOnly, type ServerBootstrapRuntime } from './server/bootstrap'
+import {
+  fetchServerBootstrap,
+  fetchServerBootstrapReadOnly,
+  fetchServerOwnership,
+  type ServerBootstrapRuntime,
+} from './server/bootstrap'
 import { subscribeServerCommandEvents, type ServerMemoryEvent, type ServerMemoryJobSnapshot } from './server/events'
 import { publishServerMemoryJobEvent } from './server/memoryJobEvents'
 import { publishServerBardWikiJobEvent, publishServerBardWikiJobSnapshot } from './server/bardWikiJobEvents'
@@ -762,16 +767,22 @@ async function resumeConnectedWriter(): Promise<void> {
   const operation = beginClientWriterResume()
   if (!operation) return
   const running = (async () => {
-    const result = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
+    const result = await fetchServerOwnership()
     if (!isClientSessionOperationCurrent(operation)) return
-    if (result.status !== 'ok') {
-      if (result.status === 'error' && result.httpStatus === 401) {
-        await discardReaderProjectionState('auth-loss')
-        return
-      }
-      throw new Error(result.status === 'unavailable' ? 'Server is unavailable' : result.error)
+    if (result.status === 'error' && result.httpStatus === 401) {
+      await discardReaderProjectionState('auth-loss')
+      return
     }
-    const ownership = bootstrapOwnership(result.bootstrap)
+    const current = getClientSessionSnapshot()
+    const ownership =
+      result.status === 'ok'
+        ? result.ownership
+        : current.databaseLineage && current.writer
+          ? { databaseLineage: current.databaseLineage, writer: current.writer }
+          : null
+    if (!ownership) {
+      throw new Error(result.status === 'error' ? result.error : 'Server is unavailable')
+    }
     if (
       ownership.databaseLineage !== getClientSessionSnapshot().databaseLineage ||
       ownership.writer.sessionId !== getActiveWriterSessionId()
@@ -1642,6 +1653,15 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     },
     onWriterEvent: (event) => {
       if (!isCurrentServerResourceEventEpoch(eventEpoch)) return
+      if (
+        event.databaseLineage &&
+        getClientSessionSnapshot().databaseLineage &&
+        event.databaseLineage !== getClientSessionSnapshot().databaseLineage
+      ) {
+        demoteClientSession()
+        void refreshConnectedReader()
+        return
+      }
       if (isClientSessionManaged()) observeClientWriter(event)
       if (event.sessionId !== null && event.sessionId !== getActiveWriterSessionId()) {
         enterWriterTakeoverFlow()
@@ -1800,16 +1820,27 @@ function isCurrentServerResourceEventEpoch(eventEpoch: number): boolean {
 
 function ensureServerResourceRecoveryListeners(): void {
   if (stopServerResourceRecoveryListeners || typeof window === 'undefined' || typeof document === 'undefined') return
-  stopServerResourceRecoveryListeners = subscribeBrowserLifecycleRecovery(() => restartServerResourceEvents())
+  stopServerResourceRecoveryListeners = subscribeBrowserLifecycleRecovery((_source, context) =>
+    restartServerResourceEvents({ lifecycle: true, suspensionEvidence: context?.suspensionEvidence }),
+  )
 }
 
-function restartServerResourceEvents(): void {
+function serverResourceEventStreamIsHealthyAndRecent(): boolean {
+  return (
+    serverResourceEventSubscription !== null &&
+    getClientSessionSnapshot().connection === 'live' &&
+    Date.now() - serverResourceLastFrameAt < SERVER_RESOURCE_EVENT_STALE_TIMEOUT_MS
+  )
+}
+
+function restartServerResourceEvents(options: { lifecycle?: boolean; suspensionEvidence?: boolean } = {}): void {
   if (isClientSessionManaged()) {
     if (getClientSessionSnapshot().lifecycle === 'writing') {
+      if (options.lifecycle && !options.suspensionEvidence && serverResourceEventStreamIsHealthyAndRecent()) return
       if (connectedWriterOwnershipCheck) return
       const generation = captureClientSessionGeneration()
       const check = (async () => {
-        const result = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
+        const result = await fetchServerOwnership()
         if (!isClientSessionGenerationCurrent(generation)) return
         if (result.status !== 'ok') {
           if (result.status === 'error' && result.httpStatus === 401) {
@@ -1820,11 +1851,29 @@ function restartServerResourceEvents(): void {
           scheduleConnectedWriterResume()
           return
         }
-        if (result.bootstrap.databaseLineage !== getClientSessionSnapshot().databaseLineage) {
+        const before = getClientSessionSnapshot()
+        if (result.ownership.databaseLineage !== before.databaseLineage) {
           demoteClientSession()
+          void refreshConnectedReader()
           return
         }
-        if (result.bootstrap.writer) observeClientWriter(result.bootstrap.writer)
+        const writerChanged =
+          before.writer?.epoch !== result.ownership.writer.epoch ||
+          before.writer.sessionId !== result.ownership.writer.sessionId
+        if (!observeClientWriter(result.ownership.writer)) {
+          setClientConnectionState('interrupted')
+          scheduleConnectedWriterResume()
+          return
+        }
+        if (result.ownership.writer.sessionId !== getActiveWriterSessionId()) {
+          void refreshConnectedReader()
+          return
+        }
+        if (writerChanged || !serverResourceEventStreamIsHealthyAndRecent()) {
+          teardownServerResourceSubscription()
+          setClientConnectionState('interrupted')
+          scheduleConnectedWriterResume()
+        }
       })().finally(() => {
         if (connectedWriterOwnershipCheck === check) connectedWriterOwnershipCheck = null
       })
@@ -3096,7 +3145,7 @@ async function reconcileReplacementDatabaseOwnership(): Promise<{
   if (!isCurrent()) return null
   await waitForLocalReplacementDatabaseOperations()
   if (!isCurrent()) return null
-  const runtime = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
+  const runtime = await fetchServerOwnership()
   if (!isCurrent()) return null
   if (runtime.status !== 'ok') {
     if (runtime.status === 'error') {
@@ -3104,18 +3153,18 @@ async function reconcileReplacementDatabaseOwnership(): Promise<{
     }
     return null
   }
-  const { databaseLineage, writerEpoch } = runtime.bootstrap
+  const { databaseLineage, writer } = runtime.ownership
+  const writerEpoch = writer.epoch
   if (
     isClientSessionManaged() &&
-    (databaseLineage !== getClientSessionSnapshot().databaseLineage ||
-      runtime.bootstrap.writer?.sessionId !== getActiveWriterSessionId())
+    (databaseLineage !== getClientSessionSnapshot().databaseLineage || writer.sessionId !== getActiveWriterSessionId())
   ) {
     demoteClientSession()
     void refreshConnectedReader()
     return null
   }
   if (!databaseLineage || typeof writerEpoch !== 'number' || !Number.isSafeInteger(writerEpoch) || writerEpoch < 0) {
-    console.warn('Server database ownership refresh failed: bootstrap ownership metadata is missing')
+    console.warn('Server database ownership refresh failed: ownership metadata is missing')
     return null
   }
   const ownership = {

@@ -95,6 +95,7 @@ describe('@risuai/protocol import boundary', () => {
       'loreTokenCounts.ts',
       'mcpOAuthRefresh.ts',
       'moduleOrganization.ts',
+      'ownership.ts',
       'providerOperation.ts',
       'remoteDiagnostics.ts',
       'routeOperation.ts',

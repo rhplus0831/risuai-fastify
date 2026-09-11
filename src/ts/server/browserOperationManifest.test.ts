@@ -14,7 +14,7 @@ const repositoryRoot = process.cwd()
 
 describe('browser operation manifest', () => {
   it('keeps the reviewed browser vocabularies explicit and non-authoritative', () => {
-    expect(BROWSER_OPERATION_BINDINGS).toHaveLength(56)
+    expect(BROWSER_OPERATION_BINDINGS).toHaveLength(57)
     expect(
       Object.fromEntries(
         ['resource', 'cache', 'generation', 'raw-generation'].map((family) => [
@@ -22,7 +22,7 @@ describe('browser operation manifest', () => {
           BROWSER_OPERATION_BINDINGS.filter((binding) => binding.family === family).length,
         ]),
       ),
-    ).toEqual({ resource: 32, cache: 12, generation: 10, 'raw-generation': 2 })
+    ).toEqual({ resource: 33, cache: 12, generation: 10, 'raw-generation': 2 })
     expect(BROWSER_OPERATION_NON_OVERLAPS).toHaveLength(7)
     expect(BROWSER_RAW_GENERATION_OPERATION_IDS).toEqual({
       atomicSubmit: 'generation-operation-submit',

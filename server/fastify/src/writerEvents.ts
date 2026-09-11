@@ -1,5 +1,6 @@
 export interface WriterEvent {
-  sessionId: string
+  databaseLineage: string
+  sessionId: string | null
   epoch: number
 }
 

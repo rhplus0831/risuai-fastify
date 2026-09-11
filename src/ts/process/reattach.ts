@@ -1353,8 +1353,8 @@ export function startActiveGenerationReattach(): void {
   // A mobile tab can remain mounted while its fetch/SSE sockets are discarded.
   // Refresh the server's active-job projection when the page or network returns
   // so even a request dropped before its job-id header arrived can recover.
-  stopGenerationLifecycleRecoverySubscription = subscribeBrowserLifecycleRecovery((source) => {
-    if (!reattachDisabled) requestLifecycleGenerationRecovery(source)
+  stopGenerationLifecycleRecoverySubscription = subscribeBrowserLifecycleRecovery((source, context) => {
+    if (!reattachDisabled && context?.suspensionEvidence) requestLifecycleGenerationRecovery(source)
   })
 }
 

@@ -118,6 +118,17 @@ export const PROTOCOL_ROUTE_POLICIES = [
     },
   },
   {
+    id: 'ownership',
+    auth: {
+      decision: 'required',
+      reason: 'Ownership metadata identifies the active authenticated database and writer session.',
+    },
+    activeWriter: {
+      decision: 'not-applicable',
+      reason: 'Read-only ownership discovery never acquires or changes writer authority.',
+    },
+  },
+  {
     id: 'diagnostics-read',
     auth: {
       decision: 'required',

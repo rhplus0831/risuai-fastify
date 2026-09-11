@@ -139,15 +139,23 @@ server revision can advance from a command response, asset upload, generation,
 or Realm completion without making an unapplied event look complete. Clean
 closes and stream errors reconnect with exponential backoff plus jitter, capped
 at 30 seconds. A malformed command frame forces a complete resource refresh
-before reconnect. Every frame resets a 60-second silence watchdog;
-visibility/page-show/online/focus recovery reconnects immediately. The writer
-transport retriggers current-scope outbox replay after reconnect. A foreign
-writer frame demotes a managed writer into connected reading; only explicit
-**Use this device** requests acquisition. `connectedReaderSync.ts` uses the same
-authenticated frame parser without writer headers, with its own bounded
-backoff, watchdog, ownership/lineage checks, and read-only reconciliation. It
-never replays mutations. Server writer/memory frames are live-only; only command
-events are persisted and replayed.
+before reconnect. Every frame resets a 60-second silence watchdog. The shared
+lifecycle dispatcher records hidden, pagehide, offline, and persisted-page
+suspension evidence. An ordinary focus event does nothing while SSE is live and
+recent; suspension evidence or an unhealthy stream first performs a no-store,
+generation-scoped single-flight `GET /api/v1/ownership` probe. Unchanged
+ownership leaves a healthy stream in place, while a discarded reader stream can
+resume from its applied event cursor. Changed or uncertain ownership takes the
+existing full-bootstrap recovery path. The writer transport retriggers
+current-scope outbox replay after reconnect. A foreign writer frame demotes a
+managed writer into connected reading; only explicit **Use this device**
+requests acquisition. `connectedReaderSync.ts` uses the same authenticated
+frame parser without writer headers, with its own bounded backoff, watchdog,
+ownership/lineage checks, and read-only reconciliation. Writer SSE frames carry
+the database lineage with the writer tuple so a restored database is detected
+without waiting for a separate probe. Reader recovery never replays mutations.
+Server writer/memory frames are live-only; only command events are persisted and
+replayed.
 
 An established writer loses mutation and generation authority synchronously when
 its transport is interrupted, but its coherent writer DOM remains mounted and
@@ -357,8 +365,9 @@ PATCH/lost-receipt window across writer transfer; see
 Other durable effects retain their own lease/idempotency requirements, and late
 ephemeral effects remain skipped.
 
-Read-only bootstrap, resource reads, event streams, generation viewer GETs,
-terminal-snapshot GETs, and immutable asset reads do not require writer ownership. Legacy
+Ownership probes, read-only bootstrap, resource reads, event streams, generation
+viewer GETs, terminal-snapshot GETs, and immutable asset reads do not require
+writer ownership. Legacy
 storage `write`/`remove` calls do carry the active-writer session because they
 mutate server-owned compatibility files. Browser writer-session handling lives
 in `src/ts/server/activeWriterSession.ts`.

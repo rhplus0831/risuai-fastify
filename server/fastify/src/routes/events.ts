@@ -3,6 +3,7 @@ import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
 import type { ActiveWriterState } from '../activeWriter.js'
 import { readActiveWriterSessionId, trackConnectedWriterSession } from '../activeWriter.js'
 import type { AuthState } from '../auth.js'
+import { getDatabaseOwnershipSnapshot } from '../databaseLineage.js'
 import {
   listPersistedCommandEventHistory,
   selectCommandEventReplay,
@@ -39,7 +40,7 @@ function formatMemorySnapshot(snapshot: MemoryJobSnapshot): string {
   return `event: memory_snapshot\ndata: ${JSON.stringify(snapshot)}\n\n`
 }
 
-function formatWriterEvent(event: { sessionId: string | null; epoch: number }): string {
+function formatWriterEvent(event: { databaseLineage: string; sessionId: string | null; epoch: number }): string {
   return `event: writer\ndata: ${JSON.stringify(event)}\n\n`
 }
 
@@ -188,9 +189,10 @@ export function registerEventsRoutes(
       }
       queuedWriterEvents.push(event)
     })
+    const initialOwnership = getDatabaseOwnershipSnapshot(db)
     const initialWriterEvent = {
-      sessionId: activeWriterState.sessionId,
-      epoch: activeWriterState.epoch,
+      databaseLineage: initialOwnership.databaseLineage,
+      ...initialOwnership.writer,
     }
     const snapshotVersion = memoryEvents.snapshotVersion()
     const memorySnapshot: MemoryJobSnapshot = {
