@@ -74,6 +74,7 @@ const appRouteDomMocks = vi.hoisted(() => {
     getCharImage: vi.fn(() => ''),
     importCharacterFile: vi.fn(),
     importPreset: vi.fn(),
+    ensureResourceSurfaces: vi.fn(async () => {}),
     openGridRoute: vi.fn(),
     discardGenerationRecoveryStartup: vi.fn(async () => true),
     retryGenerationRecoveryStartup: vi.fn(async () => true),
@@ -126,6 +127,7 @@ vi.mock('./ts/server/routeResourceLoader', async () => {
   return {
     prefetchCharacterRouteResource: vi.fn(),
     prefetchRoutePathResources: vi.fn(),
+    ensureResourceSurfaces: appRouteDomMocks.ensureResourceSurfaces,
     routeResourceLoadState: writable({ error: null, routeKey: routePath, status: 'ready' }),
   }
 })
@@ -534,6 +536,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     routeResourceLoadState.set({ error: null, routeKey: routePath, status: 'ready' })
     appRouteDomMocks.discardGenerationRecoveryStartup.mockReset().mockResolvedValue(true)
     appRouteDomMocks.retryGenerationRecoveryStartup.mockReset().mockResolvedValue(true)
+    appRouteDomMocks.ensureResourceSurfaces.mockReset().mockResolvedValue()
     seedStores()
     setPushNotificationWarningDismissed(false)
     pushNotificationStateWriter.set(initialPushNotificationCoordinatorState())
@@ -657,6 +660,28 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(get(selectedCharID)).toBe(0)
     expect(window.location.pathname).toBe(routePath)
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(1)
+  })
+
+  it('loads the Hypa V3 overlay resources before mounting a cold modal', async () => {
+    const resourceLoad = deferred<void>()
+    appRouteDomMocks.ensureResourceSurfaces.mockReturnValueOnce(resourceLoad.promise)
+
+    hypaV3ModalOpen.set(true)
+
+    await vi.waitFor(() =>
+      expect(appRouteDomMocks.ensureResourceSurfaces).toHaveBeenCalledWith(['overlay:hypa-memory']),
+    )
+    expect(target.querySelector('[data-risu-lazy-surface="hypa-v3"]')?.getAttribute('data-risu-lazy-state')).toBe(
+      'pending',
+    )
+
+    resourceLoad.resolve()
+
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-risu-lazy-surface="hypa-v3"]')?.getAttribute('data-risu-lazy-state')).toBe(
+        'ready',
+      ),
+    )
   })
 
   it('does not reapply the current route when unrelated startup coordinator metadata changes', async () => {

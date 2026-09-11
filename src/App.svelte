@@ -65,7 +65,11 @@
     restoreCharacterSidebarViewFromHistory,
   } from './ts/router'
   import { routeKey, type AppRoute } from './ts/routerRoute'
-  import { prefetchCharacterRouteResource, routeResourceLoadState } from './ts/server/routeResourceLoader'
+  import {
+    ensureResourceSurfaces,
+    prefetchCharacterRouteResource,
+    routeResourceLoadState,
+  } from './ts/server/routeResourceLoader'
   import { prefetchRouteIntent } from './ts/routeIntentPrefetch'
   import { alertError } from './ts/alert'
   import { canShowReaderAlert } from './ts/readerAlertPolicy'
@@ -92,7 +96,13 @@
   const loadPersonaList = () => import('./lib/Setting/listedPersona.svelte')
   const loadChatGenerationTogglePresetDialog = () => import('./lib/SideBars/ChatGenerationTogglePresetDialog.svelte')
   const loadCustomGUISettingMenu = () => import('./lib/Setting/Pages/CustomGUISettingMenu.svelte')
-  const loadHypaV3Modal = () => import('./lib/Others/HypaV3Modal.svelte')
+  const loadHypaV3Modal = async () => {
+    const [component] = await Promise.all([
+      import('./lib/Others/HypaV3Modal.svelte'),
+      ensureResourceSurfaces(['overlay:hypa-memory']),
+    ])
+    return component
+  }
   const loadHypaV3Progress = () => import('./lib/Others/HypaV3Progress.svelte')
   const loadPopupList = () => import('./lib/UI/PopupList.svelte')
   const loadEasyPanel = () => import('./lib/Others/ProTools/EasyPanel.svelte')
