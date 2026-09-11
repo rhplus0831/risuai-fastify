@@ -5,7 +5,7 @@ import {
   demoteAndRepromoteForTest,
 } from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { get } from 'svelte/store'
+import { get, writable } from 'svelte/store'
 import type { Message } from '../storage/database.svelte'
 
 interface TestPersistenceDatabase {
@@ -56,6 +56,8 @@ import { clearRetainedChatProjections, reapplyRetainedChatBodyProjections } from
 import { registerGenerationOperationsRuntime, registerRecoveredEffectsRuntime } from './generationRuntimeBridge'
 import { charactersResourceState } from '../server/resourceState.svelte'
 
+const generationOperationProjections = writable([])
+
 function seedMessages(messages: Message[]): void {
   const character = {
     type: 'character',
@@ -77,6 +79,7 @@ beforeEach(() => {
   resetClientSessionForTests()
   registerGenerationOperationsRuntime({
     applyGenerationOperationBootstrap: persistenceStateMocks.applyGenerationOperationBootstrap,
+    generationOperationProjections,
   } as never)
   registerRecoveredEffectsRuntime({
     reconcilePendingRecoveredGenerationEffects: persistenceStateMocks.reconcilePendingRecoveredGenerationEffects,
@@ -86,6 +89,8 @@ beforeEach(() => {
   persistenceStateMocks.database = { characters: [] }
   persistenceStateMocks.fetchBootstrap.mockReset()
   persistenceStateMocks.applyGenerationOperationBootstrap.mockReset()
+  persistenceStateMocks.applyGenerationOperationBootstrap.mockReturnValue(true)
+  generationOperationProjections.set([])
   persistenceStateMocks.setPendingRecoveredGenerationEffects.mockReset()
   persistenceStateMocks.reconcilePendingRecoveredGenerationEffects.mockReset()
   persistenceStateMocks.reconcilePendingRecoveredGenerationEffects.mockResolvedValue(undefined)
@@ -384,6 +389,59 @@ describe('generation finalization persistence projection', () => {
     expect(get(generationFinalizationPersistences)).toEqual([])
     expect(persistenceStateMocks.setPendingRecoveredGenerationEffects).toHaveBeenCalledWith([pendingEffect])
     expect(persistenceStateMocks.reconcilePendingRecoveredGenerationEffects).toHaveBeenCalledOnce()
+  })
+
+  it('retains pending finalization and skips effects when the authority snapshot is rejected', async () => {
+    const queuedFinalization = {
+      generationId: 'generation-a',
+      chatId: 'chat-a',
+      messageId: 'generation-a',
+      mode: 'send' as const,
+      state: 'queued' as const,
+    }
+    setGenerationFinalizationPersistences([queuedFinalization])
+    persistenceStateMocks.fetchBootstrap.mockResolvedValue({
+      status: 'ok',
+      bootstrap: { generationFinalizations: [], pendingGenerationEffects: [] },
+    })
+    persistenceStateMocks.applyGenerationOperationBootstrap.mockReturnValueOnce(false)
+
+    startGenerationFinalizationPersistenceRefresh()
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(get(generationFinalizationPersistences)).toEqual([queuedFinalization])
+    expect(persistenceStateMocks.setPendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+    expect(persistenceStateMocks.reconcilePendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(persistenceStateMocks.fetchBootstrap).toHaveBeenCalledTimes(2)
+    expect(persistenceStateMocks.reconcilePendingRecoveredGenerationEffects).toHaveBeenCalledOnce()
+    expect(get(generationFinalizationPersistences)).toEqual([])
+  })
+
+  it('preserves newer finalization authority published while recovered effects are reconciling', async () => {
+    const queued = {
+      generationId: 'generation-a',
+      chatId: 'chat-a',
+      messageId: 'message-a',
+      state: 'queued' as const,
+    }
+    const newer = { ...queued, state: 'stalled' as const, failureCount: 3 }
+    setGenerationFinalizationPersistences([queued])
+    persistenceStateMocks.fetchBootstrap.mockResolvedValue({
+      status: 'ok',
+      bootstrap: { generationFinalizations: [], pendingGenerationEffects: [] },
+    })
+    persistenceStateMocks.reconcilePendingRecoveredGenerationEffects.mockImplementationOnce(async () => {
+      generationOperationProjections.set([])
+      setGenerationFinalizationPersistences([newer])
+    })
+
+    startGenerationFinalizationPersistenceRefresh()
+    await vi.advanceTimersByTimeAsync(5_000)
+
+    expect(get(generationFinalizationPersistences)).toEqual([newer])
   })
 
   it('retains the refresh trigger until recovered effects reconcile successfully', async () => {

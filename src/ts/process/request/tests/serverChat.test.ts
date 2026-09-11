@@ -71,8 +71,10 @@ import {
   activeGenerationJobs,
   clearActiveGenerationJobProjection,
   forgetActiveGenerationJob,
+  hasUnresolvedGenerationAuthorityForTests,
   rememberActiveGenerationJob,
 } from '../../reattach'
+import { captureGenerationRecoveryObligations } from '../../generationRecoveryObligations'
 import {
   isClientAutomaticTranslationEligible,
   replaceAutomaticTranslationMessageIds,
@@ -325,6 +327,7 @@ describe('requestServerChat', () => {
       callerHeader: 'preview-prompt',
       mode: 'preview_prompt',
     })
+    expect(captureGenerationRecoveryObligations()).toEqual([])
   })
 
   it('accepts compact prompt events without the legacy duplicate fields', async () => {
@@ -577,6 +580,86 @@ describe('requestServerChat', () => {
     expect(res.status).toBe('ok')
     if (res.status !== 'ok') return
     expect(res.prompt.messages).toEqual([{ role: 'user', content: 'hi' }])
+  })
+
+  it('preserves recovery interest when a durable POST loses its response before the job header', async () => {
+    let dispatchCapture: ReturnType<typeof captureGenerationRecoveryObligations> = []
+    const fetchMock = vi.fn(async () => {
+      dispatchCapture = captureGenerationRecoveryObligations()
+      throw new Error('connection lost')
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestServerChatGeneration({ ...baseInput, durable: true }, null)).resolves.toMatchObject({
+      status: 'error',
+      error: 'Network error: connection lost',
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/generate/chat',
+      expect.objectContaining({ method: 'POST', body: expect.any(String) }),
+    )
+    expect(dispatchCapture).toEqual([
+      expect.objectContaining({ kind: 'submit', chatId: baseInput.chatId, phase: 'dispatching' }),
+    ])
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'submit', chatId: baseInput.chatId, phase: 'uncertain' }),
+    ])
+    expect(hasUnresolvedGenerationAuthorityForTests(baseInput.chatId)).toBe(true)
+  })
+
+  it('preserves recovery interest when a durable response body fails before the job frame', async () => {
+    const controlled = controlledGenerationStream()
+    const fetchMock = vi.fn(async () => controlled.response)
+    vi.stubGlobal('fetch', fetchMock)
+    const pending = requestServerChatGeneration({ ...baseInput, durable: true }, null)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+
+    controlled.error(new Error('stream lost'))
+
+    await expect(pending).resolves.toMatchObject({ status: 'error', error: 'stream lost' })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(hasUnresolvedGenerationAuthorityForTests(baseInput.chatId)).toBe(true)
+  })
+
+  it('preserves recovery interest when a durable success has no response body or job header', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestServerChatGeneration({ ...baseInput, durable: true }, null)).resolves.toEqual({
+      status: 'error',
+      error: 'Server did not return a streaming response body.',
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(hasUnresolvedGenerationAuthorityForTests(baseInput.chatId)).toBe(true)
+  })
+
+  it('keeps a durable submission uncertain after a retryable HTTP response', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ error: 'temporary_failure' }), { status: 503 })),
+    )
+
+    await expect(requestServerChatGeneration({ ...baseInput, durable: true }, null)).resolves.toMatchObject({
+      status: 'error',
+      error: 'temporary_failure',
+    })
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'submit', chatId: baseInput.chatId, phase: 'uncertain' }),
+    ])
+  })
+
+  it('does not create a durable submission obligation when already aborted before fetch', async () => {
+    const controller = new AbortController()
+    controller.abort()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestServerChatGeneration({ ...baseInput, durable: true }, controller.signal)).resolves.toEqual({
+      status: 'aborted',
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(captureGenerationRecoveryObligations()).toEqual([])
   })
 
   it('returns a streaming dispatch response from token + enriched done events', async () => {
@@ -1930,11 +2013,27 @@ describe('cancelServerChatGeneration', () => {
       error: 'Generation job ID is required.',
     })
     expect(fetchSpy).not.toHaveBeenCalled()
+    rememberActiveGenerationJob({ chatId: 'chat-cancel', jobId: 'gen-x' })
     await expect(cancelServerChatGeneration('gen-x')).resolves.toEqual({
       status: 'failed',
       error: 'Network error: network down',
     })
     expect(fetchSpy).toHaveBeenCalledTimes(1)
+    expect(get(activeGenerationJobs)).toContainEqual({ chatId: 'chat-cancel', jobId: 'gen-x' })
+  })
+
+  it('keeps known legacy job authority when cancellation acknowledgement is malformed', async () => {
+    rememberActiveGenerationJob({ chatId: 'chat-cancel', jobId: 'gen-malformed' })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify({ success: true }), { status: 200 })),
+    )
+
+    await expect(cancelServerChatGeneration('gen-malformed')).resolves.toEqual({
+      status: 'failed',
+      error: 'Invalid generation cancellation response.',
+    })
+    expect(get(activeGenerationJobs)).toContainEqual({ chatId: 'chat-cancel', jobId: 'gen-malformed' })
   })
 
   it('returns a typed not-found outcome for an expired compatibility job', async () => {
@@ -1989,6 +2088,7 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     const controller = new AbortController()
     const pending = requestServerChatGeneration({ ...baseInput, durable: true }, controller.signal)
     await waitForAcceptedServerChatJob('job-xyz')
+    expect(captureGenerationRecoveryObligations()).toEqual([])
 
     controller.abort()
 
@@ -2511,6 +2611,7 @@ describe('requestServerChatGeneration reattach mode', () => {
       url: '/api/v1/generate/chat/job-reattach/stream',
       method: 'GET',
     })
+    expect(captureGenerationRecoveryObligations()).toEqual([])
   })
 
   it('labels reattach stream requests with x-risu-caller: chat-reattach', async () => {

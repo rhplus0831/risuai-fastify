@@ -11,6 +11,7 @@ export type GenerationOperationsRuntime = Pick<
   | 'generationOperationStreamForActiveJob'
   | 'isProtocolGenerationOperationJob'
   | 'readGenerationOperationStatus'
+  | 'replayGenerationRecoveryObligations'
   | 'retireGenerationOperationViewers'
   | 'retryGenerationOperation'
   | 'stopGenerationOperation'

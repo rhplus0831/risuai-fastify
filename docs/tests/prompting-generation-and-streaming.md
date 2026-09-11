@@ -6,6 +6,17 @@ Targeted source check: 2026-09-08 (reader boundaries, native selection setup and
 
 This area covers the path from chat intent through prompt construction, provider dispatch orchestration, streaming, persistence, post-processing, cancellation, and reroll recovery. Provider wire formats are assessed in [Providers, Models, and Media](providers-models-and-media.md); scripting engines are assessed in [Scripting, Parsing, and Automation](scripting-parsing-and-automation.md); memory retrieval is assessed in [Memory and Embeddings](memory-and-embeddings.md).
 
+Foreground recovery is checked at three boundaries. The obligation registry tests
+in `src/ts/process/__tests__/generationRecoveryObligations.test.ts` cover exact
+dispatch and terminal authority identities. The real-module lifecycle tests in
+`generationRecoveryLifecycle.dom.test.ts` compose submission, durable outbox,
+bootstrap acceptance, writer transitions, and strict transcript hydration.
+`server/fastify/browser-smoke/acceptedSendProtocol.spec.ts` then exercises lost
+and malformed accepted responses, a request still pending before acceptance,
+Continue, and Retry against isolated Fastify and SQLite. Its same-page foreground
+cases assert a stable page time origin and resource SSE connection; persisted
+`pageshow` recovery alone cannot establish this because that path reloads the page.
+
 The content-free diagnostic path is exercised by
 `server/fastify/__tests__/diagnosticsGeneration.test.ts`,
 `server/fastify/__tests__/providerDiagnostics.test.ts`, and

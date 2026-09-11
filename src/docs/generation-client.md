@@ -76,9 +76,23 @@ Important files:
   completed, and cancelled viewer state plus the last transport error. Retry,
   Refresh, and Stop resolve a stale control through its recorded operation/chat
   lineage to the current exact authority. While a durable generation remains
-  active, a failed foreground lifecycle probe receives bounded retries after
-  500 ms, 2 s, and 5 s. A newer lifecycle signal, successful probe, settled
-  activity, or teardown supersedes that retry sequence.
+  unresolved, a failed or incomplete foreground lifecycle probe receives bounded retries after
+  500 ms, 2 s, and 5 s. A newer lifecycle signal, settled recovery, settled
+  originating recovery obligation, or teardown supersedes that retry sequence.
+- `src/ts/process/generationRecoveryObligations.ts` records pending generation
+  dispatches before their network requests start. Protocol sends, targeted
+  continue/regenerate, retries, cancellation, and outbox replay share this
+  contract with direct durable chat submission. An in-flight dispatch and an
+  uncertain outcome retain their own identity independently of the local
+  activity spinner. Matching operation authority transfers terminal work to
+  transcript reconciliation; a missing operation in a bootstrap is not proof
+  that the request failed. Recovery can replay only the matching uncertain
+  protocol intents through their idempotent outbox path. Direct compatibility
+  POSTs are never automatically resubmitted.
+  Capture/version checks prevent older authority reads or transcript hydration
+  from settling newer work. Obligations survive automatic reconnection by the
+  same writer and database; loss of that ownership or authentication revokes
+  the old scope, and late callbacks cannot recreate its work.
 - `src/ts/server/readerGenerationObservation.ts`, `readerGenerationStream.ts`,
   and `readerGenerationTypes.ts` own selected-reader status discovery,
   authenticated viewing, and disposable presentation independently of writer

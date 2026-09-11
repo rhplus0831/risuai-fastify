@@ -18,10 +18,12 @@ const operationMocks = vi.hoisted(() => ({
   discard: vi.fn(),
   getBaseRevision: vi.fn(),
   isWriterAccessLost: vi.fn(),
+  listPending: vi.fn(),
   peekRevision: vi.fn(),
   reconcileDirectEvent: vi.fn(),
   setRevision: vi.fn(),
   stage: vi.fn(),
+  canApplyActiveJobs: vi.fn(() => true),
   setActiveJobs: vi.fn(() => true),
   withDirectReconciliation: vi.fn(),
 }))
@@ -40,6 +42,7 @@ vi.mock('../process/acceptedSendRecoveryState', () => ({
 }))
 vi.mock('../process/reattach', () => ({
   authoritativeGenerationJobForChat: vi.fn(),
+  canApplyActiveGenerationJobProjection: operationMocks.canApplyActiveJobs,
   clearActiveGenerationJobProjection: vi.fn(),
   forgetActiveGenerationJob: vi.fn(),
   rememberActiveGenerationJob: vi.fn(),
@@ -75,6 +78,7 @@ vi.mock('./pendingMutationOutbox', () => ({
     intent.kind === 'generation-operation-submit' ||
     intent.kind === 'generation-operation-cancel' ||
     intent.kind === 'generation-operation-retry',
+  listPendingMutations: operationMocks.listPending,
   stagePendingMutation: operationMocks.stage,
 }))
 vi.mock('./bootstrap', () => ({
@@ -97,6 +101,7 @@ import {
   generationOperationProjections,
   reconcileGenerationOperationErrorBody,
   reconcileGenerationOperationTranscriptHydration,
+  replayGenerationRecoveryObligations,
   resetGenerationOperationClientForTests,
   retryGenerationOperation,
   stageAcceptedSendGenerationOperation,
@@ -105,6 +110,12 @@ import {
   submitStagedAcceptedSendOperation,
   submitStagedTargetedGenerationOperation,
 } from './generationOperations'
+import {
+  beginGenerationRecoveryObligation,
+  captureGenerationRecoveryObligations,
+  markGenerationRecoveryObligationUncertain,
+  resetGenerationRecoveryObligations,
+} from '../process/generationRecoveryObligations'
 import {
   recordStartupMilestone,
   resetStartupReadinessForTests,
@@ -188,6 +199,7 @@ beforeEach(() => {
   }
   settleStartupGenerationRecoveryReadiness(true)
   settleStartupChatReadiness(true)
+  resetGenerationRecoveryObligations()
   resetGenerationOperationClientForTests()
   let uuidIndex = 0
   vi.stubGlobal('crypto', {
@@ -195,6 +207,7 @@ beforeEach(() => {
   })
   operationMocks.peekRevision.mockReturnValue(7)
   operationMocks.isWriterAccessLost.mockReturnValue(false)
+  operationMocks.listPending.mockResolvedValue([])
   operationMocks.getBaseRevision.mockResolvedValue(7)
   operationMocks.beginDispatch.mockResolvedValue('persisted')
   operationMocks.discard.mockResolvedValue('deleted')
@@ -220,6 +233,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetStartupReadinessForTests()
+  resetGenerationRecoveryObligations()
   resetGenerationOperationClientForTests()
 })
 
@@ -269,6 +283,7 @@ describe('generation operation client', () => {
         'Generation is not ready (blockers: writer-startup, plugin-runtime, generation-recovery, chat-dependencies; startup phase: not-started; last failure: none).',
     })
     expect(fetchMock).not.toHaveBeenCalled()
+    expect(captureGenerationRecoveryObligations()).toEqual([])
     await expect(dispatchGenerationOperationPendingReplay(staged.handle, staged.intent)).resolves.toMatchObject({
       disposition: 'succeeded',
       result: { status: 'accepted' },
@@ -384,6 +399,33 @@ describe('generation operation client', () => {
     })
   })
 
+  it('establishes submit recovery before transport and rejects a response for another operation', async () => {
+    const staged = await stageManagedSend()
+    if ('status' in staged) throw new Error(staged.error)
+    let dispatchCapture: ReturnType<typeof captureGenerationRecoveryObligations> = []
+    const mismatched = responseBody()
+    mismatched.operation = { ...mismatched.operation, operationId: '33333333-3333-4333-8333-333333333333' }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        dispatchCapture = captureGenerationRecoveryObligations()
+        return new Response(JSON.stringify(mismatched), { status: 200 })
+      }),
+    )
+
+    await expect(submitStagedAcceptedSendOperation(staged)).resolves.toEqual({
+      status: 'retained',
+      error: 'Invalid generation operation response.',
+    })
+    expect(dispatchCapture).toEqual([
+      expect.objectContaining({ kind: 'submit', operationId, chatId: 'chat-a', phase: 'dispatching' }),
+    ])
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'submit', operationId, chatId: 'chat-a', phase: 'uncertain' }),
+    ])
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+  })
+
   it('retains an accepted send whose response omits its reconciliation event', async () => {
     const staged = await stageAcceptedSendGenerationOperation({
       target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
@@ -408,6 +450,9 @@ describe('generation operation client', () => {
       status: 'retained',
       error: 'Invalid accepted-send append response.',
     })
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'submit', operationId, chatId: 'chat-a', phase: 'uncertain' }),
+    ])
     expect(operationMocks.reconcileDirectEvent).not.toHaveBeenCalled()
     expect(operationMocks.discard).not.toHaveBeenCalled()
   })
@@ -433,6 +478,14 @@ describe('generation operation client', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(submitStagedAcceptedSendOperation(staged)).resolves.toMatchObject({ status: 'retained' })
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({
+        kind: 'submit',
+        operationId,
+        chatId: 'chat-a',
+        phase: 'uncertain',
+      }),
+    ])
     expect(operationMocks.discard).not.toHaveBeenCalled()
 
     await expect(dispatchGenerationOperationPendingReplay(staged.handle, staged.intent)).resolves.toMatchObject({
@@ -441,6 +494,7 @@ describe('generation operation client', () => {
     })
     expect(operationMocks.appendOptimistic).toHaveBeenCalledTimes(1)
     expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
+    expect(captureGenerationRecoveryObligations()).toEqual([])
     expect(fetchMock).toHaveBeenCalledTimes(2)
     const firstBody = JSON.parse(fetchMock.mock.calls[0][1].body as string)
     const replayBody = JSON.parse(fetchMock.mock.calls[1][1].body as string)
@@ -448,37 +502,219 @@ describe('generation operation client', () => {
     expect(replayBody).toMatchObject({ operationId, acceptedMessageId: messageId })
   })
 
-  it('stages continue and regenerate as operation-addressed targets without appending a message', async () => {
-    const staged = await stageTargetedGenerationOperation({
-      target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
-      mode: 'continue',
-      targetMessageId: 'assistant-a',
-      draftGeneration: { sequence: 9 },
-      generation: {
-        syntheticSayNothing: false,
-        resetMessages: false,
-        inlayAssetRefs: [],
-        clientContext: {},
-        clientCapabilities: {},
-      },
-    })
+  it('discards an accepted submit row from a pre-bootstrap recovery capture without replaying it', async () => {
+    const staged = await stageManagedSend()
     if ('status' in staged) throw new Error(staged.error)
-
-    expect(staged.request).toMatchObject({
+    const token = beginGenerationRecoveryObligation({
+      kind: 'submit',
       operationId,
-      mode: 'continue',
-      targetMessageId: 'assistant-a',
-      draftGeneration: { sequence: 9 },
+      chatId: 'chat-a',
+      sourceGeneration: 0,
     })
-    expect(staged.request).not.toHaveProperty('message')
-    expect(staged.request).not.toHaveProperty('acceptedMessageId')
-    expect(operationMocks.appendOptimistic).not.toHaveBeenCalled()
+    markGenerationRecoveryObligationUncertain(token)
+    const captured = captureGenerationRecoveryObligations()
+    applyGenerationOperationProjection(responseBody().operation)
+    expect(captureGenerationRecoveryObligations()).toEqual([])
+    operationMocks.listPending.mockResolvedValueOnce([{ handle: staged.handle, intent: staged.intent }])
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
 
+    await expect(replayGenerationRecoveryObligations(captured)).resolves.toBe(true)
+
+    expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('does not acknowledge a captured outbox row after its recovery scope is replaced', async () => {
+    const staged = await stageManagedSend()
+    if ('status' in staged) throw new Error(staged.error)
+    const token = beginGenerationRecoveryObligation({
+      kind: 'submit',
+      operationId,
+      chatId: 'chat-a',
+      sourceGeneration: 0,
+    })
+    markGenerationRecoveryObligationUncertain(token)
+    const captured = captureGenerationRecoveryObligations()
+    let releaseEntries!: () => void
+    const entriesReady = new Promise<void>((resolve) => {
+      releaseEntries = resolve
+    })
+    operationMocks.listPending.mockImplementationOnce(async () => {
+      await entriesReady
+      return [{ handle: staged.handle, intent: staged.intent }]
+    })
+
+    const recovery = replayGenerationRecoveryObligations(captured)
+    await vi.waitFor(() => expect(operationMocks.listPending).toHaveBeenCalledOnce())
+    resetGenerationRecoveryObligations()
+    releaseEntries()
+
+    await expect(recovery).resolves.toBe(false)
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+  })
+
+  it('matches a persisted cancellation when its recovery capture includes the known chat', async () => {
+    const handle = {
+      key: `generation-operation-cancel:${operationId}`,
+      mutationId: 'cancel-mutation-chat-a',
+      sequence: 2,
+      ownerWriterSessionId: 'writer-a',
+      writerEpoch: 1,
+      databaseLineage: 'database-a',
+      phase: 'staged' as const,
+      ready: Promise.resolve<'persisted'>('persisted'),
+    }
+    const intent = {
+      version: 1 as const,
+      kind: 'generation-operation-cancel' as const,
+      requests: [
+        {
+          method: 'PUT' as const,
+          path: `/generation-operations/${operationId}/cancellation`,
+          body: { reason: 'user_stop' },
+        },
+      ],
+    }
+    const token = beginGenerationRecoveryObligation({
+      kind: 'cancel',
+      operationId,
+      chatId: 'chat-a',
+      sourceGeneration: 0,
+    })
+    markGenerationRecoveryObligationUncertain(token)
+    operationMocks.listPending.mockResolvedValueOnce([{ handle, intent }])
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ error: 'temporary_failure', message: 'try later' }), { status: 503 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayGenerationRecoveryObligations(captureGenerationRecoveryObligations())).resolves.toBe(true)
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(captureGenerationRecoveryObligations()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'cancel', operationId, chatId: 'chat-a', phase: 'uncertain' }),
+      ]),
+    )
+  })
+
+  it('does not overlap a replay while the exact recovery intent is already dispatching', async () => {
+    const staged = await stageManagedSend()
+    if ('status' in staged) throw new Error(staged.error)
+    const token = beginGenerationRecoveryObligation({
+      kind: 'submit',
+      operationId,
+      chatId: 'chat-a',
+      sourceGeneration: 0,
+    })
+    markGenerationRecoveryObligationUncertain(token)
+    operationMocks.listPending.mockResolvedValue([{ handle: staged.handle, intent: staged.intent }])
+    let releaseResponse!: (response: Response) => void
+    const heldResponse = new Promise<Response>((resolve) => {
+      releaseResponse = resolve
+    })
+    const fetchMock = vi.fn(async () => heldResponse)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const firstReplay = replayGenerationRecoveryObligations(captureGenerationRecoveryObligations())
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    expect(captureGenerationRecoveryObligations()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ kind: 'submit', operationId, phase: 'uncertain' }),
+        expect.objectContaining({ kind: 'submit', operationId, phase: 'dispatching' }),
+      ]),
+    )
+
+    await expect(replayGenerationRecoveryObligations(captureGenerationRecoveryObligations())).resolves.toBe(false)
+    expect(fetchMock).toHaveBeenCalledOnce()
+
+    releaseResponse(new Response(JSON.stringify(responseBody()), { status: 200 }))
+    await expect(firstReplay).resolves.toBe(true)
+  })
+
+  it.each(['continue', 'regenerate'] as const)(
+    'stages %s as an operation-addressed target and retains pre-dispatch recovery on transport loss',
+    async (mode) => {
+      const staged = await stageTargetedGenerationOperation({
+        target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
+        mode,
+        targetMessageId: 'assistant-a',
+        draftGeneration: { sequence: 9 },
+        generation: {
+          syntheticSayNothing: false,
+          resetMessages: false,
+          inlayAssetRefs: [],
+          clientContext: {},
+          clientCapabilities: {},
+        },
+      })
+      if ('status' in staged) throw new Error(staged.error)
+
+      expect(staged.request).toMatchObject({
+        operationId,
+        mode,
+        targetMessageId: 'assistant-a',
+        draftGeneration: { sequence: 9 },
+      })
+      expect(staged.request).not.toHaveProperty('message')
+      expect(staged.request).not.toHaveProperty('acceptedMessageId')
+      expect(operationMocks.appendOptimistic).not.toHaveBeenCalled()
+
+      let dispatchCapture: ReturnType<typeof captureGenerationRecoveryObligations> = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          dispatchCapture = captureGenerationRecoveryObligations()
+          throw new Error(`${mode} transport lost`)
+        }),
+      )
+      await expect(submitStagedTargetedGenerationOperation(staged)).resolves.toEqual({
+        status: 'retained',
+        error: `Network error: ${mode} transport lost`,
+      })
+      expect(dispatchCapture).toEqual([
+        expect.objectContaining({ kind: 'submit', operationId, chatId: 'chat-a', phase: 'dispatching' }),
+      ])
+      expect(captureGenerationRecoveryObligations()).toEqual([
+        expect.objectContaining({ kind: 'submit', operationId, chatId: 'chat-a', phase: 'uncertain' }),
+      ])
+    },
+  )
+
+  it('keeps a retry obligation when a successful response describes an older attempt', async () => {
+    const stale = responseBody()
+    stale.operation = {
+      ...stale.operation,
+      stateVersion: 2,
+      currentAttempt: { ...stale.operation.currentAttempt!, retryRequestId: 'older-retry' },
+    }
+    let dispatchCapture: ReturnType<typeof captureGenerationRecoveryObligations> = []
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(JSON.stringify(responseBody()), { status: 200 })),
+      vi.fn(async () => {
+        dispatchCapture = captureGenerationRecoveryObligations()
+        return new Response(JSON.stringify(stale), { status: 200 })
+      }),
     )
-    await expect(submitStagedTargetedGenerationOperation(staged)).resolves.toMatchObject({ status: 'accepted' })
+
+    await expect(retryGenerationOperation(operationId, 2)).resolves.toEqual({
+      status: 'retained',
+      error: 'Invalid generation operation response.',
+    })
+    expect(dispatchCapture).toEqual([
+      expect.objectContaining({
+        kind: 'retry',
+        operationId,
+        retryRequestId: operationId,
+        minimumStateVersion: 3,
+        phase: 'dispatching',
+      }),
+    ])
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'retry', retryRequestId: operationId, phase: 'uncertain' }),
+    ])
+    expect(operationMocks.discard).not.toHaveBeenCalled()
   })
 
   it('treats a pending-finalization admission error as a typed terminal rejection', async () => {
@@ -559,6 +795,9 @@ describe('generation operation client', () => {
     vi.stubGlobal('fetch', fetchMock)
 
     await expect(stopGenerationOperation(operationId)).resolves.toMatchObject({ status: 'failed' })
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'cancel', operationId, phase: 'uncertain' }),
+    ])
     expect(operationMocks.stage).toHaveBeenLastCalledWith(
       `generation-operation-cancel:${operationId}`,
       expect.objectContaining({
@@ -582,6 +821,7 @@ describe('generation operation client', () => {
       disposition: 'cancelled_before_acceptance',
     })
     expect(operationMocks.stage).toHaveBeenCalledTimes(2)
+    expect(captureGenerationRecoveryObligations()).toEqual([])
     expect(get(generationOperationCancellations)).toEqual([
       expect.objectContaining({ operationId, state: 'settled_cancelled' }),
     ])
@@ -759,6 +999,35 @@ describe('generation operation client', () => {
       operations: [newerOperation],
       source: 'pageshow',
     })
+  })
+
+  it('preflights the job epoch before a rejected bootstrap can clear recovery authority', () => {
+    const token = beginGenerationRecoveryObligation({
+      kind: 'submit',
+      operationId,
+      chatId: 'chat-a',
+      sourceGeneration: 0,
+    })
+    markGenerationRecoveryObligationUncertain(token)
+    const before = captureGenerationRecoveryObligations()
+    operationMocks.canApplyActiveJobs.mockReturnValueOnce(false)
+
+    expect(
+      applyGenerationOperationBootstrap({
+        initialized: true,
+        revision: 8,
+        databaseLineage: 'database-a',
+        generationOperationProtocol: { version: 1 },
+        generationOperationProjectionEpoch: 3,
+        generationOperations: [responseBody().operation],
+        activeGenerationJobs: [],
+      }),
+    ).toBe(false)
+
+    expect(operationMocks.setActiveJobs).not.toHaveBeenCalled()
+    expect(operationMocks.applyAcceptedBootstrap).not.toHaveBeenCalled()
+    expect(get(generationOperationProjections)).toEqual([])
+    expect(captureGenerationRecoveryObligations()).toEqual(before)
   })
 
   it('keeps a newer per-operation state version when a bootstrap reuses the global epoch', () => {
@@ -1014,6 +1283,14 @@ describe('generation operation writer lifecycle', () => {
     expect(operationMocks.setRevision).not.toHaveBeenCalled()
     expect(operationMocks.applyAcceptedOperation).not.toHaveBeenCalled()
     expect(operationMocks.reconcileDirectEvent).not.toHaveBeenCalled()
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({
+        kind: 'submit',
+        operationId,
+        chatId: 'chat-a',
+        phase: 'uncertain',
+      }),
+    ])
   })
 
   it('does not apply a held cancellation acknowledgement after writer loss and re-promotion', async () => {
@@ -1044,5 +1321,8 @@ describe('generation operation writer lifecycle', () => {
     await expect(pending).resolves.toMatchObject({ status: 'acknowledged', disposition: 'cancelling' })
     expect(get(generationOperationCancellations)).toEqual(before)
     expect(operationMocks.applyAcceptedOperation).not.toHaveBeenCalled()
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'cancel', operationId, phase: 'uncertain' }),
+    ])
   })
 })

@@ -134,7 +134,26 @@ capabilities consumed by the shell and protocol adapters:
   ownership leaves a healthy stream alone, or reconnects a discarded reader
   stream from its applied event cursor without a bootstrap. Changed or uncertain
   ownership retains the full bootstrap recovery path. Generation bootstrap
-  recovery is likewise limited to suspension-backed lifecycle signals.
+  recovery is likewise limited to suspension-backed lifecycle signals and runs
+  only while the browser retains active message work, a known active job, an
+  explicit in-flight or unresolved durable request obligation, a pending
+  absent-job transcript reconciliation, or an in-flight generation operation
+  (`accepted`, `launching`, `owned_by_job`, `stopping`, or `finalizing`). Stable
+  retryable/abandoned operations and settled cancel-before-submit tombstones do
+  not trigger lifecycle polling by themselves. An unresolved retry or
+  cancellation request remains a distinct obligation until its matching
+  authority is known.
+- Generation submission obligations start before the network dispatch, across
+  both protocol-v1 and direct durable chat paths. A response failure preserves
+  uncertainty even after the local activity settles. An accepted bootstrap
+  cannot erase an obligation merely because its operation is absent; recovery
+  replays only matching uncertain idempotent protocol intents from the outbox.
+  In-flight requests and direct compatibility POSTs are not replayed. A
+  terminal operation discovered without a previously known job still requires
+  strict transcript reconciliation. Each settlement checks the captured
+  request identity and version so an older read cannot clear newer work.
+  Automatic same-writer reconnection preserves obligations; authentication,
+  writer ownership, or database-lineage loss revokes the old scope.
 - Writer generation recovery treats SQLite `generation_operations`,
   `generation_operation_attempts`, and `generation_effects` as durable
   authority. Active jobs are live attachment hints and local activities are
@@ -143,15 +162,20 @@ capabilities consumed by the shell and protocol adapters:
   late ephemeral effects. Runtime read-only bootstrap probes are epoch-fenced and
   bounded; a foreground probe may supersede an older suspended request while
   preserving the last successfully applied projection on failure. While durable
-  generation activity remains visible, a failed lifecycle probe receives three
-  bounded foreground retries at 500 ms, 2 s, and 5 s; a newer lifecycle event,
-  successful probe, settled activity, or teardown supersedes that retry chain.
+  generation recovery remains unresolved, a failed or incomplete lifecycle probe receives three
+  bounded foreground retries at 500 ms, 2 s, and 5 s. Each retry is bound to
+  the job, activity, operation, or versioned unresolved-request identities that
+  scheduled it; unrelated later work cannot adopt an older retry chain. A newer
+  lifecycle event, settled recovery, settled originating interest, or teardown
+  supersedes that retry chain.
   A current, accepted probe advances the known-server command cursor before
   transcript and effect reconciliation, while the applied-resource cursor
   remains event-owned.
   Terminal or expired jobs are not cleared until their affected transcript has
-  been authoritatively hydrated, and the snapshot's finalization/effect
-  projections are reconciled in the same recovery pass.
+  been authoritatively hydrated. Concurrent absent jobs settle independently so
+  one failed chat hydration cannot exhaust successfully reconciled jobs, and the
+  snapshot's finalization/effect projections are reconciled in the same recovery
+  pass.
 - Reader generation uses `readerGenerationObservation.ts` and
   `readerGenerationStream.ts` instead of the writer send/recovery pipeline. Only
   the selected chat's exact operation/attempt/job is attached. Reads and silent

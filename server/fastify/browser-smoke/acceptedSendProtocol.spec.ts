@@ -1,4 +1,12 @@
-import { devices, expect, test, type Page } from '@playwright/test'
+import {
+  devices,
+  expect,
+  test,
+  type Page,
+  type Request as PlaywrightRequest,
+  type Response as PlaywrightResponse,
+  type Route,
+} from '@playwright/test'
 import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -25,13 +33,15 @@ interface ProviderPlan {
 interface OperationProjection {
   operationId: string
   chatId?: string
+  mode?: 'send' | 'continue' | 'regenerate'
+  targetMessageId?: string
   state: string
   stateVersion: number
   projectionEpoch: number
   acceptedMessageId?: string
   resultMessageId?: string
   providerMayHaveRun: boolean
-  currentAttempt?: { attemptNo: number; jobId: string; status: string }
+  currentAttempt?: { attemptNo: number; jobId: string; status: string; retryRequestId?: string }
 }
 
 interface LifecycleSnapshot {
@@ -41,6 +51,7 @@ interface LifecycleSnapshot {
     phase: string
     operationState?: string
     providerMayHaveRun: boolean
+    retrying?: boolean
   }>
   activeGenerationJobs: Array<{ chatId: string; jobId: string; operationId?: string }>
   activeChatGenerations: Array<{ chatId?: string; operationId?: string; stage: number }>
@@ -52,7 +63,13 @@ interface LifecycleSnapshot {
     target?: { chatId?: string }
   }>
   generationOperations: OperationProjection[]
-  outbox: Array<{ key: string; mutationId: string; phase: string; kind?: string }>
+  outbox: Array<{
+    key: string
+    mutationId: string
+    phase: string
+    kind?: string
+    requests: Array<{ method?: string; path?: string; body?: Record<string, unknown> }>
+  }>
 }
 
 interface ApiMessage {
@@ -67,6 +84,21 @@ interface BootstrapProjection {
   activeGenerationJobs?: Array<{ chatId: string; jobId: string; operationId?: string }>
   generationFinalizations?: Array<{ chatId: string; generationId: string; state: string }>
   pendingGenerationEffects?: Array<{ chatId: string; operationId?: string; status: string }>
+}
+
+interface CapturedGenerationSubmit {
+  request: Record<string, unknown>
+  status: number
+  response: {
+    operation?: OperationProjection
+    append?: { disposition?: string; messageId?: string }
+  }
+}
+
+interface ApiRequestAudit {
+  requests: Array<{ method: string; path: string }>
+  responses: Array<{ method: string; path: string; status: number }>
+  dispose: () => void
 }
 
 class ControlledProvider {
@@ -323,9 +355,15 @@ class LifecycleHarness {
 
 const CHARACTER_ID = 'char-lifecycle'
 const chats = {
+  idleForeground: 'chat-idle-foreground',
   reloadDesktop: 'chat-reload-desktop',
   responseLoss: 'chat-response-loss',
+  responseMalformed: 'chat-response-malformed',
+  pendingForegroundAnchor: 'chat-pending-foreground-anchor',
+  pendingForeground: 'chat-pending-foreground',
+  targetedContinueLoss: 'chat-targeted-continue-loss',
   retryableProviderFailure: 'chat-retryable-provider-failure',
+  retryResponseLoss: 'chat-retry-response-loss',
   reloadMobile: 'chat-reload-mobile',
   restart: 'chat-restart',
   stopDesktop: 'chat-stop-desktop',
@@ -410,39 +448,234 @@ test('send -> mid-stream and completed reloads retain one exact reply', async ({
   expect(harness.provider.calls(chatId)).toBe(1)
 })
 
-test('accepted send recovers when the operation response is lost before identity reaches the browser', async ({
-  page,
-}) => {
-  const chatId = chats.responseLoss
-  const userText = 'lost operation response request'
-  const partial = 'Recovered response'
-  const reply = `${partial} reply`
-  harness.provider.configure(chatId, { chunks: [partial, ' reply'], holdAfterChunk: 1 })
-
+test('healthy writer foreground after a real idle suspension preserves SSE and skips bootstrap', async ({ page }) => {
+  const chatId = chats.idleForeground
   await bootChat(page, chatId)
-  let responseDropped = false
-  await page.route('**/api/v1/generation-operations', async (route) => {
-    if (responseDropped || route.request().method() !== 'POST') {
-      await route.continue()
-      return
-    }
-    responseDropped = true
-    await route.fetch()
-    await route.abort('connectionclosed')
-  })
+  const writerSessionId = await expectHealthyWriterSession(page)
+  const idle = await lifecycleSnapshot(page)
+  expect({
+    activeOperations: idle.generationOperations.filter((operation) =>
+      ['accepted', 'launching', 'owned_by_job', 'stopping', 'finalizing'].includes(operation.state),
+    ).length,
+    jobs: idle.activeGenerationJobs.length,
+    activities: idle.activeChatGenerations.length,
+    outbox: generationOutboxCount(idle),
+  }).toEqual({ activeOperations: 0, jobs: 0, activities: 0, outbox: 0 })
 
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+  const audit = startApiRequestAudit(page)
   try {
-    await sendMessage(page, userText)
-    await expect.poll(() => responseDropped).toBe(true)
-    await dispatchLifecycleRecoveryEvents(page)
-    const operation = await expectRunningTruth(page, chatId, userText, partial)
-
-    harness.provider.release(chatId)
-    await expectTerminalTruth(page, chatId, userText, reply, 'completed', operation.operationId)
-    expect(harness.provider.calls(chatId)).toBe(1)
+    await dispatchVisibilitySuspensionAndWaitForOwnership(page, audit)
+    expect(apiRequestCount(audit, '/api/v1/ownership')).toBe(1)
+    expect(apiResponseCount(audit, '/api/v1/ownership')).toBe(1)
+    expect(apiRequestCount(audit, '/api/v1/bootstrap')).toBe(0)
+    expect(apiRequestCount(audit, '/api/v1/events')).toBe(0)
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+    expect(await expectHealthyWriterSession(page)).toBe(writerSessionId)
   } finally {
-    harness.provider.release(chatId)
-    await page.unroute('**/api/v1/generation-operations')
+    audit.dispose()
+  }
+})
+
+for (const scenario of [
+  {
+    name: 'lost',
+    chatId: chats.responseLoss,
+    userText: 'lost operation response request',
+    partial: 'Recovered lost response',
+    mode: 'drop-after-acceptance' as const,
+  },
+  {
+    name: 'malformed',
+    chatId: chats.responseMalformed,
+    userText: 'malformed operation response request',
+    partial: 'Recovered malformed response',
+    mode: 'malformed-after-acceptance' as const,
+  },
+]) {
+  test(`accepted send recovers when its ${scenario.name} response hides server identity from the live browser`, async ({
+    page,
+  }) => {
+    const reply = `${scenario.partial} reply`
+    harness.provider.configure(scenario.chatId, { chunks: [scenario.partial, ' reply'], holdAfterChunk: 1 })
+
+    await bootChat(page, scenario.chatId)
+    const audit = startApiRequestAudit(page)
+    const interception = await interceptNextGenerationSubmit(page, scenario.chatId, scenario.mode)
+    const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+    try {
+      await sendMessage(page, scenario.userText)
+      const accepted = await interception.accepted
+      const identity = expectAcceptedSubmit(accepted, scenario.chatId, 'send')
+      await expectAmbiguousSendSettled(page, scenario.chatId, scenario.userText, identity.operationId)
+      expect(harness.provider.calls(scenario.chatId)).toBe(1)
+      const writerSessionId = await expectHealthyWriterSession(page)
+
+      const bootstrapBeforeRecovery = apiResponseCount(audit, '/api/v1/bootstrap')
+      const eventRequestsBeforeRecovery = apiRequestCount(audit, '/api/v1/events')
+      await dispatchVisibilitySuspensionAndWaitForOwnership(page, audit)
+      await expect
+        .poll(() => apiResponseCount(audit, '/api/v1/bootstrap'), { timeout: 15_000 })
+        .toBeGreaterThan(bootstrapBeforeRecovery)
+      expect(apiRequestCount(audit, '/api/v1/events')).toBe(eventRequestsBeforeRecovery)
+      expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+      expect(await expectHealthyWriterSession(page)).toBe(writerSessionId)
+
+      const operation = await expectRunningTruth(
+        page,
+        scenario.chatId,
+        scenario.userText,
+        scenario.partial,
+        identity.operationId,
+      )
+      expect(operation).toMatchObject({
+        operationId: identity.operationId,
+        acceptedMessageId: identity.acceptedMessageId,
+        currentAttempt: { jobId: identity.jobId },
+      })
+
+      harness.provider.release(scenario.chatId)
+      await expectTerminalTruth(page, scenario.chatId, scenario.userText, reply, 'completed', identity.operationId)
+      const committed = await authoritativeMessages(page, scenario.chatId)
+      const completedOperation = await operationForId(page, identity.operationId)
+      const resultMessageId = requiredString(completedOperation?.resultMessageId, 'completed result message id')
+      expect(committed).toHaveLength(2)
+      expect(committed[0]).toMatchObject({ chatId: identity.acceptedMessageId, role: 'user', data: scenario.userText })
+      expect(committed[1]).toMatchObject({
+        chatId: resultMessageId,
+        role: 'char',
+        data: reply,
+        generationInfo: { operationId: identity.operationId },
+      })
+      expect(harness.provider.calls(scenario.chatId)).toBe(1)
+
+      const bootstrapAfterCompletion = apiRequestCount(audit, '/api/v1/bootstrap')
+      await dispatchVisibilitySuspensionAndWaitForOwnership(page, audit)
+      expect(apiRequestCount(audit, '/api/v1/bootstrap')).toBe(bootstrapAfterCompletion)
+      expect(apiRequestCount(audit, '/api/v1/events')).toBe(eventRequestsBeforeRecovery)
+      expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+      expect(await expectHealthyWriterSession(page)).toBe(writerSessionId)
+    } finally {
+      harness.provider.release(scenario.chatId)
+      await interception.dispose()
+      audit.dispose()
+    }
+  })
+}
+
+test('a submit pending across foreground survives a bootstrap that predates server acceptance', async ({ page }) => {
+  test.setTimeout(60_000)
+  const anchorChatId = chats.pendingForegroundAnchor
+  const pendingChatId = chats.pendingForeground
+  const anchorUser = 'foreground bootstrap anchor request'
+  const anchorPartial = 'Foreground anchor'
+  const anchorReply = `${anchorPartial} reply`
+  const pendingUser = 'pending foreground request'
+  const pendingPartial = 'Pending foreground'
+  const pendingReply = `${pendingPartial} reply`
+  harness.provider.configure(anchorChatId, { chunks: [anchorPartial, ' reply'], holdAfterChunk: 1 })
+  harness.provider.configure(pendingChatId, { chunks: [pendingPartial, ' reply'], holdAfterChunk: 1 })
+
+  await bootChat(page, anchorChatId)
+  await sendMessage(page, anchorUser)
+  const anchorOperation = await expectRunningTruth(page, anchorChatId, anchorUser, anchorPartial)
+  await navigateToChat(page, pendingChatId)
+
+  const audit = startApiRequestAudit(page)
+  const interception = await interceptNextGenerationSubmit(page, pendingChatId, 'hold-before-acceptance')
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+  const writerSessionId = await expectHealthyWriterSession(page)
+  try {
+    await sendMessage(page, pendingUser)
+    const intercepted = await interception.intercepted
+    const pendingOperationId = requiredString(intercepted.operationId, 'pending operation id')
+    const pendingMessageId = requiredString(intercepted.acceptedMessageId, 'pending accepted message id')
+    await expect(page.getByTestId('default-chat-cancel-button')).toBeVisible()
+    expect(harness.provider.calls(pendingChatId)).toBe(0)
+    expect(await authoritativeMessages(page, pendingChatId)).toEqual([])
+    // Stream activity starts only after the accepted POST returns. The held
+    // route plus the exact durable outbox row are the in-flight proof here.
+    await expect
+      .poll(async () => {
+        const snapshot = await lifecycleSnapshot(page)
+        return {
+          operations: snapshot.generationOperations.filter((operation) => operation.chatId === pendingChatId).length,
+          jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === pendingChatId).length,
+          activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === pendingChatId).length,
+          outbox: generationOutboxCount(snapshot),
+        }
+      })
+      .toEqual({ operations: 0, jobs: 0, activities: 0, outbox: 1 })
+
+    const recoveryBootstrap = page.waitForResponse(
+      (response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/bootstrap',
+      { timeout: 15_000 },
+    )
+    await dispatchVisibilitySuspensionAndWaitForOwnership(page, audit)
+    const staleBootstrapResponse = await recoveryBootstrap
+    const staleBootstrap = (await staleBootstrapResponse.json()) as BootstrapProjection
+    await staleBootstrapResponse.finished()
+    await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+    expect(apiRequestCount(audit, '/api/v1/events')).toBe(0)
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+    expect(await expectHealthyWriterSession(page)).toBe(writerSessionId)
+    expect(staleBootstrap.generationOperations?.some((operation) => operation.operationId === pendingOperationId)).toBe(
+      false,
+    )
+    expect(staleBootstrap.activeGenerationJobs?.some((job) => job.chatId === pendingChatId)).toBe(false)
+    expect(staleBootstrap.generationOperations).toContainEqual(
+      expect.objectContaining({ operationId: anchorOperation.operationId, state: 'owned_by_job' }),
+    )
+    await expect
+      .poll(async () => {
+        const snapshot = await lifecycleSnapshot(page)
+        return {
+          cancellable: await page.getByTestId('default-chat-cancel-button').isVisible(),
+          knownPendingOperation: snapshot.generationOperations.some(
+            (operation) => operation.operationId === pendingOperationId,
+          ),
+          activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === pendingChatId).length,
+          stagedOperationId: snapshot.outbox.find((entry) => entry.kind === 'generation-operation-submit')?.requests[0]
+            ?.body?.operationId,
+          pendingProviderCalls: harness.provider.calls(pendingChatId),
+        }
+      })
+      .toEqual({
+        cancellable: true,
+        knownPendingOperation: false,
+        activities: 0,
+        stagedOperationId: pendingOperationId,
+        pendingProviderCalls: 0,
+      })
+
+    interception.release()
+    const accepted = await interception.accepted
+    const identity = expectAcceptedSubmit(accepted, pendingChatId, 'send')
+    expect(identity).toMatchObject({ operationId: pendingOperationId, acceptedMessageId: pendingMessageId })
+    const pendingOperation = await expectRunningTruth(
+      page,
+      pendingChatId,
+      pendingUser,
+      pendingPartial,
+      pendingOperationId,
+    )
+    expect(pendingOperation.currentAttempt?.jobId).toBe(identity.jobId)
+    expect(harness.provider.calls(pendingChatId)).toBe(1)
+
+    harness.provider.release(pendingChatId)
+    await expectTerminalTruth(page, pendingChatId, pendingUser, pendingReply, 'completed', pendingOperationId)
+    expect(harness.provider.calls(pendingChatId)).toBe(1)
+
+    harness.provider.release(anchorChatId)
+    await navigateToChat(page, anchorChatId)
+    await expectTerminalTruth(page, anchorChatId, anchorUser, anchorReply, 'completed', anchorOperation.operationId)
+    expect(harness.provider.calls(anchorChatId)).toBe(1)
+  } finally {
+    interception.release()
+    harness.provider.release(pendingChatId)
+    harness.provider.release(anchorChatId)
+    await interception.dispose()
+    audit.dispose()
   }
 })
 
@@ -487,6 +720,197 @@ test('provider failure before tokens exposes an exact Retry that succeeds withou
     { role: 'user', data: userText },
     { role: 'char', data: reply },
   ])
+})
+
+test('an accepted Retry with a lost response recovers the exact retry attempt on foreground', async ({ page }) => {
+  test.setTimeout(45_000)
+  const chatId = chats.retryResponseLoss
+  const userText = 'lost retry response request'
+  const partial = 'Recovered retry response'
+  const reply = `${partial} reply`
+  harness.provider.configure(
+    chatId,
+    { chunks: [], errorBeforeTokens: 'browser smoke retry response setup failure' },
+    { chunks: [partial, ' reply'], holdAfterChunk: 1 },
+  )
+
+  await bootChat(page, chatId)
+  await sendMessage(page, userText)
+  const recovery = page.getByTestId('accepted-send-recovery')
+  await expect(recovery).toBeVisible({ timeout: 15_000 })
+  const providerError = page.getByRole('alertdialog')
+  await expect(providerError).toContainText('browser smoke retry response setup failure')
+  await providerError.getByRole('button', { name: 'OK', exact: true }).click()
+  const retryable = await waitForOperation(page, chatId)
+  expect(retryable).toMatchObject({ state: 'retryable', providerMayHaveRun: true })
+
+  const audit = startApiRequestAudit(page)
+  const interception = await interceptGenerationRetryResponse(page, retryable.operationId)
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+  try {
+    await recovery.getByTestId('accepted-send-retry').click()
+    const confirmation = page.getByRole('alertdialog')
+    await expect(confirmation).toContainText('may already have been billed')
+    await confirmation.getByRole('button', { name: 'YES' }).click()
+
+    const accepted = await interception.accepted
+    expect(accepted.status).toBe(202)
+    const retryRequestId = requiredString(accepted.request.retryRequestId, 'retry request id')
+    expect(accepted.request.expectedStateVersion).toBe(retryable.stateVersion)
+    expect(accepted.response.operation).toMatchObject({
+      operationId: retryable.operationId,
+      chatId,
+      state: 'owned_by_job',
+      currentAttempt: { attemptNo: 2, retryRequestId },
+    })
+    const retryJobId = requiredString(accepted.response.operation?.currentAttempt?.jobId, 'retry job id')
+    await expect
+      .poll(async () => {
+        const snapshot = await lifecycleSnapshot(page)
+        const operation = snapshot.generationOperations.find(
+          (candidate) => candidate.operationId === retryable.operationId,
+        )
+        const retainedRetry = snapshot.outbox.find((entry) => entry.kind === 'generation-operation-retry')
+        return {
+          state: operation?.state,
+          recovery: snapshot.acceptedSendRecoveries.find(
+            (candidate) => candidate.operationId === retryable.operationId,
+          ),
+          jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
+          activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === chatId).length,
+          outbox: generationOutboxCount(snapshot),
+          stagedRetryRequestId: retainedRetry?.requests[0]?.body?.retryRequestId,
+        }
+      })
+      .toEqual({
+        state: 'retryable',
+        recovery: expect.objectContaining({ phase: 'retryable', retrying: false }),
+        jobs: 0,
+        activities: 0,
+        outbox: 1,
+        stagedRetryRequestId: retryRequestId,
+      })
+    expect(harness.provider.calls(chatId)).toBe(2)
+    const writerSessionId = await expectHealthyWriterSession(page)
+
+    const bootstrapBeforeRecovery = apiResponseCount(audit, '/api/v1/bootstrap')
+    const eventRequestsBeforeRecovery = apiRequestCount(audit, '/api/v1/events')
+    await dispatchVisibilitySuspensionAndWaitForOwnership(page, audit)
+    await expect
+      .poll(() => apiResponseCount(audit, '/api/v1/bootstrap'), { timeout: 15_000 })
+      .toBeGreaterThan(bootstrapBeforeRecovery)
+    expect(apiRequestCount(audit, '/api/v1/events')).toBe(eventRequestsBeforeRecovery)
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+    expect(await expectHealthyWriterSession(page)).toBe(writerSessionId)
+
+    const running = await expectRunningTruth(page, chatId, userText, partial, retryable.operationId)
+    expect(running.currentAttempt).toMatchObject({ attemptNo: 2, jobId: retryJobId, retryRequestId })
+    harness.provider.release(chatId, 2)
+    await expectTerminalTruth(page, chatId, userText, reply, 'completed', retryable.operationId)
+    expect(harness.provider.calls(chatId)).toBe(2)
+    expect(summarizeMessages(await authoritativeMessages(page, chatId))).toEqual([
+      { role: 'user', data: userText },
+      { role: 'char', data: reply },
+    ])
+  } finally {
+    harness.provider.release(chatId, 2)
+    await interception.dispose()
+    audit.dispose()
+  }
+})
+
+test('a targeted Continue with a lost accepted response recovers its exact operation on foreground', async ({
+  page,
+}) => {
+  test.setTimeout(45_000)
+  const chatId = chats.targetedContinueLoss
+  const userText = 'targeted continue source request'
+  const initialReply = 'Initial targeted reply'
+  const continuedPartial = ' continued after response loss'
+  const continuedReply = `${continuedPartial} exactly`
+  harness.provider.configure(
+    chatId,
+    { chunks: [initialReply] },
+    { chunks: [continuedPartial, ' exactly'], holdAfterChunk: 1 },
+  )
+
+  await bootChat(page, chatId)
+  await sendMessage(page, userText)
+  const initialOperation = await waitForOperation(page, chatId)
+  await expectTerminalTruth(page, chatId, userText, initialReply, 'completed', initialOperation.operationId)
+  const initialTranscript = await authoritativeMessages(page, chatId)
+  const continueTargetId = requiredString(initialTranscript.at(-1)?.chatId, 'continue target message id')
+
+  const audit = startApiRequestAudit(page)
+  const interception = await interceptNextGenerationSubmit(page, chatId, 'drop-after-acceptance')
+  const timeOrigin = await page.evaluate(() => performance.timeOrigin)
+  try {
+    await page.getByTestId('default-chat-menu-button').click()
+    await page.getByRole('menuitem', { name: 'Continue Response', exact: true }).click()
+    const accepted = await interception.accepted
+    const identity = expectAcceptedSubmit(accepted, chatId, 'continue')
+    expect(accepted.request.targetMessageId).toBe(continueTargetId)
+    await expectAmbiguousTargetedSubmitSettled(page, chatId, identity.operationId)
+    expect(harness.provider.calls(chatId)).toBe(2)
+    const writerSessionId = await expectHealthyWriterSession(page)
+
+    const bootstrapBeforeRecovery = apiResponseCount(audit, '/api/v1/bootstrap')
+    const eventRequestsBeforeRecovery = apiRequestCount(audit, '/api/v1/events')
+    await dispatchVisibilitySuspensionAndWaitForOwnership(page, audit)
+    await expect
+      .poll(() => apiResponseCount(audit, '/api/v1/bootstrap'), { timeout: 15_000 })
+      .toBeGreaterThan(bootstrapBeforeRecovery)
+    expect(apiRequestCount(audit, '/api/v1/events')).toBe(eventRequestsBeforeRecovery)
+    expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin)
+    expect(await expectHealthyWriterSession(page)).toBe(writerSessionId)
+
+    await expect
+      .poll(async () => {
+        const snapshot = await lifecycleSnapshot(page)
+        const operation = snapshot.generationOperations.find(
+          (candidate) => candidate.operationId === identity.operationId,
+        )
+        return {
+          state: operation?.state,
+          jobId: operation?.currentAttempt?.jobId,
+          jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
+          activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === chatId).length,
+          outbox: generationOutboxCount(snapshot),
+        }
+      })
+      .toEqual({ state: 'owned_by_job', jobId: identity.jobId, jobs: 1, activities: 1, outbox: 0 })
+    await expect(page.locator('.default-chat-screen')).toContainText(continuedPartial.trim())
+
+    harness.provider.release(chatId, 2)
+    await expectTargetedOperationCompleted(page, chatId, identity.operationId, initialReply + continuedReply)
+    const completedTranscript = await authoritativeMessages(page, chatId)
+    expect(completedTranscript).toHaveLength(2)
+    expect(completedTranscript[0]).toEqual(initialTranscript[0])
+    const completedOperation = await operationForId(page, identity.operationId)
+    expect(completedOperation).toMatchObject({
+      operationId: identity.operationId,
+      state: 'completed',
+      mode: 'continue',
+      targetMessageId: continueTargetId,
+      resultMessageId: continueTargetId,
+    })
+    const resultMessageId = requiredString(completedOperation?.resultMessageId, 'continued result message id')
+    const resultMessage = completedTranscript.find((message) => message.chatId === resultMessageId)
+    // Extend-style Continue mutates the existing assistant row in place. Its
+    // row metadata retains the operation that created it; the completed
+    // continuation operation above is the authority for this later mutation.
+    expect(resultMessage).toMatchObject({
+      chatId: continueTargetId,
+      role: 'char',
+      data: initialReply + continuedReply,
+      generationInfo: { operationId: initialOperation.operationId },
+    })
+    expect(harness.provider.calls(chatId)).toBe(2)
+  } finally {
+    harness.provider.release(chatId, 2)
+    await interception.dispose()
+    audit.dispose()
+  }
 })
 
 test('Pixel reload plus visibility/pageshow reattaches and commits one reply', async ({ browser }) => {
@@ -964,6 +1388,306 @@ async function dispatchLifecycleRecoveryEvents(page: Page): Promise<void> {
   })
 }
 
+function startApiRequestAudit(page: Page): ApiRequestAudit {
+  const requests: ApiRequestAudit['requests'] = []
+  const responses: ApiRequestAudit['responses'] = []
+  const recordRequest = (request: PlaywrightRequest) => {
+    const url = new URL(request.url())
+    if (url.origin === new URL(harness.baseUrl).origin && url.pathname.startsWith('/api/')) {
+      requests.push({ method: request.method(), path: url.pathname })
+    }
+  }
+  const recordResponse = (response: PlaywrightResponse) => {
+    const url = new URL(response.url())
+    if (url.origin === new URL(harness.baseUrl).origin && url.pathname.startsWith('/api/')) {
+      responses.push({ method: response.request().method(), path: url.pathname, status: response.status() })
+    }
+  }
+  page.on('request', recordRequest)
+  page.on('response', recordResponse)
+  return {
+    requests,
+    responses,
+    dispose: () => {
+      page.off('request', recordRequest)
+      page.off('response', recordResponse)
+    },
+  }
+}
+
+function apiRequestCount(audit: ApiRequestAudit, path: string): number {
+  return audit.requests.filter((request) => request.path === path).length
+}
+
+function apiResponseCount(audit: ApiRequestAudit, path: string): number {
+  return audit.responses.filter((response) => response.path === path && response.status === 200).length
+}
+
+async function dispatchVisibilitySuspensionAndWaitForOwnership(page: Page, audit: ApiRequestAudit): Promise<void> {
+  const ownershipResponses = apiResponseCount(audit, '/api/v1/ownership')
+  const ownershipResponse = page.waitForResponse(
+    (response) => response.request().method() === 'GET' && new URL(response.url()).pathname === '/api/v1/ownership',
+    { timeout: 15_000 },
+  )
+  await page.evaluate(() => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    document.dispatchEvent(new Event('visibilitychange'))
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+    document.dispatchEvent(new Event('visibilitychange'))
+  })
+  const response = await ownershipResponse
+  expect(response.status()).toBe(200)
+  await response.finished()
+  await expect
+    .poll(() => apiResponseCount(audit, '/api/v1/ownership'), {
+      message: 'foreground ownership check completed',
+      timeout: 15_000,
+    })
+    .toBeGreaterThan(ownershipResponses)
+  // The ownership body has finished by this point. Yield one browser task so
+  // the fetch continuation can decide whether recovery needs a reconnect.
+  await page.evaluate(() => new Promise<void>((resolve) => setTimeout(resolve, 0)))
+}
+
+async function expectHealthyWriterSession(page: Page): Promise<string> {
+  await expect
+    .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot()))
+    .toMatchObject({ managed: true, lifecycle: 'writing', connection: 'live' })
+  const headers = await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders())
+  return requiredString(headers['risu-writer-session'], 'writer session id')
+}
+
+async function interceptNextGenerationSubmit(
+  page: Page,
+  chatId: string,
+  mode: 'drop-after-acceptance' | 'malformed-after-acceptance' | 'hold-before-acceptance',
+): Promise<{
+  intercepted: Promise<Record<string, unknown>>
+  accepted: Promise<CapturedGenerationSubmit>
+  release: () => void
+  dispose: () => Promise<void>
+}> {
+  let handled = false
+  let releaseHeldRequest = () => {}
+  const heldRequest = new Promise<void>((resolve) => {
+    releaseHeldRequest = resolve
+  })
+  let resolveIntercepted!: (request: Record<string, unknown>) => void
+  const intercepted = new Promise<Record<string, unknown>>((resolve) => {
+    resolveIntercepted = resolve
+  })
+  let resolveAccepted!: (capture: CapturedGenerationSubmit) => void
+  let rejectAccepted!: (error: unknown) => void
+  const accepted = new Promise<CapturedGenerationSubmit>((resolve, reject) => {
+    resolveAccepted = resolve
+    rejectAccepted = reject
+  })
+  const handler = async (route: Route): Promise<void> => {
+    const request = route.request()
+    let body: Record<string, unknown> = {}
+    try {
+      const parsed = JSON.parse(request.postData() ?? 'null') as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed as Record<string, unknown>
+    } catch {}
+    if (handled || request.method() !== 'POST' || body.chatId !== chatId) {
+      await route.continue()
+      return
+    }
+    handled = true
+    resolveIntercepted(body)
+    try {
+      if (mode === 'hold-before-acceptance') await heldRequest
+      const response = await route.fetch()
+      const responseBody = (await response.json()) as CapturedGenerationSubmit['response']
+      resolveAccepted({ request: body, status: response.status(), response: responseBody })
+      if (mode === 'drop-after-acceptance') {
+        await route.abort('connectionclosed')
+      } else if (mode === 'malformed-after-acceptance') {
+        await route.fulfill({ status: response.status(), contentType: 'application/json', body: '{}' })
+      } else {
+        await route.fulfill({ response })
+      }
+    } catch (error) {
+      rejectAccepted(error)
+      throw error
+    }
+  }
+  await page.route('**/api/v1/generation-operations', handler)
+  return {
+    intercepted,
+    accepted,
+    release: releaseHeldRequest,
+    dispose: async () => {
+      releaseHeldRequest()
+      if (handled && mode === 'hold-before-acceptance') await accepted.catch(() => undefined)
+      await page.unroute('**/api/v1/generation-operations', handler)
+    },
+  }
+}
+
+async function interceptGenerationRetryResponse(
+  page: Page,
+  operationId: string,
+): Promise<{
+  accepted: Promise<CapturedGenerationSubmit>
+  dispose: () => Promise<void>
+}> {
+  const path = `/api/v1/generation-operations/${encodeURIComponent(operationId)}/retries`
+  let handled = false
+  let resolveAccepted!: (capture: CapturedGenerationSubmit) => void
+  let rejectAccepted!: (error: unknown) => void
+  const accepted = new Promise<CapturedGenerationSubmit>((resolve, reject) => {
+    resolveAccepted = resolve
+    rejectAccepted = reject
+  })
+  const handler = async (route: Route): Promise<void> => {
+    const request = route.request()
+    if (handled || request.method() !== 'POST' || new URL(request.url()).pathname !== path) {
+      await route.continue()
+      return
+    }
+    handled = true
+    let body: Record<string, unknown> = {}
+    try {
+      const parsed = JSON.parse(request.postData() ?? 'null') as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) body = parsed as Record<string, unknown>
+    } catch {}
+    try {
+      const response = await route.fetch()
+      const responseBody = (await response.json()) as CapturedGenerationSubmit['response']
+      resolveAccepted({ request: body, status: response.status(), response: responseBody })
+      await route.abort('connectionclosed')
+    } catch (error) {
+      rejectAccepted(error)
+      throw error
+    }
+  }
+  await page.route(`**${path}`, handler)
+  return {
+    accepted,
+    dispose: async () => {
+      await page.unroute(`**${path}`, handler)
+    },
+  }
+}
+
+function expectAcceptedSubmit(
+  capture: CapturedGenerationSubmit,
+  chatId: string,
+  mode: 'send' | 'continue' | 'regenerate',
+): { operationId: string; acceptedMessageId: string; jobId: string } {
+  expect(capture.status).toBe(201)
+  expect(capture.request).toMatchObject({ protocolVersion: 1, chatId, mode })
+  const operationId = requiredString(capture.request.operationId, 'operation id')
+  const operation = capture.response.operation
+  expect(operation).toMatchObject({ operationId, chatId, mode, state: 'owned_by_job' })
+  const jobId = requiredString(operation?.currentAttempt?.jobId, 'generation job id')
+  if (mode !== 'send') return { operationId, acceptedMessageId: '', jobId }
+  const acceptedMessageId = requiredString(capture.request.acceptedMessageId, 'accepted message id')
+  expect(capture.response.append).toMatchObject({ disposition: 'accepted', messageId: acceptedMessageId })
+  expect(operation).toMatchObject({ acceptedMessageId })
+  return { operationId, acceptedMessageId, jobId }
+}
+
+function requiredString(value: unknown, label: string): string {
+  expect(value, label).toEqual(expect.any(String))
+  return value as string
+}
+
+async function expectAmbiguousSendSettled(
+  page: Page,
+  chatId: string,
+  userText: string,
+  operationId: string,
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const snapshot = await lifecycleSnapshot(page)
+      const intent = snapshot.outbox.find((entry) => entry.kind === 'generation-operation-submit')
+      return {
+        knownOperation: snapshot.generationOperations.some((operation) => operation.operationId === operationId),
+        jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
+        activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === chatId).length,
+        outbox: generationOutboxCount(snapshot),
+        stagedOperationId: intent?.requests[0]?.body?.operationId,
+      }
+    })
+    .toEqual({ knownOperation: false, jobs: 0, activities: 0, outbox: 1, stagedOperationId: operationId })
+  await settleLocalSubmissionError(page)
+  await expect(page.getByTestId('default-chat-cancel-button')).toBeVisible()
+  expect(summarizeMessages(await residentMessages(page, chatId))).toEqual([{ role: 'user', data: userText }])
+  expect(summarizeMessages(await authoritativeMessages(page, chatId))).toEqual([{ role: 'user', data: userText }])
+}
+
+async function expectAmbiguousTargetedSubmitSettled(page: Page, chatId: string, operationId: string): Promise<void> {
+  await expect
+    .poll(async () => {
+      const snapshot = await lifecycleSnapshot(page)
+      const intent = snapshot.outbox.find(
+        (entry) => entry.kind === 'generation-operation-submit' && entry.requests[0]?.body?.operationId === operationId,
+      )
+      return {
+        knownOperation: snapshot.generationOperations.some((operation) => operation.operationId === operationId),
+        jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
+        activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === chatId).length,
+        outbox: generationOutboxCount(snapshot),
+        stagedOperationId: intent?.requests[0]?.body?.operationId,
+      }
+    })
+    .toEqual({ knownOperation: false, jobs: 0, activities: 0, outbox: 1, stagedOperationId: operationId })
+  await settleLocalSubmissionError(page)
+  await expect(page.getByTestId('default-chat-cancel-button')).toBeVisible()
+}
+
+async function settleLocalSubmissionError(page: Page): Promise<void> {
+  const dialog = page.getByRole('alertdialog')
+  if (await dialog.isVisible()) {
+    await expect(dialog).toContainText('Network error')
+    await dialog.getByRole('button', { name: 'OK', exact: true }).click()
+  }
+  await expect(dialog).not.toBeVisible()
+}
+
+async function expectTargetedOperationCompleted(
+  page: Page,
+  chatId: string,
+  operationId: string,
+  resultText: string,
+): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const snapshot = await lifecycleSnapshot(page)
+        const operation = snapshot.generationOperations.find((candidate) => candidate.operationId === operationId)
+        return {
+          state: operation?.state,
+          resultMessageId: operation?.resultMessageId,
+          jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
+          activities: snapshot.activeChatGenerations.filter((activity) => activity.chatId === chatId).length,
+          outbox: generationOutboxCount(snapshot),
+        }
+      },
+      { timeout: 20_000 },
+    )
+    .toEqual({
+      state: 'completed',
+      resultMessageId: expect.any(String),
+      jobs: 0,
+      activities: 0,
+      outbox: 0,
+    })
+  await expect
+    .poll(async () => {
+      const operation = await operationForId(page, operationId)
+      const transcript = await authoritativeMessages(page, chatId)
+      return transcript.find((message) => message.chatId === operation?.resultMessageId)?.data
+    })
+    .toContain(resultText)
+  await expect
+    .poll(async () => summarizeMessages(await residentMessages(page, chatId)))
+    .toEqual(summarizeMessages(await authoritativeMessages(page, chatId)))
+}
+
 async function expectRunningTruth(
   page: Page,
   chatId: string,
@@ -1284,6 +2008,10 @@ async function operationForChat(page: Page, chatId: string): Promise<OperationPr
   return (await lifecycleSnapshot(page)).generationOperations.find((candidate) => candidate.chatId === chatId)
 }
 
+async function operationForId(page: Page, operationId: string): Promise<OperationProjection | undefined> {
+  return (await lifecycleSnapshot(page)).generationOperations.find((candidate) => candidate.operationId === operationId)
+}
+
 function generationOutboxCount(snapshot: LifecycleSnapshot): number {
   return snapshot.outbox.filter((entry) => entry.kind?.startsWith('generation-operation-')).length
 }
@@ -1368,6 +2096,7 @@ function lifecycleFixtureDatabase(): Record<string, unknown> {
     aiModel: 'echo_model',
     useStreaming: true,
     removeIncompleteResponse: false,
+    useSayNothing: false,
     requestRetrys: 0,
     echoMessage: 'unused browser-smoke echo',
     echoDelay: 0,

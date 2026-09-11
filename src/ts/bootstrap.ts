@@ -1537,9 +1537,12 @@ export async function loadWebInitialDatabase(
     recordStartupMilestone('reader-ready')
   })
   await runWriterStep('writer-runtime-services', () => {
-    applyGenerationOperationBootstrap(runtime, 'startup')
-    setPendingRecoveredGenerationEffects(runtime.pendingGenerationEffects ?? [])
-    setGenerationFinalizationPersistences(runtime.generationFinalizations ?? [])
+    // Outbox replay can publish newer generation authority after this startup
+    // snapshot was read. Its effects/finalization slices must share acceptance.
+    if (applyGenerationOperationBootstrap(runtime, 'startup')) {
+      setPendingRecoveredGenerationEffects(runtime.pendingGenerationEffects ?? [])
+      setGenerationFinalizationPersistences(runtime.generationFinalizations ?? [])
+    }
     startGenerationFinalizationPersistenceRefresh()
     setActiveMessageTranslations(runtime.activeMessageTranslations ?? [])
     setActiveGreetingTranslations(runtime.activeGreetingTranslations ?? [])

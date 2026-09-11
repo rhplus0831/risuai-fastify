@@ -86,8 +86,9 @@ function uninstallListeners(): void {
 
 /**
  * Subscribe to one coalesced browser foreground-recovery signal. Generation,
- * resource SSE, and future recovery domains share these physical listeners so
- * visibility + pageshow bursts enter one ordered recovery epoch.
+ * resource SSE, and future recovery domains share these physical listeners.
+ * This coalesces notification only: each subscriber owns its request sequencing
+ * and the authority required to settle its domain's recovery obligations.
  */
 export function subscribeBrowserLifecycleRecovery(listener: BrowserLifecycleRecoveryListener): () => void {
   listeners.add(listener)

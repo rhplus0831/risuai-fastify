@@ -552,6 +552,7 @@ beforeEach(() => {
   clearAppliedServerResourceRevision()
 
   vi.clearAllMocks()
+  runtimeApi.applyGenerationOperationBootstrap.mockReset().mockReturnValue(true)
   readerApi.start.mockImplementation(() => {
     setClientConnectionState('live')
     return { stop: readerApi.stop, retry: readerApi.retry, ready: Promise.resolve() }
@@ -1615,6 +1616,18 @@ describe('API-backed client bootstrap', () => {
 
     await vi.waitFor(() => expect(pushApi.reconcile).toHaveBeenCalledOnce())
     expect(pushApi.reconcile).toHaveBeenCalledWith(true)
+  })
+
+  it('preserves newer generation effects when startup authority was superseded during recovery', async () => {
+    runtimeApi.applyGenerationOperationBootstrap.mockReturnValueOnce(false)
+
+    await loadWebInitialDatabase()
+
+    expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+    expect(runtimeApi.applyGenerationOperationBootstrap).toHaveBeenCalledOnce()
+    expect(recoveredGenerationApi.setPendingRecoveredGenerationEffects).not.toHaveBeenCalled()
+    expect(runtimeApi.setGenerationFinalizationPersistences).not.toHaveBeenCalled()
+    expect(runtimeApi.startGenerationFinalizationPersistenceRefresh).toHaveBeenCalledOnce()
   })
 
   it('loads resource APIs and writer runtime services without starting selected hydration owners', async () => {

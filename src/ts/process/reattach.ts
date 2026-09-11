@@ -22,6 +22,18 @@ import {
   getRecoveredEffectsRuntime,
   getServerChatRuntime,
 } from './generationRuntimeBridge'
+import { captureClientSessionGeneration, clientSessionStore, type ClientSessionSnapshot } from '../clientSession'
+import {
+  applyGenerationRecoveryJob,
+  beginGenerationRecoveryObligation,
+  captureGenerationRecoveryObligations,
+  hasGenerationRecoveryObligationsForTests,
+  markGenerationRecoveryObligationUncertain,
+  resetGenerationRecoveryObligations,
+  settleCapturedGenerationRecoveryObligation,
+  settleGenerationRecoveryObligation,
+  type CapturedGenerationRecoveryObligation,
+} from './generationRecoveryObligations'
 
 /**
  * Durable generations still running server-side, as surfaced by the bootstrap
@@ -62,10 +74,37 @@ interface ReattachProjectionCapture {
 const authoritativeGenerationJobsById = new Map<string, ActiveGenerationJob>()
 let authoritativeGenerationJobByChat = new Map<string, ActiveGenerationJob>()
 const supersededGenerationJobChats = new Map<string, string>()
+const pendingAbsentGenerationReconciliations = new Map<string, ActiveGenerationJob>()
 let activeGenerationProjectionEpoch = 0
 let activeGenerationProjectionApplicationVersion = 0
 let activeGenerationRecoveryEpoch = 0
 const MAX_SUPERSEDED_GENERATION_JOB_CONTEXTS = 128
+
+let recoveryOwnershipSnapshot: ClientSessionSnapshot | undefined
+
+function generationRecoveryOwnershipWasReplaced(previous: ClientSessionSnapshot, next: ClientSessionSnapshot): boolean {
+  if (previous.managed !== next.managed) return true
+  if (previous.sessionId && previous.sessionId !== next.sessionId) return true
+  if (previous.databaseLineage && previous.databaseLineage !== next.databaseLineage) return true
+  if (previous.authenticated && !next.authenticated) return true
+  return (
+    previous.writer?.sessionId === previous.sessionId &&
+    next.writer !== null &&
+    next.writer.sessionId !== null &&
+    next.writer.sessionId !== next.sessionId
+  )
+}
+
+// Recovery ownership exists before UI reattachment is started. Observe its
+// durable scope for the lifetime of this module so auth, lineage, or foreign
+// writer replacement invalidates old tokens before late callbacks can run.
+clientSessionStore.subscribe((next) => {
+  const previous = recoveryOwnershipSnapshot
+  recoveryOwnershipSnapshot = next
+  if (previous && generationRecoveryOwnershipWasReplaced(previous, next)) {
+    resetGenerationRecoveryObligations()
+  }
+})
 
 function rememberSupersededGenerationJob(jobId: string, chatId: string): void {
   supersededGenerationJobChats.delete(jobId)
@@ -301,7 +340,7 @@ export function setActiveGenerationJobs(
   application: GenerationJobProjectionApplication = {},
 ): boolean {
   const incomingEpoch = application.projectionEpoch
-  if (incomingEpoch !== undefined && incomingEpoch < activeGenerationProjectionEpoch) return false
+  if (!canApplyActiveGenerationJobProjection(incomingEpoch)) return false
   const previousJobsById = new Map(authoritativeGenerationJobsById)
   if (incomingEpoch !== undefined) activeGenerationProjectionEpoch = incomingEpoch
   activeGenerationProjectionApplicationVersion += 1
@@ -316,6 +355,7 @@ export function setActiveGenerationJobs(
     }
   }
   replaceAuthoritativeGenerationJobs(normalizedJobs)
+  for (const job of normalizedJobs) applyGenerationRecoveryJob(job)
   const nextJobIds = new Set(normalizedJobs.map((job) => job.jobId))
   for (const jobId of reattachRetryStates.keys()) {
     if (!nextJobIds.has(jobId)) clearReattachRetryState(jobId)
@@ -376,6 +416,11 @@ export function setActiveGenerationJobs(
   return true
 }
 
+/** Read-only half of the bootstrap projection's atomic acceptance check. */
+export function canApplyActiveGenerationJobProjection(projectionEpoch?: number): boolean {
+  return projectionEpoch === undefined || projectionEpoch >= activeGenerationProjectionEpoch
+}
+
 export function clearActiveGenerationJobProjection(): void {
   activeGenerationRecoveryEpoch += 1
   runtimeJobRefresh?.controller.abort()
@@ -384,10 +429,42 @@ export function clearActiveGenerationJobProjection(): void {
   authoritativeGenerationJobsById.clear()
   authoritativeGenerationJobByChat = new Map()
   supersededGenerationJobChats.clear()
+  resetGenerationRecoveryObligations()
+  pendingAbsentGenerationReconciliations.clear()
   activeGenerationProjectionEpoch = 0
   activeGenerationProjectionApplicationVersion += 1
   activeGenerationJobs.set([])
   generationJobLifecycles.set({})
+}
+
+/**
+ * Compatibility wrapper for callers not yet migrated to per-dispatch tokens.
+ */
+export function retainUnresolvedGenerationAuthority(chatId: string | undefined, operationId?: string): void {
+  const normalizedChatId = chatId?.trim()
+  if (!normalizedChatId) return
+  const token = beginGenerationRecoveryObligation({
+    chatId: normalizedChatId,
+    ...(operationId?.trim() ? { operationId: operationId.trim() } : {}),
+    kind: 'submit',
+    sourceGeneration: captureClientSessionGeneration(),
+  })
+  markGenerationRecoveryObligationUncertain(token)
+}
+
+export function hasUnresolvedGenerationAuthorityForTests(chatId?: string): boolean {
+  return hasGenerationRecoveryObligationsForTests(chatId)
+}
+
+export function resolveUnresolvedGenerationAuthority(chatId: string | undefined, operationId?: string): void {
+  const normalizedChatId = chatId?.trim()
+  if (!normalizedChatId) return
+  const normalizedOperationId = operationId?.trim() || undefined
+  for (const obligation of captureGenerationRecoveryObligations()) {
+    if (obligation.chatId !== normalizedChatId) continue
+    if (normalizedOperationId ? obligation.operationId !== normalizedOperationId : obligation.operationId) continue
+    settleGenerationRecoveryObligation(obligation.token)
+  }
 }
 
 /**
@@ -408,6 +485,8 @@ export function rememberActiveGenerationJob(job: ActiveGenerationJob): void {
   ) {
     return
   }
+  applyGenerationRecoveryJob(job)
+  pendingAbsentGenerationReconciliations.delete(job.jobId)
   if (previous?.jobId === job.jobId && compareActiveGenerationJobAuthority(job, previous) <= 0) {
     const remembered = {
       ...previous,
@@ -450,6 +529,7 @@ export function rememberActiveGenerationJob(job: ActiveGenerationJob): void {
 /** Remove a locally/bootstrap-known job once its terminal frame is observed. */
 export function forgetActiveGenerationJob(jobId: string, terminalStatus?: 'completed' | 'cancelled'): void {
   if (!jobId) return
+  pendingAbsentGenerationReconciliations.delete(jobId)
   const knownJob = knownGenerationJob(jobId)
   clearReattachRetryState(jobId)
   const authoritative = authoritativeGenerationJobsById.get(jobId)
@@ -854,8 +934,9 @@ function bootstrapRefreshError(result: { status: 'error'; error: string } | { st
 async function hydrateReconciledChats(
   jobs: readonly Pick<ActiveGenerationJob, 'chatId'>[],
   options: { strict?: boolean; signal?: AbortSignal | null } = {},
-): Promise<boolean> {
-  if (jobs.length === 0) return true
+): Promise<ReadonlySet<string>> {
+  const hydratedChatIds = new Set<string>()
+  if (jobs.length === 0) return hydratedChatIds
   const { hydrateChatMessages } = getChatHydrationRuntime()
   let pendingChatIds = [...new Set(jobs.map((job) => job.chatId))]
   // A terminal resource event can apply a newer transcript while this forced
@@ -872,12 +953,15 @@ async function hydrateReconciledChats(
         }),
       ),
     )
+    for (const [index, result] of results.entries()) {
+      if (result.status === 'fulfilled') hydratedChatIds.add(pendingChatIds[index])
+    }
     const failedChatIds = pendingChatIds.filter((_chatId, index) => results[index].status === 'rejected')
-    if (failedChatIds.length === 0) return true
-    if (options.signal?.aborted) return false
+    if (failedChatIds.length === 0) return hydratedChatIds
+    if (options.signal?.aborted) return hydratedChatIds
     pendingChatIds = failedChatIds
   }
-  return false
+  return hydratedChatIds
 }
 
 /** Reconcile and retry only the requested job against authoritative bootstrap state. */
@@ -1021,9 +1105,23 @@ async function reconcileAbsentGenerationJobs(
   previousJobs: readonly ActiveGenerationJob[],
   source: GenerationJobProjectionSource,
   signal?: AbortSignal | null,
+  terminalObligations: readonly CapturedGenerationRecoveryObligation[] = [],
 ): Promise<void> {
-  const absentJobs = previousJobs.filter((job) => !authoritativeGenerationJobForChat(job.chatId))
-  if (absentJobs.length === 0) return
+  retainAbsentGenerationJobsForReconciliation(previousJobs)
+  const candidates = new Map(pendingAbsentGenerationReconciliations)
+  const absentJobs: ActiveGenerationJob[] = []
+  for (const job of candidates.values()) {
+    if (authoritativeGenerationJobForChat(job.chatId)) {
+      pendingAbsentGenerationReconciliations.delete(job.jobId)
+      continue
+    }
+    pendingAbsentGenerationReconciliations.set(job.jobId, job)
+    absentJobs.push(job)
+  }
+  const awaitingTranscript = terminalObligations.filter(
+    (obligation) => obligation.phase === 'awaiting_transcript' && obligation.chatId,
+  )
+  if (absentJobs.length === 0 && awaitingTranscript.length === 0) return
 
   for (const job of absentJobs) {
     updateGenerationJobLifecycle(job, 'retrying', {
@@ -1032,65 +1130,98 @@ async function reconcileAbsentGenerationJobs(
     })
   }
 
-  const hydrated = await hydrateReconciledChats(absentJobs, { strict: true, signal })
+  const hydratedChatIds = await hydrateReconciledChats(
+    [...absentJobs, ...awaitingTranscript.map((obligation) => ({ chatId: obligation.chatId! }))],
+    { strict: true, signal },
+  )
   if (signal?.aborted) return
   const { generationOperationProjections } = getGenerationOperationsRuntime()
   const operations = get(generationOperationProjections)
   for (const job of absentJobs) {
-    const operation = job.operationId
-      ? operations.find((candidate) => candidate.operationId === job.operationId)
-      : undefined
-    if (!hydrated) {
-      updateGenerationJobLifecycle(job, 'exhausted-dead', {
-        lastError: 'The generation finished, but its transcript could not be refreshed.',
-      })
-      continue
-    }
-    if (operation && (operation.state === 'retryable' || operation.state === 'abandoned')) {
-      updateGenerationJobLifecycle(job, 'exhausted-dead', {
-        lastError: operation.lastError ?? 'Generation requires authoritative recovery.',
-      })
-      continue
-    }
-    if (operation && (operation.state === 'terminal_failed' || operation.state === 'invalidated')) {
-      reportSendChatError(operation.lastError ?? 'Generation failed.', {
-        target: stablePostGenerationChatTarget(operation.characterId, operation.chatId),
-        ...(operation.resultMessageId ? { messageId: operation.resultMessageId } : {}),
-        generationInfo: undefined,
-      })
-      forgetActiveGenerationJob(job.jobId)
+    let reconciliationSettled = false
+    try {
+      // Authority may have advanced while strict hydration was in flight. A
+      // replacement job owns this chat now; the old absence must not publish a
+      // terminal lifecycle or consume the replacement's observation state.
+      if (authoritativeGenerationJobForChat(job.chatId)) {
+        reconciliationSettled = true
+        continue
+      }
+      const operation = job.operationId
+        ? operations.find((candidate) => candidate.operationId === job.operationId)
+        : undefined
+      if (!hydratedChatIds.has(job.chatId)) {
+        updateGenerationJobLifecycle(job, 'exhausted-dead', {
+          lastError: 'The generation finished, but its transcript could not be refreshed.',
+        })
+        continue
+      }
+      if (operation && (operation.state === 'retryable' || operation.state === 'abandoned')) {
+        reconciliationSettled = true
+        updateGenerationJobLifecycle(job, 'exhausted-dead', {
+          lastError: operation.lastError ?? 'Generation requires authoritative recovery.',
+        })
+        continue
+      }
+      if (operation && (operation.state === 'terminal_failed' || operation.state === 'invalidated')) {
+        reconciliationSettled = true
+        reportSendChatError(operation.lastError ?? 'Generation failed.', {
+          target: stablePostGenerationChatTarget(operation.characterId, operation.chatId),
+          ...(operation.resultMessageId ? { messageId: operation.resultMessageId } : {}),
+          generationInfo: undefined,
+        })
+        forgetActiveGenerationJob(job.jobId)
+        recordGenerationRecoveryEvent(
+          {
+            trigger: source,
+            recoveryEpoch: activeGenerationRecoveryEpoch,
+            disposition: 'terminal_reconciliation',
+            operationId: operation.operationId,
+            ...(job.attemptNo !== undefined ? { attemptNo: job.attemptNo } : {}),
+            jobId: job.jobId,
+            nextDurableState: operation.state,
+            priorObserverState: 'attached',
+            nextObserverState: 'completed',
+          },
+          'terminal_reconciliation',
+        )
+        continue
+      }
+      const terminalStatus = operation?.state === 'cancelled' ? 'cancelled' : 'completed'
+      reconciliationSettled = true
+      forgetActiveGenerationJob(job.jobId, terminalStatus)
       recordGenerationRecoveryEvent(
         {
           trigger: source,
           recoveryEpoch: activeGenerationRecoveryEpoch,
           disposition: 'terminal_reconciliation',
-          operationId: operation.operationId,
+          ...(job.operationId ? { operationId: job.operationId } : {}),
           ...(job.attemptNo !== undefined ? { attemptNo: job.attemptNo } : {}),
           jobId: job.jobId,
-          nextDurableState: operation.state,
+          ...(operation?.state ? { nextDurableState: operation.state } : {}),
           priorObserverState: 'attached',
-          nextObserverState: 'completed',
+          nextObserverState: terminalStatus,
         },
-        'terminal_reconciliation',
+        job.operationId ? 'terminal_reconciliation' : 'compatibility_job_expiry',
       )
-      continue
+    } finally {
+      if (reconciliationSettled) pendingAbsentGenerationReconciliations.delete(job.jobId)
     }
-    const terminalStatus = operation?.state === 'cancelled' ? 'cancelled' : 'completed'
-    forgetActiveGenerationJob(job.jobId, terminalStatus)
-    recordGenerationRecoveryEvent(
-      {
-        trigger: source,
-        recoveryEpoch: activeGenerationRecoveryEpoch,
-        disposition: 'terminal_reconciliation',
-        ...(job.operationId ? { operationId: job.operationId } : {}),
-        ...(job.attemptNo !== undefined ? { attemptNo: job.attemptNo } : {}),
-        jobId: job.jobId,
-        ...(operation?.state ? { nextDurableState: operation.state } : {}),
-        priorObserverState: 'attached',
-        nextObserverState: terminalStatus,
-      },
-      job.operationId ? 'terminal_reconciliation' : 'compatibility_job_expiry',
-    )
+  }
+  for (const obligation of awaitingTranscript) {
+    if (obligation.chatId && hydratedChatIds.has(obligation.chatId)) {
+      settleCapturedGenerationRecoveryObligation(obligation)
+    }
+  }
+}
+
+function retainAbsentGenerationJobsForReconciliation(previousJobs: readonly ActiveGenerationJob[]): void {
+  for (const job of previousJobs) {
+    if (authoritativeGenerationJobForChat(job.chatId)) {
+      pendingAbsentGenerationReconciliations.delete(job.jobId)
+    } else {
+      pendingAbsentGenerationReconciliations.set(job.jobId, job)
+    }
   }
 }
 
@@ -1118,26 +1249,59 @@ async function applyGenerationRecoveryBootstrap(
   runtime: { status: 'ok'; bootstrap: ServerBootstrapRuntime },
   source: GenerationJobProjectionSource,
   signal?: AbortSignal | null,
-): Promise<void> {
+  capturedRecovery: readonly CapturedGenerationRecoveryObligation[] = [],
+): Promise<boolean> {
   const previousJobs = [...authoritativeGenerationJobsById.values()]
-  const { applyGenerationOperationBootstrap } = getGenerationOperationsRuntime()
+  const generationOperations = getGenerationOperationsRuntime()
+  const { applyGenerationOperationBootstrap } = generationOperations
   const applied = applyGenerationOperationBootstrap(runtime.bootstrap, source)
-  if (!applied) return
+  if (!applied) return false
+  // Retain vanished jobs before replay can await or time out. Their transcript
+  // reconciliation must survive even though the accepted projection has
+  // already removed them from the active-job maps.
+  retainAbsentGenerationJobsForReconciliation(previousJobs)
+  // The authority ingress is synchronous. Advance the command cursor only
+  // after its operation/job epoch checks accept the complete projection, and
+  // before replay or transcript/effect reconciliation can yield.
+  setCachedServerCommandRevision(runtime.bootstrap.revision)
+  // Apply every accepted bootstrap slice before replay can publish newer
+  // operation authority. Older snapshot data must not overwrite that result
+  // after the network await below.
   if (runtime.bootstrap.generationFinalizations) {
     setGenerationFinalizationPersistences(runtime.bootstrap.generationFinalizations)
   }
+  const hasPendingGenerationEffects = (runtime.bootstrap.pendingGenerationEffects?.length ?? 0) > 0
+  const recoveredGenerationEffects = hasPendingGenerationEffects ? getRecoveredEffectsRuntime() : null
+  if (recoveredGenerationEffects) {
+    recoveredGenerationEffects.setPendingRecoveredGenerationEffects(runtime.bootstrap.pendingGenerationEffects ?? [])
+  }
+  // Reconcile exact outbox receipts and replay only still-current idempotent
+  // uncertain identities after the accepted snapshot leaves their outcome
+  // unresolved. The replay path rechecks each token at actual dispatch time.
+  const replay = generationOperations.replayGenerationRecoveryObligations(
+    [...capturedRecovery, ...captureGenerationRecoveryObligations()],
+    signal ?? undefined,
+  )
+  if (signal) {
+    if ((await settleBeforeAbort(replay, signal)) === null) return false
+  } else {
+    await replay
+  }
+  if (signal?.aborted) return false
+  const terminalObligations = captureGenerationRecoveryObligations().filter(
+    (obligation) => obligation.phase === 'awaiting_transcript',
+  )
   // Once the foreground authority projection is accepted, the pre-suspension
   // observer is stale. Retire it before strict transcript hydration so a hung
   // post-resume resource read cannot keep its chat activity spinner alive.
   if (sourceRearmsObservation(source)) {
     await retireSupersededGenerationObservers(previousJobs, [...authoritativeGenerationJobsById.values()])
   }
-  await reconcileAbsentGenerationJobs(previousJobs, source, signal)
-  if ((runtime.bootstrap.pendingGenerationEffects?.length ?? 0) > 0) {
-    const recoveredGenerationEffects = getRecoveredEffectsRuntime()
-    recoveredGenerationEffects.setPendingRecoveredGenerationEffects(runtime.bootstrap.pendingGenerationEffects ?? [])
+  await reconcileAbsentGenerationJobs(previousJobs, source, signal, terminalObligations)
+  if (recoveredGenerationEffects) {
     await recoveredGenerationEffects.reconcilePendingRecoveredGenerationEffects().catch(() => undefined)
   }
+  return true
 }
 
 async function refreshGenerationAuthority(
@@ -1162,6 +1326,7 @@ async function refreshGenerationAuthority(
 
   const epoch = ++activeGenerationRecoveryEpoch
   const controller = new AbortController()
+  const recoveryAtRequestStart = captureGenerationRecoveryObligations()
   let timedOut = false
   const handleOwnerAbort = () => controller.abort()
   if (options.signal?.aborted) controller.abort()
@@ -1227,19 +1392,15 @@ async function refreshGenerationAuthority(
         })
         return { status: 'error', error: bootstrapRefreshError(runtime) }
       }
-      // The read itself suppresses revision caching so an aborted or superseded
-      // recovery probe cannot move the command cursor. Once this epoch has been
-      // accepted, advance the known-server cursor before transcript/effect
-      // reconciliation yields: a concurrent character selection must use this
-      // bootstrap revision rather than the older cached base. The separate
-      // applied-resource cursor remains unchanged until event reconciliation.
-      setCachedServerCommandRevision(runtime.bootstrap.revision)
-      await applyGenerationRecoveryBootstrap(runtime, source, controller.signal)
+      const applied = await applyGenerationRecoveryBootstrap(runtime, source, controller.signal, recoveryAtRequestStart)
       if (epoch !== activeGenerationRecoveryEpoch || controller.signal.aborted) {
         return {
           status: 'error',
           error: timedOut ? 'Generation authority refresh timed out.' : 'Generation authority refresh was superseded.',
         }
+      }
+      if (!applied) {
+        return { status: 'error', error: 'Generation authority projection was superseded.' }
       }
       return { status: 'ok' }
     } catch (error) {
@@ -1262,13 +1423,47 @@ export async function refreshActiveGenerationJobsFromBootstrap(
   await refreshGenerationAuthority(source, { signal })
 }
 
-function hasActiveDurableGenerationActivity(): boolean {
-  const durableJobChatIds = new Set([...authoritativeGenerationJobsById.values()].map((job) => job.chatId))
-  return get(activeChatGenerations).some(
-    (activity) =>
-      activity.kind === 'message' &&
-      (Boolean(activity.operationId) || Boolean(activity.chatId && durableJobChatIds.has(activity.chatId))),
+function generationOperationNeedsLifecycleAuthorityRefresh(operation: GenerationOperationProjection): boolean {
+  return (
+    operation.state === 'accepted' ||
+    operation.state === 'launching' ||
+    operation.state === 'owned_by_job' ||
+    operation.state === 'stopping' ||
+    operation.state === 'finalizing'
   )
+}
+
+function generationRecoveryInterestKeys(): ReadonlySet<string> {
+  const keys = new Set<string>()
+  for (const job of authoritativeGenerationJobsById.values()) keys.add(`job:${job.jobId}`)
+  for (const obligation of captureGenerationRecoveryObligations()) {
+    keys.add(`obligation:${obligation.token}`)
+  }
+  for (const job of pendingAbsentGenerationReconciliations.values()) keys.add(`reconciliation:${job.jobId}`)
+  for (const activity of get(activeChatGenerations)) {
+    if (activity.kind === 'message') keys.add(`activity:${activity.id}`)
+  }
+  for (const operation of get(getGenerationOperationsRuntime().generationOperationProjections)) {
+    if (generationOperationNeedsLifecycleAuthorityRefresh(operation)) {
+      const attemptIdentity = operation.currentAttempt
+        ? `${operation.currentAttempt.retryRequestId}:${operation.currentAttempt.attemptNo}`
+        : `${operation.state}:${operation.stateVersion}`
+      keys.add(`operation:${operation.operationId}:${attemptIdentity}`)
+    }
+  }
+  return keys
+}
+
+function hasGenerationRecoveryInterest(): boolean {
+  return generationRecoveryInterestKeys().size > 0
+}
+
+function retainsGenerationRecoveryInterest(expected: ReadonlySet<string>): boolean {
+  const current = generationRecoveryInterestKeys()
+  for (const key of expected) {
+    if (current.has(key)) return true
+  }
+  return false
 }
 
 function clearLifecycleAuthorityRetry(): void {
@@ -1282,18 +1477,18 @@ function scheduleLifecycleAuthorityRetry(
   completedRetries: number,
 ): void {
   const delayMs = LIFECYCLE_AUTHORITY_RETRY_DELAYS_MS[completedRetries]
-  if (
-    delayMs === undefined ||
-    reattachDisabled ||
-    sequence !== lifecycleRecoverySequence ||
-    !hasActiveDurableGenerationActivity()
-  ) {
+  const retryInterest = generationRecoveryInterestKeys()
+  if (delayMs === undefined || reattachDisabled || sequence !== lifecycleRecoverySequence || retryInterest.size === 0) {
     return
   }
   clearLifecycleAuthorityRetry()
   lifecycleAuthorityRetryTimer = setTimeout(() => {
     lifecycleAuthorityRetryTimer = null
-    if (reattachDisabled || sequence !== lifecycleRecoverySequence || !hasActiveDurableGenerationActivity()) {
+    if (
+      reattachDisabled ||
+      sequence !== lifecycleRecoverySequence ||
+      !retainsGenerationRecoveryInterest(retryInterest)
+    ) {
       return
     }
     void refreshRuntimeJobsAndTriggerReattach(source, sequence, completedRetries + 1)
@@ -1313,13 +1508,18 @@ async function refreshRuntimeJobsAndTriggerReattach(
   }
   if (sequence !== lifecycleRecoverySequence || reattachDisabled) return
   if (authority.status === 'ok') {
-    clearLifecycleAuthorityRetry()
+    if (captureGenerationRecoveryObligations().length > 0 || pendingAbsentGenerationReconciliations.size > 0) {
+      scheduleLifecycleAuthorityRetry(source, sequence, completedRetries)
+    } else {
+      clearLifecycleAuthorityRetry()
+    }
     return
   }
   scheduleLifecycleAuthorityRetry(source, sequence, completedRetries)
 }
 
 function requestLifecycleGenerationRecovery(source: GenerationJobProjectionSource): void {
+  if (!hasGenerationRecoveryInterest()) return
   pendingLifecycleWakeupSource = source
   lifecycleRecoverySequence += 1
   clearLifecycleAuthorityRetry()

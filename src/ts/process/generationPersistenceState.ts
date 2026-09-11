@@ -176,15 +176,18 @@ async function refreshGenerationFinalizationPersistences(): Promise<void> {
     if (!isCurrent()) return
     const result = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
     if (isCurrent() && result.status === 'ok' && result.bootstrap.generationFinalizations) {
-      const { applyGenerationOperationBootstrap } = getGenerationOperationsRuntime()
+      const { applyGenerationOperationBootstrap, generationOperationProjections } = getGenerationOperationsRuntime()
       const recoveredGenerationEffects = getRecoveredEffectsRuntime()
-      applyGenerationOperationBootstrap(result.bootstrap, 'bootstrap')
+      if (!applyGenerationOperationBootstrap(result.bootstrap, 'bootstrap') || !isCurrent()) return
+      const acceptedOperations = get(generationOperationProjections)
       recoveredGenerationEffects.setPendingRecoveredGenerationEffects(result.bootstrap.pendingGenerationEffects ?? [])
       await recoveredGenerationEffects.reconcilePendingRecoveredGenerationEffects()
       // Keep the last queued/stalled projection as the refresh trigger until
       // every newly published effect has reconciled. Clearing it first would
       // leave no timer owner when a transient effect runtime failure occurs.
-      if (isCurrent()) setGenerationFinalizationPersistences(result.bootstrap.generationFinalizations)
+      if (isCurrent() && get(generationOperationProjections) === acceptedOperations) {
+        setGenerationFinalizationPersistences(result.bootstrap.generationFinalizations)
+      }
     }
   } catch {
     if (!isCurrent()) return

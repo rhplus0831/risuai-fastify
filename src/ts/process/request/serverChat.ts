@@ -39,6 +39,12 @@ import {
   type AgentPresetProgressSession,
 } from '../agentPresetProgress'
 import { forgetActiveGenerationJob, rememberActiveGenerationJob } from '../reattach'
+import {
+  beginGenerationRecoveryObligation,
+  markGenerationRecoveryObligationUncertain,
+  settleGenerationRecoveryObligation,
+  type GenerationRecoveryObligationToken,
+} from '../generationRecoveryObligations'
 import { handleServerGeneratedMessageTranslation } from '../serverGeneratedMessageTranslation'
 import {
   beginHalfStreamingProgress,
@@ -429,7 +435,13 @@ async function openChatResponse(
   staleAttemptRedirects = 0,
   sourceGeneration = captureClientSessionGeneration(),
 ): Promise<
-  | { status: 'ok'; response: Response; requestUid?: string; operationStream?: ServerChatOperationStream }
+  | {
+      status: 'ok'
+      response: Response
+      requestUid?: string
+      operationStream?: ServerChatOperationStream
+      recoveryObligation?: GenerationRecoveryObligationToken
+    }
   | {
       status: 'error'
       error: string
@@ -446,6 +458,21 @@ async function openChatResponse(
   if (!canOpen()) return { status: 'error', error: 'client_write_access_required', retryable: false }
   const auth = await getNodeServerProxyAuth()
   if (!canOpen()) return { status: 'aborted' }
+  if (signal?.aborted) return { status: 'aborted' }
+
+  const freshDurableSubmission =
+    !reattachJobId &&
+    !operationStream &&
+    input.durable === true &&
+    input.mode !== 'preview' &&
+    input.mode !== 'preview_prompt'
+  const recoveryObligation = freshDurableSubmission
+    ? beginGenerationRecoveryObligation({
+        chatId: input.chatId,
+        kind: 'submit',
+        sourceGeneration,
+      })
+    : undefined
 
   let response: Response
   try {
@@ -478,6 +505,7 @@ async function openChatResponse(
             signal: signal ?? undefined,
           })
   } catch (err) {
+    if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
     if (signal?.aborted) return { status: 'aborted' }
     const msg = err instanceof Error ? err.message : String(err)
     return { status: 'error', error: `Network error: ${msg}`, retryable: true }
@@ -491,6 +519,11 @@ async function openChatResponse(
   })
 
   if (!response.ok) {
+    const retryableResponse = response.status === 408 || response.status === 429 || response.status >= 500
+    if (recoveryObligation) {
+      if (retryableResponse) markGenerationRecoveryObligationUncertain(recoveryObligation)
+      else settleGenerationRecoveryObligation(recoveryObligation)
+    }
     const statusText = response.statusText.trim()
     let reason = `HTTP ${response.status}${statusText ? ` ${statusText}` : ''}`
     let code: string | undefined
@@ -551,21 +584,29 @@ async function openChatResponse(
       ...(code ? { code } : {}),
       requestUid,
       httpStatus: response.status,
-      retryable: response.status === 408 || response.status === 429 || response.status >= 500,
+      retryable: retryableResponse,
     }
   }
 
   if (!isClientSessionGenerationCurrent(sourceGeneration)) {
+    if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
     void response.body?.cancel().catch(() => {})
     return { status: 'aborted' }
   }
   if (!response.body) {
+    if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
     const error = 'Server did not return a streaming response body.'
     debugServerChat('server-chat-response-error', { requestUid, status: response.status, error })
     return { status: 'error', error, requestUid, retryable: true }
   }
 
-  return { status: 'ok', response, requestUid, ...(operationStream ? { operationStream } : {}) }
+  return {
+    status: 'ok',
+    response,
+    requestUid,
+    ...(operationStream ? { operationStream } : {}),
+    ...(recoveryObligation ? { recoveryObligation } : {}),
+  }
 }
 
 async function fetchDurableTerminalSnapshot(
@@ -646,6 +687,7 @@ export async function requestServerChat(input: ServerChatInput, signal: AbortSig
       : opened
   }
   const response = opened.response
+  const recoveryObligation = opened.recoveryObligation
 
   let prompt: ServerChatPrompt | null = null
   let info: ServerChatInfo | undefined
@@ -658,7 +700,10 @@ export async function requestServerChat(input: ServerChatInput, signal: AbortSig
   // payload carries the remaining fields with `type` stripped (see the
   // server's `writePromptChatEvent`).
   for await (const frame of iterateSseEvents(response.body, signal)) {
-    if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'aborted' }
+    if (!isClientWriteOperationCurrent(sourceGeneration)) {
+      if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
+      return { status: 'aborted' }
+    }
     const event = parsePromptChatSseEvent(frame.event, parseData(frame.data))
     if (!event) continue
     switch (event.type) {
@@ -673,12 +718,17 @@ export async function requestServerChat(input: ServerChatInput, signal: AbortSig
         messagePatches.push(event.patch)
         break
       case 'error':
+        if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
         error = errorMessageFromEvent(event, 'Server returned an error without details during prompt assembly.')
         errorCode = truncationConfirmationCode(event.code) ?? truncationConfirmationCode(event.reason)
         done = true
         break
       case 'done':
+        if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
         done = true
+        break
+      case 'job_accepted':
+        if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
         break
       // Prompt-only calls ignore stage and dispatch-coupled events.
       default:
@@ -687,7 +737,10 @@ export async function requestServerChat(input: ServerChatInput, signal: AbortSig
     if (done) break
   }
 
-  if (signal?.aborted) return { status: 'aborted' }
+  if (signal?.aborted) {
+    if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
+    return { status: 'aborted' }
+  }
   if (error !== null) {
     return {
       status: 'error',
@@ -697,6 +750,7 @@ export async function requestServerChat(input: ServerChatInput, signal: AbortSig
     }
   }
   if (!prompt) {
+    if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
     return { status: 'error', error: 'stream ended without a prompt event' }
   }
   return { status: 'ok', prompt, info, messagePatches }
@@ -905,6 +959,7 @@ export async function requestServerChatGeneration(
         }
       : opened
   }
+  const recoveryObligation = opened.recoveryObligation
   authoritativeOperationStream = opened.operationStream ?? authoritativeOperationStream
   durableJobId = authoritativeOperationStream?.jobId ?? durableJobId
 
@@ -967,6 +1022,7 @@ export async function requestServerChatGeneration(
       ...(operationLineage.attemptNo !== undefined ? { attemptNo: operationLineage.attemptNo } : {}),
       ...(operationLineage.projectionEpoch !== undefined ? { projectionEpoch: operationLineage.projectionEpoch } : {}),
     })
+    if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
   }
   rememberDurableJob()
   if (signal?.aborted) cancelDurableOnAbort()
@@ -1050,6 +1106,7 @@ export async function requestServerChatGeneration(
       }
 
       const settleAborted = (): void => {
+        if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
         if (observerSuperseded) {
           const error = 'The previous generation observer was replaced by foreground recovery.'
           resolveReadyOnce({ status: 'error', error, reattachOutcome: 'observer_superseded' })
@@ -1076,6 +1133,7 @@ export async function requestServerChatGeneration(
         error: string,
         reattachOutcome: GenerationReattachOutcomeStatus = 'retryable_transport_failure',
       ): void => {
+        if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
         resolveReadyOnce({ status: 'error', error, ...reattachOutcomeFields(reattachOutcome) })
         resolveTerminalOnce({ status: 'error', error, ...reattachOutcomeFields(reattachOutcome), warnings })
         clearLiveGenerationProgress(agentPresetSession, postGenerationSession)
@@ -1173,6 +1231,7 @@ export async function requestServerChatGeneration(
                     mode: input.mode === 'preview' || input.mode === 'preview_prompt' ? undefined : input.mode,
                     ...(input.regenerateMessageId ? { regenerateMessageId: input.regenerateMessageId } : {}),
                   })
+                  if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
                   // Backward-compatible with servers that predate the response
                   // header: an abort may have won the race with this first frame.
                   if (signal?.aborted) cancelDurableOnAbort()
@@ -1297,6 +1356,7 @@ export async function requestServerChatGeneration(
                     setCachedServerCommandRevision(postGeneration.revision)
                   }
                   applyGenerationOperationSseEvent({ ...event, jobId: durableJobId })
+                  if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
                   resolveReadyOnce({
                     status: 'error',
                     error,
@@ -1376,6 +1436,7 @@ export async function requestServerChatGeneration(
                   replayGapPending = false
                   if (streamingRequest) streamingRequest.replayGapPending = false
                   applyGenerationOperationSseEvent({ ...event, jobId: durableJobId })
+                  if (recoveryObligation) settleGenerationRecoveryObligation(recoveryObligation)
                   const previousTokenResult = tokenResult
                   if (watchesDurableJob && typeof donePayload.result === 'string') {
                     // Durable replay is a lossy token window. Its protected
@@ -1448,6 +1509,7 @@ export async function requestServerChatGeneration(
       })()
     },
     cancel() {
+      if (recoveryObligation) markGenerationRecoveryObligationUncertain(recoveryObligation)
       consumerDetached = true
       tokenStreamInactive = true
       viewerAbortController.abort()

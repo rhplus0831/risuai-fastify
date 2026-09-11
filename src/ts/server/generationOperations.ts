@@ -20,12 +20,25 @@ import {
 } from '../process/acceptedSendRecoveryState'
 import {
   authoritativeGenerationJobForChat,
+  canApplyActiveGenerationJobProjection,
   clearActiveGenerationJobProjection,
   forgetActiveGenerationJob,
   rememberActiveGenerationJob,
   setActiveGenerationJobs,
   type GenerationJobProjectionSource,
 } from '../process/reattach'
+import {
+  applyGenerationRecoveryOperation,
+  beginGenerationRecoveryObligation,
+  captureGenerationRecoveryObligations,
+  isGenerationRecoveryObligationCurrent,
+  isGenerationRecoveryScopeCurrent,
+  markGenerationRecoveryObligationUncertain,
+  settleGenerationRecoveryObligation,
+  type CapturedGenerationRecoveryObligation,
+  type GenerationRecoveryObligationInput,
+  type GenerationRecoveryObligationToken,
+} from '../process/generationRecoveryObligations'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse, isWriterAccessLost } from './activeWriterSession'
 import {
   getServerCommandBaseRevision,
@@ -41,6 +54,7 @@ import {
   beginPendingMutationDispatch,
   discardPendingMutation,
   isGenerationOperationPendingIntent,
+  listPendingMutations,
   stagePendingMutation,
   type DurableMutationIntent,
   type PendingMutationHandle,
@@ -938,6 +952,7 @@ function applyGenerationOperationProjectionState(
     )
   })
   if (!accepted) return false
+  applyGenerationRecoveryOperation(operation)
   applyAcceptedSendOperationProjection(operation, capturedTarget)
   syncGenerationOperationCancellationProjection(operation)
   return true
@@ -947,11 +962,20 @@ function applyGenerationOperationBootstrapState(
   runtime: ServerBootstrapRuntime,
   source: GenerationJobProjectionSource,
 ): boolean {
-  configureGenerationOperationProtocol(runtime.generationOperationProtocol, runtime.databaseLineage)
   const epoch = runtime.generationOperationProjectionEpoch ?? 0
-  if (epoch < generationOperationProjectionEpoch) return false
+  const replacesDatabaseLineage = Boolean(
+    runtime.databaseLineage &&
+    generationOperationDatabaseLineage &&
+    runtime.databaseLineage !== generationOperationDatabaseLineage,
+  )
+  if (
+    !replacesDatabaseLineage &&
+    (epoch < generationOperationProjectionEpoch || !canApplyActiveGenerationJobProjection(epoch))
+  ) {
+    return false
+  }
+  configureGenerationOperationProtocol(runtime.generationOperationProtocol, runtime.databaseLineage)
   const previousOperations = get(generationOperationProjections)
-  generationOperationProjectionEpoch = epoch
   const operations = (runtime.generationOperations ?? []).map((operation) => {
     const previous = previousOperations.find((candidate) => candidate.operationId === operation.operationId)
     if (!previous) return operation
@@ -963,14 +987,22 @@ function applyGenerationOperationBootstrapState(
     }
     return operation
   })
+  if (
+    !setActiveGenerationJobs(runtime.activeGenerationJobs ?? [], {
+      projectionEpoch: epoch,
+      operations,
+      source,
+    })
+  ) {
+    return false
+  }
+  generationOperationProjectionEpoch = epoch
   generationOperationProjections.set([...operations])
   applyAcceptedSendBootstrapProjection(operations, runtime.activeGenerationJobs ?? [], epoch)
-  for (const operation of operations) syncGenerationOperationCancellationProjection(operation)
-  setActiveGenerationJobs(runtime.activeGenerationJobs ?? [], {
-    projectionEpoch: epoch,
-    operations,
-    source,
-  })
+  for (const operation of operations) {
+    applyGenerationRecoveryOperation(operation)
+    syncGenerationOperationCancellationProjection(operation)
+  }
   return true
 }
 
@@ -1328,13 +1360,18 @@ async function dispatchGenerationOperationCancellation(
   intent: DurableMutationIntent & { kind: 'generation-operation-cancel' },
   access: GenerationOperationAccess,
   sourceGeneration = captureClientSessionGeneration(),
+  recoveryObligationIsCurrent?: () => boolean,
 ): Promise<GenerationOperationCancellationResult> {
-  if (!generationAccessIsCurrent(access, sourceGeneration))
+  if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false)
     return { status: 'failed', error: generationNotReadyError() }
   if (!handle.databaseLineage) return { status: 'failed', error: 'The Stop intent has no database lineage.' }
   const persistence = await beginPendingMutationDispatch(handle)
   if (persistence !== 'persisted') return { status: 'failed', error: 'The Stop intent is not durably staged.' }
   const request = intent.requests[0]
+  const recoveryIdentity = generationDispatchRecoveryIdentity(intent)
+  if (!recoveryIdentity || recoveryIdentity.kind !== 'cancel') {
+    return { status: 'failed', error: 'Invalid generation cancellation outbox intent.' }
+  }
   let auth: string
   try {
     auth = await getNodeServerProxyAuth()
@@ -1347,8 +1384,15 @@ async function dispatchGenerationOperationCancellation(
           : `Unable to prepare Stop: ${String(error)}`,
     }
   }
-  if (!generationAccessIsCurrent(access, sourceGeneration))
+  if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false)
     return { status: 'failed', error: generationNotReadyError() }
+  const obligation = beginGenerationRecoveryObligation({
+    ...recoveryIdentity,
+    chatId: get(generationOperationProjections).find(
+      (operation) => operation.operationId === recoveryIdentity.operationId,
+    )?.chatId,
+    sourceGeneration,
+  })
   const controller = new AbortController()
   const deadline = setTimeout(() => controller.abort(), CANCELLATION_STATUS_TIMEOUT_MS)
   let response: Response
@@ -1365,6 +1409,7 @@ async function dispatchGenerationOperationCancellation(
       signal: controller.signal,
     })
   } catch (error) {
+    markGenerationRecoveryObligationUncertain(obligation)
     return {
       status: 'failed',
       error: controller.signal.aborted
@@ -1383,6 +1428,15 @@ async function dispatchGenerationOperationCancellation(
     // A malformed success cannot acknowledge durable cancellation authority.
   }
   if (!response.ok) {
+    const operation = operationFromBody(body)
+    const current = generationAccessIsCurrent(access, sourceGeneration)
+    if (current && operation && operationMatchesRecoveryAddress(operation, recoveryIdentity)) {
+      applyGenerationOperationProjection(operation)
+    }
+    const definitiveRejection =
+      response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
+    if (current && definitiveRejection) settleGenerationRecoveryObligation(obligation)
+    else markGenerationRecoveryObligationUncertain(obligation)
     handleActiveWriterStaleResponse(response, body, sourceGeneration)
     return {
       status: 'failed',
@@ -1391,9 +1445,17 @@ async function dispatchGenerationOperationCancellation(
     }
   }
   const parsed = cancellationResponseFromBody(body)
-  if (!parsed) return { status: 'failed', error: 'Invalid generation cancellation response.' }
-  if (!generationAccessIsCurrent(access, sourceGeneration)) return { status: 'acknowledged', ...parsed }
-  return applyCancellationAcknowledgement(parsed)
+  if (!parsed || !operationMatchesRecoveryAddress(parsed.operation, recoveryIdentity)) {
+    markGenerationRecoveryObligationUncertain(obligation)
+    return { status: 'failed', error: 'Invalid generation cancellation response.' }
+  }
+  if (!generationAccessIsCurrent(access, sourceGeneration)) {
+    markGenerationRecoveryObligationUncertain(obligation)
+    return { status: 'acknowledged', ...parsed }
+  }
+  const result = applyCancellationAcknowledgement(parsed)
+  settleGenerationRecoveryObligation(obligation)
+  return result
 }
 
 function cancellationAdvisory(
@@ -1415,6 +1477,7 @@ async function sendGenerationOperationCancellation(
     intent: DurableMutationIntent & { kind: 'generation-operation-cancel' }
   },
   access: GenerationOperationAccess = 'ordinary',
+  recoveryObligationIsCurrent?: () => boolean,
 ): Promise<GenerationOperationCancellationResult> {
   const sourceGeneration = captureClientSessionGeneration()
   if (!canUseGenerationOperationAccess(access)) return { status: 'failed', error: generationNotReadyError() }
@@ -1492,7 +1555,13 @@ async function sendGenerationOperationCancellation(
     detachGenerationOperationViewers(operationId)
     let result: GenerationOperationCancellationResult
     try {
-      result = await dispatchGenerationOperationCancellation(handle, intent, access, sourceGeneration)
+      result = await dispatchGenerationOperationCancellation(
+        handle,
+        intent,
+        access,
+        sourceGeneration,
+        recoveryObligationIsCurrent,
+      )
     } catch (error) {
       result = {
         status: 'failed',
@@ -1646,14 +1715,113 @@ function acceptedSendResponseEvent(
   return { status: 'ok', event: append.event }
 }
 
+interface GenerationDispatchRecoveryIdentity extends Omit<GenerationRecoveryObligationInput, 'sourceGeneration'> {
+  operationId: string
+}
+
+function operationIdFromPendingPath(path: string, suffix: 'retries' | 'cancellation'): string | undefined {
+  const match = new RegExp(`^/generation-operations/([^/?#]+)/${suffix}$`).exec(path)
+  if (!match) return undefined
+  try {
+    return decodeURIComponent(match[1]!)
+  } catch {
+    return match[1]
+  }
+}
+
+function generationDispatchRecoveryIdentity(intent: DurableMutationIntent): GenerationDispatchRecoveryIdentity | null {
+  const request = intent.requests[0]
+  if (!request) return null
+  if (intent.kind === 'generation-operation-submit') {
+    const operationId = request.body?.operationId
+    const chatId = request.body?.chatId
+    if (typeof operationId !== 'string' || !operationId || typeof chatId !== 'string' || !chatId) return null
+    return { kind: 'submit', operationId, chatId }
+  }
+  if (intent.kind === 'generation-operation-retry') {
+    const operationId = operationIdFromPendingPath(request.path, 'retries')
+    const retryRequestId = request.body?.retryRequestId
+    const expectedStateVersion = request.body?.expectedStateVersion
+    if (
+      !operationId ||
+      typeof retryRequestId !== 'string' ||
+      !retryRequestId ||
+      !Number.isSafeInteger(expectedStateVersion) ||
+      (expectedStateVersion as number) < 0 ||
+      (expectedStateVersion as number) >= Number.MAX_SAFE_INTEGER
+    ) {
+      return null
+    }
+    return {
+      kind: 'retry',
+      operationId,
+      retryRequestId,
+      minimumStateVersion: (expectedStateVersion as number) + 1,
+    }
+  }
+  if (intent.kind === 'generation-operation-cancel') {
+    const operationId = operationIdFromPendingPath(request.path, 'cancellation')
+    const knownStateVersion = request.body?.knownStateVersion
+    if (!operationId) return null
+    return {
+      kind: 'cancel',
+      operationId,
+      ...(Number.isSafeInteger(knownStateVersion) && (knownStateVersion as number) >= 0
+        ? { minimumStateVersion: knownStateVersion as number }
+        : {}),
+    }
+  }
+  return null
+}
+
+function operationMatchesRecoveryAddress(
+  operation: GenerationOperationProjection,
+  identity: GenerationDispatchRecoveryIdentity,
+): boolean {
+  return operation.operationId === identity.operationId && (!identity.chatId || operation.chatId === identity.chatId)
+}
+
+function acceptedOperationMatchesRecoveryDispatch(
+  operation: GenerationOperationProjection,
+  identity: GenerationDispatchRecoveryIdentity,
+): boolean {
+  if (!operationMatchesRecoveryAddress(operation, identity)) return false
+  if (identity.minimumStateVersion !== undefined && operation.stateVersion < identity.minimumStateVersion) return false
+  if (identity.kind === 'retry') {
+    return operation.currentAttempt?.retryRequestId === identity.retryRequestId
+  }
+  if (identity.kind === 'cancel') {
+    return (
+      operation.state === 'cancel_requested' ||
+      operation.state === 'stopping' ||
+      operation.state === 'finalizing' ||
+      operation.state === 'cancelled' ||
+      operation.state === 'completed' ||
+      operation.state === 'terminal_failed' ||
+      operation.state === 'invalidated'
+    )
+  }
+  return true
+}
+
+function retainedAmbiguousGenerationOperation(
+  obligation: GenerationRecoveryObligationToken,
+  error: string,
+  code?: string,
+): Extract<GenerationOperationDispatchResult, { status: 'retained' }> {
+  markGenerationRecoveryObligationUncertain(obligation)
+  return { status: 'retained', error, ...(code ? { code } : {}) }
+}
+
 async function dispatchPendingGenerationOperation(
   handle: PendingMutationHandle,
   intent: DurableMutationIntent,
   access: GenerationOperationAccess = 'ordinary',
   acceptedSendLocalEffect?: MessageMutationLocalEffect,
   sourceGeneration = captureClientSessionGeneration(),
+  recoveryObligationIsCurrent?: () => boolean,
 ): Promise<GenerationOperationDispatchResult> {
-  if (!generationAccessIsCurrent(access, sourceGeneration)) {
+  if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false) {
     return { status: 'retained', error: generationNotReadyError() }
   }
   if (
@@ -1670,6 +1838,8 @@ async function dispatchPendingGenerationOperation(
 
   const request = intent.requests[0]
   const body = cloneJson(request.body)
+  const recoveryIdentity = generationDispatchRecoveryIdentity(intent)
+  if (!recoveryIdentity) return { status: 'rejected', error: 'Invalid generation operation outbox intent.' }
   const auth = await getNodeServerProxyAuth()
   const acceptedSendTarget = acceptedSendEventTarget(intent)
   const dispatch = async (
@@ -1677,9 +1847,10 @@ async function dispatchPendingGenerationOperation(
   ): Promise<GenerationOperationDispatchResult> => {
     let revisionRetries = 0
     while (true) {
-      if (!generationAccessIsCurrent(access, sourceGeneration)) {
+      if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false) {
         return { status: 'retained', error: generationNotReadyError() }
       }
+      const obligation = beginGenerationRecoveryObligation({ ...recoveryIdentity, sourceGeneration })
       let response: Response
       try {
         response = await fetch(`/api/v1${request.path}`, {
@@ -1693,10 +1864,10 @@ async function dispatchPendingGenerationOperation(
           body: JSON.stringify(body),
         })
       } catch (error) {
-        return {
-          status: 'retained',
-          error: error instanceof Error ? `Network error: ${error.message}` : `Network error: ${String(error)}`,
-        }
+        return retainedAmbiguousGenerationOperation(
+          obligation,
+          error instanceof Error ? `Network error: ${error.message}` : `Network error: ${String(error)}`,
+        )
       }
 
       let responseBody: unknown = null
@@ -1707,29 +1878,39 @@ async function dispatchPendingGenerationOperation(
       }
       if (response.ok) {
         const parsed = responseFromBody(responseBody)
-        if (!parsed) return { status: 'retained', error: 'Invalid generation operation response.' }
+        if (!parsed) return retainedAmbiguousGenerationOperation(obligation, 'Invalid generation operation response.')
+        if (!operationMatchesRecoveryAddress(parsed.operation, recoveryIdentity)) {
+          return retainedAmbiguousGenerationOperation(obligation, 'Invalid generation operation response.')
+        }
+        if (!operationConcludesPendingIntent(parsed.operation, intent, recoveryIdentity)) {
+          return retainedAmbiguousGenerationOperation(obligation, 'Invalid generation operation response.')
+        }
         const appendReconciliation = acceptedSendTarget
           ? acceptedSendResponseEvent(parsed, acceptedSendTarget)
           : { status: 'ok' as const }
         if (appendReconciliation.status === 'invalid') {
-          return { status: 'retained', error: 'Invalid accepted-send append response.' }
+          return retainedAmbiguousGenerationOperation(obligation, 'Invalid accepted-send append response.')
+        }
+        const responseIsCurrent = generationAccessIsCurrent(access, sourceGeneration)
+        if (responseIsCurrent) {
+          applyGenerationOperationProjection(parsed.operation)
+          settleGenerationRecoveryObligation(obligation)
+        } else {
+          markGenerationRecoveryObligationUncertain(obligation)
         }
         await discardPendingMutation(handle)
         if (!generationAccessIsCurrent(access, sourceGeneration))
           return { status: 'accepted', response: parsed, stream: generationOperationStreamDescriptor(parsed) }
         if (parsed.append?.revision !== undefined) setCachedServerCommandRevision(parsed.append.revision)
-        applyGenerationOperationProjection(parsed.operation)
         if (appendReconciliation.event && reconcileResponseEvent) {
           await reconcileResponseEvent(appendReconciliation.event, acceptedSendLocalEffect)
         }
         return { status: 'accepted', response: parsed, stream: generationOperationStreamDescriptor(parsed) }
       }
 
-      handleActiveWriterStaleResponse(response, responseBody, sourceGeneration)
       const code = errorCode(responseBody)
-      if (!generationAccessIsCurrent(access, sourceGeneration))
-        return { status: 'retained', error: errorMessage(responseBody, response), ...(code ? { code } : {}) }
-      if (
+      const operation = operationFromBody(responseBody)
+      const retriesRevisionConflict =
         intent.kind === 'generation-operation-submit' &&
         response.status === 409 &&
         code === 'revision_conflict' &&
@@ -1737,17 +1918,28 @@ async function dispatchPendingGenerationOperation(
         typeof responseBody === 'object' &&
         Number.isSafeInteger((responseBody as Record<string, unknown>).currentRevision) &&
         revisionRetries < MAX_REVISION_RETRIES
-      ) {
+      const discardsFailure = shouldDiscardOperationFailure(code, response.status)
+      const responseIsCurrent = generationAccessIsCurrent(access, sourceGeneration)
+      if (responseIsCurrent && (retriesRevisionConflict || discardsFailure)) {
+        settleGenerationRecoveryObligation(obligation)
+      } else {
+        markGenerationRecoveryObligationUncertain(obligation)
+      }
+      handleActiveWriterStaleResponse(response, responseBody, sourceGeneration)
+      if (!generationAccessIsCurrent(access, sourceGeneration))
+        return { status: 'retained', error: errorMessage(responseBody, response), ...(code ? { code } : {}) }
+      if (retriesRevisionConflict) {
         body.baseRevision = (responseBody as Record<string, unknown>).currentRevision
         setCachedServerCommandRevision(body.baseRevision as number)
         revisionRetries += 1
         continue
       }
 
-      const operation = operationFromBody(responseBody)
-      if (operation) applyGenerationOperationProjection(operation)
+      if (operation && operationMatchesRecoveryAddress(operation, recoveryIdentity)) {
+        applyGenerationOperationProjection(operation)
+      }
       const error = errorMessage(responseBody, response)
-      if (shouldDiscardOperationFailure(code, response.status)) {
+      if (discardsFailure) {
         await discardPendingMutation(handle)
         return { status: 'rejected', error, ...(code ? { code } : {}), ...(operation ? { operation } : {}) }
       }
@@ -1865,11 +2057,112 @@ export async function retryGenerationOperation(
   return dispatchPendingGenerationOperation(handle, intent, 'ordinary', undefined, sourceGeneration)
 }
 
+function pendingIntentMatchesCapturedRecovery(
+  intent: DurableMutationIntent,
+  captured: CapturedGenerationRecoveryObligation,
+): boolean {
+  if (!captured.operationId) return false
+  const identity = generationDispatchRecoveryIdentity(intent)
+  if (!identity || identity.kind !== captured.kind || identity.operationId !== captured.operationId) return false
+  if (captured.chatId && identity.chatId && identity.chatId !== captured.chatId) return false
+  return captured.kind !== 'retry' || identity.retryRequestId === captured.retryRequestId
+}
+
+function capturedRecoveryStillNeedsReplay(
+  intent: DurableMutationIntent,
+  obligation: CapturedGenerationRecoveryObligation,
+  signal?: AbortSignal,
+): boolean {
+  if (
+    signal?.aborted ||
+    !isGenerationRecoveryScopeCurrent(obligation) ||
+    !isGenerationRecoveryObligationCurrent(obligation)
+  ) {
+    return false
+  }
+  return !captureGenerationRecoveryObligations().some(
+    (candidate) =>
+      candidate.phase === 'dispatching' &&
+      isGenerationRecoveryScopeCurrent(candidate) &&
+      isGenerationRecoveryObligationCurrent(candidate) &&
+      pendingIntentMatchesCapturedRecovery(intent, candidate),
+  )
+}
+
+function operationConcludesPendingIntent(
+  operation: GenerationOperationProjection,
+  intent: DurableMutationIntent,
+  identity: GenerationDispatchRecoveryIdentity,
+): boolean {
+  if (!acceptedOperationMatchesRecoveryDispatch(operation, identity)) return false
+  const body = intent.requests[0]?.body
+  if (identity.kind !== 'submit') return true
+  if (
+    !body ||
+    operation.characterId !== body.characterId ||
+    operation.chatId !== body.chatId ||
+    operation.mode !== body.mode
+  ) {
+    return false
+  }
+  if (body.mode === 'send') return operation.acceptedMessageId === body.acceptedMessageId
+  if (body.mode === 'continue' || body.mode === 'regenerate') {
+    return operation.targetMessageId === body.targetMessageId
+  }
+  return false
+}
+
+/** Replay only idempotent protocol work represented by the captured uncertain obligations. */
+export async function replayGenerationRecoveryObligations(
+  captured: readonly CapturedGenerationRecoveryObligation[],
+  signal?: AbortSignal,
+): Promise<boolean> {
+  if (signal?.aborted || !canUseGenerationOperationAccess('pending-replay')) return false
+  const scoped = captured.filter(
+    (obligation) => Boolean(obligation.operationId) && isGenerationRecoveryScopeCurrent(obligation),
+  )
+  if (scoped.length === 0) return false
+  const entries = await listPendingMutations()
+  let dispatched = false
+  const dispatchedMutationIds = new Set<string>()
+  for (const entry of entries) {
+    if (signal?.aborted || !canUseGenerationOperationAccess('pending-replay')) break
+    if (dispatchedMutationIds.has(entry.handle.mutationId)) continue
+    const matching = scoped.filter(
+      (candidate) =>
+        isGenerationRecoveryScopeCurrent(candidate) && pendingIntentMatchesCapturedRecovery(entry.intent, candidate),
+    )
+    if (matching.length === 0) continue
+    const identity = generationDispatchRecoveryIdentity(entry.intent)
+    if (!identity) continue
+    const operation = get(generationOperationProjections).find(
+      (candidate) => candidate.operationId === identity.operationId,
+    )
+    if (operation && operationConcludesPendingIntent(operation, entry.intent, identity)) {
+      dispatchedMutationIds.add(entry.handle.mutationId)
+      dispatched = true
+      await discardPendingMutation(entry.handle)
+      continue
+    }
+    const obligation = matching.find(
+      (candidate) => candidate.phase === 'uncertain' && isGenerationRecoveryObligationCurrent(candidate),
+    )
+    if (!obligation || !capturedRecoveryStillNeedsReplay(entry.intent, obligation, signal)) continue
+    dispatchedMutationIds.add(entry.handle.mutationId)
+    dispatched = true
+    await dispatchGenerationOperationPendingReplay(entry.handle, entry.intent, () =>
+      capturedRecoveryStillNeedsReplay(entry.intent, obligation, signal),
+    )
+  }
+  return dispatched
+}
+
 export async function dispatchGenerationOperationPendingReplay(
   handle: PendingMutationHandle,
   intent: DurableMutationIntent,
+  recoveryObligationIsCurrent?: () => boolean,
 ): Promise<GenerationOperationPendingReplayOutcome> {
-  if (!canUseGenerationOperationAccess('pending-replay'))
+  if (!canUseGenerationOperationAccess('pending-replay') || recoveryObligationIsCurrent?.() === false)
     return { disposition: 'retained', result: { status: 'retained', error: generationNotReadyError() } }
   if (intent.kind === 'generation-operation-cancel') {
     const cancellationIntent = intent as DurableMutationIntent & { kind: 'generation-operation-cancel' }
@@ -1906,6 +2199,7 @@ export async function dispatchGenerationOperationPendingReplay(
       operationId,
       { handle, intent: cancellationIntent },
       'pending-replay',
+      recoveryObligationIsCurrent,
     )
     if (result.status === 'failed') return { disposition: 'retained', result }
     return {
@@ -1913,7 +2207,14 @@ export async function dispatchGenerationOperationPendingReplay(
       result,
     }
   }
-  const result = await dispatchPendingGenerationOperation(handle, intent, 'pending-replay')
+  const result = await dispatchPendingGenerationOperation(
+    handle,
+    intent,
+    'pending-replay',
+    undefined,
+    undefined,
+    recoveryObligationIsCurrent,
+  )
   if (result.status === 'accepted') return { disposition: 'succeeded', result }
   if (result.status === 'rejected') return { disposition: 'discarded', result }
   return { disposition: 'retained', result }
@@ -1926,6 +2227,7 @@ registerGenerationOperationsRuntime({
   isProtocolGenerationOperationJob,
   readGenerationOperationStatus,
   retireGenerationOperationViewers,
+  replayGenerationRecoveryObligations,
   retryGenerationOperation,
   stopGenerationOperation,
 })
