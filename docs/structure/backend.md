@@ -1,7 +1,7 @@
 # Backend Map
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-08 (diagnostic authority, isolated journal, and browser ingestion lifecycle).
+Targeted source check: 2026-09-11 (incremental diagnostic journal retention and bounded worker recovery).
 
 The backend is the Fastify server under `server/fastify`. This guide owns its
 composition root, route policy, request-path boundaries, process-local jobs,

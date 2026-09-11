@@ -9,7 +9,10 @@ export interface DiagnosticsJournalLimits {
   maxQueue: number
   maxRecordBytes: number
   maxFileBytes: number
+  initializationTimeoutMs: number
   requestTimeoutMs: number
+  maintenanceTimeoutMs: number
+  closeTimeoutMs: number
 }
 
 export const DIAGNOSTICS_JOURNAL_HARD_LIMITS: Readonly<DiagnosticsJournalLimits> = Object.freeze({
@@ -21,7 +24,10 @@ export const DIAGNOSTICS_JOURNAL_HARD_LIMITS: Readonly<DiagnosticsJournalLimits>
   // SQLite overhead is separate from the retained JSON byte budget. DELETE
   // rollback journaling can temporarily consume one additional file of this size.
   maxFileBytes: 16 * 1024 * 1024,
-  requestTimeoutMs: 1000,
+  initializationTimeoutMs: 30_000,
+  requestTimeoutMs: 5_000,
+  maintenanceTimeoutMs: 15_000,
+  closeTimeoutMs: 1_000,
 })
 
 export interface DiagnosticsJournalCounters {
@@ -38,6 +44,14 @@ export interface StoredDiagnosticRow {
   browserKey: string | null
   json: string | null
 }
+
+export type DiagnosticsJournalWorkerFailure =
+  | 'invalid-storage'
+  | 'storage-busy'
+  | 'storage-full'
+  | 'storage-io'
+  | 'invalid-request'
+  | 'worker-failed'
 
 interface JournalRequestBase {
   id: number
@@ -56,14 +70,15 @@ export type DiagnosticsJournalRequest = JournalRequestBase &
     | { kind: 'close' }
   )
 
+interface DiagnosticsJournalResponseBase {
+  id: number
+  epoch: string
+  lastSequence: number
+  counters: DiagnosticsJournalCounters
+  entries: StoredDiagnosticRow[]
+}
+
 export type DiagnosticsJournalResponse =
-  | { id: number; kind: 'failed' }
-  | {
-      id: number
-      kind: 'snapshot' | 'changed' | 'closed'
-      epoch: string
-      lastSequence: number
-      counters: DiagnosticsJournalCounters
-      entries: StoredDiagnosticRow[]
-      retainedSequences: number[]
-    }
+  | { id: number; kind: 'failed'; failure: DiagnosticsJournalWorkerFailure }
+  | (DiagnosticsJournalResponseBase & { kind: 'snapshot'; retainedSequences: number[] })
+  | (DiagnosticsJournalResponseBase & { kind: 'changed' | 'closed'; removedSequences: number[] })

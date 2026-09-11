@@ -15,26 +15,41 @@ import {
   type DiagnosticsJournalOptions,
 } from '../src/diagnosticsJournal.js'
 
-const faults = vi.hoisted(() => ({ stall: false, throwOnStart: false, stallAppend: false }))
+const faults = vi.hoisted(() => ({
+  starts: 0,
+  stall: false,
+  stalledStarts: 0,
+  throwOnStart: false,
+  throwingStarts: 0,
+  stallAppend: false,
+  suppressedAppendResponses: 0,
+}))
 vi.mock('node:worker_threads', async (importOriginal) => {
   const original = await importOriginal<typeof import('node:worker_threads')>()
   return {
     ...original,
     Worker: class extends original.Worker {
       constructor(filename: string | URL, options?: import('node:worker_threads').WorkerOptions) {
-        if (faults.throwOnStart) throw new Error('PRIVATE_NATIVE_ERROR_CANARY')
-        if (faults.stall) super('setInterval(() => {}, 1000)', { eval: true, stdout: true, stderr: true })
-        else super(filename, options)
+        faults.starts++
+        if (faults.throwOnStart || faults.throwingStarts > 0) {
+          if (faults.throwingStarts > 0) faults.throwingStarts--
+          throw new Error('PRIVATE_NATIVE_ERROR_CANARY')
+        }
+        if (faults.stall || faults.stalledStarts > 0) {
+          if (faults.stalledStarts > 0) faults.stalledStarts--
+          super('setInterval(() => {}, 1000)', { eval: true, stdout: true, stderr: true })
+        } else super(filename, options)
       }
       override postMessage(value: unknown, transferList?: readonly import('node:worker_threads').Transferable[]): void {
-        if (
-          faults.stallAppend &&
-          typeof value === 'object' &&
-          value !== null &&
-          'kind' in value &&
-          value.kind === 'append'
-        )
-          return
+        const append = typeof value === 'object' && value !== null && 'kind' in value && value.kind === 'append'
+        if (append) {
+          if (faults.stallAppend) return
+          if (faults.suppressedAppendResponses > 0) {
+            faults.suppressedAppendResponses--
+            // Deliver the append, but model a committed write whose reply is lost.
+            this.removeAllListeners('message')
+          }
+        }
         super.postMessage(value, transferList)
       }
     },
@@ -102,9 +117,13 @@ beforeEach(async () => {
   directory = path.join(temporary, 'diagnostics')
   clock = NOW
   journals = []
+  faults.starts = 0
   faults.stall = false
+  faults.stalledStarts = 0
   faults.throwOnStart = false
+  faults.throwingStarts = 0
   faults.stallAppend = false
+  faults.suppressedAppendResponses = 0
 })
 
 afterEach(async () => {
@@ -512,7 +531,10 @@ describe('bounded diagnostics journal', () => {
       { maxQueue: 257 },
       { maxAgeMs: 86_400_001 },
       { maxRecordBytes: 4097 },
-      { requestTimeoutMs: 1001 },
+      { initializationTimeoutMs: 30_001 },
+      { requestTimeoutMs: 5_001 },
+      { maintenanceTimeoutMs: 15_001 },
+      { closeTimeoutMs: 1_001 },
     ]) {
       const invalid = create({ limits })
       await invalid.ready
@@ -525,6 +547,10 @@ describe('bounded diagnostics journal', () => {
       maxBytes: 8 * 1024 * 1024,
       maxQueue: 256,
       maxRecordBytes: 4096,
+      initializationTimeoutMs: 30_000,
+      requestTimeoutMs: 5_000,
+      maintenanceTimeoutMs: 15_000,
+      closeTimeoutMs: 1_000,
     })
   })
 
@@ -547,14 +573,23 @@ describe('bounded diagnostics journal', () => {
     expect(corrupt.read().source).toBe('unavailable')
     expect(JSON.stringify(corrupt.read())).not.toContain(CANARY)
     faults.throwOnStart = true
-    const throwing = create()
+    const throwing = create({ recoveryDelaysMs: [] })
     await throwing.ready
     expect(throwing.record(event())).toBe(false)
     expect(JSON.stringify(throwing.read())).not.toContain('PRIVATE_NATIVE_ERROR_CANARY')
   })
 
   it('isolates a locked journal from writes to an independent authoritative database', async () => {
-    const journal = create()
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    let reportUnavailable!: () => void
+    const unavailable = new Promise<void>((resolve) => (reportUnavailable = resolve))
+    const journal = create({
+      recoveryDelaysMs: [1000],
+      onStateChange: (event) => {
+        states.push(event)
+        if (event.state === 'unavailable') reportUnavailable()
+      },
+    })
     await journal.ready
     const authoritative = new DatabaseSync(path.join(temporary, 'authoritative.sqlite'))
     authoritative.exec('CREATE TABLE state (revision INTEGER); INSERT INTO state VALUES (0)')
@@ -562,17 +597,28 @@ describe('bounded diagnostics journal', () => {
     database.exec('BEGIN EXCLUSIVE')
     expect(journal.record(event())).toBe(true)
     authoritative.exec('UPDATE state SET revision = revision + 1')
-    await waitUntil(() => journal.read().source === 'unavailable')
+    await unavailable
+    expect(states[0]).toEqual({
+      state: 'unavailable',
+      failure: 'storage-busy',
+      operation: 'append',
+      recoveryAttempt: 1,
+      retryInMs: 1000,
+    })
     expect(journal.read().dropped).toBeGreaterThanOrEqual(1)
     expect(authoritative.prepare('SELECT revision FROM state').get()).toEqual({ revision: 1 })
+    await journal.close()
     authoritative.close()
     database.exec('ROLLBACK')
     database.close()
-    await journal.close()
   })
 
   it('bounds physical SQLite growth and reports full storage without waiting in record()', async () => {
-    const journal = create({ limits: { maxFileBytes: 64 * 1024 } })
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    const journal = create({
+      limits: { maxFileBytes: 64 * 1024 },
+      onStateChange: (event) => states.push(event),
+    })
     await journal.ready
     for (let index = 0; index < 256; index++)
       journal.record(
@@ -589,6 +635,15 @@ describe('bounded diagnostics journal', () => {
       )
     await waitUntil(() => journal.read().source === 'unavailable')
     expect(journal.read().dropped).toBeGreaterThan(0)
+    expect(states).toEqual([
+      {
+        state: 'unavailable',
+        failure: 'storage-full',
+        operation: 'append',
+        recoveryAttempt: 0,
+        retryInMs: null,
+      },
+    ])
     expect((await stat(path.join(directory, 'journal.sqlite'))).size).toBeLessThanOrEqual(64 * 1024)
     expect((await readdir(directory)).some((file) => file.endsWith('-wal'))).toBe(false)
   })
@@ -643,9 +698,218 @@ describe('bounded diagnostics journal', () => {
     )
   })
 
+  it('restores a saturated journal and durably retains the newest 10,000 records', async () => {
+    const initial = create()
+    await initial.ready
+    await initial.close()
+    const database = openStore()
+    const insert = database.prepare(
+      'INSERT INTO journal_records (sequence, received_at, record, browser_key) VALUES (?, ?, ?, NULL)',
+    )
+    database.exec('BEGIN IMMEDIATE')
+    try {
+      for (let sequence = 1; sequence <= DIAGNOSTICS_JOURNAL_HARD_LIMITS.maxEvents; sequence++) {
+        insert.run(
+          sequence,
+          NOW,
+          JSON.stringify({
+            sequence,
+            receivedAt: NOW,
+            instanceId: INSTANCE,
+            provenance: { kind: 'server' },
+            entry: event({ durationMs: sequence }),
+          }),
+        )
+      }
+      database
+        .prepare('UPDATE journal_metadata SET last_sequence = ? WHERE id = 1')
+        .run(DIAGNOSTICS_JOURNAL_HARD_LIMITS.maxEvents)
+      database.exec('COMMIT')
+    } catch (cause) {
+      database.exec('ROLLBACK')
+      throw cause
+    } finally {
+      database.close()
+    }
+
+    const restarted = create({ instanceId: 'b'.repeat(32) })
+    await restarted.ready
+    expect(restarted.read().source).toBe('journal')
+    expect(restarted.read().entries).toHaveLength(DIAGNOSTICS_JOURNAL_HARD_LIMITS.maxEvents)
+    for (let index = 0; index < 32; index++) expect(restarted.record(event({ durationMs: index }))).toBe(true)
+    await vi.waitFor(() => expect(restarted.read().pending).toBe(0), { timeout: 10_000, interval: 100 })
+    const result = restarted.read()
+    expect(result.source).toBe('journal')
+    expect(result.pending).toBe(0)
+    expect(result.entries).toHaveLength(DIAGNOSTICS_JOURNAL_HARD_LIMITS.maxEvents)
+    expect(result.entries[0].sequence).toBe(33)
+    expect(result.entries.at(-1)?.sequence).toBe(10_032)
+    expect(result.pruned).toBe(32)
+    await restarted.close()
+    const persisted = openStore()
+    expect(
+      persisted
+        .prepare('SELECT count(*) AS count, min(sequence) AS first, max(sequence) AS last FROM journal_records')
+        .get(),
+    ).toEqual({ count: 10_000, first: 33, last: 10_032 })
+    expect(
+      persisted.prepare('SELECT last_sequence AS lastSequence, pruned FROM journal_metadata WHERE id = 1').get(),
+    ).toEqual({ lastSequence: 10_032, pruned: 32 })
+    persisted.close()
+  })
+
+  it('recovers automatically after one stalled startup while preserving queued records', async () => {
+    faults.stalledStarts = 1
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    const journal = create({
+      limits: { initializationTimeoutMs: 1000 },
+      recoveryDelaysMs: [10],
+      onStateChange: (event) => states.push(event),
+    })
+    expect(journal.record(event())).toBe(true)
+    await journal.ready
+    expect(journal.read()).toMatchObject({ source: 'unavailable', pending: 1, dropped: 0 })
+    await waitUntil(() => journal.available() && journal.read().pending === 0, 10_000)
+    expect(journal.read().entries).toEqual([
+      expect.objectContaining({ sequence: 1, entry: expect.objectContaining({ durationMs: 10 }) }),
+    ])
+    expect(states).toEqual([
+      {
+        state: 'unavailable',
+        failure: 'request-timeout',
+        operation: 'initialize',
+        recoveryAttempt: 1,
+        retryInMs: 10,
+      },
+      { state: 'recovered', recoveryAttempt: 1 },
+    ])
+  })
+
+  it('recovers a committed append after its acknowledgement is lost without replaying it', async () => {
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    let reportUnavailable!: () => void
+    const unavailable = new Promise<void>((resolve) => (reportUnavailable = resolve))
+    const journal = create({
+      limits: { requestTimeoutMs: 100 },
+      recoveryDelaysMs: [200],
+      onStateChange: (event) => {
+        states.push(event)
+        if (event.state === 'unavailable') reportUnavailable()
+      },
+    })
+    await journal.ready
+    faults.suppressedAppendResponses = 1
+    expect(journal.record(event({ durationMs: 1 }))).toBe(true)
+    await unavailable
+    expect(journal.read()).toMatchObject({ source: 'unavailable', pending: 0, dropped: 1 })
+    expect(journal.record(event({ durationMs: 2 }))).toBe(true)
+    await waitUntil(() => journal.available() && journal.read().pending === 0)
+    expect(
+      journal.read().entries.map((record) => ('durationMs' in record.entry ? record.entry.durationMs : undefined)),
+    ).toEqual([1, 2])
+    expect(journal.read().entries.map((record) => record.sequence)).toEqual([1, 2])
+    expect(journal.read().dropped).toBe(1)
+    expect(states).toEqual([
+      {
+        state: 'unavailable',
+        failure: 'request-timeout',
+        operation: 'append',
+        recoveryAttempt: 1,
+        retryInMs: 200,
+      },
+      { state: 'recovered', recoveryAttempt: 1 },
+    ])
+  })
+
+  it('recovers after one worker start failure while preserving queued records', async () => {
+    faults.throwingStarts = 1
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    const journal = create({
+      recoveryDelaysMs: [0],
+      onStateChange: (event) => states.push(event),
+    })
+    expect(journal.record(event())).toBe(true)
+    await waitUntil(() => journal.available() && journal.read().pending === 0)
+    expect(faults.starts).toBe(2)
+    expect(journal.read()).toMatchObject({ source: 'journal', pending: 0, dropped: 0 })
+    expect(journal.read().entries).toEqual([
+      expect.objectContaining({ sequence: 1, entry: expect.objectContaining({ durationMs: 10 }) }),
+    ])
+    expect(states).toEqual([
+      {
+        state: 'unavailable',
+        failure: 'worker-start',
+        operation: 'initialize',
+        recoveryAttempt: 1,
+        retryInMs: 0,
+      },
+      { state: 'recovered', recoveryAttempt: 1 },
+    ])
+  })
+
+  it('bounds repeated recovery attempts and becomes terminal after the configured schedule', async () => {
+    faults.stall = true
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    const journal = create({
+      limits: { initializationTimeoutMs: 50 },
+      recoveryDelaysMs: [10, 10],
+      onStateChange: (event) => states.push(event),
+    })
+    await waitUntil(() => states.length >= 3)
+    expect(faults.starts).toBe(3)
+    expect(states).toEqual([
+      {
+        state: 'unavailable',
+        failure: 'request-timeout',
+        operation: 'initialize',
+        recoveryAttempt: 1,
+        retryInMs: 10,
+      },
+      {
+        state: 'unavailable',
+        failure: 'request-timeout',
+        operation: 'initialize',
+        recoveryAttempt: 2,
+        retryInMs: 10,
+      },
+      {
+        state: 'unavailable',
+        failure: 'request-timeout',
+        operation: 'initialize',
+        recoveryAttempt: 2,
+        retryInMs: null,
+      },
+    ])
+    expect(journal.record(event())).toBe(false)
+    expect(journal.available()).toBe(false)
+    expect(journal.read()).toMatchObject({ source: 'unavailable', pending: 0, dropped: 1 })
+  })
+
+  it('does not start a replacement worker after close while recovery is pending', async () => {
+    faults.stalledStarts = 1
+    const states: Parameters<NonNullable<DiagnosticsJournalOptions['onStateChange']>>[0][] = []
+    let reportUnavailable!: () => void
+    const unavailable = new Promise<void>((resolve) => (reportUnavailable = resolve))
+    const journal = create({
+      limits: { initializationTimeoutMs: 50 },
+      recoveryDelaysMs: [0],
+      onStateChange: (event) => {
+        states.push(event)
+        if (event.state === 'unavailable') reportUnavailable()
+      },
+    })
+    await unavailable
+    expect(faults.starts).toBe(1)
+    await journal.close()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(faults.starts).toBe(1)
+    expect(states).toHaveLength(1)
+    expect(journal.read().source).toBe('unavailable')
+  })
+
   it('times out a stalled worker and bounds shutdown even while an append is awaiting acknowledgment', async () => {
     faults.stall = true
-    const stalled = create({ limits: { requestTimeoutMs: 100 } })
+    const stalled = create({ limits: { initializationTimeoutMs: 100 }, recoveryDelaysMs: [] })
     expect(stalled.record(event())).toBe(true)
     const started = performance.now()
     await stalled.ready

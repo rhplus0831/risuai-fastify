@@ -56,7 +56,8 @@ snapshot, falls back to v2 for an older server, and groups the safe timeline by
 correlation reference. Setup, privacy limits, and rollback live in
 [Remote Support Diagnostics](development-and-observability.md#remote-support-diagnostics).
 Focused diagnostics suites cover exact schemas, separate authority, journal
-limits/restarts, generation/provider/recovery evidence, and browser publishing.
+limits/restarts, saturated 10,000-record incremental pruning, bounded same-process
+worker recovery, generation/provider/recovery evidence, and browser publishing.
 `server/fastify/browser-smoke/remoteDiagnostics.spec.ts` is the focused real
 browser/auth/upload/HTTPS-helper journey; it uses a fresh disposable database
 and temporary test CA. Run it through the focused test runner after a smoke

@@ -374,12 +374,24 @@ reject symlink sources before copying bytes.
 Hard limits are 24 hours, 10,000 retained events, 8 MiB of retained JSON, 4 KiB
 per record, and 256 queued/in-flight records. SQLite is capped at 16 MiB with
 DELETE rollback journaling, which can temporarily require another bounded file.
-The worker processes at most one request at a time, writes up to 32 records per
-batch, and has a one-second request deadline. Startup revalidates every record,
-purges invalid rows, and prunes age/count/bytes before exposing evidence.
-Unavailable, corrupt, full, or stalled storage yields fixed unavailable/loss
-outcomes. Collection never writes to domain tables or waits in generation,
-command acceptance, recovery, or writer transitions. Close is bounded.
+The worker processes at most one request at a time and writes up to 32 records
+per batch. It maintains count/byte/expiry state incrementally and returns removal
+deltas after startup instead of rescanning and returning every retained sequence
+for each write. Cold initialization has a 30-second deadline, ordinary appends
+five seconds, maintenance/reset work 15 seconds, and shutdown one second.
+Startup revalidates every record, purges invalid rows, and prunes age/count/bytes
+before exposing evidence.
+
+Transient worker, I/O, or lock failures restart the isolated worker after bounded
+250 ms, 1 second, and 5 second backoffs. Reads remain `storage-unavailable` during
+recovery, uncertain in-flight records are accounted as loss rather than replayed,
+and queued records that were never sent resume after a successful restore. Invalid
+storage, full storage, invalid protocol responses, or an exhausted retry budget
+remain unavailable until process restart. Local logs contain only fixed failure,
+operation, retry-state, and attempt categories; native SQLite messages and paths
+remain suppressed. Collection never writes to domain tables or waits in
+generation, command acceptance, recovery, or writer transitions. Close remains
+bounded.
 
 Server receive sequence orders retained records. Browser timestamp and request
 associations are client assertions with unknown skew. Async operation scope

@@ -52,7 +52,33 @@ export function createDiagnosticsRuntime(
   }
   const directory = path.join(config.dataDir, 'diagnostics')
   let lineage = getDatabaseLineage(db)
-  const journal = createDiagnosticsJournal({ directory, lineage, instanceId, enabled: true })
+  const journal = createDiagnosticsJournal({
+    directory,
+    lineage,
+    instanceId,
+    enabled: true,
+    onStateChange(event) {
+      if (event.state === 'recovered') {
+        app.log.info(
+          { diagnosticsJournal: { state: event.state, recoveryAttempt: event.recoveryAttempt } },
+          'Diagnostics journal worker recovered',
+        )
+      } else {
+        app.log.warn(
+          {
+            diagnosticsJournal: {
+              state: event.state,
+              failure: event.failure,
+              operation: event.operation,
+              recoveryAttempt: event.recoveryAttempt,
+              retryScheduled: event.retryInMs !== null,
+            },
+          },
+          'Diagnostics journal worker unavailable',
+        )
+      }
+    },
+  })
   let closed = false
   let keyReady = false
   let operationContinuity: 'retained' | 'process-only' = 'process-only'
@@ -211,7 +237,7 @@ export function createDiagnosticsRuntime(
       if (!browserEnabled || closed || !isBrowserDiagnosticsBatch(batch)) return null
       try {
         history()
-        if (journal.read().source !== 'journal') return null
+        if (!journal.available()) return null
         const result: BrowserDiagnosticsUploadResponse = { version: 1, accepted: 0, duplicates: 0, dropped: 0 }
         for (const event of batch.events) {
           if (journal.hasBrowserEvent(batch.sourceId, event.eventId)) result.duplicates++
