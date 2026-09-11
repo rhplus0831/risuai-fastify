@@ -2,11 +2,21 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createHash } from 'node:crypto'
 import { StatementSync } from 'node:sqlite'
 import type { FastifyInstance } from 'fastify'
+import {
+  serializeChatGenerationSettingsDigestInput,
+  type ChatGenerationSettings,
+} from '@risuai/shared-core/chat-generation-settings'
 import { buildApp } from '../src/app.js'
 import { openDatabase } from '../src/db.js'
-import { loadChatHydration, loadPersisted, loadPersistedForChatMutation } from '../src/repository.js'
+import {
+  loadChatHydration,
+  loadPersisted,
+  loadPersistedForChatGenerationSettingsMutation,
+  loadPersistedForChatMutation,
+} from '../src/repository.js'
 import { applyTargetedCommandMutation } from '../src/commands/mutations.js'
 import { normalizeAllCharacterChats } from '../src/commands/chats.js'
 import { subscribeProtocolMetrics } from '../src/protocolMetrics.js'
@@ -17,10 +27,9 @@ import { buildLargeCorpusFixture } from '../../../test/fixtures/largeCorpusFixtu
 
 // Command-mutation read narrowing: targeted message/scriptstate/generation
 // command routes locate one chat row and mutate it (or write the message store
-// through kit writers). The opt-in `chatScopedRead` loads exactly the target chat
-// row plus its parent character, with a broad `loadPersisted` fallback for
-// unknown ids and pre-extraction embedded state so error behavior and the global
-// dedup edge stay byte-identical.
+// through kit writers). Ordinary `chatScopedRead` loads the target and parent;
+// generation-settings additionally loads its settings/collection validation
+// owners. Both retain a broad fallback for unknown ids and pre-extraction state.
 
 interface Harness {
   app: FastifyInstance
@@ -73,6 +82,10 @@ async function importDatabase(database: unknown): Promise<number> {
 
 function command(method: 'POST' | 'PATCH' | 'PUT' | 'DELETE', url: string, payload: Record<string, unknown>) {
   return harness.app.inject({ method, url, headers: { 'risu-auth': assertion }, payload })
+}
+
+function chatGenerationSettingsDigest(settings: ChatGenerationSettings | undefined): string {
+  return createHash('sha256').update(serializeChatGenerationSettingsDigestInput(settings), 'utf8').digest('hex')
 }
 
 function hydrationGet(chatId: string) {
@@ -146,6 +159,16 @@ function readSettingsRecord(): Record<string, unknown> {
       data_json: string
     }
     return JSON.parse(row.data_json) as Record<string, unknown>
+  } finally {
+    db.close()
+  }
+}
+
+function readStoredChatGenerationSettings(chatId: string): ChatGenerationSettings | undefined {
+  const db = openDatabase(harness.dataDir)
+  try {
+    const row = db.prepare('SELECT data_json FROM chats WHERE id = ?').get(chatId) as { data_json: string }
+    return (JSON.parse(row.data_json) as { generationSettings?: ChatGenerationSettings }).generationSettings
   } finally {
     db.close()
   }
@@ -527,27 +550,36 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     expect(scoped.statusCode).toBe(200)
   })
 
-  it('chat generation settings save avoids message and hypa payload reads', async () => {
+  it('sparse chat generation-settings save reads only its target and validation owners', async () => {
     const fixture = buildLargeCorpusFixture()
+    const promptPresets = fixture.database.promptPresets as Array<Record<string, unknown>>
+    promptPresets[0].customPromptTemplateToggle = 'mode=Mode'
     const revision = await importDatabase(fixture.database)
+    const initialSettings = readStoredChatGenerationSettings(fixture.hot.chatId)
 
-    const { result: res, loadCountByTable } = await withServerLoadInstrumentation(() =>
-      command('PUT', `/api/v1/commands/chats/${fixture.hot.chatId}/generation-settings`, {
-        baseRevision: revision,
-        generationSettings: {
-          configured: true,
-          personaId: 'corpus-persona-0',
-          modelPresetId: 'corpus-model-preset-0',
-          promptPresetId: 'corpus-prompt-preset-0',
-          jailbreakToggle: false,
-          sidebarToggles: {},
-        },
-      }),
+    const { result: loadRun, readCountByTable } = await withSqliteSelectReadInstrumentation(() =>
+      withServerLoadInstrumentation(() =>
+        command('PUT', `/api/v1/commands/chats/${fixture.hot.chatId}/generation-settings`, {
+          baseRevision: revision,
+          baseGenerationSettingsDigest: chatGenerationSettingsDigest(initialSettings),
+          patch: { sidebarToggles: { mode: '1' } },
+        }),
+      ),
     )
 
+    const { result: res, loadCountByTable } = loadRun
     expect(res.statusCode).toBe(200)
-    expect(loadCountByTable.messages ?? 0).toBe(0)
-    expect(loadCountByTable.chat_hypa_v3 ?? 0).toBe(0)
+    expect(loadCountByTable).toEqual({ modules: 1, personas: 1 })
+    expect(readCountByTable).toEqual({
+      schema_version: 1,
+      settings: 1,
+      modules: 1,
+      model_presets: 1,
+      prompt_presets: 1,
+      personas: 1,
+      chats: 1,
+      characters: 1,
+    })
 
     const db = openDatabase(harness.dataDir)
     try {
@@ -555,12 +587,8 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
         data_json: string
       }
       expect(JSON.parse(row.data_json).generationSettings).toEqual({
-        configured: true,
-        personaId: 'corpus-persona-0',
-        modelPresetId: 'corpus-model-preset-0',
-        promptPresetId: 'corpus-prompt-preset-0',
-        jailbreakToggle: false,
-        sidebarToggles: {},
+        ...initialSettings,
+        sidebarToggles: { mode: '1' },
       })
     } finally {
       db.close()
@@ -1553,6 +1581,14 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
       const characters = (persisted.database as { characters: unknown[] }).characters
       expect(characters).toHaveLength(2)
 
+      // Generation-settings uses a separate partial loader, so protect its
+      // legacy fallback independently from the ordinary chat loader above.
+      const generationSettingsFallback = loadPersistedForChatGenerationSettingsMutation(db, harness.dataDir, {
+        chatId: 'dup-chat',
+      })
+      const generationSettingsCharacters = (generationSettingsFallback.database as { characters: unknown[] }).characters
+      expect(generationSettingsCharacters).toHaveLength(2)
+
       const exactFallback = loadPersistedForChatMutation(db, harness.dataDir, {
         chatId: 'dup-chat',
         exactChatRow: true,
@@ -1573,7 +1609,7 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     }
   })
 
-  it('rejects chatScopedRead combined with writeDatabase (data-loss guard)', async () => {
+  it('rejects chat-scoped reads combined with writeDatabase (data-loss guard)', async () => {
     const db = openDatabase(harness.dataDir)
     try {
       expect(() =>
@@ -1590,6 +1626,20 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
           },
         }),
       ).toThrow('chatScopedRead cannot be combined with writeDatabase')
+      expect(() =>
+        applyTargetedCommandMutation({
+          db,
+          dataDir: harness.dataDir,
+          baseRevision: 0,
+          eventSink: { emit() {} } as never,
+          mutationPath: 'targeted-chat-row',
+          writeDatabase: true,
+          chatGenerationSettingsScopedRead: { chatId: 'any' },
+          mutate() {
+            throw new Error('must not be reached')
+          },
+        }),
+      ).toThrow('chatGenerationSettingsScopedRead cannot be combined with writeDatabase')
     } finally {
       db.close()
     }

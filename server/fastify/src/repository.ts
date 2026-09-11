@@ -2306,6 +2306,10 @@ export interface ChatMutationTarget {
   exactChatRow?: boolean
 }
 
+export interface ChatGenerationSettingsMutationTarget {
+  chatId: string
+}
+
 /**
  * Chat-scoped read for targeted command-mutation hot paths. A
  * message/scriptstate/generation mutation only locates one chat row and
@@ -2360,6 +2364,67 @@ export function loadPersistedForChatMutation(db: DatabaseSync, dataDir: string, 
   return {
     _version: PERSISTED_VERSION,
     database: { characters: [character] },
+    assets: [],
+  }
+}
+
+const CHAT_GENERATION_SETTINGS_COLLECTION_FIELDS = [
+  'modules',
+  'modelPresets',
+  'promptPresets',
+  'personas',
+] as const satisfies readonly CollectionFieldKey[]
+
+/**
+ * Generation-settings mutations need one complete chat row plus the global
+ * owners used to validate its post-update references. Keep that bounded read
+ * separate from ordinary chat mutations: agents and enabled-module ids live in
+ * settings, while modules, model/prompt presets, and personas live in their
+ * extracted collection tables.
+ *
+ * Missing or pre-extraction rows retain the broad fallback so legacy embedded
+ * databases keep the same validation and repair behavior. The returned scope
+ * must only be used with targeted SQLite writers.
+ */
+export function loadPersistedForChatGenerationSettingsMutation(
+  db: DatabaseSync,
+  dataDir: string,
+  target: ChatGenerationSettingsMutationTarget,
+): Persisted {
+  const broadFallback = () => loadPersisted(db, dataDir)
+  const dependencyLoad = loadDatabaseFieldsFromSqlite(db, CHAT_GENERATION_SETTINGS_COLLECTION_FIELDS)
+  const { settings } = dependencyLoad
+  if (
+    settings === null ||
+    !settingsCanRepresentCollectionMutation(settings, CHAT_GENERATION_SETTINGS_COLLECTION_FIELDS)
+  ) {
+    return broadFallback()
+  }
+
+  const chatRow = db
+    .prepare('SELECT id, character_id, position, data_json FROM chats WHERE id = ?')
+    .get(target.chatId) as unknown as ChatRow | undefined
+  if (!chatRow) return broadFallback()
+
+  const charRow = db
+    .prepare('SELECT id, position, data_json FROM characters WHERE id = ?')
+    .get(chatRow.character_id) as unknown as CharacterRow | undefined
+  if (!charRow) return broadFallback()
+
+  const character = JSON.parse(charRow.data_json) as unknown
+  const chat = parseStoredChatRow(chatRow.data_json)
+  if (!isRecord(character) || !isRecord(chat)) return broadFallback()
+  character.chatPage = 0
+  character.chats = [chat]
+
+  return {
+    _version: PERSISTED_VERSION,
+    database: {
+      ...settings,
+      ...dependencyLoad.fields,
+      currentChar: 0,
+      characters: [character],
+    },
     assets: [],
   }
 }
