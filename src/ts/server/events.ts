@@ -19,6 +19,8 @@ import {
 } from '../clientSession'
 
 const EVENTS_ENDPOINT = '/api/v1/events'
+export const SERVER_EVENT_CONNECT_TIMEOUT_MS = 30_000
+const EVENT_CONNECTION_CANCELLED = Symbol('event-connection-cancelled')
 
 export type ServerCommandEventHandler = (event: CommandEvent) => void
 
@@ -96,10 +98,23 @@ export async function subscribeServerCommandEvents(
 
   const controller = new AbortController()
   let stopped = false
+  let connectTimedOut = false
+  let resolveConnectionCancelled!: (value: typeof EVENT_CONNECTION_CANCELLED) => void
+  const connectionCancelled = new Promise<typeof EVENT_CONNECTION_CANCELLED>((resolve) => {
+    resolveConnectionCancelled = resolve
+  })
   const stop = (): void => {
     stopped = true
     controller.abort()
+    resolveConnectionCancelled(EVENT_CONNECTION_CANCELLED)
   }
+  const connectDeadline = setTimeout(() => {
+    connectTimedOut = true
+    stop()
+  }, SERVER_EVENT_CONNECT_TIMEOUT_MS)
+  const clearConnectDeadline = () => clearTimeout(connectDeadline)
+  const cancelledConnectionResult = (): ServerCommandEventSubscriptionResult =>
+    connectTimedOut ? { status: 'error', error: 'Event stream connection timed out' } : { status: 'unavailable' }
 
   if (input.signal) {
     if (input.signal.aborted) {
@@ -109,8 +124,23 @@ export async function subscribeServerCommandEvents(
     }
   }
 
-  const auth = await getNodeServerProxyAuth()
+  let auth: string
+  try {
+    const result = await Promise.race([getNodeServerProxyAuth(), connectionCancelled])
+    if (result === EVENT_CONNECTION_CANCELLED) {
+      clearConnectDeadline()
+      input.signal?.removeEventListener('abort', stop)
+      return cancelledConnectionResult()
+    }
+    auth = result
+  } catch (err) {
+    clearConnectDeadline()
+    input.signal?.removeEventListener('abort', stop)
+    const message = err instanceof Error ? err.message : String(err)
+    return { status: 'error', error: `Network error: ${message}` }
+  }
   if (stopped || !isClientSessionGenerationCurrent(generation)) {
+    clearConnectDeadline()
     input.signal?.removeEventListener('abort', stop)
     return { status: 'unavailable' }
   }
@@ -132,24 +162,42 @@ export async function subscribeServerCommandEvents(
 
   let response: Response
   try {
-    response = await fetch(endpoint, {
-      method: 'GET',
-      signal: controller.signal,
-      headers,
-    })
+    const result = await Promise.race([
+      fetch(endpoint, {
+        method: 'GET',
+        signal: controller.signal,
+        headers,
+      }),
+      connectionCancelled,
+    ])
+    if (result === EVENT_CONNECTION_CANCELLED) {
+      clearConnectDeadline()
+      input.signal?.removeEventListener('abort', stop)
+      return cancelledConnectionResult()
+    }
+    response = result
   } catch (err) {
+    clearConnectDeadline()
     if (input.signal) input.signal.removeEventListener('abort', stop)
     const message = err instanceof Error ? err.message : String(err)
     return { status: 'error', error: `Network error: ${message}` }
   }
 
   if (response.status === 409) {
-    if (input.signal) input.signal.removeEventListener('abort', stop)
-    const replayError = await parseReplayUnavailableResponse(response)
+    const result = await Promise.race([parseReplayUnavailableResponse(response), connectionCancelled])
+    if (result === EVENT_CONNECTION_CANCELLED) {
+      clearConnectDeadline()
+      input.signal?.removeEventListener('abort', stop)
+      return cancelledConnectionResult()
+    }
+    const replayError = result
+    clearConnectDeadline()
+    input.signal?.removeEventListener('abort', stop)
     if (replayError) return replayError
   }
 
   if (!response.ok) {
+    clearConnectDeadline()
     if (input.signal) input.signal.removeEventListener('abort', stop)
     return {
       status: 'error',
@@ -159,9 +207,12 @@ export async function subscribeServerCommandEvents(
   }
 
   if (!response.body) {
+    clearConnectDeadline()
     if (input.signal) input.signal.removeEventListener('abort', stop)
     return { status: 'error', error: 'Event stream response has no body' }
   }
+
+  clearConnectDeadline()
 
   void (async () => {
     let completed = false

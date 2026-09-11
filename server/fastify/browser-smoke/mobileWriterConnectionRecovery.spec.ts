@@ -11,7 +11,7 @@ import {
 const CHAT_PATH = '/character/fast-bootstrap-small-character/fast-bootstrap-small-chat'
 const DRAFT = 'retained mobile draft'
 
-type FaultMode = 'event-stream-close' | 'offline'
+type FaultMode = 'event-stream-close' | 'offline' | 'retired-bootstrap'
 
 interface ApiRequestRecord {
   method: string
@@ -209,38 +209,60 @@ async function runRecoveryJourney(browser: Browser, faultMode: FaultMode, testIn
     evidence.before = before
     evidence.durableBefore = durableBefore
     recoveryTrafficStarted = true
+    let interrupted: PageSnapshot | null = null
 
-    if (faultMode === 'event-stream-close') {
+    let recoveryBootstrapRequests = 0
+    if (faultMode === 'event-stream-close' || faultMode === 'retired-bootstrap') {
       await expect.poll(() => eventResponses.filter(({ response }) => !response.destroyed).length).toBeGreaterThan(0)
       const bootstrapReleased = deferred<void>()
-      let holdNextBootstrap = true
-      let recoveryBootstrapStarted = false
       releaseRecovery = () => bootstrapReleased.resolve()
       await page.route('**/api/v1/bootstrap', async (route) => {
-        if (holdNextBootstrap) {
-          holdNextBootstrap = false
-          recoveryBootstrapStarted = true
+        recoveryBootstrapRequests += 1
+        if (recoveryBootstrapRequests === 1) {
           await bootstrapReleased.promise
         }
-        await route.continue()
+        await route.continue().catch(() => undefined)
       })
       const activeEventResponse = eventResponses.filter(({ response }) => !response.destroyed).at(-1)
       if (!activeEventResponse) throw new Error('Active writer event response disappeared before interruption')
       activeEventResponse.response.destroy()
-      await expect.poll(() => recoveryBootstrapStarted, { timeout: 30_000 }).toBe(true)
+      await expect.poll(() => recoveryBootstrapRequests, { timeout: 30_000 }).toBe(1)
+      if (faultMode === 'retired-bootstrap') {
+        await waitForRecoveringWriter(page)
+        interrupted = await pageSnapshot(page)
+        evidence.interrupted = interrupted
+        await page.evaluate(() => {
+          const visibility = { state: 'hidden' as DocumentVisibilityState }
+          Object.defineProperty(document, 'visibilityState', {
+            configurable: true,
+            get: () => visibility.state,
+          })
+          document.dispatchEvent(new Event('visibilitychange'))
+          visibility.state = 'visible'
+          document.dispatchEvent(new Event('visibilitychange'))
+        })
+        await expect.poll(() => recoveryBootstrapRequests, { timeout: 30_000 }).toBeGreaterThanOrEqual(2)
+      }
     } else {
       await context.setOffline(true)
     }
 
-    await waitForRecoveringWriter(page)
-    const interrupted = await pageSnapshot(page)
-    evidence.interrupted = interrupted
+    if (faultMode !== 'retired-bootstrap') {
+      await waitForRecoveringWriter(page)
+      interrupted = await pageSnapshot(page)
+      evidence.interrupted = interrupted
+    }
+    if (!interrupted) throw new Error('Interrupted recovery snapshot was not captured')
 
     if (faultMode === 'event-stream-close') releaseRecovery?.()
-    else await context.setOffline(false)
+    else if (faultMode === 'offline') await context.setOffline(false)
 
     await waitForWriter(page)
-    if (faultMode === 'event-stream-close') await page.unrouteAll({ behavior: 'wait' })
+    if (faultMode === 'retired-bootstrap') releaseRecovery?.()
+    if (faultMode !== 'offline') await page.unrouteAll({ behavior: 'wait' })
+    await expect
+      .poll(() => eventResponses.filter(({ response }) => !response.destroyed && !response.writableEnded).length)
+      .toBeGreaterThan(0)
     const recovered = await pageSnapshot(page)
     const durableRecovered = durableSnapshot(harness.dataDir)
     const recoveryTrafficEnd = recoveryRequests.length
@@ -324,4 +346,8 @@ test('mobile writer reconnects in place after its event stream closes', async ({
 
 test('mobile writer reconnects in place after a temporary offline period', async ({ browser }, testInfo) => {
   await runRecoveryJourney(browser, 'offline', testInfo)
+})
+
+test('mobile writer replaces a hidden recovery before its old bootstrap settles', async ({ browser }, testInfo) => {
+  await runRecoveryJourney(browser, 'retired-bootstrap', testInfo)
 })

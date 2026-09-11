@@ -268,6 +268,51 @@ describe('route resource loader', () => {
     await expect(second).resolves.toBeUndefined()
   })
 
+  it('starts a replacement surface request after its recovery owner is cancelled', async () => {
+    loaderMocks.requirements = [requirement({ kind: 'settings-group', group: 'providers', purposes: ['interact'] })]
+    const firstRead = deferred<{ status: 'ok'; revision: number; scope: 'targeted' }>()
+    const replacementRead = deferred<{ status: 'ok'; revision: number; scope: 'targeted' }>()
+    loaderMocks.refresh.mockReturnValueOnce(firstRead.promise).mockReturnValueOnce(replacementRead.promise)
+    const firstController = new AbortController()
+
+    const first = ensureResourceSurfaces(['runtime:plugins'], {
+      owner: {},
+      signal: firstController.signal,
+    })
+    firstController.abort()
+    const replacement = ensureResourceSurfaces(['runtime:plugins'], {
+      owner: {},
+      signal: new AbortController().signal,
+    })
+
+    expect(replacement).not.toBe(first)
+    expect(loaderMocks.refresh).toHaveBeenCalledTimes(2)
+    replacementRead.resolve({ status: 'ok', revision: 5, scope: 'targeted' })
+    await expect(replacement).resolves.toBeUndefined()
+    firstRead.resolve({ status: 'ok', revision: 4, scope: 'targeted' })
+    await expect(first).rejects.toThrow('Route resource load was cancelled')
+  })
+
+  it('does not attach recovery-owned surface loading to older unowned work', async () => {
+    loaderMocks.requirements = [requirement({ kind: 'settings-group', group: 'providers', purposes: ['interact'] })]
+    const ordinaryRead = deferred<{ status: 'ok'; revision: number; scope: 'targeted' }>()
+    const recoveryRead = deferred<{ status: 'ok'; revision: number; scope: 'targeted' }>()
+    loaderMocks.refresh.mockReturnValueOnce(ordinaryRead.promise).mockReturnValueOnce(recoveryRead.promise)
+
+    const ordinary = ensureResourceSurfaces(['runtime:plugins'])
+    const recovery = ensureResourceSurfaces(['runtime:plugins'], {
+      owner: {},
+      signal: new AbortController().signal,
+    })
+
+    expect(recovery).not.toBe(ordinary)
+    expect(loaderMocks.refresh).toHaveBeenCalledTimes(2)
+    recoveryRead.resolve({ status: 'ok', revision: 5, scope: 'targeted' })
+    await expect(recovery).resolves.toBeUndefined()
+    ordinaryRead.resolve({ status: 'ok', revision: 4, scope: 'targeted' })
+    await expect(ordinary).resolves.toBeUndefined()
+  })
+
   it('lets a deferred consumer join a route-owned request for the same resource', async () => {
     loaderMocks.requirements = [requirement({ kind: 'settings-group', group: 'display', purposes: ['render'] })]
     const read = deferred<{ status: 'ok'; revision: number; scope: 'targeted' }>()

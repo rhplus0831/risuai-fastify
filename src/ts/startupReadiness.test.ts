@@ -286,6 +286,39 @@ describe('startup readiness instrumentation', () => {
     expect(step).toHaveBeenCalledTimes(2)
   })
 
+  it('does not hand a retired owner in-flight step to its replacement', async () => {
+    let firstCurrent = true
+    let releaseFirst!: (value: string) => void
+    const firstStep = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseFirst = resolve
+        }),
+    )
+    const firstOwner = {}
+    const first = runStartupStep('plugin-runtime', firstStep, {
+      owner: firstOwner,
+      isCurrent: () => firstCurrent,
+    })
+    await vi.waitFor(() => expect(firstStep).toHaveBeenCalledOnce())
+
+    firstCurrent = false
+    const replacementStep = vi.fn(async () => 'replacement')
+    await expect(runStartupStep('plugin-runtime', replacementStep, { owner: {}, isCurrent: () => true })).resolves.toBe(
+      'replacement',
+    )
+    expect(replacementStep).toHaveBeenCalledOnce()
+
+    releaseFirst('retired')
+    await expect(first).rejects.toThrow('Startup step was superseded')
+    await expect(
+      runStartupStep(
+        'plugin-runtime',
+        vi.fn(async () => 'unexpected'),
+      ),
+    ).resolves.toBe('replacement')
+  })
+
   it('shares a rejected capability retry and permits a fresh retry after cleanup', async () => {
     const retry = vi.fn().mockRejectedValueOnce(new Error('still offline')).mockResolvedValueOnce('recovered')
 

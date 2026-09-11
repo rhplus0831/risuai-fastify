@@ -42,6 +42,8 @@ import { applyServerMemoryJobEvent, applyServerMemoryJobSnapshot } from './memor
 import { publishServerBardWikiJobEvent, publishServerBardWikiJobSnapshot } from './bardWikiJobEvents'
 
 export interface ConnectedReaderSyncOptions {
+  /** Cancels setup owned by a higher-level operation such as explicit promotion. */
+  signal?: AbortSignal
   onAuthLoss(): void | Promise<void>
   onLineageChange(ownership: ClientSessionOwnership): void | Promise<void>
   onWriterEvent?(writer: ServerWriterEvent): void
@@ -80,9 +82,11 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
   let stopLifecycle: (() => void) | null = null
   let stopSession: (() => void) | null = null
   let stopOffline: (() => void) | null = null
+  let stopVisibility: (() => void) | null = null
+  let stopParentSignal: (() => void) | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null
-  let foregroundRecovery: Promise<void> | null = null
+  let foregroundRecovery: { controller: AbortController; promise: Promise<void> } | null = null
   let lastFrameAt = 0
   let chain = Promise.resolve()
   let memoryStream: string | null = null
@@ -127,6 +131,12 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     stopSession = null
     stopOffline?.()
     stopOffline = null
+    stopVisibility?.()
+    stopVisibility = null
+    stopParentSignal?.()
+    stopParentSignal = null
+    foregroundRecovery?.controller.abort()
+    foregroundRecovery = null
     resolveReady()
   }
 
@@ -145,7 +155,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     // Fence callbacks already queued by this stream, including completed reads.
     epoch += 1
     setClientConnectionState('interrupted', generation)
-    if (!current() || reconnectTimer || browserIsOffline()) return
+    if (!current() || reconnectTimer || browserRecoverySuspended()) return
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       void connect()
@@ -202,7 +212,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
   }
 
   async function probeOwnership(sourceEpoch: number, signal: AbortSignal): Promise<boolean> {
-    const result = await fetchServerOwnership()
+    const result = await fetchServerOwnership(signal)
     if (!current(sourceEpoch)) return false
     if (result.status === 'error' && result.httpStatus === 401) {
       notifyAuthLoss()
@@ -339,18 +349,23 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     connectionOptions: {
       preserveLiveStatus?: boolean
       ownershipValidation?: 'probe' | 'full' | 'validated'
+      signal?: AbortSignal
     } = {},
   ): Promise<void> {
     if (!current()) return
-    if (browserIsOffline()) {
+    if (browserRecoverySuspended()) {
       setClientConnectionState('interrupted', generation)
       resolveReady()
       return
     }
     teardownStream()
     const sourceEpoch = ++epoch
-    controller = new AbortController()
-    const signal = controller.signal
+    const connectionController = new AbortController()
+    controller = connectionController
+    const abortConnection = () => connectionController.abort()
+    if (connectionOptions.signal?.aborted) abortConnection()
+    else connectionOptions.signal?.addEventListener('abort', abortConnection, { once: true })
+    const signal = connectionController.signal
     const preserveLiveStatus =
       connectionOptions.preserveLiveStatus === true && getClientSessionSnapshot().connection === 'live'
     if (!preserveLiveStatus) setClientConnectionState('connecting', generation)
@@ -438,6 +453,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
         interrupt(sourceEpoch)
       }
     } finally {
+      connectionOptions.signal?.removeEventListener('abort', abortConnection)
       resolveReady()
     }
   }
@@ -453,10 +469,11 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     if (!current()) return
     if (!context?.suspensionEvidence && streamIsHealthyAndRecent()) return
     if (foregroundRecovery) return
+    const recoveryController = new AbortController()
     let running!: Promise<void>
     running = (async () => {
-      const result = await fetchServerOwnership()
-      if (!current()) return
+      const result = await fetchServerOwnership(recoveryController.signal)
+      if (!current() || recoveryController.signal.aborted) return
       if (result.status === 'error' && result.httpStatus === 401) {
         await notifyAuthLoss()
         return
@@ -476,14 +493,24 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       await connect({
         preserveLiveStatus: true,
         ownershipValidation: ownershipUnchanged ? 'validated' : 'full',
+        signal: recoveryController.signal,
       })
     })().finally(() => {
-      if (foregroundRecovery === running) foregroundRecovery = null
+      if (foregroundRecovery?.promise === running) foregroundRecovery = null
     })
-    foregroundRecovery = running
+    foregroundRecovery = { controller: recoveryController, promise: running }
   }
 
   if (current() && lineage) {
+    if (options.signal) {
+      const abort = () => stop()
+      if (options.signal.aborted) abort()
+      else {
+        options.signal.addEventListener('abort', abort, { once: true })
+        stopParentSignal = () => options.signal?.removeEventListener('abort', abort)
+      }
+    }
+    if (!current()) return { stop, retry, ready }
     stopSession = clientSessionStore.subscribe((state) => {
       if (stopped) return
       if (state.lifecycle === 'auth-required') notifyAuthLoss()
@@ -491,15 +518,28 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     })
     stopLifecycle = subscribeBrowserLifecycleRecovery(recoverForeground)
     if (typeof window !== 'undefined') {
-      const offline = () => interrupt(epoch)
+      const offline = () => {
+        foregroundRecovery?.controller.abort()
+        interrupt(epoch)
+      }
       window.addEventListener('offline', offline)
       stopOffline = () => window.removeEventListener('offline', offline)
+      const pageDocument = typeof document === 'undefined' ? null : document
+      const visibilityChange = () => {
+        if (pageDocument?.visibilityState === 'hidden') foregroundRecovery?.controller.abort()
+      }
+      pageDocument?.addEventListener('visibilitychange', visibilityChange)
+      stopVisibility = () => pageDocument?.removeEventListener('visibilitychange', visibilityChange)
     }
-    void connect({ ownershipValidation: 'full' })
+    if (current()) void connect({ ownershipValidation: 'full', signal: options.signal })
   } else stop()
   return { stop, retry, ready }
 }
 
 function browserIsOffline(): boolean {
   return typeof navigator !== 'undefined' && navigator.onLine === false
+}
+
+function browserRecoverySuspended(): boolean {
+  return browserIsOffline() || (typeof document !== 'undefined' && document.visibilityState === 'hidden')
 }

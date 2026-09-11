@@ -4,6 +4,7 @@ Last audited: 2026-08-31.
 Targeted source check: 2026-09-05 (module-folder event invalidation).
 Targeted source check: 2026-09-08 (connected-reader recovery and IGP receipts).
 Targeted source check: 2026-09-10 (in-place no-change writer recovery).
+Targeted source check: 2026-09-12 (connected recovery-attempt ownership).
 
 This guide owns browser-to-Fastify mutation durability and reconciliation:
 encrypted outbox intent, the serialized command queue, compact optimistic
@@ -164,6 +165,20 @@ outbox reconciliation, a no-change reconnect skips shell replacement only when
 the bootstrap, known-command, and applied-resource revisions are identical and
 replay attempted no intent. A newer revision, replayed intent, changed ownership,
 or changed lineage retains the authoritative hydration/demotion path.
+
+Foreground reader refresh, writer resume, explicit promotion, and writer
+ownership probes share one page-owned recovery lease whose identity is separate
+from the client-session generation. Hiding, going offline, or page teardown
+retires that lease and settles its caller even when a subordinate request never
+settles; foreground work can start a replacement immediately, and late
+completions cannot publish projection, runtime, or readiness state. Recovery
+owned deferred resource loads use the same owner and cancellation signal, so a
+replacement never joins an older hung request. A successfully connected reader
+or writer event stream transfers to the generation/epoch-fenced page runtime
+instead of being aborted when setup finishes. Outbox transactions remain
+generation and recovery-access fenced: cancellation can stop scope adoption or
+lineage disposal, but it does not clear encrypted pending intent merely because
+the UI attempt ended.
 
 `refreshInvalidatedServerResources()` sorts and normalizes a single event or a
 coalesced event batch, then converts each resource key into concrete reads:

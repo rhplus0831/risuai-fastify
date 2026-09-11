@@ -24,6 +24,58 @@ const WRITER_OBSERVER_SESSION_HEADER = 'risu-writer-observer-session'
 export const DISCONNECT_EXISTING_WRITER_HEADER = 'risu-disconnect-existing-writer'
 export const EXPECTED_WRITER_EPOCH_HEADER = 'risu-expected-writer-epoch'
 export const EXPECTED_DATABASE_LINEAGE_HEADER = 'risu-expected-database-lineage'
+export const SERVER_CONTROL_REQUEST_TIMEOUT_MS = 30_000
+const SERVER_CONTROL_REQUEST_CANCELLED = Symbol('server-control-request-cancelled')
+
+function createServerControlRequestAbort(callerSignal?: AbortSignal | null): {
+  signal: AbortSignal
+  cancelled: Promise<typeof SERVER_CONTROL_REQUEST_CANCELLED>
+  timedOut(): boolean
+  dispose(): void
+} {
+  const controller = new AbortController()
+  let timedOut = false
+  let resolveCancelled!: (value: typeof SERVER_CONTROL_REQUEST_CANCELLED) => void
+  const cancelled = new Promise<typeof SERVER_CONTROL_REQUEST_CANCELLED>((resolve) => {
+    resolveCancelled = resolve
+  })
+  const abort = () => {
+    controller.abort()
+    resolveCancelled(SERVER_CONTROL_REQUEST_CANCELLED)
+  }
+  if (callerSignal?.aborted) abort()
+  else callerSignal?.addEventListener('abort', abort, { once: true })
+  const deadline = setTimeout(() => {
+    timedOut = true
+    abort()
+  }, SERVER_CONTROL_REQUEST_TIMEOUT_MS)
+  return {
+    signal: controller.signal,
+    cancelled,
+    timedOut: () => timedOut,
+    dispose: () => {
+      clearTimeout(deadline)
+      callerSignal?.removeEventListener('abort', abort)
+    },
+  }
+}
+
+function raceServerControlRequest<T>(
+  promise: Promise<T>,
+  requestAbort: ReturnType<typeof createServerControlRequestAbort>,
+): Promise<T | typeof SERVER_CONTROL_REQUEST_CANCELLED> {
+  return Promise.race([promise, requestAbort.cancelled])
+}
+
+function serverControlCancellationError(requestAbort: ReturnType<typeof createServerControlRequestAbort>): {
+  status: 'error'
+  error: string
+} {
+  return {
+    status: 'error',
+    error: requestAbort.timedOut() ? 'Network error: Request timed out' : 'Network error: Request aborted',
+  }
+}
 
 export type BootstrapWriter = OwnershipWriter
 
@@ -272,9 +324,10 @@ export function canUseServerBootstrap(): boolean {
   return true
 }
 
-/** Coalesces concurrent recovery checks without sharing writer-acquisition intent. */
-export function fetchServerOwnership(): Promise<ServerOwnershipResult> {
+/** Coalesces uncancelled recovery checks without sharing a caller's cancellation lifetime. */
+export function fetchServerOwnership(signal?: AbortSignal | null): Promise<ServerOwnershipResult> {
   const generation = captureClientSessionGeneration()
+  if (signal) return requestServerOwnership(generation, signal)
   if (ownershipRequest?.generation === generation) return ownershipRequest.promise
   let promise!: Promise<ServerOwnershipResult>
   promise = requestServerOwnership(generation).finally(() => {
@@ -284,43 +337,54 @@ export function fetchServerOwnership(): Promise<ServerOwnershipResult> {
   return promise
 }
 
-async function requestServerOwnership(generation: number): Promise<ServerOwnershipResult> {
+async function requestServerOwnership(
+  generation: number,
+  callerSignal?: AbortSignal | null,
+): Promise<ServerOwnershipResult> {
   if (!canUseServerBootstrap() || !isClientSessionGenerationCurrent(generation)) return { status: 'unavailable' }
-  const auth = await getNodeServerProxyAuth()
-  if (!isClientSessionGenerationCurrent(generation)) return { status: 'unavailable' }
-
-  let response: Response
+  const requestAbort = createServerControlRequestAbort(callerSignal)
   try {
-    response = await fetch(OWNERSHIP_ENDPOINT, {
-      method: 'GET',
-      cache: 'no-store',
-      headers: { 'risu-auth': auth },
-    })
+    const auth = await raceServerControlRequest(getNodeServerProxyAuth(), requestAbort)
+    if (auth === SERVER_CONTROL_REQUEST_CANCELLED) return serverControlCancellationError(requestAbort)
+    if (!isClientSessionGenerationCurrent(generation) || callerSignal?.aborted) return { status: 'unavailable' }
+
+    const response = await raceServerControlRequest(
+      fetch(OWNERSHIP_ENDPOINT, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: requestAbort.signal,
+        headers: { 'risu-auth': auth },
+      }),
+      requestAbort,
+    )
+    if (response === SERVER_CONTROL_REQUEST_CANCELLED) return serverControlCancellationError(requestAbort)
+    const requestUid = response.headers.get('X-Request-UID') || undefined
+    const parsed = await raceServerControlRequest(
+      response.json().catch(() => null),
+      requestAbort,
+    )
+    if (parsed === SERVER_CONTROL_REQUEST_CANCELLED) return serverControlCancellationError(requestAbort)
+    const body: unknown = parsed
+    if (!response.ok) {
+      if ((response.status === 401 || response.status === 403) && isClientSessionGenerationCurrent(generation))
+        resetBrowserDiagnosticsSession()
+      return {
+        status: 'error',
+        error: errorMessageFromBody(body, `HTTP ${response.status}`),
+        httpStatus: response.status,
+        ...(requestUid ? { requestUid } : {}),
+      }
+    }
+    if (!isOwnershipResponse(body)) {
+      return { status: 'error', error: 'Invalid ownership response', ...(requestUid ? { requestUid } : {}) }
+    }
+    return { status: 'ok', ownership: body, ...(requestUid ? { requestUid } : {}) }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return { status: 'error', error: `Network error: ${message}` }
+  } finally {
+    requestAbort.dispose()
   }
-  const requestUid = response.headers.get('X-Request-UID') || undefined
-  let body: unknown = null
-  try {
-    body = await response.json()
-  } catch {
-    // HTTP status handling below reports non-JSON failures.
-  }
-  if (!response.ok) {
-    if ((response.status === 401 || response.status === 403) && isClientSessionGenerationCurrent(generation))
-      resetBrowserDiagnosticsSession()
-    return {
-      status: 'error',
-      error: errorMessageFromBody(body, `HTTP ${response.status}`),
-      httpStatus: response.status,
-      ...(requestUid ? { requestUid } : {}),
-    }
-  }
-  if (!isOwnershipResponse(body)) {
-    return { status: 'error', error: 'Invalid ownership response', ...(requestUid ? { requestUid } : {}) }
-  }
-  return { status: 'ok', ownership: body, ...(requestUid ? { requestUid } : {}) }
 }
 
 export async function fetchServerBootstrap(
@@ -365,79 +429,93 @@ async function fetchServerBootstrapWithMode(input: {
 }): Promise<ServerBootstrapResult> {
   const generation = captureClientSessionGeneration()
   if (!canUseServerBootstrap()) return { status: 'unavailable' }
-
-  const auth = await getNodeServerProxyAuth()
-  if (input.registerActiveWriter && (!isClientSessionGenerationCurrent(generation) || input.signal?.aborted)) {
-    return { status: 'unavailable' }
-  }
-  let response: Response
+  const requestAbort = createServerControlRequestAbort(input.signal)
   try {
-    response = await fetch(BOOTSTRAP_ENDPOINT, {
-      method: 'GET',
-      signal: input.signal ?? undefined,
-      headers: {
-        'risu-auth': auth,
-        ...(input.registerActiveWriter
-          ? {
-              ...activeWriterSessionHeader(),
-              ...(input.disconnectExistingWriter ? { [DISCONNECT_EXISTING_WRITER_HEADER]: 'true' } : {}),
-              ...(input.expectedWriter
-                ? {
-                    [EXPECTED_WRITER_EPOCH_HEADER]: String(input.expectedWriter.epoch),
-                    [EXPECTED_DATABASE_LINEAGE_HEADER]: input.expectedWriter.databaseLineage,
-                  }
-                : {}),
-            }
-          : { [WRITER_OBSERVER_SESSION_HEADER]: activeWriterSessionHeader()['risu-writer-session'] }),
-      },
-    })
+    const auth = await raceServerControlRequest(getNodeServerProxyAuth(), requestAbort)
+    if (auth === SERVER_CONTROL_REQUEST_CANCELLED) return serverControlCancellationError(requestAbort)
+    if (input.registerActiveWriter && (!isClientSessionGenerationCurrent(generation) || input.signal?.aborted)) {
+      return { status: 'unavailable' }
+    }
+    const response = await raceServerControlRequest(
+      fetch(BOOTSTRAP_ENDPOINT, {
+        method: 'GET',
+        signal: requestAbort.signal,
+        headers: {
+          'risu-auth': auth,
+          ...(input.registerActiveWriter
+            ? {
+                ...activeWriterSessionHeader(),
+                ...(input.disconnectExistingWriter ? { [DISCONNECT_EXISTING_WRITER_HEADER]: 'true' } : {}),
+                ...(input.expectedWriter
+                  ? {
+                      [EXPECTED_WRITER_EPOCH_HEADER]: String(input.expectedWriter.epoch),
+                      [EXPECTED_DATABASE_LINEAGE_HEADER]: input.expectedWriter.databaseLineage,
+                    }
+                  : {}),
+              }
+            : { [WRITER_OBSERVER_SESSION_HEADER]: activeWriterSessionHeader()['risu-writer-session'] }),
+        },
+      }),
+      requestAbort,
+    )
+    if (response === SERVER_CONTROL_REQUEST_CANCELLED) return serverControlCancellationError(requestAbort)
+    const requestUid = response.headers.get('X-Request-UID') || undefined
+
+    const parsed = await raceServerControlRequest(
+      response.json().catch(() => null),
+      requestAbort,
+    )
+    if (parsed === SERVER_CONTROL_REQUEST_CANCELLED) return serverControlCancellationError(requestAbort)
+    const body: unknown = parsed
+
+    if (
+      response.status === 409 &&
+      body !== null &&
+      typeof body === 'object' &&
+      !Array.isArray(body) &&
+      (body as Record<string, unknown>).error === 'active_writer_connected'
+    ) {
+      return {
+        status: 'active-writer-connected',
+        error: 'active_writer_connected',
+        ...(requestUid ? { requestUid } : {}),
+      }
+    }
+
+    if (!response.ok) {
+      if (
+        (response.status === 401 || response.status === 403) &&
+        isClientSessionGenerationCurrent(generation) &&
+        !input.signal?.aborted
+      )
+        resetBrowserDiagnosticsSession()
+      return {
+        status: 'error',
+        error: errorMessageFromBody(body, `HTTP ${response.status}`),
+        httpStatus: response.status,
+        ...(requestUid ? { requestUid } : {}),
+      }
+    }
+
+    if (!body || typeof body !== 'object') {
+      return { status: 'error', error: 'Invalid bootstrap response' }
+    }
+
+    return applyServerBootstrapBody(body as Record<string, unknown>, input, generation, requestUid)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return { status: 'error', error: `Network error: ${message}` }
+  } finally {
+    requestAbort.dispose()
   }
-  const requestUid = response.headers.get('X-Request-UID') || undefined
+}
 
-  let body: unknown = null
-  try {
-    body = await response.json()
-  } catch {
-    // HTTP status handling below reports non-JSON failures.
-  }
-
-  if (
-    response.status === 409 &&
-    body !== null &&
-    typeof body === 'object' &&
-    !Array.isArray(body) &&
-    (body as Record<string, unknown>).error === 'active_writer_connected'
-  ) {
-    return {
-      status: 'active-writer-connected',
-      error: 'active_writer_connected',
-      ...(requestUid ? { requestUid } : {}),
-    }
-  }
-
-  if (!response.ok) {
-    if (
-      (response.status === 401 || response.status === 403) &&
-      isClientSessionGenerationCurrent(generation) &&
-      !input.signal?.aborted
-    )
-      resetBrowserDiagnosticsSession()
-    return {
-      status: 'error',
-      error: errorMessageFromBody(body, `HTTP ${response.status}`),
-      httpStatus: response.status,
-      ...(requestUid ? { requestUid } : {}),
-    }
-  }
-
-  if (!body || typeof body !== 'object') {
-    return { status: 'error', error: 'Invalid bootstrap response' }
-  }
-
-  const record = body as Record<string, unknown>
+function applyServerBootstrapBody(
+  record: Record<string, unknown>,
+  input: { registerActiveWriter: boolean; cacheRevision: boolean; signal?: AbortSignal | null },
+  generation: number,
+  requestUid?: string,
+): ServerBootstrapResult {
   if (typeof record.initialized !== 'boolean') {
     return { status: 'error', error: 'Invalid bootstrap initialization state' }
   }

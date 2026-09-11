@@ -84,6 +84,7 @@ import {
   calculateConnectedReaderReconnectDelayMs,
   startConnectedReaderSync,
   type ConnectedReaderSync,
+  type ConnectedReaderSyncOptions,
 } from './connectedReaderSync'
 import {
   memoryJobProjectionStore,
@@ -112,14 +113,14 @@ function reader(): void {
   settleClientReader(operation, ownership)
   setClientProjectionReady(true)
 }
-function start() {
+function start(options: Pick<ConnectedReaderSyncOptions, 'signal'> = {}) {
   const callbacks = {
     onAuthLoss: vi.fn(),
     onLineageChange: vi.fn(),
     onWriterEvent: vi.fn(),
     onProjectionRefreshed: vi.fn(),
   }
-  const sync = startConnectedReaderSync(callbacks)
+  const sync = startConnectedReaderSync({ ...callbacks, ...options })
   controllers.push(sync)
   return { sync, callbacks }
 }
@@ -212,6 +213,60 @@ describe('connected reader synchronization', () => {
     online = false
     events.dispatchEvent(new Event('offline'))
     expect(getClientSessionSnapshot().connection).toBe('live')
+  })
+
+  it('settles reader setup when its owning promotion signal is cancelled', async () => {
+    const owner = new AbortController()
+    let streamInput: SubscribeServerCommandEventsInput | undefined
+    api.subscribe.mockImplementationOnce(
+      (input: SubscribeServerCommandEventsInput) =>
+        new Promise((resolve) => {
+          streamInput = input
+          input.signal?.addEventListener('abort', () => resolve({ status: 'unavailable' }), { once: true })
+        }),
+    )
+    const { sync } = start({ signal: owner.signal })
+    await vi.waitFor(() => expect(streamInput).toBeDefined())
+
+    owner.abort()
+
+    await expect(sync.ready).resolves.toBeUndefined()
+    expect(streamInput?.signal?.aborted).toBe(true)
+  })
+
+  it('cancels foreground reconnection when the reader is hidden again', async () => {
+    const browser = new EventTarget()
+    const page = new EventTarget()
+    let visibility: DocumentVisibilityState = 'visible'
+    Object.defineProperty(page, 'visibilityState', { get: () => visibility })
+    vi.stubGlobal('window', browser)
+    vi.stubGlobal('document', page)
+    vi.stubGlobal('navigator', { onLine: true })
+    const { sync } = start()
+    await sync.ready
+    let reconnectInput: SubscribeServerCommandEventsInput | undefined
+    api.subscribe.mockImplementationOnce(
+      (input: SubscribeServerCommandEventsInput) =>
+        new Promise((resolve) => {
+          reconnectInput = input
+          input.signal?.addEventListener('abort', () => resolve({ status: 'unavailable' }), { once: true })
+        }),
+    )
+    streams[0]!.input.onClose?.()
+    api.lifecycle.mock.calls[0]![0]('visibility', { suspensionEvidence: true })
+    await vi.waitFor(() => expect(reconnectInput).toBeDefined())
+
+    visibility = 'hidden'
+    page.dispatchEvent(new Event('visibilitychange'))
+
+    expect(reconnectInput?.signal?.aborted).toBe(true)
+    await flush()
+    await vi.advanceTimersByTimeAsync(120_000)
+    expect(api.subscribe).toHaveBeenCalledTimes(2)
+    visibility = 'visible'
+    api.lifecycle.mock.calls[0]![0]('visibility', { suspensionEvidence: true })
+    await flush()
+    expect(api.subscribe).toHaveBeenCalledTimes(3)
   })
 
   it.each(['accepted', 'superseded', 'failed'] as const)(

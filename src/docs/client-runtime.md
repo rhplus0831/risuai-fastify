@@ -3,6 +3,7 @@
 Last audited: 2026-08-31.
 Targeted source check: 2026-09-08 (connected-reader startup, role transitions, and display isolation).
 Targeted source check: 2026-09-10 (same-owner writer reconnect presentation and projection reuse).
+Targeted source check: 2026-09-12 (connected recovery-attempt ownership).
 
 This file covers browser TypeScript coordinators that influence visible Svelte
 UI. For component ownership and UI triage, start with the
@@ -118,6 +119,12 @@ Connected-reader and writer startup share one role-first path.
    its own accepted subscription; an earlier reader stream cannot satisfy it.
    Only the current recovery operation can complete writer readiness and enable
    ordinary commands and persistence-capable route effects.
+   Foreground recovery also owns a separate per-attempt lease spanning discovery,
+   outbox preparation/replay, hydration, event connection, and startup
+   settlement. Lifecycle cancellation settles the attempt even if subordinate
+   work hangs, while late work is fenced from replacement readiness. A successful
+   event connection is explicitly transferred from the setup lease to the page
+   runtime and keeps its generation/epoch guards.
 8. Route application resolves `RESOURCE_SURFACE_MANIFEST` and loads the current
    route's settings groups, collections, standalone settings, selected detail,
    chat, and prompt owner through `routeResourceLoader.ts`. A newer navigation

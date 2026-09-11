@@ -61,7 +61,14 @@ interface RequirementLoadResult {
 
 interface InFlightRequirementLoad {
   minimumRevision: number | undefined
+  owner?: object
   promise: Promise<RequirementLoadResult>
+  signal: AbortSignal | null
+}
+
+interface DeferredSurfaceRequest {
+  owner?: object
+  promise: Promise<void>
   signal: AbortSignal | null
 }
 
@@ -84,7 +91,7 @@ let activeRouteLoad: ActiveRouteLoad | null = null
 let pendingRoutePrefetch: PendingRoutePrefetch | null = null
 let backgroundCharacterWarmupStarted = false
 let backgroundCharacterWarmupQueue: string[] = []
-const deferredSurfaceRequests = new Map<string, Promise<void>>()
+const deferredSurfaceRequests = new Map<string, DeferredSurfaceRequest>()
 const requirementRequests = new Map<string, InFlightRequirementLoad>()
 
 export const BACKGROUND_CHARACTER_WARMUP_LIMIT = 3
@@ -172,25 +179,32 @@ export function failActiveRouteLoad(route: AppRoute, error: unknown): boolean {
 }
 
 /** Load a deferred runtime/overlay surface once, sharing concurrent callers. */
-export function ensureResourceSurfaces(surfaceIds: readonly ResourceSurfaceId[]): Promise<void> {
+export function ensureResourceSurfaces(
+  surfaceIds: readonly ResourceSurfaceId[],
+  options: { owner?: object; signal?: AbortSignal | null } = {},
+): Promise<void> {
   const ids = [...new Set(surfaceIds)].sort()
   const requestKey = ids.join('\u0000')
   const existing = deferredSurfaceRequests.get(requestKey)
-  if (existing) return existing
+  const signal = options.signal ?? null
+  if (existing && !existing.signal?.aborted && existing.owner === options.owner) return existing.promise
 
-  const request = (async () => {
+  const entry = {} as DeferredSurfaceRequest
+  entry.owner = options.owner
+  entry.signal = signal
+  entry.promise = (async () => {
     const requirements = resolveResourceRequirements(ids).filter((requirement) => !isPostRouteRequirement(requirement))
     const minimumRevision = peekAppliedServerResourceRevision() ?? undefined
     const results = await Promise.all(
-      requirements.map((requirement) => safeLoadRequirement(requirement, null, null, minimumRevision)),
+      requirements.map((requirement) => safeLoadRequirement(requirement, null, signal, minimumRevision, options.owner)),
     )
     const failure = results.find((result) => !result.ok)
     if (failure) throw new Error(failure.error ?? `Failed to load ${failure.identity}`)
   })().finally(() => {
-    if (deferredSurfaceRequests.get(requestKey) === request) deferredSurfaceRequests.delete(requestKey)
+    if (deferredSurfaceRequests.get(requestKey) === entry) deferredSurfaceRequests.delete(requestKey)
   })
-  deferredSurfaceRequests.set(requestKey, request)
-  return request
+  deferredSurfaceRequests.set(requestKey, entry)
+  return entry.promise
 }
 
 export function stopRouteResourceLoader(): void {
@@ -408,6 +422,7 @@ async function loadRequirement(
   route: AppRoute | null,
   signal: AbortSignal | null,
   minimumRevision: number | undefined,
+  owner?: object,
 ): Promise<RequirementLoadResult> {
   const identity = resourceRequirementIdentity(requirement)
   const requestKey = requirementRequestKey(requirement, route)
@@ -415,6 +430,7 @@ async function loadRequirement(
   if (
     existing &&
     !existing.signal?.aborted &&
+    existing.owner === owner &&
     (minimumRevision === undefined ||
       (existing.minimumRevision !== undefined && existing.minimumRevision >= minimumRevision))
   ) {
@@ -428,12 +444,14 @@ async function loadRequirement(
 
   const request = {} as InFlightRequirementLoad
   request.minimumRevision = minimumRevision
+  request.owner = owner
   request.signal = signal
   request.promise = loadRequirementOnce(requirement, route, signal, minimumRevision).finally(() => {
     if (requirementRequests.get(requestKey) === request) requirementRequests.delete(requestKey)
   })
   requirementRequests.set(requestKey, request)
-  return request.promise
+  const result = await request.promise
+  return signal?.aborted ? { identity, ok: false, error: 'Route resource load was cancelled' } : result
 }
 
 async function safeLoadRequirement(
@@ -441,9 +459,10 @@ async function safeLoadRequirement(
   route: AppRoute | null,
   signal: AbortSignal | null,
   minimumRevision: number | undefined,
+  owner?: object,
 ): Promise<RequirementLoadResult> {
   try {
-    return await loadRequirement(requirement, route, signal, minimumRevision)
+    return await loadRequirement(requirement, route, signal, minimumRevision, owner)
   } catch (error) {
     return {
       identity: resourceRequirementIdentity(requirement),

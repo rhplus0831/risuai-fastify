@@ -116,7 +116,10 @@ const readinessListeners = new Set<() => void>()
 const telemetryListeners = new Set<(event: Readonly<StartupTelemetryEvent>) => unknown>()
 const capabilityFailures = new Map<StartupRetryTarget, StartupCapabilityFailureSnapshot>()
 const completedStartupSteps = new Map<StartupStep, unknown>()
-const inFlightStartupSteps = new Map<StartupStep, Promise<unknown>>()
+const inFlightStartupSteps = new Map<
+  StartupStep,
+  { promise: Promise<unknown>; owner?: object; isCurrent?: () => boolean }
+>()
 const inFlightCapabilityRetries = new Map<StartupRetryTarget, Promise<unknown>>()
 let nextAttemptId = 1
 let writerCapabilitiesRevoked = false
@@ -476,29 +479,44 @@ export function subscribeStartupTelemetryEvents(
  * later startup attempt resume at the failed capability without replaying
  * already successful listeners, timers, or recovery work.
  */
-export function runStartupStep<T>(step: StartupStep, operation: () => Promise<T> | T): Promise<T> {
+export function runStartupStep<T>(
+  step: StartupStep,
+  operation: () => Promise<T> | T,
+  ownership: { owner?: object; isCurrent?: () => boolean } = {},
+): Promise<T> {
+  if (ownership.isCurrent && !ownership.isCurrent()) return Promise.reject(new Error('Startup step was superseded'))
   if (completedStartupSteps.has(step)) {
     return Promise.resolve(completedStartupSteps.get(step) as T)
   }
   const existing = inFlightStartupSteps.get(step)
-  if (existing) return existing as Promise<T>
+  if (existing && (!existing.isCurrent || existing.isCurrent()) && existing.owner === ownership.owner) {
+    return existing.promise as Promise<T>
+  }
+  if (existing && inFlightStartupSteps.get(step) === existing) inFlightStartupSteps.delete(step)
 
   const generation = captureClientSessionGeneration()
+  const isCurrent = () =>
+    isClientSessionGenerationCurrent(generation) && (!ownership.isCurrent || ownership.isCurrent())
   const running = Promise.resolve()
     .then(() => {
-      if (!isClientSessionGenerationCurrent(generation)) throw new Error('Startup step was superseded')
+      if (!isCurrent()) throw new Error('Startup step was superseded')
       return operation()
     })
     .then((value) => {
-      if (!isClientSessionGenerationCurrent(generation)) throw new Error('Startup step was superseded')
+      if (!isCurrent()) throw new Error('Startup step was superseded')
       completedStartupSteps.set(step, value)
       notifyReadinessListeners()
       return value
     })
     .finally(() => {
-      if (inFlightStartupSteps.get(step) === running) inFlightStartupSteps.delete(step)
+      if (inFlightStartupSteps.get(step) === entry) inFlightStartupSteps.delete(step)
     })
-  inFlightStartupSteps.set(step, running)
+  const entry = {
+    promise: running as Promise<unknown>,
+    ...(ownership.owner ? { owner: ownership.owner } : {}),
+    ...(ownership.isCurrent ? { isCurrent: ownership.isCurrent } : {}),
+  }
+  inFlightStartupSteps.set(step, entry)
   return running
 }
 

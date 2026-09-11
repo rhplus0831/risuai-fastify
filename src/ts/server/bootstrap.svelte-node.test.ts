@@ -12,6 +12,7 @@ import {
   DISCONNECT_EXISTING_WRITER_HEADER,
   EXPECTED_DATABASE_LINEAGE_HEADER,
   EXPECTED_WRITER_EPOCH_HEADER,
+  SERVER_CONTROL_REQUEST_TIMEOUT_MS,
   fetchServerBootstrap,
   fetchServerBootstrapReadOnly,
   fetchServerOwnership,
@@ -74,6 +75,7 @@ beforeEach(() => {
 
 afterEach(() => {
   resetBrowserDiagnosticsSession()
+  vi.useRealTimers()
   vi.unstubAllGlobals()
 })
 
@@ -104,6 +106,66 @@ describe('server runtime bootstrap helper', () => {
     await expect(fetchServerOwnership()).resolves.toEqual({ status: 'ok', ownership })
     expect(calls).toHaveLength(2)
     expect(calls[1]).toMatchObject({ url: '/api/v1/ownership', method: 'GET', cache: 'no-store' })
+  })
+
+  it('bounds an ownership probe when the browser leaves fetch pending', async () => {
+    vi.useFakeTimers()
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init: RequestInit = {}) => {
+        requestSignal = init.signal ?? undefined
+        return new Promise<Response>(() => {})
+      }) as unknown as typeof fetch,
+    )
+
+    const request = fetchServerOwnership()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requestSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(SERVER_CONTROL_REQUEST_TIMEOUT_MS)
+
+    await expect(request).resolves.toMatchObject({ status: 'error' })
+    expect(requestSignal?.aborted).toBe(true)
+  })
+
+  it('bounds a read-only bootstrap without requiring a caller signal', async () => {
+    vi.useFakeTimers()
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init: RequestInit = {}) => {
+        requestSignal = init.signal ?? undefined
+        return new Promise<Response>(() => {})
+      }) as unknown as typeof fetch,
+    )
+
+    const request = fetchServerBootstrapReadOnly()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requestSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(SERVER_CONTROL_REQUEST_TIMEOUT_MS)
+
+    await expect(request).resolves.toEqual({ status: 'error', error: 'Network error: Request timed out' })
+    expect(requestSignal?.aborted).toBe(true)
+  })
+
+  it('forwards caller cancellation through the bounded bootstrap request', async () => {
+    const controller = new AbortController()
+    let requestSignal: AbortSignal | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init: RequestInit = {}) => {
+        requestSignal = init.signal ?? undefined
+        return new Promise<Response>(() => {})
+      }) as unknown as typeof fetch,
+    )
+
+    const request = fetchServerBootstrap(controller.signal)
+    await vi.waitFor(() => expect(requestSignal).toBeInstanceOf(AbortSignal))
+    expect(requestSignal?.aborted).toBe(false)
+    controller.abort()
+
+    await expect(request).resolves.toMatchObject({ status: 'error' })
+    expect(requestSignal?.aborted).toBe(true)
   })
 
   it('fails closed on malformed ownership and preserves HTTP status details', async () => {

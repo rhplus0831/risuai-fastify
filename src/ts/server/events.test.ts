@@ -7,7 +7,7 @@ vi.mock('../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: authApi.get,
 }))
 
-import { subscribeServerCommandEvents } from './events'
+import { SERVER_EVENT_CONNECT_TIMEOUT_MS, subscribeServerCommandEvents } from './events'
 import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
 import * as activeWriterSession from './activeWriterSession'
 import {
@@ -72,6 +72,7 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 afterEach(() => {
   resetClientSessionForTests()
+  vi.useRealTimers()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
 })
@@ -80,6 +81,55 @@ beforeEach(() => {
 })
 
 describe('server command event subscription helper', () => {
+  it('bounds initial event connection even when fetch ignores abort', async () => {
+    vi.useFakeTimers()
+    enterClientWriter()
+    let requestSignal: AbortSignal | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init: RequestInit = {}) => {
+        requestSignal = init.signal ?? null
+        return new Promise<Response>(() => {})
+      }) as unknown as typeof fetch,
+    )
+
+    const subscription = subscribeServerCommandEvents({ onCommandEvent: vi.fn() })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requestSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(SERVER_EVENT_CONNECT_TIMEOUT_MS)
+
+    await expect(subscription).resolves.toEqual({ status: 'error', error: 'Event stream connection timed out' })
+    expect(requestSignal?.aborted).toBe(true)
+  })
+
+  it('bounds replay-conflict parsing when the response body never finishes', async () => {
+    vi.useFakeTimers()
+    enterClientWriter()
+    let requestSignal: AbortSignal | null = null
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init: RequestInit = {}) => {
+        requestSignal = init.signal ?? null
+        return Promise.resolve(
+          new Response(
+            new ReadableStream<Uint8Array>({
+              start() {},
+            }),
+            { status: 409 },
+          ),
+        )
+      }) as unknown as typeof fetch,
+    )
+
+    const subscription = subscribeServerCommandEvents({ onCommandEvent: vi.fn() })
+    await vi.advanceTimersByTimeAsync(0)
+    expect(requestSignal?.aborted).toBe(false)
+    await vi.advanceTimersByTimeAsync(SERVER_EVENT_CONNECT_TIMEOUT_MS)
+
+    await expect(subscription).resolves.toEqual({ status: 'error', error: 'Event stream connection timed out' })
+    expect(requestSignal?.aborted).toBe(true)
+  })
+
   it('cannot open a writer stream after losing its session during authentication', async () => {
     enterClientWriter()
     let release!: (value: string) => void
