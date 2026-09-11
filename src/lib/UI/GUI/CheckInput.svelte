@@ -27,7 +27,7 @@
 </script>
 
 <label
-  class={'flex items-center gap-2 cursor-pointer' +
+  class={'relative flex items-center gap-2 cursor-pointer' +
     (className ? ' ' + className : '') +
     (grayText ? ' text-textcolor2' : ' text-textcolor')}
   class:mr-2={margin}

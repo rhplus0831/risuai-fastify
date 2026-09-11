@@ -391,7 +391,10 @@ writer adapters consume those values. Managed readers receive the column values
 only through the certified display projection; pending writer settings remain
 isolated.
 
-The body is overflow-hidden and full-height, and `#app` uses `overflow: clip`.
+The body is overflow-hidden and full-height, while `#app` and the persistent
+`ConversationShell` use `overflow: clip` so neither can become a programmatic
+scroll container. Shared visually hidden checkbox inputs are positioned against
+their own label rather than this shell, including inside a scrolled sidebar.
 `src/ts/gui/viewportScrollGuard.ts` pins the document root at the origin before
 mount, preventing focus, `scrollIntoView`, custom CSS, or automation from moving
 the fixed shell. While a text editor is focused,

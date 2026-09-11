@@ -13,8 +13,8 @@ import { setupBrowserSmokeAuth } from './auth.js'
 //
 //   - Journey 1: switch chats by clicking sidebar rows -> the generation picker
 //     repaints the newly active chat's prompt preset id.
-//   - Journey 2 (settle): toggle a sidebar checkbox -> the flip survives the
-//     command + resource refresh (not just the optimistic paint).
+//   - Journey 2 (settle): activate a checkbox in a scrolled sidebar -> the app
+//     shell stays fixed and the flip survives command + resource refresh.
 //   - Journey 3 (GATE): retain the character sidebar across an old-lineage
 //     command and import: the client becomes a Reader in place and restores
 //     the view after Use this device.
@@ -103,8 +103,9 @@ test('switching chats repaints the active-chat generation picker', async ({ page
   expect(storedPresetId, diagnostics()).toBe('preset-b')
 })
 
-test('a sidebar toggle flip survives the command + resource refresh', async ({ page }) => {
+test('a scrolled sidebar toggle keeps the shell fixed through command + resource refresh', async ({ page }) => {
   const diagnostics = attachDiagnostics(page)
+  await page.setViewportSize({ width: 1280, height: 480 })
   await boot(page)
   await openCharacter(page)
   await clickChatRow(page, 'chat-a')
@@ -113,11 +114,57 @@ test('a sidebar toggle flip survives the command + resource refresh', async ({ p
   await expect(flagControl).toBeVisible({ timeout: 15_000 })
   await expect(flagControl).toHaveAttribute('data-risu-selected', 'true')
 
+  const preActivationLayout = await flagControl.evaluate((element) => {
+    const sidebar = element.closest<HTMLElement>('[data-risu-shell-sidebar-panel]')
+    const shell = element.closest<HTMLElement>('[data-risu-conversation-shell]')
+    if (!sidebar || !shell) throw new Error('sidebar toggle layout is incomplete')
+
+    const sidebarRect = sidebar.getBoundingClientRect()
+    const initialControlRect = element.getBoundingClientRect()
+    const controlContentTop = sidebar.scrollTop + initialControlRect.top - sidebarRect.top
+    sidebar.scrollTop = Math.max(
+      1,
+      Math.min(sidebar.scrollHeight - sidebar.clientHeight, controlContentTop - sidebar.clientHeight / 2),
+    )
+
+    const controlRect = element.getBoundingClientRect()
+    return {
+      sidebarScrollTop: sidebar.scrollTop,
+      controlTop: controlRect.top,
+      controlBottom: controlRect.bottom,
+      sidebarTop: sidebarRect.top,
+      sidebarBottom: sidebarRect.bottom,
+      shellScrollTop: shell.scrollTop,
+      documentScrollTop: document.scrollingElement?.scrollTop,
+    }
+  })
+  expect(preActivationLayout.sidebarScrollTop, diagnostics()).toBeGreaterThan(0)
+  expect(preActivationLayout.controlTop, diagnostics()).toBeGreaterThanOrEqual(preActivationLayout.sidebarTop)
+  expect(preActivationLayout.controlBottom, diagnostics()).toBeLessThanOrEqual(preActivationLayout.sidebarBottom)
+  expect(
+    {
+      shellScrollTop: preActivationLayout.shellScrollTop,
+      documentScrollTop: preActivationLayout.documentScrollTop,
+    },
+    diagnostics(),
+  ).toEqual({ shellScrollTop: 0, documentScrollTop: 0 })
+
   // Drive a real click on the rendered toggle, then let the save + SSE resource
-  // refresh settle. CheckInput hides the real <input>; the <label>
-  // is the click target.
+  // refresh settle. The sidebar is deliberately scrolled: CheckInput's native
+  // control must receive native focus without moving the sidebar, application
+  // shell, or document.
+  const checkbox = flagControl.getByRole('checkbox')
+  await checkbox.evaluate((input) => {
+    input.addEventListener('focus', () => input.setAttribute('data-risu-test-focus-observed', 'true'), { once: true })
+  })
   const commandResponsePromise = page.waitForResponse(isFlagToggleOffCommandResponse, { timeout: 15_000 })
   await flagControl.locator('label').first().click()
+  await expect(checkbox).toHaveAttribute('data-risu-test-focus-observed', 'true')
+  expect(await sidebarToggleScrollState(flagControl), diagnostics()).toEqual({
+    sidebarScrollTop: preActivationLayout.sidebarScrollTop,
+    shellScrollTop: 0,
+    documentScrollTop: 0,
+  })
   await expect
     .poll(() => flagControl.getAttribute('data-risu-selected'), {
       timeout: 15_000,
@@ -133,6 +180,11 @@ test('a sidebar toggle flip survives the command + resource refresh', async ({ p
   // The accepted command revision is now applied, so this is the settled paint
   // rather than only the immediate optimistic state.
   await expect(flagControl).toHaveAttribute('data-risu-selected', 'false')
+  expect(await sidebarToggleScrollState(flagControl), diagnostics()).toEqual({
+    sidebarScrollTop: preActivationLayout.sidebarScrollTop,
+    shellScrollTop: 0,
+    documentScrollTop: 0,
+  })
 
   const stored = await page.evaluate(() => {
     const snap = window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot()
@@ -142,6 +194,23 @@ test('a sidebar toggle flip survives the command + resource refresh', async ({ p
   })
   expect(stored, diagnostics()).toBe('0')
 })
+
+async function sidebarToggleScrollState(control: ReturnType<Page['locator']>): Promise<{
+  sidebarScrollTop: number
+  shellScrollTop: number
+  documentScrollTop: number | undefined
+}> {
+  return control.evaluate((element) => {
+    const sidebar = element.closest<HTMLElement>('[data-risu-shell-sidebar-panel]')
+    const shell = element.closest<HTMLElement>('[data-risu-conversation-shell]')
+    if (!sidebar || !shell) throw new Error('sidebar toggle layout is incomplete')
+    return {
+      sidebarScrollTop: sidebar.scrollTop,
+      shellScrollTop: shell.scrollTop,
+      documentScrollTop: document.scrollingElement?.scrollTop,
+    }
+  })
+}
 
 test('the character sidebar survives an old-lineage response and in-place writer recovery', async ({ page }) => {
   const diagnostics = attachDiagnostics(page)

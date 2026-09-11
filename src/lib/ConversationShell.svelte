@@ -57,7 +57,7 @@
 </script>
 
 <div
-  class="relative flex h-full min-h-0 w-full min-w-0 overflow-hidden bg-bg text-textcolor"
+  class="relative flex h-full min-h-0 w-full min-w-0 overflow-clip bg-bg text-textcolor"
   data-risu-conversation-shell>
   {#if responsive && showNavigationToggle}
     <button
