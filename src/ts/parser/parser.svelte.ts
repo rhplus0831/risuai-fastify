@@ -74,7 +74,12 @@ import { getChatMessageOwnerState } from '../server/chatMessageHydration.svelte'
 import { SERVER_SETTINGS_GROUP_BY_KEY } from '../server/settingsGroups'
 import { SERVER_STANDALONE_SETTING_NAMES } from '@risuai/protocol/standalone-settings'
 import { displaySettingForPaint } from '../gui/displaySettings'
-import { AssetCollectionIndexCache, type AssetNameIndex } from './assetCollectionIndex'
+import {
+  AssetCollectionIndexCache,
+  stripKnownImageExtension,
+  type AssetCollectionIndexes,
+  type AssetNameIndex,
+} from './assetCollectionIndex'
 
 export { dateTimeFormat, makeArray, parseArray, parseDict, risuEscape, risuUnescape }
 export type { CbsConditions }
@@ -727,6 +732,11 @@ interface AssetPathMatch {
   ext?: string
 }
 
+interface ClosestAssetMatch {
+  distance: number
+  match: AssetPathMatch
+}
+
 interface AssetResolutionContext {
   sourceCharacterImage: string | undefined
   sourceUserIcon: string
@@ -735,8 +745,10 @@ interface AssetResolutionContext {
   characterSignature: string
   emotionAssets: readonly (readonly string[])[]
   moduleOwners: readonly RisuModule[]
-  assetIndex: Promise<AssetNameIndex[]> | null
+  assetIndex: Promise<AssetCollectionIndexes[]> | null
   resolvedAssets: Map<string, AssetPathMatch | null>
+  resolvedAssetsWithoutImageExtensions: Map<string, AssetPathMatch | null>
+  closestAssets: Map<string, ClosestAssetMatch | null>
   resolvedEmotions: Map<string, string | null>
 }
 
@@ -755,6 +767,8 @@ const additionalAssetCacheStats = {
   characterAssetTuplesVisited: 0,
   moduleAssetTuplesVisited: 0,
   resolvedAssetNames: 0,
+  fuzzyAssetNames: 0,
+  fuzzyAssetTuplesVisited: 0,
 }
 const assetCollectionIndexes = new AssetCollectionIndexCache((kind) => {
   if (kind === 'module') additionalAssetCacheStats.moduleAssetTuplesVisited += 1
@@ -845,6 +859,8 @@ function getAssetResolutionContext(
     moduleRenderRevision,
     assetIndex: null,
     resolvedAssets: new Map(),
+    resolvedAssetsWithoutImageExtensions: new Map(),
+    closestAssets: new Map(),
     resolvedEmotions: new Map(),
   }
   additionalAssetCacheStats.contextsBuilt += 1
@@ -861,6 +877,39 @@ function getAssetResolutionContext(
 async function resolveAssetPaths(context: AssetResolutionContext, name: string): Promise<AssetPathMatch | null> {
   if (context.resolvedAssets.has(name)) return context.resolvedAssets.get(name) ?? null
 
+  const indexes = await getAssetIndexes(context)
+  if (context.resolvedAssets.has(name)) return context.resolvedAssets.get(name) ?? null
+  const match = resolveIndexedAssetPaths(
+    indexes.map((index) => index.exact),
+    name,
+  )
+  additionalAssetCacheStats.resolvedAssetNames += 1
+  context.resolvedAssets.set(name, match)
+  return match
+}
+
+async function resolveAssetPathsWithoutImageExtensions(
+  context: AssetResolutionContext,
+  name: string,
+): Promise<AssetPathMatch | null> {
+  const normalizedName = stripKnownImageExtension(name)
+  if (context.resolvedAssetsWithoutImageExtensions.has(normalizedName)) {
+    return context.resolvedAssetsWithoutImageExtensions.get(normalizedName) ?? null
+  }
+
+  const indexes = await getAssetIndexes(context)
+  if (context.resolvedAssetsWithoutImageExtensions.has(normalizedName)) {
+    return context.resolvedAssetsWithoutImageExtensions.get(normalizedName) ?? null
+  }
+  const match = resolveIndexedAssetPaths(
+    indexes.map((index) => (index.withoutImageExtensions === true ? index.exact : index.withoutImageExtensions)),
+    normalizedName,
+  )
+  context.resolvedAssetsWithoutImageExtensions.set(normalizedName, match)
+  return match
+}
+
+async function getAssetIndexes(context: AssetResolutionContext): Promise<AssetCollectionIndexes[]> {
   if (!context.assetIndex) {
     const revision = captureModuleRenderRevision()
     context.assetIndex = Promise.all([
@@ -874,8 +923,10 @@ async function resolveAssetPaths(context: AssetResolutionContext, name: string):
     ])
     additionalAssetCacheStats.assetIndexesBuilt += 1
   }
-  const indexes = await context.assetIndex
-  if (context.resolvedAssets.has(name)) return context.resolvedAssets.get(name) ?? null
+  return context.assetIndex
+}
+
+function resolveIndexedAssetPaths(indexes: AssetNameIndex[], name: string): AssetPathMatch | null {
   let match: AssetPathMatch | null = null
   for (const index of indexes) {
     const extensions = index.get(name)
@@ -884,8 +935,6 @@ async function resolveAssetPaths(context: AssetResolutionContext, name: string):
     match ??= { ext: extensions.keys().next().value, srcPaths: [] }
     for (const path of extensions.get(match.ext) ?? []) match.srcPaths.push(path)
   }
-  additionalAssetCacheStats.resolvedAssetNames += 1
-  context.resolvedAssets.set(name, match)
   return match
 }
 
@@ -908,6 +957,8 @@ export function clearAdditionalAssetCachesForTests(): void {
   additionalAssetCacheStats.characterAssetTuplesVisited = 0
   additionalAssetCacheStats.moduleAssetTuplesVisited = 0
   additionalAssetCacheStats.resolvedAssetNames = 0
+  additionalAssetCacheStats.fuzzyAssetNames = 0
+  additionalAssetCacheStats.fuzzyAssetTuplesVisited = 0
 }
 
 export function getAdditionalAssetCacheStatsForTests() {
@@ -968,11 +1019,15 @@ async function parseAdditionalAssets(
     let match = await resolveAssetPaths(context, name)
 
     if (!match) {
+      match = await resolveAssetPathsWithoutImageExtensions(context, name)
+    }
+
+    if (!match) {
       if (legacyMediaFindings) {
         return ''
       }
 
-      match = getClosestMatch(char, name)
+      match = getClosestMatch(context, name)
 
       if (!match) {
         return ''
@@ -1034,33 +1089,37 @@ async function parseAdditionalAssets(
   return data
 }
 
-function getClosestMatch(char: simpleCharacterArgument | character, name: string) {
-  if (!char.additionalAssets) return null
-
-  let closestDist = 999999
-  let targetPath = ''
-  let targetExt = ''
-
+function getClosestMatch(context: AssetResolutionContext, name: string): AssetPathMatch | null {
   const trimmedName = trimmer(name)
-  for (const asset of char.additionalAssets) {
-    const key = asset[0].toLocaleLowerCase()
-    const dist = getDistance(trimmedName, trimmer(key))
-    if (dist < closestDist) {
-      closestDist = dist
-      targetPath = asset[1]
-      targetExt = asset[2]
+  let closest = context.closestAssets.get(trimmedName)
+  if (closest === undefined && !context.closestAssets.has(trimmedName)) {
+    additionalAssetCacheStats.fuzzyAssetNames += 1
+    let closestDist = 999999
+    let closestMatch: AssetPathMatch | null = null
+
+    for (const asset of context.characterAssets) {
+      additionalAssetCacheStats.fuzzyAssetTuplesVisited += 1
+      const key = asset[0].toLocaleLowerCase()
+      const dist = getDistance(trimmedName, trimmer(key))
+      if (dist < closestDist) {
+        closestDist = dist
+        closestMatch = {
+          srcPaths: [asset[1]],
+          ext: asset[2],
+        }
+      }
     }
+
+    closest = closestMatch ? { distance: closestDist, match: closestMatch } : null
+    context.closestAssets.set(trimmedName, closest)
   }
 
   const assetMaxDifference = parserSetting('assetMaxDifference')
-  if (typeof assetMaxDifference !== 'number' || closestDist > assetMaxDifference) {
+  if (!closest || typeof assetMaxDifference !== 'number' || closest.distance > assetMaxDifference) {
     return null
   }
 
-  return {
-    srcPaths: [targetPath],
-    ext: targetExt,
-  }
+  return closest.match
 }
 
 //Levenshtein distance, new with 1d array
@@ -1087,7 +1146,8 @@ export function getDistance(a: string, b: string) {
 }
 
 function trimmer(str: string) {
-  const ext = ['webp', 'png', 'jpg', 'jpeg', 'gif', 'mp4', 'webm', 'avi', 'm4p', 'm4v', 'mp3', 'wav', 'ogg']
+  str = stripKnownImageExtension(str)
+  const ext = ['mp4', 'webm', 'avi', 'm4p', 'm4v', 'mp3', 'wav', 'ogg']
   for (const e of ext) {
     if (str.endsWith('.' + e)) {
       str = str.substring(0, str.length - e.length - 1)

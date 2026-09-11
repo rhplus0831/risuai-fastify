@@ -217,21 +217,62 @@ describe('additional asset resolution cache', () => {
     expect(getAdditionalAssetCacheStatsForTests().entries).toBe(2)
   })
 
-  it('resolves colliding names from the character passed to ParseMarkdown', async () => {
+  it('resolves extensionless names from the character passed to ParseMarkdown without fuzzy matching', async () => {
     const lucy = simpleCharacter('lucy', [['bg', 'lucy-background', 'png']])
     const haniel = simpleCharacter('haniel', [['bg.png', 'haniel-background', 'png']])
 
     const lucyOutput = await ParseMarkdown('{{raw::bg}}', lucy, 'back')
     const hanielOutput = await ParseMarkdown('{{raw::bg}}', haniel, 'back')
 
-    expect(lucyOutput).toContain('/resolved/lucy-background')
-    expect(hanielOutput).toContain('/resolved/haniel-background')
-    expect(hanielOutput).not.toContain('/resolved/lucy-background')
+    expect(lucyOutput).toBe('/resolved/lucy-background')
+    expect(hanielOutput).toBe('/resolved/haniel-background')
+    expect(getAdditionalAssetCacheStatsForTests().fuzzyAssetTuplesVisited).toBe(0)
   })
 
-  it('invalidates character tuples structurally and module tuples through the render revision', async () => {
-    const character = simpleCharacter('mutable-character', [['portrait', 'character-old', 'png']])
-    mocks.moduleAssets = [['frame', 'module-old', 'png']]
+  it('matches an image-suffixed request to a bare asset name without fuzzy matching', async () => {
+    const character = simpleCharacter('request-extension', [['portrait', 'portrait-path', 'png']])
+
+    await expect(ParseMarkdown('{{raw::portrait.png}}', character, 'back')).resolves.toBe('/resolved/portrait-path')
+    expect(getAdditionalAssetCacheStatsForTests().fuzzyAssetTuplesVisited).toBe(0)
+  })
+
+  it('keeps an original exact module name ahead of a normalized character collision', async () => {
+    const character = simpleCharacter('exact-precedence', [['portrait.png', 'normalized-character', 'png']])
+    mocks.db.modules = [
+      {
+        id: 'module-owner',
+        name: 'Module owner',
+        description: '',
+        assets: [['portrait', 'exact-module', 'png']],
+      },
+    ]
+    collectionsResourceState.values.modules = mocks.db.modules
+
+    await expect(ParseMarkdown('{{raw::portrait}}', character, 'back')).resolves.toBe('/resolved/exact-module')
+  })
+
+  it('resolves an image-suffixed active-module asset name without fuzzy matching', async () => {
+    const character = simpleCharacter('module-extension')
+    mocks.db.modules = [
+      {
+        id: 'module-owner',
+        name: 'Module owner',
+        description: '',
+        assets: [['frame.png', 'module-frame', 'png']],
+      },
+    ]
+    collectionsResourceState.values.modules = mocks.db.modules
+
+    await expect(ParseMarkdown('{{raw::frame}}', character, 'back')).resolves.toBe('/resolved/module-frame')
+    expect(getAdditionalAssetCacheStatsForTests().fuzzyAssetTuplesVisited).toBe(0)
+  })
+
+  it('invalidates normalized and fuzzy character results structurally and module results by revision', async () => {
+    const character = simpleCharacter('mutable-character', [
+      ['portrait.png', 'character-old', 'png'],
+      ['profile', 'fuzzy-old', 'png'],
+    ])
+    mocks.moduleAssets = [['frame.png', 'module-old', 'png']]
     mocks.db.modules = [
       {
         id: 'module-owner',
@@ -242,28 +283,27 @@ describe('additional asset resolution cache', () => {
     ]
     collectionsResourceState.values.modules = mocks.db.modules as never
 
-    await expect(ParseMarkdown('{{raw::portrait}} {{raw::frame}}', character, 'back')).resolves.toContain(
-      '/resolved/character-old',
+    await expect(ParseMarkdown('{{raw::portrait}} {{raw::frame}} {{raw::profil}}', character, 'back')).resolves.toBe(
+      '/resolved/character-old /resolved/module-old /resolved/fuzzy-old',
     )
 
     character.additionalAssets![0][1] = 'character-new'
-    const characterUpdated = await ParseMarkdown('{{raw::portrait}}', character, 'back')
-    expect(characterUpdated).toContain('/resolved/character-new')
-    expect(characterUpdated).not.toContain('/resolved/character-old')
+    character.additionalAssets![1][1] = 'fuzzy-new'
+    const characterUpdated = await ParseMarkdown('{{raw::portrait}} {{raw::profil}}', character, 'back')
+    expect(characterUpdated).toBe('/resolved/character-new /resolved/fuzzy-new')
 
     collectionsResourceState.values.modules![0].assets![0][1] = 'module-new'
     invalidateModuleRenderRevision()
     const moduleUpdated = await ParseMarkdown('{{raw::frame}}', character, 'back')
 
-    expect(moduleUpdated).toContain('/resolved/module-new')
-    expect(moduleUpdated).not.toContain('/resolved/module-old')
+    expect(moduleUpdated).toBe('/resolved/module-new')
   })
 
   // Cooperative indexing yields to real timers. Allow aggregate-run contention;
   // the visit counts below enforce bounded work independently of elapsed time.
-  it('does not index 130,000 active module assets until an exact marker needs one', async () => {
+  it('lazily builds and reuses an extension-normalized index for 130,000 active module assets', async () => {
     const moduleAssets = Array.from({ length: 130_000 }, (_, index) => [
-      `asset-${index}`,
+      `asset-${index}.png`,
       `module-path-${index}`,
       'png',
     ]) as [string, string, string][]
@@ -278,7 +318,7 @@ describe('additional asset resolution cache', () => {
     collectionsResourceState.values.modules = mocks.db.modules as never
     const character = simpleCharacter('asset-heavy-character')
 
-    await expect(ParseMarkdown('No asset marker in this message.', character, 'back')).resolves.toContain(
+    await expect(ParseMarkdown('No asset marker in this message.', character, 'back')).resolves.toBe(
       'No asset marker in this message.',
     )
     expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
@@ -288,7 +328,7 @@ describe('additional asset resolution cache', () => {
     })
     expect(mocks.getFileSrc).not.toHaveBeenCalled()
 
-    await expect(ParseMarkdown('{{raw::asset-129999}}', character, 'back')).resolves.toContain(
+    await expect(ParseMarkdown('{{raw::asset-129999}}', character, 'back')).resolves.toBe(
       '/resolved/module-path-129999',
     )
     expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
@@ -298,38 +338,41 @@ describe('additional asset resolution cache', () => {
     })
     expect(mocks.getFileSrc).toHaveBeenCalledTimes(1)
 
-    await expect(ParseMarkdown('{{raw::asset-129999}}', character, 'back')).resolves.toContain(
+    await expect(ParseMarkdown('{{raw::asset-129999}}', character, 'back')).resolves.toBe(
       '/resolved/module-path-129999',
     )
     expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
       contextsBuilt: 1,
       moduleAssetTuplesVisited: 130_000,
       resolvedAssetNames: 1,
+      fuzzyAssetTuplesVisited: 0,
     })
     expect(mocks.getFileSrc).toHaveBeenCalledTimes(2)
 
-    const distinctNames = Array.from({ length: 100 }, (_, i) => `{{raw::asset-${i}}}`).join(' ')
+    const distinctAssetIndexes = Array.from({ length: 100 }, (_, i) => i)
+    const distinctNames = distinctAssetIndexes.map((index) => `{{raw::asset-${index}}}`).join(' ')
     const output = await ParseMarkdown(distinctNames, character, 'back')
-    expect(output).toContain('/resolved/module-path-99')
+    expect(output).toBe(distinctAssetIndexes.map((index) => `/resolved/module-path-${index}`).join(' '))
     expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
       contextsBuilt: 1,
       assetIndexesBuilt: 1,
       moduleAssetTuplesVisited: 130_000,
       resolvedAssetNames: 101,
+      fuzzyAssetTuplesVisited: 0,
     })
     // A different chat/character sharing the module must not walk its assets again.
-    await expect(
-      ParseMarkdown('{{raw::asset-129999}}', simpleCharacter('second-character'), 'back'),
-    ).resolves.toContain('/resolved/module-path-129999')
-    await expect(ParseMarkdown('{{raw::asset-0}}', character, 'back')).resolves.toContain('/resolved/module-path-0')
+    await expect(ParseMarkdown('{{raw::asset-129999}}', simpleCharacter('second-character'), 'back')).resolves.toBe(
+      '/resolved/module-path-129999',
+    )
+    await expect(ParseMarkdown('{{raw::asset-0}}', character, 'back')).resolves.toBe('/resolved/module-path-0')
     expect(getAdditionalAssetCacheStatsForTests().moduleAssetTuplesVisited).toBe(130_000)
   }, 15_000)
 
-  it('preserves locale casing, the first extension and ordered deterministic variants', async () => {
+  it('normalizes mixed-case suffixes while preserving first-extension and deterministic variant order', async () => {
     const character = simpleCharacter('variants', [
-      ['PoRtRaIt', 'character-first', 'png'],
-      ['portrait', 'character-other-extension', 'jpg'],
-      ['PORTRAIT', 'character-second', 'png'],
+      ['PoRtRaIt.PNG', 'character-first', 'png'],
+      ['portrait.jpg', 'character-other-extension', 'jpg'],
+      ['PORTRAIT.PNG', 'character-second', 'png'],
     ])
     collectionsResourceState.values.modules = [
       {
@@ -337,11 +380,11 @@ describe('additional asset resolution cache', () => {
         name: '',
         description: '',
         assets: [
-          ['portrait', 'module-first', 'png'],
-          ['portrait', 'module-other-extension', 'webp'],
+          ['portrait.png', 'module-first', 'png'],
+          ['portrait.webp', 'module-other-extension', 'webp'],
         ],
       },
-      { id: 'module-second', name: '', description: '', assets: [['portrait', 'module-second', 'png']] },
+      { id: 'module-second', name: '', description: '', assets: [['portrait.png', 'module-second', 'png']] },
     ] as never
     settingsResourceState.value.enabledModules = ['module-owner', 'module-second']
     const variants = ['character-first', 'character-second', 'module-first', 'module-second']
@@ -354,6 +397,7 @@ describe('additional asset resolution cache', () => {
       assetIndexesBuilt: 1,
       characterAssetTuplesVisited: 3,
       moduleAssetTuplesVisited: 3,
+      fuzzyAssetTuplesVisited: 0,
     })
   })
 
@@ -379,7 +423,7 @@ describe('additional asset resolution cache', () => {
     expect(getAdditionalAssetCacheStatsForTests().contextsBuilt).toBe(4)
   })
 
-  it('retains fuzzy misses and the last matching emotion without building an asset index for emotions', async () => {
+  it('caches fuzzy resolutions and threshold misses while keeping emotion lookup separate', async () => {
     const character = simpleCharacter(
       'fallback',
       [['portrait', 'fuzzy-path', 'png']],
@@ -390,9 +434,35 @@ describe('additional asset resolution cache', () => {
     )
     await expect(ParseMarkdown('{{emotion::happy}}', character, 'back')).resolves.toContain('/resolved/last-emotion')
     expect(getAdditionalAssetCacheStatsForTests().assetIndexesBuilt).toBe(0)
+
+    settingsResourceState.value.assetMaxDifference = 0
+    await expect(ParseMarkdown('{{raw::portrai}}', character, 'back')).resolves.toBe('')
+    expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
+      fuzzyAssetNames: 1,
+      fuzzyAssetTuplesVisited: 1,
+    })
+
+    settingsResourceState.value.assetMaxDifference = 1
     await expect(ParseMarkdown('{{raw::portrai}}', character, 'back')).resolves.toBe('/resolved/fuzzy-path')
+    expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
+      fuzzyAssetNames: 1,
+      fuzzyAssetTuplesVisited: 1,
+    })
+
+    settingsResourceState.value.assetMaxDifference = 0
+    await expect(ParseMarkdown('{{raw::portrai}}', character, 'back')).resolves.toBe('')
+    expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
+      fuzzyAssetNames: 1,
+      fuzzyAssetTuplesVisited: 1,
+    })
+
+    settingsResourceState.value.assetMaxDifference = 1
     settingsResourceState.value.legacyMediaFindings = true
     await expect(ParseMarkdown('{{raw::portrai}}', character, 'back')).resolves.toBe('')
+    expect(getAdditionalAssetCacheStatsForTests()).toMatchObject({
+      fuzzyAssetNames: 1,
+      fuzzyAssetTuplesVisited: 1,
+    })
   })
 
   it('evicts the least recently used context and reindexes replacement assets', async () => {
