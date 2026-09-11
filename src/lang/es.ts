@@ -18,6 +18,8 @@ export const languageSpanish = {
       'Es posible que la solicitud anterior ya se haya facturado. Reintentar puede generar otro cargo. ¿Reintentar de todos modos?',
     retry: 'Reintentar respuesta',
     retrying: 'Reintentando…',
+    dismiss: 'Descartar',
+    dismissing: 'Descartando…',
   },
   generationStop: {
     stopping: 'Deteniendo…',

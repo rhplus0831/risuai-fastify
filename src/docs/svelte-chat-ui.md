@@ -623,7 +623,9 @@ When the outer reattach budget is exhausted, the composer replaces its healthy
 pulse with a warning and renders a separate accessible alert. Its Retry,
 Refresh, and Stop controls pass the failed job ID rather than selecting work by
 chat, and the accepted-send recovery alert remains an independent state
-machine.
+machine. An accepted-send operation abandoned by a server restart also exposes
+a Dismiss action. Dismissal durably cancels that exact operation, so a later
+bootstrap cannot recreate an impossible retry notice.
 
 ### Targeted Regenerate Presentation
 

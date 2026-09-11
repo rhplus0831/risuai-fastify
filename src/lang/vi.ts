@@ -19,6 +19,8 @@ export const languageVietnamese = {
       'Yêu cầu trước đó có thể đã phát sinh phí. Thử lại có thể tạo thêm một khoản phí. Vẫn thử lại?',
     retry: 'Thử lại câu trả lời',
     retrying: 'Đang thử lại…',
+    dismiss: 'Bỏ qua',
+    dismissing: 'Đang bỏ qua…',
   },
   generationStop: {
     stopping: 'Đang dừng…',

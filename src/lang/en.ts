@@ -218,6 +218,8 @@ export const languageEnglish = {
       'The previous provider request may already have been billed. Retrying may create another billed request. Retry anyway?',
     retry: 'Retry reply',
     retrying: 'Retrying…',
+    dismiss: 'Dismiss',
+    dismissing: 'Dismissing…',
   },
   generationStop: {
     stopping: 'Stopping…',

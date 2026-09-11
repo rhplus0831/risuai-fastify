@@ -206,6 +206,7 @@
   import {
     acceptedSendRecoveries,
     coordinateAcceptedChatSend,
+    dismissAbandonedAcceptedChatSend,
     findAcceptedSendRecoveries,
     retryAcceptedChatSend,
   } from 'src/ts/process/acceptedSendCoordinator.svelte'
@@ -411,6 +412,7 @@
   let scrollToMessageRunId = 0
   let composerMutationVersion = 0
   let composerFileInvalidationVersion = 0
+  let acceptedSendRecoveryAction: { id: string; action: 'retry' | 'dismiss' } | null = $state(null)
   let reattachRecoveryAction: { jobId: string; action: 'retry' | 'refresh' | 'stop' } | null = $state(null)
   let messageInputMutationVersion = 0
   let messageInputTranslateMutationVersion = 0
@@ -834,6 +836,19 @@
 
   async function retryActiveChatHydration() {
     await hydrateActiveChat({ force: true })
+  }
+
+  async function runAcceptedSendRecoveryAction(id: string, action: 'retry' | 'dismiss'): Promise<void> {
+    if (!canUseClientWriteAccess() || acceptedSendRecoveryAction) return
+    acceptedSendRecoveryAction = { id, action }
+    try {
+      if (action === 'retry') await retryAcceptedChatSend(id)
+      else await dismissAbandonedAcceptedChatSend(id)
+    } finally {
+      if (acceptedSendRecoveryAction?.id === id && acceptedSendRecoveryAction.action === action) {
+        acceptedSendRecoveryAction = null
+      }
+    }
   }
 
   async function runReattachRecoveryAction(jobId: string, action: 'retry' | 'refresh' | 'stop'): Promise<void> {
@@ -2917,11 +2932,11 @@
           {/if}
           {#each currentAcceptedSendRecoveries as recovery (recovery.id)}
             <div
-              class="chat-screen-content-width mb-2 flex items-center gap-3 rounded-md border border-draculared p-3 text-sm text-draculared"
+              class="chat-screen-content-width mb-2 flex flex-wrap items-center gap-3 rounded-md border border-draculared p-3 text-sm text-draculared"
               role="alert"
               data-testid="accepted-send-recovery"
               data-generation-operation-id={recovery.operationId}>
-              <div>
+              <div class="min-w-0 flex-1">
                 <p>
                   {recovery.operationState === 'abandoned'
                     ? language.acceptedSendRecovery.abandoned
@@ -2933,15 +2948,35 @@
                   <p class="mt-1 text-textcolor2">{language.acceptedSendRecovery.providerMayHaveRun}</p>
                 {/if}
               </div>
-              <button
-                type="button"
-                class="ml-auto shrink-0 rounded-md border border-draculared px-3 py-1.5 text-sm transition-colors hover:bg-draculared hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={recovery.retrying}
-                aria-busy={recovery.retrying}
-                data-testid="accepted-send-retry"
-                onclick={() => void retryAcceptedChatSend(recovery.id)}>
-                {recovery.retrying ? language.acceptedSendRecovery.retrying : language.acceptedSendRecovery.retry}
-              </button>
+              <div class="ml-auto flex max-w-full flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  class="shrink-0 rounded-md border border-draculared px-3 py-1.5 text-sm transition-colors hover:bg-draculared hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+                  disabled={recovery.retrying || acceptedSendRecoveryAction !== null}
+                  aria-busy={recovery.retrying ||
+                    (acceptedSendRecoveryAction?.id === recovery.id && acceptedSendRecoveryAction.action === 'retry')}
+                  data-testid="accepted-send-retry"
+                  onclick={() => void runAcceptedSendRecoveryAction(recovery.id, 'retry')}>
+                  {recovery.retrying ||
+                  (acceptedSendRecoveryAction?.id === recovery.id && acceptedSendRecoveryAction.action === 'retry')
+                    ? language.acceptedSendRecovery.retrying
+                    : language.acceptedSendRecovery.retry}
+                </button>
+                {#if recovery.operationState === 'abandoned'}
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-md border border-darkborderc px-3 py-1.5 text-sm text-textcolor transition-colors hover:border-textcolor hover:bg-selected disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={recovery.retrying || acceptedSendRecoveryAction !== null}
+                    aria-busy={acceptedSendRecoveryAction?.id === recovery.id &&
+                      acceptedSendRecoveryAction.action === 'dismiss'}
+                    data-testid="accepted-send-dismiss"
+                    onclick={() => void runAcceptedSendRecoveryAction(recovery.id, 'dismiss')}>
+                    {acceptedSendRecoveryAction?.id === recovery.id && acceptedSendRecoveryAction.action === 'dismiss'
+                      ? language.acceptedSendRecovery.dismissing
+                      : language.acceptedSendRecovery.dismiss}
+                  </button>
+                {/if}
+              </div>
             </div>
           {/each}
           <div

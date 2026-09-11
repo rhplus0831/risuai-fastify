@@ -14,6 +14,8 @@ export const languageChineseTraditional = {
     providerMayHaveRunConfirm: '先前的供應商請求可能已產生費用。重試可能再次產生費用。仍要重試嗎？',
     retry: '重試回覆',
     retrying: '正在重試…',
+    dismiss: '關閉',
+    dismissing: '正在關閉…',
   },
   generationStop: {
     stopping: '正在停止…',

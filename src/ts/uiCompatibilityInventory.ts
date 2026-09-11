@@ -260,6 +260,7 @@ export const phase4ControlInventory: readonly UiCompatibilityControlGroup[] = [
     owner: 'generation-operation',
     controls: [
       'testid:accepted-send-recovery',
+      'testid:accepted-send-dismiss',
       'testid:accepted-send-retry',
       'testid:default-chat-cancel-button',
       'testid:default-chat-preparing-button',

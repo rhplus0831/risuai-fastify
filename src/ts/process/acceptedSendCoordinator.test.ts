@@ -22,6 +22,7 @@ const coordinatorMocks = vi.hoisted(() => ({
   sendChat: vi.fn(),
   sleep: vi.fn(),
   stageAcceptedSendGenerationOperation: vi.fn(),
+  stopGenerationOperation: vi.fn(),
   submitStagedAcceptedSendOperation: vi.fn(),
   waitForPendingCharacterScriptDefinitionSave: vi.fn(),
 }))
@@ -55,6 +56,7 @@ vi.mock('../server/generationOperations', () => ({
   readGenerationOperationStatus: coordinatorMocks.readGenerationOperationStatus,
   retryGenerationOperation: coordinatorMocks.retryGenerationOperation,
   stageAcceptedSendGenerationOperation: coordinatorMocks.stageAcceptedSendGenerationOperation,
+  stopGenerationOperation: coordinatorMocks.stopGenerationOperation,
   submitStagedAcceptedSendOperation: coordinatorMocks.submitStagedAcceptedSendOperation,
 }))
 
@@ -84,6 +86,7 @@ import {
   ACCEPTED_SEND_AUTHORITY_PROBE_TIMEOUT_MS,
   acceptedSendRecoveries,
   coordinateAcceptedChatSend,
+  dismissAbandonedAcceptedChatSend,
   resetAcceptedSendCoordinatorForTests,
   retryAcceptedChatSend,
 } from './acceptedSendCoordinator.svelte'
@@ -104,6 +107,28 @@ function target(): ActiveChatTarget {
     characterId: 'character-a',
     chatId: 'chat-a',
   }
+}
+
+function projectAbandonedAcceptedSend(): void {
+  applyAcceptedSendOperationProjection({
+    operationId: 'operation-abandoned',
+    protocolVersion: 1,
+    requestOrigin: 'accepted_send',
+    state: 'abandoned',
+    stateVersion: 4,
+    projectionEpoch: 4,
+    creatorWriterSessionId: 'writer-a',
+    creatorWriterEpoch: 1,
+    characterId: 'character-a',
+    chatId: 'chat-a',
+    mode: 'send',
+    acceptedMessageId: 'message-a',
+    acceptedRevision: 2,
+    resultMessageId: 'reply-a',
+    providerMayHaveRun: true,
+    createdAt: '2026-08-11T00:00:00.000Z',
+    updatedAt: '2026-08-11T00:00:01.000Z',
+  })
 }
 
 beforeEach(() => {
@@ -482,25 +507,7 @@ describe('accepted send coordinator', () => {
   })
 
   it('requires explicit confirmation before retrying an abandoned operation that may have been billed', async () => {
-    applyAcceptedSendOperationProjection({
-      operationId: 'operation-abandoned',
-      protocolVersion: 1,
-      requestOrigin: 'accepted_send',
-      state: 'abandoned',
-      stateVersion: 4,
-      projectionEpoch: 4,
-      creatorWriterSessionId: 'writer-a',
-      creatorWriterEpoch: 1,
-      characterId: 'character-a',
-      chatId: 'chat-a',
-      mode: 'send',
-      acceptedMessageId: 'message-a',
-      acceptedRevision: 2,
-      resultMessageId: 'reply-a',
-      providerMayHaveRun: true,
-      createdAt: '2026-08-11T00:00:00.000Z',
-      updatedAt: '2026-08-11T00:00:01.000Z',
-    })
+    projectAbandonedAcceptedSend()
 
     coordinatorMocks.alertConfirm.mockResolvedValueOnce(false)
     await expect(retryAcceptedChatSend('operation-abandoned')).resolves.toBe(false)
@@ -529,10 +536,36 @@ describe('accepted send coordinator', () => {
       },
     )
   })
+
+  it('retains an abandoned retry when dismissal is not acknowledged', async () => {
+    projectAbandonedAcceptedSend()
+    coordinatorMocks.stopGenerationOperation.mockResolvedValueOnce({ status: 'failed', error: 'offline' })
+
+    await expect(dismissAbandonedAcceptedChatSend('operation-abandoned')).resolves.toBe(false)
+    expect(coordinatorMocks.stopGenerationOperation).toHaveBeenCalledExactlyOnceWith('operation-abandoned')
+    expect(get(acceptedSendRecoveries)).toEqual([
+      expect.objectContaining({ id: 'operation-abandoned', retrying: false }),
+    ])
+  })
+
+  it('removes an abandoned retry when dismissal is acknowledged', async () => {
+    projectAbandonedAcceptedSend()
+    coordinatorMocks.stopGenerationOperation.mockResolvedValueOnce({
+      status: 'acknowledged',
+      disposition: 'cancelled',
+      knownAttemptMatched: true,
+      operation: { state: 'cancelled' },
+    })
+
+    await expect(dismissAbandonedAcceptedChatSend('operation-abandoned')).resolves.toBe(true)
+    expect(coordinatorMocks.stopGenerationOperation).toHaveBeenCalledExactlyOnceWith('operation-abandoned')
+    expect(get(acceptedSendRecoveries)).toEqual([])
+  })
 })
 
 describe('accepted send coordinator writer lifecycle', () => {
-  it('rejects Reader atomic sends and retries before callbacks or preparation', async () => {
+  it('rejects Reader atomic sends and recovery actions before callbacks or preparation', async () => {
+    projectAbandonedAcceptedSend()
     setManagedReaderForTest()
     const onAppendAccepted = vi.fn()
     const onAppendFailed = vi.fn()
@@ -540,8 +573,10 @@ describe('accepted send coordinator writer lifecycle', () => {
       coordinateAcceptedChatSend({ target: target(), message: 'Reader text', onAppendAccepted, onAppendFailed }),
     ).resolves.toEqual({ status: 'append_failed' })
     await expect(retryAcceptedChatSend('missing')).resolves.toBe(false)
+    await expect(dismissAbandonedAcceptedChatSend('operation-abandoned')).resolves.toBe(false)
     expect(coordinatorMocks.waitForPendingCharacterScriptDefinitionSave).not.toHaveBeenCalled()
     expect(coordinatorMocks.stageAcceptedSendGenerationOperation).not.toHaveBeenCalled()
+    expect(coordinatorMocks.stopGenerationOperation).not.toHaveBeenCalled()
     expect(onAppendAccepted).not.toHaveBeenCalled()
     expect(onAppendFailed).not.toHaveBeenCalled()
   })
@@ -634,6 +669,29 @@ describe('accepted send coordinator writer lifecycle', () => {
     await expect(pending).resolves.toBe(false)
     expect(coordinatorMocks.retryGenerationOperation).not.toHaveBeenCalled()
     expect(get(acceptedSendRecoveries)[0].retrying).toBe(false)
+  })
+
+  it('does not dismiss an operation after acknowledgement crosses writer re-promotion', async () => {
+    setManagedWriterForTest()
+    projectAbandonedAcceptedSend()
+    const acknowledgement = deferred<unknown>()
+    coordinatorMocks.stopGenerationOperation.mockReturnValueOnce(acknowledgement.promise)
+    const pending = dismissAbandonedAcceptedChatSend('operation-abandoned')
+    await vi.waitFor(() => expect(coordinatorMocks.stopGenerationOperation).toHaveBeenCalledOnce())
+    expect(get(acceptedSendRecoveries)[0].retrying).toBe(true)
+
+    demoteAndRepromoteForTest()
+    acknowledgement.resolve({
+      status: 'acknowledged',
+      disposition: 'cancelled',
+      knownAttemptMatched: true,
+      operation: { state: 'cancelled' },
+    })
+
+    await expect(pending).resolves.toBe(false)
+    expect(get(acceptedSendRecoveries)).toEqual([
+      expect.objectContaining({ id: 'operation-abandoned', retrying: false }),
+    ])
   })
 })
 

@@ -27,6 +27,7 @@ const loadPageMocks = vi.hoisted(() => ({
   clearActiveGenerationAbortController: vi.fn(),
   createActiveGenerationAbortController: vi.fn(() => ({ signal: new AbortController().signal })),
   downloadFile: vi.fn(async () => undefined),
+  dismissAbandonedAcceptedChatSend: vi.fn(async () => false),
   getCharImage: vi.fn(() => ''),
   getChatMessageOwnerState: vi.fn((_chatId: string) => undefined as Record<string, unknown> | undefined),
   getInlayAsset: vi.fn(async () => null),
@@ -109,6 +110,8 @@ vi.mock('../../lang', () => ({
                     providerMayHaveRunConfirm: 'acceptedSendProviderMayHaveRunConfirm',
                     retry: 'acceptedSendRetry',
                     retrying: 'acceptedSendRetrying',
+                    dismiss: 'acceptedSendDismiss',
+                    dismissing: 'acceptedSendDismissing',
                   }
                 : property === 'generationStop'
                   ? {
@@ -250,6 +253,14 @@ vi.mock('src/ts/process/reattach', async (importActual) => {
     refreshGenerationJobFromBootstrap: loadPageMocks.refreshGenerationJobFromBootstrap,
     retryGenerationJobReattach: loadPageMocks.retryGenerationJobReattach,
     stopGenerationJob: loadPageMocks.stopGenerationJob,
+  }
+})
+
+vi.mock('src/ts/process/acceptedSendCoordinator.svelte', async (importActual) => {
+  const actual = await importActual<typeof import('src/ts/process/acceptedSendCoordinator.svelte')>()
+  return {
+    ...actual,
+    dismissAbandonedAcceptedChatSend: loadPageMocks.dismissAbandonedAcceptedChatSend,
   }
 })
 
@@ -828,6 +839,8 @@ beforeEach(() => {
   loadPageMocks.appendCurrentChatUserMessageForSend.mockResolvedValue({ status: 'ok', messageId: 'message-a' })
   loadPageMocks.sendChat.mockReset()
   loadPageMocks.sendChat.mockResolvedValue(true)
+  loadPageMocks.dismissAbandonedAcceptedChatSend.mockReset()
+  loadPageMocks.dismissAbandonedAcceptedChatSend.mockResolvedValue(false)
   loadPageMocks.refreshActiveGenerationJobsFromBootstrap.mockReset()
   loadPageMocks.refreshActiveGenerationJobsFromBootstrap.mockResolvedValue(undefined)
   loadPageMocks.refreshGenerationJobFromBootstrap.mockReset()
@@ -1189,7 +1202,7 @@ describe('DefaultChatScreen acknowledged Stop lifecycle', () => {
 })
 
 describe('DefaultChatScreen accepted-send recovery projection', () => {
-  it('renders distinct retry controls and the abandoned billing warning', async () => {
+  it('offers Dismiss only for an abandoned recovery and keeps failed dismissal actionable', async () => {
     seedDatabase([1])
     applyAcceptedSendOperationProjection({
       operationId: 'operation-a',
@@ -1233,12 +1246,43 @@ describe('DefaultChatScreen accepted-send recovery projection', () => {
     expect(target.textContent).toContain('acceptedSendAbandoned')
     expect(target.textContent).toContain('acceptedSendProviderMayHaveRun')
     expect(target.querySelectorAll('[data-testid="accepted-send-retry"]')).toHaveLength(2)
+    const retryableRecovery = target.querySelector<HTMLElement>('[data-generation-operation-id="operation-a"]')!
+    const abandonedRecovery = target.querySelector<HTMLElement>('[data-generation-operation-id="operation-b"]')!
+    expect(retryableRecovery.querySelector('[data-testid="accepted-send-dismiss"]')).toBeNull()
+    const dismiss = abandonedRecovery.querySelector<HTMLButtonElement>('[data-testid="accepted-send-dismiss"]')!
+    expect(dismiss.textContent?.trim()).toBe('acceptedSendDismiss')
     const flow = target.querySelector<HTMLElement>('[data-default-chat-composer-flow]')!
     expect(
       [...target.querySelectorAll('[data-testid="accepted-send-recovery"]')].every((recovery) =>
         flow.contains(recovery),
       ),
     ).toBe(true)
+
+    const dismissal = createDeferred<boolean>()
+    loadPageMocks.dismissAbandonedAcceptedChatSend.mockReturnValueOnce(dismissal.promise)
+    dismiss.click()
+    await waitFor(() =>
+      expect(loadPageMocks.dismissAbandonedAcceptedChatSend).toHaveBeenCalledExactlyOnceWith('operation-b'),
+    )
+    await waitFor(() => {
+      expect(dismiss.disabled).toBe(true)
+      expect(dismiss.getAttribute('aria-busy')).toBe('true')
+      expect(dismiss.textContent?.trim()).toBe('acceptedSendDismissing')
+    })
+    expect(
+      [...target.querySelectorAll<HTMLButtonElement>('[data-testid="accepted-send-retry"]')].every(
+        (button) => button.disabled,
+      ),
+    ).toBe(true)
+
+    dismissal.resolve(false)
+    await waitFor(() => {
+      expect(dismiss.disabled).toBe(false)
+      expect(dismiss.getAttribute('aria-busy')).toBe('false')
+      expect(dismiss.textContent?.trim()).toBe('acceptedSendDismiss')
+    })
+    expect(target.querySelectorAll('[data-testid="accepted-send-recovery"]')).toHaveLength(2)
+    expect(abandonedRecovery.textContent).toContain('acceptedSendAbandoned')
   })
 })
 

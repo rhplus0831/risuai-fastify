@@ -14,6 +14,8 @@ export const languageChinese = {
     providerMayHaveRunConfirm: '先前的提供商请求可能已经产生费用。重试可能再次产生费用。仍要重试吗？',
     retry: '重试回复',
     retrying: '正在重试…',
+    dismiss: '忽略',
+    dismissing: '正在忽略…',
   },
   generationStop: {
     stopping: '正在停止…',

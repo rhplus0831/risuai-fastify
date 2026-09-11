@@ -22,6 +22,7 @@ import {
   readGenerationOperationStatus,
   retryGenerationOperation,
   stageAcceptedSendGenerationOperation,
+  stopGenerationOperation,
   submitStagedAcceptedSendOperation,
   type GenerationOperationStreamDescriptor,
 } from '../server/generationOperations'
@@ -666,6 +667,25 @@ export async function retryAcceptedChatSend(id: string): Promise<boolean> {
     return false
   } finally {
     finishRetry()
+  }
+}
+
+/** Permanently dismiss an abandoned accepted-send retry through server authority. */
+export async function dismissAbandonedAcceptedChatSend(id: string): Promise<boolean> {
+  const sourceGeneration = captureClientSessionGeneration()
+  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return false
+  const recovery = get(acceptedSendRecoveries).find((candidate) => candidate.id === id)
+  if (!recovery || recovery.retrying || recovery.operationState !== 'abandoned' || !recovery.operationId) return false
+
+  const finishDismiss = beginRecoveryRetry(id, sourceGeneration)
+  try {
+    const result = await stopGenerationOperation(recovery.operationId)
+    if (!isCurrent() || result.status !== 'acknowledged') return false
+    removeAcceptedSendRecovery(id)
+    return true
+  } finally {
+    finishDismiss()
   }
 }
 

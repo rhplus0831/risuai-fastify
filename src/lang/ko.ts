@@ -2189,6 +2189,8 @@ export const languageKorean = {
       '이전 요청으로 인해 이미 비용이 청구되었을 수 있습니다. 다시 시도하면 비용이 추가로 발생할 수 있습니다. 계속하시겠습니까?',
     retry: '답변 다시 시도',
     retrying: '다시 시도 중…',
+    dismiss: '닫기',
+    dismissing: '닫는 중…',
   },
   generationStop: {
     stopping: '중지하는 중…',

@@ -19,6 +19,8 @@ export const languageGerman = {
       'Die vorherige Anbieteranfrage wurde möglicherweise bereits berechnet. Ein erneuter Versuch kann weitere Kosten verursachen. Trotzdem erneut versuchen?',
     retry: 'Antwort erneut versuchen',
     retrying: 'Wird erneut versucht…',
+    dismiss: 'Verwerfen',
+    dismissing: 'Wird verworfen…',
   },
   generationStop: {
     stopping: 'Wird gestoppt…',
