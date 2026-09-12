@@ -69,6 +69,7 @@ export function registerGenerationEffectRoutes(app: FastifyInstance, db: Databas
           kind: req.params.effectKind,
           delivery,
           ...(messageId ? { messageId } : {}),
+          ...(req.body.recoverRecentCompletionAlert === true ? { recoverRecentCompletionAlert: true } : {}),
         })
         return reply.code(result.status === 'claimed' ? 201 : 200).send(result)
       } catch (error) {

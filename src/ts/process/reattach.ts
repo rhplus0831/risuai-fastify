@@ -71,6 +71,12 @@ interface ReattachProjectionCapture {
   jobProjectionEpoch?: number
 }
 
+interface GenerationObserverRetirementSnapshot {
+  jobs: readonly ActiveGenerationJob[]
+  jobViewerFence: number
+  operationViewerFence: number
+}
+
 const authoritativeGenerationJobsById = new Map<string, ActiveGenerationJob>()
 let authoritativeGenerationJobByChat = new Map<string, ActiveGenerationJob>()
 const supersededGenerationJobChats = new Map<string, string>()
@@ -1225,24 +1231,34 @@ function retainAbsentGenerationJobsForReconciliation(previousJobs: readonly Acti
   }
 }
 
-async function retireSupersededGenerationObservers(
-  previousJobs: readonly ActiveGenerationJob[],
-  currentJobs: readonly ActiveGenerationJob[],
-): Promise<void> {
-  const activeChatIds = new Set(
-    get(activeChatGenerations)
-      .filter((activity) => activity.kind === 'message' && activity.chatId)
-      .map((activity) => activity.chatId!),
+async function retireSupersededGenerationObservers(snapshot: GenerationObserverRetirementSnapshot): Promise<boolean> {
+  const activities = get(activeChatGenerations).filter((activity) => activity.kind === 'message' && activity.chatId)
+  if (activities.length === 0) return false
+  const jobs = snapshot.jobs.filter((job) =>
+    activities.some((activity) => {
+      if (activity.chatId !== job.chatId) return false
+      if (activity.operationId && job.operationId && activity.operationId !== job.operationId) return false
+      if (activity.attemptNo !== undefined && job.attemptNo !== undefined && activity.attemptNo !== job.attemptNo) {
+        return false
+      }
+      if (
+        activity.projectionEpoch !== undefined &&
+        job.projectionEpoch !== undefined &&
+        activity.projectionEpoch !== job.projectionEpoch
+      ) {
+        return false
+      }
+      return true
+    }),
   )
-  if (activeChatIds.size === 0) return
-  const jobs = [...previousJobs, ...currentJobs].filter((job) => activeChatIds.has(job.chatId))
-  if (jobs.length === 0) return
+  if (jobs.length === 0) return false
   const { retireGenerationJobViewers } = getServerChatRuntime()
   const { retireGenerationOperationViewers } = getGenerationOperationsRuntime()
   for (const job of jobs) {
-    retireGenerationJobViewers(job.jobId)
-    if (job.operationId) retireGenerationOperationViewers(job.operationId)
+    retireGenerationJobViewers(job.jobId, snapshot.jobViewerFence)
+    if (job.operationId) retireGenerationOperationViewers(job.operationId, snapshot.operationViewerFence)
   }
+  return true
 }
 
 async function applyGenerationRecoveryBootstrap(
@@ -1250,6 +1266,7 @@ async function applyGenerationRecoveryBootstrap(
   source: GenerationJobProjectionSource,
   signal?: AbortSignal | null,
   capturedRecovery: readonly CapturedGenerationRecoveryObligation[] = [],
+  observerRetirement?: GenerationObserverRetirementSnapshot,
 ): Promise<boolean> {
   const previousJobs = [...authoritativeGenerationJobsById.values()]
   const generationOperations = getGenerationOperationsRuntime()
@@ -1294,13 +1311,18 @@ async function applyGenerationRecoveryBootstrap(
   // Once the foreground authority projection is accepted, the pre-suspension
   // observer is stale. Retire it before strict transcript hydration so a hung
   // post-resume resource read cannot keep its chat activity spinner alive.
-  if (sourceRearmsObservation(source)) {
-    await retireSupersededGenerationObservers(previousJobs, [...authoritativeGenerationJobsById.values()])
-  }
+  const observerHandoffRequired =
+    sourceRearmsObservation(source) && observerRetirement
+      ? await retireSupersededGenerationObservers(observerRetirement)
+      : false
   await reconcileAbsentGenerationJobs(previousJobs, source, signal, terminalObligations)
   if (recoveredGenerationEffects) {
     await recoveredGenerationEffects.reconcilePendingRecoveredGenerationEffects().catch(() => undefined)
   }
+  // Activity cleanup normally queues this handoff. Queue once more after all
+  // accepted recovery work settles so a slow abort cannot consume the only
+  // replacement attempt before its foreground activity is released.
+  if (observerHandoffRequired) triggerOpenChatGenerationReattach()
   return true
 }
 
@@ -1327,6 +1349,18 @@ async function refreshGenerationAuthority(
   const epoch = ++activeGenerationRecoveryEpoch
   const controller = new AbortController()
   const recoveryAtRequestStart = captureGenerationRecoveryObligations()
+  let observerRetirement: GenerationObserverRetirementSnapshot | undefined
+  if (sourceRearmsObservation(source)) {
+    const serverChat = getServerChatRuntime()
+    const generationOperations = getGenerationOperationsRuntime()
+    observerRetirement = {
+      jobs: [...authoritativeGenerationJobsById.values()].filter(
+        (job) => !options.operationId || job.operationId === options.operationId,
+      ),
+      jobViewerFence: serverChat.captureGenerationJobViewerFence(),
+      operationViewerFence: generationOperations.captureGenerationOperationViewerFence(),
+    }
+  }
   let timedOut = false
   const handleOwnerAbort = () => controller.abort()
   if (options.signal?.aborted) controller.abort()
@@ -1392,7 +1426,13 @@ async function refreshGenerationAuthority(
         })
         return { status: 'error', error: bootstrapRefreshError(runtime) }
       }
-      const applied = await applyGenerationRecoveryBootstrap(runtime, source, controller.signal, recoveryAtRequestStart)
+      const applied = await applyGenerationRecoveryBootstrap(
+        runtime,
+        source,
+        controller.signal,
+        recoveryAtRequestStart,
+        observerRetirement,
+      )
       if (epoch !== activeGenerationRecoveryEpoch || controller.signal.aborted) {
         return {
           status: 'error',

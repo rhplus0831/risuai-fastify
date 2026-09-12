@@ -361,6 +361,7 @@ beforeEach(() => {
   configureGenerationOperationProtocol({ version: 1 }, 'database-a')
   registerGenerationOperationsRuntime({
     applyGenerationOperationBootstrap,
+    captureGenerationOperationViewerFence: () => 0,
     generationOperationProjections,
     generationOperationStreamForActiveJob: (_job: never) => undefined,
     isProtocolGenerationOperationJob: (job: { operationId?: string }) => Boolean(job.operationId),
@@ -382,6 +383,7 @@ beforeEach(() => {
   } as never)
   registerServerChatRuntime({
     cancelServerChatGeneration: vi.fn(async () => ({ status: 'failed', error: 'unused' })),
+    captureGenerationJobViewerFence: () => 0,
     retireGenerationJobViewers: vi.fn(),
   } as never)
   registerRecoveredEffectsRuntime({

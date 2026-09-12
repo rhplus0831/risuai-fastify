@@ -5,6 +5,7 @@ import { recordTableWrite } from './protocolMetrics.js'
 
 export const GENERATION_EFFECT_LEDGER_VERSION = 1
 export const GENERATION_EFFECT_CLAIM_LEASE_MS = 5 * 60_000
+export const GENERATION_EFFECT_RECENT_ALERT_RECOVERY_MS = 60_000
 
 export const GENERATION_EFFECT_KINDS = [
   'igp',
@@ -118,6 +119,9 @@ export interface ClaimGenerationEffectInput {
   messageId?: string
   claimedAt?: string
   leaseMs?: number
+  /** Permit a one-shot notification/sound claim shortly after completion.
+   * The server still rejects stale recovery and every other ephemeral kind. */
+  recoverRecentCompletionAlert?: boolean
 }
 
 export type ClaimGenerationEffectResult =
@@ -369,7 +373,21 @@ export function claimGenerationEffectInTransaction(
   }
 
   const claimId = randomUUID()
-  if (!reclaiming && input.delivery === 'late_recovery' && current.effect_class === 'ephemeral') {
+  const createdAt = Date.parse(current.created_at)
+  const claimedAt = Date.parse(now)
+  const recentCompletionAlert =
+    input.recoverRecentCompletionAlert === true &&
+    (input.kind === 'notification' || input.kind === 'completion_sound') &&
+    Number.isFinite(createdAt) &&
+    Number.isFinite(claimedAt) &&
+    claimedAt >= createdAt &&
+    claimedAt - createdAt <= GENERATION_EFFECT_RECENT_ALERT_RECOVERY_MS
+  if (
+    !reclaiming &&
+    input.delivery === 'late_recovery' &&
+    current.effect_class === 'ephemeral' &&
+    !recentCompletionAlert
+  ) {
     db.prepare(
       `UPDATE generation_effects
        SET status = 'skipped', claim_id = ?, delivery = ?, reason = 'late_recovery',

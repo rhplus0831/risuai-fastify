@@ -227,6 +227,77 @@ describe('generation effect ledger', () => {
     }
   })
 
+  it('grants recent notification and sound recovery once while keeping stale alerts and TTS skipped', () => {
+    const { db, lineage } = openTestDatabase()
+    try {
+      ensureGenerationEffectLedger(db, {
+        databaseLineage: lineage,
+        operationId: 'operation-recent',
+        operationProtocolVersion: 1,
+        generationId: 'generation-recent',
+        characterId: 'character-a',
+        chatId: 'chat-a',
+        messageId: 'message-recent',
+        createdAt: '2026-09-12T00:00:00.000Z',
+      })
+
+      for (const kind of ['notification', 'completion_sound'] as const) {
+        const claim = claimGenerationEffect(db, {
+          databaseLineage: lineage,
+          generationId: 'generation-recent',
+          kind,
+          delivery: 'late_recovery',
+          claimedAt: '2026-09-12T00:00:30.000Z',
+          recoverRecentCompletionAlert: true,
+        })
+        expect(claim).toMatchObject({ status: 'claimed', effect: { status: 'claimed', delivery: 'late_recovery' } })
+        if (claim.status !== 'claimed') throw new Error('expected recent alert claim')
+        expect(
+          settleGenerationEffect(db, {
+            databaseLineage: lineage,
+            generationId: 'generation-recent',
+            kind,
+            claimId: claim.claimId,
+            status: 'completed',
+          }),
+        ).toMatchObject({ status: 'completed' })
+      }
+      expect(
+        claimGenerationEffect(db, {
+          databaseLineage: lineage,
+          generationId: 'generation-recent',
+          kind: 'tts',
+          delivery: 'late_recovery',
+          claimedAt: '2026-09-12T00:00:30.000Z',
+          recoverRecentCompletionAlert: true,
+        }),
+      ).toMatchObject({ status: 'not_claimed', reason: 'late_recovery_skipped' })
+
+      ensureGenerationEffectLedger(db, {
+        databaseLineage: lineage,
+        operationId: 'operation-stale',
+        operationProtocolVersion: 1,
+        generationId: 'generation-stale',
+        characterId: 'character-a',
+        chatId: 'chat-a',
+        messageId: 'message-stale',
+        createdAt: '2026-09-12T00:00:00.000Z',
+      })
+      expect(
+        claimGenerationEffect(db, {
+          databaseLineage: lineage,
+          generationId: 'generation-stale',
+          kind: 'notification',
+          delivery: 'late_recovery',
+          claimedAt: '2026-09-12T00:01:00.001Z',
+          recoverRecentCompletionAlert: true,
+        }),
+      ).toMatchObject({ status: 'not_claimed', reason: 'late_recovery_skipped' })
+    } finally {
+      db.close()
+    }
+  })
+
   it('reserves generated translation for the server owner', () => {
     const { db, lineage } = openTestDatabase()
     try {

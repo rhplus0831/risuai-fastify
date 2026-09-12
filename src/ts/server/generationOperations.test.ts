@@ -96,12 +96,15 @@ import {
   applyGenerationOperationBootstrap,
   applyGenerationOperationProjection,
   applyGenerationOperationSseEvent,
+  captureGenerationOperationViewerFence,
   dispatchGenerationOperationPendingReplay,
   generationOperationCancellations,
   generationOperationProjections,
   reconcileGenerationOperationErrorBody,
   reconcileGenerationOperationTranscriptHydration,
+  registerGenerationOperationViewer,
   replayGenerationRecoveryObligations,
+  retireGenerationOperationViewers,
   resetGenerationOperationClientForTests,
   retryGenerationOperation,
   stageAcceptedSendGenerationOperation,
@@ -238,6 +241,21 @@ afterEach(() => {
 })
 
 describe('generation operation client', () => {
+  it('retires only operation viewers registered through the captured recovery fence', () => {
+    const oldViewer = vi.fn()
+    const newViewer = vi.fn()
+    registerGenerationOperationViewer(operationId, vi.fn(), oldViewer)
+    const fence = captureGenerationOperationViewerFence()
+    registerGenerationOperationViewer(operationId, vi.fn(), newViewer)
+
+    retireGenerationOperationViewers(operationId, fence)
+
+    expect(oldViewer).toHaveBeenCalledOnce()
+    expect(newViewer).not.toHaveBeenCalled()
+    retireGenerationOperationViewers(operationId)
+    expect(newViewer).toHaveBeenCalledOnce()
+  })
+
   it('identifies writer ownership loss in a readiness failure', async () => {
     operationMocks.isWriterAccessLost.mockReturnValue(true)
 

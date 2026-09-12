@@ -65,6 +65,22 @@ const hydration = vi.hoisted(() => ({
 const effectResources = vi.hoisted(() => ({ ensure: vi.fn() }))
 vi.mock('../server/routeResourceLoader', () => ({ ensureResourceSurfaces: effectResources.ensure }))
 vi.mock('../server/chatMessageHydration.svelte', () => hydration)
+const lateAlerts = vi.hoisted(() => ({
+  grantRecent: false,
+  notify: vi.fn(async () => undefined),
+  sound: vi.fn(() => true),
+  isChatVisible: vi.fn(() => false),
+  markChatUnread: vi.fn(),
+}))
+vi.mock('./postGeneration/notification', () => ({
+  chatCompletionNotificationInput: (_character: unknown, body: string) => ({ body }),
+  fireDesktopNotification: lateAlerts.notify,
+}))
+vi.mock('./messageCompletionSound', () => ({ playMessageCompletionSoundIfEnabled: lateAlerts.sound }))
+vi.mock('./chatUnread.svelte', () => ({
+  isChatVisible: lateAlerts.isChatVisible,
+  markChatUnread: lateAlerts.markChatUnread,
+}))
 vi.mock('./postGeneration/igp', () => ({
   evaluateIgp: vi.fn(async () => {
     state.order.push('igp')
@@ -92,15 +108,19 @@ vi.mock('./generationEffectLedger', async (importOriginal) => {
   const original = await importOriginal<typeof import('./generationEffectLedger')>()
   return {
     ...original,
-    runLedgeredGenerationEffect: vi.fn(async (_ref, kind, delivery, effect) => {
+    runLedgeredGenerationEffect: vi.fn(async (_ref, kind, delivery, effect, options) => {
       ledger.calls.push(`${delivery}:${kind}`)
       const key = `${_ref.generationId}:${kind}`
       if (ledger.unavailableKinds.has(kind) || ledger.unavailableKinds.has(key))
         return { executed: false, status: 'unavailable' }
-      if (kind === 'notification' || kind === 'tts' || kind === 'completion_sound') {
+      if (ledger.receipts.has(key)) return { executed: false, status: 'already_receipted' }
+      if (
+        kind === 'tts' ||
+        ((kind === 'notification' || kind === 'completion_sound') &&
+          (!lateAlerts.grantRecent || options?.recoverRecentCompletionAlert !== true))
+      ) {
         return { executed: false, status: 'already_receipted' }
       }
-      if (ledger.receipts.has(key)) return { executed: false, status: 'already_receipted' }
       const result = await effect({
         idempotencyKey: `test:${kind}`,
         reclaimed: false,
@@ -165,6 +185,11 @@ beforeEach(() => {
   ledger.calls = []
   ledger.receipts.clear()
   ledger.unavailableKinds.clear()
+  lateAlerts.grantRecent = false
+  lateAlerts.notify.mockClear()
+  lateAlerts.sound.mockClear()
+  lateAlerts.isChatVisible.mockReset().mockReturnValue(false)
+  lateAlerts.markChatUnread.mockClear()
   hydration.hydrateChatMessages.mockReset()
   hydration.hydrateChatMessages.mockResolvedValue(undefined)
   charactersResourceState.characters = state.ownerCharacters as never
@@ -267,6 +292,28 @@ describe('late recovered generation effects', () => {
       allEffectsReconciled: true,
     })
     expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
+  })
+
+  it('delivers recent recovered notification and sound once and marks a background chat unread', async () => {
+    lateAlerts.grantRecent = true
+    settingsResourceState.value = {
+      ...settingsResourceState.value,
+      notification: true,
+    } as never
+
+    await expect(reconcileRecoveredGenerationEffects(ref)).resolves.toEqual({
+      durableEffectsReconciled: true,
+      allEffectsReconciled: true,
+    })
+
+    expect(lateAlerts.notify).toHaveBeenCalledWith({ body: 'reply' })
+    expect(lateAlerts.sound).toHaveBeenCalledOnce()
+    expect(lateAlerts.markChatUnread).toHaveBeenCalledWith('chat-a')
+
+    await expect(reconcileRecoveredGenerationEffects(ref)).resolves.toMatchObject({ allEffectsReconciled: true })
+    expect(lateAlerts.notify).toHaveBeenCalledOnce()
+    expect(lateAlerts.sound).toHaveBeenCalledOnce()
+    expect(lateAlerts.markChatUnread).toHaveBeenCalledOnce()
   })
 
   it('runs only missing durable effects when one already has a receipt', async () => {

@@ -63,6 +63,7 @@ const h = vi.hoisted(() => {
         undefined,
     ),
     cancelServerChatGeneration: vi.fn(async () => undefined),
+    captureGenerationJobViewerFence: vi.fn(() => 17),
     retireGenerationJobViewers: vi.fn(),
     applyGenerationOperationBootstrap: vi.fn(),
     isProtocolGenerationOperationJob: vi.fn((job: { operationId?: string }) => Boolean(job.operationId)),
@@ -79,6 +80,7 @@ const h = vi.hoisted(() => {
         : undefined,
     ),
     stopGenerationOperation: vi.fn(async () => ({ status: 'acknowledged' })),
+    captureGenerationOperationViewerFence: vi.fn(() => 29),
     retireGenerationOperationViewers: vi.fn(),
     retryGenerationOperation: vi.fn(),
     replayGenerationRecoveryObligations: vi.fn(async () => false),
@@ -293,6 +295,7 @@ beforeEach(() => {
   } as never)
   registerGenerationOperationsRuntime({
     applyGenerationOperationBootstrap: h.applyGenerationOperationBootstrap,
+    captureGenerationOperationViewerFence: h.captureGenerationOperationViewerFence,
     generationOperationProjections: h.generationOperationProjections,
     generationOperationStreamForActiveJob: h.generationOperationStreamForActiveJob,
     isProtocolGenerationOperationJob: h.isProtocolGenerationOperationJob,
@@ -305,6 +308,7 @@ beforeEach(() => {
   registerChatHydrationRuntime({ hydrateChatMessages: h.hydrateChatMessages } as never)
   registerServerChatRuntime({
     cancelServerChatGeneration: h.cancelServerChatGeneration,
+    captureGenerationJobViewerFence: h.captureGenerationJobViewerFence,
     retireGenerationJobViewers: h.retireGenerationJobViewers,
   } as never)
   registerRecoveredEffectsRuntime({
@@ -326,6 +330,7 @@ beforeEach(() => {
   h.setCachedServerCommandRevision.mockClear()
   h.hydrateChatMessages.mockClear()
   h.cancelServerChatGeneration.mockClear()
+  h.captureGenerationJobViewerFence.mockClear()
   h.retireGenerationJobViewers.mockClear()
   h.applyGenerationOperationBootstrap.mockClear()
   h.applyGenerationOperationBootstrap.mockImplementation((runtime, source) => {
@@ -340,6 +345,7 @@ beforeEach(() => {
   h.isProtocolGenerationOperationJob.mockReset()
   h.generationOperationStreamForActiveJob.mockReset()
   h.stopGenerationOperation.mockClear()
+  h.captureGenerationOperationViewerFence.mockClear()
   h.retireGenerationOperationViewers.mockClear()
   h.retryGenerationOperation.mockReset()
   h.replayGenerationRecoveryObligations.mockReset()
@@ -1165,8 +1171,8 @@ describe('reattach open-chat generation', () => {
       const refresh = refreshActiveGenerationJobsFromBootstrap(controller.signal, 'visibility')
       await vi.waitFor(() => expect(h.hydrateChatMessages).toHaveBeenCalledTimes(1))
 
-      expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId)
-      expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId)
+      expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId, 17)
+      expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId, 29)
       expect(hydrationSignal).toBeInstanceOf(AbortSignal)
       expect(hydrationSignal?.aborted).toBe(false)
 
@@ -1680,8 +1686,8 @@ describe('reattach open-chat generation', () => {
         strict: true,
         signal: expect.any(AbortSignal),
       })
-      expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId)
-      expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId)
+      expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId, 17)
+      expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId, 29)
       expect(vi.getTimerCount()).toBe(0)
     } finally {
       if (activity) finishChatGenerationActivity(activity.id)
@@ -1888,14 +1894,73 @@ describe('reattach open-chat generation', () => {
 
     await refreshActiveGenerationJobsFromBootstrap(undefined, 'visibility')
 
-    expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId)
-    expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId)
+    expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId, 17)
+    expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId, 29)
     finishChatGenerationActivity(activity.id)
     await maybeReattachOpenChatGeneration()
     expect(h.sendChat).toHaveBeenCalledWith(
       -1,
       expect.objectContaining({ generationOperationStream: expect.objectContaining({ jobId: job.jobId }) }),
     )
+  })
+
+  it('does not retire a newer same-chat observer that starts while recovery is in flight', async () => {
+    openChat('chat-1')
+    const oldJob = {
+      chatId: 'chat-1',
+      jobId: 'job-old-observer',
+      operationId: 'operation-old-observer',
+      operationStateVersion: 3,
+      projectionEpoch: 20,
+      attemptNo: 1,
+    }
+    const newJob = {
+      chatId: 'chat-1',
+      jobId: 'job-new-observer',
+      operationId: 'operation-new-observer',
+      operationStateVersion: 1,
+      projectionEpoch: 21,
+      attemptNo: 1,
+    }
+    setActiveGenerationJobs([oldJob], { projectionEpoch: 20 })
+    const oldActivity = beginChatGenerationActivity({
+      target: { selectedCharID: 0, chatPage: 0, characterId: 'char-a', chatId: 'chat-1' },
+      kind: 'message',
+      operationId: oldJob.operationId,
+      attemptNo: oldJob.attemptNo,
+      projectionEpoch: oldJob.projectionEpoch,
+    })!
+    let resolveBootstrap!: (value: {
+      status: 'ok'
+      bootstrap: { generationOperationProjectionEpoch: number; activeGenerationJobs: Array<typeof newJob> }
+    }) => void
+    h.fetchRuntimeJobs.mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolveBootstrap = resolve
+      }),
+    )
+
+    const refresh = refreshActiveGenerationJobsFromBootstrap(undefined, 'visibility')
+    await vi.waitFor(() => expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce())
+    finishChatGenerationActivity(oldActivity.id)
+    setActiveGenerationJobs([newJob], { projectionEpoch: 21 })
+    const newActivity = beginChatGenerationActivity({
+      target: { selectedCharID: 0, chatPage: 0, characterId: 'char-a', chatId: 'chat-1' },
+      kind: 'message',
+      operationId: newJob.operationId,
+      attemptNo: newJob.attemptNo,
+      projectionEpoch: newJob.projectionEpoch,
+    })!
+    resolveBootstrap({
+      status: 'ok',
+      bootstrap: { generationOperationProjectionEpoch: 21, activeGenerationJobs: [newJob] },
+    })
+
+    await refresh
+
+    expect(h.retireGenerationJobViewers).not.toHaveBeenCalled()
+    expect(h.retireGenerationOperationViewers).not.toHaveBeenCalled()
+    finishChatGenerationActivity(newActivity.id)
   })
 
   it('stops lifecycle probes from reconnecting to the server', async () => {

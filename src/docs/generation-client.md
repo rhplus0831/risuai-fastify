@@ -99,7 +99,9 @@ Important files:
   operation/activity/effect stores.
 - `src/ts/process/generationEffectLedger.ts` claims and receipts client effects
   for the exact persisted generation. `recoveredGenerationEffects.ts` retries
-  missing durable effects after bootstrap; late ephemeral effects are skipped.
+  missing durable effects after bootstrap. TTS and stale ephemeral effects are
+  skipped, while notification and completion sound receive one server-fenced
+  recovery claim when reconciliation starts within 60 seconds of completion.
 
 ## Preflight Persistence Gates
 
@@ -139,6 +141,9 @@ tab can recover even when its original connection was discarded before the id
 reached JavaScript. A stale-attempt response redirects only to an exact newer
 live descriptor; terminal/non-live responses and compatibility 404s force
 authority and transcript reconciliation before viewer UI is settled. Viewer
+retirement is fenced by the jobs and viewer registrations captured before the
+authority request: a newer operation, attempt, projection, or viewer registered
+during recovery cannot be retired by the older bootstrap. Viewer
 transport failures never use the ordinary provider-error/inlay path until
 durable authority proves a terminal generation failure. Terminal `postGeneration` data
 can advance the revision cache, apply a server-owned `messagePatch`, render the

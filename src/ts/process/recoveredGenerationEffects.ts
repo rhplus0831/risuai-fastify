@@ -13,6 +13,9 @@ import { runEmotionEmbeddingFallback } from './postGeneration/emotionFallbackEmb
 import { runEmotionLlmFallback } from './postGeneration/emotionFallbackLlm'
 import { runImggenStableDiff } from './postGeneration/imggenStableDiff'
 import { stablePostGenerationMessageTarget } from './postGeneration/stableTarget'
+import { chatCompletionNotificationInput, fireDesktopNotification } from './postGeneration/notification'
+import { playMessageCompletionSoundIfEnabled } from './messageCompletionSound'
+import { isChatVisible, markChatUnread } from './chatUnread.svelte'
 import {
   completedGenerationEffect,
   generationEffectRefFromMessage,
@@ -139,17 +142,49 @@ export async function reconcileRecoveredGenerationEffects(
   // must never become a permanent not-configured receipt.
   await ensureResourceSurfaces(['runtime:chat-generation'])
   if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
-  // Late delivery never invokes these callbacks: the server atomically turns
-  // each pending ephemeral row into a permanent late_recovery skip.
+  const recovered = resolveGeneration(ref)
   const unexpectedEphemeral = () => completedGenerationEffect(undefined)
   const ephemeral = await Promise.all([
-    runLedgeredGenerationEffect(ref, 'notification', 'late_recovery', unexpectedEphemeral),
+    runLedgeredGenerationEffect(
+      ref,
+      'notification',
+      'late_recovery',
+      async (effectContext) => {
+        if (!effectContext.isCurrent() || !recovered) return skippedGenerationEffect('target_changed')
+        if (
+          settingsResourceState.status !== 'ready' ||
+          !(settingsResourceState.value as Record<string, unknown>).notification
+        ) {
+          return skippedGenerationEffect('not_configured')
+        }
+        await fireDesktopNotification(chatCompletionNotificationInput(recovered.character, recovered.message.data))
+        return completedGenerationEffect(undefined)
+      },
+      { recoverRecentCompletionAlert: true },
+    ),
     runLedgeredGenerationEffect(ref, 'tts', 'late_recovery', unexpectedEphemeral),
-    runLedgeredGenerationEffect(ref, 'completion_sound', 'late_recovery', unexpectedEphemeral),
+    runLedgeredGenerationEffect(
+      ref,
+      'completion_sound',
+      'late_recovery',
+      () =>
+        playMessageCompletionSoundIfEnabled()
+          ? completedGenerationEffect(undefined)
+          : skippedGenerationEffect('not_configured'),
+      { recoverRecentCompletionAlert: true },
+    ),
   ])
 
+  if (
+    recovered &&
+    !isChatVisible(ref.chatId) &&
+    (ephemeral[0].status === 'completed' || ephemeral[2].status === 'completed')
+  ) {
+    markChatUnread(ref.chatId)
+  }
+
   if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
-  const initial = resolveGeneration(ref)
+  const initial = recovered ?? resolveGeneration(ref)
   if (!initial) return { durableEffectsReconciled: false, allEffectsReconciled: false }
   const completionText = initial.message.data
 

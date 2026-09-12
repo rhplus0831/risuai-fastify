@@ -104,24 +104,41 @@ export const SERVER_CHAT_CLIENT_CAPABILITIES = {
   regenerateTargetProjection: 1,
 } as const
 
-const durableGenerationViewerRetirers = new Map<string, Set<() => void>>()
+interface DurableGenerationViewerRetirer {
+  registrationId: number
+  retire: () => void
+}
+
+const durableGenerationViewerRetirers = new Map<string, Set<DurableGenerationViewerRetirer>>()
+let durableGenerationViewerRegistrationId = 0
+
+/** Capture the newest viewer that exists before an authority refresh starts.
+ * Recovery must never retire a viewer registered after this fence. */
+export function captureGenerationJobViewerFence(): number {
+  return durableGenerationViewerRegistrationId
+}
 
 /** Retire local viewers for an exact job without issuing durable cancellation. */
-export function retireGenerationJobViewers(jobId: string): void {
+export function retireGenerationJobViewers(jobId: string, registeredThrough = Number.POSITIVE_INFINITY): void {
   const viewers = durableGenerationViewerRetirers.get(jobId)
   if (!viewers) return
-  durableGenerationViewerRetirers.delete(jobId)
-  for (const retire of [...viewers]) retire()
+  for (const viewer of [...viewers]) {
+    if (viewer.registrationId > registeredThrough) continue
+    viewers.delete(viewer)
+    viewer.retire()
+  }
+  if (viewers.size === 0) durableGenerationViewerRetirers.delete(jobId)
 }
 
 function registerGenerationJobViewer(jobId: string, retire: () => void): () => void {
   if (!jobId) return () => undefined
-  const viewers = durableGenerationViewerRetirers.get(jobId) ?? new Set<() => void>()
-  viewers.add(retire)
+  const viewers = durableGenerationViewerRetirers.get(jobId) ?? new Set<DurableGenerationViewerRetirer>()
+  const viewer = { registrationId: ++durableGenerationViewerRegistrationId, retire }
+  viewers.add(viewer)
   durableGenerationViewerRetirers.set(jobId, viewers)
   return () => {
     const current = durableGenerationViewerRetirers.get(jobId)
-    current?.delete(retire)
+    current?.delete(viewer)
     if (current?.size === 0) durableGenerationViewerRetirers.delete(jobId)
   }
 }
@@ -1523,4 +1540,8 @@ export async function requestServerChatGeneration(
   return ready
 }
 
-registerServerChatRuntime({ cancelServerChatGeneration, retireGenerationJobViewers })
+registerServerChatRuntime({
+  cancelServerChatGeneration,
+  captureGenerationJobViewerFence,
+  retireGenerationJobViewers,
+})

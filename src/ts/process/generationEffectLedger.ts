@@ -33,6 +33,11 @@ export interface RunGenerationEffectResult<T> {
   status: 'completed' | 'skipped' | 'failed' | 'already_receipted' | 'unavailable'
 }
 
+export interface RunGenerationEffectOptions {
+  /** Ask the server to grant a recent late notification/sound exactly once. */
+  recoverRecentCompletionAlert?: boolean
+}
+
 export interface GenerationEffectExecutionContext {
   /** Stable across an expired-lease reclaim; callbacks can use it as their idempotency key. */
   idempotencyKey: string
@@ -189,6 +194,7 @@ export function runLedgeredGenerationEffect<T>(
   effect: (
     context: GenerationEffectExecutionContext,
   ) => Promise<GenerationEffectExecution<T>> | GenerationEffectExecution<T>,
+  options: RunGenerationEffectOptions = {},
 ): Promise<RunGenerationEffectResult<T>> {
   const sourceGeneration = captureClientSessionGeneration()
   if (!effectAccessIsCurrent(sourceGeneration)) return Promise.resolve({ executed: false, status: 'unavailable' })
@@ -216,7 +222,7 @@ export function runLedgeredGenerationEffect<T>(
   const existing = inFlightEffects.get(key)
   if (existing) return existing as Promise<RunGenerationEffectResult<T>>
 
-  const running = runClaimedGenerationEffect(ref, kind, delivery, measuredEffect, sourceGeneration)
+  const running = runClaimedGenerationEffect(ref, kind, delivery, measuredEffect, sourceGeneration, options)
   inFlightEffects.set(key, running as Promise<RunGenerationEffectResult<unknown>>)
   const cleanup = () => {
     if (inFlightEffects.get(key) === running) inFlightEffects.delete(key)
@@ -233,8 +239,9 @@ async function runClaimedGenerationEffect<T>(
     context: GenerationEffectExecutionContext,
   ) => Promise<GenerationEffectExecution<T>> | GenerationEffectExecution<T>,
   sourceGeneration: number,
+  options: RunGenerationEffectOptions,
 ): Promise<RunGenerationEffectResult<T>> {
-  const claim = await claimEffect(ref, kind, delivery, sourceGeneration)
+  const claim = await claimEffect(ref, kind, delivery, sourceGeneration, options)
   if (!claim) return { executed: false, status: 'unavailable' }
   if (claim.status !== 'claimed' || typeof claim.claimId !== 'string') {
     return {
@@ -295,6 +302,7 @@ async function claimEffect(
   kind: GenerationEffectKind,
   delivery: GenerationEffectDelivery,
   sourceGeneration: number,
+  options: RunGenerationEffectOptions,
 ): Promise<ClaimedEffectResponse | NotClaimedEffectResponse | null> {
   const result = await requestGenerationEffect(
     ref,
@@ -304,6 +312,7 @@ async function claimEffect(
     {
       delivery,
       messageId: ref.messageId,
+      ...(options.recoverRecentCompletionAlert ? { recoverRecentCompletionAlert: true } : {}),
     },
     sourceGeneration,
   )

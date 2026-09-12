@@ -1,5 +1,6 @@
 import { canUseClientWriteAccess, captureClientSessionGeneration } from '../../clientSession'
 import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
+import type { character } from '../../storage/database.svelte'
 const RISU_NOTIFICATION_ICON = '/logo_192.png'
 const MAX_NOTIFICATION_BODY_BYTES = 1024
 const NOTIFICATION_BODY_TRUNCATION_MARKER = '...'
@@ -9,6 +10,18 @@ const LOCAL_ASSET_PATH_RE = /^assets\/([0-9a-fA-F]{64})\.[a-z0-9]+$/i
 export interface DesktopNotificationInput {
   body: string
   icon?: string | null
+}
+
+export function chatCompletionNotificationInput(
+  currentChar: Pick<character, 'customNotificationMessage' | 'notificationImage' | 'image'>,
+  defaultBody: string,
+): DesktopNotificationInput {
+  const customBody = currentChar.customNotificationMessage?.trim()
+  const customIcon = currentChar.notificationImage?.trim()
+  return {
+    body: customBody || defaultBody,
+    ...(customIcon || currentChar.image ? { icon: customIcon || currentChar.image } : {}),
+  }
 }
 
 export async function fireDesktopNotification(input: string | DesktopNotificationInput): Promise<void> {

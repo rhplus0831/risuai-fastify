@@ -20,6 +20,13 @@ const fakes = vi.hoisted(() => ({
 }))
 
 vi.mock('../../postGeneration/notification', () => ({
+  chatCompletionNotificationInput: (
+    character: { customNotificationMessage?: string; notificationImage?: string; image?: string },
+    body: string,
+  ) => ({
+    body: character.customNotificationMessage?.trim() || body,
+    ...(character.notificationImage || character.image ? { icon: character.notificationImage || character.image } : {}),
+  }),
   fireDesktopNotification: async (input: unknown) => {
     fakes.notification.calls.push(input)
     await fakes.notification.pending
@@ -27,6 +34,13 @@ vi.mock('../../postGeneration/notification', () => ({
 }))
 
 vi.mock('../postGeneration/notification', () => ({
+  chatCompletionNotificationInput: (
+    character: { customNotificationMessage?: string; notificationImage?: string; image?: string },
+    body: string,
+  ) => ({
+    body: character.customNotificationMessage?.trim() || body,
+    ...(character.notificationImage || character.image ? { icon: character.notificationImage || character.image } : {}),
+  }),
   fireDesktopNotification: async (input: unknown) => {
     fakes.notification.calls.push(input)
     await fakes.notification.pending

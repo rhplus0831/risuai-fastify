@@ -7,6 +7,7 @@ type RecoveredEffectsModule = typeof import('./recoveredGenerationEffects')
 export type GenerationOperationsRuntime = Pick<
   GenerationOperationsModule,
   | 'applyGenerationOperationBootstrap'
+  | 'captureGenerationOperationViewerFence'
   | 'generationOperationProjections'
   | 'generationOperationStreamForActiveJob'
   | 'isProtocolGenerationOperationJob'
@@ -22,7 +23,10 @@ export type ChatHydrationRuntime = Pick<
   'acknowledgeMessageMutationLocalEffect' | 'hydrateChatMessages' | 'stopChatMessageHydration'
 >
 
-export type ServerChatRuntime = Pick<ServerChatModule, 'cancelServerChatGeneration' | 'retireGenerationJobViewers'>
+export type ServerChatRuntime = Pick<
+  ServerChatModule,
+  'cancelServerChatGeneration' | 'captureGenerationJobViewerFence' | 'retireGenerationJobViewers'
+>
 
 export type GenerationProcessRuntime = Pick<
   GenerationProcessModule,

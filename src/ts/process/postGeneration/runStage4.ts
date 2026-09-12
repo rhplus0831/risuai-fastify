@@ -10,7 +10,7 @@ import { applyEmotionFromResponse } from './emotionFromResponse'
 import { runEmotionEmbeddingFallback } from './emotionFallbackEmbedding'
 import { runEmotionLlmFallback } from './emotionFallbackLlm'
 import { runImggenStableDiff } from './imggenStableDiff'
-import { fireDesktopNotification, type DesktopNotificationInput } from './notification'
+import { chatCompletionNotificationInput, fireDesktopNotification } from './notification'
 import { finalizeStage4, type StageTimings } from './stage4Finalize'
 import type { DispatchSuccessReq } from '../dispatch/dispatchRequest'
 import type { StablePostGenerationMessageTarget } from './stableTarget'
@@ -188,13 +188,4 @@ export async function runStage4(args: RunStage4Args): Promise<RunStage4Result> {
 
   finalizeStage4({ stageTimings, generationInfo, target })
   return { status: 'done' }
-}
-
-function chatCompletionNotificationInput(currentChar: character, defaultBody: string): DesktopNotificationInput {
-  const customBody = currentChar.customNotificationMessage?.trim()
-  const customIcon = currentChar.notificationImage?.trim()
-  return {
-    body: customBody || defaultBody,
-    ...(customIcon || currentChar.image ? { icon: customIcon || currentChar.image } : {}),
-  }
 }

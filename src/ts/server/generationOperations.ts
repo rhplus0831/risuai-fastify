@@ -245,11 +245,13 @@ interface GenerationOperationCancellationRuntime {
 }
 
 interface GenerationOperationViewer {
+  registrationId: number
   onStop: () => void
   onRetire: () => void
 }
 
 const cancellationRuntimeByOperationId = new Map<string, GenerationOperationCancellationRuntime>()
+let generationOperationViewerRegistrationId = 0
 let cancellationWakeListenersInstalled = false
 
 let generationOperationProtocolVersion = 0
@@ -288,6 +290,7 @@ export function resetGenerationOperationClientForTests(): void {
     if (runtime.reconcileTimer !== undefined) clearTimeout(runtime.reconcileTimer)
   }
   cancellationRuntimeByOperationId.clear()
+  generationOperationViewerRegistrationId = 0
   generationOperationCancellations.set([])
   clearAcceptedSendRecoveryProjection()
   clearActiveGenerationJobProjection()
@@ -419,7 +422,7 @@ export function registerGenerationOperationViewer(
   onRetire: () => void = onStop,
 ): () => void {
   const runtime = cancellationRuntime(operationId)
-  const viewer = { onStop, onRetire }
+  const viewer = { registrationId: ++generationOperationViewerRegistrationId, onStop, onRetire }
   runtime.viewers.add(viewer)
   const state = cancellationByOperationId(operationId)?.state
   if (
@@ -435,6 +438,12 @@ export function registerGenerationOperationViewer(
   return () => runtime.viewers.delete(viewer)
 }
 
+/** Capture the newest operation viewer that exists before authority recovery.
+ * Viewers registered after this point belong to the newer foreground epoch. */
+export function captureGenerationOperationViewerFence(): number {
+  return generationOperationViewerRegistrationId
+}
+
 function detachGenerationOperationViewers(operationId: string): void {
   const runtime = cancellationRuntime(operationId)
   for (const viewer of [...runtime.viewers]) {
@@ -448,17 +457,21 @@ function detachGenerationOperationViewers(operationId: string): void {
 }
 
 /** Retire stale local observers without changing durable operation state. */
-export function retireGenerationOperationViewers(operationId: string): void {
+export function retireGenerationOperationViewers(
+  operationId: string,
+  registeredThrough = Number.POSITIVE_INFINITY,
+): void {
   const runtime = cancellationRuntimeByOperationId.get(operationId)
   if (!runtime) return
   for (const viewer of [...runtime.viewers]) {
+    if (viewer.registrationId > registeredThrough) continue
+    runtime.viewers.delete(viewer)
     try {
       viewer.onRetire()
     } catch (error) {
       console.error(error)
     }
   }
-  runtime.viewers.clear()
 }
 
 function operationIntentForSubmit(request: GenerationOperationSubmitRequest): DurableMutationIntent & {
@@ -2245,6 +2258,7 @@ export async function dispatchGenerationOperationPendingReplay(
 
 registerGenerationOperationsRuntime({
   applyGenerationOperationBootstrap,
+  captureGenerationOperationViewerFence,
   generationOperationProjections,
   generationOperationStreamForActiveJob,
   isProtocolGenerationOperationJob,

@@ -162,6 +162,29 @@ describe('client generation effect ledger', () => {
     })
   })
 
+  it('requests a server-fenced recent alert recovery before invoking the callback', async () => {
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) =>
+      init?.method === 'POST'
+        ? jsonResponse({ status: 'claimed', claimId: 'claim-alert' }, 201)
+        : jsonResponse({ effect: { status: 'completed' } }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+    const effect = vi.fn(() => completedGenerationEffect(undefined))
+
+    await expect(
+      runLedgeredGenerationEffect(ref, 'notification', 'late_recovery', effect, {
+        recoverRecentCompletionAlert: true,
+      }),
+    ).resolves.toMatchObject({ executed: true, status: 'completed' })
+
+    expect(effect).toHaveBeenCalledOnce()
+    expect(JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body))).toEqual({
+      delivery: 'late_recovery',
+      messageId: 'message-a',
+      recoverRecentCompletionAlert: true,
+    })
+  })
+
   it('fires every ephemeral effect on a live terminal and writes each receipt', async () => {
     const claimedKinds: string[] = []
     const receiptedKinds: string[] = []
