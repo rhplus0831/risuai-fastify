@@ -1,5 +1,10 @@
 import { gcm } from '@noble/ciphers/aes.js'
 
+import {
+  canUseClientReadServices,
+  captureClientSessionGeneration,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import type { RisuModule } from '../process/modules'
 import { isCurrentDraftRecoveryScope, readDraftRecoveryScope, type DraftRecoveryScope } from './draftRecoveryScope'
 
@@ -117,9 +122,14 @@ export function writeModuleEditorDraft(input: ModuleEditorDraftInput): ModuleEdi
 
 export async function readLatestModuleEditorDraft(): Promise<RecoveredModuleEditorDraft | null> {
   const scope = readDraftRecoveryScope()
-  if (!scope) return null
+  if (!scope || !canUseClientReadServices()) return null
+  const sessionGeneration = captureClientSessionGeneration()
+  const current = () =>
+    isCurrentDraftRecoveryScope(scope) &&
+    isClientSessionGenerationCurrent(sessionGeneration) &&
+    canUseClientReadServices()
   const database = await openModuleDraftDatabase()
-  if (!database) return null
+  if (!database || !current()) return null
 
   let records: unknown[]
   try {
@@ -131,6 +141,7 @@ export async function readLatestModuleEditorDraft(): Promise<RecoveredModuleEdit
     return null
   }
 
+  if (!current()) return null
   const now = Date.now()
   const invalidKeys = new Set<string>()
   const candidates: StoredModuleEditorDraft[] = []
@@ -149,20 +160,30 @@ export async function readLatestModuleEditorDraft(): Promise<RecoveredModuleEdit
     nextDraftSequence = Math.max(nextDraftSequence, record.sequence)
     lastDraftUpdatedAt = Math.max(lastDraftUpdatedAt, record.updatedAt)
   }
-  if (invalidKeys.size > 0) await deleteModuleDraftKeys(database, invalidKeys)
+  if (invalidKeys.size > 0) await deleteModuleDraftKeys(database, invalidKeys, records, current)
   candidates.sort(compareStoredModuleDraftNewestFirst)
 
   for (const record of candidates) {
+    if (!current()) return null
     try {
       const payload = await decryptModuleEditorDraft(record)
       const normalized = normalizeEncryptedModuleEditorDraft(payload, record)
+      if (
+        !current() ||
+        !(await isModuleEditorDraftGenerationCurrent(generationFromStoredModuleDraft(record))) ||
+        !current()
+      )
+        return null
       return {
         ...normalized,
         generation: generationFromStoredModuleDraft(record),
         updatedAt: record.updatedAt,
       }
     } catch {
-      await deleteModuleDraftKeys(database, new Set([record.key]))
+      if (!current()) return null
+      // Corrupt snapshot A must not remove a valid replacement B at the same key.
+      await deleteModuleDraftKeys(database, new Set([record.key]), [record], current)
+      if (!current()) return null
       reportModuleEditorDraftStorageFailure()
     }
   }
@@ -291,6 +312,7 @@ async function cleanupModuleEditorDraftStore(
   database: IDBDatabase,
   currentGeneration: ModuleEditorDraftGeneration,
 ): Promise<void> {
+  if (!isCurrentDraftRecoveryScope(currentGeneration)) return
   const readTransaction = database.transaction(DRAFT_STORE, 'readonly')
   const records = await requestResult<unknown[]>(readTransaction.objectStore(DRAFT_STORE).getAll())
   await transactionDone(readTransaction)
@@ -320,7 +342,8 @@ async function cleanupModuleEditorDraftStore(
     deleteKeys.add(oldest.key)
     totalBytes -= oldest.plaintextBytes
   }
-  if (deleteKeys.size > 0) await deleteModuleDraftKeys(database, deleteKeys)
+  if (deleteKeys.size > 0)
+    await deleteModuleDraftKeys(database, deleteKeys, records, () => isCurrentDraftRecoveryScope(currentGeneration))
 }
 
 async function decryptModuleEditorDraft(record: StoredModuleEditorDraft): Promise<EncryptedModuleEditorDraftPayload> {
@@ -662,14 +685,38 @@ async function openModuleDraftDatabase(): Promise<IDBDatabase | null> {
   return opening
 }
 
-async function deleteModuleDraftKeys(database: IDBDatabase, keys: Set<string>): Promise<void> {
+/** Cleanup owns only the rows it inspected, never a newer draft at the same key. */
+async function deleteModuleDraftKeys(
+  database: IDBDatabase,
+  keys: Set<string>,
+  observed: unknown[],
+  isCurrent: () => boolean,
+): Promise<void> {
+  if (!isCurrent()) return
   try {
     const transaction = database.transaction(DRAFT_STORE, 'readwrite')
+    const done = transactionDone(transaction)
+    void done.catch(() => undefined)
     const store = transaction.objectStore(DRAFT_STORE)
-    for (const key of keys) store.delete(key)
-    await transactionDone(transaction)
+    for (const key of keys) {
+      const previous = observed.find((record) => unknownStoredDraftKey(record) === key)
+      const current = await requestResult<unknown>(store.get(key))
+      if (!isCurrent()) {
+        transaction.abort()
+        return
+      }
+      if (isStoredModuleEditorDraftMetadata(previous)) {
+        if (
+          !isStoredModuleEditorDraftMetadata(current) ||
+          !storedModuleDraftMatchesGeneration(current, generationFromStoredModuleDraft(previous))
+        )
+          continue
+      } else if (isStoredModuleEditorDraftMetadata(current)) continue
+      store.delete(key)
+    }
+    await done
   } catch {
-    reportModuleEditorDraftStorageFailure()
+    if (isCurrent()) reportModuleEditorDraftStorageFailure()
   }
 }
 

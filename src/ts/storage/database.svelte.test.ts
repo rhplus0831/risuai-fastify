@@ -3754,16 +3754,15 @@ describe('preset command rollback', () => {
       await vi.advanceTimersByTimeAsync(250)
       expect(calls).toHaveLength(1)
 
+      const transportTimers = vi.getTimerCount()
       updateModelPreset(0, { temperature: 50 })
-      expect(vi.getTimerCount()).toBe(1)
+      expect(vi.getTimerCount()).toBe(transportTimers + 1)
       updateModelPreset(0, { temperature: 40 })
 
-      expect(vi.getTimerCount()).toBe(0)
+      expect(vi.getTimerCount()).toBe(transportTimers)
       expect(calls).toHaveLength(1)
       firstResponse.resolve(jsonResponse({ error: 'forced predecessor failure' }, 500))
-      for (let attempt = 0; attempt < 20 && calls.length < 2; attempt += 1) {
-        await Promise.resolve()
-      }
+      await vi.advanceTimersByTimeAsync(0)
 
       expect(calls).toHaveLength(2)
       expect(calls[1]?.body.patch).toEqual({ temperature: 40 })

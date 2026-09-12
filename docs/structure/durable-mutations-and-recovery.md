@@ -5,6 +5,7 @@ Targeted source check: 2026-09-05 (module-folder event invalidation).
 Targeted source check: 2026-09-08 (connected-reader recovery and IGP receipts).
 Targeted source check: 2026-09-10 (in-place no-change writer recovery).
 Targeted source check: 2026-09-12 (connected recovery-attempt ownership).
+Targeted source check: 2026-09-12 (bounded command transport, replay ordering, and draft cleanup).
 
 This guide owns browser-to-Fastify mutation durability and reconciliation:
 encrypted outbox intent, the serialized command queue, compact optimistic
@@ -46,6 +47,13 @@ Do not conflate the persistence and acknowledgement artifacts:
 | Server mutation receipt | SQLite; lineage-scoped mutation id | Authoritative idempotency record returned on replay; acknowledged after the accepted browser intent is durably removed. |
 | Compact local-effect acknowledgement | Command response plus client projection fences | May advance already-visible optimistic state without a GET; durable nowhere and distinct from both the intent and server receipt. |
 
+Module draft reads capture authenticated session and draft scope, then recheck
+both and the stored generation after decryption. Expiry, retention, and corrupt
+record cleanup delete only the inspected generation in a read/write transaction.
+A late read or failed decryption cannot publish an old draft or remove a newer
+valid draft written to the same key. Admitted writes still retain their captured
+originating scope for recovery after writer loss.
+
 Durable helpers stage before network dispatch (and before a debounced control
 waits to send). Semantic owner keys and explicit dependency keys preserve
 predecessor order across commands; Web Locks coordinate tabs when available and
@@ -58,9 +66,17 @@ a higher committed row across tabs. Only the allowlisted command shapes in
 `pendingMutationOutbox.ts` are eligible. Secure contexts store a non-extractable
 WebCrypto key; insecure contexts use a separately stored raw AES-GCM key and
 tagged envelopes. If IndexedDB or secure random generation is unavailable, the
-outbox cannot provide crash recovery. IndexedDB/key-persistence failure can
-fall back to ordinary transport; unavailable secure randomness can fail staging
-before dispatch.
+outbox cannot provide crash recovery. Failed staging can fall back to ordinary
+transport only when the outbox is readable and contains no retained command;
+otherwise an older replay could overwrite that untracked newer write. A failed
+dispatch-marker write for an already persisted intent retains it without sending.
+Unavailable secure randomness can fail staging before dispatch.
+
+Replay reserves its position in the global command queue before acquiring
+durable key locks, then executes its requests inside that queue position. Taking
+locks before joining the queue can deadlock with a live successor waiting for
+those locks. Failed marker writes or failed accepted/terminal row removal retain
+the unresolved entry and block dependent successors until storage recovers.
 
 Staging captures each mutable request body once as owned JSON; recursively frozen
 JSON bodies can be reused. Request limits, allowlisted paths, and canonical body
@@ -75,6 +91,15 @@ queue. `runServerCommandSequence()` keeps a multi-step optimistic mutation in
 one queue unit: each accepted response advances the base-revision cursor before
 the next command factory runs, unrelated mutations cannot interleave, and a
 first failure rolls back before the accepted earlier events are released.
+
+Command authentication, HTTP, and response-body parsing share a 30-second
+deadline per request, including base-revision bootstrap reads and receipt
+acknowledgement transport. Explicit cancellation also settles the caller when a
+transport/body reader ignores abort. A timeout remains ambiguous acceptance:
+persisted intent keeps its stable receipt identity for replay. Detached work
+cannot publish a revision or start a request using a later queue entry's identity.
+Late accepted receipts may still settle their exact old intent across role changes;
+session and projection fences prevent them from overwriting the current UI.
 
 Accepted response events and matching own-session SSE echoes are accumulated by
 revision and reconciled once after the queued work drains. A response-supplied

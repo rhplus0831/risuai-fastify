@@ -1,6 +1,7 @@
 # Domain Mutations and Editing Owners
 
 Last audited: 2026-08-31.
+Targeted source check: 2026-09-12 (visible settings outcomes and draft recovery boundaries).
 
 This area covers optimistic browser edits and rollback for settings, prompts and presets, characters,
 chats and messages, personas, loadouts, modules, plugins, lorebooks, and script definitions. It also
@@ -20,6 +21,15 @@ assessed in [Settings, Profiles, and Extensions](settings-profiles-and-extension
 [Character Content, Memory, and Catalogs](character-content-memory-and-catalogs.md). Shared controls,
 alerts, and accessibility are assessed in
 [Shared UI, Feedback, and Accessibility](shared-ui-feedback-and-accessibility.md).
+
+The rendered display-settings interruption journey is documented in
+[Browser State Sync and Recovery](browser-state-sync-and-recovery.md#durable-command-interruption-through-visible-settings).
+It complements settings-owner tests with native storage, HTTP/SSE, SQLite, and
+visible saving/error/value assertions. Composer writer-switch recovery provides
+the selected draft-bearing browser journey; encrypted module draft read/cleanup
+races use the narrower real-crypto store tests indexed in
+[Settings, Profiles, and Extensions](settings-profiles-and-extensions.md).
+Neither selection claims browser recovery coverage for every editor.
 
 ## Test groups
 

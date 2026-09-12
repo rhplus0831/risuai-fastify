@@ -63,6 +63,7 @@ const commandSpies = vi.hoisted(() => {
     updateTranslatorPresetCommand: vi.fn(),
     subscribeServerCommandLocalEffectApplied: vi.fn(),
     acknowledgeServerMutationReceipts: vi.fn(async () => true),
+    replayQueued: false,
     replayDurableMutationRequests: vi.fn(),
     replayDurableMutationRequestsInline: vi.fn(),
     runServerCommandWithoutMutationReceipt: vi.fn(async (execute: () => Promise<unknown>) => execute()),
@@ -77,6 +78,8 @@ const commandSpies = vi.hoisted(() => {
   )
   spies.replayDurableMutationRequestsInline.mockImplementation(
     async (requests: Array<Record<string, unknown>>, mutationId: string, databaseLineage: string) => {
+      // Keep external recovery fault schedules separate from a live predecessor drain.
+      if (spies.replayQueued) return spies.replayDurableMutationRequests(requests, mutationId, databaseLineage)
       spies.inlineReplayInputs.push({ requests, mutationId, databaseLineage })
       return spies.inlineReplayResults.shift() ?? { status: 'ok' }
     },
@@ -267,7 +270,14 @@ vi.mock('src/ts/server/commands', () => ({
   createTranslatorPresetCommand: commandSpies.createTranslatorPresetCommand,
   deleteTranslatorPresetCommand: commandSpies.deleteTranslatorPresetCommand,
   runServerCommand: commandSpies.runServerCommand,
-  replayDurableMutationRequests: commandSpies.replayDurableMutationRequests,
+  enqueueDurableMutationReplay: vi.fn(async (execute: () => Promise<unknown>) => {
+    commandSpies.replayQueued = true
+    try {
+      return await execute()
+    } finally {
+      commandSpies.replayQueued = false
+    }
+  }),
   replayDurableMutationRequestsInline: commandSpies.replayDurableMutationRequestsInline,
   runServerCommandWithoutMutationReceipt: commandSpies.runServerCommandWithoutMutationReceipt,
   runServerCommandWithMutationReceipt: commandSpies.runServerCommandWithMutationReceipt,

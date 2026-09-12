@@ -27,7 +27,6 @@ const botSettingsMocks = vi.hoisted(() => {
     promptItemUpdateInputs: [] as Array<Record<string, unknown>>,
     promptPresetUpdateInputs: [] as Array<Record<string, unknown>>,
     replayInlineResults: [] as Array<Record<string, unknown>>,
-    replayResults: [] as Array<Record<string, unknown>>,
     replayInlineInputs: [] as Array<{
       requests: Array<{ path?: string }>
       mutationId: string
@@ -116,7 +115,7 @@ vi.mock('src/ts/server/commands', () => ({
       return execution
     },
   ),
-  replayDurableMutationRequests: vi.fn(async () => botSettingsMocks.replayResults.shift() ?? { status: 'ok' }),
+  enqueueDurableMutationReplay: vi.fn(async (execute: () => Promise<unknown>) => execute()),
   replayDurableMutationRequestsInline: vi.fn(
     async (requests: Array<{ path?: string }>, mutationId: string, databaseLineage: string) => {
       botSettingsMocks.replayInlineInputs.push({ requests, mutationId, databaseLineage })
@@ -300,7 +299,6 @@ beforeEach(() => {
   botSettingsMocks.promptItemUpdateInputs.length = 0
   botSettingsMocks.promptPresetUpdateInputs.length = 0
   botSettingsMocks.replayInlineResults.length = 0
-  botSettingsMocks.replayResults.length = 0
   botSettingsMocks.replayInlineInputs.length = 0
   botSettingsMocks.networkOrder.length = 0
   botSettingsMocks.ownerId = null
@@ -947,7 +945,7 @@ describe('BotSettings pending prompt persistence', () => {
 
       const [entry] = await listPendingMutations()
       expect(entry).toBeTruthy()
-      botSettingsMocks.replayResults.push({
+      botSettingsMocks.replayInlineResults.push({
         status: 'error',
         error: 'queued toggle rejected',
         reason: 'invalid-request',

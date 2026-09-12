@@ -4,15 +4,16 @@ Updated: 2026-09-12.
 
 ## Current Cursor
 
-- State: **Phases 01 and 02 complete. Phase 03 has not started.**
+- State: **Phases 01–03 complete. Phase 04 is next.**
 - Planning work: complete, including source grounding, independent review,
   corrections, and documentation validation.
-- Next action: complete the mutation entry-path and real/mocked coverage inventory
-  in [phase 03](phases/03-outbox-and-optimistic-edits.md), reusing Phase 02's
-  operation/receipt and Phase 01's connection evidence.
+- Next action: read [Phase 04](phases/04-resource-hydration.md), recheck HEAD and
+  the uncommitted Phase 03 patch, then inventory selected navigation/hydration
+  owners and their real/mocked boundaries. Phase 04 has not started.
+- Phase 03 baseline: `a449e97908d41aed7f04442c260f0ce56194dd43`, clean worktree at entry.
 - Phase 02 execution baseline: `7ede21ee99b194598f4b761a9941a4bcfdae6c45`,
   clean worktree at entry. Phase 01 is committed there; the completed Phase 02
-  runtime/test/documentation patch remains uncommitted and is recorded in its ledger.
+  patch was committed as `a449e97908d41aed7f04442c260f0ce56194dd43` before Phase 03.
 - Phase 01 execution baseline: `dc96708c798b3653ca73b501227649acd0753dfb`.
   Planning runtime baseline: `e93a74236d3e66a928cdd44c4e6d73a086aae515`.
   Recheck current source and working changes before beginning the next phase.
@@ -31,7 +32,7 @@ Updated: 2026-09-12.
 | --- | --- | --- |
 | [01 — Connection recovery](phases/01-connection-recovery.md) | Complete | R1–R8 verified; SSE snapshot-failure leak fixed; focused/broad checks and 22 browser journeys passed. |
 | [02 — Generation recovery](phases/02-generation-recovery.md) | Complete | G1–G7 verified; five reproduced defects fixed; broader checks and all 26 selected browser journeys passed. |
-| [03 — Outbox and optimistic edits](phases/03-outbox-and-optimistic-edits.md) | Not started | Next: inventory representative mutation owners and reuse 01–02 authority/receipt evidence. |
+| [03 — Outbox and optimistic edits](phases/03-outbox-and-optimistic-edits.md) | Complete | O1–O6 verified; five demonstrated defects repaired; broader validation lanes and all 20 selected browser journeys passed. |
 | [04 — Resource hydration](phases/04-resource-hydration.md) | Not started | Extend 01's hydration checks to cache, invalidation, and navigation. |
 | [05 — Background jobs](phases/05-background-jobs.md) | Not started | Separate process-local and durable lifecycle obligations. |
 | [06 — Import and restore](phases/06-import-and-restore.md) | Not started | Verify replacement/publication boundaries in disposable data. |
@@ -82,6 +83,29 @@ This table's states are separate from whether the planning documents are verifie
   formatting and whitespace checks passed. No required Phase 02 evidence gap
   remains; external-process crash and physical-platform depth are explicitly limited.
 
+## Phase 03 Execution Evidence
+
+- [Phase 03 ledger](phases/03-outbox-and-optimistic-edits.md#execution-record):
+  bounded settings/composer/store inventory, O1–O6 evidence, reproduced findings,
+  retained coverage, fixture corrections, and handoff limits.
+- Fixed unbounded command controls, replay successors released after storage
+  failure, unsafe ordinary fallback over retained intent, stale encrypted module
+  draft reads/cleanup, and a live/replay queue-and-lock deadlock.
+- Added eight native rendered settings journeys. Together with retained startup,
+  visible-state, and composer writer-switch cases, **20 Chromium journeys passed**.
+  Assertions cover DOM values/errors/saving state, encrypted outbox/ACK metadata,
+  and actual SQLite receipt/revision/event counts.
+- `pnpm test:agent` passed six lanes initially; frontend fixtures exposed by the
+  transport/queue changes were corrected without further runtime changes. Final
+  frontend reruns passed **9,529 tests** across 729 files; server validation passed
+  **4,375 tests**. Each suite retains three existing skips outside required phase
+  evidence. All seven validation lanes are satisfied; the final frontend check
+  reports zero errors/warnings.
+- Current docs (51 files), explicit nested plans/index (nine files), scoped
+  formatting and whitespace checks passed. Phase 03 remains uncommitted on
+  `a449e97908d41aed7f04442c260f0ce56194dd43`. No required evidence gap remains;
+  native module-editor and physical/platform depth limits are recorded explicitly.
+
 ## Planning Evidence
 
 - Six independent read-only GPT-5.6 Luna explorations completed successfully for
@@ -101,7 +125,7 @@ This table's states are separate from whether the planning documents are verifie
 - Scoped Prettier and whitespace checks passed. Formatting used
   `--ignore-path /dev/null` because the normal ignore file excludes Markdown.
   Compact tables use local Prettier ignore comments.
-- Runtime tests/browser journeys were not run during planning; Phase 01–02 execution
+- Runtime tests/browser journeys were not run during planning; Phase 01–03 execution
   results are recorded above.
 
 ## Decisions and Boundaries
@@ -111,7 +135,8 @@ This table's states are separate from whether the planning documents are verifie
 - Keep background jobs and import/restore in separate bounded phases.
 - Each execution phase began with a clean worktree. Phase 01 fixed event-route
   cleanup; Phase 02 fixes generation lifecycle/identity/effect boundaries and
-  strengthens their tests and documentation.
+  strengthens their tests and documentation. Phase 03 fixes shared command/outbox
+  ordering and draft cleanup, with native rendered settings/recovery evidence.
 - Phase 01 reproduced one runtime defect under an induced snapshot-read failure in
   disposable SQLite: SSE subscriptions survived HTTP 500. It is fixed; this is
   not a claim of an observed external production incident.
@@ -121,7 +146,7 @@ This table's states are separate from whether the planning documents are verifie
 ## Open Items
 
 - No unresolved planning-review findings.
-- Phases 03–06 remain unstarted. Phase 03 is next.
+- Phases 01–03 are complete; Phases 04–06 remain unstarted.
 - External-process crash/power-loss verification remains an optional Phase 02
   follow-up; repeated in-process restarts do not certify those conditions.
 - Physical-device suspension and non-Chromium behavior remain an explicit optional

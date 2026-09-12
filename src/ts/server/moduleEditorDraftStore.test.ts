@@ -70,6 +70,34 @@ afterEach(async () => {
 })
 
 describe('encrypted module editor draft store', () => {
+  it.each(['success', 'failure', 'scope-change'] as const)(
+    'fences a late decrypt %s while a newer draft becomes durable',
+    async (outcome) => {
+      await writeModuleEditorDraft(editDraft('Older edit')).ready
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const decrypt = globalThis.crypto.subtle.decrypt.bind(globalThis.crypto.subtle)
+      const held = vi.spyOn(globalThis.crypto.subtle, 'decrypt').mockImplementationOnce(async (...args) => {
+        const plaintext = await decrypt(...args)
+        await gate
+        if (outcome === 'failure') throw new Error('Old ciphertext failed authentication')
+        return plaintext
+      })
+      const reading = readLatestModuleEditorDraft()
+      await vi.waitFor(() => expect(held).toHaveBeenCalledOnce())
+      if (outcome === 'scope-change')
+        initializeDraftRecoveryScope({ databaseLineage: 'database-b', writerSessionId: 'writer-a' })
+      const newer = writeModuleEditorDraft(editDraft('Newer edit'))
+      await expect(newer.ready).resolves.toBe('persisted')
+      release()
+      await expect(reading).resolves.toBeNull()
+      await expect(isModuleEditorDraftGenerationCurrent(newer.generation)).resolves.toBe(true)
+      await expect(readLatestModuleEditorDraft()).resolves.toMatchObject({ tempModule: { name: 'Newer edit' } })
+    },
+  )
+
   it('roundtrips create and edit drafts with nested code, collection, and asset-reference payloads', async () => {
     const create = createDraft()
     const createWrite = writeModuleEditorDraft(create)

@@ -22,7 +22,7 @@ import { applyServerResourceDatabase, setDatabase, type Database, type character
 import { selectedCharID } from '../../stores.svelte'
 import { replaceResourceDatabase } from '../../server/resourceState.svelte'
 import { reportSendChatError, type SendChatErrorContext } from '../sendChatErrors'
-import { clearCachedServerCommandRevision } from '../../server/commands'
+import { clearCachedServerCommandRevision, runExternalServerRevisionOperation } from '../../server/commands'
 import { getResourceDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
 
 const testDatabaseState = {
@@ -131,7 +131,8 @@ describe('reportSendChatError', () => {
     // DB and throws (same shape as the guard in parser.svelte.ts).
   })
 
-  afterEach(() => {
+  afterEach(async () => {
+    await runExternalServerRevisionOperation(async () => undefined)
     vi.unstubAllGlobals()
   })
 

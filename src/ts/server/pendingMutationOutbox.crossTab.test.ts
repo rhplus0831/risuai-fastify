@@ -6,7 +6,6 @@ import type { DurableMutationIntent } from './pendingMutationOutbox'
 const commandApi = vi.hoisted(() => ({
   acknowledge: vi.fn(),
   inlineReplay: vi.fn(),
-  replay: vi.fn(),
   withoutReceipt: vi.fn(<T>(execute: () => Promise<T>) => execute()),
   withReceipt: vi.fn(<T>(execute: () => Promise<T>) => execute()),
 }))
@@ -14,7 +13,7 @@ const commandApi = vi.hoisted(() => ({
 vi.mock('./commands', () => ({
   acknowledgeServerMutationReceipts: commandApi.acknowledge,
   replayDurableMutationRequestsInline: commandApi.inlineReplay,
-  replayDurableMutationRequests: commandApi.replay,
+  enqueueDurableMutationReplay: vi.fn(async (execute: () => Promise<unknown>) => execute()),
   runServerCommandWithoutMutationReceipt: commandApi.withoutReceipt,
   runServerCommandWithMutationReceipt: commandApi.withReceipt,
 }))
@@ -74,8 +73,6 @@ beforeEach(() => {
   commandApi.acknowledge.mockResolvedValue(true)
   commandApi.inlineReplay.mockReset()
   commandApi.inlineReplay.mockResolvedValue({ status: 'ok' })
-  commandApi.replay.mockReset()
-  commandApi.replay.mockResolvedValue({ status: 'ok' })
   commandApi.withoutReceipt.mockClear()
   commandApi.withReceipt.mockClear()
 })
@@ -329,7 +326,7 @@ describe('pending mutation outbox cross-tab staging', () => {
       disposition: 'succeeded',
       result: { status: 'ok' },
     })
-    expect(commandApi.replay).toHaveBeenCalledWith(
+    expect(commandApi.inlineReplay).toHaveBeenCalledWith(
       settingsIntent('committed').requests,
       committed.mutationId,
       databaseLineage,

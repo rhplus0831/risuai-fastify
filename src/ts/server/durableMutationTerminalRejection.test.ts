@@ -1,4 +1,4 @@
-import { IDBFactory } from 'fake-indexeddb'
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../platform', () => ({ isFastifyServer: true }))
@@ -38,6 +38,7 @@ import {
   preparePendingMutationOutbox,
   resetPendingMutationOutboxForTests,
   stagePendingMutation,
+  setPendingMutationCommitTransactionHookForTests,
   type DurableMutationIntent,
 } from './pendingMutationOutbox'
 import { replayPendingMutations } from './pendingMutationReplay'
@@ -88,6 +89,96 @@ afterEach(async () => {
 })
 
 describe('durable mutation terminal request rejection', () => {
+  it.each(['dispatch-marker', 'terminal-delete', 'accepted-delete'] as const)(
+    'retains a predecessor and blocks its successor when %s storage fails',
+    async (failure) => {
+      const intent = (value: number): DurableMutationIntent => ({
+        version: 1,
+        requests: [{ method: 'PATCH', path: '/settings/runtime', body: { patch: { maxContext: value } } }],
+      })
+      const predecessor = stagePendingMutation('settings:runtime', intent(4000))
+      await predecessor.ready
+      const successor = stagePendingMutation('settings:runtime', intent(8000))
+      await successor.ready
+      const calls: string[] = []
+      setCachedServerCommandRevision(10)
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+          if (String(input).endsWith('/mutation-receipts/ack')) return jsonResponse({ acknowledged: 1, requested: 1 })
+          const id = new Headers(init.headers).get('risu-mutation-id')!
+          calls.push(id)
+          if (failure === 'terminal-delete' && id === predecessor.mutationId)
+            return jsonResponse({ error: 'Invalid edit' }, 400)
+          const revision = 10 + calls.length
+          return jsonResponse({ revision, event: { revision, type: 'settings.updated', resource: 'settings' } })
+        }),
+      )
+      const put = IDBObjectStore.prototype.put
+      const remove = IDBObjectStore.prototype.delete
+      let failed = false
+      vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (value, key) {
+        if (
+          !failed &&
+          failure === 'dispatch-marker' &&
+          value?.mutationId === predecessor.mutationId &&
+          value.dispatchStarted
+        ) {
+          failed = true
+          this.transaction.abort()
+          throw new DOMException('Injected dispatch marker failure', 'QuotaExceededError')
+        }
+        return put.call(this, value, key)
+      })
+      vi.spyOn(IDBObjectStore.prototype, 'delete').mockImplementation(function (key) {
+        if (!failed && failure.endsWith('delete') && key === predecessor.mutationId) {
+          failed = true
+          throw new DOMException('Injected terminal cleanup failure', 'QuotaExceededError')
+        }
+        return remove.call(this, key)
+      })
+      await expect(replayPendingMutations()).resolves.toEqual({ attempted: 1, succeeded: 0, discarded: 0, retained: 2 })
+      expect(failed).toBe(true)
+      expect(calls).toEqual(failure === 'dispatch-marker' ? [] : [predecessor.mutationId])
+      expect((await listPendingMutations()).map((entry) => entry.handle.mutationId)).toEqual([
+        predecessor.mutationId,
+        successor.mutationId,
+      ])
+      calls.length = 0
+      await expect(replayPendingMutations()).resolves.toMatchObject({ retained: 0, attempted: 2 })
+      expect(calls).toEqual([predecessor.mutationId, successor.mutationId])
+      expect(await listPendingMutations()).toEqual([])
+      await expect(replayPendingMutations()).resolves.toEqual({ attempted: 0, succeeded: 0, discarded: 0, retained: 0 })
+    },
+  )
+
+  it('does not send an unstaged replacement ahead of its surviving durable predecessor', async () => {
+    const older: DurableMutationIntent = {
+      version: 1,
+      requests: [{ method: 'PATCH', path: '/settings/runtime', body: { patch: { maxContext: 4000 } } }],
+    }
+    const newer: DurableMutationIntent = {
+      version: 1,
+      requests: [{ method: 'PATCH', path: '/settings/runtime', body: { patch: { maxContext: 8000 } } }],
+    }
+    const predecessor = stagePendingMutation('settings:runtime', older)
+    await predecessor.ready
+    setPendingMutationCommitTransactionHookForTests((transaction) => transaction.abort())
+    const successor = stagePendingMutation('settings:runtime', newer, predecessor)
+    await expect(successor.ready).resolves.toBe('unavailable')
+    setPendingMutationCommitTransactionHookForTests(null)
+    const send = vi.fn(async () => ({
+      status: 'ok' as const,
+      revision: 11,
+      event: { type: 'settings.updated', resource: 'settings', revision: 11 },
+    }))
+    await expect(dispatchDurableMutation(successor, newer, wrappedDispatch(send))).resolves.toEqual({
+      status: 'unavailable',
+    })
+    expect(send).not.toHaveBeenCalled()
+    expect((await listPendingMutations()).map((entry) => entry.intent)).toEqual([older])
+  })
+
   it('rolls back a live HTTP 400 and removes its exact outbox generation', async () => {
     const intent: DurableMutationIntent = {
       version: 1,

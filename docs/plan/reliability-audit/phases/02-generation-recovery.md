@@ -66,7 +66,9 @@ validation rule for operation, outbox, event, or transcript contract changes.
 
 - Execution began at `7ede21ee99b194598f4b761a9941a4bcfdae6c45` with a clean
   worktree. This revision commits Phase 01; its connection evidence is reused.
-  The Phase 02 patch is uncommitted. No external production incident is claimed.
+  The Phase 02 patch was subsequently committed as
+  `a449e97908d41aed7f04442c260f0ce56194dd43` before Phase 03 began.
+  No external production incident is claimed.
 - Four independent read-only Luna workers assessed browser recovery, server
   operation admission, effects/restart, and compatibility/browser coverage. All
   succeeded. Parent review reconciled their candidates against current source
@@ -220,5 +222,5 @@ worker lifecycle. Phase 04 owns wider resource hydration beyond the strict
 terminal reads verified here. Phase 03 is next: read
 [its outline](03-outbox-and-optimistic-edits.md), inventory representative mutation
 owners and their real/mocked boundaries, and reuse this operation/receipt evidence.
-Recheck HEAD and this uncommitted patch before extending shared owners. No server
+Recheck HEAD and current working changes before extending shared owners. No server
 or test process is retained for the handoff.

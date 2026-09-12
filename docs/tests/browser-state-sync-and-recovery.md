@@ -1,7 +1,7 @@
 # Browser State Sync and Recovery
 
 Last audited: 2026-08-30.
-Last Targeted source check: 2026-09-12 (recovery replacement and stalled control bodies).
+Targeted source check: 2026-09-12 (command/outbox interruption and rendered settings replay).
 
 This area covers browser startup, active-writer ownership, encrypted durable mutation recovery, command
 serialization, compact local acknowledgements, authoritative resource reads, hash-cache validation,
@@ -112,6 +112,36 @@ supplies persisted malformed values after harness startup and observes normalize
 values during browser startup. The read path clones nonrepairing settings reads;
 the case does not assert a repair write to SQLite or repair before bootstrap.
 
+## Durable command interruption through visible settings
+
+`server/fastify/browser-smoke/durableMutationRecovery.spec.ts` drives the actual
+Display settings **Show Memory Limit** checkbox through its owner and durable
+`PATCH /api/v1/commands/settings/display`. Eight cases cover committed response
+loss, malformed accepted JSON, pre-acceptance transport failure, failed IndexedDB
+staging plus transport failure, a held committed receipt acknowledgement with a
+newer edit, both orders of own SSE/HTTP delivery, and a real revision gap followed
+by reload replay. DOM value/error/saving state is checked together with native
+IndexedDB metadata and isolated SQLite revisions, receipts, and command events.
+The held acknowledgement must allow the newer edit to commit before release;
+this detects command-queue/outbox-lock inversion as well as an unbounded request.
+
+Faults are injected at native storage or network delivery. SSE tests delay bytes
+from the real authenticated event stream; they do not synthesize events or
+replace reconciliation. The harness disables unrelated memory workers. Existing
+`startupRecoveryIntegrationMatrix.spec.ts` retains its settings/runtime helper
+journey and missing-event-history recovery, while `visibleStateRecovery.spec.ts`
+retains role/lineage replacement and rollback journeys.
+
+`src/ts/server/commands.clientSession.test.ts` additionally holds authentication,
+fetch, successful/error body parsing, bootstrap fetch/body, and receipt-ACK
+auth/fetch. Fake-clock deadlines and explicit cancellation must release the real
+command queue; late work cannot publish an old revision or dispatch another
+entry's receipt identity. These use controlled transport and real command/session
+owners. `durableMutationTerminalRejection.test.ts` keeps real commands, outbox,
+crypto, and replay with fake IndexedDB; injected marker/deletion failures retain
+the predecessor and block the successor, and a failed replacement cannot fall
+back to untracked transport ahead of its surviving predecessor.
+
 ## Test groups
 
 | Logical group | Relevant test locations and included cases | Behavior and regression importance |
@@ -213,4 +243,4 @@ and UI files are discussed in their focused documents.
 | Invalidation and refresh | `src/ts/server/resourceInvalidation.test.ts`; `resourceRefresh.test.ts`; `src/lib/_audit/frontendArchitecture.static.test.ts`; `src/ts/storage/database.resourceState.test.ts` |
 | Owner lifecycle and stale-state guards | `src/ts/server/ownerMutationLifecycle.test.ts`; `pendingOwnerMutationRegistry.test.ts`; `settingsGroups.test.ts`; `staleStateGuards.test.ts` |
 | Replacement/retained ownership | `src/ts/server/chatRetainedProjection.test.ts`; `persistenceActivity.svelte-node.test.ts`; `replacementDatabaseOwnership.svelte-node.test.ts` |
-| Fast-bootstrap browser evidence | `server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts`; `startupRecoveryIntegrationMatrix.spec.ts`; `mobileWriterConnectionRecovery.spec.ts`; `fastBootstrapHarness.ts` |
+| Fast-bootstrap browser evidence | `server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts`; `startupRecoveryIntegrationMatrix.spec.ts`; `durableMutationRecovery.spec.ts`; `mobileWriterConnectionRecovery.spec.ts`; `fastBootstrapHarness.ts` |

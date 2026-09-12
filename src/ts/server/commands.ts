@@ -2459,6 +2459,56 @@ export async function getServerCommandBaseRevision(
   return getServerCommandBaseRevisionForAccess('ordinary', signal, keepalive)
 }
 
+const SERVER_COMMAND_REQUEST_TIMEOUT_MS = 30_000
+
+/** Bound auth, HTTP and body parsing together. Timeout/cancellation is ambiguous:
+ * callers retain durable intent and replay its exact receipt id. Detached network
+ * work never publishes revisions or reads a later queue task's receipt context. */
+async function requestServerCommandResponse(
+  request: (auth: string, signal: AbortSignal) => Promise<Response>,
+  isCurrent: () => boolean,
+  signal?: AbortSignal | null,
+  readBody = true,
+): Promise<{ response: Response; body: unknown } | null> {
+  if (signal?.aborted || !isCurrent()) return null
+  const controller = new AbortController()
+  let rejectCancelled!: (error: Error) => void
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    rejectCancelled = reject
+  })
+  const abort = () => {
+    controller.abort()
+    rejectCancelled(new Error('Server command request cancelled or timed out'))
+  }
+  signal?.addEventListener('abort', abort, { once: true })
+  const deadline = setTimeout(abort, SERVER_COMMAND_REQUEST_TIMEOUT_MS)
+  try {
+    return await Promise.race([
+      cancelled,
+      (async () => {
+        const auth = await getNodeServerProxyAuth()
+        controller.signal.throwIfAborted()
+        if (!isCurrent()) return null
+        const response = await request(auth, controller.signal)
+        controller.signal.throwIfAborted()
+        let body: unknown = null
+        if (readBody) {
+          try {
+            body = await response.json()
+          } catch {
+            /* Classify malformed bodies by HTTP status. */
+          }
+        }
+        controller.signal.throwIfAborted()
+        return { response, body }
+      })(),
+    ])
+  } finally {
+    clearTimeout(deadline)
+    signal?.removeEventListener('abort', abort)
+  }
+}
+
 async function getServerCommandBaseRevisionForAccess(
   access: ServerCommandAccess,
   signal?: AbortSignal | null,
@@ -2468,30 +2518,27 @@ async function getServerCommandBaseRevisionForAccess(
   const sessionGeneration = captureClientSessionGeneration()
   if (cachedServerCommandRevision !== null) return cachedServerCommandRevision
 
-  const auth = await getNodeServerProxyAuth()
-  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration)) return null
-  let response: Response
   try {
-    const init: RequestInit = {
-      method: 'GET',
-      signal: signal ?? undefined,
-      headers: {
-        'risu-auth': auth,
-      },
-    }
-    if (keepalive) init.keepalive = true
-    response = await fetch(BOOTSTRAP_ENDPOINT, init)
-  } catch {
-    return null
-  }
-
-  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration) || !response.ok)
-    return null
-
-  try {
-    const body = (await response.json()) as { revision?: unknown }
-    if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration)) return null
-    if (Number.isInteger(body.revision) && (body.revision as number) >= 0) {
+    const received = await requestServerCommandResponse(
+      (auth, requestSignal) =>
+        fetch(BOOTSTRAP_ENDPOINT, {
+          method: 'GET',
+          signal: requestSignal,
+          headers: { 'risu-auth': auth },
+          ...(keepalive ? { keepalive: true } : {}),
+        }),
+      () => canExecuteServerCommandAccess(access) && isClientSessionGenerationCurrent(sessionGeneration),
+      signal,
+    )
+    if (
+      !received ||
+      !received.response.ok ||
+      !canExecuteServerCommandAccess(access) ||
+      !isClientSessionGenerationCurrent(sessionGeneration)
+    )
+      return null
+    const body = received.body as { revision?: unknown } | null
+    if (body && Number.isInteger(body.revision) && (body.revision as number) >= 0) {
       cachedServerCommandRevision = body.revision as number
       return cachedServerCommandRevision
     }
@@ -6197,6 +6244,24 @@ export type DurableMutationReplayResult =
     }
   | { status: 'unavailable' }
 
+/** Reserve replay in the same command queue as live edits before acquiring any
+ * durable key locks. A lock held while waiting for this queue can deadlock a
+ * live successor already waiting for that lock inside the queue. */
+export function enqueueDurableMutationReplay<T>(execute: () => Promise<T>): Promise<T | undefined> {
+  if (!canUseServerCommandAccess('pending-replay')) return Promise.resolve(undefined)
+  const epoch = captureDestructiveRefreshEpoch()
+  const generation = captureClientSessionGeneration()
+  return enqueueServerCommandExecution(() =>
+    withQueuedCommandExecutionContext(
+      epoch,
+      undefined,
+      undefined,
+      async () => (canExecuteServerCommandAccess('pending-replay') ? execute() : undefined),
+      generation,
+    ),
+  )
+}
+
 /** Replay one encrypted outbox entry against the current revision cursor. */
 export async function replayDurableMutationRequests(
   requests: readonly DurableMutationRequest[],
@@ -6299,23 +6364,28 @@ export async function acknowledgeServerMutationReceipts(
     throw new RangeError('Server mutation receipt request count is invalid')
   }
   try {
-    const auth = await getNodeServerProxyAuth()
-    if (!canUseClientRecoveryAccess() || isWriterAccessLost() || !isClientSessionGenerationCurrent(sessionGeneration))
-      return false
-    const response = await fetch(MUTATION_RECEIPT_ACK_ENDPOINT, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        'risu-auth': auth,
-        ...activeWriterSessionHeader(),
-      },
-      body: JSON.stringify({
-        mutationId: normalizedMutationId,
-        requestCount,
-        databaseLineage: normalizedDatabaseLineage,
-      }),
-    })
-    return response.ok
+    const received = await requestServerCommandResponse(
+      (auth, signal) =>
+        fetch(MUTATION_RECEIPT_ACK_ENDPOINT, {
+          method: 'POST',
+          signal,
+          headers: {
+            'content-type': 'application/json',
+            'risu-auth': auth,
+            ...activeWriterSessionHeader(),
+          },
+          body: JSON.stringify({
+            mutationId: normalizedMutationId,
+            requestCount,
+            databaseLineage: normalizedDatabaseLineage,
+          }),
+        }),
+      () =>
+        canUseClientRecoveryAccess() && !isWriterAccessLost() && isClientSessionGenerationCurrent(sessionGeneration),
+      undefined,
+      false,
+    )
+    return received?.response.ok ?? false
   } catch (error) {
     console.warn('Unable to acknowledge durable server mutation receipts', error)
     return false
@@ -6440,45 +6510,44 @@ async function requestCommandJson<T extends Record<string, unknown> = {}>(
   if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration))
     return { status: 'unavailable' }
 
-  const auth = await getNodeServerProxyAuth()
-  if (!canExecuteServerCommandAccess(access) || !isClientSessionGenerationCurrent(sessionGeneration))
-    return { status: 'unavailable' }
-  const mutation = nextQueuedCommandMutationRequest()
   const directReconciliation = init.deferOwnEventUntilResponse
     ? beginDirectServerCommandReconciliation(init.deferOwnEventUntilResponse)
     : null
   let confirmedEvent: CommandEvent | null = null
   try {
     let response: Response
+    let body: unknown
     try {
-      const requestInit: RequestInit = {
-        method: init.method,
-        signal: init.signal ?? undefined,
-        headers: {
-          'content-type': 'application/json',
-          'risu-auth': auth,
-          ...activeWriterSessionHeader(),
-          ...(mutation
-            ? {
-                [SERVER_MUTATION_ID_HEADER]: mutation.mutationId,
-                [SERVER_DATABASE_LINEAGE_HEADER]: mutation.databaseLineage,
-              }
-            : {}),
+      const received = await requestServerCommandResponse(
+        (auth, signal) => {
+          const mutation = nextQueuedCommandMutationRequest()
+          const requestInit: RequestInit = {
+            method: init.method,
+            signal,
+            headers: {
+              'content-type': 'application/json',
+              'risu-auth': auth,
+              ...activeWriterSessionHeader(),
+              ...(mutation
+                ? {
+                    [SERVER_MUTATION_ID_HEADER]: mutation.mutationId,
+                    [SERVER_DATABASE_LINEAGE_HEADER]: mutation.databaseLineage,
+                  }
+                : {}),
+            },
+            body: JSON.stringify(init.body),
+          }
+          if (init.keepalive) requestInit.keepalive = true
+          return fetch(`${COMMAND_ENDPOINT}${path}`, requestInit)
         },
-        body: JSON.stringify(init.body),
-      }
-      if (init.keepalive) requestInit.keepalive = true
-      response = await fetch(`${COMMAND_ENDPOINT}${path}`, requestInit)
+        () => canExecuteServerCommandAccess(access) && isClientSessionGenerationCurrent(sessionGeneration),
+        init.signal,
+      )
+      if (!received) return { status: 'unavailable' }
+      ;({ response, body } = received)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return { status: 'error', error: `Network error: ${message}` }
-    }
-
-    let body: unknown = null
-    try {
-      body = await response.json()
-    } catch {
-      // Non-JSON command errors are reported by HTTP status below.
     }
 
     if (response.status === 409 && isDatabaseLineageConflict(body)) {

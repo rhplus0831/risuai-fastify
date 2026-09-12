@@ -5,7 +5,6 @@ import {
   flushPendingMutationReceiptAcknowledgements,
 } from './durableMutationDispatch'
 const dispatchApi = vi.hoisted(() => ({
-  replay: vi.fn(),
   acknowledge: vi.fn(),
   inlineReplay: vi.fn(),
   notify: vi.fn(),
@@ -13,7 +12,7 @@ const dispatchApi = vi.hoisted(() => ({
 }))
 vi.mock('./commands', () => ({
   acknowledgeServerMutationReceipts: dispatchApi.acknowledge,
-  replayDurableMutationRequests: dispatchApi.replay,
+  enqueueDurableMutationReplay: (execute: () => Promise<unknown>) => execute(),
   replayDurableMutationRequestsInline: dispatchApi.inlineReplay,
   runServerCommandWithoutMutationReceipt: (execute: () => unknown) => execute(),
   runServerCommandWithMutationReceipt: (execute: () => unknown) => execute(),
@@ -101,9 +100,8 @@ function deferred<T>() {
 
 beforeEach(async () => {
   resetClientSessionForTests()
-  dispatchApi.replay.mockReset().mockResolvedValue({ status: 'ok' })
   dispatchApi.acknowledge.mockReset().mockResolvedValue(true)
-  dispatchApi.inlineReplay.mockReset()
+  dispatchApi.inlineReplay.mockReset().mockResolvedValue({ status: 'ok' })
   dispatchApi.notify.mockReset()
   dispatchApi.reload.mockReset()
   setPendingMutationDiscardNotifier(dispatchApi.notify)
@@ -355,13 +353,13 @@ describe('pending mutation reader admission', () => {
     demoteAndRepromote()
     gate.resolve(undefined)
     await expect(pending).resolves.toEqual({ disposition: 'retained' })
-    expect(dispatchApi.replay).not.toHaveBeenCalled()
+    expect(dispatchApi.inlineReplay).not.toHaveBeenCalled()
     expect(await rawMutation(handle.mutationId)).toMatchObject({ dispatchStarted: false })
     const fresh = (await listPendingMutations())[0]
     await expect(dispatchDurableMutationReplay(fresh.handle, fresh.intent)).resolves.toMatchObject({
       disposition: 'succeeded',
     })
-    expect(dispatchApi.replay).toHaveBeenCalledOnce()
+    expect(dispatchApi.inlineReplay).toHaveBeenCalledOnce()
   })
 
   it('parks the server ACK after an old replay receives accepted success across repromotion', async () => {
@@ -369,9 +367,9 @@ describe('pending mutation reader admission', () => {
     const handle = stagePendingMutation('accepted-replay', intent())
     await handle.ready
     const response = deferred<{ status: 'ok' }>()
-    dispatchApi.replay.mockReturnValueOnce(response.promise)
+    dispatchApi.inlineReplay.mockReturnValueOnce(response.promise)
     const pending = dispatchDurableMutationReplay(handle, intent())
-    await vi.waitFor(() => expect(dispatchApi.replay).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(dispatchApi.inlineReplay).toHaveBeenCalledOnce())
     demoteAndRepromote()
     response.resolve({ status: 'ok' })
     await expect(pending).resolves.toMatchObject({ disposition: 'succeeded' })

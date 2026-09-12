@@ -25,7 +25,7 @@ import { tick } from 'svelte'
 import { selectedCharID } from './stores.svelte'
 import { changeChatTo, chatFoldedState, chatFoldedStateMessageIndex, foldChatToMessage } from './globalApi.svelte'
 import { testDatabaseState } from './__tests__/resourceDatabaseState'
-import { clearCachedServerCommandRevision } from './server/commands'
+import { clearCachedServerCommandRevision, runExternalServerRevisionOperation } from './server/commands'
 import { seedCloneCostDb, withCloneInstrumentation } from './__tests__/cloneCostHarness'
 import { charactersResourceState } from './server/resourceState.svelte'
 
@@ -73,7 +73,8 @@ beforeEach(() => {
   )
 })
 
-afterEach(() => {
+afterEach(async () => {
+  await runExternalServerRevisionOperation(async () => undefined)
   vi.unstubAllGlobals()
 })
 

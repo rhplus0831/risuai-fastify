@@ -91,6 +91,135 @@ afterEach(async () => {
 })
 
 describe('command transport across connected client roles', () => {
+  it('releases the command queue when an accepted response body stalls and ignores its late receipt', async () => {
+    becomeWriter()
+    vi.useFakeTimers()
+    const body = deferred<unknown>()
+    const json = vi.fn(() => body.promise)
+    const response = Response.json(receipt(2))
+    response.json = json
+    vi.mocked(fetch).mockResolvedValueOnce(response)
+    const reconcile = vi.fn()
+    setServerCommandSuccessReconciler(reconcile)
+    let settled = false
+    const first = runServerCommand({
+      command: (baseRevision) => patchRuntimeSettings({ baseRevision, patch: { maxContext: 4000 } }),
+    }).then((result) => {
+      settled = true
+      return result
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(json).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(settled).toBe(true)
+      await expect(first).resolves.toMatchObject({ status: 'error' })
+      vi.mocked(fetch).mockResolvedValueOnce(Response.json(receipt(3)))
+      await expect(
+        runServerCommand({
+          command: (baseRevision) => patchRuntimeSettings({ baseRevision, patch: { maxContext: 8000 } }),
+        }),
+      ).resolves.toMatchObject({ status: 'ok', revision: 3 })
+      body.resolve(receipt(2))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(peekCachedServerCommandRevision()).toBe(3)
+      expect(reconcile).toHaveBeenCalledOnce()
+      expect(reconcile.mock.calls[0][0].revision).toBe(3)
+      await vi.advanceTimersByTimeAsync(500) // Normal persistence-indicator linger.
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      body.resolve(receipt(2))
+      await first
+      vi.useRealTimers()
+    }
+  })
+
+  it.each([
+    'auth',
+    'fetch',
+    'error-body',
+    'bootstrap-fetch',
+    'bootstrap-body',
+    'receipt-auth',
+    'receipt-fetch',
+  ] as const)('bounds %s without publishing a late response or blocking the next edit', async (boundary) => {
+    becomeWriter()
+    vi.useFakeTimers()
+    const auth = deferred<string>()
+    const response = deferred<Response>()
+    const body = deferred<unknown>()
+    const acknowledgement = boundary.startsWith('receipt-')
+    if (boundary.includes('auth')) mocks.auth.mockReturnValueOnce(auth.promise)
+    else if (boundary.endsWith('body')) {
+      const held = Response.json({}, { status: boundary === 'error-body' ? 423 : 200 })
+      held.json = vi.fn(() => body.promise)
+      vi.mocked(fetch).mockResolvedValueOnce(held)
+    } else vi.mocked(fetch).mockReturnValueOnce(response.promise)
+    if (boundary.startsWith('bootstrap-')) clearCachedServerCommandRevision()
+    let settled = false
+    const first = (
+      acknowledgement
+        ? acknowledgeServerMutationReceipts('accepted-a', 1, 'lineage-a')
+        : runServerCommand({
+            command: (baseRevision) => patchRuntimeSettings({ baseRevision, patch: { maxContext: 4000 } }),
+          })
+    ).then((result) => {
+      settled = true
+      return result
+    })
+    try {
+      await vi.advanceTimersByTimeAsync(0)
+      expect(mocks.auth).toHaveBeenCalledOnce()
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(settled).toBe(true)
+      if (acknowledgement) await expect(first).resolves.toBe(false)
+      else await expect(first).resolves.toMatchObject({ status: 'error' })
+      // A recovered revision is independent of the held old request.
+      setCachedServerCommandRevision(2)
+      vi.mocked(fetch).mockResolvedValue(Response.json(receipt(3)))
+      await expect(
+        runServerCommand({
+          command: (baseRevision) => patchRuntimeSettings({ baseRevision, patch: { maxContext: 8000 } }),
+        }),
+      ).resolves.toMatchObject({ status: 'ok', revision: 3 })
+      const callsBeforeLateDelivery = vi.mocked(fetch).mock.calls.length
+      auth.resolve('old-auth')
+      response.resolve(Response.json(receipt(99)))
+      body.resolve(boundary === 'error-body' ? { error: 'active_writer_stale' } : receipt(99))
+      await vi.advanceTimersByTimeAsync(500)
+      expect(fetch).toHaveBeenCalledTimes(callsBeforeLateDelivery)
+      expect(peekCachedServerCommandRevision()).toBe(3)
+      expect(canUseClientWriteAccess()).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      auth.resolve('old-auth')
+      response.resolve(Response.json(receipt(99)))
+      body.resolve(receipt(99))
+      await first
+      vi.useRealTimers()
+    }
+  })
+
+  it('settles explicit cancellation even when response parsing ignores abort', async () => {
+    becomeWriter()
+    const body = deferred<unknown>()
+    const response = Response.json(receipt(2))
+    response.json = vi.fn(() => body.promise)
+    vi.mocked(fetch).mockResolvedValueOnce(response)
+    const controller = new AbortController()
+    const request = patchRuntimeSettings({ baseRevision: 1, patch: { maxContext: 4000 } }, controller.signal)
+    await vi.waitFor(() => expect(response.json).toHaveBeenCalledOnce())
+    controller.abort()
+    try {
+      await expect(request).resolves.toMatchObject({ status: 'error' })
+      expect(vi.mocked(fetch).mock.calls[0][1]?.signal?.aborted).toBe(true)
+    } finally {
+      body.resolve(receipt(2))
+      await request
+    }
+    expect(peekCachedServerCommandRevision()).toBe(1)
+  })
+
   it('denies reader commands, initialization, replay and receipt writes before even requesting auth', async () => {
     const operation = beginClientSession('client-a')
     settleClientReader(operation, ownership('client-b', 1))
