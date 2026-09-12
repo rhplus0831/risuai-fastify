@@ -23,6 +23,7 @@ defects in this checkout or show that every earlier fix caused a regression.
 
 ## Document Ownership
 
+<!-- prettier-ignore -->
 | Document | Owns |
 | --- | --- |
 | This plan | Objective, scope, method, phase dependencies, validation policy, completion rules. |
@@ -63,6 +64,7 @@ Finish one workflow through audit, necessary fixes, test repair, and browser
 verification before starting the next implementation phase. Later phases are
 bounded outlines; complete their owner/coverage matrix when they begin.
 
+<!-- prettier-ignore -->
 | Phase | Workflow and dependency | Deliverable |
 | --- | --- | --- |
 | [01](phases/01-connection-recovery.md) | Connection recovery and writer promotion; first priority because failures disable normal use. | Verified attempt retirement/replacement, authority gating, retained drafts, and usable controls. |
@@ -84,6 +86,7 @@ with a recorded dependency or impact reason.
 
 For each phase, enumerate supported entry paths and record:
 
+<!-- prettier-ignore -->
 | Field | Required content |
 | --- | --- |
 | Contract ID | Stable phase-local identifier, such as `R1`, for traceability. |
@@ -104,9 +107,11 @@ rendered controls, and request observations relevant to the contract.
 - **Correctness:** stale work cannot overwrite current state; work stays within
   its chat, writer, database lineage, and operation/attempt; supported idempotent
   replay cannot duplicate a committed result; queued intent cannot look accepted.
-- **Progress:** interruption releases waiting callers; retired attempts cannot
-  block replacements; unresolved work retains a reachable reconciliation or
-  explicit recovery path. Error handling must cover the whole relevant workflow.
+- **Progress:** interruption has an explicit completion/recovery path. Where a
+  lifecycle owns cancellation, it releases waiting callers and retired attempts
+  cannot block replacements. Distinguish those leases from cold startup's shared
+  attempt, bounded control requests, and currentness checks (phase 01). Error
+  handling must cover the whole relevant workflow.
 - **Settled behavior:** resolved obligations stop retrying; obsolete timers and
   subscriptions stop affecting current work; idle foreground activity avoids
   unnecessary bootstrap/resource requests.
@@ -114,7 +119,7 @@ rendered controls, and request observations relevant to the contract.
 Inspect `await`, response parsing, stream setup/read, timers, callbacks,
 subscriptions, synchronous re-entry, and `finally` cleanup. At each boundary,
 identify the current owner, validity evidence, cancellation behavior, successor,
-and exact resource cleanup is allowed to retire.
+and the exact resource that cleanup is allowed to retire.
 
 ### 3. Exercise hostile schedules with real interactions
 
