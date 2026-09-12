@@ -35,6 +35,7 @@ vi.mock('../../../server/generationOperations', () => ({
 
 import {
   cancelServerChatGeneration,
+  captureGenerationJobViewerFence,
   retireGenerationJobViewers,
   requestServerChat,
   requestServerChatGeneration,
@@ -2376,26 +2377,41 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     })
   })
 
-  it('retires an exact job viewer without cancelling durable work', async () => {
+  it('retires only pre-recovery job viewers while a newer viewer still receives completion', async () => {
     const jobId = 'job-observer-retire'
     const wire = controlledGenerationStream()
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => wire.response),
-    )
+    const newerWire = controlledGenerationStream()
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(wire.response)
+      .mockResolvedValueOnce(newerWire.response)
+    vi.stubGlobal('fetch', fetchMock)
 
     const pending = requestServerChatGeneration(baseInput, null, jobId)
     sendGenerationReadyFrames(wire, jobId)
     const served = await pending
     expect(served.status).toBe('ok')
     if (served.status !== 'ok') return
+    const fence = captureGenerationJobViewerFence()
+    const newerPending = requestServerChatGeneration(baseInput, null, jobId)
+    sendGenerationReadyFrames(newerWire, jobId)
+    const newerServed = await newerPending
+    expect(newerServed.status).toBe('ok')
+    if (newerServed.status !== 'ok') return
 
-    retireGenerationJobViewers(jobId)
+    retireGenerationJobViewers(jobId, fence)
 
     await expect(served.terminal).resolves.toMatchObject({
       status: 'error',
       reattachOutcome: 'observer_superseded',
     })
+    newerWire.send('done', { generationId: jobId, result: 'completed reply' })
+    newerWire.close()
+    await expect(newerServed.terminal).resolves.toMatchObject({
+      status: 'done',
+      done: { result: 'completed reply' },
+    })
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
     expect(generationOperationMocks.stopOperation).not.toHaveBeenCalled()
   })
 

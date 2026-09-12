@@ -247,11 +247,23 @@ describe('generation effect ledger', () => {
           generationId: 'generation-recent',
           kind,
           delivery: 'late_recovery',
-          claimedAt: '2026-09-12T00:00:30.000Z',
+          claimedAt: '2026-09-12T00:01:00.000Z',
           recoverRecentCompletionAlert: true,
         })
         expect(claim).toMatchObject({ status: 'claimed', effect: { status: 'claimed', delivery: 'late_recovery' } })
         if (claim.status !== 'claimed') throw new Error('expected recent alert claim')
+        for (const delivery of ['late_recovery', 'live_terminal'] as const) {
+          expect(
+            claimGenerationEffect(db, {
+              databaseLineage: lineage,
+              generationId: 'generation-recent',
+              kind,
+              delivery,
+              claimedAt: '2026-09-12T00:01:00.000Z',
+              recoverRecentCompletionAlert: true,
+            }),
+          ).toMatchObject({ status: 'not_claimed', reason: 'already_receipted' })
+        }
         expect(
           settleGenerationEffect(db, {
             databaseLineage: lineage,
@@ -261,6 +273,16 @@ describe('generation effect ledger', () => {
             status: 'completed',
           }),
         ).toMatchObject({ status: 'completed' })
+        expect(
+          claimGenerationEffect(db, {
+            databaseLineage: lineage,
+            generationId: 'generation-recent',
+            kind,
+            delivery: 'late_recovery',
+            claimedAt: '2026-09-12T00:01:00.000Z',
+            recoverRecentCompletionAlert: true,
+          }),
+        ).toMatchObject({ status: 'not_claimed', reason: 'already_receipted', effect: { status: 'completed' } })
       }
       expect(
         claimGenerationEffect(db, {
@@ -283,16 +305,18 @@ describe('generation effect ledger', () => {
         messageId: 'message-stale',
         createdAt: '2026-09-12T00:00:00.000Z',
       })
-      expect(
-        claimGenerationEffect(db, {
-          databaseLineage: lineage,
-          generationId: 'generation-stale',
-          kind: 'notification',
-          delivery: 'late_recovery',
-          claimedAt: '2026-09-12T00:01:00.001Z',
-          recoverRecentCompletionAlert: true,
-        }),
-      ).toMatchObject({ status: 'not_claimed', reason: 'late_recovery_skipped' })
+      for (const kind of ['notification', 'completion_sound'] as const) {
+        expect(
+          claimGenerationEffect(db, {
+            databaseLineage: lineage,
+            generationId: 'generation-stale',
+            kind,
+            delivery: 'late_recovery',
+            claimedAt: '2026-09-12T00:01:00.001Z',
+            recoverRecentCompletionAlert: true,
+          }),
+        ).toMatchObject({ status: 'not_claimed', reason: 'late_recovery_skipped' })
+      }
     } finally {
       db.close()
     }

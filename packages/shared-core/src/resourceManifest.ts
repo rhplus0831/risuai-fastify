@@ -664,6 +664,7 @@ export const RESOURCE_SURFACE_MANIFEST = {
       'src/ts/process/recoveredGenerationEffects.ts',
     ],
     requirements: [
+      group('display', ['generate'], ['notification', 'playMessage']),
       group('providers', ['generate']),
       group('models', ['generate']),
       group('runtime', ['generate']),

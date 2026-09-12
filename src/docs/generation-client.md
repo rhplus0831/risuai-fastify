@@ -102,6 +102,8 @@ Important files:
   missing durable effects after bootstrap. TTS and stale ephemeral effects are
   skipped, while notification and completion sound receive one server-fenced
   recovery claim when reconciliation starts within 60 seconds of completion.
+  Recovery waits for display settings before claiming alerts, and a recent
+  claim marks a background chat unread even when desktop/audio alerts are disabled.
 
 ## Preflight Persistence Gates
 
@@ -144,6 +146,9 @@ authority and transcript reconciliation before viewer UI is settled. Viewer
 retirement is fenced by the jobs and viewer registrations captured before the
 authority request: a newer operation, attempt, projection, or viewer registered
 during recovery cannot be retired by the older bootstrap. Viewer
+streams for still-live background jobs remain attached because replacement
+observation targets only the open chat. Absent background jobs still retire
+and reconcile their terminal transcript. Viewer
 transport failures never use the ordinary provider-error/inlay path until
 durable authority proves a terminal generation failure. Terminal `postGeneration` data
 can advance the revision cache, apply a server-owned `messagePatch`, render the

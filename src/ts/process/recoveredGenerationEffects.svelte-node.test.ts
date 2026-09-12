@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { PendingGenerationEffect } from '../server/bootstrap'
 import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
+import { resolveResourceRequirements, type ResourceSurfaceId } from '@risuai/shared-core/resource-manifest'
 
 const state = vi.hoisted(() => ({
   order: [] as string[],
@@ -276,6 +277,9 @@ describe('late recovered generation effects', () => {
     })
 
     expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
+    expect(lateAlerts.notify).not.toHaveBeenCalled()
+    expect(lateAlerts.sound).not.toHaveBeenCalled()
+    expect(lateAlerts.markChatUnread).not.toHaveBeenCalled()
     expect(ledger.calls).toEqual(
       expect.arrayContaining([
         'late_recovery:notification',
@@ -315,6 +319,52 @@ describe('late recovered generation effects', () => {
     expect(lateAlerts.sound).toHaveBeenCalledOnce()
     expect(lateAlerts.markChatUnread).toHaveBeenCalledOnce()
   })
+
+  it('waits for display settings before claiming recent alerts', async () => {
+    lateAlerts.grantRecent = true
+    let release!: () => void
+    const displayReady = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    effectResources.ensure.mockImplementation(async (surfaces: ResourceSurfaceId[]) => {
+      const needsDisplay = resolveResourceRequirements(surfaces).some(
+        (requirement) => requirement.kind === 'settings-group' && requirement.group === 'display',
+      )
+      if (needsDisplay) await displayReady
+    })
+    const pending = reconcileRecoveredGenerationEffects(ref)
+    try {
+      await Promise.resolve()
+      await Promise.resolve()
+      expect(ledger.calls).toEqual([])
+    } finally {
+      settingsResourceState.value = { ...settingsResourceState.value, notification: true } as never
+      settingsResourceState.groupStatuses.display = 'ready'
+      release()
+      await pending
+    }
+    expect(lateAlerts.notify).toHaveBeenCalledWith({ body: 'reply' })
+    expect(lateAlerts.sound).toHaveBeenCalledOnce()
+  })
+
+  it.each([false, true])(
+    'reconciles unread state with alerts disabled when the chat is visible: %s',
+    async (visible) => {
+      lateAlerts.grantRecent = true
+      lateAlerts.isChatVisible.mockReturnValue(visible)
+      lateAlerts.sound.mockReturnValueOnce(false)
+      settingsResourceState.value = { ...settingsResourceState.value, notification: false } as never
+      await expect(reconcileRecoveredGenerationEffects(ref)).resolves.toMatchObject({ allEffectsReconciled: true })
+      expect(lateAlerts.notify).not.toHaveBeenCalled()
+      if (visible) expect(lateAlerts.markChatUnread).not.toHaveBeenCalled()
+      else expect(lateAlerts.markChatUnread).toHaveBeenCalledWith('chat-a')
+
+      lateAlerts.markChatUnread.mockClear()
+      lateAlerts.isChatVisible.mockReturnValue(false)
+      await reconcileRecoveredGenerationEffects(ref)
+      expect(lateAlerts.markChatUnread).not.toHaveBeenCalled()
+    },
+  )
 
   it('runs only missing durable effects when one already has a receipt', async () => {
     ledger.receipts.add('generation-a:igp')

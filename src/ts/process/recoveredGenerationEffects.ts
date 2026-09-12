@@ -175,15 +175,13 @@ export async function reconcileRecoveredGenerationEffects(
     ),
   ])
 
-  if (
-    recovered &&
-    !isChatVisible(ref.chatId) &&
-    (ephemeral[0].status === 'completed' || ephemeral[2].status === 'completed')
-  ) {
+  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
+  // A recent claim also owns the unread indication when the user disabled
+  // desktop/audio alerts. Replayed or stale claims must not re-mark read chats.
+  if (recovered && !isChatVisible(ref.chatId) && (ephemeral[0].executed || ephemeral[2].executed)) {
     markChatUnread(ref.chatId)
   }
 
-  if (!recoveryIsCurrent(sourceGeneration)) return unavailableEffects()
   const initial = recovered ?? resolveGeneration(ref)
   if (!initial) return { durableEffectsReconciled: false, allEffectsReconciled: false }
   const completionText = initial.message.data

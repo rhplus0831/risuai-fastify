@@ -1234,9 +1234,14 @@ function retainAbsentGenerationJobsForReconciliation(previousJobs: readonly Acti
 async function retireSupersededGenerationObservers(snapshot: GenerationObserverRetirementSnapshot): Promise<boolean> {
   const activities = get(activeChatGenerations).filter((activity) => activity.kind === 'message' && activity.chatId)
   if (activities.length === 0) return false
+  const openChatId = openChatTarget()?.chatId
   const jobs = snapshot.jobs.filter((job) =>
     activities.some((activity) => {
       if (activity.chatId !== job.chatId) return false
+      // Only the open chat can acquire a replacement observer. Preserve live
+      // background streams so their terminal still delivers completion effects.
+      // Absent jobs must still retire and reconcile their persisted outcome.
+      if (job.chatId !== openChatId && authoritativeGenerationJobsById.has(job.jobId)) return false
       if (activity.operationId && job.operationId && activity.operationId !== job.operationId) return false
       if (activity.attemptNo !== undefined && job.attemptNo !== undefined && activity.attemptNo !== job.attemptNo) {
         return false

@@ -1904,6 +1904,76 @@ describe('reattach open-chat generation', () => {
     )
   })
 
+  it.each([false, true])(
+    'preserves a live background viewer when switching during recovery is %s',
+    async (switchDuringRecovery) => {
+      openChat(switchDuringRecovery ? 'chat-1' : 'chat-2')
+      const job = {
+        chatId: 'chat-1',
+        jobId: 'job-background',
+        operationId: 'operation-background',
+        operationStateVersion: 4,
+        projectionEpoch: 12,
+        attemptNo: 1,
+      }
+      setActiveGenerationJobs([job], { projectionEpoch: 12 })
+      const activity = beginChatGenerationActivity({
+        target: { selectedCharID: 0, chatPage: 0, characterId: 'char-a', chatId: job.chatId },
+        kind: 'message',
+        operationId: job.operationId,
+      })!
+      let release!: () => void
+      h.fetchRuntimeJobs.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = () =>
+            resolve({
+              status: 'ok',
+              bootstrap: {
+                generationOperationProjectionEpoch: 12,
+                activeGenerationJobs: [job],
+              },
+            })
+        }),
+      )
+      try {
+        const refresh = refreshActiveGenerationJobsFromBootstrap(undefined, 'focus')
+        await vi.waitFor(() => expect(h.fetchRuntimeJobs).toHaveBeenCalledOnce())
+        if (switchDuringRecovery) openChat('chat-2')
+        release()
+        await refresh
+        await maybeReattachOpenChatGeneration()
+        expect(h.retireGenerationJobViewers).not.toHaveBeenCalled()
+        expect(h.retireGenerationOperationViewers).not.toHaveBeenCalled()
+        expect(h.sendChat).not.toHaveBeenCalled()
+      } finally {
+        finishChatGenerationActivity(activity.id)
+      }
+    },
+  )
+
+  it('retires an absent background viewer and hydrates its terminal transcript', async () => {
+    openChat('chat-2')
+    const job = { chatId: 'chat-1', jobId: 'job-background-terminal', operationId: 'operation-background-terminal' }
+    setActiveGenerationJobs([job])
+    const activity = beginChatGenerationActivity({
+      target: { selectedCharID: 0, chatPage: 0, characterId: 'char-a', chatId: job.chatId },
+      kind: 'message',
+      operationId: job.operationId,
+    })!
+    h.fetchRuntimeJobs.mockResolvedValueOnce({ status: 'ok', bootstrap: { activeGenerationJobs: [] } })
+    try {
+      await refreshActiveGenerationJobsFromBootstrap(undefined, 'focus')
+      expect(h.retireGenerationJobViewers).toHaveBeenCalledWith(job.jobId, 17)
+      expect(h.retireGenerationOperationViewers).toHaveBeenCalledWith(job.operationId, 29)
+      expect(h.hydrateChatMessages).toHaveBeenCalledWith(
+        job.chatId,
+        expect.objectContaining({ force: true, strict: true }),
+      )
+    } finally {
+      finishChatGenerationActivity(activity.id)
+    }
+  })
+
   it('does not retire a newer same-chat observer that starts while recovery is in flight', async () => {
     openChat('chat-1')
     const oldJob = {
