@@ -162,75 +162,80 @@
     <div class="grid gap-2 lg:grid-cols-2" data-risu-agent-list>
       {#each agents as agent, index (agent.id)}
         {@const references = referencingPresets(agent.id)}
-        <article class="risu-card flex flex-col gap-2" data-risu-agent-row data-agent-id={agent.id}>
-          <div class="flex flex-wrap items-center gap-2">
-            <span class="font-medium">{agent.name}</span>
-            <span class="text-xs text-textcolor2">{agent.outputFormat}</span>
-            <div class="ml-auto flex gap-1">
+        <article
+          class="risu-card grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          data-risu-agent-row
+          data-agent-id={agent.id}>
+          <div class="order-2 flex flex-wrap justify-center gap-1 sm:justify-end" data-risu-agent-actions>
+            <Button
+              size="sm"
+              styled="outlined"
+              className="min-h-11 min-w-11"
+              disabled={busy || index === 0}
+              ariaLabel={language.agentPresets.moveAgentUp(agent.name)}
+              onclick={() => move(agent, -1)}><ArrowUpIcon size={14} /></Button>
+            <Button
+              size="sm"
+              styled="outlined"
+              className="min-h-11 min-w-11"
+              disabled={busy || index === agents.length - 1}
+              ariaLabel={language.agentPresets.moveAgentDown(agent.name)}
+              onclick={() => move(agent, 1)}><ArrowDownIcon size={14} /></Button>
+            <Button
+              size="sm"
+              styled="outlined"
+              className="min-h-11 min-w-11"
+              disabled={busy}
+              ariaLabel={language.agentPresets.editAgentNamed(agent.name)}
+              onclick={() => openEdit(agent)}><PencilIcon size={14} /></Button>
+            <Button
+              size="sm"
+              styled="outlined"
+              className="min-h-11 min-w-11"
+              disabled={busy}
+              ariaLabel={language.agentPresets.duplicateAgentNamed(agent.name)}
+              onclick={() => copy(agent)}><CopyIcon size={14} /></Button>
+            <span class="border-l border-darkborderc pl-1" data-risu-danger-action>
               <Button
                 size="sm"
-                styled="outlined"
+                styled="danger"
                 className="min-h-11 min-w-11"
-                disabled={busy || index === 0}
-                ariaLabel={language.agentPresets.moveAgentUp(agent.name)}
-                onclick={() => move(agent, -1)}><ArrowUpIcon size={14} /></Button>
-              <Button
-                size="sm"
-                styled="outlined"
-                className="min-h-11 min-w-11"
-                disabled={busy || index === agents.length - 1}
-                ariaLabel={language.agentPresets.moveAgentDown(agent.name)}
-                onclick={() => move(agent, 1)}><ArrowDownIcon size={14} /></Button>
-              <Button
-                size="sm"
-                styled="outlined"
-                className="min-h-11 min-w-11"
-                disabled={busy}
-                ariaLabel={language.agentPresets.editAgentNamed(agent.name)}
-                onclick={() => openEdit(agent)}><PencilIcon size={14} /></Button>
-              <Button
-                size="sm"
-                styled="outlined"
-                className="min-h-11 min-w-11"
-                disabled={busy}
-                ariaLabel={language.agentPresets.duplicateAgentNamed(agent.name)}
-                onclick={() => copy(agent)}><CopyIcon size={14} /></Button>
-              <span class="border-l border-darkborderc pl-1" data-risu-danger-action>
-                <Button
-                  size="sm"
-                  styled="danger"
-                  className="min-h-11 min-w-11"
-                  disabled={busy || references.length > 0}
-                  ariaLabel={references.length > 0
-                    ? language.agentPresets.deleteAgentBlocked(agent.name, references.length)
-                    : language.agentPresets.deleteAgentAccessibleName(agent.name)}
-                  onclick={() => remove(agent)}><TrashIcon size={14} /></Button>
-              </span>
-            </div>
+                disabled={busy || references.length > 0}
+                ariaLabel={references.length > 0
+                  ? language.agentPresets.deleteAgentBlocked(agent.name, references.length)
+                  : language.agentPresets.deleteAgentAccessibleName(agent.name)}
+                onclick={() => remove(agent)}><TrashIcon size={14} /></Button>
+            </span>
           </div>
-          {#if agent.description}<p class="text-xs text-textcolor2">{agent.description}</p>{/if}
-          <span class="break-all text-xs text-textcolor2">{agent.id}</span>
-          {#if references.length > 0}
-            <details class="text-xs text-textcolor2" data-risu-agent-dependencies>
-              <summary class="cursor-pointer font-medium text-textcolor">
-                {language.agentPresets.usedByPresets(references.length)}
-              </summary>
-              <ul class="mt-2 space-y-1 border-l border-darkborderc pl-3">
-                {#each references as reference (reference.preset.id)}
-                  <li class="flex flex-wrap items-center justify-between gap-2">
-                    <span>{language.agentPresets.presetUseCount(reference.preset.name, reference.useCount)}</span>
-                    {#if onEditPreset}
-                      <Button size="sm" styled="outlined" onclick={() => onEditPreset?.(reference.preset.id)}>
-                        {language.agentPresets.openBlockingPreset(reference.preset.name)}
-                      </Button>
-                    {/if}
-                  </li>
-                {/each}
-              </ul>
-            </details>
-          {:else}
-            <span class="text-xs text-textcolor2">{language.agentPresets.agentUnused}</span>
-          {/if}
+          <div class="order-1 flex min-w-0 flex-col gap-2">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-medium">{agent.name}</span>
+              <span class="text-xs text-textcolor2">{agent.outputFormat}</span>
+            </div>
+            {#if agent.description}<p class="text-xs text-textcolor2">{agent.description}</p>{/if}
+            <span class="break-all text-xs text-textcolor2">{agent.id}</span>
+            {#if references.length > 0}
+              <details class="text-xs text-textcolor2" data-risu-agent-dependencies>
+                <summary class="cursor-pointer font-medium text-textcolor">
+                  {language.agentPresets.usedByPresets(references.length)}
+                </summary>
+                <ul class="mt-2 space-y-1 border-l border-darkborderc pl-3">
+                  {#each references as reference (reference.preset.id)}
+                    <li class="flex flex-wrap items-center justify-between gap-2">
+                      <span>{language.agentPresets.presetUseCount(reference.preset.name, reference.useCount)}</span>
+                      {#if onEditPreset}
+                        <Button size="sm" styled="outlined" onclick={() => onEditPreset?.(reference.preset.id)}>
+                          {language.agentPresets.openBlockingPreset(reference.preset.name)}
+                        </Button>
+                      {/if}
+                    </li>
+                  {/each}
+                </ul>
+              </details>
+            {:else}
+              <span class="text-xs text-textcolor2">{language.agentPresets.agentUnused}</span>
+            {/if}
+          </div>
         </article>
       {/each}
     </div>
