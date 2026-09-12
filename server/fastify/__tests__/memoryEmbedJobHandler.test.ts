@@ -583,6 +583,76 @@ describe('embed memory job handler', () => {
     }
   })
 
+  it.each(['success', 'failure'] as const)(
+    'retires an abort-insensitive embedding request and ignores its late %s after a sibling and recreated instance complete',
+    async (late) => {
+      vi.useFakeTimers()
+      const db = openDatabase(makeDataDir())
+      let release!: () => void
+      let tick: Promise<boolean> | undefined
+      try {
+        seedBatchJob(db, { id: 'job-1', chunkId: 'chunk-1', text: 'held source' })
+        seedBatchJob(db, { id: 'job-2', chunkId: 'chunk-2', text: 'sibling source' })
+        let holdFirst = true
+        const embed = vi.fn(async (input: { input: readonly string[] }) => {
+          if (input.input[0] === 'held source' && holdFirst) {
+            holdFirst = false
+            await new Promise<void>((resolve) => {
+              release = resolve
+            })
+            if (late === 'failure') throw new Error('retired failure')
+          }
+          return { model: 'custom', vectors: [new Float32Array([1, 2])], dim: 2 }
+        })
+        const worker = new MemoryWorker({
+          db,
+          batchHandlers: {
+            embed: createEmbedMemoryJobBatchHandler({
+              db,
+              loadDatabase: () => database({ embeddingMaxConcurrent: 1 }),
+              embed: embed as never,
+              sleep: async () => {},
+              providerFetchDeadlineMs: 25,
+            }),
+          },
+        })
+        let settled = false
+        tick = worker.tick().then((value) => {
+          settled = true
+          return value
+        })
+        await vi.advanceTimersByTimeAsync(25)
+        expect(settled).toBe(true)
+        await tick
+        expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'pending' })
+        expect(getMemoryJob(db, 'job-2')).toMatchObject({ status: 'completed' })
+        expect(listMemoryEmbeddings(db, { chatId: 'chat-1' }).map((row) => row.chunkId)).toEqual(['chunk-2'])
+        const previous = getMemoryJob(db, 'job-1')!
+        db.prepare('DELETE FROM memory_jobs WHERE id = ?').run(previous.id)
+        const replacement = enqueueMemoryJob(db, {
+          id: previous.id,
+          chatId: previous.chatId,
+          kind: 'embed',
+          payload: previous.payload,
+        })
+        expect(replacement.instanceId).not.toBe(previous.instanceId)
+        await worker.tick()
+        expect(getMemoryJob(db, previous.id)).toMatchObject({ instanceId: replacement.instanceId, status: 'completed' })
+        const currentOutput = listMemoryEmbeddings(db, { chatId: 'chat-1' })
+        expect(currentOutput).toHaveLength(2)
+        release()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(listMemoryEmbeddings(db, { chatId: 'chat-1' })).toEqual(currentOutput)
+        expect(getMemoryJob(db, previous.id)).toMatchObject({ instanceId: replacement.instanceId, status: 'completed' })
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        release?.()
+        await tick
+        db.close()
+      }
+    },
+  )
+
   it('clears the embedding deadline after a provider call resolves under it', async () => {
     vi.useFakeTimers()
     const db = openDatabase(makeDataDir())

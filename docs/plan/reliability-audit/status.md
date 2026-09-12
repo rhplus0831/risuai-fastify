@@ -4,12 +4,13 @@ Updated: 2026-09-12.
 
 ## Current Cursor
 
-- State: **Phases 01–04 complete. Phase 05 is next.**
+- State: **Phases 01–05 complete. Phase 06 is next.**
 - Planning work: complete, including source grounding, independent review,
   corrections, and documentation validation.
-- Next action: recheck source/worktree and complete the [Phase 05](phases/05-background-jobs.md)
-  background-job entry inventory, including a selected real worker in an isolated
-  deterministic-provider harness. Phase 05 has not started.
+- Next action: read [Phase 06](phases/06-import-and-restore.md), recheck source/worktree,
+  and inventory import/restore replacement and publication boundaries using
+  disposable database-lineage fixtures. Phase 05 is complete and uncommitted.
+- Phase 05 baseline: `86d07b1da`, clean worktree at entry.
 - Phase 04 baseline: `960a2f336dcab751692cdac0d87d04ac3377daa4`, clean worktree at entry.
   This commit records the completed Phase 03 patch before Phase 04 began.
 - Phase 03 baseline: `a449e97908d41aed7f04442c260f0ce56194dd43`, clean worktree at entry.
@@ -36,7 +37,7 @@ Updated: 2026-09-12.
 | [02 — Generation recovery](phases/02-generation-recovery.md) | Complete | G1–G7 verified; five reproduced defects fixed; broader checks and all 26 selected browser journeys passed. |
 | [03 — Outbox and optimistic edits](phases/03-outbox-and-optimistic-edits.md) | Complete | O1–O6 verified; five demonstrated defects repaired; broader validation lanes and all 20 selected browser journeys passed. |
 | [04 — Resource hydration](phases/04-resource-hydration.md) | Complete | H1–H6 verified; three reproduced defects repaired; all broader validation lanes and 28 selected Chromium journeys passed. |
-| [05 — Background jobs](phases/05-background-jobs.md) | Not started | Separate process-local and durable lifecycle obligations. |
+| [05 — Background jobs](phases/05-background-jobs.md) | Complete | J1–J7 verified per family; six reproduced findings repaired; all seven broader lanes and 20 selected Chromium journeys passed. |
 | [06 — Import and restore](phases/06-import-and-restore.md) | Not started | Verify replacement/publication boundaries in disposable data. |
 
 Use `Not started`, `Assessing`, `Improving`, `Validating`, `Blocked`, or `Complete`
@@ -127,9 +128,31 @@ This table's states are separate from whether the planning documents are verifie
   references; affected focused/type checks passed afterward. All seven lanes are
   satisfied, with zero final frontend errors/warnings and no further runtime fixes.
 - Current docs (51 files), explicit nested plans/index (nine files), scoped
-  formatting and whitespace checks passed. Phase 04 remains uncommitted on
-  `960a2f336dcab751692cdac0d87d04ac3377daa4`. No required evidence gap remains;
+  formatting and whitespace checks passed. Phase 04 was committed as
+  `86d07b1da`. No required evidence gap remains;
   physical/platform and full performance-matrix limits are explicit.
+
+## Phase 05 Execution Evidence
+
+- [Phase 05 ledger](phases/05-background-jobs.md#execution-record): separate
+  translation/memory/BardWiki contracts, J1–J7 evidence, six findings and limits.
+- Fixed stale translation polls, translation and memory deadline settlement,
+  active-memory recovery after failed reads, BardWiki equal-revision read order,
+  and rebuild identity collisions with manually edited prior events.
+- Focused regressions passed. `pnpm test:agent` passed all seven lanes, including
+  **9,550 frontend** and **4,396 server tests**, with three existing skips in each
+  suite outside required evidence. The frontend check has zero errors/warnings.
+  Broader validation was warranted by shared provider-await, job reconciliation
+  and resource-ordering changes across the three families.
+- All **20 selected Chromium journeys passed** against the final runtime build.
+  Four new native cases assert terminal recovery and exact durable output,
+  including preserved manual BardWiki edits across the next rebuild and reload.
+- Current docs (51 files), explicit nested plans/index (nine files), scoped
+  formatting and whitespace checks passed. No required Phase 05 evidence gap remains.
+- The harness opts into the real memory worker with a local deterministic HTTP
+  provider. Translation/BardWiki use actual default orchestration and SQLite.
+  This does not certify external provider behavior or external-process crashes.
+- Phase 05 changes remain uncommitted on `86d07b1da`; Phase 06 is unstarted.
 
 ## Planning Evidence
 
@@ -150,7 +173,7 @@ This table's states are separate from whether the planning documents are verifie
 - Scoped Prettier and whitespace checks passed. Formatting used
   `--ignore-path /dev/null` because the normal ignore file excludes Markdown.
   Compact tables use local Prettier ignore comments.
-- Runtime tests/browser journeys were not run during planning; Phase 01–04 execution
+- Runtime tests/browser journeys were not run during planning; Phase 01–05 execution
   results are recorded above.
 
 ## Decisions and Boundaries
@@ -163,7 +186,8 @@ This table's states are separate from whether the planning documents are verifie
   strengthens their tests and documentation. Phase 03 fixes shared command/outbox
   ordering and draft cleanup, with native rendered settings/recovery evidence.
   Phase 04 fixes hydration settlement, snapshot age before apply and reader focus,
-  with native navigation/cache/gap evidence.
+  with native navigation/cache/gap evidence. Phase 05 fixes background-job
+  deadlines, terminal recovery and rebuild identity, with real-worker browser evidence.
 - Phase 01 reproduced one runtime defect under an induced snapshot-read failure in
   disposable SQLite: SSE subscriptions survived HTTP 500. It is fixed; this is
   not a claim of an observed external production incident.
@@ -173,7 +197,7 @@ This table's states are separate from whether the planning documents are verifie
 ## Open Items
 
 - No unresolved planning-review findings.
-- Phases 01–04 are complete; Phases 05–06 remain unstarted.
+- Phases 01–05 are complete; Phase 06 is unstarted.
 - External-process crash/power-loss verification remains an optional Phase 02
   follow-up; repeated in-process restarts do not certify those conditions.
 - Physical-device suspension and non-Chromium behavior remain an explicit optional

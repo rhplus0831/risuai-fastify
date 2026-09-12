@@ -17,7 +17,7 @@ import { summarizeOnce, type SummaryAdapterResult } from './memorySummaryAdapter
 import { resolveMemorySummaryModel, type MemorySummaryModelRequest } from './memorySummaryModel.js'
 import { loadPersistedDatabaseForMemoryJob } from './repository.js'
 import { MEMORY_JOB_BATCH_MAX_JOBS, type MemoryJobBatchHandler, type MemoryJobHandlerContext } from './memoryWorker.js'
-import { createMemoryProviderAbortScope, throwIfMemoryProviderAborted } from './memoryProviderDeadline.js'
+import { awaitMemoryProviderResult, createMemoryProviderAbortScope } from './memoryProviderDeadline.js'
 import { resolveModelProfile } from '@risuai/shared-core/model-profile-resolver'
 import {
   completeRequestHistory,
@@ -213,13 +213,14 @@ async function executeSummarizeJob(input: {
     },
   })
   try {
-    throwIfMemoryProviderAborted(abortScope.signal)
-    summary = await input.summarize(prompt.messages, {
-      ...modelRequest.request,
-      maxTokens: prompt.options.maxTokens,
-      temperature: prompt.options.temperature,
-      signal: abortScope.signal,
-    })
+    summary = await awaitMemoryProviderResult(abortScope.signal, () =>
+      input.summarize(prompt.messages, {
+        ...modelRequest.request,
+        maxTokens: prompt.options.maxTokens,
+        temperature: prompt.options.temperature,
+        signal: abortScope.signal,
+      }),
+    )
     if ('error' in summary) {
       completeRequestHistory(historyHandle, {
         status: abortScope.signal.aborted ? 'cancelled' : 'error',
@@ -233,6 +234,10 @@ async function executeSummarizeJob(input: {
       })
     }
   } catch (error) {
+    const current = getMemoryJob(input.opts.db, input.job.id)
+    if (current?.instanceId === input.job.instanceId && current.status === 'running') {
+      markChunkFailed(input.opts.db, chunk.id)
+    }
     completeRequestHistory(historyHandle, {
       status: abortScope.signal.aborted ? 'cancelled' : 'error',
       error: error instanceof Error ? error.message : String(error),

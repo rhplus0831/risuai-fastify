@@ -121,6 +121,45 @@ describe('memory job refresh controller', () => {
     controller.dispose()
   })
 
+  it.each(['error', 'unavailable', 'throw'] as const)(
+    'recovers a lost terminal event after one %s refresh without user action',
+    async (failure) => {
+      const running = job('running', 'job-1')
+      const completed = { ...running, status: 'completed' as const }
+      const listJobs = vi.fn().mockResolvedValueOnce({ status: 'ok', jobs: [running] })
+      if (failure === 'throw') listJobs.mockRejectedValueOnce(new Error('temporary network failure'))
+      else
+        listJobs.mockResolvedValueOnce(
+          failure === 'error' ? { status: 'error', error: 'temporary failure' } : { status: 'unavailable' },
+        )
+      listJobs.mockResolvedValueOnce({ status: 'ok', jobs: [completed] })
+      const seen: ServerMemoryJob[][] = []
+      const onError = vi.fn()
+      const controller = createMemoryJobRefreshController({
+        chatId: 'chat-1',
+        intervalMs: 1000,
+        listJobs,
+        onJobs: (jobs) => seen.push(jobs),
+        onError,
+        onClear: vi.fn(),
+        onLoading: vi.fn(),
+      })
+      try {
+        await controller.refresh()
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(onError).toHaveBeenCalledTimes(1)
+        expect(seen.at(-1)).toEqual([running])
+        await vi.advanceTimersByTimeAsync(1000)
+        expect(seen.at(-1)).toEqual([completed])
+        await vi.advanceTimersByTimeAsync(5000)
+        expect(listJobs).toHaveBeenCalledTimes(3)
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        controller.dispose()
+      }
+    },
+  )
+
   it('reuses the last job list when polling returns not-modified', async () => {
     const listJobs = vi
       .fn()

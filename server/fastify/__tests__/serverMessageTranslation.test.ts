@@ -4,6 +4,12 @@ import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createCommandEventSink } from '../src/commands/events.js'
+import { createInitialDatabase } from '../src/databaseDefaults.js'
+import { MessageTranslationJobRegistry } from '../src/messageTranslationJobs.js'
+import { GreetingTranslationJobRegistry } from '../src/greetingTranslationJobs.js'
+import { NON_DURABLE_REQUEST_DEADLINE_MS } from '../src/requestAbort.js'
+import { runServerGreetingTranslation } from '../src/translation/serverGreetingTranslation.js'
+import { getSchemaState } from '../src/db.js'
 import { openDatabase } from '../src/db.js'
 import { resolveActiveMessageLocationById } from '../src/messageStore.js'
 import {
@@ -43,6 +49,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  vi.useRealTimers()
   serverTranslationMocks.dispatchChatProvider.mockReset()
   db.close()
   rmSync(dataDir, { recursive: true, force: true })
@@ -306,3 +313,168 @@ describe('runServerMessageTranslation', () => {
     ])
   })
 })
+
+for (const family of ['message', 'greeting'] as const) {
+  describe(`${family} detached lifecycle`, () => {
+    function setup() {
+      const database = createInitialDatabase() as unknown as Record<string, unknown>
+      Object.assign(database, {
+        translator: 'ko',
+        translatorInputLanguage: 'en',
+        translatorType: 'llm',
+        translatorSendTextAsIs: true,
+        modelProfiles: [
+          { id: 'translate-profile', name: 'Translate', providerId: 'debug-echo', modelId: 'debug-echo' },
+        ],
+        modelRoleProfiles: { translate: { mode: 'profile', profileId: 'translate-profile' } },
+        characters: [
+          {
+            chaId: 'char-a',
+            name: 'A',
+            firstMessage: 'Source greeting',
+            chatPage: 0,
+            chatFolders: [],
+            chats: [
+              {
+                id: 'chat-a',
+                name: 'A chat',
+                note: '',
+                localLore: [],
+                message: [{ chatId: 'msg-a', role: 'char', data: 'Source message' }],
+              },
+            ],
+          },
+        ],
+      })
+      writePersistedWithMessages(db, dataDir, { _version: 1, database, assets: [] })
+      const messageJobs = new MessageTranslationJobRegistry()
+      const greetingJobs = new GreetingTranslationJobRegistry()
+      const eventSink = createCommandEventSink()
+      return {
+        jobs: () => (family === 'message' ? messageJobs.translations() : greetingJobs.translations()),
+        run: (jobId: string) =>
+          family === 'message'
+            ? runServerMessageTranslation({
+                db,
+                dataDir,
+                eventSink,
+                messageTranslationJobs: messageJobs,
+                messageId: 'msg-a',
+                jobId,
+              })
+            : runServerGreetingTranslation({
+                db,
+                dataDir,
+                eventSink,
+                greetingTranslationJobs: greetingJobs,
+                characterId: 'char-a',
+                chatId: 'chat-a',
+                greetingIndex: -1,
+                jobId,
+              }),
+      }
+    }
+
+    it.each(['success', 'failure'] as const)(
+      'settles its deadline before an abort-insensitive provider and ignores late %s after retry',
+      async (late) => {
+        vi.useFakeTimers()
+        const harness = setup()
+        let release!: () => void
+        serverTranslationMocks.dispatchChatProvider.mockImplementationOnce(async () => {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          if (late === 'failure') throw new Error('old provider failure')
+          return textFrames('Old translation')
+        })
+        let settled = false
+        const old = harness.run('old-job').then(
+          () => {
+            settled = true
+            return 'success'
+          },
+          () => {
+            settled = true
+            return 'failure'
+          },
+        )
+        await vi.advanceTimersByTimeAsync(0)
+        expect(serverTranslationMocks.dispatchChatProvider).toHaveBeenCalledTimes(1)
+        const revision = getSchemaState(db).revision
+        await vi.advanceTimersByTimeAsync(NON_DURABLE_REQUEST_DEADLINE_MS)
+        expect(settled).toBe(true)
+        expect(await old).toBe('failure')
+        expect(harness.jobs()).toMatchObject([{ jobId: 'old-job', status: 'failed' }])
+        expect(getSchemaState(db).revision).toBe(revision)
+        serverTranslationMocks.dispatchChatProvider.mockResolvedValueOnce(textFrames('Replacement translation'))
+        await expect(harness.run('new-job')).resolves.toMatchObject({
+          translation: { text: 'Replacement translation' },
+        })
+        release()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(harness.jobs()).toMatchObject([{ jobId: 'new-job', status: 'succeeded' }])
+        expect(getSchemaState(db).revision).toBe(revision + 1)
+        expect(vi.getTimerCount()).toBe(0)
+      },
+    )
+
+    it('does not persist after its target is deleted while the provider ignores abort', async () => {
+      const harness = setup()
+      let release!: () => void
+      serverTranslationMocks.dispatchChatProvider.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return textFrames('Deleted target output')
+      })
+      const old = harness.run('deleted-job').then(
+        () => 'success',
+        () => 'failure',
+      )
+      await vi.waitFor(() => expect(serverTranslationMocks.dispatchChatProvider).toHaveBeenCalledTimes(1))
+      const revision = getSchemaState(db).revision
+      db.exec(
+        family === 'message' ? "DELETE FROM messages WHERE uid = 'msg-a'" : "DELETE FROM chats WHERE id = 'chat-a'",
+      )
+      release()
+      expect(await old).toBe('failure')
+      expect(harness.jobs()).toMatchObject([{ jobId: 'deleted-job', status: 'failed' }])
+      expect(getSchemaState(db).revision).toBe(revision)
+      expect(db.prepare('SELECT COUNT(*) AS count FROM greeting_translations').get()).toEqual({ count: 0 })
+    })
+
+    it('retains committed output across SQLite reopen while process-local job history starts empty', async () => {
+      const harness = setup()
+      serverTranslationMocks.dispatchChatProvider.mockResolvedValueOnce(textFrames('Persisted across reopen'))
+      await harness.run('completed-job')
+      db.close()
+      db = openDatabase(dataDir)
+      expect(new MessageTranslationJobRegistry().translations()).toEqual([])
+      expect(new GreetingTranslationJobRegistry().translations()).toEqual([])
+      const rows = db
+        .prepare(family === 'message' ? 'SELECT json FROM messages' : 'SELECT * FROM greeting_translations')
+        .all()
+      expect(JSON.stringify(rows)).toContain('Persisted across reopen')
+    })
+
+    it('rolls back provider success on storage failure and permits one explicit retry', async () => {
+      const harness = setup()
+      const revision = getSchemaState(db).revision
+      db.exec(
+        family === 'message'
+          ? "CREATE TRIGGER fail_translation BEFORE UPDATE ON messages BEGIN SELECT RAISE(ABORT, 'held storage failure'); END"
+          : "CREATE TRIGGER fail_translation BEFORE INSERT ON greeting_translations BEGIN SELECT RAISE(ABORT, 'held storage failure'); END",
+      )
+      serverTranslationMocks.dispatchChatProvider.mockResolvedValueOnce(textFrames('Uncommitted translation'))
+      await expect(harness.run('failed-job')).rejects.toThrow('held storage failure')
+      expect(harness.jobs()).toMatchObject([{ jobId: 'failed-job', status: 'failed' }])
+      expect(getSchemaState(db).revision).toBe(revision)
+      db.exec('DROP TRIGGER fail_translation')
+      serverTranslationMocks.dispatchChatProvider.mockResolvedValueOnce(textFrames('Committed retry'))
+      await expect(harness.run('retry-job')).resolves.toMatchObject({ translation: { text: 'Committed retry' } })
+      expect(getSchemaState(db).revision).toBe(revision + 1)
+      expect(harness.jobs()).toMatchObject([{ jobId: 'retry-job', status: 'succeeded' }])
+    })
+  })
+}

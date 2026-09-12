@@ -42,3 +42,19 @@ This area covers durable model profiles and role bindings, provider capability/r
 | Browser fixed operations | `src/ts/server/providerOperations.test.ts`, `embeddingOperations.test.ts`, `imageGeneration.test.ts`, `openAITranscription.test.ts`, `tts.test.ts`, `nanoGPTDashboardFetch.test.ts`, and settings-media upload tests. |
 | Server providers/media | Provider/profile suites: `additionalParams`, `anthropic`, `bedrock`, `chatDispatchProfileOptions`, `cohere`, `echo`, `embeddingOperations`, `gemini`, `generation.completion`, `greetingTranslationStore`, `horde`, `imageGeneration`, `kobold`, `mcpOAuthRefresh`, `mistral`, `modelProfileResolver.server`, `ollama`, `oobaLegacy`, `openAITranscription`, `openai`, `openaiLegacyInstruct`, `openaiResponses`, `providerCapabilityRoute`, `providerMessages`, `providerOperations`, `providerSecrets`, `providerTransport`, `requestHistory`, `requestHistoryRoutes`, `sigv4`, `staleInlineModelProfileSecrets`, `tokenizerConfig`, `tokenizerGoldenCounts`, `tts`, and `vertexAuth`; translation follow-up suites named above. MCP OAuth is analyzed primarily in the MCP document. |
 | UI | Model settings/list/editor/credential/runtime/fallback tests under `src/lib/Setting/Pages/Model/`; Request History settings; provider list/actions, NanoGPT/OpenRouter model UI tests; Playground translation/image/tool tests. Detailed interaction/accessibility quality is assessed in the UI documents. |
+
+## Detached translation recovery
+
+`server/fastify/__tests__/serverMessageTranslation.test.ts` composes the real
+message and greeting owners, registries and targeted SQLite mutations with a
+controlled provider dispatcher. It checks deadline settlement before a dependency
+honors abort, late success/failure after retry, deletion before persistence,
+provider-success/storage-failure rollback, and retained output with fresh
+process-local registries after SQLite reopen. The raw pipeline cases remain in
+`rawMessageTranslation.test.ts`; source/replacement/disconnect routes remain in
+`server/fastify/__tests__/commands.test.ts`.
+
+`src/ts/server/messageTranslationJobs.test.ts` exercises both browser translation
+refresh owners across held reads, terminal updates and stop/restart. The native
+translation journeys are documented with the other
+[background-job recovery cases](memory-and-embeddings.md#background-job-lifecycle-recovery).

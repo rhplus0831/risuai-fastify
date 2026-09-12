@@ -13,6 +13,7 @@ import {
   loadBardWikiChatResource,
   loadBardWikiDocumentResource,
   loadBardWikiVersionsResource,
+  refreshLoadedBardWikiChat,
   resetBardWikiResource,
 } from './bardWikiResource'
 
@@ -73,6 +74,29 @@ describe('BardWiki read projection lifetime', () => {
     expect(await request).toEqual({ status: 'unavailable' })
     expect(get(bardWikiResource)).toEqual({ chats: {}, documents: {}, versions: {} })
   })
+
+  it.each(['load', 'invalidation'] as const)(
+    'rejects an older %s read after terminal state arrives at the same domain revision',
+    async (owner) => {
+      const running = { id: 'job-a', instanceId: 'instance-a', status: 'running', kind: 'rebuild_chat' }
+      const active = { status: 'ok', revision: 5, chatId: 'chat-a', documents: [], receipts: [], jobs: [running] }
+      reads.chat.mockResolvedValueOnce(active)
+      await loadBardWikiChatResource('chat-a')
+      let release!: (value: unknown) => void
+      reads.chat.mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve
+        }),
+      )
+      const old = owner === 'load' ? loadBardWikiChatResource('chat-a') : refreshLoadedBardWikiChat('chat-a', [], 5)
+      const terminal = { ...active, jobs: [{ ...running, status: 'completed' }] }
+      reads.chat.mockResolvedValueOnce(terminal)
+      await loadBardWikiChatResource('chat-a')
+      release(active)
+      await old
+      expect(get(bardWikiResource).chats['chat-a'].jobs).toEqual(terminal.jobs)
+    },
+  )
 
   it.each(cases)('continues applying a current %s read', async (key, load, value) => {
     reads[key].mockResolvedValue({ status: 'ok', revision: 5, ...value })

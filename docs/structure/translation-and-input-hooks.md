@@ -1,7 +1,7 @@
 # Translation And Input Hooks
 
 Last audited: 2026-08-09.
-Targeted source check: 2026-09-12 (input-hook writer/session fencing).
+Targeted source check: 2026-09-12 (translation deadlines, refresh retirement, and input-hook writer/session fencing).
 
 This guide owns translation pipelines, translator model routing, history slots,
 cache identity, detached message and greeting jobs, generated-message automatic
@@ -160,14 +160,27 @@ transaction. Before persistence,
 `server/fastify/src/translation/serverMessageTranslation.ts` verifies the active
 job handle, exact source text, previous translation, and current row. It then
 rebases a targeted write on the current revision. A stale job can finish but
-cannot overwrite newer source or translation state.
+cannot overwrite newer source or translation state. The raw translation owner
+settles its deadline independently of provider abort handling, checks cancellation
+before subsequent chunks/steps and before returning, and discards late provider
+success or failure. Message and greeting callers then retain the failed terminal
+and permit an explicit new request without waiting for that provider.
 
 `server/fastify/src/messageTranslationJobs.ts` keeps running jobs plus recent
 succeeded/failed terminals for ten minutes, capped at 128. Errors are bounded
 and redacted. Bootstrap exposes these entries as
 `activeMessageTranslations`, allowing the browser state in
 `src/ts/server/messageTranslationJobs.ts` to recover after navigation or
-disconnect.
+disconnect. Message and greeting refreshes allow one read per lifecycle, reject
+responses after intervening projection changes or stop/restart, and remove the
+scheduled timer when no running jobs remain.
+
+These registries are process-local, not durable work queues. Committed translation
+rows survive a server restart; an unfinished request and its job history do not
+resume from a durable translation job. Storage failure exposes a failed terminal
+and supports an explicit new translation request. Generated automatic translation
+shares this execution boundary: a still-running translation after its notification
+wait cap is not a promise of durable provider resumption.
 
 ## Greeting Translation
 

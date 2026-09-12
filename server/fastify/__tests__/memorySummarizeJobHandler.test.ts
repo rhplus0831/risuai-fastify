@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { invalidateUnsummarizedMemoryForChat } from '../src/memoryInvalidation.js'
 import { openDatabase } from '../src/db.js'
 import {
   createSummarizeMemoryJobBatchHandler,
@@ -243,6 +244,92 @@ describe('summarize memory job handler', () => {
       ])
       expect(invalidSelectionDatabase.hypaV3Presets).toEqual([expect.objectContaining({ id: 'memory-default' })])
       expect(invalidSelectionDatabase.selectedHypaV3PresetId).toBe(selectedPresetId)
+    } finally {
+      db.close()
+    }
+  })
+
+  it.each(['success', 'failure'] as const)(
+    'preserves a completed sibling when source invalidation precedes a held provider %s',
+    async (late) => {
+      const db = openDatabase(makeDataDir())
+      let release!: () => void
+      let tick: Promise<boolean> | undefined
+      try {
+        seedBatchJob(db, { id: 'job-1', chunkId: 'chunk-1', rangeStartSeq: 0, rangeEndSeq: 1, text: 'held source' })
+        seedBatchJob(db, { id: 'job-2', chunkId: 'chunk-2', rangeStartSeq: 2, rangeEndSeq: 3, text: 'valid sibling' })
+        const worker = new MemoryWorker({
+          db,
+          batchHandlers: {
+            summarize: createSummarizeMemoryJobBatchHandler({
+              db,
+              loadDatabase: () => database({ summarizationMaxConcurrent: 2 }),
+              sleep: async () => {},
+              summarize: async (messages) => {
+                if (messages.some((message) => String(message.content).includes('held source'))) {
+                  await new Promise<void>((resolve) => {
+                    release = resolve
+                  })
+                  if (late === 'failure') throw new Error('obsolete provider failure')
+                }
+                return { text: 'Persisted sibling', tokens: 2 }
+              },
+            }),
+          },
+        })
+        tick = worker.tick()
+        await vi.waitFor(() => expect(listMemorySummaries(db, { chatId: 'chat-1' })).toHaveLength(1))
+        expect(invalidateUnsummarizedMemoryForChat(db, 'chat-1')).toEqual({ chunksDeleted: 1, jobsDeleted: 1 })
+        release()
+        await tick
+        expect(getMemoryJob(db, 'job-1')).toBeNull()
+        expect(getMemoryChunk(db, 'chunk-1')).toBeNull()
+        expect(getMemoryJob(db, 'job-2')).toMatchObject({ status: 'completed' })
+        expect(listMemorySummaries(db, { chatId: 'chat-1' }).map((row) => row.chunkId)).toEqual(['chunk-2'])
+      } finally {
+        release?.()
+        await tick
+        db.close()
+      }
+    },
+  )
+
+  it('reuses committed output after the job completion write fails and SQLite reopens', async () => {
+    const dataDir = makeDataDir()
+    let db = openDatabase(dataDir)
+    const summarize = vi.fn(async () => ({ text: 'Exactly one durable summary', tokens: 5 }))
+    try {
+      seedChunkAndJob(db)
+      db.exec(
+        "CREATE TRIGGER hold_completion BEFORE UPDATE OF status ON memory_jobs WHEN NEW.status = 'completed' BEGIN SELECT RAISE(ABORT, 'completion write failed'); END",
+      )
+      const worker = new MemoryWorker({
+        db,
+        retry: { backoffBaseMs: 0 },
+        handlers: {
+          summarize: createSummarizeMemoryJobHandler({ db, loadDatabase: () => database(), summarize }),
+        },
+      })
+      await worker.tick()
+      expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'pending', attemptCount: 1 })
+      expect(listMemorySummaries(db, { chatId: 'chat-1' }).map((row) => row.text)).toEqual([
+        'Exactly one durable summary',
+      ])
+      db.exec('DROP TRIGGER hold_completion')
+      db.close()
+      db = openDatabase(dataDir)
+      const replacement = new MemoryWorker({
+        db,
+        handlers: {
+          summarize: createSummarizeMemoryJobHandler({ db, loadDatabase: () => database(), summarize }),
+        },
+      })
+      await replacement.tick()
+      expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'completed', attemptCount: 2 })
+      expect(listMemorySummaries(db, { chatId: 'chat-1' }).map((row) => row.text)).toEqual([
+        'Exactly one durable summary',
+      ])
+      expect(summarize).toHaveBeenCalledTimes(1)
     } finally {
       db.close()
     }
@@ -768,6 +855,76 @@ describe('summarize memory job handler', () => {
       db.close()
     }
   })
+
+  it.each(['success', 'failure'] as const)(
+    'retires an abort-insensitive summary request and ignores its late %s after a sibling and recreated instance complete',
+    async (late) => {
+      vi.useFakeTimers()
+      const db = openDatabase(makeDataDir())
+      let release!: () => void
+      let tick: Promise<boolean> | undefined
+      try {
+        seedBatchJob(db, { id: 'job-1', chunkId: 'chunk-1', rangeStartSeq: 0, rangeEndSeq: 1, text: 'held source' })
+        seedBatchJob(db, { id: 'job-2', chunkId: 'chunk-2', rangeStartSeq: 2, rangeEndSeq: 3, text: 'sibling source' })
+        let holdFirst = true
+        const summarize = vi.fn(async (messages: readonly { content: string }[]) => {
+          if (holdFirst && messages.some((message) => message.content.includes('held source'))) {
+            holdFirst = false
+            await new Promise<void>((resolve) => {
+              release = resolve
+            })
+            if (late === 'failure') throw new Error('retired failure')
+          }
+          return { text: 'Current sibling summary', tokens: 4 }
+        })
+        const worker = new MemoryWorker({
+          db,
+          batchHandlers: {
+            summarize: createSummarizeMemoryJobBatchHandler({
+              db,
+              loadDatabase: () => database({ summarizationMaxConcurrent: 1 }),
+              summarize: summarize as never,
+              sleep: async () => {},
+              providerFetchDeadlineMs: 25,
+            }),
+          },
+        })
+        let settled = false
+        tick = worker.tick().then((value) => {
+          settled = true
+          return value
+        })
+        await vi.advanceTimersByTimeAsync(25)
+        expect(settled).toBe(true)
+        await tick
+        expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'pending' })
+        expect(getMemoryJob(db, 'job-2')).toMatchObject({ status: 'completed' })
+        expect(listMemorySummaries(db, { chatId: 'chat-1' }).map((row) => row.chunkId)).toEqual(['chunk-2'])
+        const previous = getMemoryJob(db, 'job-1')!
+        db.prepare('DELETE FROM memory_jobs WHERE id = ?').run(previous.id)
+        const replacement = enqueueMemoryJob(db, {
+          id: previous.id,
+          chatId: previous.chatId,
+          kind: 'summarize',
+          payload: previous.payload,
+        })
+        expect(replacement.instanceId).not.toBe(previous.instanceId)
+        await worker.tick()
+        expect(getMemoryJob(db, previous.id)).toMatchObject({ instanceId: replacement.instanceId, status: 'completed' })
+        const currentOutput = listMemorySummaries(db, { chatId: 'chat-1' })
+        expect(currentOutput).toHaveLength(2)
+        release()
+        await vi.advanceTimersByTimeAsync(0)
+        expect(listMemorySummaries(db, { chatId: 'chat-1' })).toEqual(currentOutput)
+        expect(getMemoryJob(db, previous.id)).toMatchObject({ instanceId: replacement.instanceId, status: 'completed' })
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        release?.()
+        await tick
+        db.close()
+      }
+    },
+  )
 
   it('forwards worker cancellation to the running provider signal and retains cancelled state', async () => {
     const db = openDatabase(makeDataDir())

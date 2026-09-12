@@ -1,7 +1,7 @@
 # BardWiki Memory
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-10 (guided workspace, effective values, activity, and responsive navigation).
+Targeted source check: 2026-09-12 (job read ordering, rebuild/manual-document identity, and recovery).
 
 BardWiki is the server-owned, per-chat Markdown memory system. It stores manual
 and model-derived documents with stable ids, logical paths, aliases, wikilinks,
@@ -116,7 +116,17 @@ Source edit/delete/truncate/alternate replacement obsoletes pending work. An
 applied receipt is safely inverted only while every affected document still
 matches its recorded after-hash; otherwise the receipt/documents become
 `needs_review`. Job SSE contains only bounded status/progress/error summaries.
-Targeted reads remain authoritative after reconnect.
+Targeted reads remain authoritative after reconnect. Chat reads also carry a
+per-chat request epoch: job transitions can share a domain revision, so an older
+read must not replace a newer terminal status merely because their revisions match.
+The same epoch covers workspace reads and invalidation refreshes.
+
+Full rebuilds preserve user-edited documents and their version history. If a prior
+rebuild event identity is already owned by a preserved or deleted document, the
+new derived event gets a separate ID; later rebuilds reuse that new event through
+its receipt. Cancellation remains terminal for that job. A fresh preview/build is
+the supported successor after cancelling a rebuild or changing its checkpointed
+source; retrying an unchanged stale checkpoint does not accept changed source.
 
 ## Prompt Retrieval
 

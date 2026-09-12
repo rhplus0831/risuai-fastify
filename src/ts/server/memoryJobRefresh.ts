@@ -186,12 +186,12 @@ export function createMemoryJobRefreshController(
         lastEtag = result.etag ?? lastEtag
         publishJobs(normalizeJobs(lastJobs, requestUpdateFence), result.memorySnapshot)
       } else {
-        stopPolling()
+        syncPolling(lastJobs)
         options.onError(result.status === 'unavailable' ? 'Server memory jobs are unavailable.' : result.error)
       }
     } catch (err) {
       if (disposed || serial !== requestSerial || controller.signal.aborted) return
-      stopPolling()
+      syncPolling(lastJobs)
       const message = err instanceof Error ? err.message : String(err)
       options.onError(`Network error: ${message}`)
     } finally {

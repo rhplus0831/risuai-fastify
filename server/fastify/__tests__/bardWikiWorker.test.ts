@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -14,6 +14,7 @@ const HASH_A = 'a'.repeat(64)
 const HASH_B = 'b'.repeat(64)
 
 afterEach(() => {
+  vi.useRealTimers()
   for (const dataDir of dataDirs.splice(0)) rmSync(dataDir, { recursive: true, force: true })
 })
 
@@ -101,6 +102,45 @@ describe('BardWiki worker lane', () => {
       await bardTick
       expect(getBardWikiJob(db, 'bard-a')?.status).toBe('completed')
     } finally {
+      db.close()
+    }
+  })
+
+  it('drains its current handler and stops all scheduling before SQLite closes', async () => {
+    vi.useFakeTimers()
+    const db = makeDb()
+    const gate = deferred()
+    const handler = vi.fn(() => gate.promise)
+    const worker = new BardWikiWorker({
+      db,
+      pollIntervalMs: 10,
+      terminalRetention: false,
+      handlers: { apply_turn: handler },
+    })
+    try {
+      enqueueApply(db)
+      worker.start()
+      worker.start()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(handler).toHaveBeenCalledTimes(1)
+      let stopped = false
+      const stopping = worker.stop().then(() => {
+        stopped = true
+      })
+      await flushMicrotasks()
+      expect(stopped).toBe(false)
+      gate.resolve()
+      await stopping
+      expect(getBardWikiJob(db, 'bard-a')?.status).toBe('completed')
+      enqueueApply(db, 'bard-b')
+      await vi.advanceTimersByTimeAsync(100)
+      expect(handler).toHaveBeenCalledTimes(1)
+      expect(worker.isRunning).toBe(false)
+      expect(worker.isProcessing).toBe(false)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      gate.resolve()
+      await worker.stop()
       db.close()
     }
   })

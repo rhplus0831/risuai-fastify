@@ -389,6 +389,12 @@ history, are retained instead of being age-pruned.
 own interrupted running jobs, perform immediate terminal-retention sweeps, poll
 on independent idle intervals, and later sweep terminal retention. The
 BardWiki lane is chat-fair and cannot occupy the Hypa single-flight lane.
+Embed/summarize provider deadlines settle the worker boundary even if a dependency
+ignores abort. Late results cannot reach persistence, while independent siblings
+and later attempts continue. Summary failure marking checks the captured job
+instance before touching its chunk. The browser memory-job controller retains
+polling through transient list failures while active jobs remain, then stops after
+terminal reconciliation.
 Shutdown first closes maintenance admission and signals cooperative cancellation
 in `preClose`, while active HTTP requests can still clean up. `onClose` drains
 maintenance leases before stopping workers/timers, removing registry jobs,

@@ -21,6 +21,7 @@ import {
 import {
   createBardWikiDocument,
   getBardWikiDocument,
+  updateBardWikiDocument,
   listBardWikiDocumentVersions,
   listBardWikiDocuments,
   listBardWikiJobSummaries,
@@ -232,6 +233,49 @@ describe('BardWiki historical rebuild', () => {
     }
   })
 
+  it.each(['cancel', 'delete'] as const)(
+    'rejects a late abort-insensitive provider result after target %s',
+    async (action) => {
+      const harness = createHarness(1)
+      let release!: () => void
+      let tick: Promise<boolean> | undefined
+      try {
+        const queued = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+        harness.analyze.mockImplementationOnce(async () => {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return JSON.stringify({
+            title: 'Old event',
+            logicalPath: 'Events/Old',
+            aliases: [],
+            markdown: 'Obsolete output',
+          })
+        })
+        tick = harness.worker.tick()
+        await vi.waitFor(() => expect(harness.analyze).toHaveBeenCalledTimes(1))
+        if (action === 'cancel') {
+          cancelBardWikiJob(harness.db, queued.id)
+          expect(harness.worker.abortRunningJob(queued.id)).toBe(true)
+        } else harness.db.prepare('DELETE FROM chats WHERE id = ?').run('chat-a')
+        release()
+        await tick
+        expect(listBardWikiDocuments(harness.db, 'chat-a')).toEqual([])
+        expect(harness.events.list()).toEqual([])
+        if (action === 'cancel') {
+          expect(getBardWikiJob(harness.db, queued.id)?.status).toBe('cancelled')
+          const next = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+          await harness.worker.tick()
+          expect(getBardWikiJob(harness.db, next.id)?.status).toBe('completed')
+        } else expect(getBardWikiJob(harness.db, queued.id)).toBeNull()
+      } finally {
+        release?.()
+        await tick
+        harness.db.close()
+      }
+    },
+  )
+
   it('fails safely when the transcript changes after a checkpoint', async () => {
     const harness = createHarness(4, { batchSize: 2 })
     const existing = createExistingDocuments(harness.db)
@@ -258,6 +302,15 @@ describe('BardWiki historical rebuild', () => {
           .map(({ id }) => id)
           .sort(),
       ).toEqual([existing.manual.id, existing.derived.id].sort())
+      // A changed source requires a fresh preview/build, which discards the old
+      // checkpoint identity and remains a supported recovery action.
+      const fresh = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 4 })
+      await harness.worker.tick()
+      await harness.worker.tick()
+      expect(getBardWikiJob(harness.db, fresh.id)?.status).toBe('completed')
+      expect(
+        listBardWikiDocuments(harness.db, 'chat-a').some((document) => document.markdown === '## assistant-0\nchanged'),
+      ).toBe(true)
     } finally {
       harness.db.close()
     }
@@ -273,6 +326,22 @@ describe('BardWiki historical rebuild', () => {
       })
       await harness.worker.tick()
       expect(claimNextBardWikiJob(harness.db)).toMatchObject({ id: queued.id, status: 'running' })
+      harness.db.close()
+      harness.db = openDatabase(harness.dataDir)
+      harness.worker = new BardWikiWorker({
+        db: harness.db,
+        retry: { backoffBaseMs: 0 },
+        handlers: {
+          rebuild_chat: createBardWikiRebuildHandler({
+            db: harness.db,
+            dataDir: harness.dataDir,
+            eventSink: harness.events,
+            loadDatabase: () => createInitialDatabase(),
+            analyze: harness.analyze,
+            batchSize: 1,
+          }),
+        },
+      })
       expect(recoverRunningBardWikiJobs(harness.db, { backoffBaseMs: 0 })[0]).toMatchObject({
         id: queued.id,
         status: 'pending',
@@ -283,6 +352,40 @@ describe('BardWiki historical rebuild', () => {
       expect(getBardWikiJob(harness.db, queued.id)?.status).toBe('completed')
       expect(listBardWikiDocuments(harness.db, 'chat-a')).toHaveLength(3)
       expect(harness.analyze).toHaveBeenCalledTimes(3)
+    } finally {
+      harness.db.close()
+    }
+  })
+
+  it('publishes a new derived document while preserving a manually edited previous rebuild document', async () => {
+    const harness = createHarness(1)
+    try {
+      enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+      await harness.worker.tick()
+      const original = listBardWikiDocuments(harness.db, 'chat-a')[0]
+      const manual = updateBardWikiDocument(harness.db, 'chat-a', original.id, {
+        expectedVersion: original.version,
+        expectedContentHash: original.contentHash,
+        markdown: 'Manual correction that must survive every rebuild.',
+        actor: 'user',
+        commandRevision: 2,
+      })
+      const replacement = enqueueBardWikiRebuild(harness.db, {
+        chatId: 'chat-a',
+        policy: 'full',
+        expectedSourceCount: 1,
+      })
+      await harness.worker.tick()
+      expect(getBardWikiJob(harness.db, replacement.id)).toMatchObject({ status: 'completed' })
+      expect(getBardWikiDocument(harness.db, 'chat-a', original.id)).toEqual(manual)
+      const documents = listBardWikiDocuments(harness.db, 'chat-a')
+      expect(documents).toHaveLength(2)
+      expect(documents.find((document) => document.id !== original.id)?.markdown).toBe('## assistant-0\nAnswer 0')
+      const third = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+      await harness.worker.tick()
+      expect(getBardWikiJob(harness.db, third.id)).toMatchObject({ status: 'completed' })
+      expect(getBardWikiDocument(harness.db, 'chat-a', original.id)).toEqual(manual)
+      expect(listBardWikiDocuments(harness.db, 'chat-a')).toHaveLength(2)
     } finally {
       harness.db.close()
     }

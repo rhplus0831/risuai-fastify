@@ -368,7 +368,14 @@ function publishStagingInOpenTransaction(
   for (const change of staged) {
     const currentSource = sources[change.sourceOrdinal]
     const reusableTarget = reusable.get(change.sourceOrdinal)
-    const documentId = reusableTarget?.document.id ?? eventDocumentId(change.source)
+    const baseDocumentId = eventDocumentId(change.source)
+    // A user-edited or deleted prior document keeps its identity and history.
+    // Publish a separate derived document when that identity is already owned.
+    const documentId =
+      reusableTarget?.document.id ??
+      (db.prepare('SELECT 1 FROM bardwiki_documents WHERE id = ?').get(baseDocumentId)
+        ? `event-rebuild-${randomUUID()}`
+        : baseDocumentId)
     const logicalPath = resolveEventLogicalPath(
       db,
       job.chatId,

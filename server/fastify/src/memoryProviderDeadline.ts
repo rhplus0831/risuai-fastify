@@ -38,3 +38,20 @@ export function throwIfMemoryProviderAborted(signal: AbortSignal): void {
   if (!signal.aborted) return
   throw signal.reason instanceof Error ? signal.reason : new Error('memory provider request aborted')
 }
+
+/** Settle the worker's provider boundary even when the dependency ignores abort. */
+export async function awaitMemoryProviderResult<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+  throwIfMemoryProviderAborted(signal)
+  let onAbort!: () => void
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(new Error('aborted'))
+    signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    const result = await Promise.race([operation(), cancelled])
+    if (signal.aborted) throw new Error('aborted')
+    return result
+  } finally {
+    signal.removeEventListener('abort', onAbort)
+  }
+}

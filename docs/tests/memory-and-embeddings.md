@@ -1,6 +1,7 @@
 # Memory and Embeddings
 
 Last audited: 2026-08-02.
+Targeted source check: 2026-09-12 (background job lifecycle and native worker recovery).
 
 This area covers legacy memory-window construction and the Hypa V3 lifecycle: planning conversation chunks, summarizing and embedding them, selecting memories for a prompt, operating the background queue, exposing the API, and keeping browser state coherent. Prompt placement is also discussed in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md); the modal's broader character-management context is covered in [Character Content, Memory, and Catalogs](character-content-memory-and-catalogs.md).
 
@@ -38,3 +39,34 @@ This area covers legacy memory-window construction and the Hypa V3 lifecycle: pl
 | Jobs and worker | `memoryEmbedJobHandler`, `memorySummarizeJobHandler`, `memoryWorker`. |
 | API, events, and reconciliation | Server `memoryJobsRoutes`, `memoryReadRoutes`, `memoryEvents`; client `serverMemory`, `memoryJobEvents`, `memoryJobRefresh`. |
 | UI | `HypaV3Modal.resetRace` and `HypaV3Modal.serverReliability`; component suites for modal header, summary item, memory jobs, summary patch, and tag manager; Hypa cases in `ownerPaths.test.ts`. |
+
+## Background-job lifecycle recovery
+
+`server/fastify/browser-smoke/backgroundJobRecovery.spec.ts` uses the built SPA,
+authentication, SQLite, SSE and a local deterministic OpenAI-compatible provider.
+The harness explicitly opts into the real memory worker; its normal default stays
+disabled. The selected summary journey drops the actual terminal SSE frame,
+returns a failed list read, and checks rendered completion, stopped polling,
+reload and exactly one durable summary. Fastify and provider teardown are awaited.
+
+The same spec covers real message/greeting translation with held older bootstrap
+responses and BardWiki rebuild with a failed operational completion write, a held
+older read, manual document editing, another rebuild and reload. It asserts durable
+output as well as rendered controls. It does not certify external provider quality.
+
+Focused embed/summarize tests cover abort-insensitive dependencies, sibling
+completion before old success/failure, and a recreated logical job with a fresh
+instance before the old callback arrives. Summary coverage also composes source
+invalidation with held work and reopens SQLite after committed output followed by
+a failed job-status write, proving that the next attempt reuses the output.
+`memoryJobRefresh.test.ts` covers error/unavailable/thrown list failures followed
+by automatic terminal reconciliation and timer cleanup. Existing cancellation,
+contextual embedding, retry, retention and projection cases remain in place.
+
+BardWiki's `bardWikiRebuildHandler.test.ts` additionally checks manually edited
+prior rebuild documents, abort-insensitive completion after cancel/delete, a fresh
+build after source changes, and checkpoint recovery with SQLite reopened.
+`bardWikiWorker.test.ts` checks graceful drain and stopped scheduling;
+`src/ts/server/bardWikiResource.test.ts` checks equal-revision read ordering for
+both workspace and invalidation owners. Receipt inversion/manual-review coverage
+remains in `server/fastify/__tests__/bardWikiLifecycle.test.ts`.

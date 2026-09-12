@@ -214,8 +214,6 @@ claim a standalone role change cancels all loader work automatically.
 
 No production data was touched, no new production test hooks were added, and no
 manual development server was started. Phase 04 is complete with no unresolved
-in-scope finding. Its patch remains uncommitted on
-`960a2f336dcab751692cdac0d87d04ac3377daa4`. Phase 05 remains unstarted. Next,
-recheck source/worktree and complete the background-job entry inventory in
-`docs/plan/reliability-audit/phases/05-background-jobs.md`; preserve its requirement
-for a selected real worker in an isolated deterministic-provider harness.
+in-scope finding. Its patch was committed as
+`86d07b1da7e39bff9f0ac0f9769f0697724c507c`. The current phase and next action are
+owned by [status](../status.md).

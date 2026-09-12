@@ -431,6 +431,7 @@ async function translateWithLlm(
       signal,
     },
     async ({ messages, maxResponse, model, signal: stepSignal }) => {
+      signal.throwIfAborted()
       let profile =
         model.mode === 'modelProfile'
           ? resolveModelProfileByProfileId({ database, role: 'translate', profileId: model.profileId })
@@ -475,8 +476,27 @@ async function translateWithLlm(
 }
 
 export async function translateRawMessageData(input: RawMessageTranslationInput): Promise<RawMessageTranslation> {
+  input.signal.throwIfAborted()
+  // Own deadline settlement even when a provider or response body ignores abort.
+  // The detached operation can finish later, but its result cannot reach persistence.
+  let onAbort!: () => void
+  const cancelled = new Promise<never>((_resolve, reject) => {
+    onAbort = () => reject(input.signal.reason ?? new Error('Translation aborted'))
+    input.signal.addEventListener('abort', onAbort, { once: true })
+  })
+  try {
+    const result = await Promise.race([executeRawMessageTranslation(input), cancelled])
+    input.signal.throwIfAborted()
+    return result
+  } finally {
+    input.signal.removeEventListener('abort', onAbort)
+  }
+}
+
+async function executeRawMessageTranslation(input: RawMessageTranslationInput): Promise<RawMessageTranslation> {
   const { translatorType, targetLanguage, inputLanguage, settingsHash } = resolveRawMessageTranslatorIdentity(input)
   const translateChunk = async (chunk: string): Promise<string> => {
+    input.signal.throwIfAborted()
     if (translatorType === 'google') return translateWithGoogle(chunk, inputLanguage, targetLanguage, input.signal)
     if (translatorType === 'deepl') return translateWithDeepL(input.settings, chunk, targetLanguage, input.signal)
     if (translatorType === 'deeplX') {

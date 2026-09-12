@@ -23,6 +23,8 @@ export async function startFastBootstrapHarness(
     /** Default to an unowned API import; explicit modes retain owned/migration/empty producers. */
     databaseSeedMode?: 'unowned-import' | 'writer-import' | 'unowned-migration' | 'empty'
     generationChat?: BuildAppOptions['generationChat']
+    /** Opt in only for isolated journeys exercising real background memory work. */
+    memoryWorker?: BuildAppOptions['memoryWorker']
   } = {},
 ): Promise<FastBootstrapHarness> {
   process.env.LOG_LEVEL = 'silent'
@@ -49,7 +51,7 @@ export async function startFastBootstrapHarness(
       requestTrace: { mode: 'agent' },
     },
     assetGc: false,
-    memoryWorker: false,
+    memoryWorker: options.memoryWorker ?? false,
     generationChat: options.generationChat,
   })
 

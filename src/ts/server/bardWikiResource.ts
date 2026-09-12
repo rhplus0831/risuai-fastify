@@ -18,9 +18,11 @@ const initialBardWikiResourceState = (): BardWikiResourceState => ({ chats: {}, 
 
 export const bardWikiResource = writable<BardWikiResourceState>(initialBardWikiResourceState())
 let resourceGeneration = 0
+const chatReadEpochs = new Map<string, number>()
 
 export function resetBardWikiResource(): void {
   resourceGeneration += 1
+  chatReadEpochs.clear()
   bardWikiResource.set(initialBardWikiResourceState())
 }
 
@@ -32,6 +34,17 @@ function captureBardWikiReadFence(signal?: AbortSignal | null, isCurrent: () => 
     isClientSessionGenerationCurrent(sessionGeneration) &&
     !signal?.aborted &&
     isCurrent()
+}
+
+function captureBardWikiChatReadFence(
+  chatId: string,
+  signal?: AbortSignal | null,
+  isCurrent: () => boolean = () => true,
+): () => boolean {
+  const current = captureBardWikiReadFence(signal, isCurrent)
+  const epoch = (chatReadEpochs.get(chatId) ?? 0) + 1
+  chatReadEpochs.set(chatId, epoch)
+  return () => current() && chatReadEpochs.get(chatId) === epoch
 }
 
 export function bardWikiDocumentResourceKey(chatId: string, documentId: string): string {
@@ -105,7 +118,7 @@ export async function loadBardWikiChatResource(
   chatId: string,
   signal?: AbortSignal | null,
 ): Promise<ServerResourceReadResult<BardWikiChatResource>> {
-  const current = captureBardWikiReadFence(signal)
+  const current = captureBardWikiChatReadFence(chatId, signal)
   const result = await fetchServerBardWikiChat(chatId, signal)
   if (!current()) return { status: 'unavailable' }
   if (result.status === 'ok') applyBardWikiChatResource(result)
@@ -143,7 +156,7 @@ export async function refreshLoadedBardWikiChat(
   signal?: AbortSignal | null,
   isCurrent: () => boolean = () => true,
 ): Promise<{ status: 'ok'; revision: number } | { status: 'error'; error: string } | { status: 'unavailable' }> {
-  const current = captureBardWikiReadFence(signal, isCurrent)
+  const current = captureBardWikiChatReadFence(chatId, signal, isCurrent)
   if (!current()) return { status: 'unavailable' }
   if (!isBardWikiChatResourceLoaded(chatId)) return { status: 'ok', revision: minimumRevision }
   const chat = await fetchServerBardWikiChat(chatId, signal)

@@ -11,6 +11,8 @@ const ACTIVE_MESSAGE_TRANSLATION_REFRESH_MS = 5_000
 export const activeMessageTranslations = writable<ActiveMessageTranslation[]>([])
 
 let refreshWired = false
+let refreshGeneration = 0
+let refreshInFlight = false
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let stopRefreshSubscription: (() => void) | null = null
 const locallyStartedTranslationJobIds = new Set<string>()
@@ -86,6 +88,8 @@ export function startActiveMessageTranslationRefresh(): void {
 
 export function stopActiveMessageTranslationRefresh(): void {
   refreshWired = false
+  refreshGeneration += 1
+  refreshInFlight = false
   stopRefreshSubscription?.()
   stopRefreshSubscription = null
   if (refreshTimer) {
@@ -95,7 +99,12 @@ export function stopActiveMessageTranslationRefresh(): void {
 }
 
 function scheduleActiveMessageTranslationRefresh(jobs: readonly ActiveMessageTranslation[]): void {
-  if (!refreshWired || !jobs.some((job) => job.status === 'running') || refreshTimer) return
+  if (!jobs.some((job) => job.status === 'running')) {
+    if (refreshTimer) clearTimeout(refreshTimer)
+    refreshTimer = null
+    return
+  }
+  if (!refreshWired || refreshInFlight || refreshTimer) return
   refreshTimer = setTimeout(() => {
     refreshTimer = null
     void refreshActiveMessageTranslations()
@@ -103,16 +112,31 @@ function scheduleActiveMessageTranslationRefresh(jobs: readonly ActiveMessageTra
 }
 
 async function refreshActiveMessageTranslations(): Promise<void> {
-  if (!get(activeMessageTranslations).some((job) => job.status === 'running')) return
+  if (!refreshWired || refreshInFlight) return
+  const generation = refreshGeneration
+  const jobsAtStart = get(activeMessageTranslations)
+  if (!jobsAtStart.some((job) => job.status === 'running')) return
+  refreshInFlight = true
   try {
     const { fetchServerBootstrapReadOnly } = await import('./bootstrap')
+    if (!refreshWired || generation !== refreshGeneration) return
     const bootstrap = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
-    if (bootstrap.status === 'ok') {
+    // A command receipt, newer snapshot or UI settlement owns any intervening
+    // change. A retired reader also cannot publish into its replacement.
+    if (
+      refreshWired &&
+      generation === refreshGeneration &&
+      get(activeMessageTranslations) === jobsAtStart &&
+      bootstrap.status === 'ok'
+    ) {
       setActiveMessageTranslations(bootstrap.bootstrap.activeMessageTranslations ?? [])
     }
   } catch (error) {
     console.warn('Message translation pending refresh failed', error)
   } finally {
-    if (refreshWired) scheduleActiveMessageTranslationRefresh(get(activeMessageTranslations))
+    if (generation === refreshGeneration) {
+      refreshInFlight = false
+      if (refreshWired) scheduleActiveMessageTranslationRefresh(get(activeMessageTranslations))
+    }
   }
 }

@@ -34,6 +34,8 @@ export const greetingTranslationProjectionVersion = writable(0)
 export const activeGreetingTranslations = writable<ActiveGreetingTranslation[]>([])
 const locallyStartedGreetingJobIds = new Set<string>()
 let refreshWired = false
+let refreshGeneration = 0
+let refreshInFlight = false
 let refreshTimer: ReturnType<typeof setTimeout> | null = null
 let stopRefreshSubscription: (() => void) | null = null
 
@@ -306,6 +308,8 @@ export function startActiveGreetingTranslationRefresh(): void {
 
 export function stopActiveGreetingTranslationRefresh(): void {
   refreshWired = false
+  refreshGeneration += 1
+  refreshInFlight = false
   stopRefreshSubscription?.()
   stopRefreshSubscription = null
   if (refreshTimer) clearTimeout(refreshTimer)
@@ -313,7 +317,12 @@ export function stopActiveGreetingTranslationRefresh(): void {
 }
 
 function scheduleActiveGreetingTranslationRefresh(jobs: readonly ActiveGreetingTranslation[]): void {
-  if (!refreshWired || refreshTimer || !jobs.some((job) => job.status === 'running')) return
+  if (!jobs.some((job) => job.status === 'running')) {
+    if (refreshTimer) clearTimeout(refreshTimer)
+    refreshTimer = null
+    return
+  }
+  if (!refreshWired || refreshInFlight || refreshTimer) return
   refreshTimer = setTimeout(() => {
     refreshTimer = null
     void refreshActiveGreetingTranslations()
@@ -321,17 +330,32 @@ function scheduleActiveGreetingTranslationRefresh(jobs: readonly ActiveGreetingT
 }
 
 async function refreshActiveGreetingTranslations(): Promise<void> {
-  if (!get(activeGreetingTranslations).some((job) => job.status === 'running')) return
+  if (!refreshWired || refreshInFlight) return
+  const generation = refreshGeneration
+  const jobsAtStart = get(activeGreetingTranslations)
+  if (!jobsAtStart.some((job) => job.status === 'running')) return
+  refreshInFlight = true
   try {
     const { fetchServerBootstrapReadOnly } = await import('./bootstrap')
+    if (!refreshWired || generation !== refreshGeneration) return
     const bootstrap = await fetchServerBootstrapReadOnly(null, { cacheRevision: false })
-    if (bootstrap.status === 'ok') {
+    // A command receipt, newer snapshot or UI settlement owns any intervening
+    // change. A retired reader also cannot publish into its replacement.
+    if (
+      refreshWired &&
+      generation === refreshGeneration &&
+      get(activeGreetingTranslations) === jobsAtStart &&
+      bootstrap.status === 'ok'
+    ) {
       setActiveGreetingTranslations(bootstrap.bootstrap.activeGreetingTranslations ?? [])
     }
   } catch (error) {
     console.warn('Greeting translation pending refresh failed', error)
   } finally {
-    if (refreshWired) scheduleActiveGreetingTranslationRefresh(get(activeGreetingTranslations))
+    if (generation === refreshGeneration) {
+      refreshInFlight = false
+      if (refreshWired) scheduleActiveGreetingTranslationRefresh(get(activeGreetingTranslations))
+    }
   }
 }
 

@@ -23,7 +23,7 @@ import {
 import { loadPersistedDatabaseForMemoryJob } from './repository.js'
 import { MEMORY_JOB_BATCH_MAX_JOBS, type MemoryJobBatchHandler, type MemoryJobHandlerContext } from './memoryWorker.js'
 import { emitProtocolMetric } from './protocolMetrics.js'
-import { createMemoryProviderAbortScope, throwIfMemoryProviderAborted } from './memoryProviderDeadline.js'
+import { awaitMemoryProviderResult, createMemoryProviderAbortScope } from './memoryProviderDeadline.js'
 import { hypaV3PresetIndexFromStableId } from '@risuai/shared-core/hypa-v3-preset-selection-identity'
 
 export interface EmbedMemoryJobHandlerOptions {
@@ -252,12 +252,13 @@ async function executeEmbedJob(input: {
   if (modelRequest.request.provider === 'voyage-contextual') {
     let embedding: Awaited<ReturnType<NonNullable<EmbedMemoryJobHandlerOptions['embedGroups']>>>
     try {
-      throwIfMemoryProviderAborted(abortScope.signal)
-      embedding = await input.embedGroups({
-        request: modelRequest.request,
-        groups: [[chunk.text]],
-        signal: abortScope.signal,
-      })
+      embedding = await awaitMemoryProviderResult(abortScope.signal, () =>
+        input.embedGroups({
+          request: modelRequest.request,
+          groups: [[chunk.text]],
+          signal: abortScope.signal,
+        }),
+      )
     } finally {
       abortScope.dispose()
     }
@@ -282,12 +283,13 @@ async function executeEmbedJob(input: {
 
   let embedding: Awaited<ReturnType<NonNullable<EmbedMemoryJobHandlerOptions['embed']>>>
   try {
-    throwIfMemoryProviderAborted(abortScope.signal)
-    embedding = await input.embed({
-      request: modelRequest.request,
-      input: [chunk.text],
-      signal: abortScope.signal,
-    })
+    embedding = await awaitMemoryProviderResult(abortScope.signal, () =>
+      input.embed({
+        request: modelRequest.request,
+        input: [chunk.text],
+        signal: abortScope.signal,
+      }),
+    )
   } finally {
     abortScope.dispose()
   }
@@ -504,12 +506,13 @@ async function executeContextualEmbedJobs(input: {
     const abortScope = createMemoryProviderAbortScope(input.signal, input.opts.providerFetchDeadlineMs)
     let embedding: Awaited<ReturnType<NonNullable<EmbedMemoryJobHandlerOptions['embedGroups']>>>
     try {
-      throwIfMemoryProviderAborted(abortScope.signal)
-      embedding = await input.embedGroups({
-        request: input.modelRequest,
-        groups: [parsed.map((item) => item.chunk.text)],
-        signal: abortScope.signal,
-      })
+      embedding = await awaitMemoryProviderResult(abortScope.signal, () =>
+        input.embedGroups({
+          request: input.modelRequest,
+          groups: [parsed.map((item) => item.chunk.text)],
+          signal: abortScope.signal,
+        }),
+      )
     } finally {
       abortScope.dispose()
     }
