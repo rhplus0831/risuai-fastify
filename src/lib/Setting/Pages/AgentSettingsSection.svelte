@@ -163,43 +163,43 @@
       {#each agents as agent, index (agent.id)}
         {@const references = referencingPresets(agent.id)}
         <article
-          class="risu-card grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center"
+          class="risu-card grid gap-2"
           data-risu-agent-row
           data-agent-id={agent.id}>
-          <div class="order-2 flex flex-wrap justify-center gap-1 sm:justify-end" data-risu-agent-actions>
+          <div class="order-2 flex flex-wrap justify-start gap-2" data-risu-agent-actions>
             <Button
               size="sm"
               styled="outlined"
-              className="min-h-11 min-w-11"
+              className="min-h-11 min-w-11 flex items-center justify-center"
               disabled={busy || index === 0}
               ariaLabel={language.agentPresets.moveAgentUp(agent.name)}
               onclick={() => move(agent, -1)}><ArrowUpIcon size={14} /></Button>
             <Button
               size="sm"
               styled="outlined"
-              className="min-h-11 min-w-11"
+              className="min-h-11 min-w-11 flex items-center justify-center"
               disabled={busy || index === agents.length - 1}
               ariaLabel={language.agentPresets.moveAgentDown(agent.name)}
               onclick={() => move(agent, 1)}><ArrowDownIcon size={14} /></Button>
             <Button
               size="sm"
               styled="outlined"
-              className="min-h-11 min-w-11"
+              className="min-h-11 min-w-11 flex items-center justify-center"
               disabled={busy}
               ariaLabel={language.agentPresets.editAgentNamed(agent.name)}
               onclick={() => openEdit(agent)}><PencilIcon size={14} /></Button>
             <Button
               size="sm"
               styled="outlined"
-              className="min-h-11 min-w-11"
+              className="min-h-11 min-w-11 flex items-center justify-center"
               disabled={busy}
               ariaLabel={language.agentPresets.duplicateAgentNamed(agent.name)}
               onclick={() => copy(agent)}><CopyIcon size={14} /></Button>
-            <span class="border-l border-darkborderc pl-1" data-risu-danger-action>
+            <span class="border-l border-darkborderc pl-4" data-risu-danger-action>
               <Button
                 size="sm"
                 styled="danger"
-                className="min-h-11 min-w-11"
+                className="min-h-11 min-w-11 flex items-center justify-center"
                 disabled={busy || references.length > 0}
                 ariaLabel={references.length > 0
                   ? language.agentPresets.deleteAgentBlocked(agent.name, references.length)
@@ -213,7 +213,6 @@
               <span class="text-xs text-textcolor2">{agent.outputFormat}</span>
             </div>
             {#if agent.description}<p class="text-xs text-textcolor2">{agent.description}</p>{/if}
-            <span class="break-all text-xs text-textcolor2">{agent.id}</span>
             {#if references.length > 0}
               <details class="text-xs text-textcolor2" data-risu-agent-dependencies>
                 <summary class="cursor-pointer font-medium text-textcolor">
