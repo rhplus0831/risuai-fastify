@@ -1138,6 +1138,44 @@ describe('command events stream', () => {
     }
   })
 
+  it('cleans subscriptions after a snapshot read fails and permits a fresh stream', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    // Induce a real SQLite snapshot failure only in this disposable fixture.
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    db.exec('ALTER TABLE memory_jobs RENAME TO held_memory_jobs')
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await harness.app.inject({
+          method: 'GET',
+          url: '/api/v1/events',
+          headers: { 'risu-auth': assertion },
+        })
+        expect(response.statusCode).toBe(500)
+        expect(harness.commandEvents.activeListeners).toBe(0)
+      }
+    } finally {
+      db.exec('ALTER TABLE held_memory_jobs RENAME TO memory_jobs')
+      db.close()
+    }
+    const baseUrl = await listen(harness.app)
+    const abort = new AbortController()
+    try {
+      const response = await fetch(`${baseUrl}/api/v1/events`, {
+        headers: { 'risu-auth': assertion },
+        signal: abort.signal,
+      })
+      expect(response.status).toBe(200)
+      const reader = response.body!.getReader()
+      await readUntil(reader, (chunk) => chunk.includes('event: memory_snapshot\n'))
+      expect(harness.commandEvents.activeListeners).toBe(1)
+      abort.abort()
+      reader.releaseLock()
+      await waitFor(() => harness.commandEvents.activeListeners === 0)
+    } finally {
+      abort.abort()
+    }
+  })
+
   it('unsubscribes listeners when the stream closes', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     process.env.RISU_PROTOCOL_METRICS = '1'

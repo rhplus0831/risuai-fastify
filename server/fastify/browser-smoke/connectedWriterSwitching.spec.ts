@@ -9,6 +9,7 @@ import {
   type TestInfo,
 } from '@playwright/test'
 import { writeFileSync } from 'node:fs'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { getSchemaState } from '../src/db.js'
@@ -459,6 +460,212 @@ async function holdNativeGetResponses(page: Page, pathname: string) {
       release()
       await page.unroute(matches, handler)
     },
+  }
+}
+
+type RecoveryPause = 'reader-events' | 'acquisition-json' | 'hydration-json' | 'writer-events'
+
+declare global {
+  interface Window {
+    __heldRecoveryResponse?: {
+      reached: boolean
+      released: boolean
+      settled: boolean
+      aborted: boolean
+      status?: number
+      release(fail?: boolean): void
+      dispose(): void
+    }
+  }
+}
+
+/** Hold native transport completion even after abort, leaving all client owners real. */
+async function holdRecoveryResponse(page: Page, pause: RecoveryPause): Promise<void> {
+  await page.evaluate((pause) => {
+    const nativeFetch = window.fetch
+    let selected = false
+    let release!: (fail: boolean) => void
+    const held = new Promise<boolean>((resolve) => {
+      release = resolve
+    })
+    const fault: NonNullable<Window['__heldRecoveryResponse']> = {
+      reached: false,
+      released: false,
+      settled: false,
+      aborted: false,
+      release(fail = false) {
+        fault.released = true
+        release(fail)
+      },
+      dispose() {
+        fault.release()
+        window.fetch = nativeFetch
+      },
+    }
+    window.__heldRecoveryResponse = fault
+    window.fetch = async (input, init) => {
+      const pathname = new URL(input instanceof Request ? input.url : String(input), location.href).pathname
+      const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined))
+      const writer = headers.has('risu-writer-session')
+      const matches =
+        pause === 'reader-events'
+          ? pathname === '/api/v1/events' && !writer
+          : pause === 'writer-events'
+            ? pathname === '/api/v1/events' && writer
+            : pause === 'acquisition-json'
+              ? pathname === '/api/v1/bootstrap' && headers.get('risu-disconnect-existing-writer') === 'true'
+              : pathname === '/api/v1/resources/shell'
+      if (selected || !matches) return nativeFetch(input, init)
+      selected = true
+      const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined)
+      signal?.addEventListener(
+        'abort',
+        () => {
+          fault.aborted = true
+        },
+        { once: true },
+      )
+      // Only this external fault ignores abort. Preserve the server's actual response.
+      const response = await nativeFetch(input, { ...init, signal: undefined })
+      fault.status = response.status
+      const wait = async () => {
+        fault.reached = true
+        const fail = await held
+        fault.settled = true
+        if (fail) throw new Error('Injected late recovery transport failure')
+      }
+      if (pause.endsWith('-json')) {
+        const body = await response.json()
+        response.json = async () => {
+          await wait()
+          return body
+        }
+      } else {
+        try {
+          await wait()
+        } finally {
+          // The native network intentionally ignored cancellation; release its socket too.
+          if (fault.aborted) void response.body?.cancel().catch(() => undefined)
+        }
+      }
+      return response
+    }
+  }, pause)
+}
+
+async function setRecoveryVisibility(page: Page, state: DocumentVisibilityState): Promise<void> {
+  await page.evaluate((state) => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: state })
+    document.dispatchEvent(new Event('visibilitychange'))
+  }, state)
+}
+
+for (const pause of ['reader-events', 'acquisition-json', 'hydration-json', 'writer-events'] as const) {
+  for (const lateResult of ['success', 'failure'] as const) {
+    test(`reader promotion replaces held ${pause} before late ${lateResult}`, async ({ browser }, testInfo) => {
+      test.setTimeout(90_000)
+      const pair = await createPair(browser)
+      const evidence: Record<string, unknown> = { pause, lateResult }
+      const writerStreams: ServerResponse[] = []
+      const onRequest = (request: IncomingMessage, response: ServerResponse) => {
+        if (
+          new URL(request.url ?? '/', pair.harness.baseUrl).pathname === '/api/v1/events' &&
+          request.headers['risu-writer-session'] === pair.b.sessionId
+        )
+          writerStreams.push(response)
+      }
+      pair.harness.app.server.on('request', onRequest)
+      try {
+        await bootPair(pair)
+        await pair.a.page.getByTestId('default-chat-composer').fill(UNSENT_A)
+        await holdRecoveryResponse(pair.b.page, pause)
+        await pair.b.page.locator('[data-reader-use-this-device]').click()
+        if (pause !== 'reader-events') {
+          await pair.b.page.getByRole('button', { name: 'Disconnect existing client', exact: true }).click()
+        }
+        await expect.poll(() => pair.b.page.evaluate(() => window.__heldRecoveryResponse!.reached)).toBe(true)
+        expect(await pair.b.page.evaluate(() => window.__heldRecoveryResponse!.status)).toBe(200)
+        expect(
+          await pair.b.page.evaluate(
+            () => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getStartupCoordinatorSnapshot().capabilities.canMutate,
+          ),
+        ).toBe(false)
+
+        await setRecoveryVisibility(pair.b.page, 'hidden')
+        // Retirement must cancel now; eventual success after the 30s control
+        // deadline would hide a missing lease cancellation behind polling.
+        expect(await pair.b.page.evaluate(() => window.__heldRecoveryResponse!.aborted)).toBe(true)
+        // Before authorization, retry requires explicit promotion. After authorization,
+        // the same owner resumes writer recovery on foreground without a new takeover.
+        const authorized = pause === 'hydration-json' || pause === 'writer-events'
+        await expect
+          .poll(() =>
+            pair.b.page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().lifecycle),
+          )
+          .toBe(authorized ? 'recovering-writer' : 'reading')
+        expect(await pair.b.page.evaluate(() => window.__heldRecoveryResponse!.released)).toBe(false)
+        await setRecoveryVisibility(pair.b.page, 'visible')
+        if (authorized) await expectWriter(pair.b, ROUTE_A)
+        else {
+          await expectReader(pair.b, ROUTE_A, CHAT_A)
+          await expect(pair.b.page.locator('[data-reader-use-this-device]')).toHaveAttribute('aria-busy', 'false')
+          if (pause === 'reader-events') await promoteViaUi(pair, pair.b, pair.a, ROUTE_A, 2)
+          else {
+            await pair.b.page.locator('[data-reader-use-this-device]').click()
+            await expectWriter(pair.b, ROUTE_A)
+          }
+        }
+        await expectReader(pair.a, ROUTE_A, CHAT_A)
+        const replacement = await pair.b.page.evaluate(() =>
+          window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot(),
+        )
+        evidence.replacementBeforeRelease = replacement
+        expect(
+          await pair.b.page.evaluate(() => ({
+            released: window.__heldRecoveryResponse!.released,
+            aborted: window.__heldRecoveryResponse!.aborted,
+          })),
+        ).toEqual({ released: false, aborted: true })
+        await pair.b.page.getByTestId('default-chat-composer').fill('Newer replacement draft')
+        const durableBeforeRelease = durableSnapshot(pair.harness.dataDir)
+        const replacementStream = writerStreams.at(-1)!
+        const streamCount = writerStreams.length
+        expect(replacementStream).toBeDefined()
+        expect(replacementStream.destroyed || replacementStream.writableEnded).toBe(false)
+
+        await pair.b.page.evaluate((fail) => window.__heldRecoveryResponse!.release(fail), lateResult === 'failure')
+        await expect.poll(() => pair.b.page.evaluate(() => window.__heldRecoveryResponse!.settled)).toBe(true)
+        await expectWriter(pair.b, ROUTE_A)
+        expect(
+          await pair.b.page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot()),
+        ).toEqual(replacement)
+        await expect(pair.b.page.getByTestId('default-chat-composer')).toHaveValue('Newer replacement draft')
+        expect(durableSnapshot(pair.harness.dataDir)).toEqual(durableBeforeRelease)
+        evidence.postReleaseRevision = await commitVisibleMessage(
+          pair,
+          pair.b,
+          pair.a,
+          await writerHeaders(pair.b),
+          CHAT_A,
+          `late-${pause}-${lateResult}`,
+          'Replacement writer committed after the retired response settled.',
+        )
+        await expect(messageBody(pair.b.page, `late-${pause}-${lateResult}`)).toContainText(
+          'Replacement writer committed after the retired response settled.',
+        )
+        expect(writerStreams).toHaveLength(streamCount)
+        expect(writerStreams.at(-1)).toBe(replacementStream)
+        expect(replacementStream.destroyed || replacementStream.writableEnded).toBe(false)
+        evidence.replacementStreamSurvived = true
+        expect((await composerDrafts(pair.a)).some((draft) => draft.messageInput === UNSENT_A)).toBe(true)
+        await expectNoReload(pair)
+        expect(pair.pageErrors).toEqual([])
+      } finally {
+        pair.harness.app.server.off('request', onRequest)
+        await pair.b.page.evaluate(() => window.__heldRecoveryResponse?.dispose()).catch(() => undefined)
+        await finishPair(pair, testInfo, evidence)
+      }
+    })
   }
 }
 

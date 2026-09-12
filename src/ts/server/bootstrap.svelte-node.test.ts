@@ -18,7 +18,11 @@ import {
   fetchServerOwnership,
 } from './bootstrap'
 import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
-import { clearCachedServerCommandRevision, peekCachedServerCommandRevision } from './commands'
+import {
+  clearCachedServerCommandRevision,
+  peekCachedServerCommandRevision,
+  setCachedServerCommandRevision,
+} from './commands'
 import {
   __browserDiagnosticsTestHooks,
   getBrowserDiagnosticsSnapshot,
@@ -80,6 +84,69 @@ afterEach(() => {
 })
 
 describe('server runtime bootstrap helper', () => {
+  for (const mode of ['ownership', 'reader', 'writer'] as const) {
+    for (const status of [200, 409]) {
+      it.each(['cancel', 'deadline'] as const)(
+        `settles ${mode} HTTP ${status} JSON on %s and ignores its late body after a replacement`,
+        async (ending) => {
+          vi.useFakeTimers()
+          setCachedServerCommandRevision(17)
+          const caller = new AbortController()
+          let release!: (body: unknown) => void
+          const body = new Promise<unknown>((resolve) => {
+            release = resolve
+          })
+          const response = new Response(null, { status })
+          response.json = vi.fn(() => body)
+          let signal: AbortSignal | null | undefined
+          vi.stubGlobal(
+            'fetch',
+            vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+              signal = init?.signal
+              return response
+            }),
+          )
+          const request =
+            mode === 'ownership'
+              ? fetchServerOwnership
+              : mode === 'reader'
+                ? fetchServerBootstrapReadOnly
+                : fetchServerBootstrap
+          const retired = request(caller.signal)
+          await vi.advanceTimersByTimeAsync(0)
+          expect(response.json).toHaveBeenCalledOnce()
+          expect(signal?.aborted).toBe(false)
+          if (ending === 'cancel') caller.abort()
+          else await vi.advanceTimersByTimeAsync(SERVER_CONTROL_REQUEST_TIMEOUT_MS)
+          await expect(retired).resolves.toMatchObject({
+            status: 'error',
+            error: ending === 'cancel' ? 'Network error: Request aborted' : 'Network error: Request timed out',
+          })
+          expect(signal?.aborted).toBe(true)
+          expect(peekCachedServerCommandRevision()).toBe(17)
+
+          const ownership = { version: 1, databaseLineage: 'database-a', writer: { sessionId: 'writer-a', epoch: 3 } }
+          stubBootstrapFetch(mode === 'ownership' ? ownership : { initialized: true, revision: 21 })
+          await expect(request()).resolves.toMatchObject({ status: 'ok' })
+          const revision = peekCachedServerCommandRevision()
+          const configurations = telemetry.configure.mock.calls.length
+          // The previous parser ignores abort and completes only after B has succeeded.
+          release(
+            status === 409
+              ? { error: 'active_writer_connected' }
+              : mode === 'ownership'
+                ? { ...ownership, writer: { sessionId: 'old-writer', epoch: 1 } }
+                : { initialized: true, revision: 99 },
+          )
+          await vi.advanceTimersByTimeAsync(0)
+          expect(peekCachedServerCommandRevision()).toBe(revision)
+          expect(telemetry.configure).toHaveBeenCalledTimes(configurations)
+          expect(vi.getTimerCount()).toBe(0)
+        },
+      )
+    }
+  }
+
   it('single-flights concurrent ownership probes without caching a settled snapshot', async () => {
     const ownership = {
       version: 1 as const,

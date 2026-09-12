@@ -484,6 +484,11 @@ the current revision. Hypa `memory.job` and BardWiki `bardwiki.job` progress
 events are bounded, secret-free, and never replayed; the reconnect snapshot plus
 targeted resources are authoritative.
 
+The event route registers request/response cleanup before subscribing to live
+sources or reading its initial snapshots. A snapshot/preparation error that
+returns HTTP 500 therefore releases those subscriptions, just as a closed or
+replay-rejected stream does; retry does not accumulate abandoned listeners.
+
 Browser reconcile rules: process events serially, defer matching own-origin
 events into the active command batch, skip revisions already covered by the
 applied-resource cursor, use verified local effects for contiguous command

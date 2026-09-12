@@ -162,6 +162,13 @@ export function registerEventsRoutes(
       if (written) streamMetrics?.recordFrame(type, text)
       return written
     }
+    // Snapshot preparation can throw before SSE admission. Own cleanup before
+    // subscribing so Fastify's error response also releases every listener.
+    req.raw.once('aborted', onRequestAborted)
+    req.raw.once('close', onRequestClose)
+    reply.raw.once('finish', onResponseFinish)
+    reply.raw.once('close', onResponseClose)
+
     unsubscribeCommand = commandEvents.subscribe((event) => {
       if (liveCommandDelivery) {
         if (!reply.raw.writableEnded) {
@@ -208,11 +215,6 @@ export function registerEventsRoutes(
         errorSummary: sanitizeMemoryJobError(job.errorSummary),
       })),
     }
-    req.raw.once('aborted', onRequestAborted)
-    req.raw.once('close', onRequestClose)
-    reply.raw.once('finish', onResponseFinish)
-    reply.raw.once('close', onResponseClose)
-
     const currentRevision = getSchemaState(db).revision
     // The full history read+map exists for replay — and for the opt-in
     // replay metric's oldest/latest fields, so metric output stays identical

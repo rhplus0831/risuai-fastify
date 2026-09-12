@@ -402,7 +402,9 @@ for (const viewport of ['desktop', 'mobile'] as const) {
       const chatNavigation = reader.locator('[data-reader-navigation]')
       const back = chatNavigation.locator('[data-reader-go-back]')
       await expect(back).toBeEnabled()
-      await expect(chatNavigation.locator('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).toHaveCount(1)
+      await expect(chatNavigation.locator('button:not(:disabled), input:not(:disabled), [tabindex="0"]')).toHaveText(
+        viewport === 'mobile' ? ['Close Menu', 'Go Back'] : ['Go Back'],
+      )
       await back.click()
       await expect(reader).toHaveURL(`${harness.baseUrl}/character/${CHARACTER_B}`)
       await expect(reader.locator('[data-risu-navigation-rail]')).toHaveCSS('width', '80px')

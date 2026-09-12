@@ -1,9 +1,7 @@
 # Browser State Sync and Recovery
 
 Last audited: 2026-08-30.
-
-Targeted source check: 2026-09-08 (connected-reader boundaries and evidence).
-Targeted source check: 2026-09-10 (mobile writer stream/offline recovery).
+Last Targeted source check: 2026-09-12 (recovery replacement and stalled control bodies).
 
 This area covers browser startup, active-writer ownership, encrypted durable mutation recovery, command
 serialization, compact local acknowledgements, authoritative resource reads, hash-cache validation,
@@ -90,6 +88,21 @@ their original interactions and assertions.
 Browser fixtures that own Playwright's page context close that context before
 closing their Fastify harness. Closing only the page can leave an idle pooled
 HTTP socket delaying server shutdown after all product assertions have passed.
+
+`connectedWriterSwitching.spec.ts` additionally holds native reader-event
+admission, confirmed acquisition JSON, shell JSON, and writer-event admission
+through synthetic hiding. At each boundary, a replacement becomes usable before
+the old response is released with success or failure. The real coordinator,
+session, outbox, resources, language, and event modules remain installed. DOM
+drafts/routes, SQLite commits, and the identity of the replacement's native SSE
+connection verify that late work does not disturb it. The fault wrapper alone
+ignores transport abort; it disposes that intentionally held socket afterward.
+Focused coordinator tests separately assert public promise settlement, failures
+and explicit retry at preparation/receipt/replay/hydration/event boundaries,
+reader-refresh and writer-probe replacement, and retired timer behavior.
+`bootstrap.svelte-node.test.ts` races held HTTP 200/409 JSON against cancellation
+and the 30-second deadline for ownership, reader bootstrap, and writer bootstrap;
+late old bodies cannot replace the completed request's revision/configuration.
 
 The startup cache matrix measures small/large cold/warm counters, bytes and
 timing; those aggregates do not independently verify each hydrated value.

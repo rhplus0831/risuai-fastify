@@ -820,40 +820,48 @@ describe('API-backed client bootstrap', () => {
     expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
   })
 
-  it('supersedes an aborted reader refresh when online returns before the old request settles', async () => {
-    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    await loadData()
-    let heldSignal: AbortSignal | undefined
-    let releaseHeld!: (value: { status: 'error'; error: string }) => void
-    bootstrapApi.fetchReadOnly.mockImplementationOnce(
-      (signal: AbortSignal) =>
-        new Promise((resolve) => {
-          heldSignal = signal
-          releaseHeld = resolve
-        }),
-    )
-    bootstrapApi.fetchReadOnly.mockResolvedValue(
-      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: 'new-writer', epoch: 2 } }),
-    )
-    const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+  it.each(['success', 'failure'] as const)(
+    'supersedes an aborted reader refresh before its late %s',
+    async (lateResult) => {
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+      await loadData()
+      let heldSignal: AbortSignal | undefined
+      let releaseHeld!: (value: ReturnType<typeof runtimeBootstrap> | { status: 'error'; error: string }) => void
+      bootstrapApi.fetchReadOnly.mockImplementationOnce(
+        (signal: AbortSignal) =>
+          new Promise((resolve) => {
+            heldSignal = signal
+            releaseHeld = resolve
+          }),
+      )
+      bootstrapApi.fetchReadOnly.mockResolvedValue(
+        runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: 'new-writer', epoch: 2 } }),
+      )
+      const online = vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
 
-    eventApi.subscriptions[0]!.onWriterEvent!({ sessionId: 'new-writer', epoch: 2 })
-    await vi.waitFor(() => expect(heldSignal).toBeInstanceOf(AbortSignal))
-    online.mockReturnValue(false)
-    window.dispatchEvent(new Event('offline'))
-    expect(heldSignal?.aborted).toBe(true)
-    online.mockReturnValue(true)
-    window.dispatchEvent(new Event('online'))
+      eventApi.subscriptions[0]!.onWriterEvent!({ sessionId: 'new-writer', epoch: 2 })
+      await vi.waitFor(() => expect(heldSignal).toBeInstanceOf(AbortSignal))
+      online.mockReturnValue(false)
+      window.dispatchEvent(new Event('offline'))
+      expect(heldSignal?.aborted).toBe(true)
+      online.mockReturnValue(true)
+      window.dispatchEvent(new Event('online'))
 
-    await vi.waitFor(() => expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(3))
-    await vi.waitFor(() =>
-      expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' }),
-    )
-    releaseHeld({ status: 'error', error: 'late aborted refresh' })
-    await Promise.resolve()
-    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' })
-    expect(warn).not.toHaveBeenCalledWith('Reader refresh failed:', expect.anything())
-  })
+      await vi.waitFor(() => expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(3))
+      await vi.waitFor(() =>
+        expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' }),
+      )
+      const replacement = getClientSessionSnapshot()
+      releaseHeld(
+        lateResult === 'success'
+          ? runtimeBootstrap({ writerEpoch: 99, writer: { sessionId: 'obsolete-writer', epoch: 99 } })
+          : { status: 'error', error: 'late aborted refresh' },
+      )
+      await Promise.resolve()
+      expect(getClientSessionSnapshot()).toEqual(replacement)
+      expect(warn).not.toHaveBeenCalledWith('Reader refresh failed:', expect.anything())
+    },
+  )
 
   it('revokes writer dispatch while offline and reuses an unchanged writer projection after revalidation', async () => {
     await loadData()
@@ -6012,6 +6020,58 @@ describe('API-backed client bootstrap', () => {
 })
 
 describe('resource event reconnect backoff', () => {
+  it.each(['success', 'failure'] as const)(
+    'replaces a suspended writer probe before its late %s and stops retired callbacks',
+    async (lateResult) => {
+      const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+      await loadData()
+      vi.useFakeTimers()
+      let release!: (value: ReturnType<typeof runtimeOwnership> | { status: 'error'; error: string }) => void
+      let oldSignal: AbortSignal | undefined
+      bootstrapApi.fetchOwnership.mockImplementationOnce((signal: AbortSignal) => {
+        oldSignal = signal
+        return new Promise((resolve) => {
+          release = resolve
+        })
+      })
+      const foreground = () => {
+        visibility.mockReturnValue('hidden')
+        document.dispatchEvent(new Event('visibilitychange'))
+        visibility.mockReturnValue('visible')
+        document.dispatchEvent(new Event('visibilitychange'))
+      }
+      foreground()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(oldSignal?.aborted).toBe(false)
+      foreground()
+      await vi.advanceTimersByTimeAsync(0)
+      expect(oldSignal?.aborted).toBe(true)
+      expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'writing', connection: 'live' })
+      expect(bootstrapApi.fetchOwnership).toHaveBeenCalledTimes(2)
+      const replacement = getClientSessionSnapshot()
+      const subscriptions = eventApi.subscribe.mock.calls.length
+      release(
+        lateResult === 'success'
+          ? runtimeOwnership({ writer: { sessionId: 'obsolete-foreign-writer', epoch: 99 } })
+          : { status: 'error', error: 'late ownership failure' },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+      expect(getClientSessionSnapshot()).toEqual(replacement)
+      expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
+      expect(eventApi.subscribe).toHaveBeenCalledTimes(subscriptions)
+
+      stopConnectedClientServices()
+      stopDeferredStartupRuntimes()
+      stopServerResourceEvents()
+      const requestsAfterStop = bootstrapApi.fetchOwnership.mock.calls.length
+      await vi.advanceTimersByTimeAsync(120_000)
+      window.dispatchEvent(new Event('focus'))
+      await vi.advanceTimersByTimeAsync(0)
+      expect(bootstrapApi.fetchOwnership).toHaveBeenCalledTimes(requestsAfterStop)
+      expect(eventApi.subscribe).toHaveBeenCalledTimes(subscriptions)
+    },
+  )
+
   it('ignores ordinary focus for a healthy managed writer and uses ownership after suspension evidence', async () => {
     const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
     await loadData()
@@ -6633,6 +6693,46 @@ describe('explicit connected writer switching', () => {
       expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
       expect(ownershipApi.discard).not.toHaveBeenCalled()
       expect(loadPlugins).not.toHaveBeenCalled()
+    },
+  )
+
+  it.each(['prepare', 'receipt', 'replay', 'hydration', 'events'] as const)(
+    'keeps failed promotion during %s gated and permits a successful explicit retry',
+    async (phase) => {
+      await startReader()
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      // Acquisition succeeded before this failure; subsequent discovery must
+      // report that durable owner, including when the client returns to reading.
+      bootstrapApi.fetchReadOnly.mockResolvedValue(
+        runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } }),
+      )
+      const step =
+        phase === 'prepare'
+          ? pendingMutationApi.prepare
+          : phase === 'receipt'
+            ? pendingMutationApi.flushAcknowledgements
+            : phase === 'replay'
+              ? pendingMutationApi.replay
+              : phase === 'hydration'
+                ? resourceApi.loadInitial
+                : eventApi.subscribe
+      step.mockRejectedValueOnce(new Error(`Injected ${phase} failure`))
+      const lifecycles: string[] = []
+      const stop = clientSessionStore.subscribe((state) => lifecycles.push(state.lifecycle))
+      try {
+        await expect(promoteConnectedReader()).resolves.toEqual({ status: 'failed', reason: 'unavailable' })
+        expect(lifecycles).not.toContain('writing')
+        expect(canUseClientWriteAccess()).toBe(false)
+        expect(loadPlugins).not.toHaveBeenCalled()
+        await vi.waitFor(() =>
+          expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' }),
+        )
+        await expect(promoteConnectedReader()).resolves.toEqual({ status: 'promoted' })
+        expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'writing', connection: 'live' })
+        expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
+      } finally {
+        stop()
+      }
     },
   )
 
