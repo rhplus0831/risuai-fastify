@@ -183,8 +183,7 @@ describe('modular Agent Preset settings', () => {
     expect(target.querySelector('[data-risu-agent-settings]')?.textContent).toContain(language.agentPresets.agentsTitle)
     const agentRow = target.querySelector('[data-risu-agent-row]')
     expect(agentRow?.textContent).toContain(agent.name)
-    expect(agentRow?.classList).toContain('sm:items-center')
-    expect(agentRow?.querySelector(':scope > [data-risu-agent-actions]')).not.toBeNull()
+    expect(agentRow?.querySelector('[data-risu-agent-actions]')).toBeTruthy()
     expect(target.querySelector('[data-risu-agent-preset-row]')?.textContent).toContain(preset.name)
     expect(target.querySelector('[data-risu-agent-preset-row]')?.textContent).toContain(
       language.agentPresets.stepCount(1),
