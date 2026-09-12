@@ -1,7 +1,7 @@
 # Development And Observability
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-10 (v3 safe facts and correlated remote investigations).
+Targeted source checks: 2026-09-12 (diagnostics extraction, startup telemetry v2, and server shutdown).
 
 Use this guide for local/full-stack servers, request and generation tracing,
 browser startup telemetry, startup and bundle verification,
@@ -110,404 +110,11 @@ content and should not be shared casually.
 
 ## Remote Support Diagnostics
 
-Remote access is explicitly enabled with `RISU_SUPPORT_DIAGNOSTICS=1` and
-`RISU_SUPPORT_DIAGNOSTICS_VERIFIER=/private/operator/directory/verifier.json`.
-Collection also requires `RISU_CLIENT_DIAGNOSTICS=1`. The verifier must be outside
-the repository, data directory, and static root. Its directory must be private,
-its file mode 0600, and symlinked paths are rejected. Missing, invalid, revoked,
-or expired credentials fail closed. The dedicated bearer credential never
-enters the ordinary application auth registry or bootstrap. Readers/writers,
-uninitialized servers, and development auth bypass do not grant support access.
-
-Operator provisioning uses the local `pnpm diagnostics:credential` script:
-
-```sh
-# Create private directories first, then choose fixed operator-owned paths.
-export RISU_SUPPORT_DIAGNOSTICS_VERIFIER=/private/operator/directory/verifier.json
-export RISU_DIAGNOSTICS_REMOTE_CONFIG=/private/transfer/directory/production.json
-export RISU_DIAGNOSTICS_REMOTE_ORIGIN=https://your-risu-host.example
-pnpm diagnostics:credential mint
-```
-
-The tool writes an exclusive mode-0600 config containing a random 32-byte hex
-token and the fixed HTTPS origin; it prints only a fixed success category. The
-verifier retains only SHA-256 digests, random credential IDs, and bounded
-lifecycle times. Move the plaintext config to the development environment over
-an operator-controlled secure channel, keep it outside Git, and remove the
-transfer copy. Provision a separate credential for each environment. A private
-file reduces accidental exposure; it cannot hide its token from unrestricted
-shell access. Server-side authority is the access boundary.
-
-Default expiry is 30 days, with a hard 90-day maximum and at most 16 credentials.
-Operators can inspect credential IDs and expiry metadata in the verifier without
-printing plaintext credentials. To rotate, select a new exclusive output config
-path and run `pnpm diagnostics:credential rotate <credential-id>`; old-token
-overlap is at most 24 hours. `pnpm diagnostics:credential revoke <credential-id>`
-revokes immediately for subsequent reads. Remove an abandoned `.lock` only after
-confirming no lifecycle command is running. Disabling support reads does not
-change application data, revisions, writer state, or the manual workflow below.
-
-`GET /api/v1/support/diagnostics` accepts the token only in
-`Authorization: Bearer`. Serve it through verified HTTPS. It reads only the
-sanitized collector, never request history, raw trace files, logs, bodies,
-sidecars, assets, backups, or domain records. All diagnostic namespace traffic,
-including rejected bodies/methods/subpaths, is excluded from automatic request
-logging and raw tracing; bounded access outcomes contain fixed categories only.
-The route policy is `diagnostics-read`, separate from application `required`.
-Existing deliberately public routes keep their public behavior.
-
-The standing channel is an allowlist of operational evidence, not a redacted
-copy of application state. Authentication credentials and secret material are
-omitted. User- or provider-controlled prompt, preset, input-hook, Hypa memory,
-BardWiki, translation, lorebook, character/module, chat-message, built-prompt,
-request-history prompt, and response text are omitted based on their provenance,
-regardless of field name. The channel does not export plain SHA-256 fingerprints
-of that content. Correlation uses random request IDs and secret-keyed opaque
-operation/attempt references; those references cannot be used to recover the
-source values. The verifier's SHA-256 digest is only for a random high-entropy
-support credential and is not a pattern for diagnostic content.
-
-The version-1 envelope remains exact and includes sequenced entries, validated
-build identity (`RISU_BUILD_ID`, otherwise unknown), random process identity,
-capture bounds, source availability, loss, truncation, and pagination. V1
-projects only its existing known fields from the journal; it excludes browser
-uploads and rich-only fields. Request `version=2` for exact deployment, HTTP,
-runtime, display, generation, prompt, provider, persistence, script, browser,
-and compatible legacy event families. V2 adds stamped provenance, pending work,
-operation continuity, and explicit browser clock semantics.
-
-Version 3 preserves the exact v2 event and may add at most 32 exact, typed facts
-to its journal record. Allowed values are bounded booleans, counts, durations,
-size buckets, opaque references, and application-relative source locations;
-there is no arbitrary-text, URL, header, object, or array fact. Duplicate fact
-IDs and unknown fields reject the record. Facts are revalidated at journal
-admission, restart restoration, reads, and remote export, and v1/v2 projection
-always strips them. Browser uploads cannot attach facts. Sanitized stack
-locations are captured only from server runtime errors when `RISU_BUILD_ID` is a
-valid 40–64 character lowercase hexadecimal coordinate. V3 exports a location
-only while its record process matches the response's current build instance, so
-an operator can resolve it against that exact build; error messages, absolute
-paths, plugin/eval frames, and locations from old/unknown builds remain absent.
-
-Journal loss counters describe server admission/retention; browser delivery
-loss remains unknown, with client sequence gaps showing possible omissions. No
-v2 or v3 payload is labeled v1. The ordinary version-1 manual report stays
-intact, and authenticated manual joined reads remain v2.
-
-Failed display-source batches and handled display-scope incompatibilities emit
-one request-correlated, v2-only `display` event. Its fixed fields distinguish
-revision, namespace, scoped persistence load, strict decode, scope resolution,
-shared dependency, target preparation, and postcondition failures. A narrow
-scope decode that returns HTTP 200 browser fallback uses outcome
-`handled-fallback`; it does not also emit a generic runtime error. Strict
-generation-input failures additionally carry only a finite owner category,
-validation rule, rejected value kind, and a 16-hex reference derived from the
-schema field name. The reference is intended to be resolved against the
-deployed generation-input schema; the event never contains the field name,
-JSON instance path, array index, persisted value, or character/chat/message
-identifiers. Other failure kinds cannot carry validator metadata, and browser
-uploads cannot publish this server-only family.
-
-Each accepted display-source service batch also emits one v2-only
-`display-performance` event under its request UID, independently of
-`RISU_PROTOCOL_METRICS`. It records requested/visited/executed target counts,
-transcript message count when known, cache hits/misses/in-flight joins and
-streaming bypasses, and final result counts when a response exists. Failed,
-stale, handled-fallback and aborted work retains the measurements reached so
-far; stages that never ran are absent, including conversion stages on cache
-hits. A cache miss counts an attempted conversion even when that attempt fails.
-No message text, domain IDs, page-session IDs, source/dependency hashes or raw
-metric payloads enter the summary. Browser uploads cannot publish this family;
-v1 exports omit it.
-
-`durationMs` covers service enqueue through completion, including
-`queueWaitMs`; it excludes route authentication/body validation and final JSON
-response serialization. SSE per-result callback/encoding time is included. `queueDepth` counts earlier unfinished batches at enqueue, and
-`timeToFirstTransformMs`, when present, also starts at enqueue. Queue wait is
-accumulated across target scheduling turns, including cancellation while queued.
-`timeToFirstResultMs` and `timeToPriorityResultsMs` measure the first fresh result
-and completion of all `priorityTargetCount` foreground results, respectively;
-they precede network delivery and browser rendering. The closed
-`timings` object reports accumulated milliseconds for revision/namespace checks,
-scope persistence load, scope decode, scope resolution, module resolution,
-shared dependency hashing, source/target hashing, target setup, Lua, declarative
-triggers, regex/CBS, target cleanup and postcondition checks. These are measured
-stage totals rather than a complete accounting of service duration. In this
-event, `scopeLoadMs` excludes decoding; the older raw `display_source_batch`
-metric's `scopeLoadMs` includes both. Pair the summary with the same UID's HTTP
-event to identify time outside the service. Browser HTTP duration ends when
-`fetch` resolves (headers, potentially just the first SSE result) and excludes
-subsequent stream/JSON/Markdown/DOM work. Use result timings and render readiness
-in addition to HTTP duration when comparing streaming behavior.
-
-Display summaries can also contain an optional `preparation` breakdown. Older
-records without it remain valid. Collection uses the same diagnostic context;
-no extra production flag, profiling endpoint, or raw payload capture is needed.
-
-| Field                                                                                 | Measurement boundary                                                                                                                                                                                                            |
-| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `loadPath`                                                                            | `selected` row loading or `legacy` compatibility fallback.                                                                                                                                                                      |
-| `loads.<owner>.readMs`                                                                | Existing SQLite statement preparation/binding, execution and returned-row materialization; excludes JavaScript JSON parsing. Owners are `settings`, `target`, `messages`, `memory`, `promptPresets`, `personas`, and `modules`. |
-| `loads.<owner>.parseMs`                                                               | Existing `JSON.parse` calls, including failed attempts; excludes byte accounting and subsequent compatibility repair/selection.                                                                                                 |
-| `loads.<owner>.jsonValues` / `jsonSize`                                               | Number of JSON strings attempted and cumulative UTF-8 size bucket. The joined `target` read normally parses two strings (character and chat), so this is not a SQL row count. Missing rows have no parse/size fields.           |
-| `configurationMs`                                                                     | Prompt/persona/module selection and construction of the scoped configuration, including their nested read/parse measurements.                                                                                                   |
-| `legacyLoadMs`                                                                        | Entire broad compatibility load when selected rows cannot serve the request. Its internals are not attributed to selected-owner measurements.                                                                                   |
-| `dependencyBuildMs`                                                                   | Construct the selected shared dependency object, including transcript projection.                                                                                                                                               |
-| `dependencyNormalizeMs`                                                               | Recursively copy dependency objects/arrays into canonical key order.                                                                                                                                                            |
-| `dependencySerializeMs`                                                               | Serialize that normalized graph once with `JSON.stringify`.                                                                                                                                                                     |
-| `dependencyHashMs`                                                                    | SHA-256 over the serialized string, including hash input encoding.                                                                                                                                                              |
-| `dependencyJsonSize`                                                                  | UTF-8 size bucket of that same serialized string. With transform v3, module digests replace full module bodies here.                                                                                                            |
-| `moduleBodyCacheHitCount` / `moduleBodyCacheMissCount` / `moduleBodyCacheBypassCount` | Selected module rows reused, loaded, or too large to retain. Bypasses are a subset of misses.                                                                                                                                   |
-| `moduleDigestCacheHitCount` / `moduleDigestCacheMissCount`                            | Active immutable module fingerprints reused or computed.                                                                                                                                                                        |
-| `moduleFreezeMs`                                                                      | Admission/freezing work on body misses; includes cache eviction/accounting.                                                                                                                                                     |
-| `moduleNormalizeMs` / `moduleSerializeMs` / `moduleHashMs`                            | Canonicalization, serialization, and SHA-256 for module digest misses only. Nested within `sharedDependencyMs`, separate from the small combined dependency stages.                                                             |
-| `measurementMs`                                                                       | Extra size/count accounting work; excludes general timer/callback overhead.                                                                                                                                                     |
-
-Size buckets have upper bounds of 4 KiB, 64 KiB, 1 MiB, 4 MiB, 16 MiB and
-64 MiB, plus `none` and `over-64MiB`. Input counts include active modules,
-module assets/regexes/triggers, and character assets/regexes/triggers. They
-count loaded definitions, not executed scripts. No owner IDs, script text,
-message text, file paths, or dependency hashes are exported. Byte accounting
-uses strings already needed by the real request; it does not serialize a
-second copy of the loaded graph. Without a diagnostic context the extra
-timers, size scans and input-count loops are bypassed.
-
-These are nested elapsed-time measurements, not additive independent totals:
-`scopeLoadMs` includes owner reads/parses and configuration work;
-`sharedDependencyMs` includes the dependency stages and their measurement
-work. Compatibility repairs and other loader work remain in the parent total.
-An unreached stage stays absent, rather than implying it ran instantly. A warm
-module-body hit has indexed read timing but no JSON parse/count/size measurement;
-a warm module-digest hit omits module normalization/serialization/hash timings.
-The first request after a restart or module change still pays body parsing,
-freezing, and digest creation. Compare warm and cold requests separately.
-The expanded summary remains one bounded journal record under the request UID.
-
-For production investigation, deploy the instrumentation and use ordinary chat
-navigation: capture one initial load, several repeated loads of the same chat,
-and a history expansion. Save each display-source `X-Request-UID` and retrieve
-its v2 `display-performance` record with the current helper below. The recorded
-cache-hit/miss counts determine whether a sample actually reused results;
-refresh alone does not establish a cold server cache. Compare several samples
-before attributing a cost to one stage. Local synthetic fixtures verify
-measurement correctness, while production timings identify costs for the real
-payload and server. A short CPU profile is a follow-up only if a dominant stage
-still needs function-level attribution.
-
-Filters are version, from/to epoch milliseconds (maximum 24 hours, default last
-hour), limit (default 50, maximum 200), generated requestUid/operationRef,
-category, and cursor. V1 has no operation references and returns no matching
-records for that filter. No raw/free-text/file/query-language options exist.
-Continuation accepts only cursor and version. Immutable sequence pages expire
-after 5 minutes and are bounded to 32 snapshots, 2,000 events/2 MiB per snapshot.
-Concurrent recording does not move events between pages. Clocks do not establish
-causal order. Responses are capped at 512 KiB; access is capped at 30 reads per
-minute per IP and a 10-second request deadline.
-
-Every outcome uses `Cache-Control: no-store`: 401 unauthorized, 400 invalid-query,
-429 rate-limited, 503 disabled/storage-unavailable, 409 collection-disabled,
-410 cursor-expired, and 500 internal-error. Successful empty windows return 200
-with no entries. Errors contain fixed categories and never echo filters or
-credential material. Restart invalidates cursor snapshots while retained journal
-evidence and sequence numbers survive within the limits below.
-
-In the development environment, set `RISU_DIAGNOSTICS_REMOTE_CONFIG` to the
-private transferred config, then run:
-
-```sh
-pnpm diagnostics:remote --investigate
-pnpm diagnostics:remote --investigate --requestUid=<generated-request-uid>
-pnpm diagnostics:remote --investigate --operationRef=<opaque-operation-reference>
-pnpm diagnostics:remote --investigate --version=2 # explicitly force an older server contract
-pnpm diagnostics:remote --limit=50
-pnpm diagnostics:remote --version=2 --requestUid=<generated-request-uid>
-pnpm diagnostics:remote --version=2 --category=display-performance --requestUid=<generated-request-uid>
-pnpm diagnostics:remote --version=2 --cursor=<returned-cursor>
-```
-
-Start an unfamiliar production investigation without a category filter, then
-follow the returned request/operation/attempt groups rather than repeatedly
-guessing categories. `--investigate` is local-only: it prefers v3, falls back
-once to v2 only when an older server rejects the initial v3 query, forces
-200-record pages, and follows cursor-only continuations for at most 20 snapshot
-pages (plus the one rejected v3 negotiation on an older server).
-It emits one deterministic JSON value after the whole snapshot validates, with
-source/loss metadata, level/category counts, correlation groups, and the safe
-timeline. `collection.complete` means cursor traversal completed; it does not
-override `loss.truncated`, dropped, rejected, or pruned counters. An explicit
-`--version=2` skips v3 negotiation. Without `--investigate`, the helper preserves
-the original single-page raw-envelope behavior.
-
-`util/diagnostics-remote.ts` accepts only the finite query flags above; it has
-no per-request destination/header/output-file override. It verifies TLS,
-rejects redirects and unexpected content types, bounds both compressed and
-expanded responses to 512 KiB, and validates each complete exact response
-before retaining it. Failures print only a fixed category to stderr, and a
-failed investigation never prints partial pages. Remote HTML, headers, stacks,
-and arbitrary error bodies never become fallback output.
-`util/diagnostics-remote.test.ts` exercises the real CLI with temporary HTTPS
-fixtures, including a trust chain, rejected TLS/redirects, compressed limits,
-timeout, v3/v2 negotiation, immutable paging, malformed schemas, and
-credential/content canaries.
-
-Source owners are `server/fastify/src/remoteDiagnostics.ts`,
-`server/fastify/src/supportDiagnosticsAuth.ts`, and the exact contract in
-`packages/protocol/src/remoteDiagnostics.ts`. Focused authorization, paging,
-privacy, limits, and lifecycle tests are in `remoteDiagnostics.test.ts` and
-`supportDiagnosticsAuth.test.ts` under the server test directory.
-
-### Retention, Correlation, And Failure Isolation
-
-When collection and either support reads or browser upload are enabled, safe
-records go to `<data-dir>/diagnostics/journal.sqlite` in a dedicated worker.
-The private directory is mode 0700 and files are mode 0600. Its independent
-random `correlation.key` creates opaque operation/attempt references; neither
-the key nor its domain-ID mapping is exported. Static serving cannot encompass
-this directory. Asset/legacy-storage routes and domain backup/export producers
-use their own bounded roots and do not include it. Startup rejects canonical
-path overlap with asset, save, backup, or static roots, including retained
-diagnostic files after collection is disabled. Static and application file reads
-also reject child symlinks resolving to diagnostics or the configured verifier;
-unrelated public file symlinks remain usable. Metadata-owned asset backup copies
-reject symlink sources before copying bytes.
-
-Hard limits are 24 hours, 10,000 retained events, 8 MiB of retained JSON, 4 KiB
-per record, and 256 queued/in-flight records. SQLite is capped at 16 MiB with
-DELETE rollback journaling, which can temporarily require another bounded file.
-The worker processes at most one request at a time and writes up to 32 records
-per batch. It maintains count/byte/expiry state incrementally and returns removal
-deltas after startup instead of rescanning and returning every retained sequence
-for each write. Cold initialization has a 30-second deadline, ordinary appends
-five seconds, maintenance/reset work 15 seconds, and shutdown one second.
-Startup revalidates every record, purges invalid rows, and prunes age/count/bytes
-before exposing evidence.
-
-Transient worker, I/O, or lock failures restart the isolated worker after bounded
-250 ms, 1 second, and 5 second backoffs. Reads remain `storage-unavailable` during
-recovery, uncertain in-flight records are accounted as loss rather than replayed,
-and queued records that were never sent resume after a successful restore. Invalid
-storage, full storage, invalid protocol responses, or an exhausted retry budget
-remain unavailable until process restart. Local logs contain only fixed failure,
-operation, retry-state, and attempt categories; native SQLite messages and paths
-remain suppressed. Collection never writes to domain tables or waits in
-generation, command acceptance, recovery, or writer transitions. Close remains
-bounded.
-
-Server receive sequence orders retained records. Browser timestamp and request
-associations are client assertions with unknown skew. Async operation scope
-survives request-UID eviction and covers background finalization and restart
-recovery. Operation references survive restart when the private key is retained;
-key failures explicitly report `process-only` continuity. Authoritative data
-replacement changes the journal epoch, clears old records/provenance and local
-collector state, and invalidates cursors and stale operation contexts.
-
-Provider events distinguish dispatch, response headers, and terminal outcomes;
-an ambiguous disconnect after dispatch does not establish safe replay. Timing
-uses monotonic clocks. Byte sizes are buckets; first-token timing is measured
-at the parsed provider boundary where supported. Stream gaps measure awaited
-upstream reads, excluding local consumer work. Missing measurements stay absent.
-Prompt events contain role/media/selection counts and token budget/truncation
-facts. Persistence events distinguish journal, authoritative commit, cleanup,
-retry, and recovery. Server Lua events count hooks and host permissions and
-compare output/transcripts locally with fixed work budgets; unavailable
-comparisons are explicit. Browser V3 output listeners emit only invoked/failed
-counts and duration under client provenance; host-call counts and content-change
-comparisons remain explicitly unmeasured. They never import Lua/plugin logs,
-hashes, or sidecars.
-
-Remote diagnostics can establish where and in which correlated operation a
-known class of failure occurred; they cannot explain content-dependent failures
-whose inputs are deliberately absent or events that were never instrumented.
-Those cases require a separately authorized reproduction path with synthetic or
-operator-approved data. Do not widen the standing channel or add content hashes
-merely because an investigation has no matching evidence.
-
-To roll back remote collection, disable `RISU_SUPPORT_DIAGNOSTICS` and
-`RISU_BROWSER_DIAGNOSTICS`, and revoke the support credential. Keep
-`RISU_CLIENT_DIAGNOSTICS=1` for the original manual workflow. No chats, presets,
-domain revisions, or writer state need changing. Stop the server before removing
-the dedicated diagnostics directory. Unsupported newer journal formats fail
-closed; do not attempt an in-place downgrade. Archive or remove that telemetry
-directory under operator control if an older version must start fresh.
-
-### Browser Upload
-
-`RISU_BROWSER_DIAGNOSTICS=1` separately opts in to ordinary authenticated
-bootstrap `browserDiagnostics: { version: 1 }`; collection must also be enabled.
-Support reads may be disabled independently. `POST /api/v1/diagnostics/browser`
-accepts ordinary authenticated readers and writers without acquiring ownership.
-A support bearer is never app authentication and cannot upload. Complete exact
-batches are validated before any storage: up to 32 events, 64 KiB per request,
-and 4 KiB per stamped record. The server assigns receive time and provenance;
-clients cannot submit server families, server origin, or trusted operation IDs.
-Unknown or content-bearing fields reject the batch without echoing them.
-
-The publisher buffers pre-bootstrap safe evidence, sends only after compatible
-opt-in, and retains at most 256 pending events for five minutes with finite
-retry/backoff. Auth loss, opt-out, and data/session changes abort stale work and
-clear the pending context. Tab/event identities support reload-safe deduplication;
-distinct tabs use separate identities. Diagnostic transport is excluded from
-capture, so upload failures do not recursively create events. New clients
-disable the older startup publisher while the richer upload is enabled; old
-client/server combinations preserve the existing startup/manual behavior.
-
-V2 reads report browser `available` only when matching uploaded evidence is
-present; `none` means enabled without matching evidence and `not-supported`
-means uploads are disabled/unsupported. Authenticated manual reads negotiate
-`GET /api/v1/diagnostics?version=2&limit=200` and combine local history with
-uploaded evidence by source/event identity. The panel preserves offline export,
-clipboard and selectable-text fallback, marks partial/lost evidence, and falls
-back to exact v1 responses from older servers.
-
-## Client Diagnostics
-
-`RISU_CLIENT_DIAGNOSTICS=1` enables a content-free recent-event viewer in
-Settings → Advanced → Diagnostics, with text download, clipboard copy, and
-selectable report text for mobile browsers without clipboard access. If the
-variable is unset, `RISU_API_TRACE_MODE=agent` or `human` also enables it;
-`RISU_CLIENT_DIAGNOSTICS=0` explicitly disables it even in trace mode. This
-flag does not enable protocol metric console output or full-prompt sidecars.
-
-Authenticated bootstrap advertises `clientDiagnostics: { version: 1 }`.
-Authenticated, read-only `GET /api/v1/diagnostics` returns at most 300 server
-events with `Cache-Control: no-store`; active-writer ownership is not required.
-Disabled servers return an empty, disabled response. The server collector is
-owned by the Fastify app and resets on restart. It records HTTP status/timing,
-runtime errors, warning/error logger calls, and selected correlated protocol
-metrics. It generates `X-Request-UID` even when body-capable tracing is off.
-Metric subscriptions use app/history-scoped operation context where available,
-with a bounded recognized-request fallback, and are removed on close.
-
-Browser capture starts before bootstrap, retaining a bounded pending queue until
-the server's opt-in arrives. Missing/unsupported opt-in discards it. Enabled
-capture records fetch status/time-to-response-headers/request UID, network
-failures, global errors/rejections, console warnings/errors, connectivity,
-startup events, and generation recovery. It retains 300 entries in memory and
-best-effort tab-scoped `sessionStorage`, revalidates them after reload, and clears
-them on auth loss or server opt-out. Fetch capture never reads or clones response
-bodies, including streams. Opening/refreshing/exporting the panel reads server
-events; collection does not require DevTools or the panel to be open. If that
-read fails, the report still includes browser events and previously loaded
-server events, explicitly marked unavailable for refresh.
-
-`packages/protocol/src/diagnostics.ts` owns the exact-key contract and projection.
-Only fixed event/error/route identifiers, numeric timing/status fields, random
-request UIDs, and application code coordinates are retained. Raw messages,
-prompts, request/response bodies, credentials, headers, URLs, domain IDs,
-plugin/Lua values, free-form log arguments, and error messages are excluded at
-capture, not merely hidden in the viewer. Error stacks retain only application
-file/line/column coordinates after removing the complete error message. Exports
-re-project records and add only app version, coarse browser/OS families,
-connectivity, viewport size, and export time. No settings, request-history rows,
-or trace files are read by this feature. Existing Show Request Logs and Request
-History remain separate content-bearing tools.
-
-Implementation owners are `server/fastify/src/clientDiagnostics.ts`,
-`src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts`, and
-`src/lib/Setting/Pages/Advanced/DiagnosticsPanel.svelte`. Focused tests are
-`server/fastify/__tests__/clientDiagnostics.test.ts`,
-`src/ts/diagnostics.dom.test.ts`, and
-`src/lib/Setting/Pages/Advanced/DiagnosticsPanel.svelte.test.ts`.
+Bounded manual and remote diagnostics, support authority, journal recovery,
+browser upload, query limits, and rollback are canonical in
+[Diagnostics](diagnostics.md). This guide retains raw request/generation tracing
+above and startup telemetry below because those are separate observability
+channels with different content and activation boundaries.
 
 ## Browser Startup Telemetry
 
@@ -562,16 +169,16 @@ failure rate blocks promotion even if background readiness eventually arrives.
 
 ### Startup failure-code taxonomy
 
-| Code                                        | Meaning                                                                               |
-| ------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `writer-bootstrap-failed`                   | Startup could not establish its required reader or writer boundary.                   |
-| `push-initialization-failed`                | Optional push-notification runtime initialization failed before background readiness. |
-| `plugin-initialization-failed`              | Plugin runtime initialization did not reach coherent plugin readiness.                |
-| `generation-recovery-failed`                | Startup could not reconcile or reattach the active generation projection.             |
-| `selected-character-hydration-failed`       | The selected character detail needed for chat readiness could not be hydrated.        |
-| `selected-chat-hydration-failed`            | The selected chat/message projection needed for chat readiness could not be hydrated. |
-| `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated.      |
-| `runtime-initialization-failed`             | Another optional background runtime failed before background readiness.               |
+| Code | Meaning |
+| --- | --- |
+| `writer-bootstrap-failed` | Startup could not establish its required reader or writer boundary. |
+| `push-initialization-failed` | Optional push-notification runtime initialization failed before background readiness. |
+| `plugin-initialization-failed` | Plugin runtime initialization did not reach coherent plugin readiness. |
+| `generation-recovery-failed` | Startup could not reconcile or reattach the active generation projection. |
+| `selected-character-hydration-failed` | The selected character detail needed for chat readiness could not be hydrated. |
+| `selected-chat-hydration-failed` | The selected chat/message projection needed for chat readiness could not be hydrated. |
+| `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated. |
+| `runtime-initialization-failed` | Another optional background runtime failed before background readiness. |
 
 Telemetry is diagnostic-only on both sides. Browser listener exceptions,
 authentication failures, network errors, and rejected fetch promises are
@@ -621,11 +228,11 @@ part of startup readiness or prove immediate-reload cache completeness.
 
 Generated files are local evidence and are ignored by Git:
 
-| Files under `fast-bootstrap-results/`      | Contents                                                                                                                          |
-| ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| `bundle-boundaries.json` / `.txt`          | Entry and immediate-startup closures, HTML-preload agreement, protected-boundary violations, and largest chunks.                  |
-| `initial-preload.json` / `.txt`            | Initial JavaScript files, raw/gzip totals, largest file, and both budget comparisons.                                             |
-| `startup-matrix.json` / `.txt`             | Small/large cold/warm milestones, payload/cache totals, early mutation/generation counts, request UIDs, and safe trace summaries. |
+| Files under `fast-bootstrap-results/` | Contents |
+| --- | --- |
+| `bundle-boundaries.json` / `.txt` | Entry and immediate-startup closures, HTML-preload agreement, protected-boundary violations, and largest chunks. |
+| `initial-preload.json` / `.txt` | Initial JavaScript files, raw/gzip totals, largest file, and both budget comparisons. |
+| `startup-matrix.json` / `.txt` | Small/large cold/warm milestones, payload/cache totals, early mutation/generation counts, request UIDs, and safe trace summaries. |
 | `fast-bootstrap-integration.json` / `.txt` | Role-first startup timings, direct links, replay/event-gap results, takeover results, and optional-runtime failure/retry results. |
 
 `util/initial-preload-budgets.json` is authoritative. The ratified hard gates are
@@ -697,60 +304,61 @@ requires the drag/drop workaround.
 
 Server:
 
-| Variable                                           | Default                         | Notes                                                                                                                                                                                           |
-| -------------------------------------------------- | ------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RISU_API_HOST`                                    | `0.0.0.0`                       | Fastify listen host.                                                                                                                                                                            |
-| `RISU_API_PORT`                                    | `6002`                          | Fastify listen port.                                                                                                                                                                            |
-| `RISU_API_DATA_DIR`                                | `<repo>/data`                   | SQLite, asset bytes, backups, auth files, traces, and legacy import artifacts.                                                                                                                  |
-| `RISU_API_ALLOW_MISSING_DATABASE`                  | unset                           | Set to `1` only to accept creating a fresh `risu.db` when the data directory contains evidence of a prior installation.                                                                         |
-| `RISU_API_BODY_LIMIT`                              | `104857600`                     | JSON/body and multipart file limit.                                                                                                                                                             |
-| `RISU_API_IMPORT_MAX_BYTES`                        | unlimited                       | Streamed device-backup import limit; positive byte count caps, `0`/`unlimited`/`none`/`infinity` opts out.                                                                                      |
-| `RISU_API_AUTOMATIC_BACKUP_RETENTION`              | `3`                             | Positive count of automatic pre-import/pre-restore safety snapshots to retain; manual backups are never pruned.                                                                                 |
-| `RISU_REALM_IMPORT_MAX_EXPANDED_BYTES`             | `325058560`                     | Expanded payload cap for streamed Realm `charx` imports and Realm-fetched asset totals.                                                                                                         |
-| `RISU_API_TRACE_MODE`                              | unset                           | Enables API request tracing when `agent` or `human`; `0`/`false`/`off`/`none` disable it.                                                                                                       |
-| `RISU_GENERATION_TRACE_FULL_PROMPT`                | unset                           | Set to `1` with protocol metrics enabled to write redacted prompt-emission and OpenAI/Gemini request sidecars.                                                                                  |
-| `RISU_GENERATION_TRACE_FULL_PROMPT_MAX_GZIP_BYTES` | `10485760`                      | Maximum compressed size for prompt/provider and post-generation Lua trace sidecars.                                                                                                             |
-| `RISU_WEB_PUSH_VAPID_PUBLIC_KEY`                   | unset                           | Optional Web Push VAPID public key. If both keys are omitted, the server can generate and persist keys under `<data-dir>/__web_push_vapid_keys.json`; supplying only one key disables Web Push. |
-| `RISU_WEB_PUSH_VAPID_PRIVATE_KEY`                  | unset                           | Optional Web Push VAPID private key. Must be supplied with the public key when using env-provided keys.                                                                                         |
-| `RISU_WEB_PUSH_CONTACT`                            | `mailto:risuai@example.invalid` | Web Push contact subject used for VAPID details.                                                                                                                                                |
-| `TRUST_PROXY`                                      | `false`                         | Fastify trust proxy setting; accepts boolean, integer, or string.                                                                                                                               |
-| `RISU_API_STATIC_ROOT`                             | `<repo>/dist`                   | Static SPA root; empty, `none`, or `off` disables.                                                                                                                                              |
-| `RISU_HUB_URL`                                     | `https://sv.risuai.xyz`         | Hub passthrough target.                                                                                                                                                                         |
-| `RISU_REALM_URL`                                   | `https://realm.risuai.net`      | Realm character import target.                                                                                                                                                                  |
-| `RISU_AGENT_DEV_AUTH_BYPASS`                       | disabled                        | Direct-server dev escape hatch; full-stack runners override it as described below.                                                                                                              |
-| `LOG_LEVEL`                                        | `info`                          | Use `silent` to disable Fastify logger.                                                                                                                                                         |
-| `RISU_CLIENT_DIAGNOSTICS`                          | follows API trace mode          | Enables the authenticated recent diagnostics viewer/export; explicit `0` disables it even in `agent`/`human` trace mode.                                                                        |
-| `RISU_SUPPORT_DIAGNOSTICS`                         | disabled                        | Exact `1` enables separately authenticated support reads; requires collection and a protected verifier file.                                                                                    |
-| `RISU_SUPPORT_DIAGNOSTICS_VERIFIER`                | unset                           | Absolute operator-owned verifier path outside repository/data/static roots.                                                                                                                     |
-| `RISU_BROWSER_DIAGNOSTICS`                         | disabled                        | Exact `1` opts in to ordinary-auth browser upload when client collection is enabled.                                                                                                            |
-| `RISU_BUILD_ID`                                    | `unknown`                       | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics.                                                                                                                |
-| `RISU_PROTOCOL_METRICS`                            | unset                           | Enables structured protocol metrics and advertises v1 browser startup collection when `1`, `true`, `yes`, or `on`.                                                                              |
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `RISU_API_HOST` | `0.0.0.0` | Fastify listen host. |
+| `RISU_API_PORT` | `6002` | Fastify listen port. |
+| `RISU_API_DATA_DIR` | `<repo>/data` | SQLite, asset bytes, backups, auth files, traces, and legacy import artifacts. |
+| `RISU_API_ALLOW_MISSING_DATABASE` | unset | Set to `1` only to accept creating a fresh `risu.db` when the data directory contains evidence of a prior installation. |
+| `RISU_API_BODY_LIMIT` | `104857600` | JSON/body and multipart file limit. |
+| `RISU_API_IMPORT_MAX_BYTES` | unlimited | Streamed device-backup import limit; positive byte count caps, `0`/`unlimited`/`none`/`infinity` opts out. |
+| `RISU_API_AUTOMATIC_BACKUP_RETENTION` | `3` | Positive count of automatic pre-import/pre-restore safety snapshots to retain; manual backups are never pruned. |
+| `RISU_REALM_IMPORT_MAX_EXPANDED_BYTES` | `325058560` | Expanded payload cap for streamed Realm `charx` imports and Realm-fetched asset totals. |
+| `RISU_API_TRACE_MODE` | unset | Enables API request tracing when `agent` or `human`; `0`/`false`/`off`/`none` disable it. |
+| `RISU_GENERATION_TRACE_FULL_PROMPT` | unset | Set to `1` with protocol metrics enabled to write redacted prompt-emission and OpenAI/Gemini request sidecars. |
+| `RISU_GENERATION_TRACE_FULL_PROMPT_MAX_GZIP_BYTES` | `10485760` | Maximum compressed size for prompt/provider and post-generation Lua trace sidecars. |
+| `RISU_WEB_PUSH_VAPID_PUBLIC_KEY` | unset | Optional Web Push VAPID public key. If both keys are omitted, the server can generate and persist keys under `<data-dir>/__web_push_vapid_keys.json`; supplying only one key disables Web Push. |
+| `RISU_WEB_PUSH_VAPID_PRIVATE_KEY` | unset | Optional Web Push VAPID private key. Must be supplied with the public key when using env-provided keys. |
+| `RISU_WEB_PUSH_CONTACT` | `mailto:risuai@example.invalid` | Web Push contact subject used for VAPID details. |
+| `TRUST_PROXY` | `false` | Fastify trust proxy setting; accepts boolean, integer, or string. |
+| `RISU_API_STATIC_ROOT` | `<repo>/dist` | Static SPA root; empty, `none`, or `off` disables. |
+| `RISU_HUB_URL` | `https://sv.risuai.xyz` | Hub passthrough target. |
+| `RISU_REALM_URL` | `https://realm.risuai.net` | Realm character import target. |
+| `RISU_AGENT_DEV_AUTH_BYPASS` | disabled | Direct-server dev escape hatch; full-stack runners override it as described below. |
+| `LOG_LEVEL` | `info` | Use `silent` to disable Fastify logger. |
+| `RISU_CLIENT_DIAGNOSTICS` | follows API trace mode | Enables the authenticated recent diagnostics viewer/export; explicit `0` disables it even in `agent`/`human` trace mode. |
+| `RISU_SUPPORT_DIAGNOSTICS` | disabled | Exact `1` enables separately authenticated support reads; requires collection and a protected verifier file. |
+| `RISU_SUPPORT_DIAGNOSTICS_VERIFIER` | unset | Absolute operator-owned verifier path outside repository/data/static roots. |
+| `RISU_BROWSER_DIAGNOSTICS` | disabled | Exact `1` opts in to ordinary-auth browser upload when client collection is enabled. |
+| `RISU_BUILD_ID` | `unknown` | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics. |
+| `RISU_PROTOCOL_METRICS` | unset | Enables structured protocol metrics and advertises v2 browser startup collection when `1`, `true`, `yes`, or `on`. |
 
 Local/dev:
 
-| Variable                                 | Default                                                                                 | Notes                                                                                                                                       |
-| ---------------------------------------- | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| `RISU_API_RESTART_FLAG`                  | `.risu-api-restart`                                                                     | Flag file watched by `pnpm api:dev:flag`.                                                                                                   |
-| `RISU_AGENT_DEV_HOST`                    | `127.0.0.1` for `dev:agent`; active Tailscale IPv4 or loopback fallback for `dev:human` | Host used by the full-stack runner for both spawned processes.                                                                              |
-| `RISU_AGENT_DEV_PORT`                    | `6418`                                                                                  | Frontend port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6002`.                                                                     |
-| `RISU_AGENT_API_PORT`                    | `6419`                                                                                  | Fastify port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6001`.                                                                      |
-| `RISU_AGENT_DEV_AUTH_BYPASS`             | `TRUE` for `dev:agent`, `FALSE` for `dev:human`                                         | Protected API routes ignore password auth when enabled.                                                                                     |
-| `RISU_AGENT_DATA_MODE`                   | `clone`                                                                                 | Agent sandbox reset policy: `clone` snapshots selected state from `data/`, `fresh` starts empty, and `keep` reuses `data-agent/`.           |
-| `RISU_TS_AGENT_TSSERVER_LOG`             | unset                                                                                   | Set to `1` or a path to capture verbose `pnpm ts:agent` tsserver logs.                                                                      |
-| `RISU_TS_AGENT_TIMEOUT_MS`               | `30000`                                                                                 | Default tsserver request timeout for `pnpm ts:agent`; `--timeout-ms` overrides it.                                                          |
-| `RISU_TS_AGENT_DEBUG`                    | unset                                                                                   | Echo tsserver stderr while debugging `pnpm ts:agent`.                                                                                       |
-| `TSS_LOG`                                | `-level off`                                                                            | Low-level tsserver log arguments forwarded by `pnpm ts:agent`; prefer `RISU_TS_AGENT_TSSERVER_LOG` for the supported file-logging workflow. |
-| `VITE_RISU_AGENT_DEV_IGNORE_REALM_TERMS` | `TRUE` in full-stack runners                                                            | Set by `pnpm dev:agent` / `pnpm dev:human`; ordinary Vite/build leaves it unset. `alertRealmTerms()` returns accepted when set.             |
+| Variable | Default | Notes |
+| --- | --- | --- |
+| `RISU_API_RESTART_FLAG` | `.risu-api-restart` | Flag file watched by `pnpm api:dev:flag`. |
+| `RISU_AGENT_DEV_HOST` | `127.0.0.1` for `dev:agent`; active Tailscale IPv4 or loopback fallback for `dev:human` | Host used by the full-stack runner for both spawned processes. |
+| `RISU_AGENT_DEV_PORT` | `6418` | Frontend port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6002`. |
+| `RISU_AGENT_API_PORT` | `6419` | Fastify port for `pnpm dev:agent`; `pnpm dev:human` sets it to `6001`. |
+| `RISU_AGENT_DEV_AUTH_BYPASS` | `TRUE` for `dev:agent`, `FALSE` for `dev:human` | Protected API routes ignore password auth when enabled. |
+| `RISU_AGENT_DATA_MODE` | `clone` | Agent sandbox reset policy: `clone` snapshots selected state from `data/`, `fresh` starts empty, and `keep` reuses `data-agent/`. |
+| `RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED` | unset | Test-runner control injected by fast-bootstrap verification and browser-smoke aggregates to require valid merged artifacts. |
+| `RISU_TS_AGENT_TSSERVER_LOG` | unset | Set to `1` or a path to capture verbose `pnpm ts:agent` tsserver logs. |
+| `RISU_TS_AGENT_TIMEOUT_MS` | `30000` | Default tsserver request timeout for `pnpm ts:agent`; `--timeout-ms` overrides it. |
+| `RISU_TS_AGENT_DEBUG` | unset | Echo tsserver stderr while debugging `pnpm ts:agent`. |
+| `TSS_LOG` | `-level off` | Low-level tsserver log arguments forwarded by `pnpm ts:agent`; prefer `RISU_TS_AGENT_TSSERVER_LOG` for the supported file-logging workflow. |
+| `VITE_RISU_AGENT_DEV_IGNORE_REALM_TERMS` | `TRUE` in full-stack runners | Set by `pnpm dev:agent` / `pnpm dev:human`; ordinary Vite/build leaves it unset. `alertRealmTerms()` returns accepted when set. |
 
 Client/build:
 
-| Variable                                                                         | Notes                                                                                                                                 |
-| -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `RISU_API_PROXY_TARGET`                                                          | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`.                                                                |
-| `VITE_RISU_BUILD_ID`                                                             | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed. |
-| `VITE_FASTIFY_BROWSER_SMOKE`                                                     | Enables browser smoke hook and fixed smoke password setup/login.                                                                      |
-| `VITE_RISU_LITE`                                                                 | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell.               |
-| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration.                                                                                                                  |
+| Variable | Notes |
+| --- | --- |
+| `RISU_API_PROXY_TARGET` | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`. |
+| `VITE_RISU_BUILD_ID` | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed. |
+| `VITE_FASTIFY_BROWSER_SMOKE` | Enables browser smoke hook and fixed smoke password setup/login. |
+| `VITE_RISU_LITE` | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell. |
+| `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration. |
 
 Test/audit summary variables include `RISU_TEST_INCLUDE_GATES`,
 `UPDATE_FIXTURES`, `RISU_DIRECT_REALM_IMPORT_TEST`,

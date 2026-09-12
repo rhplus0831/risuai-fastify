@@ -15,35 +15,36 @@ cache validation, read endpoints, and hydration workflows remain in
 
 Important files:
 
-| Path                                                      | Role                                                                                            |
-| --------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
-| `src/ts/server/pendingMutationOutbox.ts`                  | Encrypted intent rows, scope/order indexes, and durable receipt acknowledgements.               |
-| `src/ts/server/durableMutationDispatch.ts`                | Stages intent, classifies dispatch/replay outcomes, and settles accepted work.                  |
-| `src/ts/server/pendingMutationReplay.ts`                  | Replays current-scope work after bootstrap and before resource hydration.                       |
-| `src/ts/server/commands.ts`                               | Global mutation queue, response decoding, local effects, and reconciliation batches.            |
-| `src/ts/server/events.ts`                                 | Authenticated reader/writer SSE transport, replay cursor, and frame decoding.                   |
-| `src/ts/server/connectedReaderSync.ts`                    | Reader-only ownership checks, event reconciliation, reconnect, and memory/BardWiki observation. |
-| `src/ts/server/resourceInvalidation.ts`                   | Event-to-endpoint planning, targeted reads, revision fences, and resource application.          |
-| `src/ts/server/resourceRefresh.ts`                        | Coalesced complete refresh for gaps, restores, and broad recovery.                              |
-| `src/ts/server/lifecycleRecovery.ts`                      | Shared visibility/page-show/online/focus recovery dispatcher.                                   |
-| `src/ts/server/resourceState.svelte.ts`                   | Explicit resource owners, per-owner projection epochs, and acknowledgement fences.              |
-| `src/ts/server/persistenceActivity.svelte.ts`             | Saving signal for commands and current-writer outbox work.                                      |
-| `src/ts/server/draftRecoveryScope.ts`                     | Lineage/writer scope for non-authoritative editing recovery.                                    |
-| `src/lib/ChatScreens/DefaultChatScreen.composerDrafts.ts` | Bounded transcript composer recovery in `sessionStorage`.                                       |
-| `src/ts/server/moduleEditorDraftStore.ts`                 | Encrypted bounded IndexedDB recovery for module-editor drafts.                                  |
+| Path | Role |
+| --- | --- |
+| `src/ts/server/pendingMutationOutbox.ts` | Encrypted intent rows, scope/order indexes, and durable receipt acknowledgements. |
+| `src/ts/server/durableMutationDispatch.ts` | Stages intent, classifies dispatch/replay outcomes, and settles accepted work. |
+| `src/ts/server/pendingMutationReplay.ts` | Replays current-scope work after bootstrap and before resource hydration. |
+| `src/ts/server/commands.ts` | Global mutation queue, response decoding, local effects, and reconciliation batches. |
+| `src/ts/server/commandLocalEffectEvents.ts` | Publishes only local effects that passed event/projection fences; distinct from HTTP acknowledgement. |
+| `src/ts/server/events.ts` | Authenticated reader/writer SSE transport, replay cursor, and frame decoding. |
+| `src/ts/server/connectedReaderSync.ts` | Reader-only ownership checks, event reconciliation, reconnect, and memory/BardWiki observation. |
+| `src/ts/server/resourceInvalidation.ts` | Event-to-endpoint planning, targeted reads, revision fences, and resource application. |
+| `src/ts/server/resourceRefresh.ts` | Coalesced complete refresh for gaps, restores, and broad recovery. |
+| `src/ts/server/lifecycleRecovery.ts` | Shared visibility/page-show/online/focus recovery dispatcher. |
+| `src/ts/server/resourceState.svelte.ts` | Explicit resource owners, per-owner projection epochs, and acknowledgement fences. |
+| `src/ts/server/persistenceActivity.svelte.ts` | Saving signal for commands and current-writer outbox work. |
+| `src/ts/server/draftRecoveryScope.ts` | Lineage/writer scope for non-authoritative editing recovery. |
+| `src/lib/ChatScreens/DefaultChatScreen.composerDrafts.ts` | Bounded transcript composer recovery in `sessionStorage`. |
+| `src/ts/server/moduleEditorDraftStore.ts` | Encrypted bounded IndexedDB recovery for module-editor drafts. |
 
 ## Durable Mutation Recovery, Command Queue, And Local Acknowledgements
 
 Do not conflate the persistence and acknowledgement artifacts:
 
-| Artifact                             | Storage / protection                                   | Authority and startup effect                                                                                                      |
-| ------------------------------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------- |
-| Disposable resource cache            | IndexedDB; SHA-256 reverified after authenticated read | Never authoritative or offline state; corruption/misses fall back to full reads.                                                  |
-| Durable mutation intent              | IndexedDB; AES-GCM payload plus plaintext scope/order  | Non-authoritative pending command work; current-scope unresolved rows replay before hydration and can block hydration.            |
-| Composer recovery draft              | Bounded `sessionStorage`; plaintext                    | Lineage/writer-scoped editing recovery only; not a command, receipt, or proof of acceptance.                                      |
-| Module-editor recovery draft         | Separate bounded AES-GCM IndexedDB                     | Lineage/writer-scoped editing recovery with rebase/copy/discard UI; not outbox intent.                                            |
-| Server mutation receipt              | SQLite; lineage-scoped mutation id                     | Authoritative idempotency record returned on replay; acknowledged after the accepted browser intent is durably removed.           |
-| Compact local-effect acknowledgement | Command response plus client projection fences         | May advance already-visible optimistic state without a GET; durable nowhere and distinct from both the intent and server receipt. |
+| Artifact | Storage / protection | Authority and startup effect |
+| --- | --- | --- |
+| Disposable resource cache | IndexedDB; SHA-256 reverified after authenticated read | Never authoritative or offline state; corruption/misses fall back to full reads. |
+| Durable mutation intent | IndexedDB; AES-GCM payload plus plaintext scope/order | Non-authoritative pending command work; current-scope unresolved rows replay before hydration and can block hydration. |
+| Composer recovery draft | Bounded `sessionStorage`; plaintext | Lineage/writer-scoped editing recovery only; not a command, receipt, or proof of acceptance. |
+| Module-editor recovery draft | Separate bounded AES-GCM IndexedDB | Lineage/writer-scoped editing recovery with rebase/copy/discard UI; not outbox intent. |
+| Server mutation receipt | SQLite; lineage-scoped mutation id | Authoritative idempotency record returned on replay; acknowledged after the accepted browser intent is durably removed. |
+| Compact local-effect acknowledgement | Command response plus client projection fences | May advance already-visible optimistic state without a GET; durable nowhere and distinct from both the intent and server receipt. |
 
 Durable helpers stage before network dispatch (and before a debounced control
 waits to send). Semantic owner keys and explicit dependency keys preserve
@@ -143,13 +144,13 @@ at 30 seconds. A malformed command frame forces a complete resource refresh
 before reconnect. Every frame resets a 60-second silence watchdog. The shared
 lifecycle dispatcher records hidden, pagehide, offline, and persisted-page
 suspension evidence. An ordinary focus event does nothing while SSE is live and
-recent; suspension evidence or an unhealthy stream first performs a no-store,
-generation-scoped single-flight `GET /api/v1/ownership` probe. Unchanged
+recent; suspension evidence or an unhealthy stream first performs a no-store
+`GET /api/v1/ownership` probe sequenced by that recovery domain. Unchanged
 ownership leaves a healthy stream in place, while a discarded reader stream can
 resume from its applied event cursor. Changed or uncertain ownership takes the
 existing full-bootstrap recovery path. The writer transport retriggers
 current-scope outbox replay after reconnect. A foreign writer frame demotes a
-managed writer into connected reading; only explicit **Use this device**
+managed writer into connected reading; only explicit Use this device
 requests acquisition. `connectedReaderSync.ts` uses the same authenticated
 frame parser without writer headers, with its own bounded backoff, watchdog,
 ownership/lineage checks, and read-only reconciliation. Writer SSE frames carry
@@ -166,8 +167,11 @@ the bootstrap, known-command, and applied-resource revisions are identical and
 replay attempted no intent. A newer revision, replayed intent, changed ownership,
 or changed lineage retains the authoritative hydration/demotion path.
 
-Foreground reader refresh, writer resume, explicit promotion, and writer
-ownership probes share one page-owned recovery lease whose identity is separate
+Physical lifecycle listeners coalesce visibility, page-show, online, and focus
+notifications only; generation, resource SSE, and other recovery domains keep
+their own request sequencing and currentness. Foreground reader refresh, writer
+resume, explicit promotion, and writer ownership probes serialize connected
+recovery through one page-owned lease whose identity is separate
 from the client-session generation. Hiding, going offline, or page teardown
 retires that lease and settles its caller even when a subordinate request never
 settles; foreground work can start a replacement immediately, and late
@@ -307,12 +311,12 @@ that affect rendered state should follow the visible-state policy in
 
 ## Owner Mutation Lifecycles
 
-| File                              | Role                                                                                                                                                                                                        |
-| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `ownerMutationLifecycle.ts`       | Flushes every registered, loaded owner on `pagehide` / hidden visibility with `keepalive`; it does not import feature owners into bootstrap.                                                                |
-| `pendingOwnerMutationRegistry.ts` | Registers owner flush/reset callbacks for targeted structural calls, lifecycle durability, and database-ownership replacement.                                                                              |
-| `settingsOwner.svelte.ts`         | Explicit group-owned drafts and patches through `PATCH /commands/settings/:group`, with equality-noop suppression, exact projection fences, durable receipts, and field-scoped rollback.                    |
-| `lorebookOwner.svelte.ts`         | Stable-id global/character/chat/module lorebook upsert/delete/reorder planning with hydrated guards and unsafe-diff replacement fallback.                                                                   |
+| File | Role |
+| --- | --- |
+| `ownerMutationLifecycle.ts` | Flushes every registered, loaded owner on `pagehide` / hidden visibility with `keepalive`; it does not import feature owners into bootstrap. |
+| `pendingOwnerMutationRegistry.ts` | Registers owner flush/reset callbacks for targeted structural calls, lifecycle durability, and database-ownership replacement. |
+| `settingsOwner.svelte.ts` | Explicit group-owned drafts and patches through `PATCH /commands/settings/:group`, with equality-noop suppression, exact projection fences, durable receipts, and field-scoped rollback. |
+| `lorebookOwner.svelte.ts` | Stable-id global/character/chat/module lorebook upsert/delete/reorder planning with hydrated guards and unsafe-diff replacement fallback. |
 | `scriptDefinitionOwner.svelte.ts` | Explicit character/module definition owner mutations plus the global-script settings draft watcher; compact create/update/delete/reorder classification, projection fencing, and full-replacement fallback. |
 
 Common requirements are to capture snapshots, suppress no-op updates, respect
@@ -349,7 +353,7 @@ Owner lifecycle flushes do not dispatch while read-only. Drafts and encrypted
 outbox rows retain their originating session/lineage scope; promotion does not
 transfer another client's drafts or adopt its pending intent.
 
-**Use this device** shares one current promotion promise, keeps the reader
+Use this device shares one current promotion promise, keeps the reader
 projection available during confirmation, and then performs authorized outbox
 preparation/replay, fresh shell hydration, and writer event attachment. Only
 that successful recovery restores writes. Current cancelled/failed attempts
@@ -390,7 +394,7 @@ in `src/ts/server/activeWriterSession.ts`.
 Server protocol metrics are opt-in with `RISU_PROTOCOL_METRICS=1` (also accepts
 `true`, `yes`, or `on`). Browser protocol debug logs are opt-in with
 `localStorage.setItem('risu:protocol-debug', '1')` or `'true'`. Browser
-diagnostics include complete-resource-refresh reasons, hydration concurrency and
+debug metrics include complete-resource-refresh reasons, hydration concurrency and
 stale-drop counters, asset byte-read fanout counters, bounded
 generation-recovery events and counters, and server event-stream frame/byte,
 lifetime, and close-reason metrics. Memory job SSE and refresh paths
@@ -403,3 +407,8 @@ or non-active terminal refresh updates. Relevant files include
 recovery epoch, operation/attempt/job identifiers, state transitions,
 disposition, and request UID; they never contain prompts, generated text,
 credentials, or bodies.
+
+These protocol/debug streams may carry operation or job identifiers and are not
+the bounded export channel. Manual and remote diagnostics apply exact schemas,
+provenance rules, support authority, journal limits, and opaque remote
+correlation as documented in [Diagnostics](diagnostics.md).

@@ -1,6 +1,7 @@
 # Project Structure
 
 Last audited: 2026-09-05.
+Targeted source check: 2026-09-12 (ownership, focused-guide routing, and validation policy).
 
 Fastify-only RisuAI: Svelte 5 browser client, Fastify API, SQLite persistence.
 Toolchain: Node.js >=24 and pnpm; root `package.json` owns both runtimes.
@@ -19,9 +20,10 @@ Toolchain: Node.js >=24 and pnpm; root `package.json` owns both runtimes.
    only explicit imports from current tooling make an archived artifact a live input.
 5. Discover paths with `rg --files | rg '<name>'`, honoring `.ignore`. Prefer
    canonical package implementations over browser compatibility re-exports.
-6. Find a relevant test in [docs/tests/README.md](docs/tests/README.md); use
-   `pnpm test -- <one-test-or-source-file>` while working, then `pnpm test:agent`
-   when edits are complete. Documentation changes also require `pnpm check:docs`.
+6. Find a relevant test in [docs/tests/README.md](docs/tests/README.md) and choose
+   validation by impact. Prefer `pnpm test -- <one-test-or-source-file>` while
+   working. Run `pnpm test:agent` only for the cross-area risks and other cases
+   defined in `AGENTS.md`. Documentation-only changes require `pnpm check:docs`.
 
 ## Repository-Wide Invariants
 
@@ -62,12 +64,14 @@ Toolchain: Node.js >=24 and pnpm; root `package.json` owns both runtimes.
 | Model profiles, credentials, providers, capabilities, runtime options, or request history | [Providers And Models](docs/structure/providers-and-models.md) |
 | TTS, image generation, transcription, or server-owned media operations | [Server-Owned Provider And Media Operations](docs/structure/providers-and-models.md#server-owned-provider-and-media-operations) for contracts, then [Client Runtime](src/docs/client-runtime.md#server-owned-operation-adapters) for browser adapters or the [Backend Boundary](docs/structure/backend.md#server-owned-provider-and-media-boundary) for API wiring |
 | Prompt assembly, templates, lorebook/Hypa memory injection, CBS, regex, triggers, or Lua | [Prompt Assembly And Scripting](docs/structure/prompt-assembly-and-scripting.md) |
+| Intermediate display transforms, display-source cache/queue, batching, fallback, or measurements | [Intermediate Display](docs/structure/intermediate-display.md) |
 | BardWiki settings, documents, confirmation, jobs, prompt retrieval, vaults, rebuilds, or lifecycle | [BardWiki Memory](docs/structure/bardwiki.md) |
 | Translation, translator presets/caches/jobs, or Draft/BTW input hooks | [Translation And Input Hooks](docs/structure/translation-and-input-hooks.md) |
 | Agents, Agent Presets, prepared inputs, dependencies, or output composition | [Agents And Presets](docs/structure/agents-and-presets.md) |
 | Modules, plugins, permissions, or MCP | [Plugins And MCP](docs/structure/plugins-and-mcp.md) |
 | Assets, inlay catalog, `.risu`/CharX/chat exchange, backups, reset, or Realm conversion | [Assets And Saves](docs/structure/assets-and-saves.md) |
-| Startup performance, bundle boundaries, observer rollout, or readiness budgets | [Development And Observability](docs/structure/development-and-observability.md#startup-and-bundle-verification), [Server Resources And Hydration](docs/structure/server-resources-and-bridges.md), and [Client Runtime](src/docs/client-runtime.md) |
+| Client/manual diagnostics, remote support evidence, support credentials, browser diagnostic upload, or journal recovery | [Diagnostics](docs/structure/diagnostics.md) |
+| Startup performance, bundle boundaries, readiness or recovery matrices, or readiness budgets | [Development And Observability](docs/structure/development-and-observability.md#startup-and-bundle-verification), [Server Resources And Hydration](docs/structure/server-resources-and-bridges.md), and [Client Runtime](src/docs/client-runtime.md) |
 | Tests, Node/Svelte+Node/DOM/browser capability routing, compatibility harness, CI, TypeScript, or formatting | [Testing And Operations](docs/structure/testing-and-operations.md) and [Test Suite Guide](docs/tests/README.md) |
 | Local dev, tracing, startup telemetry, environment, or browser support | [Development And Observability](docs/structure/development-and-observability.md) |
 | Generated, ignored, compatibility-only, or removed paths | [Generated And Legacy](docs/structure/generated-and-legacy.md) |

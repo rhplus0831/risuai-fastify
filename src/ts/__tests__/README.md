@@ -22,6 +22,7 @@ aggregate owns both contracts together.
 | `renderCostHarness*.ts` | DOM/render-cost regression probes for GUI reload behavior. |
 | `sendCloneCountProbe*.ts` | Send-path clone-count regression probe. |
 | `test/fixtures/largeCorpusFixture.ts` | Shared large-corpus fixture used by client and server cost regressions. |
+| `latestOperationTestAssertions.ts` | Shared newer-operation-wins assertion helper used by browser/server-facing tests; test support, not a performance gate. |
 
 Keep new performance gates here and add their exact paths to
 `vitest.performance-tests.ts`. UI audit probes belong in `src/lib/_audit`.

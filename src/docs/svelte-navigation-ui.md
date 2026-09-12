@@ -1,7 +1,7 @@
 # Svelte Navigation UI Guide
 
 Last audited: 2026-08-27.
-Targeted source check: 2026-09-10 (compact modal geometry, overflow menus, hierarchy, and focus restoration).
+Targeted source checks: 2026-09-12 (reader-folder semantics and compact chat/folder actions).
 
 This guide owns the sidebar, navigation controls, character and chat selection,
 character configuration, and list organization.
@@ -11,13 +11,13 @@ routes and shell priority.
 
 ## Fast Triage
 
-| Symptom                                                                | Inspect first                                                                   | Then inspect                                                                   |
-| ---------------------------------------------------------------------- | ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
-| Sidebar route, tab, character, folder, or grid button is wrong         | `src/lib/SideBars/Sidebar.svelte`                                               | `src/ts/router.ts`, `src/ts/stores.svelte.ts`                                  |
-| Reader selection, missing-chat fallback, or Use this device is wrong   | `src/lib/Workspace.svelte`, `SideBars/ReaderNavigation.svelte`                  | `src/ts/readerRouteScope.ts`, `src/ts/bootstrap.ts`, `src/ts/clientSession.ts` |
-| Chat list, chat folder, branch graph, or export/reset flow is wrong    | `src/lib/SideBars/SideChatList.svelte`                                          | `src/ts/chatCommands.ts`, `src/ts/server/chatMessageHydration.svelte.ts`       |
-| Character profile, media, lorebook, scripts, or TTS editor is wrong    | `src/lib/SideBars/CharConfig.svelte`                                            | The focused bridge/upload helper under `src/ts/server/`                        |
-| Character/chat reorder is stale, duplicated, or treated as file import | `src/lib/SideBars/sidebarDrag.ts`, `SideChatList.svelte`, `src/ts/dragTypes.ts` | [Drag, Drop, And Reordering](#drag-drop-and-reordering)                        |
+| Symptom | Inspect first | Then inspect |
+| --- | --- | --- |
+| Sidebar route, tab, character, folder, or grid button is wrong | `src/lib/SideBars/Sidebar.svelte` | `src/ts/router.ts`, `src/ts/stores.svelte.ts` |
+| Reader selection, missing-chat fallback, or Use this device is wrong | `src/lib/Workspace.svelte`, `SideBars/ReaderNavigation.svelte` | `src/ts/readerRouteScope.ts`, `src/ts/bootstrap.ts`, `src/ts/clientSession.ts` |
+| Chat list, chat folder, branch graph, or export/reset flow is wrong | `src/lib/SideBars/SideChatList.svelte` | `src/ts/chatCommands.ts`, `src/ts/server/chatMessageHydration.svelte.ts` |
+| Character profile, media, lorebook, scripts, or TTS editor is wrong | `src/lib/SideBars/CharConfig.svelte` | The focused bridge/upload helper under `src/ts/server/` |
+| Character/chat reorder is stale, duplicated, or treated as file import | `src/lib/SideBars/sidebarDrag.ts`, `SideChatList.svelte`, `src/ts/dragTypes.ts` | [Drag, Drop, And Reordering](#drag-drop-and-reordering) |
 
 ## Sidebar And Route Ownership
 
@@ -100,7 +100,11 @@ navigation. Plugin-defined hamburger actions are writer-only.
 `readerNavigation.ts`
 filters ambiguous/missing identities, orders active characters and derives pins
 from shell summaries or hydrated details. Folder expansion, character/chat
-search, grid/list presentation and drawer state stay local. Auth/database
+search, grid/list presentation and drawer state stay local. Reader folders use
+native disclosure with `aria-expanded` and `aria-controls`; the outer collection
+is a list, folder rows are list items, and children form a semantic group.
+Search automatically expands folders containing matches, and an empty folder
+exposes the localized `emptyChatFolder` status. Auth/database
 identity changes clear that state; reconnect keeps valid reading navigation.
 When a reader chat is open, only the Back branch is interactive; an inert rail
 spacer preserves the canonical desktop width. On responsive screens the hidden
@@ -146,7 +150,7 @@ Ambiguous identities remain unavailable instead of selecting the first match.
 its read-only rendering contract is in
 [Svelte Chat UI](svelte-chat-ui.md#connected-reader-transcript).
 
-`DeviceAccessAction.svelte` owns the one explicit **Use this device** action,
+`DeviceAccessAction.svelte` owns the one explicit Use this device action,
 read-only badge, lifecycle announcement, and operation result. It stays at the
 safe-area-aware top-right of the visual workspace and becomes icon-only on
 small screens. `ReaderTranscript.svelte` reserves matching header clearance;
@@ -196,9 +200,11 @@ organization keys. The component surfaces pending, queued, and failed
 structural operations and blocks conflicting actions while an operation is
 pending.
 
-Chat selection and folder disclosure remain the primary row controls. Copy,
-persona binding, rename, export, organization, and Delete use the shared
-target-named popup-menu contract; Delete is last in a separated danger section.
+Chat selection and folder disclosure remain the primary row controls. A chat
+menu offers copy, bind or unbind persona, rename, export, organize when
+available, and delete. A folder menu offers rename, organize, and delete.
+Destructive actions use the shared target-named contract in a separated final
+danger section.
 Folder children use native disclosure state plus semantic list/group
 relationships, indentation, and connectors rather than claiming a full ARIA
 tree model. Truncated rows retain their complete accessible name and title,
@@ -327,7 +333,7 @@ before cloning or durable dispatch. Leaving the editor flushes the draft;
 display activation waits for final acceptance, while generation blocks on a
 queued or failed immediate save. The cross-layer persistence and display rules
 are canonical in
-[Prompt Assembly And Scripting](../../docs/structure/prompt-assembly-and-scripting.md#intermediate-display-processing).
+[Intermediate Display](../../docs/structure/intermediate-display.md).
 
 `src/ts/hotkey.ts` mixes live store/modal state with DOM class selectors for
 visible controls. A markup or class-name change can therefore break keyboard

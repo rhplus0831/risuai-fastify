@@ -1,7 +1,7 @@
 # Data And Events
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-08 (connected readers and atomic IGP completion).
+Targeted source checks: 2026-09-12 (scoped chat-generation-settings mutation loading and ownership probe vocabulary).
 
 Fastify owns authoritative application state. The browser reads authenticated
 REST resources and sends revision-checked commands or explicit server-owned
@@ -9,19 +9,19 @@ mutation requests; its durable outbox and recovery drafts are non-authoritative.
 
 ## Stores
 
-| Store            | Location                                                                                           | Role                                                                                                                                        |
-| ---------------- | -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| SQLite           | `data/risu.db`                                                                                     | Authoritative schema/revision/lineage plus normalized domain and operational tables.                                                        |
-| Asset bytes      | `data/assets/<sha256>.<ext>`                                                                       | Content-addressed supported asset payloads; metadata lives in SQLite `assets`.                                                              |
-| Inlay catalog    | SQLite `inlay_catalog`                                                                             | Revisioned names, dimensions, and aliases keyed to immutable `assets` rows; the browser keeps a separate read projection.                   |
-| Backups          | `data/backups/<id>/`                                                                               | Database snapshot, manifest, assets, and legacy storage when present; restore uses an explicit table allowlist.                             |
-| Legacy `db.json` | `data/db.json`                                                                                     | Import-only input: valid snapshots commit/checkpoint before rename; invalid envelopes quarantine, while malformed JSON stops startup.       |
-| Legacy storage   | `data/save/<hex-key>`                                                                              | Compatibility bytes for `/api/v1/storage/*`; guarded writes do not bump the domain revision.                                                |
-| Auth files       | `data/__password`, `data/__known_public_key_hashes.json`, `data/__known_session_token_hashes.json` | Single-user password, registered browser-key hashes, and optional session-token hashes.                                                     |
-| Web Push keys    | `data/__web_push_vapid_keys.json`                                                                  | Generated VAPID keypair when keys are not supplied by environment; subscription rows live in SQLite.                                        |
-| Resource cache   | Browser IndexedDB `risu-resource-cache-v1`                                                         | Disposable authenticated-hash read cache; never offline or authoritative state.                                                             |
-| Mutation outbox  | Browser IndexedDB `risu-pending-mutations-v1`                                                      | Crash-recovery journal with AES-GCM-encrypted intent payloads plus plaintext scope/order metadata and receipt-ACK rows; never server truth. |
-| Recovery drafts  | Browser `sessionStorage` and IndexedDB `risu-recovery-drafts-v1`                                   | Lineage/writer-scoped composer and module-editor drafts; editing recovery only, not mutation intent or proof of acceptance.                 |
+| Store | Location | Role |
+| --- | --- | --- |
+| SQLite | `data/risu.db` | Authoritative schema/revision/lineage plus normalized domain and operational tables. |
+| Asset bytes | `data/assets/<sha256>.<ext>` | Content-addressed supported asset payloads; metadata lives in SQLite `assets`. |
+| Inlay catalog | SQLite `inlay_catalog` | Revisioned names, dimensions, and aliases keyed to immutable `assets` rows; the browser keeps a separate read projection. |
+| Backups | `data/backups/<id>/` | Database snapshot, manifest, assets, and legacy storage when present; restore uses an explicit table allowlist. |
+| Legacy `db.json` | `data/db.json` | Import-only input: valid snapshots commit/checkpoint before rename; invalid envelopes quarantine, while malformed JSON stops startup. |
+| Legacy storage | `data/save/<hex-key>` | Compatibility bytes for `/api/v1/storage/*`; guarded writes do not bump the domain revision. |
+| Auth files | `data/__password`, `data/__known_public_key_hashes.json`, `data/__known_session_token_hashes.json` | Single-user password, registered browser-key hashes, and optional session-token hashes. |
+| Web Push keys | `data/__web_push_vapid_keys.json` | Generated VAPID keypair when keys are not supplied by environment; subscription rows live in SQLite. |
+| Resource cache | Browser IndexedDB `risu-resource-cache-v1` | Disposable authenticated-hash read cache; never offline or authoritative state. |
+| Mutation outbox | Browser IndexedDB `risu-pending-mutations-v1` | Crash-recovery journal with AES-GCM-encrypted intent payloads plus plaintext scope/order metadata and receipt-ACK rows; never server truth. |
+| Recovery drafts | Browser `sessionStorage` and IndexedDB `risu-recovery-drafts-v1` | Lineage/writer-scoped composer and module-editor drafts; editing recovery only, not mutation intent or proof of acceptance. |
 
 Primary boundaries: `server/fastify/src/db.ts` owns
 schema/migrations/revision, `server/fastify/src/repository.ts` owns domain
@@ -82,6 +82,13 @@ unknown JSON for the generation domain's validation boundary. Speaker-name
 snapshots include only IDs referenced by that target history. Pre-extraction
 embedded characters have a named compatibility scope; the historical assembly
 and display loaders remain separate owners.
+
+`loadPersistedForChatGenerationSettingsMutation()` loads one chat, its parent
+character, settings, and only the modules, model presets, prompt presets, and
+personas required to validate that chat's generation settings. Missing or
+pre-extraction records use the broad compatibility load. The returned scoped
+shape may use only targeted writers; whole-database write-back and other scoped
+read modes are rejected for this mutation lane.
 
 Selected reads reuse at most 16 fixed SQLite query programs per connection,
 without caching rows or configuration. SQLite retains the last bound parameters;
@@ -409,7 +416,7 @@ Connected readers are part of the sole startup path.
 may acquire an unowned server or conditionally resume its own writer; an
 initialized server owned by another session opens for reading even when that
 writer is disconnected. An observed writer frame never grants write access.
-Explicit **Use this device** performs fresh discovery, conditional acquisition,
+Explicit Use this device performs fresh discovery, conditional acquisition,
 current-scope outbox recovery, post-replay hydration, and writer event attachment
 before mutation capabilities return. Cancellation or a current failed switch
 returns to reading while authentication and lineage remain valid; superseded
@@ -433,11 +440,11 @@ active-writer, streaming, public exceptions, and read-only POST decisions.
 
 ## Resource Persistence And Event Ordering
 
-| Concern                                                              | Canonical source                           |
-| -------------------------------------------------------------------- | ------------------------------------------ |
+| Concern | Canonical source |
+| --- | --- |
 | Transaction, revision bump, receipt, commit, and live-emission order | `server/fastify/src/commands/mutations.ts` |
-| Event drafts, persisted replay rows, and retention window            | `server/fastify/src/commands/events.ts`    |
-| Browser interpretation of event resource keys                        | `src/ts/server/resourceInvalidation.ts`    |
+| Event drafts, persisted replay rows, and retention window | `server/fastify/src/commands/events.ts` |
+| Browser interpretation of event resource keys | `src/ts/server/resourceInvalidation.ts` |
 
 A normal resource-changing command writes its SQLite rows, increments the global
 revision once, and inserts one command event in the same transaction. The live

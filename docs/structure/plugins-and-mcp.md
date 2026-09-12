@@ -1,7 +1,7 @@
 # Plugins And MCP
 
 Last audited: 2026-09-04.
-Targeted source check: 2026-09-05 (module organization ownership and events).
+Targeted source checks: 2026-09-12 (module organization, reader/writer runtime authority, and output-listener diagnostics).
 
 Plugins and MCP tooling are browser runtime features with server-backed records.
 Fastify stores plugin records, plugin storage, settings, and module state, but it
@@ -40,6 +40,13 @@ recovery without discarding the coherent shell. The localized startup Retry
 reruns plugin initialization and then generation recovery rather than replaying
 already-completed writer/resource steps.
 
+Plugin readiness is writer-dependent. Connected readers do not start the plugin
+runtime, and a writer-to-reader transition stops it immediately. Active V3
+instances capture client-session generation and writer authority, so callbacks
+and mutations from a former writer fail their fence even if guest code settles
+later. Reader mode keeps server-backed plugin/module records readable but does
+not grant browser plugin execution or mutation authority.
+
 Plugin records live in `Database.plugins` and use the plugin `name` as the
 stable id. `currentPluginProvider` selects a plugin-defined provider when one is
 active. Plugin providers remain browser compatibility surfaces; Fastify
@@ -66,6 +73,14 @@ server-backed inlay catalog adapter, reads immutable bytes from
 patch and final inlay projection are applied, so send, continue, regenerate,
 and reattached job completion share the same detached-snapshot event; owner
 unload removes the listener.
+
+Output-listener execution requires current writer authority, runtime readiness,
+and a current abort/session fence. When diagnostics collection is enabled it
+emits only bounded run count, failure count, and duration metadata; comparison
+and content-change facts remain unavailable. Late evidence is suppressed after
+authority loss, and recorder failure cannot fail the listener flow. See
+[Diagnostics](diagnostics.md#protocol-versions-and-provenance) for the safe
+export boundary.
 
 Plugin V3 code runs through an opaque-origin iframe RPC boundary nested inside
 a trusted guard iframe. The outer guard contains only the RPC relay and uses

@@ -1,6 +1,7 @@
 # Providers And Models
 
 Last audited: 2026-08-27.
+Targeted source check: 2026-09-12 (`localStopStrings` precedence, validation, and narrow repair).
 
 This guide owns browser model metadata, durable model profiles and credentials,
 server-owned provider operations, provider dispatch, runtime options, capability
@@ -158,6 +159,14 @@ profile-bound generation does not silently borrow them.
 stored units for settings displays; profile overrides remain a separate record.
 
 Important runtime contracts include:
+
+- `localStopStrings` has three distinct states: an absent field inherits the
+  next runtime layer, explicit `null` disables inherited local stop strings,
+  and a string array replaces them. Shared validation rejects other shapes.
+  Import/migration repair removes only the known serialized-undefined markers;
+  it preserves `null`, valid arrays, and unrelated malformed values for strict
+  validation rather than repairing data during generation. The canonical
+  normalizer is `packages/shared-core/src/localStopStrings.ts`.
 
 - `stripCoT` incrementally removes recognized `<Thoughts>`/`<think>` blocks
   before downstream consumers and request-history capture. It retains possible

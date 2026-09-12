@@ -1,7 +1,7 @@
 # Assets And Saves
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-06 (bounded backup workers, GC discovery and maintenance ownership).
+Targeted source checks: 2026-09-12 (bounded backup workers, inlay reader/migration authority, and browser backup fencing).
 
 Fastify owns binary persistence, save import/export, Realm import, and backup
 snapshots. Browser code should use server asset URLs and server save routes
@@ -162,11 +162,13 @@ guarded by `server/fastify/__tests__/inlayCatalog.test.ts` and
 migration. New decoded-image ingestion rejects sources above 16 Mi-pixels and
 `writeInlayImage()` downsizes accepted images above 1 Mi-pixel before uploading
 PNG bytes; audio/video bytes and signature JSON use their own content types.
-Listing first migrates usable browser-local entries and aliases into the server
-catalog, removes metadata ghosts with no bytes/asset id, and retains
-browser-local reads only as a legacy fallback. Deletion removes the revisioned
-catalog row and matching local aliases; immutable bytes remain subject to the
-server asset-GC policy.
+Readers ensure and fetch the server catalog without attempting local migration.
+With writer authority, listing first migrates usable browser-local entries and
+aliases into the server catalog and removes metadata ghosts with no bytes/asset
+id. Catalog reads remain available to readers; migration, registration, and
+deletion require a current writer. Browser-local reads remain only as a legacy
+fallback. Deletion removes the revisioned catalog row and matching local aliases;
+immutable bytes remain subject to server asset GC.
 
 ## `.risu` And Bundle Routes
 
@@ -439,6 +441,12 @@ delete are authenticated and active-writer guarded; list is authenticated
 read-only. The durable route-policy owners are the `backup-mutations` and
 `backup-list` entries in `server/fastify/src/routeManifest.ts`; behavior is
 guarded by `server/fastify/__tests__/backups.test.ts`.
+
+The browser adapter exposes backup creation/listing/deletion only while the
+managed session has writer access, even though the server list route itself is
+read-only. Restore is likewise unavailable to readers. Each mutating request
+rechecks writer-operation freshness so a transition to reader mode prevents a
+late backup or restore action from continuing under stale authority.
 
 Backup creation holds a data-directory maintenance lease from before the SQLite
 backup await through file verification and publication or failure cleanup.

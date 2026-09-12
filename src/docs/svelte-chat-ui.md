@@ -1,7 +1,7 @@
 # Svelte Chat UI Guide
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-10 (chat-menu modal opener and guided BardWiki workspace).
+Targeted source checks: 2026-09-12 (chat-menu opener, BardWiki workspace, and focused coverage map).
 
 This guide owns the visible chat frame, transcript, message rows, composer
 variants, generation/loading feedback, and in-chat confirmations. Return to the
@@ -17,14 +17,14 @@ Direct sections: [hydration/scroll](#transcript-hydration-and-paging),
 [keyboard viewport](#keyboard-viewport-coordination),
 [send phases](#message-generation-phases), [regenerate](#targeted-regenerate-presentation).
 
-| Symptom                                                              | Inspect first                                                                                                                   | Then inspect                                                                                            |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------- |
-| Chat frame, background, or display mode is wrong                     | `src/lib/ChatScreens/ChatScreen.svelte`                                                                                         | `src/lib/ChatScreens/BackgroundDom.svelte`, `src/styles.css`                                            |
-| Transcript window, hydration, scroll, composer, or menu is wrong     | `src/lib/ChatScreens/DefaultChatScreen.svelte`                                                                                  | `src/lib/ChatScreens/DefaultChatScreen.loadPages.ts`, `src/ts/server/chatMessageHydration.svelte.ts`    |
-| Reader transcript, partial output, or viewer refresh is wrong        | `src/lib/ReaderTranscript.svelte`                                                                                               | `src/ts/server/readerGenerationObservation.ts`, `src/lib/ChatScreens/readerGenerationRows.ts`           |
-| One message, translation, parser result, or partial edit is wrong    | `src/lib/ChatScreens/Chat.svelte`, `src/lib/ChatScreens/ChatBody.svelte`                                                        | `src/lib/ChatScreens/ChatBodyParseMemo.ts`, `src/lib/ChatScreens/PartialEditController.svelte`          |
-| Generation text, progress bar, stage color, or cancel state is wrong | `src/lib/ChatScreens/chatGenerationLoading.ts`, `Chat.svelte`, `DefaultChatScreen.svelte`                                       | `src/ts/process/index.svelte.ts`, durable generation state in [Generation Client](generation-client.md) |
-| Draft/BTW hook controls or review state are wrong                    | `src/lib/SideBars/ChatDraftHookSelector.svelte`, `src/lib/ChatScreens/InputHookPickerDialog.svelte`, `DefaultChatScreen.svelte` | [Translation And Input Hooks](../../docs/structure/translation-and-input-hooks.md)                      |
+| Symptom | Inspect first | Then inspect |
+| --- | --- | --- |
+| Chat frame, background, or display mode is wrong | `src/lib/ChatScreens/ChatScreen.svelte` | `src/lib/ChatScreens/BackgroundDom.svelte`, `src/styles.css` |
+| Transcript window, hydration, scroll, composer, or menu is wrong | `src/lib/ChatScreens/DefaultChatScreen.svelte` | `src/lib/ChatScreens/DefaultChatScreen.loadPages.ts`, `src/ts/server/chatMessageHydration.svelte.ts` |
+| Reader transcript, partial output, or viewer refresh is wrong | `src/lib/ReaderTranscript.svelte` | `src/ts/server/readerGenerationObservation.ts`, `src/lib/ChatScreens/readerGenerationRows.ts` |
+| One message, translation, parser result, or partial edit is wrong | `src/lib/ChatScreens/Chat.svelte`, `src/lib/ChatScreens/ChatBody.svelte` | `src/lib/ChatScreens/ChatBodyParseMemo.ts`, `src/lib/ChatScreens/PartialEditController.svelte` |
+| Generation text, progress bar, stage color, or cancel state is wrong | `src/lib/ChatScreens/chatGenerationLoading.ts`, `Chat.svelte`, `DefaultChatScreen.svelte` | `src/ts/process/index.svelte.ts`, durable generation state in [Generation Client](generation-client.md) |
+| Draft/BTW hook controls or review state are wrong | `src/lib/SideBars/ChatDraftHookSelector.svelte`, `src/lib/ChatScreens/InputHookPickerDialog.svelte`, `DefaultChatScreen.svelte` | [Translation And Input Hooks](../../docs/structure/translation-and-input-hooks.md) |
 
 ## Chat Surface Ownership
 
@@ -742,6 +742,8 @@ Failed hydration cannot present a partial transcript count as a complete total.
 ## Focused Tests
 
 Start with `src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts`,
+`src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts`,
+`src/lib/ChatScreens/BardWikiWorkspace.lazy.test.ts`,
 `src/lib/ChatScreens/ChatBody.svelte.test.ts`,
 `src/lib/ChatScreens/ChatBody.parseMemo.test.ts`,
 `src/lib/ChatScreens/Chat.parserDependencies.test.ts`,

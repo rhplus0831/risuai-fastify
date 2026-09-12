@@ -1,6 +1,7 @@
 # Translation And Input Hooks
 
 Last audited: 2026-08-09.
+Targeted source check: 2026-09-12 (input-hook writer/session fencing).
 
 This guide owns translation pipelines, translator model routing, history slots,
 cache identity, detached message and greeting jobs, generated-message automatic
@@ -231,6 +232,13 @@ returns `rq.result.trim()`, including an empty successful result. UI callers
 perform the empty-text guard before applying it; for example,
 `src/lib/ChatScreens/DefaultChatScreen.svelte` reports the empty-text error and
 preserves the composer.
+
+Input hooks require current writer authority before parsing/tokenization and
+provider dispatch. `src/ts/process/inputHooks.ts` captures the managed session
+generation, aborts pending work when authority or session changes, and rechecks
+the fence before dispatch and before returning a result. Connected readers are
+rejected without starting model work; a late result from an old writer/session
+cannot replace composer text.
 
 Before a selected Draft hook runs during send, the chat loading contract uses
 stage 5 at progress 20. The constants live in

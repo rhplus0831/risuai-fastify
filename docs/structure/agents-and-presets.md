@@ -1,7 +1,7 @@
 # Agents And Presets
 
 Last audited: 2026-08-09.
-Targeted source check: 2026-09-10 (authoring diagnostics, presentation state, and certified deletion impact).
+Targeted source checks: 2026-09-12 (authoring diagnostics, certified deletion impact, and module-integration codec).
 
 This guide owns reusable Agents, Agent Preset records and selection, model
 resolution, module/reference inputs, lorebook inputs, dependency execution,
@@ -111,6 +111,12 @@ deduplicated by module id.
 The union is an effective generation overlay. Selecting a preset does not
 mutate `enabledModules`. A disabled or absent preset contributes no Agent module
 integration.
+
+`src/ts/agentPresetModuleIntegration.ts` owns the browser authoring codec: it
+parses and trims the comma-separated value, deduplicates entries, builds choices
+from module IDs and namespaces, and preserves/reports unknown integrations.
+Runtime union semantics remain in shared core; the editor must not silently
+drop a stored value merely because its module is not currently loaded.
 
 ## Agent Preset Model Flow
 

@@ -1,6 +1,7 @@
 # Structure Documentation Index
 
 Last audited: 2026-09-05.
+Targeted source check: 2026-09-12 (diagnostics/display owners and current indexes).
 
 Entry point: [`STRUCTURE.md`](../../STRUCTURE.md#agent-read-protocol).
 This index selects canonical guides and cross-layer checks; domain contracts
@@ -20,7 +21,7 @@ for historical links and must not receive current guidance.
 
 | Document | Owns |
 | --- | --- |
-| [`backend.md`](backend.md) | Fastify composition, security hooks, route families, startup telemetry, intermediate-display processing, workers, Web Push, generation operation/effect/job/timer wiring, half-streaming telemetry, and persistence fencing. |
+| [`backend.md`](backend.md) | Fastify composition, security hooks, route families, workers, Web Push, generation operation/effect/job/timer wiring, half-streaming telemetry, and persistence fencing. |
 | [`data-and-events.md`](data-and-events.md) | SQLite stores, revisions, lineage, active writer, command events, atomic chat reset transactions, and command-event SSE. |
 | [`server-resources-and-bridges.md`](server-resources-and-bridges.md) | Browser bootstrap/root resources, REST endpoint and hydration workflows, cache protocol, route surfaces, and settings/feature projections. |
 | [`durable-mutations-and-recovery.md`](durable-mutations-and-recovery.md) | Encrypted mutation intent, command queue/local effects, event invalidation/recovery, explicit owner lifecycles, active writer, and protocol diagnostics. |
@@ -28,11 +29,13 @@ for historical links and must not receive current guidance.
 | [`plugins-and-mcp.md`](plugins-and-mcp.md) | Plugin V3 host, permissions, storage/network boundaries, modules, MCP transports and OAuth, UI surfaces, and lifecycle. |
 | [`providers-and-models.md`](providers-and-models.md) | Model registry metadata, profiles, credentials, provider/media operations, runtime options, capability routing, adapters, chat/tool transport, and LLM request history. |
 | [`prompt-assembly-and-scripting.md`](prompt-assembly-and-scripting.md) | Generation surfaces, prompt assembly, CBS/history, lorebook and Hypa memory injection, templates/roles, budgeting, post-generation effects, Lua, and V2 triggers. |
+| [`intermediate-display.md`](intermediate-display.md) | Cross-runtime display-source wire contract, isolated server transform, cache/queue, browser batching/fallback/fences, and measurements. |
 | [`bardwiki.md`](bardwiki.md) | Server-owned per-chat Markdown memory, settings, documents and versions, confirmation, jobs, prompt selection, lifecycle, vault interchange, and recovery. |
 | [`translation-and-input-hooks.md`](translation-and-input-hooks.md) | Translator pipelines and history slots, browser caches, server translation identity/jobs, generated-message translation, and Draft/BTW input hooks. |
 | [`agents-and-presets.md`](agents-and-presets.md) | Agent selection/readiness, Agent Preset models and prepared/lorebook inputs, dependencies, destinations, output composition, provider dispatch, and compatibility. |
 | [`testing-and-operations.md`](testing-and-operations.md) | pnpm scripts, test lanes, CI, deployment, TypeScript, and visible-state testing policy. |
 | [`development-and-observability.md`](development-and-observability.md) | Local/full-stack dev, tracing, startup telemetry, startup/bundle verification, built SPA serving, browser support, and runtime environment variables. |
+| [`diagnostics.md`](diagnostics.md) | Manual client diagnostics, remote support authority and protocol, journal retention/recovery, browser upload, bounded queries, and rollback. |
 | [`domain-glossary.md`](domain-glossary.md) | Shared record names, mutation terms, runtime boundaries, cross-layer ownership, focused-guide routing, and retired/no-port vocabulary. |
 | [`generated-and-legacy.md`](generated-and-legacy.md) | Generated, vendored, ignored, compatibility-only, retired, and deliberately absent surfaces. |
 | [`frontend.md`](frontend.md) | Compatibility pointer only; routes old links to the seven current `src/docs/` index/guide files and owns no current guidance. |
@@ -64,8 +67,9 @@ normalization/import paths, not only the visible editor.
 | Chat generation settings or Saved Toggles | Definition-owner readiness before reconciliation; preservation of required values on full/sparse writes; prompt/module/persona activation. | [Chat-scoped controls](../../src/docs/svelte-navigation-ui.md#chat-scoped-generation-controls), [effective configuration](prompt-assembly-and-scripting.md#effective-configuration-and-assembly-order) |
 | Agents or Agent Presets | Shared normalization/resolution, references and delete cleanup, prepared inputs, phase execution, authoring/progress UI. | [Agents And Presets](agents-and-presets.md), [authoring](../../src/docs/svelte-settings-ui.md#agent-and-prompt-authoring) |
 | Provider, credential, model profile, or runtime option | Role/profile precedence, capability routing, secret handling, server operation/adapter, history, and provider-panel persistence. | [Adding provider behavior](providers-and-models.md#adding-provider-behavior), [model UI](../../src/docs/svelte-settings-ui.md#model-profiles-and-provider-panels) |
-| LLM request history or diagnostics | Attempt recording and retention, metadata sanitization, API reads, and history UI; trace flags are separate. | [Request history](providers-and-models.md#llm-request-history), [tracing](development-and-observability.md#request-and-generation-tracing) |
+| LLM request history or diagnostics | Attempt recording and retention, safe diagnostic projection, authority and provenance, API reads, and UI; traces are separate. | [Request history](providers-and-models.md#llm-request-history), [diagnostics](diagnostics.md), [tracing](development-and-observability.md#request-and-generation-tracing) |
 | Prompt assembly, CBS, lorebook/memory injection, or scripting | Effective config, execution order, server/browser parity, budget/confirmation gates, and durable effects. | [Prompt Assembly And Scripting](prompt-assembly-and-scripting.md) |
+| Intermediate display processing | Wire/version limits, scoped transform isolation, server cache/queue, browser batching/fallback, render fences, and measurement boundaries. | [Intermediate Display](intermediate-display.md), [chat presentation](../../src/docs/svelte-chat-ui.md#intermediate-display-and-cold-hydration) |
 | BardWiki | Protocol, chat-scoped documents/jobs/receipts, source fences, prompt retrieval, lifecycle/import recovery, and settings/workspace UI. | [BardWiki Memory](bardwiki.md) |
 | Prompt preset/template ownership or block roles | Modern owner versus compatibility projection, lazy hydration, commands, shared role normalization, render/budget parity, and save codecs. | [Prompt template ownership and roles](prompt-assembly-and-scripting.md#prompt-template-ownership-and-roles), [preset hydration](server-resources-and-bridges.md#prompt-preset-and-legacy-bodies), [authoring](../../src/docs/svelte-settings-ui.md#agent-and-prompt-authoring) |
 | Asset or inlay-catalog field | Asset references/GC, metadata persistence, command invalidation, bounded catalog projection, and Playground rendering. | [Inlay catalog](assets-and-saves.md#inlay-catalog), [cache bounds](server-resources-and-bridges.md#collection-and-cache-bounds), [Playground](../../src/docs/svelte-ui.md#playground) |

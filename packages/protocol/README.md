@@ -21,6 +21,15 @@ are additive, so their object schemas intentionally accept unknown properties.
 Security-sensitive or explicitly closed protocols, such as startup telemetry,
 use `additionalProperties: false`.
 
+The public `@risuai/protocol/ownership` subpath is owned by
+`packages/protocol/src/ownership.ts`. It defines `OWNERSHIP_ENDPOINT`, the
+protocol version, the exact lineage/writer tuple, and `isOwnershipResponse()`.
+Fastify registers the
+authenticated no-store read in `server/fastify/src/routes/ownership.ts`; it
+reports durable ownership without acquiring it. Focused schema coverage is in
+`packages/protocol/src/ownership.test.ts`; verify both browser recovery and
+Fastify route consumers when changing the contract.
+
 Run the focused checks with:
 
 ```sh

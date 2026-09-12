@@ -1,7 +1,7 @@
 # Prompt Assembly And Scripting
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-09 (display-scope validation and persisted trigger compatibility).
+Targeted source checks: 2026-09-12 (display-guide extraction, pre-provider cancellation, and generation runtime options).
 
 This guide owns server prompt construction, CBS and history variables,
 lorebook and memory injection, prompt-template precedence, generation
@@ -240,128 +240,13 @@ warning.
 
 ## Intermediate Display Processing
 
-Fastify owns the expensive intermediate `editdisplay` transform for supported
-mounted chat rows through
-`POST /api/v1/chats/:chatId/display-sources`. The browser supplies the exact
-string after its first additional-asset pass; the server applies Lua
-`editDisplay`, the declarative V2 display trigger, non-mutating CBS expansion,
-and bounded global/active-preset/character/module regex scripts. The browser
-then resumes with the optional second asset pass, inlays, thought/tool markup,
-Markdown, style handling, sanitization, and DOM behavior. Neither the wire
-`displaySource` nor the process-local cache is persisted as message content.
-
-The route is a read-only POST. Every target starts from an isolated copy of the
-authoritative chat scriptstate. Lua chat-variable writes remain visible within
-that target's own Lua/trigger/regex pipeline, then the server discards the delta
-before processing another target. Display-time writes therefore never reach
-SQLite, affect a sibling target, or make rendering order, retries, viewport
-mounting, and cache reuse mutate chat state. V2 display variables follow the
-same ephemeral principle. Browser `editdisplay` plugins, dynamic fuzzy-asset
-matching, an old server, stale identity/context, and transport failures select
-the complete browser transform instead of reordering stages.
-
-The display route hydrates and validates only the selected character, selected
-chat and transcript, selected prompt/persona dependencies, module activation
-identities, and the activation-winning module bodies required by the transform.
-Inactive modules, unrelated prompt/persona rows, and later duplicate module
-bodies stay outside the display decoder. Unrelated character/chat payloads and
-asset metadata are not scanned. `server/fastify/src/displayModuleCache.ts` reuses
-selected parsed module bodies per SQLite handle and module-content token. A
-position-only indexed lookup avoids materializing cached JSON. The LRU retains
-at most 256 bodies and 64 MiB of charged size (JSON UTF-16/property allowance plus
-object/array overhead, not a measured heap limit). Oversized bodies bypass reuse.
-Module definitions are deeply frozen; generation loads and mutable execution
-state remain private. Module writes retire the whole module-body cache, while
-chat-only changes retain it. Legacy embedded bodies use the uncached path.
-
-Each immutable active module also carries a weakly held digest of its display
-dependency fields. The `editdisplay-v3-module-digests` fingerprint combines those
-ordered digests with current character/chat/settings dependencies; it never
-re-serializes an unchanged asset catalog on a warm hit. A compatible batch
-canonicalizes and hashes the
-shared transcript and scripting dependencies once, then combines that digest
-with each target's small identity and source digest. Opt-in
-`display_source_batch` metrics expose queue wait, scoped-load,
-shared-dependency, per-target fingerprint, transcript-size, and per-batch cache
-outcome fields so regressions can be separated from actual script execution
-time.
-
-When remote/browser diagnostic collection is enabled, a content-free
-`display-performance` v2 event additionally exports per-batch queue, preparation,
-conversion and cache measurements under the request UID without raw metrics.
-Persistence loading and strict decoding have separate timings. Cache hits omit
-unexecuted conversion stages, and failed/stale/aborted batches retain reached
-stages. Optional preparation detail separates selected-owner SQLite reads from
-JSON parsing and shared dependency construction, canonical normalization,
-serialization, and hashing. Bucketed JSON sizes and loaded-definition counts
-identify large inputs without exporting content. Measurement does not change
-the canonical fingerprint or repeat serialization. See [remote diagnostics](development-and-observability.md) for measurement
-boundaries and the helper query.
-
-A generation-input shape that the narrow display decoder cannot support is a
-handled compatibility boundary: the route returns HTTP 200 with one
-`client_fallback` / `scope_input_incompatible` entry per target, so the browser
-runs its complete legacy transform. Malformed stored JSON, storage faults,
-invariant failures, and unexpected exceptions remain server errors. The
-fallback is read-only and does not normalize or rewrite the rejected record.
-
-The display POST accepts optional `priorityKeys` identifying targets in foreground
-order and negotiates a finite SSE response with `Accept: text/event-stream`.
-The browser chooses at most three distinct message rows at the final coalesced
-HTTP boundary, including all their display layers. Viewport ranks are refreshed
-on layout/scroll and consulted after waiting for the command lane and auth, so
-paging waves cannot each add another three rows to the same priority group.
-JSON remains the default for older clients. Both groups share one scoped load and
-dependency fingerprint. SSE emits `result` per target and a terminal `done`,
-`invalidated`, or `error`; it uses bounded writes and aborts on disconnect or
-buffer overflow. Validation/auth failures before the first frame remain HTTP
-errors. No event contains final HTML: browser Markdown/sanitization still follows.
-
-`displaySourceQueue.ts` retains exclusive execution through each complete target
-and its state cleanup, then yields for I/O and newly queued foreground work.
-The batch generator retains its prepared scope and budgets across these turns;
-request async context is bound to each queued operation. Revision/lineage/writer/module-token
-postconditions run before and after targets, and once at completion. A late
-change emits terminal invalidation, including for already delivered results.
-The browser reparses affected projections after invalidation and keeps fetch
-cancellation active through body consumption. Writer reads retain the shared
-command revision lane until stream completion; reader requests remain independent.
-
-### Display Activation And Persistence
-
-`src/ts/process/regexDisplayActivation.ts` owns the three-second regex display
-activation debounce; `src/ts/process/regexDisplayReload.ts` selects scoped
-reload dependencies. Character,
-module, prompt-preset/root, and global edits keep independent timers, and a
-component unmount does not shorten the three-second delay. Consumers derive a
-reload token from only the regex owners active for their character/chat, so an
-unrelated owner does not reparse mounted rows. The browser also deduplicates
-identical non-streaming targets by namespace, server revision, browser context,
-target/source identity, priority, and the scoped activation token; completed
-results use a bounded LRU and namespace changes clear both in-flight and
-completed deduplication state.
-
-Character-sidebar script and trigger edits have an earlier 300 ms trailing
-draft debounce in `src/ts/server/scriptDefinitionOwner.svelte.ts`, before cloning, diffing,
-outbox staging, or network dispatch. Display activation flushes that draft and
-waits for final durable settlement before advancing its owner token; a failed
-save leaves the old display active. Send/continue/regenerate also flush the
-draft, but waits only for the immediate dispatch outcome so offline/queued or
-failed persistence blocks generation instead of hanging or assembling against
-unsaved definitions. Module, prompt-preset, and global display activation keep
-their existing owner-specific persistence paths.
-
-The cache retains up to four recently active namespaces keyed exactly by
-database lineage, writer epoch, ephemeral page session, language, both viewport
-dimensions, and protocol version. Returning to one of those exact contexts can
-reuse its entries, while different contexts never cross-hit. Entry count and
-UTF-8 byte limits apply across all retained namespaces; namespace and entry
-eviction are LRU-bounded, and completion from an evicted in-flight namespace
-cannot repopulate it. Entries use SHA-256 over canonical display dependencies
-rather than a global revision. Growing generation prefixes are coalesced and
-explicitly bypass reusable storage. The transform version is part of each
-dependency key, so the per-target ephemeral-state contract cannot reuse entries
-from the former durable-display-state behavior.
+Fastify applies the intermediate `editdisplay` stages to supported mounted chat
+rows after the browser's first asset pass and before browser-owned Markdown and
+DOM work. Display execution is read-only and isolates ephemeral script state per
+target; it never changes the prompt-generation pipeline or stored messages.
+Wire negotiation, scoped loading, server cache and scheduling, browser
+batching/fallback, activation fences, and diagnostic measurements are canonical
+in [Intermediate Display](intermediate-display.md).
 
 ## Lorebook Activation And Injection
 
@@ -537,6 +422,9 @@ apply steps 1–2 once to the accumulated partial and persist that exact text, b
 do not run Agent Preset after-main, run-variable, output-trigger, translation,
 or other completion-only effects. Incremental display remains raw on
 server-backed streams.
+Stop during assembly before provider dispatch has no partial assistant row to
+process; its accepted operation settles as cancelled under the
+[backend generation lifecycle](backend.md#generation-and-background-work).
 
 `dispatchProviderWithPolicies()` in
 `server/fastify/src/routes/generationChat.ts` runs the request trigger for every

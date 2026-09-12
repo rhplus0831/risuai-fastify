@@ -17,18 +17,18 @@ messages on demand.
 
 ## Client TypeScript Areas
 
-| Path                                                                                                                                                                                                               | Runtime ownership                                                                                                                                                                                                                                                                                                                                         |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/ts/server/`                                                                                                                                                                                                   | Fastify browser adapters: runtime bootstrap, encrypted pending-mutation outbox/replay, REST resource reads, explicit resource owners/invalidation, commands, hydration, events, active writer, provider/media operations, assets, backups, Realm import, owner mutation lifecycles, push notifications, stale-operation guards, diagnostics, smoke hooks. |
-| `src/ts/clientSession.ts`, `src/ts/connectedClientStartup.ts`                                                                                                                                                      | Per-page identity, read/write capabilities, ownership discovery, and fenced promotion/recovery.                                                                                                                                                                                                                                                           |
-| `src/ts/storage/`                                                                                                                                                                                                  | Server-backed auth/storage compatibility, resource-database accessors, `.risu` helpers, backup helpers, and auto-storage selection.                                                                                                                                                                                                                       |
-| `src/ts/process/`                                                                                                                                                                                                  | `sendChat`, server-backed generation bridge, durable reattach, files/MCP/memory/embedding/post-generation helpers, retained parity helpers.                                                                                                                                                                                                               |
-| `src/ts/process/request/`                                                                                                                                                                                          | Provider/server-routing classifiers, chat/completion/memory request adapters, SSE parsing, message patch helpers.                                                                                                                                                                                                                                         |
-| `src/ts/model/`, `src/ts/horde/`                                                                                                                                                                                   | Browser model registry, profile UI/integration, and provider catalog adapters. Neutral profile records/resolution live in `packages/shared-core/`; see [Providers And Models](../../docs/structure/providers-and-models.md).                                                                                                                              |
-| `src/ts/plugins/`                                                                                                                                                                                                  | Browser plugin loading/runtime and Plugin V3 API host. Fastify stores plugin records but does not execute plugins.                                                                                                                                                                                                                                        |
-| `src/ts/process/mcp/`                                                                                                                                                                                              | Browser MCP clients, internal tools, Risu access tools, and plugin MCP clients.                                                                                                                                                                                                                                                                           |
-| `src/ts/media/`, `src/ts/parser/`, `src/ts/gui/`, `src/ts/setting/`, `src/ts/translator/`, `src/ts/network/`, `src/ts/kei/`, `src/ts/util/`                                                                        | Focused helper domains that feed visible UI and tests.                                                                                                                                                                                                                                                                                                    |
-| `src/ts/stores.svelte.ts`, `src/ts/globalApi.svelte.ts`, `src/ts/characters.ts`, `src/ts/characterCards.ts`, `src/ts/characterFolderOpening.ts`, `src/ts/hotkey.ts`, `src/ts/lite.ts`, `src/ts/observer.svelte.ts` | Cross-cutting browser stores, compatibility helpers, character/card and folder-opening utilities, hotkeys, lite mode, and observers.                                                                                                                                                                                                                      |
+| Path | Runtime ownership |
+| --- | --- |
+| `src/ts/server/` | Fastify browser adapters: runtime bootstrap, encrypted pending-mutation outbox/replay, REST resource reads, explicit resource owners/invalidation, commands, hydration, events, active writer, provider/media operations, assets, backups, Realm import, owner mutation lifecycles, push notifications, stale-operation guards, diagnostics, smoke hooks. |
+| `src/ts/clientSession.ts`, `src/ts/connectedClientStartup.ts` | Per-page identity, read/write capabilities, ownership discovery, and fenced promotion/recovery. |
+| `src/ts/storage/` | Server-backed auth/storage compatibility, resource-database accessors, `.risu` helpers, backup helpers, and auto-storage selection. |
+| `src/ts/process/` | `sendChat`, server-backed generation bridge, durable reattach, files/MCP/memory/embedding/post-generation helpers, retained parity helpers. |
+| `src/ts/process/request/` | Provider/server-routing classifiers, chat/completion/memory request adapters, SSE parsing, message patch helpers. |
+| `src/ts/model/`, `src/ts/horde/` | Browser model registry, profile UI/integration, and provider catalog adapters. Neutral profile records/resolution live in `packages/shared-core/`; see [Providers And Models](../../docs/structure/providers-and-models.md). |
+| `src/ts/plugins/` | Browser plugin loading/runtime and Plugin V3 API host. Fastify stores plugin records but does not execute plugins. |
+| `src/ts/process/mcp/` | Browser MCP clients, internal tools, Risu access tools, and plugin MCP clients. |
+| `src/ts/media/`, `src/ts/parser/`, `src/ts/gui/`, `src/ts/setting/`, `src/ts/translator/`, `src/ts/network/`, `src/ts/kei/`, `src/ts/util/` | Focused helper domains that feed visible UI and tests. |
+| `src/ts/stores.svelte.ts`, `src/ts/globalApi.svelte.ts`, `src/ts/characters.ts`, `src/ts/characterCards.ts`, `src/ts/characterFolderOpening.ts`, `src/ts/hotkey.ts`, `src/ts/lite.ts`, `src/ts/observer.svelte.ts` | Cross-cutting browser stores, compatibility helpers, character/card and folder-opening utilities, hotkeys, lite mode, and observers. |
 
 Retained compatibility and parity helpers still exist under `src/ts/process/`,
 but they are not a selectable browser-local runtime. `src/ts/platform.ts`
@@ -184,7 +184,7 @@ application, so those read capabilities never enable persisted selection,
 `canMutate`, or `canGenerate`. Watching generation uses the independent reader
 viewer described in [Generation Client](generation-client.md#connected-reader-observation).
 
-`Workspace.svelte` exposes the top-right **Use this device** action for explicit promotion.
+`Workspace.svelte` exposes the top-right Use this device action for explicit promotion.
 `promoteConnectedReader()` shares one attempt, refreshes ownership, and submits
 acquisition against the exact discovered lineage and writer epoch. Disconnect
 confirmation, when required, retains that same precondition. The read stream
@@ -212,84 +212,43 @@ Neither event makes saved drafts into server authority.
 ## Server Resources And Durable Mutations
 
 The browser renders from explicit settings, collection, character,
-chat/transcript, lorebook, prompt-template, and standalone feature owners in
-`src/ts/server/resourceState.svelte.ts` and adjacent owner modules. The inlay
-catalog in `src/ts/server/inlayCatalog.ts` is a standalone root projection.
-Large chat, lorebook, legacy-preset, and prompt-template bodies hydrate only
-when a workflow needs them. The authoritative-state invariant is canonical in
-[Project Structure](../../STRUCTURE.md#repository-wide-invariants), while
-[Server Resources And Hydration](../../docs/structure/server-resources-and-bridges.md)
-owns endpoint, cache, and hydration contracts. Event reconciliation, the
-mutation queue, and durable outbox behavior belong in
+chat/transcript, lorebook, prompt-template, and standalone owners in
+`src/ts/server/resourceState.svelte.ts` and adjacent modules. Reactive consumers
+subscribe only to the fields they render, and owner projection epochs fence
+stale reads and rollbacks. `composeResourceDatabaseSnapshot()` creates a detached
+snapshot only for interchange, browser-smoke diagnostics, and test adapters; it
+is not a production aggregate state facade.
+
+Endpoint, cache, manifest, and hydration contracts are canonical in
+[Server Resources And Hydration](../../docs/structure/server-resources-and-bridges.md).
+Command serialization, encrypted outbox intent, local-effect acknowledgement,
+event reconciliation, and full recovery are canonical in
 [Durable Mutations And Recovery](../../docs/structure/durable-mutations-and-recovery.md).
+This guide retains browser integration that directly affects visible lifecycle
+or a specialized workflow.
 
-There is no production aggregate database facade. Reactive callers subscribe to
-the specific owner fields they render, and owner-specific projection epochs
-fence stale reads and rollbacks without turning unrelated updates into a global
-invalidation. `composeResourceDatabaseSnapshot()` creates a detached snapshot
-only for interchange, browser-smoke diagnostics, and test adapters.
+Reader navigation and passive appearance share the certified projection in
+`readerTranscriptProjection.svelte.ts`. It is populated from authoritative
+resource/command results before writer-only optimistic overlays and retains only
+display character/chat/persona fields and certified message bodies. A same-route
+reader may retain that snapshot through a failed refresh under authentication,
+lineage, and chat-incarnation fences. Reader presentation does not start route
+warming, composer recovery, plugins, or other writer work; local drafts, outbox
+rows, and transient generation text never become reader authority.
 
-The main client boundaries are:
+Chat/message compatibility writes in `src/ts/chatCommands.ts` select the
+narrowest safe append, one-message update, prefix truncate, delete, or anchored
+tail replacement. A placeholder-bearing transcript cannot fall back to broad
+replacement. At send time, `src/ts/process/sendChatContext.ts` persists locally
+assigned missing message IDs only when they form a contiguous suffix after a
+known persisted anchor.
 
-| Path                                                                                                                                   | Responsibility                                                                                             |
-| -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| `src/ts/server/resourceReads.ts`, `resourceCache.ts`                                                                                   | Root/targeted reads and the disposable authenticated-hash cache.                                           |
-| `src/ts/server/connectedReaderSync.ts`, `readerTranscriptProjection.svelte.ts`, `readerDisplayResources.ts`                            | Reader event reconciliation, certified display/transcript projections, and read-only display dependencies. |
-| `src/ts/server/shellHydration.ts`, `src/ts/server/routeResourceLoader.ts`, `packages/shared-core/src/resourceManifest.ts`              | Atomic root shell application and manifest-driven route/runtime resources.                                 |
-| `src/ts/server/hydrationReads.ts`, `chatMessageHydration.svelte.ts`, `characterShellHydration.svelte.ts`, `promptTemplateHydration.ts` | Lazy owner-body and shell hydration.                                                                       |
-| `src/ts/server/commands.ts`, `events.ts`, `resourceInvalidation.ts`, `resourceRefresh.ts`                                              | Serialized commands, SSE reconciliation, targeted reads, and full recovery.                                |
-| `src/ts/server/pendingMutationOutbox.ts`, `durableMutationDispatch.ts`, `pendingMutationReplay.ts`                                     | Encrypted crash-recovery intents and pre-hydration replay.                                                 |
-| `src/ts/server/greetingTranslations.svelte.ts`                                                                                         | Character-scoped greeting projection, refresh, manual translation, and job recovery.                       |
-| `src/ts/server/ownerMutationLifecycle.ts`, `pendingOwnerMutationRegistry.ts`                                                           | Registers and flushes loaded explicit owners at structural and lifecycle boundaries.                       |
-| `src/ts/server/settingsOwner.svelte.ts`, `lorebookOwner.svelte.ts`, `scriptDefinitionOwner.svelte.ts`                                  | Owner-scoped drafts, narrow command dispatch, projection fencing, and field/row rollback.                  |
-
-Reader navigation and passive appearance share the same certification boundary.
-Resource/receipt consumers copy allowlisted order, folders, pins and visual
-settings before applying optimistic writer overlays. Reader presentation does
-not start writer route warming, composer
-recovery or plugins. Restricted route/overlay/script actions check current
-authority, while explicit takeover retains only valid local reading intent.
-
-Reader transcripts use the separately certified projection in
-`readerTranscriptProjection.svelte.ts`, populated from authoritative resource
-and command results before optimistic writer overlays are reapplied. It retains
-only the display character/chat/persona fields and certified message bodies.
-`ReaderTranscript.svelte` may retain a same-route read snapshot through a failed
-refresh, fenced by authentication, lineage, and chat incarnation. Local drafts,
-pending outbox rows, and transient generation text do not enter that snapshot.
-
-If a component shows stale or missing data, confirm whether the data is:
-
-- absent from the settings/collections/characters/inlay-catalog response by design;
-- waiting on a chat, lorebook, character row, legacy preset, or prompt-template
-  endpoint;
-- hidden by a route/store condition;
-- optimistically changed but awaiting command confirmation;
-- retained for replay after a retryable command failure, or rolled back after a
-  terminal/non-durable failure;
-- superseded by an SSE-triggered targeted read or full resource refresh.
-
-Chat/message compatibility writes in `src/ts/chatCommands.ts` classify a list
-change into the narrowest safe command: append, single-message update, prefix
-truncate, single delete, or tail replacement after a known persisted anchor.
-Fully hydrated incompatible edits can fall back to full replacement, but a
-placeholder-bearing transcript is not broadly replaced. At send time,
-`src/ts/process/sendChatContext.ts` assigns ids locally to missing rows in a
-fully loaded transcript, but persists those backfilled ids only when they form a
-contiguous suffix following a persisted anchor. Other shapes remain local for
-that send.
-
-Mutation-facing UI must consume the helper outcome instead of assuming that an
-awaited dispatch means success. `queued` is retained local intent, not server
-acceptance; keep the user's newer draft and surface `accepted`, `queued`, or
-`failed` without prematurely closing the surface.
-
-`src/ts/server/persistenceActivity.svelte.ts` aggregates in-flight mutations
-and this writer's unacknowledged outbox rows. `SavePopupIcon.svelte` displays
-that shared state when the retained `showSavingIcon` preference permits it.
-Individual controls keep their disabled/busy state and failure feedback, while
-queued outcomes use the shared indicator and notification flow instead of
-mounting transient status rows throughout the UI.
+Mutation-facing UI consumes the explicit `accepted`, `queued`, or `failed`
+outcome. Queued intent is not server acceptance and must not discard a newer
+draft or close a surface as saved. `persistenceActivity.svelte.ts` combines
+in-flight work and the current writer's unacknowledged outbox rows for the
+shared save indicator; individual controls retain action-specific busy,
+disabled, failure, and rollback presentation.
 
 ### All-Chats Export Fence
 
@@ -390,7 +349,7 @@ disposal, and writer loss prevent further automatic enablement.
 App lazily mounts `PushNotificationWarning.svelte` above route content, and the
 notification setting uses the same warning and retry action. The warning stays
 visible during retries and clears on successful setup or intentional disable.
-The banner also offers **Hide on this browser**, persisted in localStorage by
+The banner also offers Hide on this browser, persisted in localStorage by
 `src/ts/gui/pushNotificationWarningPreference.ts`. Dismissal survives reloads and
 is shared across tabs of the same origin/browser profile. Display settings can
 restore the banner and always retain the inline warning and Retry action.
@@ -426,17 +385,21 @@ and replaces them with `connectedReaderSync.ts` and authoritative read
 projections; losing write access does not permanently close reader networking.
 The reader keeps local navigation and can observe the selected generation.
 Managed startup never acquires a foreign writer just because its event
-connection is absent. **Use this device** performs explicit conditional
+connection is absent. Use this device performs explicit conditional
 acquisition and recovery against freshly discovered ownership.
 
-Foreground recovery shares a generation-scoped `GET /api/v1/ownership` request
-across consumers. Ordinary focus is ignored while SSE is live and has produced a
-recent frame. Hidden, pagehide, offline, persisted pageshow, stale-stream, or
-disconnected evidence permits the probe; an unchanged lineage/writer tuple
-leaves a healthy stream alone, while changed or uncertain ownership enters the
-existing full-bootstrap recovery path. The endpoint is authenticated, no-store,
-and read-only. Its tuple, bootstrap ownership, and SSE writer frames are all
-derived from the same durable `database_metadata` row.
+Foreground refresh, writer resume, explicit promotion, and ownership probes
+share one page-owned recovery lease whose identity is separate from the client
+session generation. Physical lifecycle listeners publish shared suspension and
+foreground evidence, while each domain sequences its own recovery request.
+Ordinary focus is ignored while SSE is live and recent. Hidden, pagehide,
+offline, persisted pageshow, stale-stream, or disconnected evidence permits the
+authenticated no-store `GET /api/v1/ownership` probe. An unchanged
+lineage/writer tuple leaves a healthy stream alone; changed or uncertain
+ownership enters full-bootstrap recovery. The tuple, bootstrap ownership, and
+SSE writer frames derive from the same durable `database_metadata` row. See
+[Durable Mutations And Recovery](../../docs/structure/durable-mutations-and-recovery.md#event-invalidation-and-recovery)
+for cancellation and lease transfer.
 
 Managed import/restore observation can replace the lineage in place, enter
 reading even when the server still names the same writer session, and install
@@ -458,54 +421,13 @@ startup, resources, drafts, writer loss, and adjacent runtime ownership here.
 
 ## Intermediate Display Bridge
 
-Before final markup rendering, `ParseMarkdown()` keeps its first browser asset
-pass and asks the negotiated display-source bridge to perform only the
-intermediate `editdisplay` stages. `src/ts/server/displaySources.ts` batches
-same-chat mounted rows, reports an ephemeral page id plus language and viewport,
-and fences each result by request key, source hash, context fingerprint, target
-identity, and projection epoch. `ChatBodyParseMemo` remains above this bridge,
-so a browser memo hit performs no request and the existing last-good body stays
-visible while a replacement is pending. Server-side Lua display state is
-isolated per target: writes may influence the remainder of that target's
-intermediate transform, but are discarded before another target runs and never
-become chat authority. The current bridge still shares the global command
-revision lane to fence each batch against its requested base revision and
-ingests every chunk response revision before later mutations dispatch.
-
-Batch scheduling registers same-namespace work before source and context hashes
-settle, then waits for all registered preparations before starting the
-zero-delay flush. Digest completion order therefore cannot split concurrently
-requested same-chat rows into separate revision-lane operations.
-
-Initial transcript mounting assigns the newest three messages critical priority.
-The scheduler admits compatible mounted rows' post-asset preparation together;
-`priorityKeys` puts those three at the front of one mixed-priority batch. The
-bridge requests SSE, resolves validated result promises as frames arrive, and
-checks the terminal event before releasing the shared revision lane. It accepts
-legacy JSON responses too. Requests split at both target-count and aggregate
-UTF-8 source-byte limits. Newly admitted rows collect while an earlier response
-is active instead of reserving individual revision-lane operations.
-
-The server checks revision and namespace before publishing each result. Terminal
-invalidation clears bridge results, changes the finalized-HTML memo epoch, and
-advances the affected render owner's reload token, so earlier streamed projections cannot remain cached as
-current. EOF/errors settle unfinished targets through existing fallbacks;
-malformed/duplicate events retire partial projections. Chat, session, or namespace
-changes cancel the response body as well as the initial fetch. The client keeps
-its last rendered bodies during ordinary replacements and history loading.
-
-With current write access, the full client `processScriptFull` path remains the
-fallback for browser edit hooks, unsupported fuzzy dynamic assets, missing
-protocol support, stale writer/revision/context, and network failure. Readers
-use the same isolated server display bridge but fall back to readable source
-with localized limited-display feedback; they never enter general client
-scripts, plugin hooks, or provider effects. The display batch uses a read-only
-POST independently of the GET-only generation viewer.
-
-Growing generation prefixes are marked as streaming: pending duplicate
-prefixes coalesce and server results bypass the shared stable-row LRU. Final
-Markdown, CSS scoping, DOMPurify, blob URLs, metadata, and DOM activation remain
-browser-owned.
+`ParseMarkdown()` keeps its first browser asset pass, then delegates the
+negotiated intermediate `editdisplay` stages through
+`src/ts/server/displaySources.ts`. Final Markdown, CSS scoping, sanitization,
+blob URLs, metadata, and DOM activation stay in the browser. The bridge's
+batching, prioritized SSE stream, reader/writer fallback, namespace cache, and
+revision/projection fences are canonical in
+[Intermediate Display](../../docs/structure/intermediate-display.md).
 
 ## Rendered Markup Sanitization
 
@@ -519,14 +441,14 @@ cover decoded output.
 
 ## Adjacent Runtime Owners
 
-| Topic                                                        | Browser entrypoints                                                                                                                                                     | Canonical guide                                                                                                                                                                                                                |
-| ------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Client diagnostics                                           | `src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts`                                                                                                           | [Client Diagnostics](../../docs/structure/development-and-observability.md#client-diagnostics)                                                                                                                                 |
-| Module folders and organization                              | `src/ts/moduleOrganization.ts`, `src/ts/moduleCommands.ts`                                                                                                              | [Module Organization](../../docs/structure/plugins-and-mcp.md#module-organization)                                                                                                                                             |
-| Assets, inlay catalog, saves, backups, Realm, legacy storage | `src/ts/server/assets.ts`, `inlayCatalog.ts`, `backups.ts`, `realmImport.ts`; `src/ts/storage/backup.ts`, `fastifyStorage.ts`                                           | [Assets And Saves](../../docs/structure/assets-and-saves.md)                                                                                                                                                                   |
-| Plugins, modules, MCP                                        | `src/ts/plugins/`, `src/ts/moduleActivation.ts`, `src/ts/process/modules.ts`, `src/ts/process/mcp/`; neutral parsing in `packages/shared-core/src/moduleIntegration.ts` | [Plugins And MCP](../../docs/structure/plugins-and-mcp.md)                                                                                                                                                                     |
-| Providers, prompt assembly, and Agents                       | `src/ts/model/`, `src/ts/process/request/`, `src/ts/process/promptAssembly/`                                                                                            | [Providers And Models](../../docs/structure/providers-and-models.md), [Prompt Assembly And Scripting](../../docs/structure/prompt-assembly-and-scripting.md), [Agents And Presets](../../docs/structure/agents-and-presets.md) |
-| Retired/browser-local surfaces                               | `src/ts/platform.ts`                                                                                                                                                    | [Generated Files And Legacy Caveats](../../docs/structure/generated-and-legacy.md)                                                                                                                                             |
+| Topic | Browser entrypoints | Canonical guide |
+| --- | --- | --- |
+| Client diagnostics | `src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts` | [Diagnostics](../../docs/structure/diagnostics.md#manual-client-diagnostics) |
+| Module folders and organization | `src/ts/moduleOrganization.ts`, `src/ts/moduleCommands.ts` | [Module Organization](../../docs/structure/plugins-and-mcp.md#module-organization) |
+| Assets, inlay catalog, saves, backups, Realm, legacy storage | `src/ts/server/assets.ts`, `inlayCatalog.ts`, `backups.ts`, `realmImport.ts`; `src/ts/storage/backup.ts`, `fastifyStorage.ts` | [Assets And Saves](../../docs/structure/assets-and-saves.md) |
+| Plugins, modules, MCP | `src/ts/plugins/`, `src/ts/moduleActivation.ts`, `src/ts/process/modules.ts`, `src/ts/process/mcp/`; neutral parsing in `packages/shared-core/src/moduleIntegration.ts` | [Plugins And MCP](../../docs/structure/plugins-and-mcp.md) |
+| Providers, prompt assembly, and Agents | `src/ts/model/`, `src/ts/process/request/`, `src/ts/process/promptAssembly/` | [Providers And Models](../../docs/structure/providers-and-models.md), [Prompt Assembly And Scripting](../../docs/structure/prompt-assembly-and-scripting.md), [Agents And Presets](../../docs/structure/agents-and-presets.md) |
+| Retired/browser-local surfaces | `src/ts/platform.ts` | [Generated Files And Legacy Caveats](../../docs/structure/generated-and-legacy.md) |
 
 `packages/shared-core/src/moduleIntegration.ts` parses and deduplicates the
 comma-separated module references shared by prompt and Agent Presets.

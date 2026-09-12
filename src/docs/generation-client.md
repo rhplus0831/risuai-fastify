@@ -1,7 +1,7 @@
 # Generation Client
 
 Last audited: 2026-08-29.
-Targeted source check: 2026-09-08 (reader viewing and IGP persistence/effect recovery).
+Targeted source checks: 2026-09-12 (reader viewing, IGP recovery, durable Stop, and abandoned-send recovery).
 
 This guide owns the browser side of durable chat generation: operation
 acceptance, streaming, cancellation, reattach, terminal reconciliation,
@@ -148,6 +148,19 @@ so the browser suppresses the old generation-result command in server-backed
 paths. The configured message-completion sound is emitted once through its
 ledgered successful terminal lifecycle, rather than from the selected chat
 component, so background and reattached generations retain the same behavior.
+
+Protocol Stop is durably staged before its cancellation request. If cancellation
+wins before operation acceptance, the server records a cancel-before-acceptance
+tombstone, creates no attempt, launches no provider job, and appends no user
+message. The browser rolls back its optimistic append only after acknowledged
+cancellation. A lost or failed acknowledgement keeps the durable Stop
+obligation for replay instead of treating the operation as cancelled.
+
+An interrupted accepted-send recovery can be dismissed only while its durable
+operation is abandoned. Dismiss sends Stop for that exact operation and removes
+the recovery row only after acknowledgement; failure, writer/session scope loss,
+or re-promotion races keep the warning and recovery action. Retry is a separate
+action and asks for confirmation when the provider may already have run.
 
 ## Connected Reader Observation
 

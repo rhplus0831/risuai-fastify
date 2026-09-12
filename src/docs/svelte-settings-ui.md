@@ -1,7 +1,7 @@
 # Svelte Settings UI Guide
 
 Last audited: 2026-09-04.
-Targeted source check: 2026-09-10 (guided Agent, Preset, Input Hook, and theme accessibility states).
+Targeted source checks: 2026-09-12 (Agent issue focus/recovery and authoring states).
 
 This guide owns settings navigation, data-driven rows, shared controls,
 authoring editors, model-profile presentation, and visible settings persistence
@@ -11,14 +11,14 @@ shell and routing model.
 
 ## Fast Triage
 
-| Symptom                                                                             | Inspect first                                                                             | Then inspect                                                                                                |
-| ----------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| Category, slug, mobile back, or page switch is wrong                                | `src/lib/Setting/Settings.svelte`, `src/ts/router.ts`                                     | [Shell And Routed Pages](#shell-and-routed-pages)                                                           |
-| A data-driven row is hidden, stale, or not saving                                   | `src/lib/Setting/SettingRenderer.svelte`, the matching definition under `src/ts/setting/` | `src/ts/setting/utils.ts`, `src/lib/Setting/Wrappers/`                                                      |
-| A primitive control is wrong everywhere                                             | The control in `src/lib/UI/GUI/`                                                          | Its settings wrapper if only rows are affected                                                              |
-| Agent, prompt, or input-hook editor is wrong                                        | The matching page/drawer under `src/lib/Setting/Pages/`                                   | The canonical runtime guide linked from its section below                                                   |
-| Role/profile summary, divider, provider panel, or credential editor is wrong        | `src/lib/Setting/Pages/Model/`                                                            | `src/ts/model/modelProfileUiState.ts`, [Providers And Models](../../docs/structure/providers-and-models.md) |
-| Optimistic value rolls back, queues indefinitely, or survives page exit incorrectly | `src/ts/setting/utils.ts`, `src/ts/server/settingsOwner.svelte.ts`                        | [Settings Persistence](#settings-persistence)                                                               |
+| Symptom | Inspect first | Then inspect |
+| --- | --- | --- |
+| Category, slug, mobile back, or page switch is wrong | `src/lib/Setting/Settings.svelte`, `src/ts/router.ts` | [Shell And Routed Pages](#shell-and-routed-pages) |
+| A data-driven row is hidden, stale, or not saving | `src/lib/Setting/SettingRenderer.svelte`, the matching definition under `src/ts/setting/` | `src/ts/setting/utils.ts`, `src/lib/Setting/Wrappers/` |
+| A primitive control is wrong everywhere | The control in `src/lib/UI/GUI/` | Its settings wrapper if only rows are affected |
+| Agent, prompt, or input-hook editor is wrong | The matching page/drawer under `src/lib/Setting/Pages/` | The canonical runtime guide linked from its section below |
+| Role/profile summary, divider, provider panel, or credential editor is wrong | `src/lib/Setting/Pages/Model/` | `src/ts/model/modelProfileUiState.ts`, [Providers And Models](../../docs/structure/providers-and-models.md) |
+| Optimistic value rolls back, queues indefinitely, or survives page exit incorrectly | `src/ts/setting/utils.ts`, `src/ts/server/settingsOwner.svelte.ts` | [Settings Persistence](#settings-persistence) |
 
 ## Shell And Routed Pages
 
@@ -37,29 +37,29 @@ or replaces a direct entry with home.
 
 Primary indexes and canonical slugs are:
 
-| Index      | Slug                           | Page or visible category                                                                                                           |
-| ---------- | ------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------- |
-| `0`        | `backup`                       | `src/lib/Setting/Pages/UserSettings.svelte`                                                                                        |
-| `1`        | `bot-preset`                   | `src/lib/Setting/Pages/BotSettings.svelte` when legacy presets exist; otherwise model settings                                     |
-| `2`        | `memory`                       | `src/lib/Setting/Pages/OtherBotSettings.svelte`; visible label is **Memory** through `language.settingsNavMemory` and a brain icon |
-| `3`        | `display`                      | `src/lib/Setting/Pages/DisplaySettings.svelte`                                                                                     |
-| `4`        | `plugins`                      | `src/lib/Setting/Pages/PluginSettings.svelte`                                                                                      |
-| `6`        | `advanced`                     | `src/lib/Setting/Pages/AdvancedSettings.svelte`                                                                                    |
-| `7`        | `communities`                  | `src/lib/Setting/Pages/Communities.svelte`                                                                                         |
-| `8`        | `global-lorebook`              | Legacy `src/lib/Setting/Pages/GlobalLoreBookSettings.svelte`; nav is visibility-gated                                              |
-| `9`        | `global-regex`                 | Legacy `src/lib/Setting/Pages/GlobalRegex.svelte`; nav is visibility-gated                                                         |
-| `10`       | `language`                     | `src/lib/Setting/Pages/LanguageSettings.svelte`                                                                                    |
-| `11`       | `accessibility`                | `src/lib/Setting/Pages/AccessibilitySettings.svelte`; visible page title is **Interaction & Accessibility**                       |
-| `12`       | `persona`                      | `src/lib/Setting/Pages/PersonaSettings.svelte`                                                                                     |
-| `13`, `18` | `prompt`, `prompt-settings`    | Prompt-template editor and prompt-preset shell                                                                                     |
-| `14`       | `modules`                      | `src/lib/Setting/Pages/Module/ModuleSettings.svelte`                                                                               |
-| `15`       | `hotkeys`                      | `src/lib/Setting/Pages/HotkeySettings.svelte`                                                                                      |
-| `17`       | `model`                        | Profile-first model settings                                                                                                       |
-| `19`, `20` | `agent-presets`, `input-hooks` | `src/lib/Setting/Pages/AgentPresetSettings.svelte` and `src/lib/Setting/Pages/InputHookSettings.svelte`                            |
-| `21`       | `request-history`              | `src/lib/Setting/Pages/RequestHistorySettings.svelte`                                                                              |
-| `22`       | `source-code`                  | `src/lib/Setting/Pages/SourceCode.svelte`                                                                                          |
-| `23`       | `bardwiki`                     | `src/lib/Setting/Pages/BardWikiSettings.svelte`                                                                                    |
-| `77`       | `supporter`                    | `src/lib/Setting/Pages/ThanksPage.svelte` after the external-server warning when required                                          |
+| Index | Slug | Page or visible category |
+| --- | --- | --- |
+| `0` | `backup` | `src/lib/Setting/Pages/UserSettings.svelte` |
+| `1` | `bot-preset` | `src/lib/Setting/Pages/BotSettings.svelte` when legacy presets exist; otherwise model settings |
+| `2` | `memory` | `src/lib/Setting/Pages/OtherBotSettings.svelte`; visible label is Memory through `language.settingsNavMemory` and a brain icon |
+| `3` | `display` | `src/lib/Setting/Pages/DisplaySettings.svelte` |
+| `4` | `plugins` | `src/lib/Setting/Pages/PluginSettings.svelte` |
+| `6` | `advanced` | `src/lib/Setting/Pages/AdvancedSettings.svelte` |
+| `7` | `communities` | `src/lib/Setting/Pages/Communities.svelte` |
+| `8` | `global-lorebook` | Legacy `src/lib/Setting/Pages/GlobalLoreBookSettings.svelte`; nav is visibility-gated |
+| `9` | `global-regex` | Legacy `src/lib/Setting/Pages/GlobalRegex.svelte`; nav is visibility-gated |
+| `10` | `language` | `src/lib/Setting/Pages/LanguageSettings.svelte` |
+| `11` | `accessibility` | `src/lib/Setting/Pages/AccessibilitySettings.svelte`; visible page title is Interaction & Accessibility |
+| `12` | `persona` | `src/lib/Setting/Pages/PersonaSettings.svelte` |
+| `13`, `18` | `prompt`, `prompt-settings` | Prompt-template editor and prompt-preset shell |
+| `14` | `modules` | `src/lib/Setting/Pages/Module/ModuleSettings.svelte` |
+| `15` | `hotkeys` | `src/lib/Setting/Pages/HotkeySettings.svelte` |
+| `17` | `model` | Profile-first model settings |
+| `19`, `20` | `agent-presets`, `input-hooks` | `src/lib/Setting/Pages/AgentPresetSettings.svelte` and `src/lib/Setting/Pages/InputHookSettings.svelte` |
+| `21` | `request-history` | `src/lib/Setting/Pages/RequestHistorySettings.svelte` |
+| `22` | `source-code` | `src/lib/Setting/Pages/SourceCode.svelte` |
+| `23` | `bardwiki` | `src/lib/Setting/Pages/BardWikiSettings.svelte` |
+| `77` | `supporter` | `src/lib/Setting/Pages/ThanksPage.svelte` after the external-server warning when required |
 
 `/settings/memory` is canonical for the Memory page. `/settings/other-bots`
 and `/settings/otherbots` remain compatibility aliases and are replaced with
@@ -285,7 +285,7 @@ creates, edits, duplicates, deletes, and reorders records; chooses the global
 default; attaches existing Agents; and shows status, save, and queued/failure
 feedback.
 
-Preset cards distinguish executable **Ready** from legal no-op **Empty**, while
+Preset cards distinguish executable Ready from legal no-op Empty, while
 Disabled, Incomplete, Invalid, and Model not ready continue to come from the
 canonical planner. Plain-language phase/use summaries stay visible; raw IDs,
 output keys, concurrency, and module metadata live under Technical details.
@@ -302,7 +302,9 @@ deselected; used-but-unselected inputs can be enabled. The same field-linked
 issue list covers invalid ChatML, output/model mismatches, missing definitions,
 empty instructions, and generated names. Valid ChatML renders a role-row
 preview, authoring text supports caret insertion/autocomplete, and numeric
-fields state their bounds and effects.
+fields state their bounds and effects. Issue entries are controls: selecting one
+focuses its affected field, and supported issues expose a contextual recovery
+action that applies the repair and refreshes the issue list.
 
 Preset-use editing exposes phase, dependency/output wiring, destination,
 failure policy, model/runtime overrides, module integration, and final-output
@@ -375,7 +377,7 @@ deletion names the hook in the shared confirmation and moves focus to another
 hook or Add. The prompt uses the shared popup editor with a stable, derived hook
 ID as its context, so changing another row does not invalidate an open editor.
 Draft and BTW storage values stay compatible, while options/cards supplement
-them with **Before send** and **On-demand result** outcomes. A collapsed prompt
+them with Before send and On-demand result outcomes. A collapsed prompt
 exposes its complete value on hover or keyboard focus, and Translation help
 states which draft reaches the model and which reviewed result is stored/sent.
 

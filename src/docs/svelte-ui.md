@@ -10,13 +10,13 @@ surface-specific ownership.
 
 ## Related Guides
 
-| Guide                                     | Owns                                                                                                       |
-| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| [Chat UI](svelte-chat-ui.md)              | Transcript and message rendering, composer variants, generation states, and in-chat confirmations.         |
-| [Navigation UI](svelte-navigation-ui.md)  | Sidebar, character folders, chat and character selection, and internal reordering.                         |
-| [Settings UI](svelte-settings-ui.md)      | Settings routes, data-driven rows, controls, authoring surfaces, model profiles, and settings persistence. |
-| [Client Runtime](client-runtime.md)       | Startup resources, hydration, commands, durable recovery, and server-operation adapters.                   |
-| [Generation Client](generation-client.md) | Durable generation acceptance, streaming, cancellation, reattach, effects, and completion audio.           |
+| Guide | Owns |
+| --- | --- |
+| [Chat UI](svelte-chat-ui.md) | Transcript and message rendering, composer variants, generation states, and in-chat confirmations. |
+| [Navigation UI](svelte-navigation-ui.md) | Sidebar, character folders, chat and character selection, and internal reordering. |
+| [Settings UI](svelte-settings-ui.md) | Settings routes, data-driven rows, controls, authoring surfaces, model profiles, and settings persistence. |
+| [Client Runtime](client-runtime.md) | Startup resources, hydration, commands, durable recovery, and server-operation adapters. |
+| [Generation Client](generation-client.md) | Durable generation acceptance, streaming, cancellation, reattach, effects, and completion audio. |
 
 The frontend is a Svelte 5 SPA with no SvelteKit routes tree:
 `src/ts/router.ts` parses URLs and synchronizes Svelte stores, while
@@ -27,32 +27,32 @@ CSS, and plugin execution.
 
 ## Fast Triage
 
-| Symptom                                                                                | Inspect first                                                                                     | Continue with                                              |
-| -------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Loading, settings, grid, chat, or global overlay is wrong                              | `src/App.svelte`, `src/appStartup.ts`, `src/ts/router.ts`                                         | This guide and [Client Runtime](client-runtime.md)         |
-| Transcript, message HTML, composer, generation progress, or chat confirmation is wrong | `src/lib/ChatScreens/DefaultChatScreen.svelte`, `src/lib/ChatScreens/Chat.svelte`                 | [Chat UI](svelte-chat-ui.md)                               |
-| Sidebar, character folder, character/chat list, or reorder is wrong                    | `src/lib/SideBars/Sidebar.svelte`, `src/lib/SideBars/SideChatList.svelte`                         | [Navigation UI](svelte-navigation-ui.md)                   |
-| Settings nav, row, authoring editor, model profile, or shared control is wrong         | `src/lib/Setting/Settings.svelte`, `src/lib/Setting/SettingRenderer.svelte`                       | [Settings UI](svelte-settings-ui.md)                       |
-| Theme, motion, clipping, font, scale, or custom CSS is wrong                           | `src/styles.css`, `src/ts/gui/colorscheme.ts`, `src/ts/gui/animation.ts`, `src/ts/gui/guisize.ts` | [Styling, Theme, And Layout](#styling-theme-and-layout)    |
-| URL, back/forward, settings section, Playground tool, or character route is wrong      | `src/ts/router.ts`, route effects in `src/App.svelte`                                             | `src/ts/router.test.ts`, `src/App.routeEffect.dom.test.ts` |
-| The document moved or window scrolling appeared                                        | `src/ts/gui/viewportScrollGuard.ts`, `src/appStartup.ts`, `src/styles.css`                        | Code that scrolls `window` or `document.scrollingElement`  |
+| Symptom | Inspect first | Continue with |
+| --- | --- | --- |
+| Loading, settings, grid, chat, or global overlay is wrong | `src/App.svelte`, `src/appStartup.ts`, `src/ts/router.ts` | This guide and [Client Runtime](client-runtime.md) |
+| Transcript, message HTML, composer, generation progress, or chat confirmation is wrong | `src/lib/ChatScreens/DefaultChatScreen.svelte`, `src/lib/ChatScreens/Chat.svelte` | [Chat UI](svelte-chat-ui.md) |
+| Sidebar, character folder, character/chat list, or reorder is wrong | `src/lib/SideBars/Sidebar.svelte`, `src/lib/SideBars/SideChatList.svelte` | [Navigation UI](svelte-navigation-ui.md) |
+| Settings nav, row, authoring editor, model profile, or shared control is wrong | `src/lib/Setting/Settings.svelte`, `src/lib/Setting/SettingRenderer.svelte` | [Settings UI](svelte-settings-ui.md) |
+| Theme, motion, clipping, font, scale, or custom CSS is wrong | `src/styles.css`, `src/ts/gui/colorscheme.ts`, `src/ts/gui/animation.ts`, `src/ts/gui/guisize.ts` | [Styling, Theme, And Layout](#styling-theme-and-layout) |
+| URL, back/forward, settings section, Playground tool, or character route is wrong | `src/ts/router.ts`, route effects in `src/App.svelte` | `src/ts/router.test.ts`, `src/App.routeEffect.dom.test.ts` |
+| The document moved or window scrolling appeared | `src/ts/gui/viewportScrollGuard.ts`, `src/appStartup.ts`, `src/styles.css` | Code that scrolls `window` or `document.scrollingElement` |
 
 ## Entrypoints And Shell
 
-| Path                                                                                                                    | Role                                                                                                                                          |
-| ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.html`                                                                                                            | Mounts `#app` and loads `/src/main.ts`.                                                                                                       |
-| `src/main.ts`                                                                                                           | Thin entry boundary: readiness marker, preload-error handling, runtime-environment installation, and dynamic import of `src/appStartup.ts`.   |
-| `src/ts/entryStartup.ts`, `src/ts/polyfill.ts`, `src/ts/entryLoadError.ts`                                              | Environment-before-app ordering, conditional baseline globals/polyfills, and the localized pre-mount reload surface.                          |
-| `src/appStartup.ts`                                                                                                     | Installs routing, push and viewport coordinators, mounts `App.svelte`, starts bootstrap/hotkeys and route warming, and removes `#preloading`. |
-| `src/App.svelte`                                                                                                        | Main role/route render switch, responsive sidebar state, app-level file drop, route effects, and global overlay host.                         |
-| `src/lib/ConversationShell.svelte`, `src/ts/gui/shellGeometry.ts`                                                       | Role-neutral conversation frame, responsive dialog semantics, and canonical rail/panel dimensions.                                            |
-| `src/styles.css`                                                                                                        | Tailwind v4 import, theme defaults, full-height shell, global chat text CSS, and compatibility base rules.                                    |
-| `src/ts/bootstrap.ts`                                                                                                   | Loads Fastify resources and starts hydration, events, bridges, and UI-derived CSS state.                                                      |
-| `src/ts/startupReadiness.ts`                                                                                            | Publishes startup milestones, narrow UI/action capabilities, and localized retry diagnostics.                                                 |
-| `src/lib/Workspace.svelte`                                                                                              | Persistent role-neutral workspace host with separate reader and writer controllers inside one `ConversationShell`.                            |
-| `src/ts/clientSession.ts`, `readerWorkspaceLifecycle.svelte.ts`, `readerRouteIntent.ts`, `readerProjectionLifecycle.ts` | Role/content admission, read/switch lifecycle state, local route intent, and authentication/lineage projection fencing.                       |
-| `src/ts/platform.ts`                                                                                                    | Fastify-only platform flag; `isFastifyServer` is always true.                                                                                 |
+| Path | Role |
+| --- | --- |
+| `index.html` | Mounts `#app` and loads `/src/main.ts`. |
+| `src/main.ts` | Thin entry boundary: readiness marker, preload-error handling, runtime-environment installation, and dynamic import of `src/appStartup.ts`. |
+| `src/ts/entryStartup.ts`, `src/ts/polyfill.ts`, `src/ts/entryLoadError.ts` | Environment-before-app ordering, conditional baseline globals/polyfills, and the localized pre-mount reload surface. |
+| `src/appStartup.ts` | Installs routing, push and viewport coordinators, mounts `App.svelte`, starts bootstrap/hotkeys and route warming, and removes `#preloading`. |
+| `src/App.svelte` | Main role/route render switch, responsive sidebar state, app-level file drop, route effects, and global overlay host. |
+| `src/lib/ConversationShell.svelte`, `src/ts/gui/shellGeometry.ts` | Role-neutral conversation frame, responsive dialog semantics, and canonical rail/panel dimensions. |
+| `src/styles.css` | Tailwind v4 import, theme defaults, full-height shell, global chat text CSS, and compatibility base rules. |
+| `src/ts/bootstrap.ts` | Loads Fastify resources and starts hydration, events, bridges, and UI-derived CSS state. |
+| `src/ts/startupReadiness.ts` | Publishes startup milestones, narrow UI/action capabilities, and localized retry diagnostics. |
+| `src/lib/Workspace.svelte` | Persistent role-neutral workspace host with separate reader and writer controllers inside one `ConversationShell`. |
+| `src/ts/clientSession.ts`, `readerWorkspaceLifecycle.svelte.ts`, `readerRouteIntent.ts`, `readerProjectionLifecycle.ts` | Role/content admission, read/switch lifecycle state, local route intent, and authentication/lineage projection fencing. |
+| `src/ts/platform.ts` | Fastify-only platform flag; `isFastifyServer` is always true. |
 
 `src/main.ts` listens for `vite:preloadError` before mounting the app. While the
 entry preloader exists, a failed entry/lazy chunk renders the localized offline
@@ -132,7 +132,7 @@ disposition. Established reader content remains readable through promotion and
 interrupted writer recovery; a new authentication/session or lineage resets
 that admission.
 
-**Use this device** explicitly starts conditional acquisition and writer
+Use this device explicitly starts conditional acquisition and writer
 recovery. Reading and local navigation remain available while confirmation is
 pending. Current cancellation or recovery failure returns to reading while
 authentication and lineage remain valid; a superseded attempt cannot change a
@@ -183,18 +183,18 @@ character/chat URLs locally through `Workspace.svelte` and
 `readerRouteScope.ts`, without changing persisted selection or mounting
 authoring controls.
 
-| Route                               | Store effect                                                                                          |
-| ----------------------------------- | ----------------------------------------------------------------------------------------------------- |
-| `/`                                 | Home; clears selection and closes settings and Playground.                                            |
-| `/settings`                         | Opens settings; split layout selects model settings, while the narrow layout shows the category list. |
-| `/settings/:section`                | Opens settings and maps the slug to `SettingsMenuIndex`.                                              |
-| `/settings/persona/:personaId`      | Opens persona settings and selects the unique matching persona.                                       |
-| `/grid` and `/characters`           | Opens the character grid.                                                                             |
-| `/character/:chaId/:chatId?`        | Selects the character and optionally a chat.                                                          |
-| `/characters/:chaId/chats/:chatId?` | Retained character/chat route shape.                                                                  |
-| `/playground/:tool`                 | Maps tool slugs to `PlaygroundStore`.                                                                 |
-| `/inlay` or `/inlays`               | Opens the inlay explorer as Playground value `14`.                                                    |
-| Unknown root                        | Becomes `not-found` and closes route-owned surfaces.                                                  |
+| Route | Store effect |
+| --- | --- |
+| `/` | Home; clears selection and closes settings and Playground. |
+| `/settings` | Opens settings; split layout selects model settings, while the narrow layout shows the category list. |
+| `/settings/:section` | Opens settings and maps the slug to `SettingsMenuIndex`. |
+| `/settings/persona/:personaId` | Opens persona settings and selects the unique matching persona. |
+| `/grid` and `/characters` | Opens the character grid. |
+| `/character/:chaId/:chatId?` | Selects the character and optionally a chat. |
+| `/characters/:chaId/chats/:chatId?` | Retained character/chat route shape. |
+| `/playground/:tool` | Maps tool slugs to `PlaygroundStore`. |
+| `/inlay` or `/inlays` | Opens the inlay explorer as Playground value `14`. |
+| Unknown root | Becomes `not-found` and closes route-owned surfaces. |
 
 Unknown settings and Playground slugs fall back to their default menu; they are
 not general not-found routes.
@@ -265,19 +265,19 @@ Important route and store facts:
 
 ## Component Ownership
 
-| Path                   | Visible ownership                                                                                                                                                                 |
-| ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/lib/ChatScreens/` | Chat frame, transcript, message rows, composer variants, suggestions, partial edit, resize/emotion displays, and progress; see [Chat UI](svelte-chat-ui.md).                      |
-| `src/lib/SideBars/`    | Desktop navigation, character folders, lists, character config, lorebook, scripts, quick settings, and the custom-sidebar renderer; see [Navigation UI](svelte-navigation-ui.md). |
-| `src/lib/Setting/`     | Settings shell, renderer, wrappers, pages, authoring surfaces, bot presets, persona lists, and lore presets; see [Settings UI](svelte-settings-ui.md).                            |
-| `src/lib/UI/`          | Shared higher-level UI such as accordions, menus, model/provider pickers, prompt rows, and Realm UI.                                                                              |
-| `src/lib/UI/GUI/`      | Shared primitive inputs, buttons, selects, sliders, portals, and multilingual controls.                                                                                           |
-| `src/lib/Others/`      | App-level and miscellaneous modals, grid/trash, bookmark/chat-list surfaces, Hypa V3, popup editor, loadouts, and Iris.                                                           |
-| `src/lib/Playground/`  | Playground menu and parser, tokenizer, MCP, image, translation, subtitle, inlay, and conversion tools.                                                                            |
-| `src/lib/Mobile/`      | Active mobile character grid pieces plus an unmounted full mobile shell.                                                                                                          |
-| `src/lib/LiteUI/`      | Lite/hub card support; not the live app entrypoint.                                                                                                                               |
-| `src/lang/`            | UI string contract.                                                                                                                                                               |
-| `src/etc/`             | Bundled documentation, media, and tokenizer seed data imported by client code.                                                                                                    |
+| Path | Visible ownership |
+| --- | --- |
+| `src/lib/ChatScreens/` | Chat frame, transcript, message rows, composer variants, suggestions, partial edit, resize/emotion displays, and progress; see [Chat UI](svelte-chat-ui.md). |
+| `src/lib/SideBars/` | Desktop navigation, character folders, lists, character config, lorebook, scripts, quick settings, and the custom-sidebar renderer; see [Navigation UI](svelte-navigation-ui.md). |
+| `src/lib/Setting/` | Settings shell, renderer, wrappers, pages, authoring surfaces, bot presets, persona lists, and lore presets; see [Settings UI](svelte-settings-ui.md). |
+| `src/lib/UI/` | Shared higher-level UI such as accordions, menus, model/provider pickers, prompt rows, and Realm UI. |
+| `src/lib/UI/GUI/` | Shared primitive inputs, buttons, selects, sliders, portals, and multilingual controls. |
+| `src/lib/Others/` | App-level and miscellaneous modals, grid/trash, bookmark/chat-list surfaces, Hypa V3, popup editor, loadouts, and Iris. |
+| `src/lib/Playground/` | Playground menu and parser, tokenizer, MCP, image, translation, subtitle, inlay, and conversion tools. |
+| `src/lib/Mobile/` | Active mobile character grid pieces plus an unmounted full mobile shell. |
+| `src/lib/LiteUI/` | Lite/hub card support; not the live app entrypoint. |
+| `src/lang/` | UI string contract. |
+| `src/etc/` | Bundled documentation, media, and tokenizer seed data imported by client code. |
 
 Plugin V3 can inject settings, floating-action, hamburger, and chat-menu
 surfaces. Registration and unload contracts belong to
@@ -472,13 +472,13 @@ tool components. Value `2` is the exception: routing creates the synthetic
 playground character and the normal chat shell renders it. Keep menu buttons
 aligned with the slug maps in `src/ts/router.ts`.
 
-| Value    | Tool                                                             |
-| -------- | ---------------------------------------------------------------- |
-| `1`      | Menu                                                             |
-| `2`      | Playground chat through `src/ts/playground.ts`                   |
-| `3`–`8`  | Embedding, tokenizer, syntax, Jinja, image generation, parser    |
+| Value | Tool |
+| --- | --- |
+| `1` | Menu |
+| `2` | Playground chat through `src/ts/playground.ts` |
+| `3`–`8` | Embedding, tokenizer, syntax, Jinja, image generation, parser |
 | `9`–`14` | Subtitles, image translation, translation, MCP, CBS docs, inlays |
-| `101`    | Tool conversion                                                  |
+| `101` | Tool conversion |
 
 Tool-specific problems normally belong in the matching component under
 `src/lib/Playground/` after the route/store mapping is confirmed.

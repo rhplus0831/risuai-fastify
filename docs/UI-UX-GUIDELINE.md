@@ -72,3 +72,10 @@
 * [WCAG 2.2 Quick Reference](https://www.w3.org/WAI/WCAG22/quickref/)
 
 These guidelines are a practical baseline, not a complete WCAG conformance checklist.
+
+## Project Application
+
+Use [`src/docs/README.md`](../src/docs/README.md) to find the component or
+browser-runtime owner for a RisuAI surface. The focused source guides and their
+linked tests are canonical for project-specific behavior and evidence; this
+file remains the general design baseline.
