@@ -1270,6 +1270,39 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(appRouteDomMocks.openGridRoute).toHaveBeenCalledTimes(2)
   })
 
+  it.each(['settings', 'custom-gui-settings'] as const)(
+    'releases the mobile sidebar modal when opening %s',
+    async (surface) => {
+      const router = appRouteDomMocks.state.exports
+      if (!router) throw new Error('Router mock was not initialized')
+
+      DynamicGUI.set(true)
+      await tick()
+      const main = target.querySelector<HTMLElement>('[data-risu-shell-main]')!
+      expect(target.querySelector('[data-risu-responsive-shell="shared-sidebar-dialog"]')).not.toBeNull()
+      expect(main.inert).toBe(true)
+
+      if (surface === 'settings') router.currentRoute.set(parseAppRoute('/settings/language'))
+      else CustomGUISettingMenuStore.set(true)
+      await tick()
+
+      await vi.waitFor(() => {
+        expect(target.querySelector(`[data-risu-lazy-surface="${surface}"]`)).not.toBeNull()
+        expect(target.querySelector('[data-risu-responsive-shell="shared-sidebar-dialog"]')).toBeNull()
+        expect(main.inert).toBe(false)
+      })
+      expect(get(sideBarStore)).toBe(true)
+
+      if (surface === 'settings') router.currentRoute.set(characterRoute)
+      else CustomGUISettingMenuStore.set(false)
+      await tick()
+      await vi.waitFor(() => {
+        expect(target.querySelector('[data-risu-responsive-shell="shared-sidebar-dialog"]')).not.toBeNull()
+        expect(main.inert).toBe(true)
+      })
+    },
+  )
+
   it('routes the grid close control through the grid history helper', async () => {
     const router = appRouteDomMocks.state.exports
     if (!router) throw new Error('Router mock was not initialized')

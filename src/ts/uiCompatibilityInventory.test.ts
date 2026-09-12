@@ -209,7 +209,7 @@ describe('Phase 4 UI compatibility inventory', () => {
     expect(betaMobileGuiOwners).toEqual([])
     expect(storesSource).toContain(`DynamicGUI.set(${phase4ResponsiveShellClassification.currentBreakpoint})`)
     expect(appSource).toContain('<Workspace')
-    expect(appSource).toContain('writerNavigationOpen={$sideBarStore}')
+    expect(appSource).toContain('writerNavigationOpen={writerNavigationVisible && $sideBarStore}')
     expect(workspaceSource).toContain('<ConversationShell')
     expect(workspaceSource).toContain('responsive={$DynamicGUI}')
     expect(workspaceSource).toContain(

@@ -151,6 +151,7 @@
   )
   let readOnlyWorkspaceMode = $derived(connectedReaderView)
   let renderedRoute = $state($currentRoute)
+  let writerNavigationVisible = $derived(!$CustomGUISettingMenuStore && renderedRoute.kind !== 'settings')
   let routeLoadingVisible = $state(false)
   let routeRetryButton = $state<HTMLButtonElement | null>(null)
   let routeContentBlocked = $derived(
@@ -676,13 +677,13 @@
   {:else}
     <Workspace
       readerMode={readOnlyWorkspaceMode}
-      writerNavigationOpen={$sideBarStore}
+      writerNavigationOpen={writerNavigationVisible && $sideBarStore}
       writerNavigationLabel={language.menu}
       writerContentInert={routeContentBlocked || recoveringWriterView}
       writerContentBusy={$routeResourceLoadState.status === 'loading' || recoveringWriterView}
       onWriterCloseNavigation={closeResponsiveSidebar}>
       {#snippet writerNavigation()}
-        {#if !$CustomGUISettingMenuStore && renderedRoute.kind !== 'settings'}
+        {#if writerNavigationVisible}
           <Sidebar
             openGrid={openGridRoute}
             hidden={!$sideBarStore}
