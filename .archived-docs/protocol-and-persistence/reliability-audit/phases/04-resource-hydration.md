@@ -11,9 +11,9 @@ readiness. Extend to superseded navigation, cache verification, and reader event
 gaps. Generation recovery is a separate readiness capability; do not introduce
 a new dependency that unnecessarily blocks ordinary read-only navigation.
 
-Guides: [resources](../../../structure/server-resources-and-bridges.md),
+Guides: [resources](../../../../docs/structure/server-resources-and-bridges.md),
 [client runtime](../../../../src/docs/client-runtime.md), and
-[recovery tests](../../../tests/browser-state-sync-and-recovery.md).
+[recovery tests](../../../../docs/tests/browser-state-sync-and-recovery.md).
 
 <!-- prettier-ignore -->
 | Boundary | Source owners | Existing tests |

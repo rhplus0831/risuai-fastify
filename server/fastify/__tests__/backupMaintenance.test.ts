@@ -512,6 +512,41 @@ describe('backup maintenance ownership', () => {
     expect(listBackups(dataDir)).toHaveLength(1)
   })
 
+  it.each(['cancel', 'takeover'] as const)(
+    'rejects a restore before publication after %s during its safety snapshot',
+    async (schedule) => {
+      const source = await createBackup(db, dataDir, 'restore source')
+      const before = {
+        database: loadPersisted(db, dataDir).database,
+        lineage: getDatabaseLineage(db),
+        revision: getSchemaState(db).revision,
+      }
+      const barrier = pauseCopy()
+      const controller = new AbortController()
+      const restoring = track(restoreBackup(db, dataDir, source.id, { signal: controller.signal }))
+      await barrier.entered
+      if (schedule === 'cancel') controller.abort()
+      else {
+        const takeover = await app.inject({
+          method: 'GET',
+          url: '/api/v1/bootstrap',
+          headers: { 'risu-auth': assertion, 'risu-writer-session': 'successor' },
+        })
+        expect(takeover.statusCode).toBe(200)
+      }
+      barrier.resume()
+      if (schedule === 'cancel') await expect(restoring).rejects.toMatchObject({ name: 'AbortError' })
+      else await expect(restoring).rejects.toBeInstanceOf(MaintenanceBusyError)
+      expect({
+        database: loadPersisted(db, dataDir).database,
+        lineage: getDatabaseLineage(db),
+        revision: getSchemaState(db).revision,
+      }).toEqual(before)
+      expect(fs.readdirSync(dataDir).filter((name) => name.includes('restore'))).toEqual([])
+      expect(getMaintenanceCoordinator(dataDir).isReclamationBlocked()).toBe(false)
+    },
+  )
+
   it('drains a cancelled copy before removing partial output and releasing the lease', async () => {
     const controller = new AbortController()
     const barrier = pauseCopy()

@@ -22,8 +22,8 @@ late authorization. Immediate cold-start replacement would require a separate
 behavior/design decision; this plan does not assume it is an existing guarantee.
 
 Primary guides: [client startup](../../../../src/docs/client-runtime.md),
-[durable recovery](../../../structure/durable-mutations-and-recovery.md), and
-[browser recovery tests](../../../tests/browser-state-sync-and-recovery.md).
+[durable recovery](../../../../docs/structure/durable-mutations-and-recovery.md), and
+[browser recovery tests](../../../../docs/tests/browser-state-sync-and-recovery.md).
 
 <!-- prettier-ignore -->
 | Boundary | Source owners | Existing test starting points |

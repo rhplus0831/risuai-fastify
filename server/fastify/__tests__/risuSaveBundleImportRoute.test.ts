@@ -19,6 +19,7 @@ import {
   loadPersistedWithMessages,
 } from '../src/repository.js'
 import { openDatabase } from '../src/db.js'
+import { getDatabaseOwnershipSnapshot } from '../src/databaseLineage.js'
 import { setupAuthedClient } from './helpers/auth.js'
 import { injectComposedResourceDatabase } from './helpers/resourceDatabase.js'
 import { encodeLegacyRisuSaveEnvelope } from '../src/risuSave/legacyEnvelopeCodec.js'
@@ -396,6 +397,145 @@ function failCommandEventPersistence(dataDir: string): void {
 }
 
 describe('repository .risu bundle import route', () => {
+  it.each(['writer-change', 'writer-return', 'replacement'] as const)(
+    'rejects an upload whose admitted ownership changed during intake: %s',
+    async (schedule) => {
+      await authedInject({
+        method: 'GET',
+        url: '/api/v1/bootstrap',
+        headers: { [ACTIVE_WRITER_SESSION_HEADER]: 'writer-a' },
+      })
+      let entered!: () => void
+      let release!: () => void
+      const held = new Promise<void>((resolve) => {
+        entered = resolve
+      })
+      const resume = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      let uploadDir: string | undefined
+      const original = fs.promises.mkdtemp.bind(fs.promises)
+      vi.spyOn(fs.promises, 'mkdtemp').mockImplementation(async (prefix) => {
+        const dir = await original(prefix)
+        if (String(prefix).includes('risu-import-')) {
+          uploadDir = dir
+          entered()
+          await resume
+        }
+        return dir
+      })
+      const upload = multipartBundle(
+        buildBundleZip(encodeLegacyRisuSaveEnvelope({ characters: [], tag: 'obsolete-upload' })),
+      )
+      const pending = authedInject({
+        method: 'POST',
+        url: '/api/v1/import/bundle',
+        headers: { 'content-type': upload.contentType, [ACTIVE_WRITER_SESSION_HEADER]: 'writer-a' },
+        payload: upload.payload,
+      }).then((response) => response)
+      try {
+        await held
+        if (schedule === 'replacement') {
+          const replaced = await authedInject({
+            method: 'POST',
+            url: '/api/v1/import/risusave',
+            headers: { [ACTIVE_WRITER_SESSION_HEADER]: 'writer-a' },
+            payload: { database: { characters: [], tag: 'current-replacement' } },
+          })
+          expect(replaced.statusCode, replaced.body).toBe(200)
+        } else {
+          await authedInject({
+            method: 'GET',
+            url: '/api/v1/bootstrap',
+            headers: { [ACTIVE_WRITER_SESSION_HEADER]: 'writer-b' },
+          })
+          if (schedule === 'writer-return')
+            await authedInject({
+              method: 'GET',
+              url: '/api/v1/bootstrap',
+              headers: { [ACTIVE_WRITER_SESSION_HEADER]: 'writer-a' },
+            })
+        }
+        const read = () => {
+          const db = openDatabase(harness.dataDir)
+          try {
+            return {
+              ownership: getDatabaseOwnershipSnapshot(db),
+              state: loadPersistedWithMessages(db, harness.dataDir),
+              backups: listBackups(harness.dataDir),
+              events: db.prepare('SELECT * FROM command_events').all(),
+            }
+          } finally {
+            db.close()
+          }
+        }
+        const current = read()
+        release()
+        const response = await pending
+        expect(response.statusCode, response.body).toBe(503)
+        expect(response.json()).toMatchObject({ error: 'maintenance_busy' })
+        expect(read()).toEqual(current)
+        expect(fs.existsSync(uploadDir!)).toBe(false)
+      } finally {
+        release()
+        await pending
+      }
+    },
+  )
+
+  it('drains temporary upload files without publication after an actual HTTP disconnect', async () => {
+    const url = await harness.app.listen({ host: '127.0.0.1', port: 0 })
+    let entered!: () => void
+    let release!: () => void
+    const held = new Promise<void>((resolve) => {
+      entered = resolve
+    })
+    const resume = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let uploadDir: string | undefined
+    const original = fs.promises.mkdtemp.bind(fs.promises)
+    vi.spyOn(fs.promises, 'mkdtemp').mockImplementation(async (prefix) => {
+      const dir = await original(prefix)
+      if (String(prefix).includes('risu-import-')) {
+        uploadDir = dir
+        entered()
+        await resume
+      }
+      return dir
+    })
+    const disconnected = new Promise<void>((resolve) =>
+      harness.app.server.once('connection', (socket) => socket.once('close', () => resolve())),
+    )
+    const upload = multipartBundle(
+      buildBundleZip(encodeLegacyRisuSaveEnvelope({ characters: [], tag: 'aborted upload' })),
+    )
+    const controller = new AbortController()
+    const request = fetch(url + '/api/v1/import/bundle', {
+      method: 'POST',
+      headers: { 'risu-auth': assertion, 'content-type': upload.contentType },
+      body: upload.payload,
+      signal: controller.signal,
+    }).then(
+      () => 'unexpected success',
+      () => 'disconnected',
+    )
+    try {
+      await held
+      controller.abort()
+      expect(await request).toBe('disconnected')
+      await disconnected
+      release()
+      await vi.waitFor(() => expect(fs.existsSync(uploadDir!)).toBe(false))
+      await expectNoImportedAssetSideEffects(harness)
+      expect(listBackups(harness.dataDir)).toEqual([])
+    } finally {
+      release?.()
+      controller.abort()
+      await request
+    }
+  })
+
   it('stops local-backup decoding before staging when the request is already aborted', async () => {
     const bundlePath = path.join(harness.dataDir, 'aborted-before-decode.risu.zip')
     writeFileSync(bundlePath, buildBundleZip(encodeLegacyRisuSaveEnvelope({ characters: [] })))

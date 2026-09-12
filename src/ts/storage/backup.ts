@@ -1,3 +1,5 @@
+import { captureClientSessionGeneration } from '../clientSession'
+import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { alertError, alertNormal, alertWait } from '../alert'
 import { language } from '../../lang'
 import {
@@ -77,7 +79,10 @@ export async function saveZipBackupToDevice(options: BackupOperationOptions = {}
  * replaces the database, after which the local projection refreshes.
  */
 export async function loadBackupFromDevice(options: BackupOperationOptions = {}): Promise<BackupOperationStatus> {
+  const operation = captureClientSessionGeneration()
+  if (!isClientWriteOperationCurrent(operation)) return 'unavailable'
   const file = await selectBackupFile()
+  if (!isClientWriteOperationCurrent(operation)) return 'unavailable'
   if (!file) return 'cancelled'
 
   if (!options.onProgress) alertWait('Loading local backup...')
@@ -87,6 +92,7 @@ export async function loadBackupFromDevice(options: BackupOperationOptions = {})
     signal: options.signal,
     onProgress: options.onProgress,
   })
+  if (!isClientWriteOperationCurrent(operation)) return 'unavailable'
   if (result.status === 'ok') {
     const hasAssetCaveats = result.assetReport.missingCount > 0 || result.assetReport.orphanedCount > 0
     const assetResult = hasAssetCaveats

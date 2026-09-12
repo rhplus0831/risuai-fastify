@@ -238,6 +238,12 @@ Legacy record names are capped at 1,024 bytes, and a second
 `src/ts/server/backups.ts` uses the `x-risu-estimated-backup-bytes` progress
 header when present; UI-facing wrappers live in `src/ts/storage/backup.ts`.
 
+Upload admission captures database lineage and writer session/epoch. Both `.risu`
+and device-backup routes recheck that ownership after upload/decode and before
+taking the publication lease. A takeover, even one followed by return, or another
+completed replacement rejects the old upload without a new safety snapshot or
+live asset/database changes.
+
 Whole-database `.risu`, bundle, and legacy `.bin` imports reject group
 characters atomically with `422 unsupported-group-characters`. Block-envelope
 saves that contain standalone `CHAT` blocks import all supported blocks, skip
@@ -544,6 +550,10 @@ dropped without aborting the rewrite, and their character/index/settings keys
 are collected and logged while valid rows for surviving characters are
 rewritten.
 
+SQLite restore deletes the complete old table graph before copying any snapshot
+rows. Deferred foreign-key checks do not defer cascades; interleaving deletes
+and inserts would erase restored BardWiki children when live parent IDs match.
+
 `database_metadata` also remains live because restore rotates lineage/writer
 ownership, while lineage-scoped `command_mutation_receipts` are cleared rather
 than copied across the replacement boundary.
@@ -571,3 +581,18 @@ Restore and bundle import call `adoptReplacementDatabaseOwnership()` before a
 complete refresh. A changed lineage/writer epoch retires the old owner state
 and registered mutation settlements before the outbox admits writes against the
 replacement database.
+
+The Settings server-restore flow retires its passive progress display before
+showing backup selection. The selected-file import wrapper fences both picker
+continuations and result alerts by the initiating browser session. Confirmed
+restore/import responses remain explicitly qualified as accepted when ownership
+preparation or resource refresh fails; reload can recover the committed result
+without another import. A lost response is an unknown network outcome, and is
+never automatically retried as a replacement.
+
+Translation persistence checks the captured database lineage even when source
+IDs/text match. Process-local translation projections retire on lineage change.
+Memory/BardWiki provider results and worker callbacks also retain their original
+lineage; the next worker tick recovers running jobs restored from the snapshot.
+Existing provider deadlines/draining still bound active work before that tick;
+replacement does not add a second concurrent worker.

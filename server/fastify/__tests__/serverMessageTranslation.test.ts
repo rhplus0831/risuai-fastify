@@ -10,9 +10,14 @@ import { GreetingTranslationJobRegistry } from '../src/greetingTranslationJobs.j
 import { NON_DURABLE_REQUEST_DEADLINE_MS } from '../src/requestAbort.js'
 import { runServerGreetingTranslation } from '../src/translation/serverGreetingTranslation.js'
 import { getSchemaState } from '../src/db.js'
+import { getDatabaseLineage } from '../src/databaseLineage.js'
 import { openDatabase } from '../src/db.js'
 import { resolveActiveMessageLocationById } from '../src/messageStore.js'
 import {
+  applyImport,
+  createBackup,
+  restoreBackup,
+  loadPersistedWithMessages,
   loadCharacterSelectionRows,
   loadSettingsWithTranslatorPresetsFromSqlite,
   writePersistedWithMessages,
@@ -347,8 +352,8 @@ for (const family of ['message', 'greeting'] as const) {
         ],
       })
       writePersistedWithMessages(db, dataDir, { _version: 1, database, assets: [] })
-      const messageJobs = new MessageTranslationJobRegistry()
-      const greetingJobs = new GreetingTranslationJobRegistry()
+      const messageJobs = new MessageTranslationJobRegistry(() => getDatabaseLineage(db))
+      const greetingJobs = new GreetingTranslationJobRegistry(() => getDatabaseLineage(db))
       const eventSink = createCommandEventSink()
       return {
         jobs: () => (family === 'message' ? messageJobs.translations() : greetingJobs.translations()),
@@ -416,6 +421,45 @@ for (const family of ['message', 'greeting'] as const) {
         expect(harness.jobs()).toMatchObject([{ jobId: 'new-job', status: 'succeeded' }])
         expect(getSchemaState(db).revision).toBe(revision + 1)
         expect(vi.getTimerCount()).toBe(0)
+      },
+    )
+
+    it.each(['import', 'restore'] as const)(
+      'rejects a result from the replaced database after %s even with identical source IDs',
+      async (replacement) => {
+        const harness = setup()
+        const snapshot = loadPersistedWithMessages(db, dataDir).database
+        const backup = replacement === 'restore' ? await createBackup(db, dataDir, 'before translation') : null
+        let release!: () => void
+        serverTranslationMocks.dispatchChatProvider.mockImplementationOnce(async () => {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return textFrames('Obsolete lineage output')
+        })
+        const old = harness.run('old-lineage-job').then(
+          () => 'success',
+          () => 'failure',
+        )
+        try {
+          await vi.waitFor(() => expect(serverTranslationMocks.dispatchChatProvider).toHaveBeenCalledTimes(1))
+          if (backup) await restoreBackup(db, dataDir, backup.id)
+          else await applyImport(db, dataDir, snapshot)
+          const revision = getSchemaState(db).revision
+          expect(harness.jobs()).toEqual([])
+          release()
+          expect(await old).toBe('failure')
+          expect(getSchemaState(db).revision).toBe(revision)
+          expect(JSON.stringify(db.prepare('SELECT json FROM messages').all())).not.toContain('Obsolete lineage output')
+          expect(db.prepare('SELECT COUNT(*) AS count FROM greeting_translations').get()).toEqual({ count: 0 })
+          serverTranslationMocks.dispatchChatProvider.mockResolvedValueOnce(textFrames('Current lineage output'))
+          await expect(harness.run('current-lineage-job')).resolves.toMatchObject({
+            translation: { text: 'Current lineage output' },
+          })
+        } finally {
+          release?.()
+          await old
+        }
       },
     )
 

@@ -5,6 +5,35 @@ Targeted source checks: 2026-09-12 (paired import recovery, storage usage, and m
 
 This area covers content-addressed assets, metadata and garbage collection, local backup/restore, legacy database migration, current and legacy `.risu` codecs, ordinary and bundled import/export, inlay catalogs, and Realm character packages. `realmImport.test.ts` defines an additional stress case that is skipped in the normal server lane and enabled when that file is selected directly.
 
+## Replacement lifecycle verification
+
+`server/fastify/browser-smoke/importRestoreRecovery.spec.ts` drives real Settings
+file selection and server-backup selection against built Chromium/Fastify/SQLite.
+It covers invalid upload then explicit retry, committed response loss, failed
+replacement refresh then reload, writer takeover while the response is held,
+and server restore followed by a durable visible setting check. Each accepted
+upload asserts exactly one additional persisted import event. The retained
+`fastifyBrowserSmoke.spec.ts` local `.bin` download/upload journey complements
+this ZIP fixture; `visibleStateRecovery.spec.ts` covers old command/lineage recovery.
+
+Focused replacement schedules live in `risuSaveBundleImportRoute.test.ts`
+(actual HTTP disconnect and stale upload admission), `backupMaintenance.test.ts`
+(cancel/takeover during safety copying), and `backups.test.ts` (same-ID live
+parents with the complete BardWiki graph, directory/SQLite crash points).
+`serverMessageTranslation.test.ts`, `memoryEmbedJobHandler.test.ts`,
+`memorySummarizeJobHandler.test.ts`, `bardWikiApplyTurnHandler.test.ts`, and
+`bardWikiRebuildHandler.test.ts` hold provider results across actual replacement
+and verify no old output/status mutation plus current-work recovery.
+`durableGeneration.test.ts` retains real HTTP generation through import/restore
+with identical source IDs for modern and compatibility requests.
+
+`src/ts/server/backups.svelte-node.test.ts` qualifies accepted replacements when
+ownership preparation throws; `src/ts/storage/backup.test.ts` rejects stale result
+alerts. `bardWikiLifecycle.test.ts` imports a real encoded/decoded vault during
+queued source reconciliation, then verifies exact imported manual content survives
+the next full rebuild. Existing vault route tests own transaction/error atomicity.
+Fault injection and in-process SQLite reopen do not certify power-loss behavior.
+
 ## Content-addressed assets
 
 Storage usage is covered by `server/fastify/__tests__/storageUsage.test.ts`

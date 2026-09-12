@@ -5,7 +5,10 @@ import path from 'node:path'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 import { createInitialDatabase } from '../src/databaseDefaults.js'
 import { getSchemaState, openDatabase } from '../src/db.js'
-import { createCommandEventSink } from '../src/commands/events.js'
+import { applyTargetedCommandMutation } from '../src/commands/mutations.js'
+import { applyBardWikiVaultImport, encodeBardWikiVault, decodeBardWikiVault } from '../src/bardWikiVault.js'
+import { createBardWikiRebuildHandler, enqueueBardWikiRebuild } from '../src/bardWikiRebuildHandler.js'
+import { COMMAND_EVENT_CATALOG, createCommandEventSink } from '../src/commands/events.js'
 import { createBardWikiApplyTurnHandler } from '../src/bardWikiApplyTurnHandler.js'
 import { createBardWikiReconcileReceiptHandler } from '../src/bardWikiReconcileHandler.js'
 import { createOrReuseExplicitBardWikiConfirmation, hashBardWikiMessageContent } from '../src/bardWikiReceipts.js'
@@ -204,6 +207,71 @@ describe('BardWiki source lifecycle', () => {
       expect(getSchemaState(harness.db).revision).toBe(2)
     } finally {
       harness.db.close()
+    }
+  })
+
+  it('preserves a vault replacement through queued source reconciliation and the next full rebuild', async () => {
+    const harness = createHarness()
+    const source = createHarness()
+    try {
+      await harness.worker.tick()
+      await source.worker.tick()
+      const applied = getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)!
+      const target = getBardWikiDocument(harness.db, 'chat-a', applied.eventDocumentId!)!
+      const sourceReceipt = getBardWikiReceiptSummary(source.db, source.confirmation.receipt.id)!
+      const sourceDocument = getBardWikiDocument(source.db, 'chat-a', sourceReceipt.eventDocumentId!)!
+      const markdown = 'Imported manual correction that must survive reconciliation and rebuilding.'
+      updateBardWikiDocument(source.db, 'chat-a', sourceDocument.id, {
+        expectedVersion: sourceDocument.version,
+        expectedContentHash: sourceDocument.contentHash,
+        markdown,
+        commandRevision: 1,
+      })
+      const vault = decodeBardWikiVault(encodeBardWikiVault(source.db, 'chat-a'))
+      updateActiveMessageById(harness.db, 'user-a', { data: USER_TEXT + ' Changed source.' })
+      const revision = getSchemaState(harness.db).revision
+      applyTargetedCommandMutation({
+        db: harness.db,
+        dataDir: harness.dataDir,
+        baseRevision: revision,
+        eventSink: harness.eventSink,
+        mutationPath: 'targeted-bardwiki',
+        skipDatabaseLoad: true,
+        mutate(_database, db) {
+          const plan = applyBardWikiVaultImport(
+            db,
+            'chat-a',
+            vault,
+            'replace',
+            [{ documentId: target.id, version: target.version, contentHash: target.contentHash }],
+            revision + 1,
+          )
+          expect(plan.replacements).toBe(1)
+          return { event: { ...COMMAND_EVENT_CATALOG.bardWikiVaultImported, id: 'chat-a' } }
+        },
+      })
+      await harness.worker.tick()
+      const reviewed = getBardWikiDocument(harness.db, 'chat-a', target.id)!
+      expect(reviewed).toMatchObject({ markdown, reviewState: 'needs_review' })
+      const rebuild = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+      const worker = new BardWikiWorker({
+        db: harness.db,
+        handlers: {
+          rebuild_chat: createBardWikiRebuildHandler({
+            db: harness.db,
+            dataDir: harness.dataDir,
+            loadDatabase: () => createInitialDatabase(),
+            analyze: async () => EVENT_DRAFT,
+          }),
+        },
+      })
+      await worker.tick()
+      expect(getBardWikiJob(harness.db, rebuild.id)?.status).toBe('completed')
+      expect(getBardWikiDocument(harness.db, 'chat-a', target.id)).toEqual(reviewed)
+      expect(getBardWikiReceiptSummary(harness.db, applied.id)?.state).toBe('needs_review')
+    } finally {
+      harness.db.close()
+      source.db.close()
     }
   })
 

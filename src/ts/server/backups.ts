@@ -202,42 +202,51 @@ async function restoreServerBackupImplementation(input: {
       ...(restored.event ? { event: restored.event } : {}),
     }
   }
-  const { discarded: discardedPendingMutations } = await adoptReplacementDatabaseOwnership(restored)
+  let discardedPendingMutations = 0
+  try {
+    ;({ discarded: discardedPendingMutations } = await adoptReplacementDatabaseOwnership(restored))
 
-  reportProgress(input.onProgress, {
-    phase: 'resync',
-    message: 'Refreshing local state',
-    percent: 75,
-  })
-  if (!isClientWriteOperationCurrent(operation))
+    reportProgress(input.onProgress, {
+      phase: 'resync',
+      message: 'Refreshing local state',
+      percent: 75,
+    })
+    if (!isClientWriteOperationCurrent(operation))
+      return {
+        status: 'ok',
+        revision: restored.revision,
+        discardedPendingMutations,
+        ...(restored.event ? { event: restored.event } : {}),
+      }
+    const resync = await forceServerDatabaseReplacementRefresh('backup-restore')
+    if (resync.status !== 'ok') {
+      return {
+        status: 'error',
+        ...(discardedPendingMutations > 0 ? { discardedPendingMutations } : {}),
+        error:
+          resync.status === 'unavailable'
+            ? 'Backup restored, but server resource APIs are unavailable; reload to refresh local state.'
+            : `Backup restored, but resource refresh failed: ${resync.error}`,
+      }
+    }
+    if (isClientWriteOperationCurrent(operation)) await showLegacyMemoryMigrationNoticeAfterReplacement(operation)
+    reportProgress(input.onProgress, {
+      phase: 'complete',
+      message: 'Server backup loaded',
+      percent: 100,
+    })
     return {
       status: 'ok',
       revision: restored.revision,
       discardedPendingMutations,
       ...(restored.event ? { event: restored.event } : {}),
     }
-  const resync = await forceServerDatabaseReplacementRefresh('backup-restore')
-  if (resync.status !== 'ok') {
+  } catch (error) {
     return {
       status: 'error',
       ...(discardedPendingMutations > 0 ? { discardedPendingMutations } : {}),
-      error:
-        resync.status === 'unavailable'
-          ? 'Backup restored, but server resource APIs are unavailable; reload to refresh local state.'
-          : `Backup restored, but resource refresh failed: ${resync.error}`,
+      error: `Backup restored, but resource refresh failed: ${error instanceof Error ? error.message : String(error)}`,
     }
-  }
-  if (isClientWriteOperationCurrent(operation)) await showLegacyMemoryMigrationNoticeAfterReplacement(operation)
-  reportProgress(input.onProgress, {
-    phase: 'complete',
-    message: 'Server backup loaded',
-    percent: 100,
-  })
-  return {
-    status: 'ok',
-    revision: restored.revision,
-    discardedPendingMutations,
-    ...(restored.event ? { event: restored.event } : {}),
   }
 }
 
@@ -457,14 +466,41 @@ async function importServerBundleImplementation(input: {
       ...(imported.event ? { event: imported.event } : {}),
     }
   }
-  const { discarded: discardedPendingMutations } = await adoptReplacementDatabaseOwnership(imported)
+  let discardedPendingMutations = 0
+  try {
+    ;({ discarded: discardedPendingMutations } = await adoptReplacementDatabaseOwnership(imported))
 
-  reportProgress(input.onProgress, {
-    phase: 'resync',
-    message: 'Refreshing local state',
-    percent: 90,
-  })
-  if (!isClientWriteOperationCurrent(operation))
+    reportProgress(input.onProgress, {
+      phase: 'resync',
+      message: 'Refreshing local state',
+      percent: 90,
+    })
+    if (!isClientWriteOperationCurrent(operation))
+      return {
+        status: 'ok',
+        revision: imported.revision,
+        discardedPendingMutations,
+        assetReport: imported.assetReport,
+        skippedBlocks: imported.skippedBlocks,
+        ...(imported.event ? { event: imported.event } : {}),
+      }
+    const resync = await forceServerDatabaseReplacementRefresh('bundle-restore')
+    if (resync.status !== 'ok') {
+      return {
+        status: 'error',
+        ...(discardedPendingMutations > 0 ? { discardedPendingMutations } : {}),
+        error:
+          resync.status === 'unavailable'
+            ? 'Backup imported, but server resource APIs are unavailable; reload to refresh local state.'
+            : `Backup imported, but resource refresh failed: ${resync.error}`,
+      }
+    }
+    if (isClientWriteOperationCurrent(operation)) await showLegacyMemoryMigrationNoticeAfterReplacement(operation)
+    reportProgress(input.onProgress, {
+      phase: 'complete',
+      message: 'Local backup loaded',
+      percent: 100,
+    })
     return {
       status: 'ok',
       revision: imported.revision,
@@ -473,30 +509,12 @@ async function importServerBundleImplementation(input: {
       skippedBlocks: imported.skippedBlocks,
       ...(imported.event ? { event: imported.event } : {}),
     }
-  const resync = await forceServerDatabaseReplacementRefresh('bundle-restore')
-  if (resync.status !== 'ok') {
+  } catch (error) {
     return {
       status: 'error',
       ...(discardedPendingMutations > 0 ? { discardedPendingMutations } : {}),
-      error:
-        resync.status === 'unavailable'
-          ? 'Backup imported, but server resource APIs are unavailable; reload to refresh local state.'
-          : `Backup imported, but resource refresh failed: ${resync.error}`,
+      error: `Backup imported, but resource refresh failed: ${error instanceof Error ? error.message : String(error)}`,
     }
-  }
-  if (isClientWriteOperationCurrent(operation)) await showLegacyMemoryMigrationNoticeAfterReplacement(operation)
-  reportProgress(input.onProgress, {
-    phase: 'complete',
-    message: 'Local backup loaded',
-    percent: 100,
-  })
-  return {
-    status: 'ok',
-    revision: imported.revision,
-    discardedPendingMutations,
-    assetReport: imported.assetReport,
-    skippedBlocks: imported.skippedBlocks,
-    ...(imported.event ? { event: imported.event } : {}),
   }
 }
 

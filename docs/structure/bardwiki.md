@@ -121,7 +121,9 @@ per-chat request epoch: job transitions can share a domain revision, so an older
 read must not replace a newer terminal status merely because their revisions match.
 The same epoch covers workspace reads and invalidation refreshes.
 
-Full rebuilds preserve user-edited documents and their version history. If a prior
+Full rebuilds preserve user-edited documents, documents awaiting review, and
+their version history. This includes imported manual content whose latest
+version was written by system reconciliation to set `needs_review`. If a prior
 rebuild event identity is already owned by a preserved or deleted document, the
 new derived event gets a separate ID; later rebuilds reuse that new event through
 its receipt. Cancellation remains terminal for that job. A fresh preview/build is
@@ -192,3 +194,10 @@ assembly/memory, repository, memory worker/events/jobs, and request-history
 tests. Owning browser/client tests include the BardWiki protocol, settings,
 workspace/lazy boundary, command/resource/invalidation/job adapters, language
 packs, and `server/fastify/browser-smoke/bardWikiLifecycle.spec.ts`.
+
+Apply-turn and rebuild provider continuations check their captured database
+lineage before publication. Worker completion/retry callbacks cannot alter a
+restored job with the same ID, and the next tick recovers snapshot-running jobs.
+Vault import remains a per-chat document transaction: it neither rotates whole
+state lineage nor rewrites the source transcript. Exact replacement fences and
+normal source reconciliation protect imported edits.

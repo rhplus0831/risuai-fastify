@@ -19,7 +19,8 @@ import {
   listMemoryEmbeddings,
   listMemoryJobs,
 } from '../src/memoryRepository.js'
-import { writePersistedWithMessages } from '../src/repository.js'
+import { createInitialDatabase } from '../src/databaseDefaults.js'
+import { createBackup, restoreBackup, writePersistedWithMessages } from '../src/repository.js'
 import { assertScopedLoadOnHotPath } from './helpers/loadCostHarness.js'
 
 const dataDirs: string[] = []
@@ -582,6 +583,54 @@ describe('embed memory job handler', () => {
       db.close()
     }
   })
+
+  it.each(['single', 'batch'] as const)(
+    'fences %s embeddings across restore and recovers a running snapshot',
+    async (mode) => {
+      const dataDir = makeDataDir()
+      const db = openDatabase(dataDir)
+      writePersistedWithMessages(db, dataDir, { _version: 1, database: createInitialDatabase(), assets: [] })
+      seedChunkAndJob(db)
+      let release!: () => void
+      const embed = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          return { model: 'custom', vectors: [new Float32Array([9, 9])], dim: 2 }
+        })
+        .mockResolvedValue({ model: 'custom', vectors: [new Float32Array([1, 2])], dim: 2 })
+      const options = { db, loadDatabase: database, sleep: async () => {}, embed }
+      const worker = new MemoryWorker({
+        db,
+        retry: { backoffBaseMs: 0 },
+        ...(mode === 'single'
+          ? { handlers: { embed: createEmbedMemoryJobHandler(options) } }
+          : { batchHandlers: { embed: createEmbedMemoryJobBatchHandler(options) } }),
+      })
+      const old = worker.tick()
+      try {
+        await vi.waitFor(() => expect(embed).toHaveBeenCalledOnce())
+        const backup = await createBackup(db, dataDir, 'running embedding')
+        await restoreBackup(db, dataDir, backup.id)
+        const restored = getMemoryJob(db, 'job-1')
+        release()
+        await old
+        expect(getMemoryJob(db, 'job-1')).toEqual(restored)
+        expect(listMemoryEmbeddings(db, { chatId: 'chat-1' })).toEqual([])
+        await worker.tick()
+        expect(getMemoryJob(db, 'job-1')?.status).toBe('completed')
+        expect(listMemoryEmbeddings(db, { chatId: 'chat-1' })).toHaveLength(1)
+        expect(embed).toHaveBeenCalledTimes(2)
+      } finally {
+        release?.()
+        await old
+        await worker.stop()
+        db.close()
+      }
+    },
+  )
 
   it.each(['success', 'failure'] as const)(
     'retires an abort-insensitive embedding request and ignores its late %s after a sibling and recreated instance complete',

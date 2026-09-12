@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { getSchemaState } from '../db.js'
+import { assertDatabaseLineage, getDatabaseLineage } from '../databaseLineage.js'
 import { COMMAND_EVENT_CATALOG, type CommandEventOrigin, type CommandEventSink } from '../commands/events.js'
 import { applyTargetedCommandMutation, type CommandMutationReceiptKey } from '../commands/mutations.js'
 import type { GreetingTranslationJobHandle, GreetingTranslationJobRegistry } from '../greetingTranslationJobs.js'
@@ -116,6 +117,7 @@ export async function runServerGreetingTranslation(input: RunServerGreetingTrans
   const { signal, cleanup } = createDetachedAbort()
   let translationJob: GreetingTranslationJobHandle | undefined
   try {
+    const databaseLineage = getDatabaseLineage(input.db)
     const character = readCharacter(input.db, input.dataDir, input.characterId)
     const chat = readCharacterChat(character, input.chatId)
     const source = readGreetingSource(character, input.characterId, input.greetingIndex)
@@ -148,6 +150,7 @@ export async function runServerGreetingTranslation(input: RunServerGreetingTrans
       },
     })
 
+    assertDatabaseLineage(input.db, databaseLineage)
     const result = applyTargetedCommandMutation<{
       characterId: string
       chatId: string

@@ -1,3 +1,4 @@
+import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { decodeProviderGenerationSettings } from './prompt/generationInputDecoder.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
@@ -154,6 +155,7 @@ export function createBardWikiRebuildHandler(options: BardWikiRebuildHandlerOpti
     Math.min(BARDWIKI_REBUILD_BATCH_SIZE, Math.trunc(options.batchSize ?? BARDWIKI_REBUILD_BATCH_SIZE)),
   )
   return async (job: BardWikiJob, context: BardWikiJobHandlerContext): Promise<BardWikiJobHandlerResult> => {
+    const lineage = getDatabaseLineage(options.db)
     if (job.kind !== 'rebuild_chat') throw invalidJob('Expected rebuild_chat job')
     const payload = job.payload as BardWikiRebuildChatJobPayload
     if (payload.chatId !== job.chatId) throw invalidJob('Rebuild chat id does not match its job')
@@ -178,10 +180,12 @@ export function createBardWikiRebuildHandler(options: BardWikiRebuildHandlerOpti
       const sourceOrdinal = payload.sourceCursor + index
       const source = batch[index]
       const draft = await analyzeSource(options, analyze, database, settings, job, source, context)
+      assertDatabaseLineage(options.db, lineage)
       options.hooks?.afterProvider?.(sourceOrdinal)
       staged.push({ sourceOrdinal, source: stageSource(source), draft })
     }
     options.hooks?.beforeCheckpoint?.(payload.sourceCursor)
+    assertDatabaseLineage(options.db, lineage)
     return checkpointBatch(options, job, payload, staged)
   }
 }
@@ -344,7 +348,7 @@ function publishStagingInOpenTransaction(
     const receipt = findExactReceipt(db, job.chatId, change.source)
     const document = receipt?.eventDocumentId ? getBardWikiDocument(db, job.chatId, receipt.eventDocumentId) : null
     const latest = document ? listBardWikiDocumentVersions(db, document.id, 1)[0] : undefined
-    if (receipt && document && latest && latest.actor !== 'user') {
+    if (receipt && document && document.reviewState !== 'needs_review' && latest && latest.actor !== 'user') {
       reusable.set(change.sourceOrdinal, { receiptId: receipt.id, document })
     }
   }
@@ -352,7 +356,7 @@ function publishStagingInOpenTransaction(
     const reuseIds = new Set([...reusable.values()].map(({ document }) => document.id))
     for (const document of listBardWikiDocuments(db, job.chatId)) {
       const latest = listBardWikiDocumentVersions(db, document.id, 1)[0]
-      if (latest && latest.actor !== 'user' && !reuseIds.has(document.id)) {
+      if (document.reviewState !== 'needs_review' && latest && latest.actor !== 'user' && !reuseIds.has(document.id)) {
         deleteBardWikiDocument(db, job.chatId, document.id, {
           expectedVersion: document.version,
           expectedContentHash: document.contentHash,

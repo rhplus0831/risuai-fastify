@@ -1,3 +1,5 @@
+import { resetClientSessionForTests } from '../clientSession'
+import { setManagedWriterForTest, demoteAndRepromoteForTest } from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const serverBackupState = vi.hoisted(() => ({
@@ -34,6 +36,7 @@ function selectBackupFile() {
 }
 
 beforeEach(() => {
+  resetClientSessionForTests()
   serverBackupState.createServerBackup.mockClear()
   serverBackupState.importServerBundle.mockReset()
   alertState.alertError.mockClear()
@@ -52,6 +55,31 @@ describe('Fastify backup storage gates', () => {
     expect(serverBackupState.createServerBackup).toHaveBeenCalledWith({ label: 'Manual backup' })
     expect(alertState.alertWait).toHaveBeenCalledWith('Saving server backup...')
     expect(alertState.alertNormal).toHaveBeenCalledWith('Server backup saved')
+  })
+
+  it.each(['ok', 'error'] as const)('does not publish a late %s alert after writer replacement', async (status) => {
+    setManagedWriterForTest()
+    selectBackupFile()
+    let release!: (value: unknown) => void
+    serverBackupState.importServerBundle.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = resolve
+      }),
+    )
+    const pending = loadBackupFromDevice()
+    await vi.waitFor(() => expect(serverBackupState.importServerBundle).toHaveBeenCalledOnce())
+    demoteAndRepromoteForTest()
+    release({
+      status,
+      error: 'old error',
+      revision: 2,
+      discardedPendingMutations: 0,
+      assetReport: cleanAssetReport,
+      skippedBlocks: [],
+    })
+    await pending
+    expect(alertState.alertNormal).not.toHaveBeenCalled()
+    expect(alertState.alertError).not.toHaveBeenCalled()
   })
 
   it('shows a localized success result for a clean import', async () => {

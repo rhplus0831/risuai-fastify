@@ -4040,6 +4040,69 @@ describe('Durable generation', () => {
 
   // If the target chat is gone at completion, persistence fails gracefully with a
   // job error and no bad write.
+  it.each(['modern-import', 'modern-restore', 'compatibility-import', 'compatibility-restore'] as const)(
+    'isolates a live %s generation from an identical-source database replacement',
+    async (schedule) => {
+      const gated = makeGatedProvider({ before: 'Obsolete', after: ' generation output' })
+      providerImpl = gated.dispatchProvider
+      const authority = await operationAuthority()
+      const controller = newController()
+      let stream: Response
+      if (schedule.startsWith('modern')) {
+        const response = await postAtomicOperation(
+          authority.databaseLineage,
+          atomicSendRequest({
+            operationId: randomUUID(),
+            acceptedMessageId: randomUUID(),
+            baseRevision: authority.revision,
+          }),
+        )
+        expect(response.status).toBe(201)
+        const accepted = (await response.json()) as AtomicOperationResponse
+        stream = await fetch(harness.baseUrl + accepted.stream!.href, {
+          headers: authHeaders(),
+          signal: controller.signal,
+        })
+      } else stream = await postDurable({}, { signal: controller.signal })
+      try {
+        await readSse(stream, (event) => event.type === 'token')
+        const snapshot = await bootstrap()
+        if (schedule.endsWith('restore')) {
+          const saved = await harness.app.inject({
+            method: 'POST',
+            url: '/api/v1/backups',
+            headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
+            payload: { label: 'live generation' },
+          })
+          expect(saved.statusCode, saved.body).toBe(201)
+          const restored = await harness.app.inject({
+            method: 'POST',
+            url: `/api/v1/backups/${saved.json().id}/restore`,
+            headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
+          })
+          expect(restored.statusCode, restored.body).toBe(200)
+        } else {
+          const imported = await harness.app.inject({
+            method: 'POST',
+            url: '/api/v1/import/risusave',
+            headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
+            payload: { database: snapshot.database },
+          })
+          expect(imported.statusCode, imported.body).toBe(200)
+        }
+        const before = await bootstrap()
+        gated.release()
+        await waitFor(async () => ((await bootstrap()).activeGenerationJobs.length === 0 ? true : undefined))
+        const after = await bootstrap()
+        expect(await chatMessages(after)).toEqual(await chatMessages(before))
+        expect(JSON.stringify(await chatMessages(after))).not.toContain('Obsolete generation output')
+      } finally {
+        gated.release()
+        controller.abort()
+      }
+    },
+  )
+
   it('records a job error when the target chat vanishes mid-generation (gotcha C)', async () => {
     const gated = makeGatedProvider({ before: 'Hel', after: 'lo' })
     providerImpl = gated.dispatchProvider

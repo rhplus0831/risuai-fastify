@@ -40,11 +40,26 @@ export class GreetingTranslationJobRegistry {
   private readonly activeByTarget = new Map<string, ActiveGreetingTranslationEntry>()
   private readonly terminalByTarget = new Map<string, GreetingTranslationJob>()
 
+  private lineage: string | undefined
+
+  constructor(private readonly readLineage?: () => string) {
+    this.lineage = readLineage?.()
+  }
+
+  private retireReplacedLineage(): void {
+    const lineage = this.readLineage?.()
+    if (lineage === this.lineage) return
+    this.lineage = lineage
+    this.activeByTarget.clear()
+    this.terminalByTarget.clear()
+  }
+
   register(
     input: Pick<GreetingTranslationJob, 'characterId' | 'chatId' | 'greetingIndex' | 'settingsHash'> & {
       jobId?: string
     },
   ): GreetingTranslationJobHandle {
+    this.retireReplacedLineage()
     const key = targetKey(input)
     const token = randomUUID()
     const jobId = input.jobId ?? randomUUID()
@@ -60,13 +75,17 @@ export class GreetingTranslationJobRegistry {
     })
     return {
       jobId,
-      isCurrent: () => this.activeByTarget.get(key)?.token === token,
+      isCurrent: () => {
+        this.retireReplacedLineage()
+        return this.activeByTarget.get(key)?.token === token
+      },
       succeed: () => this.complete(key, token, { status: 'succeeded' }),
       fail: (error) => this.complete(key, token, { status: 'failed', error: safeTranslationError(error) }),
     }
   }
 
   translations(): GreetingTranslationJob[] {
+    this.retireReplacedLineage()
     this.pruneTerminalJobs()
     return [
       ...[...this.activeByTarget.values()].map(({ token: _token, ...job }) => job),
@@ -93,6 +112,7 @@ export class GreetingTranslationJobRegistry {
     token: string,
     terminal: { status: 'succeeded' } | { status: 'failed'; error: string },
   ): void {
+    this.retireReplacedLineage()
     const active = this.activeByTarget.get(key)
     if (!active || active.token !== token) return
     this.activeByTarget.delete(key)

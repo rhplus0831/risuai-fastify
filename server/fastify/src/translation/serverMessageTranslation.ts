@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { getSchemaState } from '../db.js'
+import { assertDatabaseLineage, getDatabaseLineage } from '../databaseLineage.js'
 import {
   EntityNotFoundError,
   ValidationError,
@@ -68,6 +69,7 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
   const { signal, cleanup } = createDetachedAbort()
   let translationJob: MessageTranslationJobHandle | undefined
   try {
+    const databaseLineage = getDatabaseLineage(input.db)
     const source = readLiveMessageSource(input.db, input.messageId)
     translationJob = input.messageTranslationJobs?.register({
       chatId: source.chatId,
@@ -121,6 +123,7 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
       },
     })
 
+    assertDatabaseLineage(input.db, databaseLineage)
     const result = applyTargetedCommandMutation<{
       chatId: string
       messageId: string

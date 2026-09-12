@@ -4,12 +4,13 @@ Updated: 2026-09-12.
 
 ## Current Cursor
 
-- State: **Phases 01–05 complete. Phase 06 is next.**
+- State: **All six phases complete. Audit archived.**
 - Planning work: complete, including source grounding, independent review,
   corrections, and documentation validation.
-- Next action: read [Phase 06](phases/06-import-and-restore.md), recheck source/worktree,
-  and inventory import/restore replacement and publication boundaries using
-  disposable database-lineage fixtures. Phase 05 is complete and uncommitted.
+- Next action: none required. Optional depth follow-ups are listed below and
+  in the [Phase 06 closeout](phases/06-import-and-restore.md#completion-limits-and-closeout).
+- Phase 06 baseline: `6731c2aa2`, clean worktree at entry. This commit records
+  completed Phase 05; Phase 06 implementation and this archive are committed together.
 - Phase 05 baseline: `86d07b1da`, clean worktree at entry.
 - Phase 04 baseline: `960a2f336dcab751692cdac0d87d04ac3377daa4`, clean worktree at entry.
   This commit records the completed Phase 03 patch before Phase 04 began.
@@ -19,12 +20,12 @@ Updated: 2026-09-12.
   patch was committed as `a449e97908d41aed7f04442c260f0ce56194dd43` before Phase 03.
 - Phase 01 execution baseline: `dc96708c798b3653ca73b501227649acd0753dfb`.
   Planning runtime baseline: `e93a74236d3e66a928cdd44c4e6d73a086aae515`.
-  Recheck current source and working changes before beginning the next phase.
+  Recheck source drift before reusing these historical verification results.
 
 ## Document Map
 
 - [PLAN.md](PLAN.md): scope, method, dependencies, validation, completion rules.
-- [Active plans](../README.md): repository planning index.
+- [Active plans](../../../docs/plan/README.md): repository planning index.
 - Phase documents below: workflow-specific contracts, owner/test pointers, and
   evidence ledgers. Detailed results belong there rather than in this summary.
 
@@ -38,7 +39,7 @@ Updated: 2026-09-12.
 | [03 — Outbox and optimistic edits](phases/03-outbox-and-optimistic-edits.md) | Complete | O1–O6 verified; five demonstrated defects repaired; broader validation lanes and all 20 selected browser journeys passed. |
 | [04 — Resource hydration](phases/04-resource-hydration.md) | Complete | H1–H6 verified; three reproduced defects repaired; all broader validation lanes and 28 selected Chromium journeys passed. |
 | [05 — Background jobs](phases/05-background-jobs.md) | Complete | J1–J7 verified per family; six reproduced findings repaired; all seven broader lanes and 20 selected Chromium journeys passed. |
-| [06 — Import and restore](phases/06-import-and-restore.md) | Not started | Verify replacement/publication boundaries in disposable data. |
+| [06 — Import and restore](phases/06-import-and-restore.md) | Complete | I1–I6 verified; eight reproduced findings repaired; all seven broader lanes and 14 selected Chromium journeys passed. |
 
 Use `Not started`, `Assessing`, `Improving`, `Validating`, `Blocked`, or `Complete`
 for execution state. Mark a phase complete only under the plan's evidence rules.
@@ -152,7 +153,36 @@ This table's states are separate from whether the planning documents are verifie
 - The harness opts into the real memory worker with a local deterministic HTTP
   provider. Translation/BardWiki use actual default orchestration and SQLite.
   This does not certify external provider behavior or external-process crashes.
-- Phase 05 changes remain uncommitted on `86d07b1da`; Phase 06 is unstarted.
+- Phase 05 is committed as `6731c2aa2`; all six phases are complete.
+
+## Phase 06 Execution Evidence
+
+- [Phase 06 ledger](phases/06-import-and-restore.md#bounded-entry-and-commit-map):
+  supported replacement paths, I1–I6 matrix, eight reproduced findings, commands,
+  candidate dispositions, and final limits.
+- Fixed stale upload publication, cascading deletion of restored children,
+  translation output/projections crossing lineage, stale memory/BardWiki worker
+  mutations, lost acceptance qualification, stale import alerts, deletion of
+  imported content awaiting review, and the blocked server-backup selection dialog.
+- Added actual upload-disconnect, restore cancellation/takeover, identical-source
+  generation/translation, restored running-worker, and vault/rebuild compositions.
+  Retained useful existing assertions and expanded full-graph round trips to cover
+  both retained and deleted live parents.
+- `pnpm test:agent` passed all seven lanes: **9,554 frontend** and **4,419 server
+  tests**, with three existing skips in each suite outside required evidence.
+  Frontend checks report zero errors/warnings. Shared SQLite replacement, worker
+  lifecycle, and browser adoption/UI changes justified the broader run.
+- All **14 selected Chromium journeys passed** on the final runtime build: five
+  new import/restore cases, four background-job cases, four visible-state recovery
+  cases, and the retained `.bin` backup round trip. The new journeys verify actual
+  file picking, ambiguous acceptance/reload, writer takeover, and server selection.
+- Current docs (51 files), explicit archived package/index validation (nine files),
+  scoped formatting and whitespace checks passed. No required Phase 06 evidence
+  gap remains. The completed package is archived and the active-plan index updated.
+- Phase 06 was validated on `6731c2aa2` plus its implementation patch and is
+  committed with this archive. No production/human data was used.
+  Existing provider deadlines/draining remain: restored jobs recover on the next
+  tick after obsolete provider work drains; lineage checks prevent its writes.
 
 ## Planning Evidence
 
@@ -173,7 +203,7 @@ This table's states are separate from whether the planning documents are verifie
 - Scoped Prettier and whitespace checks passed. Formatting used
   `--ignore-path /dev/null` because the normal ignore file excludes Markdown.
   Compact tables use local Prettier ignore comments.
-- Runtime tests/browser journeys were not run during planning; Phase 01–05 execution
+- Runtime tests/browser journeys were not run during planning; Phase 01–06 execution
   results are recorded above.
 
 ## Decisions and Boundaries
@@ -188,6 +218,8 @@ This table's states are separate from whether the planning documents are verifie
   Phase 04 fixes hydration settlement, snapshot age before apply and reader focus,
   with native navigation/cache/gap evidence. Phase 05 fixes background-job
   deadlines, terminal recovery and rebuild identity, with real-worker browser evidence.
+  Phase 06 fixes import/restore publication, lineage retirement, restored graphs,
+  reviewed vault content, and visible backup recovery; the package is complete.
 - Phase 01 reproduced one runtime defect under an induced snapshot-read failure in
   disposable SQLite: SSE subscriptions survived HTTP 500. It is fixed; this is
   not a claim of an observed external production incident.
@@ -197,11 +229,19 @@ This table's states are separate from whether the planning documents are verifie
 ## Open Items
 
 - No unresolved planning-review findings.
-- Phases 01–05 are complete; Phase 06 is unstarted.
-- External-process crash/power-loss verification remains an optional Phase 02
-  follow-up; repeated in-process restarts do not certify those conditions.
+- All six bounded phases are complete; no unresolved in-scope finding or required
+  evidence gap remains. This does not certify the entire application as bug-free.
+- Process-recovery follow-up: external-process crash/power-loss remains unverified;
+  repeated in-process restarts and exception/reopen fixtures do not certify it.
+  Next action: a disposable subprocess harness that kills at each journal phase
+  and checks database/assets/save coherence after reopen.
 - Physical-device suspension and non-Chromium behavior remain an explicit optional
-  device follow-up; Chromium emulation does not verify them.
+  device follow-up; Chromium emulation does not verify them. Next action: repeat
+  the selected recovery journeys on physical mobile and a non-Chromium browser.
+- Provider/performance follow-up: deterministic providers and selected compatibility
+  journeys do not certify external model behavior or the full scale/performance
+  matrix. Next action: the existing matrices with representative disposable data
+  and selected provider integrations. `pnpm test:all` was not requested or run.
 
 ## Independent Review Corrections
 

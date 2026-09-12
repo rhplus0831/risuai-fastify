@@ -11,7 +11,7 @@ their actual callers separately; determine reachable paths before prescribing
 compatibility coverage. Preserve existing hard failures for unsupported shapes.
 
 Guides: [generation client](../../../../src/docs/generation-client.md) and
-[generation tests](../../../tests/prompting-generation-and-streaming.md).
+[generation tests](../../../../docs/tests/prompting-generation-and-streaming.md).
 
 <!-- prettier-ignore -->
 | Boundary | Source owners | Existing tests |

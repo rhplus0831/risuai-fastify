@@ -11,9 +11,9 @@ distinct contracts in each family; shared worker structure alone cannot prove
 equivalent lifecycle behavior. Broader provider conformance and memory-quality
 evaluation are outside this lifecycle audit.
 
-Guides: [translation](../../../structure/translation-and-input-hooks.md),
-[BardWiki](../../../structure/bardwiki.md), and
-[memory tests](../../../tests/memory-and-embeddings.md).
+Guides: [translation](../../../../docs/structure/translation-and-input-hooks.md),
+[BardWiki](../../../../docs/structure/bardwiki.md), and
+[memory tests](../../../../docs/tests/memory-and-embeddings.md).
 
 <!-- prettier-ignore -->
 | Family | Source owners | Existing tests |
@@ -261,20 +261,19 @@ Only disposable SQLite/native browser fixtures are used. Reopen/reconstructed
 workers are in-process restart evidence, not external crash/power-loss testing.
 External provider service behavior, model quality, physical suspension,
 non-Chromium platforms and the full performance matrix are outside this bounded
-validation. No manual dev server was started. Phase 06 remains unstarted.
+validation. No manual dev server was started. Phase 06 was unstarted at this handoff.
 
 ### Final handoff
 
 J1–J7 are complete under each family's supported persistence and cancellation
 contract. The six demonstrated in-scope findings are repaired; no required
-acceptance gap remains. Phase 05 runtime/tests/docs are uncommitted on
-`86d07b1da7e39bff9f0ac0f9769f0697724c507c`. Relevant checks must be rerun if those
+acceptance gap remains. Phase 05 runtime/tests/docs were subsequently committed as `6731c2aa2`
+before Phase 06 began. Relevant checks must be rerun if those
 sources change; ephemeral logs above supplement the checked-in cases and ledger.
 
-Next phase: read [Phase 06](06-import-and-restore.md), recheck `git status --short`
-and source at entry, then inventory import/restore replacement and publication
-boundaries. Use isolated database lineage/publication fixtures and disposable
-storage for that work. Phase 06 has not been started. Physical suspension and
+The handoff next action was [Phase 06](06-import-and-restore.md), using isolated
+database lineage/publication fixtures and disposable storage. The current overall
+cursor belongs to [status](../status.md). Physical suspension and
 non-Chromium verification belong to the optional device follow-up (repeat the
 native recovery journeys there); external crash/power-loss depth belongs to the
 optional process-recovery follow-up (stop/restart a disposable external server at

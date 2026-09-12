@@ -1,3 +1,4 @@
+import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { decodeMemoryGenerationSettings } from './prompt/generationInputDecoder.js'
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
@@ -59,6 +60,7 @@ export function createSummarizeMemoryJobHandler(
   const acquireRateLimit = createSummaryRateLimiter(opts)
 
   return async (job: MemoryJob, context?: MemoryJobHandlerContext): Promise<void> => {
+    const lineage = getDatabaseLineage(opts.db)
     if (job.kind !== 'summarize') {
       throw new Error(`summarize handler received ${job.kind} job`)
     }
@@ -74,6 +76,7 @@ export function createSummarizeMemoryJobHandler(
       acquireRateLimit,
       signal: context?.signal,
     })
+    assertDatabaseLineage(opts.db, lineage)
     if (result.kind === 'existing') return
     const currentJob = getMemoryJob(opts.db, job.id)
     if (currentJob?.status !== 'pending' && currentJob?.status !== 'running') return
@@ -86,6 +89,7 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
   const acquireRateLimit = createSummaryRateLimiter(opts)
 
   return async (firstJob, context): Promise<void> => {
+    const lineage = getDatabaseLineage(opts.db)
     const database = resolveChatBoundMemoryDatabase(loadDatabase(opts, firstJob.chatId), firstJob.chatId)
     const settings = resolveHypaV3Settings(database)
     const maxConcurrent = Math.max(1, settings.summarizationMaxConcurrent)
@@ -102,6 +106,7 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
     const orderedJobs = [...jobs].sort(compareSummarizeJobs)
     await runWithConcurrency(orderedJobs, maxConcurrent, async (job) => {
       try {
+        assertDatabaseLineage(opts.db, lineage)
         const result = await executeSummarizeJob({
           opts,
           job,
@@ -111,6 +116,7 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
           acquireRateLimit,
           signal: context.signalFor(job.id),
         })
+        assertDatabaseLineage(opts.db, lineage)
         if (getMemoryJob(opts.db, job.id)?.status !== 'running') {
           return
         }
@@ -187,7 +193,9 @@ async function executeSummarizeJob(input: {
     settings: input.settings,
     isResummarize: false,
   })
+  const lineage = getDatabaseLineage(input.opts.db)
   await input.acquireRateLimit(input.settings)
+  assertDatabaseLineage(input.opts.db, lineage)
   if (input.signal?.aborted) {
     throw input.signal.reason instanceof Error ? input.signal.reason : new Error('memory job cancelled')
   }
@@ -235,7 +243,11 @@ async function executeSummarizeJob(input: {
     }
   } catch (error) {
     const current = getMemoryJob(input.opts.db, input.job.id)
-    if (current?.instanceId === input.job.instanceId && current.status === 'running') {
+    if (
+      getDatabaseLineage(input.opts.db) === lineage &&
+      current?.instanceId === input.job.instanceId &&
+      current.status === 'running'
+    ) {
       markChunkFailed(input.opts.db, chunk.id)
     }
     completeRequestHistory(historyHandle, {
@@ -246,6 +258,7 @@ async function executeSummarizeJob(input: {
   } finally {
     abortScope.dispose()
   }
+  assertDatabaseLineage(input.opts.db, lineage)
   if ('error' in summary) {
     markChunkFailed(input.opts.db, chunk.id)
     throw new Error(summary.error)

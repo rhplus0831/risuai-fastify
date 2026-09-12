@@ -4,7 +4,7 @@ Created: 2026-09-12.
 
 Start at [status](status.md) for execution state and the next action. This plan
 defines intended audit work; current source and the
-[architecture index](../../structure/README.md) remain authoritative for shipped
+[architecture index](../../../docs/structure/README.md) remain authoritative for shipped
 behavior. The planning request does not start runtime implementation.
 
 ## Objective
@@ -154,7 +154,7 @@ coverage. Preserve distinct failure schedules even if they share a helper.
 ## Validation Policy
 
 Follow [AGENTS.md](../../../AGENTS.md#test-workflow) and the canonical
-[testing guide](../../structure/testing-and-operations.md). Phase documents name
+[testing guide](../../../docs/structure/testing-and-operations.md). Phase documents name
 candidate owners; select commands by the changes and contracts actually involved.
 
 - For this planning change, run `pnpm check:docs`, explicitly validate all new

@@ -392,7 +392,9 @@ BardWiki lane is chat-fair and cannot occupy the Hypa single-flight lane.
 Embed/summarize provider deadlines settle the worker boundary even if a dependency
 ignores abort. Late results cannot reach persistence, while independent siblings
 and later attempts continue. Summary failure marking checks the captured job
-instance before touching its chunk. The browser memory-job controller retains
+instance and database lineage before touching its chunk. Memory/BardWiki
+handlers and worker completion/retry callbacks reject replaced lineages; the
+next tick recovers snapshot-running jobs before claiming current work. The browser memory-job controller retains
 polling through transient list failures while active jobs remain, then stops after
 terminal reconciliation.
 Shutdown first closes maintenance admission and signals cooperative cancellation

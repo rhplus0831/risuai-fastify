@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { getDatabaseLineage } from './databaseLineage.js'
 import {
   claimNextMemoryJob,
   completeMemoryJob,
@@ -78,9 +79,11 @@ export class MemoryWorker {
   private readonly chatLastServedAt = new Map<string, number>()
   private readonly runningJobAbortControllers = new Map<string, AbortController>()
   private serveSequence = 0
+  private databaseLineage: string
 
   constructor(opts: MemoryWorkerOptions) {
     this.db = opts.db
+    this.databaseLineage = getDatabaseLineage(this.db)
     this.pollIntervalMs = normalizePollIntervalMs(opts.pollIntervalMs)
     this.handlers = {
       chunk: noopMemoryJobHandler,
@@ -156,6 +159,12 @@ export class MemoryWorker {
 
   async tick(): Promise<boolean> {
     if (this.inFlight) return false
+    const lineage = getDatabaseLineage(this.db)
+    if (lineage !== this.databaseLineage) {
+      this.databaseLineage = lineage
+      this.chatLastServedAt.clear()
+      for (const job of recoverRunningMemoryJobs(this.db, this.retry)) this.emitJob(job)
+    }
     this.maybeRunRetentionSweep()
     const task = this.processOne()
     this.inFlight = task
@@ -233,6 +242,8 @@ export class MemoryWorker {
   private async processOne(): Promise<boolean> {
     const job = this.claimNextJobFairly()
     if (!job) return false
+    const lineage = getDatabaseLineage(this.db)
+    const current = () => getDatabaseLineage(this.db) === lineage
     const registeredJobs = new Map<string, AbortController>()
     const registerRunningJob = (runningJob: MemoryJob): AbortController => {
       const controller = new AbortController()
@@ -250,6 +261,7 @@ export class MemoryWorker {
           signal: jobAbortController.signal,
           signalFor: (jobId) => registeredJobs.get(jobId)?.signal ?? AbortSignal.abort('memory job is not running'),
           claimNext: (filter) => {
+            if (!current()) return null
             const claimed =
               this.retry.now === undefined
                 ? claimNextMemoryJob(this.db, filter)
@@ -261,11 +273,13 @@ export class MemoryWorker {
             return claimed
           },
           complete: (jobId) => {
+            if (!current()) return null
             const completed = completeMemoryJob(this.db, jobId)
             if (completed) this.emitJob(completed)
             return completed
           },
           retryOrFail: (jobId, error) => {
+            if (!current()) return null
             const failedOrRetried = retryOrFailMemoryJob(this.db, jobId, error, this.retry)
             if (failedOrRetried) this.emitJob(failedOrRetried)
             return failedOrRetried
@@ -275,12 +289,14 @@ export class MemoryWorker {
       }
 
       await this.handlers[job.kind](job, { signal: jobAbortController.signal })
+      if (!current()) return true
       const completed = completeMemoryJob(this.db, job.id)
       if (completed) {
         this.emitJob(completed)
       }
       return true
     } catch (error) {
+      if (!current()) return true
       const message = error instanceof Error && error.message ? error.message : String(error)
       const failedOrRetried = retryOrFailMemoryJob(this.db, job.id, message || 'memory job handler failed', this.retry)
       if (failedOrRetried) {

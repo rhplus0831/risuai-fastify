@@ -5131,11 +5131,13 @@ function restoreSqliteFromBackup(
            WHERE id = 1`,
         )
       }
+      // Delete the entire old graph before inserting any snapshot rows. Parent
+      // deletes cascade immediately even with deferred foreign-key validation.
+      for (const table of SQLITE_BACKUP_TABLES) db.exec(`DELETE FROM main.${table}`)
       for (const table of SQLITE_BACKUP_TABLES) {
         // Verify the table exists in the backup; older snapshots may predate
         // memory tables.
         const exists = db.prepare(`SELECT name FROM bak.sqlite_master WHERE type = 'table' AND name = ?`).get(table)
-        db.exec(`DELETE FROM main.${table}`)
         if (exists) {
           if (table === 'generation_finalization_retries') {
             copyGenerationFinalizationRetriesFromBackup(db)

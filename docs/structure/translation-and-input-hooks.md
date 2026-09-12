@@ -158,7 +158,8 @@ The stored translation carries both hashes plus language/type metadata.
 Manual message translation starts provider work outside the mutation
 transaction. Before persistence,
 `server/fastify/src/translation/serverMessageTranslation.ts` verifies the active
-job handle, exact source text, previous translation, and current row. It then
+job handle, captured database lineage, exact source text, previous translation,
+and current row. Greeting translation uses the same lineage fence. It then
 rebases a targeted write on the current revision. A stale job can finish but
 cannot overwrite newer source or translation state. The raw translation owner
 settles its deadline independently of provider abort handling, checks cancellation
@@ -175,6 +176,8 @@ disconnect. Message and greeting refreshes allow one read per lifecycle, reject
 responses after intervening projection changes or stop/restart, and remove the
 scheduled timer when no running jobs remain.
 
+Both registries retire active and terminal projections when database lineage
+changes, including when imported/restored targets retain identical IDs/text.
 These registries are process-local, not durable work queues. Committed translation
 rows survive a server restart; an unfinished request and its job history do not
 resume from a durable translation job. Storage failure exposes a failed terminal

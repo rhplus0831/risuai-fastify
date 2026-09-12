@@ -8,6 +8,7 @@ import type { DatabaseSync } from 'node:sqlite'
 import type { AuthState } from '../auth.js'
 import { COMMAND_EVENT_CATALOG, type CommandEventSink } from '../commands/events.js'
 import { getSchemaState } from '../db.js'
+import { getDatabaseOwnershipSnapshot, type DatabaseOwnershipSnapshot } from '../databaseLineage.js'
 import { requireAuth } from '../http.js'
 import { attachAbort } from '../requestAbort.js'
 import { getMaintenanceCoordinator, MaintenanceBusyError, type MaintenanceLease } from '../maintenanceCoordinator.js'
@@ -105,6 +106,7 @@ export function registerSaveRoutes(
     ? importMaxBytes
     : (options.maxExpandedImportBytes ?? DEFAULT_BUNDLE_INNER_RISU_MAX_EXPANDED_BYTES)
   app.post('/api/v1/import/risusave', { config: { rateLimit: importRateLimit } }, async (req, reply) => {
+    const admittedOwnership = getDatabaseOwnershipSnapshot(db)
     if (!(await requireAuth(authState, req, reply))) return
     const requestAbort = attachAbort(req, reply)
     let maintenanceLease: MaintenanceLease | undefined
@@ -119,6 +121,7 @@ export function registerSaveRoutes(
           maxExpandedBytes: options.maxExpandedImportBytes,
         })
         throwIfImportRequestAborted(requestAbort.signal)
+        assertImportOwnership(db, admittedOwnership)
         maintenanceLease = getMaintenanceCoordinator(dataDir).beginExclusive('import', requestAbort.signal)
         const { revision, event, databaseLineage, writerEpoch, assetReport, memoryLegacyReport } =
           await applyImportedDatabase(
@@ -154,6 +157,7 @@ export function registerSaveRoutes(
       // `normalizeRisuSaveJsonImportSnapshot` returns a request-body-isolated
       // throwaway object for JSON bodies, so the repository can split
       // message rows in place without a second full-corpus clone.
+      assertImportOwnership(db, admittedOwnership)
       maintenanceLease = getMaintenanceCoordinator(dataDir).beginExclusive('import', requestAbort.signal)
       const { revision, event, databaseLineage, writerEpoch, assetReport, memoryLegacyReport } =
         await applyImportedDatabase(
@@ -211,6 +215,7 @@ export function registerSaveRoutes(
   })
 
   app.post('/api/v1/import/bundle', { config: { rateLimit: importRateLimit } }, async (req, reply) => {
+    const admittedOwnership = getDatabaseOwnershipSnapshot(db)
     if (!(await requireAuth(authState, req, reply))) return
     if (!req.isMultipart()) {
       reply.code(400)
@@ -247,6 +252,7 @@ export function registerSaveRoutes(
         decoded.format === 'legacy-local-backup'
           ? normalizeLegacyLocalBackupImportDatabase(snapshot.database, decoded.assetReferenceAliases)
           : snapshot.database
+      assertImportOwnership(db, admittedOwnership)
       maintenanceLease = getMaintenanceCoordinator(dataDir).beginExclusive('import', requestAbort.signal)
       const { revision, event, databaseLineage, writerEpoch, assetReport, memoryLegacyReport } =
         await applyImportedDatabase(
@@ -625,6 +631,18 @@ async function streamUploadToTempFile(req: FastifyRequest, maxBytes: number): Pr
     throw new ValidationError('backup file is empty')
   }
   return target
+}
+
+/** Upload/decode may overlap a takeover or another completed replacement. */
+function assertImportOwnership(db: DatabaseSync, admitted: DatabaseOwnershipSnapshot): void {
+  const current = getDatabaseOwnershipSnapshot(db)
+  if (
+    current.databaseLineage !== admitted.databaseLineage ||
+    current.writer.sessionId !== admitted.writer.sessionId ||
+    current.writer.epoch !== admitted.writer.epoch
+  ) {
+    throw new MaintenanceBusyError()
+  }
 }
 
 async function applyImportedDatabase(

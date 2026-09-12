@@ -42,6 +42,12 @@
   }
 
   function setBackupProgress(progress: ServerBackupProgress) {
+    // Server restore now needs a selection response. Retire this operation's
+    // passive progress before the result-bearing dialog can take its place.
+    if (activeBackupOperation === 'serverRestore' && progress.phase === 'prepare') {
+      if (get(alertStore).type === 'progress') alertClear()
+      return
+    }
     alertProgress(
       progress.message,
       progress.percent === null ? null : Math.max(0, Math.min(100, progress.percent)),

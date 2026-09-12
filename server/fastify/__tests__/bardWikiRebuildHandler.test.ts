@@ -27,6 +27,7 @@ import {
   listBardWikiJobSummaries,
   listBardWikiReceiptSummaries,
 } from '../src/bardWikiRepository.js'
+import { createBackup, restoreBackup } from '../src/repository.js'
 import { BardWikiWorker } from '../src/bardWikiWorker.js'
 
 const dataDirs: string[] = []
@@ -356,6 +357,50 @@ describe('BardWiki historical rebuild', () => {
       harness.db.close()
     }
   })
+
+  it.each(['success', 'failure'] as const)(
+    'isolates a restored running rebuild from late %s and resumes its checkpoint',
+    async (late) => {
+      const harness = createHarness(1)
+      const queued = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+      let release!: () => void
+      harness.analyze.mockImplementationOnce(async () => {
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        if (late === 'failure') throw new Error('Obsolete rebuild failure')
+        return JSON.stringify({
+          title: 'Obsolete',
+          logicalPath: 'Events/Obsolete',
+          aliases: [],
+          markdown: 'Obsolete output',
+        })
+      })
+      const old = harness.worker.tick()
+      try {
+        await vi.waitFor(() => expect(harness.analyze).toHaveBeenCalledOnce())
+        const backup = await createBackup(harness.db, harness.dataDir, 'running rebuild')
+        await restoreBackup(harness.db, harness.dataDir, backup.id)
+        const restored = getBardWikiJob(harness.db, queued.id)
+        expect(restored).toMatchObject({ id: queued.id, status: 'running' })
+        const revision = getSchemaState(harness.db).revision
+        release()
+        await old
+        expect(getBardWikiJob(harness.db, queued.id)).toEqual(restored)
+        expect(getSchemaState(harness.db).revision).toBe(revision)
+        expect(listBardWikiDocuments(harness.db, 'chat-a')).toEqual([])
+        await harness.worker.tick()
+        expect(getBardWikiJob(harness.db, queued.id)?.status).toBe('completed')
+        expect(listBardWikiDocuments(harness.db, 'chat-a')).toEqual([expect.objectContaining({ title: 'assistant-0' })])
+        expect(harness.analyze).toHaveBeenCalledTimes(2)
+      } finally {
+        release?.()
+        await old
+        await harness.worker.stop()
+        harness.db.close()
+      }
+    },
+  )
 
   it('publishes a new derived document while preserving a manually edited previous rebuild document', async () => {
     const harness = createHarness(1)

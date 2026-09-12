@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 import { createBardWikiApplyTurnHandler } from '../src/bardWikiApplyTurnHandler.js'
+import { createBackup, restoreBackup } from '../src/repository.js'
 import { createInitialDatabase } from '../src/databaseDefaults.js'
 import { createCommandEventSink } from '../src/commands/events.js'
 import { getSchemaState, openDatabase } from '../src/db.js'
@@ -497,6 +498,48 @@ describe('BardWiki apply-turn handler', () => {
       expect(listBardWikiDocuments(harness.db, 'chat-a')).toEqual([])
       expect(getSchemaState(harness.db).revision).toBe(0)
     } finally {
+      harness.db.close()
+    }
+  })
+
+  it('fences apply-turn output across restore and resumes the restored receipt', async () => {
+    const harness = createHarness()
+    let release!: () => void
+    let calls = 0
+    const worker = workerFor(harness, {
+      db: harness.db,
+      dataDir: harness.dataDir,
+      loadDatabase: () => createInitialDatabase(),
+      analyze: async () => {
+        calls += 1
+        if (calls === 1)
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+        return VALID_DRAFT
+      },
+    })
+    const old = worker.tick()
+    try {
+      await vi.waitFor(() => expect(calls).toBe(1))
+      const backup = await createBackup(harness.db, harness.dataDir, 'running analysis')
+      await restoreBackup(harness.db, harness.dataDir, backup.id)
+      const restored = getBardWikiJob(harness.db, harness.confirmation.job.id)
+      const receipt = getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)
+      release()
+      await old
+      expect(getBardWikiJob(harness.db, harness.confirmation.job.id)).toEqual(restored)
+      expect(getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)).toEqual(receipt)
+      expect(listBardWikiDocuments(harness.db, 'chat-a')).toEqual([])
+      await worker.tick()
+      expect(getBardWikiJob(harness.db, harness.confirmation.job.id)?.status).toBe('completed')
+      expect(getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)?.state).toBe('applied')
+      expect(listBardWikiDocuments(harness.db, 'chat-a')).toHaveLength(1)
+      expect(calls).toBe(2)
+    } finally {
+      release?.()
+      await old
+      await worker.stop()
       harness.db.close()
     }
   })

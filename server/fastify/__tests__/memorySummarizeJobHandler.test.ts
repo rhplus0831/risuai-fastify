@@ -23,7 +23,8 @@ import {
 import { LEGACY_HYPA_V3_SUMMARY_MODEL } from '../src/memorySummaryCompatibility.js'
 import type { SummaryAdapterResult } from '../src/memorySummaryAdapter.js'
 import { DEFAULT_SUMMARIZATION_PROMPT } from '../src/memorySummaryPrompt.js'
-import { writePersistedWithMessages } from '../src/repository.js'
+import { createInitialDatabase } from '../src/databaseDefaults.js'
+import { createBackup, restoreBackup, writePersistedWithMessages } from '../src/repository.js'
 import { assertScopedLoadOnHotPath } from './helpers/loadCostHarness.js'
 
 const dataDirs: string[] = []
@@ -248,6 +249,63 @@ describe('summarize memory job handler', () => {
       db.close()
     }
   })
+
+  it.each(['success', 'failure'] as const)(
+    'isolates a running summary restored with the same instance from late %s',
+    async (late) => {
+      const dataDir = makeDataDir()
+      const db = openDatabase(dataDir)
+      writePersistedWithMessages(db, dataDir, { _version: 1, database: createInitialDatabase(), assets: [] })
+      seedChunkAndJob(db)
+      let release!: () => void
+      const summarize = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          await new Promise<void>((resolve) => {
+            release = resolve
+          })
+          if (late === 'failure') throw new Error('Obsolete provider failure')
+          return { text: 'Obsolete provider output', tokens: 1 }
+        })
+        .mockResolvedValue({ text: 'Current output', tokens: 1 })
+      const worker = new MemoryWorker({
+        db,
+        retry: { backoffBaseMs: 0 },
+        batchHandlers: {
+          summarize: createSummarizeMemoryJobBatchHandler({
+            db,
+            loadDatabase: database,
+            sleep: async () => {},
+            summarize,
+          }),
+        },
+      })
+      const old = worker.tick()
+      try {
+        await vi.waitFor(() => expect(summarize).toHaveBeenCalledOnce())
+        const backup = await createBackup(db, dataDir, 'running summary')
+        await restoreBackup(db, dataDir, backup.id)
+        const restoredJob = getMemoryJob(db, 'job-1')
+        const restoredChunk = getMemoryChunk(db, 'chunk-1')
+        release()
+        await old
+        expect(getMemoryJob(db, 'job-1')).toEqual(restoredJob)
+        expect(getMemoryChunk(db, 'chunk-1')).toEqual(restoredChunk)
+        expect(listMemorySummaries(db, { chatId: 'chat-1' })).toEqual([])
+        await worker.tick()
+        expect(getMemoryJob(db, 'job-1')?.status).toBe('completed')
+        expect(listMemorySummaries(db, { chatId: 'chat-1' })).toEqual([
+          expect.objectContaining({ text: 'Current output' }),
+        ])
+        expect(summarize).toHaveBeenCalledTimes(2)
+      } finally {
+        release?.()
+        await old
+        await worker.stop()
+        db.close()
+      }
+    },
+  )
 
   it.each(['success', 'failure'] as const)(
     'preserves a completed sibling when source invalidation precedes a held provider %s',

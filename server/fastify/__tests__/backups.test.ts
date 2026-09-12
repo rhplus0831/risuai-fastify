@@ -597,155 +597,162 @@ describe('backups', () => {
     }
   })
 
-  it('round-trips every BardWiki-owned table and rebuilds excluded search and link resolution', async () => {
-    const { assertion } = await setupAuthedClient(harness.app)
-    const livePath = path.join(harness.dataDir, 'risu.db')
-    const seed = new DatabaseSync(livePath)
-    let targetId: string
-    let sourceId: string
-    try {
-      seed.prepare("INSERT INTO characters (id, position, data_json) VALUES ('character-wiki', 0, '{}')").run()
-      seed
-        .prepare(
-          "INSERT INTO chats (id, character_id, position, data_json) VALUES ('chat-wiki', 'character-wiki', 0, '{}')",
-        )
-        .run()
-      updateBardWikiChatSettings(seed, 'chat-wiki', { enabledOverride: true, maxDocumentsOverride: 5 })
-      const target = createBardWikiDocument(seed, {
-        id: 'document-target',
-        chatId: 'chat-wiki',
-        kind: 'location',
-        title: 'Old Tavern',
-        logicalPath: 'Places/Old Tavern',
-        aliases: ['The Inn'],
-        markdown: '## Old Tavern\nA quiet inn.',
-        commandRevision: 1,
-      })
-      const source = createBardWikiDocument(seed, {
-        id: 'document-source',
-        chatId: 'chat-wiki',
-        kind: 'event',
-        title: 'Arrival',
-        logicalPath: 'Events/Arrival',
-        markdown: 'They met at [[Places/Old Tavern]].',
-        commandRevision: 1,
-      })
-      targetId = target.id
-      sourceId = source.id
-      seed
-        .prepare(
-          `INSERT INTO bardwiki_turn_receipts (
+  it.each(['deleted', 'retained'] as const)(
+    'round-trips every BardWiki-owned table with %s live parents and rebuilds derived state',
+    async (parents) => {
+      const { assertion } = await setupAuthedClient(harness.app)
+      const livePath = path.join(harness.dataDir, 'risu.db')
+      const seed = new DatabaseSync(livePath)
+      let targetId: string
+      let sourceId: string
+      try {
+        seed.prepare("INSERT INTO characters (id, position, data_json) VALUES ('character-wiki', 0, '{}')").run()
+        seed
+          .prepare(
+            "INSERT INTO chats (id, character_id, position, data_json) VALUES ('chat-wiki', 'character-wiki', 0, '{}')",
+          )
+          .run()
+        updateBardWikiChatSettings(seed, 'chat-wiki', { enabledOverride: true, maxDocumentsOverride: 5 })
+        const target = createBardWikiDocument(seed, {
+          id: 'document-target',
+          chatId: 'chat-wiki',
+          kind: 'location',
+          title: 'Old Tavern',
+          logicalPath: 'Places/Old Tavern',
+          aliases: ['The Inn'],
+          markdown: '## Old Tavern\nA quiet inn.',
+          commandRevision: 1,
+        })
+        const source = createBardWikiDocument(seed, {
+          id: 'document-source',
+          chatId: 'chat-wiki',
+          kind: 'event',
+          title: 'Arrival',
+          logicalPath: 'Events/Arrival',
+          markdown: 'They met at [[Places/Old Tavern]].',
+          commandRevision: 1,
+        })
+        targetId = target.id
+        sourceId = source.id
+        seed
+          .prepare(
+            `INSERT INTO bardwiki_turn_receipts (
           id, chat_id, user_message_id, user_content_hash, assistant_message_id,
           assistant_content_hash, confirmation_mode, state, change_set_id, event_document_id
         ) VALUES ('receipt-wiki', 'chat-wiki', 'user-wiki', 'hash-user', 'assistant-wiki',
           'hash-assistant', 'explicit', 'applied', 'change-wiki', ?)`,
-        )
-        .run(source.id)
-      seed
-        .prepare(
-          `INSERT INTO bardwiki_jobs (
+          )
+          .run(source.id)
+        seed
+          .prepare(
+            `INSERT INTO bardwiki_jobs (
           id, instance_id, chat_id, receipt_id, kind, status, payload_json
         ) VALUES ('job-wiki', 'instance-wiki', 'chat-wiki', 'receipt-wiki', 'apply_turn', 'completed', '{}')`,
-        )
-        .run()
-      seed
-        .prepare(
-          `INSERT INTO bardwiki_document_sources (
+          )
+          .run()
+        seed
+          .prepare(
+            `INSERT INTO bardwiki_document_sources (
           document_id, document_version, receipt_id, message_id, role, content_hash
         ) VALUES (?, 1, 'receipt-wiki', 'assistant-wiki', 'assistant', 'hash-assistant')`,
-        )
-        .run(source.id)
-      seed
-        .prepare(
-          `INSERT INTO bardwiki_change_manifest (
+          )
+          .run(source.id)
+        seed
+          .prepare(
+            `INSERT INTO bardwiki_change_manifest (
           receipt_id, document_id, after_version, after_hash
         ) VALUES ('receipt-wiki', ?, 1, ?)`,
-        )
-        .run(source.id, source.contentHash)
-      seed
-        .prepare(
-          `INSERT INTO bardwiki_rebuild_staging (rebuild_job_id, ordinal, change_json)
+          )
+          .run(source.id, source.contentHash)
+        seed
+          .prepare(
+            `INSERT INTO bardwiki_rebuild_staging (rebuild_job_id, ordinal, change_json)
          VALUES ('job-wiki', 0, '{"operation":"create"}')`,
-        )
-        .run()
-    } finally {
-      seed.close()
-    }
+          )
+          .run()
+      } finally {
+        seed.close()
+      }
 
-    const backup = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/backups',
-      headers: { 'risu-auth': assertion },
-      payload: { label: 'BardWiki ownership' },
-    })
-    expect(backup.statusCode).toBe(201)
+      const backup = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/backups',
+        headers: { 'risu-auth': assertion },
+        payload: { label: 'BardWiki ownership' },
+      })
+      expect(backup.statusCode).toBe(201)
 
-    const backupDb = new DatabaseSync(path.join(harness.dataDir, 'backups', backup.json().id as string, 'risu.db'))
-    try {
-      backupDb.prepare("UPDATE bardwiki_document_search SET title_terms = 'poisoned-derived-state'").run()
-      backupDb.prepare('UPDATE bardwiki_links SET resolved_document_id = NULL').run()
-    } finally {
-      backupDb.close()
-    }
+      const backupDb = new DatabaseSync(path.join(harness.dataDir, 'backups', backup.json().id as string, 'risu.db'))
+      try {
+        backupDb.prepare("UPDATE bardwiki_document_search SET title_terms = 'poisoned-derived-state'").run()
+        backupDb.prepare('UPDATE bardwiki_links SET resolved_document_id = NULL').run()
+      } finally {
+        backupDb.close()
+      }
 
-    const mutate = new DatabaseSync(livePath)
-    try {
-      mutate.exec('PRAGMA foreign_keys = ON')
-      mutate.prepare("DELETE FROM chats WHERE id = 'chat-wiki'").run()
-      expect(mutate.prepare('SELECT COUNT(*) AS count FROM bardwiki_documents').get()).toEqual({ count: 0 })
-    } finally {
-      mutate.close()
-    }
+      const mutate = new DatabaseSync(livePath)
+      try {
+        mutate.exec('PRAGMA foreign_keys = ON')
+        if (parents === 'deleted') {
+          mutate.prepare("DELETE FROM chats WHERE id = 'chat-wiki'").run()
+          expect(mutate.prepare('SELECT COUNT(*) AS count FROM bardwiki_documents').get()).toEqual({ count: 0 })
+        }
+      } finally {
+        mutate.close()
+      }
 
-    const restored = await harness.app.inject({
-      method: 'POST',
-      url: `/api/v1/backups/${backup.json().id}/restore`,
-      headers: { 'risu-auth': assertion },
-    })
-    expect(restored.statusCode).toBe(200)
+      const restored = await harness.app.inject({
+        method: 'POST',
+        url: `/api/v1/backups/${backup.json().id}/restore`,
+        headers: { 'risu-auth': assertion },
+      })
+      expect(restored.statusCode).toBe(200)
 
-    const verify = new DatabaseSync(livePath, { readOnly: true })
-    try {
-      expect(
-        verify.prepare('SELECT enabled_override, max_documents_override FROM bardwiki_chat_settings').get(),
-      ).toEqual({ enabled_override: 1, max_documents_override: 5 })
-      expect(verify.prepare('SELECT id FROM bardwiki_documents ORDER BY id').all()).toEqual([
-        { id: sourceId },
-        { id: targetId },
-      ])
-      expect(
-        verify.prepare('SELECT document_id, version FROM bardwiki_document_versions ORDER BY document_id').all(),
-      ).toEqual([
-        { document_id: sourceId, version: 1 },
-        { document_id: targetId, version: 1 },
-      ])
-      expect(verify.prepare('SELECT id, state FROM bardwiki_turn_receipts').all()).toEqual([
-        { id: 'receipt-wiki', state: 'applied' },
-      ])
-      expect(verify.prepare('SELECT id, status FROM bardwiki_jobs').all()).toEqual([
-        { id: 'job-wiki', status: 'completed' },
-      ])
-      expect(verify.prepare('SELECT document_id, receipt_id FROM bardwiki_document_sources').all()).toEqual([
-        { document_id: sourceId, receipt_id: 'receipt-wiki' },
-      ])
-      expect(verify.prepare('SELECT receipt_id, document_id FROM bardwiki_change_manifest').all()).toEqual([
-        { receipt_id: 'receipt-wiki', document_id: sourceId },
-      ])
-      expect(verify.prepare('SELECT rebuild_job_id, change_json FROM bardwiki_rebuild_staging').all()).toEqual([
-        { rebuild_job_id: 'job-wiki', change_json: '{"operation":"create"}' },
-      ])
-      expect(verify.prepare('SELECT raw_target, resolved_document_id FROM bardwiki_links').all()).toEqual([
-        { raw_target: 'Places/Old Tavern', resolved_document_id: targetId },
-      ])
-      expect(
-        verify
-          .prepare('SELECT title_terms, alias_terms, heading_terms FROM bardwiki_document_search WHERE document_id = ?')
-          .get(targetId),
-      ).toEqual({ title_terms: 'old tavern', alias_terms: 'the inn', heading_terms: 'old tavern' })
-    } finally {
-      verify.close()
-    }
-  })
+      const verify = new DatabaseSync(livePath, { readOnly: true })
+      try {
+        expect(
+          verify.prepare('SELECT enabled_override, max_documents_override FROM bardwiki_chat_settings').get(),
+        ).toEqual({ enabled_override: 1, max_documents_override: 5 })
+        expect(verify.prepare('SELECT id FROM bardwiki_documents ORDER BY id').all()).toEqual([
+          { id: sourceId },
+          { id: targetId },
+        ])
+        expect(
+          verify.prepare('SELECT document_id, version FROM bardwiki_document_versions ORDER BY document_id').all(),
+        ).toEqual([
+          { document_id: sourceId, version: 1 },
+          { document_id: targetId, version: 1 },
+        ])
+        expect(verify.prepare('SELECT id, state FROM bardwiki_turn_receipts').all()).toEqual([
+          { id: 'receipt-wiki', state: 'applied' },
+        ])
+        expect(verify.prepare('SELECT id, status FROM bardwiki_jobs').all()).toEqual([
+          { id: 'job-wiki', status: 'completed' },
+        ])
+        expect(verify.prepare('SELECT document_id, receipt_id FROM bardwiki_document_sources').all()).toEqual([
+          { document_id: sourceId, receipt_id: 'receipt-wiki' },
+        ])
+        expect(verify.prepare('SELECT receipt_id, document_id FROM bardwiki_change_manifest').all()).toEqual([
+          { receipt_id: 'receipt-wiki', document_id: sourceId },
+        ])
+        expect(verify.prepare('SELECT rebuild_job_id, change_json FROM bardwiki_rebuild_staging').all()).toEqual([
+          { rebuild_job_id: 'job-wiki', change_json: '{"operation":"create"}' },
+        ])
+        expect(verify.prepare('SELECT raw_target, resolved_document_id FROM bardwiki_links').all()).toEqual([
+          { raw_target: 'Places/Old Tavern', resolved_document_id: targetId },
+        ])
+        expect(
+          verify
+            .prepare(
+              'SELECT title_terms, alias_terms, heading_terms FROM bardwiki_document_search WHERE document_id = ?',
+            )
+            .get(targetId),
+        ).toEqual({ title_terms: 'old tavern', alias_terms: 'the inn', heading_terms: 'old tavern' })
+      } finally {
+        verify.close()
+      }
+    },
+  )
 
   it.each(['restore', 'import'] as const)(
     'rejects an old-lineage command held across a whole-database %s boundary',

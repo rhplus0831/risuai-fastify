@@ -1,4 +1,5 @@
 import type { DatabaseSync } from 'node:sqlite'
+import { getDatabaseLineage } from './databaseLineage.js'
 import {
   claimNextBardWikiJob,
   completeBardWikiJob,
@@ -66,9 +67,11 @@ export class BardWikiWorker {
   private wakeRequested = false
   private lastRetentionSweepAtMs = 0
   private serveSequence = 0
+  private databaseLineage: string
 
   constructor(options: BardWikiWorkerOptions) {
     this.db = options.db
+    this.databaseLineage = getDatabaseLineage(this.db)
     this.pollIntervalMs = normalizeInterval(options.pollIntervalMs, BARDWIKI_WORKER_DEFAULT_POLL_INTERVAL_MS)
     this.handlers = {
       apply_turn: noopBardWikiJobHandler,
@@ -138,6 +141,12 @@ export class BardWikiWorker {
 
   async tick(): Promise<boolean> {
     if (this.inFlight) return false
+    const lineage = getDatabaseLineage(this.db)
+    if (lineage !== this.databaseLineage) {
+      this.databaseLineage = lineage
+      this.chatLastServedAt.clear()
+      for (const job of recoverRunningBardWikiJobs(this.db, this.retry)) this.emitJob(job)
+    }
     this.maybeRunRetentionSweep()
     const task = this.processOne()
     this.inFlight = task
@@ -201,11 +210,14 @@ export class BardWikiWorker {
   private async processOne(): Promise<boolean> {
     const job = this.claimNextJobFairly()
     if (!job) return false
+    const lineage = getDatabaseLineage(this.db)
+    const current = () => getDatabaseLineage(this.db) === lineage
     const controller = new AbortController()
     this.runningJobAbortControllers.set(job.id, controller)
     this.emitJob(job)
     try {
       const handled = await this.handlers[job.kind](job, { signal: controller.signal })
+      if (!current()) return true
       if (handled && typeof handled === 'object' && handled.outcome === 'rescheduled') {
         if (handled.job.id !== job.id || handled.job.status !== 'pending') {
           throw new BardWikiJobHandlerError('bardwiki_invalid_job', 'Handler returned an invalid rescheduled job', {
@@ -218,6 +230,7 @@ export class BardWikiWorker {
         if (completed) this.emitJob(completed)
       }
     } catch (error) {
+      if (!current()) return true
       const summary = error instanceof Error && error.message ? error.message : String(error)
       const code = error instanceof BardWikiJobHandlerError ? error.code : 'bardwiki_job_handler_failed'
       const next =

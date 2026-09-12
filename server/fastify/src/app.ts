@@ -79,6 +79,7 @@ import {
 import { ASSET_GC_INTERVAL_MS, type AssetGcOptions, runAssetGc } from './assetGc.js'
 import { JobRegistry, PROXY_STREAM_GC_INTERVAL_MS } from './streamJobs.js'
 import { GenerationJobRegistry } from './generationJobs.js'
+import { getDatabaseLineage } from './databaseLineage.js'
 import { MessageTranslationJobRegistry } from './messageTranslationJobs.js'
 import { GreetingTranslationJobRegistry } from './greetingTranslationJobs.js'
 import {
@@ -376,8 +377,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   // Separately GC-ticked registry for detached chat generations and their
   // transient chatId→jobId submission lock.
   const generationJobRegistry = new GenerationJobRegistry(config.dataDir)
-  const messageTranslationJobRegistry = new MessageTranslationJobRegistry()
-  const greetingTranslationJobRegistry = new GreetingTranslationJobRegistry()
+  const messageTranslationJobRegistry = new MessageTranslationJobRegistry(() => getDatabaseLineage(db))
+  const greetingTranslationJobRegistry = new GreetingTranslationJobRegistry(() => getDatabaseLineage(db))
   const gcTimer = setInterval(() => {
     streamJobRegistry.tickGc()
     generationJobRegistry.tickGc()

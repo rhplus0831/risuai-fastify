@@ -1,3 +1,4 @@
+import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { decodeProviderGenerationSettings } from './prompt/generationInputDecoder.js'
 import type { DatabaseSync } from 'node:sqlite'
 import {
@@ -63,6 +64,7 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
   const analyze = options.analyze ?? analyzeBardWikiEvent
   const compileCanonical = options.compileCanonical ?? compileBardWikiCanonical
   return async (job: BardWikiJob, context: BardWikiJobHandlerContext): Promise<void> => {
+    const lineage = getDatabaseLineage(options.db)
     if (job.kind !== 'apply_turn') throw new BardWikiJobHandlerError('bardwiki_invalid_job', 'Expected apply_turn job')
     const payload = job.payload as BardWikiApplyTurnJobPayload
     if (payload.promptVersion !== BARDWIKI_EVENT_PROMPT_VERSION) {
@@ -109,6 +111,7 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
       )
     }
 
+    assertDatabaseLineage(options.db, lineage)
     let draft: BardWikiEventDraft
     try {
       draft = validateBardWikiEventDraft(originalOutput)
@@ -148,6 +151,7 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
       }
     }
 
+    assertDatabaseLineage(options.db, lineage)
     let canonicalChanges =
       payload.canonicalEnabled && settings.canonicalUpdates
         ? await compileCanonicalChanges({
@@ -162,6 +166,7 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
             context,
           })
         : []
+    assertDatabaseLineage(options.db, lineage)
     options.hooks?.afterProvider?.()
     let committedEvent: CommandEvent | null
     try {
@@ -180,6 +185,7 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
         context,
         allowRepair: false,
       })
+      assertDatabaseLineage(options.db, lineage)
       options.hooks?.afterProvider?.()
       committedEvent = commitChangeSet(options, job, receipt, payload, draft, canonicalChanges)
     }

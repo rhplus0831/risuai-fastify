@@ -11,9 +11,9 @@ one draft-bearing editor, preferably the composer for retained visible text or
 the module editor for encrypted baseline/rebase behavior. Add a representative
 reorder/delete/multi-step owner only when it has a distinct unverified contract.
 
-Guides: [durable mutations](../../../structure/durable-mutations-and-recovery.md),
-[editing tests](../../../tests/domain-mutations-and-editing-bridges.md), and
-[persistence tests](../../../tests/persistence-commands-and-events.md).
+Guides: [durable mutations](../../../../docs/structure/durable-mutations-and-recovery.md),
+[editing tests](../../../../docs/tests/domain-mutations-and-editing-bridges.md), and
+[persistence tests](../../../../docs/tests/persistence-commands-and-events.md).
 
 <!-- prettier-ignore -->
 | Boundary | Source owners | Existing tests |

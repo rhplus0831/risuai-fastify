@@ -1,3 +1,4 @@
+import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { embedTextGroups, embedTexts, type MemoryEmbeddingAdapterResult } from './memoryEmbeddingAdapter.js'
@@ -60,6 +61,7 @@ export function createEmbedMemoryJobHandler(
   const acquireRateLimit = createEmbeddingRateLimiter(opts)
 
   return async (job: MemoryJob, context?: MemoryJobHandlerContext): Promise<void> => {
+    const lineage = getDatabaseLineage(opts.db)
     if (job.kind !== 'embed') {
       throw new Error(`embed handler received ${job.kind} job`)
     }
@@ -76,6 +78,7 @@ export function createEmbedMemoryJobHandler(
       acquireRateLimit,
       signal: context?.signal,
     })
+    assertDatabaseLineage(opts.db, lineage)
     if (result.kind === 'existing') return
     const currentJob = getMemoryJob(opts.db, job.id)
     if (currentJob?.status !== 'pending' && currentJob?.status !== 'running') return
@@ -89,6 +92,7 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
   const acquireRateLimit = createEmbeddingRateLimiter(opts)
 
   return async (firstJob, context): Promise<void> => {
+    const lineage = getDatabaseLineage(opts.db)
     const database = loadDatabase(opts)
     const settings = resolveHypaV3Settings(database)
     const maxConcurrent = Math.max(1, settings.embeddingMaxConcurrent)
@@ -144,6 +148,7 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
           // group. A single job cancellation must not abort its siblings; the
           // commit fence below discards only the cancelled job's staged vector.
         })
+        assertDatabaseLineage(opts.db, lineage)
         commitContextualBatchResults(opts, context, results)
       }
       return
@@ -172,6 +177,7 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
       }
     })
 
+    assertDatabaseLineage(opts.db, lineage)
     commitIndependentBatchResults(opts, context, results)
   }
 }

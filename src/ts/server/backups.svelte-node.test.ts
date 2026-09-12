@@ -272,6 +272,27 @@ describe('server backup helpers', () => {
     expect(peekCachedServerCommandRevision()).toBeNull()
   })
 
+  it.each(['restore', 'import'] as const)('qualifies accepted %s when ownership preparation throws', async (family) => {
+    const failure = new Error('outbox storage unavailable')
+    ownershipSpies.preparePendingMutationOutbox.mockRejectedValueOnce(failure)
+    const backupFetch = makeBackupFetch(() => ({
+      revision: 12,
+      assetReport: cleanAssetReport,
+      ...replacementOwnership,
+    }))
+    vi.stubGlobal('fetch', backupFetch.fetch)
+    const result =
+      family === 'restore'
+        ? restoreServerBackup({ id: backupManifest.id })
+        : importServerBundle({ file: new Blob(['backup']) })
+    await expect(result).resolves.toMatchObject({
+      status: 'error',
+      error: expect.stringMatching(/Backup (restored|imported), but.*outbox storage unavailable/),
+    })
+    expect(backupFetch.calls).toHaveLength(1)
+    expect(resourceRefreshSpies.forceServerDatabaseReplacementRefresh).not.toHaveBeenCalled()
+  })
+
   it('deletes backups and reports server errors', async () => {
     const backupFetch = makeBackupFetch((url) => {
       if (url.endsWith('/missing')) return jsonResponse({ error: 'Backup not found' }, 404)
