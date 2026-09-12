@@ -69,6 +69,7 @@ export type ServerResourceRefreshResult =
 let serverResourceRefreshPromise: Promise<ServerResourceRefreshResult> | null = null
 let serverResourceRefreshGeneration = -1
 let serverResourceRefreshPending = false
+let serverResourceRefreshMinimumRevision = 0
 let serverDatabaseReplacementRefreshPending = false
 let serverDatabaseReplacementDiscardPromise: Promise<void> | null = null
 
@@ -104,17 +105,19 @@ export const serverResourceInvalidationHooks: ServerResourceInvalidationHooks = 
  */
 export async function forceServerResourceRefresh(
   reason: string,
-  options: { resource?: string } = {},
+  options: { resource?: string; minimumRevision?: number } = {},
 ): Promise<ServerResourceRefreshResult> {
   if (!canUseClientRecoveryAccess()) return { status: 'unavailable' }
   const generation = captureClientSessionGeneration()
   recordFullResourceRefresh(reason, options.resource)
   if (serverResourceRefreshPromise && serverResourceRefreshGeneration === generation) {
+    serverResourceRefreshMinimumRevision = Math.max(serverResourceRefreshMinimumRevision, options.minimumRevision ?? 0)
     serverResourceRefreshPending = true
     return serverResourceRefreshPromise
   }
 
   serverResourceRefreshGeneration = generation
+  serverResourceRefreshMinimumRevision = options.minimumRevision ?? 0
   const running = runServerResourceRefresh(generation)
   serverResourceRefreshPromise = running
   try {
@@ -127,11 +130,13 @@ export async function forceServerResourceRefresh(
 /** Force a full snapshot that may legitimately rewind every server revision. */
 export function forceServerDatabaseReplacementRefresh(
   reason: string,
-  options: { resource?: string } = {},
+  options: { resource?: string; minimumRevision?: number } = {},
 ): Promise<ServerResourceRefreshResult> {
   if (!canUseClientRecoveryAccess()) return Promise.resolve({ status: 'unavailable' })
   const generation = captureClientSessionGeneration()
   serverDatabaseReplacementRefreshPending = true
+  // A new database may have a lower valid revision than the replaced database.
+  serverResourceRefreshMinimumRevision = options.minimumRevision ?? 0
   serverDatabaseReplacementDiscardPromise ??= import('../readerProjectionLifecycle').then(
     ({ discardReaderProjectionState }) => {
       if (isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess())
@@ -163,10 +168,16 @@ export async function refreshServerRealmImportResources(input: {
   const isCurrent = () => isClientSessionGenerationCurrent(generation) && canUseClientRecoveryAccess()
   const appliedRevision = peekAppliedServerResourceRevision()
   if (!isMatchingRealmCharacterCreatedEvent(input) || appliedRevision === null) {
-    return forceServerResourceRefresh('realm-import', { resource: input.event.resource })
+    return forceServerResourceRefresh('realm-import', {
+      resource: input.event.resource,
+      minimumRevision: input.revision,
+    })
   }
   if (input.event.revision > appliedRevision + 1) {
-    return forceServerResourceRefresh('realm-import', { resource: input.event.resource })
+    return forceServerResourceRefresh('realm-import', {
+      resource: input.event.resource,
+      minimumRevision: input.revision,
+    })
   }
 
   const selectionTracker = trackSelectedCharacterDuringRefresh()
@@ -232,6 +243,7 @@ async function runServerResourceRefresh(generation: number): Promise<ServerResou
     try {
       const result = await refreshAllServerResources({
         hooks: serverResourceInvalidationHooks,
+        minimumRevision: serverResourceRefreshMinimumRevision,
         ...(isClientSessionManaged() ? { isCurrent } : {}),
       })
       if (!isCurrent()) return { status: 'unavailable' }

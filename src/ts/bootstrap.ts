@@ -2051,12 +2051,12 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
   } else if (subscription.status === 'replay-unavailable') {
     setReaderWorkspaceLifecycleMode('unavailable')
     console.warn(`Server event replay unavailable at revision ${subscription.currentRevision}; refreshing resources`)
-    await refreshAfterUnavailableEventReplay()
+    await refreshAfterUnavailableEventReplay(subscription.currentRevision)
     if (isCurrentServerResourceEventEpoch(eventEpoch)) scheduleServerResourceReconnect(eventEpoch)
   }
 }
 
-async function refreshAfterUnavailableEventReplay(): Promise<void> {
+async function refreshAfterUnavailableEventReplay(minimumRevision: number): Promise<void> {
   const reconciliation = await reconcileReplacementDatabaseOwnership()
   if (reconciliation === null) return
   const replacementRefresh =
@@ -2064,8 +2064,8 @@ async function refreshAfterUnavailableEventReplay(): Promise<void> {
     isReplacementDatabaseOwnershipRefreshPending(reconciliation.ownership) ||
     !wasReplacementDatabaseOwnershipRefreshed(reconciliation.ownership)
   const refresh = replacementRefresh
-    ? await forceServerDatabaseReplacementRefresh('event-replay-unavailable')
-    : await forceServerResourceRefresh('event-replay-unavailable')
+    ? await forceServerDatabaseReplacementRefresh('event-replay-unavailable', { minimumRevision })
+    : await forceServerResourceRefresh('event-replay-unavailable', { minimumRevision })
   if (replacementRefresh && refresh.status === 'ok') {
     markReplacementDatabaseOwnershipRefreshed(reconciliation.ownership)
   }
@@ -2263,7 +2263,7 @@ function handleServerCommandConflictGap(currentRevision: number, appliedRevision
     const latestAppliedRevision = peekAppliedServerResourceRevision()
     if (latestAppliedRevision !== null && latestAppliedRevision >= currentRevision) return
     try {
-      await forceServerResourceRefresh('conflict-gap')
+      await forceServerResourceRefresh('conflict-gap', { minimumRevision: currentRevision })
     } finally {
       restartServerResourceEvents()
     }

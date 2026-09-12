@@ -466,6 +466,31 @@ describe('API-backed resource invalidation', () => {
     },
   )
 
+  it.each(['reader', 'writer'] as const)(
+    'rejects a %s full snapshot below the invalidating event before replacing resident content',
+    async (mode) => {
+      seedResources(5)
+      fullReadMocks(6)
+      const onFullProjectionApplied = vi.fn()
+      const result = await refreshInvalidatedServerResources(event(8, 'settings'), {
+        appliedRevision: 5,
+        ...(mode === 'reader' ? { mode } : {}),
+        onFullProjectionApplied,
+      })
+      expect(result.status).toBe('error')
+      expect(getResourceDatabase().language).toBe('en')
+      expect(getResourceDatabase().characters[0].chats[0].message).toEqual([{ role: 'user', data: 'resident-a' }])
+      expect(onFullProjectionApplied).not.toHaveBeenCalled()
+      fullReadMocks(8)
+      await expect(
+        refreshInvalidatedServerResources(event(8, 'settings'), {
+          appliedRevision: 5,
+          ...(mode === 'reader' ? { mode } : {}),
+        }),
+      ).resolves.toMatchObject({ status: 'ok', revision: 8 })
+    },
+  )
+
   it('retains the readable reader transcript when an optional full-refresh BardWiki read fails', async () => {
     seedResources(5)
     fullReadMocks(6)

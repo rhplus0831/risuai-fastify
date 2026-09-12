@@ -355,6 +355,45 @@ describe('character shell hydration', () => {
     expect(projectionState.fetchResource).toHaveBeenCalledTimes(1)
   })
 
+  it.each(['success', 'failure'] as const)(
+    'settles a timeout before an abort-insensitive read and ignores its late %s after retry',
+    async (outcome) => {
+      vi.useFakeTimers()
+      const oldRead = deferred<unknown>()
+      projectionState.fetchResource.mockReturnValueOnce(oldRead.promise)
+      let settled = false
+      const pending = hydrateCharacterShell('char-1', { timeoutMs: 25 }).then((value) => {
+        settled = true
+        return value
+      })
+      try {
+        await vi.advanceTimersByTimeAsync(25)
+        expect(settled).toBe(true)
+        await expect(pending).resolves.toBe(false)
+        expect(characterShellHydrationState.rows['char-1']).toEqual({ status: 'error', error: 'timeout' })
+        projectionState.fetchResource.mockResolvedValueOnce({
+          status: 'ok',
+          revision: 1,
+          character: hydratedCharacter('Replacement'),
+        })
+        await expect(retryCharacterShellHydration('char-1')).resolves.toBe(true)
+        oldRead.resolve(
+          outcome === 'success'
+            ? { status: 'ok', revision: 1, character: hydratedCharacter('Old') }
+            : { status: 'error', error: 'Late old read failure' },
+        )
+        await vi.advanceTimersByTimeAsync(0)
+        expect(testDatabaseState.db.characters[0].name).toBe('Replacement')
+        expect(characterShellHydrationState.rows['char-1']).toEqual({ status: 'ready', error: null })
+        expect(vi.getTimerCount()).toBe(0)
+      } finally {
+        oldRead.resolve({ status: 'unavailable' })
+        await pending
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('times out a stalled request, retains the shell, and exposes retry state', async () => {
     vi.useFakeTimers()
     vi.spyOn(console, 'warn').mockImplementation(() => undefined)

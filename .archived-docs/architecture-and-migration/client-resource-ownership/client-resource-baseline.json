@@ -1147,7 +1147,7 @@
         },
         {
           "file": "src/ts/server/resourceInvalidation.test.ts",
-          "count": 53
+          "count": 55
         },
         {
           "file": "src/ts/server/resourceRefresh.test.ts",

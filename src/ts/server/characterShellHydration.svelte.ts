@@ -132,8 +132,17 @@ export async function hydrateCharacterShell(
   setCharacterShellHydrationState(characterId, 'loading', null)
   const request = (async () => {
     let result: Awaited<ReturnType<typeof fetchServerCharacter>>
+    let stopWaitingForAbort = () => {}
     try {
-      result = await fetchServerCharacter(characterId, controller.signal)
+      // Authentication and other subordinate reads may ignore transport abort.
+      // Retire this attempt without making Retry wait for their completion.
+      const cancelled = new Promise<Awaited<ReturnType<typeof fetchServerCharacter>>>((resolve) => {
+        const abort = () => resolve({ status: 'unavailable' })
+        controller.signal.addEventListener('abort', abort, { once: true })
+        stopWaitingForAbort = () => controller.signal.removeEventListener('abort', abort)
+        if (controller.signal.aborted) abort()
+      })
+      result = await Promise.race([fetchServerCharacter(characterId, controller.signal), cancelled])
     } catch (error) {
       if (generation === shellHydrationGeneration && !controller.signal.aborted) {
         if (targetHasSubscriber()) {
@@ -142,6 +151,8 @@ export async function hydrateCharacterShell(
         shellHydrationWarning(characterId, error instanceof Error ? error.message : String(error))
       }
       return false
+    } finally {
+      stopWaitingForAbort()
     }
     if (generation !== shellHydrationGeneration || controller.signal.aborted) {
       if (timedOut && targetHasSubscriber()) {

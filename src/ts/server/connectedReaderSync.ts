@@ -291,7 +291,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
 
   async function refreshFull(sourceEpoch: number, signal: AbortSignal, minimumRevision = 0): Promise<boolean> {
     if (!(await checkOwnership(sourceEpoch, signal))) return false
-    const result = await refreshAllServerResources(refreshOptions(sourceEpoch, signal))
+    const result = await refreshAllServerResources({ ...refreshOptions(sourceEpoch, signal), minimumRevision })
     return finishRefresh(
       sourceEpoch,
       result.status === 'ok' && result.revision < minimumRevision
@@ -443,7 +443,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       } else if (result.status === 'replay-unavailable') {
         setClientConnectionState('interrupted', generation)
         enqueue(sourceEpoch, async () => {
-          await refreshFull(sourceEpoch, signal)
+          await refreshFull(sourceEpoch, signal, result.currentRevision)
           interrupt(sourceEpoch)
         })
       } else interrupt(sourceEpoch)

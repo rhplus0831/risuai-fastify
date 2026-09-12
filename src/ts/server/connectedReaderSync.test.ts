@@ -422,6 +422,34 @@ describe('connected reader synchronization', () => {
     expect(streams[0].input.sinceRevision).toBe(10)
   })
 
+  it.each(['failed', 'older'] as const)(
+    'keeps the applied cursor when a gap queued behind an old refresh receives a %s snapshot',
+    async (fault) => {
+      const held = deferred<any>()
+      api.targeted.mockReturnValueOnce(held.promise)
+      api.full.mockResolvedValueOnce(
+        fault === 'failed' ? { status: 'error', error: 'offline' } : { status: 'ok', scope: 'full', revision: 8 },
+      )
+      const { sync } = start()
+      await sync.ready
+      streams[0].input.onCommandEvent(command(6))
+      streams[0].input.onCommandEvent(command(10))
+      await flush()
+      expect(api.applied).toBe(5)
+      expect(api.full).not.toHaveBeenCalled()
+      held.resolve({ status: 'ok', scope: 'targeted', revision: 6 })
+      await flush()
+      expect(api.applied).toBe(6)
+      expect(api.full).toHaveBeenCalledWith(expect.objectContaining({ minimumRevision: 10 }))
+      expect(getClientSessionSnapshot().connection).toBe('interrupted')
+      api.full.mockResolvedValue({ status: 'ok', scope: 'full', revision: 10 })
+      await vi.advanceTimersByTimeAsync(1_000)
+      streams.at(-1)!.input.onCommandEvent(command(10))
+      await flush()
+      expect(api.applied).toBe(10)
+    },
+  )
+
   it('rejects a full snapshot older than the missing event instead of acknowledging the gap', async () => {
     api.full.mockResolvedValue({ status: 'ok', scope: 'full', revision: 8 })
     const { sync } = start()

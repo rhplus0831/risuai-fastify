@@ -336,7 +336,7 @@ describe('complete server resource refresh', () => {
         return { status: 'ok', revision: 3, scope: 'full' }
       })
 
-    const oldRefresh = forceServerResourceRefresh('old-database-refresh')
+    const oldRefresh = forceServerResourceRefresh('old-database-refresh', { minimumRevision: 12 })
     await vi.waitFor(() => expect(refreshApi.refreshAll).toHaveBeenCalledTimes(1))
     const replacementRefresh = forceServerDatabaseReplacementRefresh('backup-restore')
     finishOldRead()
@@ -346,6 +346,7 @@ describe('complete server resource refresh', () => {
       { status: 'ok', revision: 3 },
     ])
     expect(refreshApi.refreshAll).toHaveBeenCalledTimes(2)
+    expect(refreshApi.refreshAll).toHaveBeenNthCalledWith(2, expect.objectContaining({ minimumRevision: 0 }))
     expect(getResourceDatabase().characters[0]?.chaId).toBe('char-restored')
     expect(peekCachedServerCommandRevision()).toBe(3)
     expect(peekAppliedServerResourceRevision()).toBe(3)
@@ -447,8 +448,9 @@ describe('complete server resource refresh', () => {
       )
       .mockResolvedValueOnce({ status: 'ok', revision: 7, scope: 'full' })
 
-    const first = forceServerResourceRefresh('first')
-    const second = forceServerResourceRefresh('second')
+    const first = forceServerResourceRefresh('first', { minimumRevision: 6 })
+    const second = forceServerResourceRefresh('second', { minimumRevision: 7 })
+    expect(refreshApi.refreshAll).toHaveBeenNthCalledWith(1, expect.objectContaining({ minimumRevision: 6 }))
     expect(refreshApi.refreshAll).toHaveBeenCalledTimes(1)
     resolveFirst?.({ status: 'ok', revision: 6, scope: 'full' })
 
@@ -457,5 +459,6 @@ describe('complete server resource refresh', () => {
       { status: 'ok', revision: 7 },
     ])
     expect(refreshApi.refreshAll).toHaveBeenCalledTimes(2)
+    expect(refreshApi.refreshAll).toHaveBeenNthCalledWith(2, expect.objectContaining({ minimumRevision: 7 }))
   })
 })

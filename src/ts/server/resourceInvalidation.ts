@@ -127,6 +127,8 @@ export interface ServerResourceInvalidationHooks {
 
 export interface ServerResourceRefreshOptions {
   signal?: AbortSignal | null
+  /** Reject an older complete snapshot before replacing any resident slice. */
+  minimumRevision?: number
   hooks?: Partial<ServerResourceInvalidationHooks>
   /** Fence the owner operation before applying a completed read. */
   isCurrent?: () => boolean
@@ -306,6 +308,12 @@ export async function refreshAllServerResources(
     if (revisions.size !== 1) continue
 
     const revision = settings.revision
+    if (options.minimumRevision !== undefined && revision < options.minimumRevision) {
+      return {
+        status: 'error',
+        error: `Server snapshot revision ${revision} is older than required revision ${options.minimumRevision}`,
+      }
+    }
     // Reader full refreshes keep their usable transcript until optional loaded
     // read owners have also succeeded. Do not re-stub chats before a failed
     // BardWiki read that would leave the refresh unacknowledged.
@@ -405,13 +413,14 @@ export async function refreshInvalidatedServerResources(
   const normalized = normalizeEventBatch(batch, options.appliedRevision)
   if (normalized.kind === 'error') return { status: 'error', error: normalized.error }
   if (normalized.kind === 'none') return { status: 'ok', revision: normalized.revision, scope: 'none' }
-  if (normalized.kind === 'full') return refreshAllServerResources(options)
+  const minimumRevision = Math.max(options.minimumRevision ?? 0, ...batch.map((event) => event.revision))
+  if (normalized.kind === 'full') return refreshAllServerResources({ ...options, minimumRevision })
 
   const plan = createRefreshPlan()
   for (const event of normalized.events) {
     if (options.mode === 'reader' && event.resource === 'characterSelection') continue
     addEventToRefreshPlan(plan, event)
-    if (plan.full) return refreshAllServerResources(options)
+    if (plan.full) return refreshAllServerResources({ ...options, minimumRevision })
   }
   retainLoadedRefreshTargets(plan)
 

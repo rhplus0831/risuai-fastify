@@ -513,6 +513,42 @@ describe('route resource loader', () => {
     expect(loaderMocks.refresh).not.toHaveBeenCalled()
   })
 
+  it('retires an already-started warmup without blocking or overwriting a new writer route', async () => {
+    enterClientWriter()
+    const grid = { kind: 'grid', path: '/grid' } as const
+    await prepareRouteResources(grid)
+    await finishRouteResources(grid)
+    loaderMocks.requirements = [requirement({ kind: 'settings-group', group: 'display', purposes: ['render'] })]
+    let idle: (() => void) | undefined
+    Object.defineProperty(window, 'requestIdleCallback', {
+      configurable: true,
+      value: vi.fn((callback: () => void) => {
+        idle = callback
+        return 11
+      }),
+    })
+    Object.defineProperty(window, 'cancelIdleCallback', { configurable: true, value: vi.fn() })
+    const oldRead = deferred<any>()
+    loaderMocks.refresh.mockReturnValueOnce(oldRead.promise)
+    prefetchRoutePathResources('/settings/display')
+    idle?.()
+    await vi.waitFor(() => expect(loaderMocks.refresh).toHaveBeenCalledOnce())
+    const signal = loaderMocks.refresh.mock.calls[0][1].signal as AbortSignal
+    demoteClientSession()
+    stopRouteResourceLoader()
+    expect(signal.aborted).toBe(true)
+    repromoteClientWriter()
+    const newer = { kind: 'settings', path: '/settings/display', section: 'display', index: 3 } as const
+    await expect(prepareRouteResources(newer)).resolves.toBe(true)
+    await expect(finishRouteResources(newer)).resolves.toBe(true)
+    const state = currentRouteResourceLoadState()
+    oldRead.resolve({ status: 'error', error: 'retired warmup failed' })
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(loaderMocks.refresh).toHaveBeenCalledTimes(2)
+    expect(currentRouteResourceLoadState()).toEqual(state)
+    expect(state.status).toBe('ready')
+  })
+
   it('prefetches the exact declared resources for an intended settings route', async () => {
     const gridRoute = { kind: 'grid', path: '/grid' } as const
     await prepareRouteResources(gridRoute)

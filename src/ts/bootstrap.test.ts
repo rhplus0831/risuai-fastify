@@ -2292,7 +2292,7 @@ describe('API-backed client bootstrap', () => {
     await vi.waitFor(() => expect(resourceApi.forceReplacement).toHaveBeenCalledTimes(2))
 
     expect(eventApi.subscribe).toHaveBeenCalledTimes(2)
-    expect(resourceApi.forceReplacement).toHaveBeenNthCalledWith(1, 'event-replay-unavailable')
+    expect(resourceApi.forceReplacement).toHaveBeenNthCalledWith(1, 'event-replay-unavailable', { minimumRevision: 3 })
     expect(resourceApi.forceReplacement).toHaveBeenNthCalledWith(2, 'database-replacement-reconnect')
     expect(ownershipApi.reset).toHaveBeenCalledOnce()
   })
@@ -5931,16 +5931,20 @@ describe('API-backed client bootstrap', () => {
 
     await loadWebInitialDatabase()
 
-    await vi.waitFor(() => expect(resourceApi.forceReplacement).toHaveBeenCalledWith('event-replay-unavailable'))
+    await vi.waitFor(() =>
+      expect(resourceApi.forceReplacement).toHaveBeenCalledWith('event-replay-unavailable', { minimumRevision: 3 }),
+    )
     expect(ownershipApi.reset).toHaveBeenCalledOnce()
     expect(ownershipApi.discard).toHaveBeenCalledOnce()
-    expect(resourceApi.forceRefresh).not.toHaveBeenCalledWith('event-replay-unavailable')
+    expect(resourceApi.forceRefresh).not.toHaveBeenCalledWith('event-replay-unavailable', expect.anything())
   })
 
   it('repairs replay and malformed-frame failures through a complete resource refresh', async () => {
     eventApi.subscribe.mockResolvedValueOnce({ status: 'replay-unavailable', currentRevision: 9 })
     await loadWebInitialDatabase()
-    await vi.waitFor(() => expect(resourceApi.forceRefresh).toHaveBeenCalledWith('event-replay-unavailable'))
+    await vi.waitFor(() =>
+      expect(resourceApi.forceRefresh).toHaveBeenCalledWith('event-replay-unavailable', { minimumRevision: 9 }),
+    )
 
     stopServerResourceEvents()
     eventApi.subscribe.mockImplementationOnce(async (input) => {
@@ -6178,7 +6182,9 @@ describe('resource event reconnect backoff', () => {
       }),
     ).resolves.toEqual({ status: 'conflict', currentRevision: 9 })
 
-    await vi.waitFor(() => expect(resourceApi.forceRefresh).toHaveBeenCalledWith('conflict-gap'))
+    await vi.waitFor(() =>
+      expect(resourceApi.forceRefresh).toHaveBeenCalledWith('conflict-gap', { minimumRevision: 9 }),
+    )
     await vi.waitFor(() => expect(eventApi.subscribe).toHaveBeenCalledTimes(2))
   })
 

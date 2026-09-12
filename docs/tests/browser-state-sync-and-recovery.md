@@ -1,7 +1,7 @@
 # Browser State Sync and Recovery
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-12 (command/outbox interruption and rendered settings replay).
+Targeted source check: 2026-09-12 (command/outbox recovery, resource hydration, native cache faults, and reader gaps).
 
 This area covers browser startup, active-writer ownership, encrypted durable mutation recovery, command
 serialization, compact local acknowledgements, authoritative resource reads, hash-cache validation,
@@ -141,6 +141,41 @@ owners. `durableMutationTerminalRejection.test.ts` keeps real commands, outbox,
 crypto, and replay with fake IndexedDB; injected marker/deletion failures retain
 the predecessor and block the successor, and a failed replacement cannot fall
 back to untracked transport ahead of its surviving predecessor.
+
+## Resource hydration and navigation races
+
+`server/fastify/browser-smoke/resourceHydrationRecovery.spec.ts` crosses the built
+SPA, native IndexedDB, authenticated Fastify resources, SQLite and real event
+replay. Four journeys hold A's character detail or both chat/prompt bodies,
+finish navigation B first, and release A's late success/failure in reverse
+order. Assertions inspect B's route, rendered transcript, prompt owner/template
+and readiness. Two journeys verify warm authenticated hash substitution, then
+corrupt/delete the native entry and reload: the bad hash is not advertised,
+the authenticated response supplies full data and the visible setting is correct.
+Two direct links fail the selected chat/prompt body and require visible error,
+shell availability, Retry and authoritative transcript rendering.
+
+Two reader journeys remove real committed event history in disposable SQLite,
+then serve a failed or older full snapshot during reconnect. Visible content and
+the applied cursor remain intact until a valid read converges to the committed
+message. Request observations reject writer-intent bootstrap/SSE and command
+submission, then assert healthy focus adds no bootstrap/ownership/full reads.
+These use network faults and synthetic lifecycle signals; they do not certify
+physical suspension or the complete startup performance matrix.
+
+Focused owners retain additional schedules: character-detail timeout settles
+before an abort-insensitive dependency returns, Retry completes first, and late
+success/failure cannot replace it; mixed bulk chat responses retain a newer
+projection while applying their valid sibling; a started warmup is retired by
+the real loader teardown before a new writer route completes. Complete-refresh
+tests reject a snapshot below the invalidating revision before any slice apply,
+including reader and writer modes. Reader queue tests hold an earlier refresh
+through a later gap, preserve its applied cursor across failed/older full reads,
+and advance only after valid convergence. Coalesced writer refreshes carry the
+newest minimum while replacement can reset a prior database's floor. Existing
+cache verification/persistence/authentication fences remain covered by the
+focused cache and delivery suites; the native reload tests do not substitute
+for those controlled asynchronous schedules.
 
 ## Test groups
 

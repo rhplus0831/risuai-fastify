@@ -212,10 +212,9 @@ and inspect recovered visible text. Physical/platform checks remain the optional
 device follow-up already recorded in Phase 01, not missing O1–O6 evidence.
 
 Broader hydration/cache/navigation belongs to Phase 04, background workers to
-Phase 05, and destructive import/restore to Phase 06. No later phase has begun.
-Phase 03 is complete with no unresolved in-scope finding. Current HEAD remains
-`a449e97908d41aed7f04442c260f0ce56194dd43`; the Phase 03 patch is uncommitted.
-Next, read `docs/plan/reliability-audit/phases/04-resource-hydration.md` and complete
-its entry inventory after rechecking source/worktree. Rebuild and rerun affected
+Phase 05, and destructive import/restore to Phase 06.
+Phase 03 is complete with no unresolved in-scope finding. Its patch was committed
+as `960a2f336dcab751692cdac0d87d04ac3377daa4` before Phase 04 began. The
+[current status](../status.md) owns the execution cursor. Rebuild and rerun affected
 evidence if later changes alter the shared command/outbox or draft boundaries.
 No `pnpm test:all` was requested or run; no manually started dev server remains.

@@ -587,7 +587,17 @@ export function startReaderGenerationObservation(
     else if (!available()) suspend()
     else if (paused) refresh()
   })
-  stopLifecycle = subscribeBrowserLifecycleRecovery(refresh)
+  stopLifecycle = subscribeBrowserLifecycleRecovery((_source, context) => {
+    if (
+      !context?.suspensionEvidence &&
+      !paused &&
+      probeFailures === 0 &&
+      streamFailures === 0 &&
+      reconcileFailures === 0
+    )
+      return
+    refresh()
+  })
   if (typeof window !== 'undefined' && typeof document !== 'undefined') {
     const hidden = () => {
       if (document.visibilityState === 'hidden') suspend(false)

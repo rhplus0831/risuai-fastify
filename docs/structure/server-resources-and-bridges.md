@@ -1,7 +1,7 @@
 # Server Resources And Hydration
 
 Last audited: 2026-08-31.
-Targeted source check: 2026-09-05 (display paint-cache ownership).
+Targeted source check: 2026-09-12 (hydration deadlines, full-snapshot revision floors, and reader focus).
 Targeted source check: 2026-09-08 (connected-reader startup and generation reads).
 Targeted source check: 2026-09-10 (role-first unified workspace).
 Targeted source check: 2026-09-10 (revision-identical writer reconnect reuse).
@@ -114,6 +114,10 @@ capabilities consumed by the shell and protocol adapters:
   switch until both pre-route resources and target code are ready. Only the root
   shell has a cross-field atomic barrier; granular route resources apply
   independently through their explicit owners and revision fences.
+- Character-detail hydration settles its own timeout/cancellation even if an
+  authentication or transport dependency remains pending. Retry can complete
+  before that old dependency returns; late results retain their owner and
+  selection fences.
 - `readerTranscriptProjection.svelte.ts` certifies navigation order/folders/pins,
   passive display settings, sanitized module metadata/activation links and transcript
   metadata from existing resource payloads
@@ -127,6 +131,13 @@ capabilities consumed by the shell and protocol adapters:
   gaps. Local navigation is restored by stable identity after replacement.
   Reconnect neither acquires a writer nor replays outbox work. Hypa/BardWiki
   operational snapshots and progress use their own stream/version fences.
+- Complete resource snapshots must agree on one revision and meet the triggering
+  event/replay revision before replacing any resident slice. Reader and writer
+  gap recovery pass this minimum into the apply owner, so an older snapshot
+  cannot erase visible bodies before the caller rejects it. Coalesced writer
+  refreshes retain the highest requested minimum for their follow-up read;
+  database replacement resets the old database's minimum and may rewind to the
+  new database's valid revision.
 - Foreground recovery does not treat an ordinary focus event as proof that a
   healthy, recently active SSE stream was suspended. Hidden, pagehide, offline,
   persisted pageshow, stale-stream, and disconnected evidence trigger one shared
@@ -184,6 +195,9 @@ capabilities consumed by the shell and protocol adapters:
   identity. Hidden/offline state, selection changes, and teardown release the
   HTTP viewer without cancelling its job. No finalization retry, effect claim,
   translation submission, or completion callback is started by the reader viewer.
+  Healthy focus preserves the observer's scheduled discovery and active viewer;
+  suspension or a failed probe, stream, or reconciliation can request recovery.
+  Explicit Retry still refreshes immediately.
 - Command success reconciliation and foreign command SSE events both flow
   through the same serialized resource path. Contiguous response-confirmed
   optimistic effects can advance their resource fences without a read;

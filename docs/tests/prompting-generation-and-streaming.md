@@ -126,7 +126,11 @@ provide selected-chat observation independently of the writer's `sendChat` and
 recovery stores. Their focused suites cover immutable lineage/operation/attempt/job
 identity, incomplete descriptors, bounded status/stream retries and deadlines,
 half-stream/Continue replay, exact terminal hydration, auth loss and teardown
-without cancellation. `src/ts/server/chatMessageHydration.test.ts` verifies exact
+without cancellation. Healthy-focus cases cover both idle and active observation:
+discovery is not restarted and an active viewer is retained, while suspension
+still triggers recovery. Native focus/request evidence is indexed in
+[Browser State Sync and Recovery](browser-state-sync-and-recovery.md#resource-hydration-and-navigation-races).
+`src/ts/server/chatMessageHydration.test.ts` verifies exact
 generation-suffix reads and late-reader fences. Its Reader-to-writer regression
 uses actual role changes, retained-body hydration resets and equal-revision
 metadata clones to require one authorized alternates read before reroll candidates

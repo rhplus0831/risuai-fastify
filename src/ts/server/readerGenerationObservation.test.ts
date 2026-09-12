@@ -235,6 +235,25 @@ describe('selected reader generation observation', () => {
     },
   )
 
+  it.each([false, true])(
+    'keeps healthy focus from restarting reader observation with active generation=%s',
+    async (active) => {
+      if (!active) runtime.generationOperations = []
+      start()
+      await flush()
+      if (active) partial()
+      expect(api.bootstrap).toHaveBeenCalledOnce()
+      for (let i = 0; i < 4; i++) api.lifecycle.mock.calls[0]![0]('focus', { suspensionEvidence: false })
+      await flush()
+      expect(api.bootstrap).toHaveBeenCalledOnce()
+      if (active) expect(streams[0]!.input.signal.aborted).toBe(false)
+      api.lifecycle.mock.calls[0]![0]('pageshow', { suspensionEvidence: true })
+      await flush()
+      expect(api.bootstrap).toHaveBeenCalledTimes(2)
+      if (active) expect(streams[0]!.input.signal.aborted).toBe(true)
+    },
+  )
+
   it('discovers a generation started after an idle reader mounted', async () => {
     runtime.generationOperations = []
     const { view } = start()

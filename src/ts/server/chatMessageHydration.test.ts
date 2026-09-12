@@ -1343,6 +1343,22 @@ describe('chat message hydration owner', () => {
     await expect(ensureAllChatsHydrated({ strict: true })).rejects.toThrow(/did not return messages for: chat-2/)
   })
 
+  it('keeps a newer chat projection while applying its valid sibling from the same held bulk response', async () => {
+    const response = deferred<ReturnType<typeof okBulkResult>>()
+    projectionState.fetchBulkChat.mockReturnValueOnce(response.promise)
+    const pending = ensureAllChatsHydrated()
+    expect(projectionState.fetchBulkChat).toHaveBeenCalledWith(['chat-1', 'chat-2'])
+    const newer = [{ role: 'char', data: 'newer targeted chat one', chatId: 'newer-one' }]
+    expect(applyServerChatMessagesResource('chat-1', newer, undefined, [])).toBe(true)
+    response.resolve(okBulkResult(['chat-1', 'chat-2']))
+    await pending
+    expect(db().characters[0].chats[0].message).toEqual(newer)
+    expect(db().characters[0].chats[1].message).toEqual([{ role: 'user', data: 'chat-2', chatId: 'm-chat-2' }])
+    projectionState.fetchBulkChat.mockClear()
+    await ensureAllChatsHydrated()
+    expect(projectionState.fetchBulkChat).not.toHaveBeenCalled()
+  })
+
   it('drops a stale bulk chat hydration response', async () => {
     setCachedServerCommandRevision(2)
     projectionState.fetchBulkChat.mockResolvedValueOnce({
