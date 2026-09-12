@@ -370,9 +370,10 @@ and model. The model select inherits the `otherAx` role when blank or stores a
 specific durable model-profile ID; divider options render as `---` and restore
 the prior selection rather than becoming a model.
 
-Hook cards keep name, type, and model visible. Prompt disclosures are keyed by
-hook ID and keep their editors mounted while hidden, preserving edits and
-independent expansion state. New hooks open their prompt and focus their name;
+Hook cards default to collapsed and keep the hook name and outcome visible in
+their disclosure header. Card and prompt disclosures are keyed by hook ID and
+keep their editors mounted while hidden, preserving edits and independent
+expansion state. New hooks open their card and prompt and focus their name;
 deletion names the hook in the shared confirmation and moves focus to another
 hook or Add. The prompt uses the shared popup editor with a stable, derived hook
 ID as its context, so changing another row does not invalidate an open editor.

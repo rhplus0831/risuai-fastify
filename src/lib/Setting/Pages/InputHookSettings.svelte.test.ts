@@ -153,7 +153,8 @@ describe('InputHookSettings model profiles', () => {
       translation: false,
     })
     const card = target.querySelector('article:last-child')!
-    expect(card.querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true')
+    expect(card.querySelector('[data-risu-input-hook-toggle]')?.getAttribute('aria-expanded')).toBe('true')
+    expect(card.querySelector('[data-risu-input-hook-prompt-toggle]')?.getAttribute('aria-expanded')).toBe('true')
     expect(document.activeElement).toBe(card.querySelector('input[type="text"]'))
   })
 
@@ -186,6 +187,14 @@ function hookCard(name: string): HTMLElement {
   return card
 }
 
+function hookToggle(card: HTMLElement): HTMLButtonElement {
+  return card.querySelector<HTMLButtonElement>('[data-risu-input-hook-toggle]')!
+}
+
+function promptToggle(card: HTMLElement): HTMLButtonElement {
+  return card.querySelector<HTMLButtonElement>('[data-risu-input-hook-prompt-toggle]')!
+}
+
 describe('InputHookSettings editing', () => {
   it('pairs Draft and BTW names with outcomes and exposes the full prompt on focus or hover', async () => {
     inputHookSettingsMocks.setInputHooks([
@@ -206,7 +215,7 @@ describe('InputHookSettings editing', () => {
       language.inputHookSettings.draftOutcome,
     )
     expect(btw.querySelector('[data-risu-hook-outcome]')?.textContent).toContain(language.inputHookSettings.btwOutcome)
-    const toggle = draft.querySelector<HTMLButtonElement>('button[aria-expanded]')!
+    const toggle = promptToggle(draft)
     expect(toggle.title).toBe('First line\nSecond line with the complete instruction.')
     expect(draft.querySelector('[data-risu-input-hook-full-prompt-preview]')?.textContent).toContain(
       'Second line with the complete instruction.',
@@ -224,28 +233,49 @@ describe('InputHookSettings editing', () => {
     ])
     await tick()
     const first = hookCard('First')
-    const firstToggle = first.querySelector<HTMLButtonElement>('button[aria-expanded]')!
-    const panel = document.getElementById(firstToggle.getAttribute('aria-controls')!)!
-    expect(firstToggle.getAttribute('aria-expanded')).toBe('false')
-    expect(panel.hidden).toBe(true)
-    expect(firstToggle.textContent).toContain('Rewrite this.')
-    expect(firstToggle.textContent).not.toContain('<|im_start|>')
+    const second = hookCard('Second')
+    const firstHookToggle = hookToggle(first)
+    const secondHookToggle = hookToggle(second)
+    const firstHookPanel = document.getElementById(firstHookToggle.getAttribute('aria-controls')!)!
+    const secondHookPanel = document.getElementById(secondHookToggle.getAttribute('aria-controls')!)!
+    expect(firstHookToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(secondHookToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(firstHookPanel.hidden).toBe(true)
+    expect(secondHookPanel.hidden).toBe(true)
 
-    firstToggle.click()
-    hookCard('Second').querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    firstHookToggle.click()
+    await tick()
+    expect(firstHookPanel.hidden).toBe(false)
+    expect(secondHookPanel.hidden).toBe(true)
+    firstHookToggle.click()
+    await tick()
+    expect(firstHookPanel.hidden).toBe(true)
+    firstHookToggle.click()
+    await tick()
+
+    const firstPromptToggle = promptToggle(first)
+    const panel = document.getElementById(firstPromptToggle.getAttribute('aria-controls')!)!
+    expect(firstPromptToggle.getAttribute('aria-expanded')).toBe('false')
+    expect(panel.hidden).toBe(true)
+    expect(firstPromptToggle.textContent).toContain('Rewrite this.')
+    expect(firstPromptToggle.textContent).not.toContain('<|im_start|>')
+
+    firstPromptToggle.click()
+    secondHookToggle.click()
+    promptToggle(second).click()
     await tick()
     expect(panel.hidden).toBe(false)
     const editor = first.querySelector('textarea')!
     editor.value = 'Keep this new prompt.'
     editor.dispatchEvent(new Event('input', { bubbles: true }))
     await tick()
-    firstToggle.click()
+    firstPromptToggle.click()
     await tick()
     expect(panel.hidden).toBe(true)
-    expect(hookCard('Second').querySelector('button[aria-expanded]')?.getAttribute('aria-expanded')).toBe('true')
+    expect(promptToggle(hookCard('Second')).getAttribute('aria-expanded')).toBe('true')
     inputHookSettingsMocks.setInputHooks([...inputHookSettingsMocks.readInputHooks()].reverse())
     await tick()
-    hookCard('First').querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    promptToggle(hookCard('First')).click()
     await tick()
     expect(hookCard('First').querySelector('textarea')).toBe(editor)
     expect(editor.value).toBe('Keep this new prompt.')
@@ -262,7 +292,8 @@ describe('InputHookSettings editing', () => {
     ])
     await tick()
     const card = hookCard('Second')
-    card.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    hookToggle(card).click()
+    promptToggle(card).click()
     await tick()
     card.querySelector<HTMLButtonElement>(`button[aria-label="${language.hotkeyDesc.popupEditor}"]`)!.click()
     expect(popUpEditorStore.open).toBe(true)
@@ -282,7 +313,8 @@ describe('InputHookSettings editing', () => {
 
   it('does not apply a popup draft to another hook when its owner is removed', async () => {
     const card = hookCard('Legacy Hook')
-    card.querySelector<HTMLButtonElement>('button[aria-expanded]')!.click()
+    hookToggle(card).click()
+    promptToggle(card).click()
     await tick()
     card.querySelector<HTMLButtonElement>(`button[aria-label="${language.hotkeyDesc.popupEditor}"]`)!.click()
     popUpEditorStore.value = 'Removed hook edit'
@@ -296,7 +328,10 @@ describe('InputHookSettings editing', () => {
   it('names the hook in the delete confirmation and preserves it on cancel', async () => {
     const confirm = vi.fn().mockReturnValue(false)
     vi.stubGlobal('confirm', confirm)
-    const remove = hookCard('Legacy Hook').querySelector<HTMLButtonElement>(
+    const card = hookCard('Legacy Hook')
+    hookToggle(card).click()
+    await tick()
+    const remove = card.querySelector<HTMLButtonElement>(
       `button[aria-label="${language.inputHookDelete}: Legacy Hook"]`,
     )!
     remove.click()

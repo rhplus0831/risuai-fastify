@@ -30,6 +30,7 @@
   })
   const sectionId = $props.id()
   let newHookType = $state<InputHook['type']>('draft')
+  let expandedHooks = $state<Record<string, boolean>>({})
   let expandedPrompts = $state<Record<string, boolean>>({})
   let modelProfiles = $derived(
     settingsResourceState.groupStatuses.providers === 'ready' && settingsResourceState.groupStatuses.models === 'ready'
@@ -105,6 +106,7 @@
         ...(newHookType === 'draft' ? { translation: false } : {}),
       })
     })
+    expandedHooks[id] = true
     expandedPrompts[id] = true
     await focusHookName(id)
   }
@@ -135,9 +137,12 @@
       const currentIndex = hooks.findIndex((hook) => hook.id === id)
       if (currentIndex !== -1) hooks.splice(currentIndex, 1)
     })
+    delete expandedHooks[id]
     delete expandedPrompts[id]
-    if (nextId) await focusHookName(nextId)
-    else {
+    if (nextId) {
+      expandedHooks[nextId] = true
+      await focusHookName(nextId)
+    } else {
       await tick()
       document.getElementById(`${sectionId}-add`)?.querySelector('button')?.focus()
     }
@@ -201,117 +206,143 @@
 
   {#each inputHooksDraft.value as hook (hook.id)}
     {@const hookId = hook.id}
+    {@const hookOpen = expandedHooks[hook.id] === true}
+    {@const hookPanelId = `${sectionId}-hook-${hook.id}-panel`}
     {@const promptOpen = expandedPrompts[hook.id] === true}
     {@const promptId = `${sectionId}-prompt-${hook.id}`}
     <article class="flex min-w-0 flex-col gap-3 rounded-md border border-darkborderc p-4" aria-label={hook.name}>
       <div class="flex items-center justify-between gap-2">
-        <strong class="rounded-full border border-darkborderc bg-darkbutton px-2.5 py-1 text-xs" data-risu-hook-outcome>
-          {hook.type === 'draft' ? language.inputHookTypeDraft : language.inputHookTypeBtw} · {outcomeLabel(hook.type)}
-        </strong>
+        <button
+          type="button"
+          id={`${hookPanelId}-toggle`}
+          aria-expanded={hookOpen}
+          aria-controls={hookPanelId}
+          class="flex min-h-11 min-w-0 flex-1 items-center gap-2 rounded-md py-2 text-left hover:bg-darkbg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-borderc"
+          data-risu-input-hook-toggle
+          onclick={() => (expandedHooks[hook.id] = !hookOpen)}>
+          <ChevronRightIcon size={18} class={`shrink-0 ${hookOpen ? 'rotate-90' : ''}`} />
+          <span class="min-w-0 flex-1 truncate font-semibold">{hook.name}</span>
+          <strong
+            class="shrink-0 rounded-full border border-darkborderc bg-darkbutton px-2.5 py-1 text-xs"
+            data-risu-hook-outcome>
+            {hook.type === 'draft' ? language.inputHookTypeDraft : language.inputHookTypeBtw} · {outcomeLabel(
+              hook.type,
+            )}
+          </strong>
+        </button>
       </div>
-      <div class="grid gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(6rem,0.5fr)_minmax(0,1.25fr)] sm:items-end">
-        <label class="flex min-w-0 flex-col gap-1">
-          <span class="text-sm text-textcolor2">{language.inputHookName}</span>
-          <TextInput
-            fullwidth
-            id={`${sectionId}-name-${hook.id}`}
-            className="min-h-11"
-            ariaLabel={language.inputHookName}
-            bind:value={() => hook.name, (value) => updateHook(hook.id, { name: value })} />
-        </label>
-        <label class="flex min-w-0 flex-col gap-1">
-          <span class="text-sm text-textcolor2">{language.type}</span>
-          <SelectInput
-            value={hook.type}
-            ariaLabel={language.type}
-            className="min-h-11 w-full"
-            onchange={(event) => updateHook(hook.id, { type: event.currentTarget.value as InputHook['type'] })}>
-            <OptionInput value="draft">{language.inputHookSettings.draftOption}</OptionInput>
-            <OptionInput value="btw">{language.inputHookSettings.btwOption}</OptionInput>
-          </SelectInput>
-        </label>
-        <label class="flex min-w-0 flex-col gap-1">
-          <span class="text-sm text-textcolor2">{language.inputHookModel}</span>
-          <select
-            class="min-h-11 w-full min-w-0 rounded-md border border-darkborderc bg-transparent px-4 py-2 text-textcolor focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
-            aria-label={`${language.inputHookModel}: ${hook.name}`}
-            value={hookProfileId(hook)}
-            onchange={(event) => handleHookModelChange(hook.id, hookProfileId(hook), event)}>
-            <option value="">{language.inputHookInheritOtherAxModel}</option>
-            {#each modelProfileItems as item (`${item.kind}:${item.kind === 'profile' ? item.profile.id : item.id}`)}
-              {#if item.kind === 'divider'}
-                <option value={modelProfileDividerSelectValue(item.id)} data-model-profile-divider="true">---</option>
-              {:else}
-                <option value={item.profile.id}>{item.profile.name ?? item.profile.id}</option>
-              {/if}
-            {/each}
-          </select>
-        </label>
-      </div>
-
-      {#if hook.type === 'draft'}
-        <div>
-          <CheckInput
-            className="min-h-11"
-            name={language.inputHookTranslation}
-            check={hook.translation === true}
-            onChange={(translation) => updateHook(hook.id, { translation })} />
-          <p class="mt-1 text-sm text-textcolor2" data-risu-input-hook-translation-flow>
-            {language.inputHookSettings.translationDescription}
-          </p>
+      <div
+        id={hookPanelId}
+        hidden={!hookOpen}
+        role="region"
+        aria-labelledby={`${hookPanelId}-toggle`}
+        class="flex flex-col gap-3"
+        data-risu-input-hook-panel>
+        <div class="flex flex-col gap-3">
+          <label class="flex min-w-0 flex-col gap-1">
+            <span class="text-sm text-textcolor2">{language.inputHookName}</span>
+            <TextInput
+              fullwidth
+              id={`${sectionId}-name-${hook.id}`}
+              className="min-h-11"
+              ariaLabel={language.inputHookName}
+              bind:value={() => hook.name, (value) => updateHook(hook.id, { name: value })} />
+          </label>
+          <label class="flex min-w-0 flex-col gap-1">
+            <span class="text-sm text-textcolor2">{language.type}</span>
+            <SelectInput
+              value={hook.type}
+              ariaLabel={language.type}
+              className="min-h-11 w-full"
+              onchange={(event) => updateHook(hook.id, { type: event.currentTarget.value as InputHook['type'] })}>
+              <OptionInput value="draft">{language.inputHookSettings.draftOption}</OptionInput>
+              <OptionInput value="btw">{language.inputHookSettings.btwOption}</OptionInput>
+            </SelectInput>
+          </label>
+          <label class="flex min-w-0 flex-col gap-1">
+            <span class="text-sm text-textcolor2">{language.inputHookModel}</span>
+            <select
+              class="min-h-11 w-full min-w-0 rounded-md border border-darkborderc bg-transparent px-4 py-2 text-textcolor focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
+              aria-label={`${language.inputHookModel}: ${hook.name}`}
+              value={hookProfileId(hook)}
+              onchange={(event) => handleHookModelChange(hook.id, hookProfileId(hook), event)}>
+              <option value="">{language.inputHookInheritOtherAxModel}</option>
+              {#each modelProfileItems as item (`${item.kind}:${item.kind === 'profile' ? item.profile.id : item.id}`)}
+                {#if item.kind === 'divider'}
+                  <option value={modelProfileDividerSelectValue(item.id)} data-model-profile-divider="true">---</option>
+                {:else}
+                  <option value={item.profile.id}>{item.profile.name ?? item.profile.id}</option>
+                {/if}
+              {/each}
+            </select>
+          </label>
         </div>
-      {/if}
 
-      <div class="flex items-start justify-between gap-2">
-        <div class="group relative min-w-0 flex-1">
-          <button
-            type="button"
-            id={`${promptId}-toggle`}
-            aria-label={`${language.inputHookPrompt}: ${hook.name}`}
-            aria-expanded={promptOpen}
-            aria-controls={`${promptId}-panel`}
-            aria-describedby={!promptOpen ? `${promptId}-full-preview` : undefined}
-            title={hook.prompt || language.inputHookSettings.noPrompt}
-            class="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md py-2 text-left text-textcolor hover:bg-darkbg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-borderc"
-            onclick={() => (expandedPrompts[hook.id] = !promptOpen)}>
-            <ChevronRightIcon size={16} class={`shrink-0 ${promptOpen ? 'rotate-90' : ''}`} />
-            <span class="flex min-w-0 flex-col gap-1">
-              <span>{language.inputHookPrompt}</span>
-              {#if !promptOpen}
-                <span class="truncate text-sm text-textcolor2">{promptPreview(hook.prompt)}</span>
-              {/if}
-            </span>
-          </button>
-          {#if !promptOpen}
-            <div
-              id={`${promptId}-full-preview`}
-              class="pointer-events-none absolute z-10 mt-1 hidden max-h-48 w-full overflow-auto rounded-md border border-darkborderc bg-bgcolor p-3 shadow-lg group-hover:block group-focus-within:block"
-              data-risu-input-hook-full-prompt-preview>
-              <span class="block text-xs font-semibold">{language.inputHookSettings.fullPromptPreview}</span>
-              <pre class="mt-1 whitespace-pre-wrap text-xs">{hook.prompt || language.inputHookSettings.noPrompt}</pre>
-            </div>
-          {/if}
+        {#if hook.type === 'draft'}
+          <div>
+            <CheckInput
+              className="min-h-11"
+              name={language.inputHookTranslation}
+              check={hook.translation === true}
+              onChange={(translation) => updateHook(hook.id, { translation })} />
+            <p class="mt-1 text-sm text-textcolor2" data-risu-input-hook-translation-flow>
+              {language.inputHookSettings.translationDescription}
+            </p>
+          </div>
+        {/if}
+
+        <div class="flex items-start justify-between gap-2">
+          <div class="group relative min-w-0 flex-1">
+            <button
+              type="button"
+              id={`${promptId}-toggle`}
+              aria-label={`${language.inputHookPrompt}: ${hook.name}`}
+              aria-expanded={promptOpen}
+              aria-controls={`${promptId}-panel`}
+              aria-describedby={!promptOpen ? `${promptId}-full-preview` : undefined}
+              title={hook.prompt || language.inputHookSettings.noPrompt}
+              class="flex min-h-11 w-full min-w-0 items-center gap-2 rounded-md py-2 text-left text-textcolor hover:bg-darkbg focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-borderc"
+              data-risu-input-hook-prompt-toggle
+              onclick={() => (expandedPrompts[hook.id] = !promptOpen)}>
+              <ChevronRightIcon size={16} class={`shrink-0 ${promptOpen ? 'rotate-90' : ''}`} />
+              <span class="flex min-w-0 flex-col gap-1">
+                <span>{language.inputHookPrompt}</span>
+                {#if !promptOpen}
+                  <span class="truncate text-sm text-textcolor2">{promptPreview(hook.prompt)}</span>
+                {/if}
+              </span>
+            </button>
+            {#if !promptOpen}
+              <div
+                id={`${promptId}-full-preview`}
+                class="pointer-events-none absolute z-10 mt-1 hidden max-h-48 w-full overflow-auto rounded-md border border-darkborderc bg-bgcolor p-3 shadow-lg group-hover:block group-focus-within:block"
+                data-risu-input-hook-full-prompt-preview>
+                <span class="block text-xs font-semibold">{language.inputHookSettings.fullPromptPreview}</span>
+                <pre class="mt-1 whitespace-pre-wrap text-xs">{hook.prompt || language.inputHookSettings.noPrompt}</pre>
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <div id={`${promptId}-panel`} hidden={!promptOpen} role="region" aria-labelledby={`${promptId}-toggle`}>
+          <TextAreaInput
+            id={promptId}
+            fullwidth
+            height="default"
+            popupEditor={true}
+            popupEditorContext={hookId}
+            ariaLabel={`${language.inputHookPrompt}: ${hook.name}`}
+            bind:value={() => hook.prompt, (value) => updateHook(hook.id, { prompt: value })} />
         </div>
         <Button
-          styled="outlined"
+          styled="primary"
           size="sm"
-          className="min-h-11 shrink-0"
+          className="min-h-11 shrink-0 mt-5"
           ariaLabel={`${language.inputHookDelete}: ${hook.name}`}
           onclick={() => deleteHook(hook.id)}>
-          <span class="inline-flex items-center gap-2"
+            <span class="inline-flex items-center gap-2"
             ><TrashIcon size={16} />{language.inputHookSettings.deleteAction}</span>
         </Button>
-      </div>
-
-      <div id={`${promptId}-panel`} hidden={!promptOpen} role="region" aria-labelledby={`${promptId}-toggle`}>
-        <TextAreaInput
-          id={promptId}
-          fullwidth
-          height="default"
-          popupEditor={true}
-          popupEditorContext={hookId}
-          ariaLabel={`${language.inputHookPrompt}: ${hook.name}`}
-          bind:value={() => hook.prompt, (value) => updateHook(hook.id, { prompt: value })} />
       </div>
     </article>
   {:else}
