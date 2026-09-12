@@ -1394,6 +1394,55 @@ describe('Durable generation', () => {
     }
   })
 
+  it('settles an unreasoned assembly abort as retryable and releases the durable chat claim', async () => {
+    let abortedJob: { done: boolean } | undefined
+    durableLifecycleHook = async (transition, job) => {
+      if (transition !== 'assembly_started' || abortedJob) return
+      abortedJob = job
+      // Match the registry deadline/GC abort at an abort-aware assembly await.
+      job.abortController.abort()
+      throw job.abortController.signal.reason
+    }
+    let providerCalls = 0
+    providerImpl = () => {
+      providerCalls += 1
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+    const authority = await operationAuthority()
+    const operationId = randomUUID()
+    const submit = await postAtomicOperation(
+      authority.databaseLineage,
+      atomicSendRequest({
+        operationId,
+        acceptedMessageId: randomUUID(),
+        baseRevision: authority.revision,
+      }),
+    )
+    expect(submit.status).toBe(201)
+    await waitFor(async () => (abortedJob?.done ? true : undefined))
+    const status = await operationStatus(operationId)
+    expect(status.operation).toMatchObject({ state: 'retryable', providerMayHaveRun: false })
+    expect(status.operation.currentAttempt).toBeUndefined()
+    expect(providerCalls).toBe(0)
+
+    const next = await operationAuthority()
+    const nextId = randomUUID()
+    const followUp = await postAtomicOperation(
+      next.databaseLineage,
+      atomicSendRequest({
+        operationId: nextId,
+        acceptedMessageId: randomUUID(),
+        baseRevision: next.revision,
+        text: 'follow-up after expired assembly',
+      }),
+    )
+    expect(followUp.status).toBe(201)
+    await waitFor(async () => ((await operationStatus(nextId)).operation.state === 'completed' ? true : undefined))
+    expect(providerCalls).toBe(1)
+  })
+
   it('rejects synchronous generation-settings readiness before append or intent commit', async () => {
     await seedDatabase({
       ...fixtureDatabase,
@@ -2114,6 +2163,25 @@ describe('Durable generation', () => {
       const status = await operationStatus(operationId)
       return status.operation.state === 'completed' ? status : undefined
     })
+    const completedReplay = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/retries`,
+      {
+        method: 'POST',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': 'writer-a',
+        }),
+        body: JSON.stringify(retryBody),
+      },
+    )
+    expect(completedReplay.status).toBe(200)
+    const receipt = (await completedReplay.json()) as Record<string, any>
+    expect(receipt).toMatchObject({
+      acceptedRetryRequestId: retryRequestId,
+      operation: { operationId, state: 'completed' },
+    })
+    expect(receipt.operation.currentAttempt).toBeUndefined()
     expect(providerCalls).toBe(2)
   })
 

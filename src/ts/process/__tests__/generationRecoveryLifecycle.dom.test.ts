@@ -582,6 +582,97 @@ describe('generation recovery lifecycle integration', () => {
     ])
   })
 
+  it('receipts a completed retry without a live descriptor, then hydrates without clearing a newer obligation', async () => {
+    const retryable = operation('retryable', { stateVersion: 5, projectionEpoch: 5 })
+    applyGenerationOperationProjection(retryable)
+    h.uuids = [retryRequestId]
+    const completed = operation('completed', { stateVersion: 9, projectionEpoch: 9, resultMessageId: 'assistant-a' })
+    const bodies: unknown[] = []
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_input: unknown, init?: RequestInit) => {
+        bodies.push(JSON.parse(String(init?.body)))
+        if (bodies.length === 1) throw new Error('accepted retry response lost')
+        return new Response(JSON.stringify({ operation: completed, acceptedRetryRequestId: retryRequestId }), {
+          status: 200,
+        })
+      }),
+    )
+    await expect(retryGenerationOperation(operationId, 5)).resolves.toMatchObject({ status: 'retained' })
+    h.fetchBootstrap.mockResolvedValueOnce(bootstrap([completed], [], 9))
+    let release!: () => void
+    const barrier = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    h.hydrateChatMessages.mockImplementationOnce(async () => {
+      await barrier
+    })
+    startActiveGenerationReattach()
+    const recovery = refreshActiveGenerationJobsFromBootstrap()
+    await vi.waitFor(() => expect(h.hydrateChatMessages).toHaveBeenCalledOnce())
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ kind: 'retry', retryRequestId, phase: 'awaiting_transcript' }),
+      expect.objectContaining({ kind: 'retry', retryRequestId, phase: 'awaiting_transcript' }),
+    ])
+    expect(h.pending).toEqual([])
+    expect(bodies).toEqual([
+      { retryRequestId, expectedStateVersion: 5 },
+      { retryRequestId, expectedStateVersion: 5 },
+    ])
+    const newer = beginGenerationRecoveryObligation({
+      operationId,
+      chatId: 'chat-a',
+      kind: 'cancel',
+      minimumStateVersion: 10,
+      sourceGeneration: captureClientSessionGeneration(),
+    })
+    markGenerationRecoveryObligationUncertain(newer)
+    release()
+    await recovery
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ token: newer, kind: 'cancel', phase: 'uncertain' }),
+    ])
+    expect(get(generationOperationProjections)).toEqual([completed])
+  })
+
+  it('settles terminal Chat B while Chat A strict hydration fails, and later retries only Chat A', async () => {
+    const a = operation('completed', { stateVersion: 5, projectionEpoch: 5, resultMessageId: 'assistant-a' })
+    const b = operation('completed', {
+      operationId: 'operation-b',
+      chatId: 'chat-b',
+      stateVersion: 5,
+      projectionEpoch: 5,
+      resultMessageId: 'assistant-b',
+    })
+    for (const op of [a, b]) {
+      const token = beginGenerationRecoveryObligation({
+        operationId: op.operationId,
+        chatId: op.chatId,
+        kind: 'submit',
+        sourceGeneration: captureClientSessionGeneration(),
+      })
+      markGenerationRecoveryObligationUncertain(token)
+    }
+    startActiveGenerationReattach()
+    h.fetchBootstrap.mockResolvedValue(bootstrap([a, b], [], 5))
+    h.hydrateChatMessages.mockImplementation(async (chatId: string) => {
+      if (chatId === 'chat-a') throw new Error('A transcript unavailable')
+    })
+    await refreshActiveGenerationJobsFromBootstrap()
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({ operationId, chatId: 'chat-a', phase: 'awaiting_transcript' }),
+    ])
+    expect(h.hydrateChatMessages.mock.calls.map(([chatId]) => chatId)).toEqual(['chat-a', 'chat-b', 'chat-a'])
+    h.hydrateChatMessages.mockReset().mockResolvedValue(undefined)
+    await refreshActiveGenerationJobsFromBootstrap()
+    expect(h.hydrateChatMessages.mock.calls.map(([chatId]) => chatId)).toEqual(['chat-a'])
+    expect(captureGenerationRecoveryObligations()).toEqual([])
+    startActiveGenerationReattach()
+    window.dispatchEvent(new Event('focus'))
+    await flushMicrotasks()
+    expect(h.fetchBootstrap).toHaveBeenCalledTimes(2)
+  })
+
   it('does not settle an unknown retry response from the old retryable state', async () => {
     const retryable = operation('retryable', {
       requestOrigin: 'regenerate',

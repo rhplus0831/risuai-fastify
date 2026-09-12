@@ -178,12 +178,17 @@ export function settleCapturedGenerationRecoveryObligation(captured: CapturedGen
 function operationIdentityMatches(
   obligation: MutableGenerationRecoveryObligation,
   operation: GenerationRecoveryOperationEvidence,
+  acceptedRetryRequestId?: string,
 ): boolean {
   if (!obligation.operationId || obligation.operationId !== operation.operationId) return false
   if (obligation.chatId && operation.chatId && obligation.chatId !== operation.chatId) return false
   if (operation.stateVersion < (obligation.minimumStateVersion ?? 0)) return false
   if (obligation.kind === 'retry') {
-    return Boolean(obligation.retryRequestId && operation.currentAttempt?.retryRequestId === obligation.retryRequestId)
+    return Boolean(
+      obligation.retryRequestId &&
+      (operation.currentAttempt?.retryRequestId === obligation.retryRequestId ||
+        acceptedRetryRequestId === obligation.retryRequestId),
+    )
   }
   if (obligation.kind !== 'cancel') return true
   return (
@@ -240,10 +245,13 @@ function sameTerminalAuthority(
  * the dispatch obligation; terminal authority transfers it to transcript
  * recovery so a response callback cannot clear it prematurely.
  */
-export function applyGenerationRecoveryOperation(operation: GenerationRecoveryOperationEvidence): void {
+export function applyGenerationRecoveryOperation(
+  operation: GenerationRecoveryOperationEvidence,
+  acceptedRetryRequestId?: string,
+): void {
   if (!operation.operationId || !Number.isSafeInteger(operation.stateVersion) || operation.stateVersion < 0) return
   for (const obligation of [...obligations.values()]) {
-    if (!operationIdentityMatches(obligation, operation)) continue
+    if (!operationIdentityMatches(obligation, operation, acceptedRetryRequestId)) continue
     if (operationNeedsTranscriptHydration(operation) && (operation.chatId || obligation.chatId)) {
       const authority = terminalAuthority(operation)
       const authorityChanged = !sameTerminalAuthority(obligation.terminalAuthority, authority)

@@ -88,6 +88,9 @@ boundary. Browser lifecycle events and mobile profiles are controlled Chromium
 conditions; they do not certify physical devices or a live external provider.
 
 The lifecycle fixture shares a server across separate case pages and chat IDs.
+Its isolated server trusts forwarded addresses, and each fresh browser page uses
+a distinct documentation-range client IP so independent devices do not exhaust
+one loopback login quota. Real authentication and writer checks remain enabled.
 Before its direct generation-settings setup write, it waits for the exact ready
 route, matching local and persisted SQL selection, and completion of that chat's
 native selection intent. It records those read-only observations and leaves
@@ -95,6 +98,26 @@ active jobs in other chats alone. Import deliberately resets `configured` to
 false, so the later configuration PUT remains necessary. This ordering prevents
 fixture writes from creating a revision conflict with real chat navigation;
 background readiness and generic composer visibility alone are insufficient.
+
+The reliability audit strengthens this suite with lost Regenerate acceptance,
+a retry that completes before its lost response can be reconciled, compatibility
+send response loss followed by reload, a committed plugin-effect receipt held
+past the browser control deadline, and two restarts before and two after queued
+finalization settles. These compare exact transcript/operation identities,
+provider invocations, outbox settlement, and durable effect rows. Compatibility
+coverage removes only the advertised operation capability and faults the native
+initial response; it verifies the real fallback POST and job-stream GET.
+
+The focused effect-ledger suite holds fetch/JSON/auth boundaries through deadline
+or writer loss, completes a replacement before releasing an old response, and
+checks renewal coalescing and cleanup after a late failure. Recovered-effect tests
+use generation-scoped receipt fixtures to prove that Chat B settles while Chat A
+hydration or claim fails. The lifecycle DOM suite composes exact retry receipt,
+strict terminal hydration, newer obligations, and mixed chat reconciliation.
+`server/fastify/__tests__/durableGeneration.test.ts` also reproduces an unreasoned
+assembly abort with a real job and verifies immediate follow-up admission; its
+abort injection matches registry expiry semantics without waiting for a full
+production deadline.
 
 ## Connected-reader viewing and writer effects
 

@@ -144,6 +144,7 @@ export interface GenerationOperationStreamDescriptor {
 }
 
 export interface GenerationOperationResponse {
+  acceptedRetryRequestId?: string
   operation: GenerationOperationProjection
   append?: {
     disposition: 'accepted' | 'not_appended'
@@ -686,6 +687,9 @@ function responseFromBody(body: unknown): GenerationOperationResponse | undefine
   const operation = operationFromBody(body)
   if (!operation) return undefined
   const result: GenerationOperationResponse = { operation }
+  if (typeof record.acceptedRetryRequestId === 'string' && UUID_V4_RE.test(record.acceptedRetryRequestId)) {
+    result.acceptedRetryRequestId = record.acceptedRetryRequestId
+  }
   if (record.append && typeof record.append === 'object' && !Array.isArray(record.append)) {
     const append = record.append as Record<string, unknown>
     if (
@@ -1048,7 +1052,10 @@ function operationFromSseEvent(data: Record<string, unknown>): GenerationOperati
       data.postGeneration && typeof data.postGeneration === 'object' && !Array.isArray(data.postGeneration)
         ? (data.postGeneration as Record<string, unknown>)
         : undefined
-    if (typeof postGeneration?.messageId === 'string') operation.resultMessageId = postGeneration.messageId
+    // Targeted patch addresses may name the displaced row. The terminal
+    // operation result identifies the row actually committed by finalization.
+    if (typeof data.resultMessageId === 'string') operation.resultMessageId = data.resultMessageId
+    else if (typeof postGeneration?.messageId === 'string') operation.resultMessageId = postGeneration.messageId
   }
   return operation
 }
@@ -1784,11 +1791,15 @@ function operationMatchesRecoveryAddress(
 function acceptedOperationMatchesRecoveryDispatch(
   operation: GenerationOperationProjection,
   identity: GenerationDispatchRecoveryIdentity,
+  acceptedRetryRequestId?: string,
 ): boolean {
   if (!operationMatchesRecoveryAddress(operation, identity)) return false
   if (identity.minimumStateVersion !== undefined && operation.stateVersion < identity.minimumStateVersion) return false
   if (identity.kind === 'retry') {
-    return operation.currentAttempt?.retryRequestId === identity.retryRequestId
+    return (
+      operation.currentAttempt?.retryRequestId === identity.retryRequestId ||
+      acceptedRetryRequestId === identity.retryRequestId
+    )
   }
   if (identity.kind === 'cancel') {
     return (
@@ -1882,7 +1893,9 @@ async function dispatchPendingGenerationOperation(
         if (!operationMatchesRecoveryAddress(parsed.operation, recoveryIdentity)) {
           return retainedAmbiguousGenerationOperation(obligation, 'Invalid generation operation response.')
         }
-        if (!operationConcludesPendingIntent(parsed.operation, intent, recoveryIdentity)) {
+        if (
+          !operationConcludesPendingIntent(parsed.operation, intent, recoveryIdentity, parsed.acceptedRetryRequestId)
+        ) {
           return retainedAmbiguousGenerationOperation(obligation, 'Invalid generation operation response.')
         }
         const appendReconciliation = acceptedSendTarget
@@ -1894,6 +1907,15 @@ async function dispatchPendingGenerationOperation(
         const responseIsCurrent = generationAccessIsCurrent(access, sourceGeneration)
         if (responseIsCurrent) {
           applyGenerationOperationProjection(parsed.operation)
+          if (recoveryIdentity.kind === 'retry' && parsed.acceptedRetryRequestId === recoveryIdentity.retryRequestId) {
+            // Receipt authority acknowledges this exact dispatch independently of
+            // the expiring stream descriptor. Reconcile against the newest
+            // admitted projection so a late receipt cannot restore an old attempt.
+            const current = get(generationOperationProjections).find(
+              (candidate) => candidate.operationId === recoveryIdentity.operationId,
+            )
+            if (current) applyGenerationRecoveryOperation(current, parsed.acceptedRetryRequestId)
+          }
           settleGenerationRecoveryObligation(obligation)
         } else {
           markGenerationRecoveryObligationUncertain(obligation)
@@ -2093,8 +2115,9 @@ function operationConcludesPendingIntent(
   operation: GenerationOperationProjection,
   intent: DurableMutationIntent,
   identity: GenerationDispatchRecoveryIdentity,
+  acceptedRetryRequestId?: string,
 ): boolean {
-  if (!acceptedOperationMatchesRecoveryDispatch(operation, identity)) return false
+  if (!acceptedOperationMatchesRecoveryDispatch(operation, identity, acceptedRetryRequestId)) return false
   const body = intent.requests[0]?.body
   if (identity.kind !== 'submit') return true
   if (

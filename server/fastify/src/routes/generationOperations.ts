@@ -963,7 +963,12 @@ export function registerGenerationOperationRoutes(
             reuseAcceptedSubmitTransforms: true,
           })
         }
-        return reply.code(createdAttempt ? 202 : 200).send(operationResponse(operation))
+        // The persisted retry-request lookup remains valid after the live attempt
+        // descriptor disappears. Return its receipt separately from stream authority.
+        return reply.code(createdAttempt ? 202 : 200).send({
+          ...operationResponse(operation),
+          acceptedRetryRequestId: retryRequestId,
+        })
       } catch (error) {
         return sendOperationError(reply, error)
       }

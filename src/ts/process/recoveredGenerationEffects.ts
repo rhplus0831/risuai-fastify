@@ -66,17 +66,32 @@ export async function reconcilePendingRecoveredGenerationEffects(): Promise<void
     const ref = generationEffectRefFromPending(effect)
     refs.set(`${ref.databaseLineage}:${ref.generationId}`, ref)
   }
-  for (const ref of refs.values()) {
+  const settled = new Set<string>()
+  const failures: unknown[] = []
+  for (const [key, ref] of refs) {
     if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
-    await hydrateChatMessages(ref.chatId, { force: true, strict: true })
-    if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
-    const result = await reconcileRecoveredGenerationEffects(ref)
-    if (!result.allEffectsReconciled) {
-      throw new Error(`Generation effects remain unavailable for ${ref.generationId}`)
+    try {
+      await hydrateChatMessages(ref.chatId, { force: true, strict: true })
+      if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
+      const result = await reconcileRecoveredGenerationEffects(ref)
+      if (!result.allEffectsReconciled) {
+        throw new Error(`Generation effects remain unavailable for ${ref.generationId}`)
+      }
+      settled.add(key)
+    } catch (error) {
+      // A failed chat retains its own work, while later chats can still settle.
+      failures.push(error)
     }
   }
   if (!recoveryIsCurrent(sourceGeneration)) throw new Error('client_write_operation_stale')
-  if (bootstrapPendingEffects === pendingEffects) bootstrapPendingEffects = []
+  // A newer bootstrap owns its complete pending snapshot. This pass can retire
+  // only the exact snapshot it captured, even if generation identities match.
+  if (bootstrapPendingEffects === pendingEffects) {
+    bootstrapPendingEffects = pendingEffects.filter(
+      (effect) => !settled.has(`${effect.databaseLineage}:${effect.generationId}`),
+    )
+  }
+  if (failures.length > 0) throw failures[0]
 }
 
 /** Permanently skip the unfinished client effects so later generations are no longer gated by them. */

@@ -3092,7 +3092,12 @@ function lineageEventForJob(db: DatabaseSync, job: StreamJob, event: PromptChatE
     jobId: lineage.jobId,
     ...(job.acceptedMessageId ? { acceptedMessageId: job.acceptedMessageId } : {}),
     ...(job.targetMessageId ? { targetMessageId: job.targetMessageId } : {}),
-    ...(event.type === 'done' && operation ? { operationState: operation.state } : {}),
+    ...(event.type === 'done' && operation
+      ? {
+          operationState: operation.state,
+          ...(operation.resultMessageId ? { resultMessageId: operation.resultMessageId } : {}),
+        }
+      : {}),
   }
 }
 
@@ -5810,7 +5815,10 @@ async function runGenerationJob(args: {
       }
     }
 
-    if (!terminalDoneEmitted && !signal.aborted) {
+    // A deadline can abort prompt assembly before any provider work exists.
+    // Its error still needs terminal settlement to release the durable chat
+    // claim; only an in-flight provider/persistence path owns deferred cleanup.
+    if (!terminalDoneEmitted && (!signal.aborted || !providerMayHaveRun)) {
       emit({ type: 'done' })
     }
   } finally {

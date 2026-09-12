@@ -296,30 +296,19 @@ async function claimEffect(
   delivery: GenerationEffectDelivery,
   sourceGeneration: number,
 ): Promise<ClaimedEffectResponse | NotClaimedEffectResponse | null> {
-  if (!effectAccessIsCurrent(sourceGeneration)) return null
-  const auth = await getNodeServerProxyAuth()
-  if (!effectAccessIsCurrent(sourceGeneration)) return null
-  let response: Response
-  try {
-    response = await fetch(
-      `/api/v1/generation-effects/${encodeURIComponent(ref.generationId)}/${encodeURIComponent(kind)}/claims`,
-      {
-        method: 'POST',
-        headers: {
-          'content-type': 'application/json',
-          'risu-auth': auth,
-          ...activeWriterSessionHeader(),
-          [SERVER_DATABASE_LINEAGE_HEADER]: ref.databaseLineage,
-        },
-        body: JSON.stringify({ delivery, messageId: ref.messageId }),
-      },
-    )
-  } catch {
-    return null
-  }
-  const body = await readJson(response)
-  if (handleActiveWriterStaleResponse(response, body, sourceGeneration)) return null
-  if (!effectAccessIsCurrent(sourceGeneration)) return null
+  const result = await requestGenerationEffect(
+    ref,
+    kind,
+    'claims',
+    'POST',
+    {
+      delivery,
+      messageId: ref.messageId,
+    },
+    sourceGeneration,
+  )
+  if (!result) return null
+  const { response, body } = result
   if (!response.ok || !body || typeof body !== 'object' || Array.isArray(body)) return null
   const record = body as Record<string, unknown>
   if (record.status === 'claimed' && typeof record.claimId === 'string') {
@@ -348,14 +337,24 @@ function startEffectLeaseRenewal(
   if (!claim.leaseExpiresAt) return () => {}
   const remainingMs = Date.parse(claim.leaseExpiresAt) - Date.now()
   if (!Number.isFinite(remainingMs) || remainingMs <= 0) return () => {}
+  const controller = new AbortController()
+  let renewing = false
   const interval = setInterval(
     () => {
       if (!effectAccessIsCurrent(sourceGeneration)) clearInterval(interval)
-      else void renewEffectLease(ref, kind, claim.claimId, sourceGeneration)
+      else if (!renewing) {
+        renewing = true
+        void renewEffectLease(ref, kind, claim.claimId, sourceGeneration, controller.signal).finally(() => {
+          renewing = false
+        })
+      }
     },
     Math.max(1_000, Math.min(30_000, Math.floor(remainingMs / 3))),
   )
-  const stop = () => clearInterval(interval)
+  const stop = () => {
+    clearInterval(interval)
+    controller.abort()
+  }
   signal.addEventListener('abort', stop, { once: true })
   return () => {
     stop()
@@ -368,30 +367,11 @@ async function renewEffectLease(
   kind: GenerationEffectKind,
   claimId: string,
   sourceGeneration: number,
+  signal: AbortSignal,
 ): Promise<void> {
-  if (!effectAccessIsCurrent(sourceGeneration)) return
-  const auth = await getNodeServerProxyAuth()
-  if (!effectAccessIsCurrent(sourceGeneration)) return
-  try {
-    const response = await fetch(
-      `/api/v1/generation-effects/${encodeURIComponent(ref.generationId)}/${encodeURIComponent(kind)}/lease`,
-      {
-        method: 'PUT',
-        headers: {
-          'content-type': 'application/json',
-          'risu-auth': auth,
-          ...activeWriterSessionHeader(),
-          [SERVER_DATABASE_LINEAGE_HEADER]: ref.databaseLineage,
-        },
-        body: JSON.stringify({ claimId }),
-      },
-    )
-    const body = await readJson(response)
-    handleActiveWriterStaleResponse(response, body, sourceGeneration)
-  } catch {
-    // Expiry makes a lost renewal recoverable; the callback keeps its stable
-    // idempotency key in case another writer has to reclaim it.
-  }
+  // Expiry makes a lost renewal recoverable; callbacks retain their stable
+  // idempotency key if another writer has to reclaim the effect.
+  await requestGenerationEffect(ref, kind, 'lease', 'PUT', { claimId }, sourceGeneration, signal)
 }
 
 function generationEffectIdempotencyKey(ref: ServerGenerationEffectLedgerRef, kind: GenerationEffectKind): string {
@@ -405,30 +385,85 @@ async function settleEffect(
   receipt: { status: 'completed' | 'skipped' | 'failed'; reason?: string; lastError?: string },
   sourceGeneration: number,
 ): Promise<boolean> {
-  if (!effectAccessIsCurrent(sourceGeneration)) return false
-  const auth = await getNodeServerProxyAuth()
-  if (!effectAccessIsCurrent(sourceGeneration)) return false
-  let response: Response
-  try {
-    response = await fetch(
-      `/api/v1/generation-effects/${encodeURIComponent(ref.generationId)}/${encodeURIComponent(kind)}/receipt`,
-      {
-        method: 'PUT',
-        headers: {
-          'content-type': 'application/json',
-          'risu-auth': auth,
-          ...activeWriterSessionHeader(),
-          [SERVER_DATABASE_LINEAGE_HEADER]: ref.databaseLineage,
-        },
-        body: JSON.stringify({ claimId, ...receipt }),
-      },
-    )
-  } catch {
-    return false
+  const result = await requestGenerationEffect(
+    ref,
+    kind,
+    'receipt',
+    'PUT',
+    {
+      claimId,
+      ...receipt,
+    },
+    sourceGeneration,
+  )
+  return result?.response.ok ?? false
+}
+
+const GENERATION_EFFECT_REQUEST_TIMEOUT_MS = 30_000
+
+/** Bound auth, transport and body consumption together, including transports
+ * that ignore abort. Retiring the request leaves server claim/receipt authority
+ * intact so the next recovery can discover an already committed outcome. */
+async function requestGenerationEffect(
+  ref: ServerGenerationEffectLedgerRef,
+  kind: GenerationEffectKind,
+  action: 'claims' | 'lease' | 'receipt',
+  method: 'POST' | 'PUT',
+  payload: object,
+  sourceGeneration: number,
+  signal?: AbortSignal,
+): Promise<{ response: Response; body: unknown } | null> {
+  if (!effectAccessIsCurrent(sourceGeneration) || signal?.aborted) return null
+  const controller = new AbortController()
+  let resolveCancelled!: (value: null) => void
+  const cancelled = new Promise<null>((resolve) => {
+    resolveCancelled = resolve
+  })
+  const abort = () => {
+    controller.abort()
+    resolveCancelled(null)
   }
-  const body = await readJson(response)
-  if (handleActiveWriterStaleResponse(response, body, sourceGeneration)) return false
-  return response.ok
+  signal?.addEventListener('abort', abort, { once: true })
+  const unsubscribe = clientSessionStore.subscribe(() => {
+    if (!effectAccessIsCurrent(sourceGeneration)) abort()
+  })
+  const deadline = setTimeout(abort, GENERATION_EFFECT_REQUEST_TIMEOUT_MS)
+  const isCurrent = () => !controller.signal.aborted && effectAccessIsCurrent(sourceGeneration)
+  try {
+    return await Promise.race([
+      cancelled,
+      (async () => {
+        try {
+          const auth = await getNodeServerProxyAuth()
+          if (!isCurrent()) return null
+          const response = await fetch(
+            `/api/v1/generation-effects/${encodeURIComponent(ref.generationId)}/${encodeURIComponent(kind)}/${action}`,
+            {
+              method,
+              headers: {
+                'content-type': 'application/json',
+                'risu-auth': auth,
+                ...activeWriterSessionHeader(),
+                [SERVER_DATABASE_LINEAGE_HEADER]: ref.databaseLineage,
+              },
+              body: JSON.stringify(payload),
+              signal: controller.signal,
+            },
+          )
+          if (!isCurrent()) return null
+          const body = await readJson(response)
+          if (!isCurrent() || handleActiveWriterStaleResponse(response, body, sourceGeneration)) return null
+          return { response, body }
+        } catch {
+          return null
+        }
+      })(),
+    ])
+  } finally {
+    clearTimeout(deadline)
+    unsubscribe()
+    signal?.removeEventListener('abort', abort)
+  }
 }
 
 async function readJson(response: Response): Promise<unknown> {

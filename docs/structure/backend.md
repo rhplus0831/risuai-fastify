@@ -277,6 +277,9 @@ The normal send/continue/regenerate protocol enters through
 `routes/generationOperations.ts`. It atomically records a lineage- and
 writer-scoped operation, accepts the user row when applicable, and reserves a
 numbered attempt before attaching that attempt to a process-local runner.
+A successful retry response also receipts `acceptedRetryRequestId` after the
+numbered attempt stops being live. This acknowledges an idempotent replay without
+redispatching provider work.
 Projection epochs plus operation/attempt/job identifiers fence status reads,
 stream attachment, cancellation, and explicit retries. On startup,
 `reconcileGenerationOperationsAtStartup()` turns interrupted ownership into an
@@ -341,6 +344,9 @@ completed and losing the partial.
 Provider failures before the first token retain no assistant row. Failures after
 tokens use the same processed partial snapshot and keep it as a failed assistant
 row instead of restoring the pre-generation transcript.
+An abort during prompt assembly before provider dispatch also settles the
+operation as retryable and releases its durable chat claim. Terminal SSE exposes
+the committed `resultMessageId` independently of a targeted patch address.
 Before writing a result, finalization compares the live transcript with the
 assembly-time target snapshot; a stale append/replace target is rejected rather
 than overwriting newer chat state. Script-side chat-variable, character-field,

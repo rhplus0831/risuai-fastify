@@ -1078,6 +1078,27 @@ describe('generation operation client', () => {
     })
   })
 
+  it('uses the committed terminal result identity instead of the displaced regenerate patch target', () => {
+    const current = { ...responseBody().operation, mode: 'regenerate' as const, targetMessageId: 'displaced-row' }
+    applyGenerationOperationProjection(current)
+    applyGenerationOperationSseEvent({
+      type: 'done',
+      operationId,
+      operationState: 'completed',
+      operationStateVersion: current.stateVersion + 1,
+      projectionEpoch: current.projectionEpoch + 1,
+      attemptNo: current.currentAttempt!.attemptNo,
+      jobId: current.currentAttempt!.jobId,
+      resultMessageId: 'committed-row',
+      postGeneration: { messageId: 'displaced-row' },
+    })
+    expect(get(generationOperationProjections)[0]).toMatchObject({
+      state: 'completed',
+      resultMessageId: 'committed-row',
+      targetMessageId: 'displaced-row',
+    })
+  })
+
   it('ignores a stale SSE frame from an older operation attempt', () => {
     const current = {
       ...responseBody().operation,

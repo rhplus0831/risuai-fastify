@@ -4,20 +4,18 @@ Updated: 2026-09-12.
 
 ## Current Cursor
 
-- State: **Phase 01 complete. Phase 02 has not started.**
+- State: **Phases 01 and 02 complete. Phase 03 has not started.**
 - Planning work: complete, including source grounding, independent review,
   corrections, and documentation validation.
-- Next action: begin the generation entry-path and real/mocked coverage matrix
-  in [phase 02](phases/02-generation-recovery.md), reusing Phase 01 evidence.
-- Phase 01 execution baseline: `dc96708c798b3653ca73b501227649acd0753dfb`;
-  working tree clean at execution start. Committed changes since the runtime
-  baseline below were documentation only; the completed Phase 01 patch is now
-  uncommitted and is described in its execution ledger.
-- Runtime source baseline: `e93a74236d3e66a928cdd44c4e6d73a086aae515`.
-  During drafting, a concurrent documentation commit advanced HEAD to
-  `07e2ff9d9cbfc97776c41e3efa8df68055769c93` and included the draft plan/status/index.
-  The intervening changes were documentation only. Recheck source and working
-  changes when Phase 02 starts.
+- Next action: complete the mutation entry-path and real/mocked coverage inventory
+  in [phase 03](phases/03-outbox-and-optimistic-edits.md), reusing Phase 02's
+  operation/receipt and Phase 01's connection evidence.
+- Phase 02 execution baseline: `7ede21ee99b194598f4b761a9941a4bcfdae6c45`,
+  clean worktree at entry. Phase 01 is committed there; the completed Phase 02
+  runtime/test/documentation patch remains uncommitted and is recorded in its ledger.
+- Phase 01 execution baseline: `dc96708c798b3653ca73b501227649acd0753dfb`.
+  Planning runtime baseline: `e93a74236d3e66a928cdd44c4e6d73a086aae515`.
+  Recheck current source and working changes before beginning the next phase.
 
 ## Document Map
 
@@ -32,8 +30,8 @@ Updated: 2026-09-12.
 | Phase | State | Evidence / next step |
 | --- | --- | --- |
 | [01 — Connection recovery](phases/01-connection-recovery.md) | Complete | R1–R8 verified; SSE snapshot-failure leak fixed; focused/broad checks and 22 browser journeys passed. |
-| [02 — Generation recovery](phases/02-generation-recovery.md) | Not started | Next: complete generation entry-path/coverage inventory; reuse 01 connection evidence. |
-| [03 — Outbox and optimistic edits](phases/03-outbox-and-optimistic-edits.md) | Not started | Select representative mutation owners after 02. |
+| [02 — Generation recovery](phases/02-generation-recovery.md) | Complete | G1–G7 verified; five reproduced defects fixed; broader checks and all 26 selected browser journeys passed. |
+| [03 — Outbox and optimistic edits](phases/03-outbox-and-optimistic-edits.md) | Not started | Next: inventory representative mutation owners and reuse 01–02 authority/receipt evidence. |
 | [04 — Resource hydration](phases/04-resource-hydration.md) | Not started | Extend 01's hydration checks to cache, invalidation, and navigation. |
 | [05 — Background jobs](phases/05-background-jobs.md) | Not started | Separate process-local and durable lifecycle obligations. |
 | [06 — Import and restore](phases/06-import-and-restore.md) | Not started | Verify replacement/publication boundaries in disposable data. |
@@ -62,6 +60,28 @@ This table's states are separate from whether the planning documents are verifie
   scoped Prettier, and whitespace checks passed. No required Phase 01 evidence
   gap remains; physical-device/platform limits are recorded separately.
 
+## Phase 02 Execution Evidence
+
+- [Phase 02 ledger](phases/02-generation-recovery.md#execution-record): bounded
+  modern/compatibility entry inventory, G1–G7 evidence, findings and limitations.
+- Fixed stalled effect controls, cross-chat effect recovery blockage, retained
+  completed retries, pre-provider aborts retaining the durable chat claim, and
+  incorrect Regenerate terminal result identity. Each defect has a regression
+  that failed before its repair.
+- Added native browser completed-retry/Regenerate acceptance-loss, compatibility
+  response-loss/reload, held committed effect receipt, and repeated restart
+  schedules. Strengthened captured-obligation and independent-chat settlement.
+- `pnpm test:agent` passed all seven lanes: 9,513 frontend and 4,375 server tests
+  passed, with three existing skips in each suite outside required phase evidence.
+  All **26 selected Chromium browser journeys passed** on the final patch.
+- Suite expansion exposed a fixture login quota collision. Distinct forwarded
+  client addresses in the isolated harness corrected it; real authentication and
+  production rate-limit policy remain unchanged. The final browser typecheck and
+  full selected browser suite passed after that fixture-only change.
+- Current docs (51 files), explicit nested-plan validation (nine files), scoped
+  formatting and whitespace checks passed. No required Phase 02 evidence gap
+  remains; external-process crash and physical-platform depth are explicitly limited.
+
 ## Planning Evidence
 
 - Six independent read-only GPT-5.6 Luna explorations completed successfully for
@@ -81,7 +101,7 @@ This table's states are separate from whether the planning documents are verifie
 - Scoped Prettier and whitespace checks passed. Formatting used
   `--ignore-path /dev/null` because the normal ignore file excludes Markdown.
   Compact tables use local Prettier ignore comments.
-- Runtime tests/browser journeys were not run during planning; Phase 01 execution
+- Runtime tests/browser journeys were not run during planning; Phase 01–02 execution
   results are recorded above.
 
 ## Decisions and Boundaries
@@ -89,9 +109,10 @@ This table's states are separate from whether the planning documents are verifie
 - Finish connection recovery and writer promotion first, then apply the same
   audit standard to later workflows. Improve existing coverage selectively.
 - Keep background jobs and import/restore in separate bounded phases.
-- Execution began with a clean worktree. Phase 01 changes the event-route cleanup
-  boundary, focused/browser tests, this ledger, and related current guides.
-- One runtime defect was reproduced under an induced snapshot-read failure in
+- Each execution phase began with a clean worktree. Phase 01 fixed event-route
+  cleanup; Phase 02 fixes generation lifecycle/identity/effect boundaries and
+  strengthens their tests and documentation.
+- Phase 01 reproduced one runtime defect under an induced snapshot-read failure in
   disposable SQLite: SSE subscriptions survived HTTP 500. It is fixed; this is
   not a claim of an observed external production incident.
 - A pre-existing mobile read-only browser assertion omitted the valid Close Menu
@@ -100,7 +121,9 @@ This table's states are separate from whether the planning documents are verifie
 ## Open Items
 
 - No unresolved planning-review findings.
-- Phases 02–06 remain unstarted. Phase 02 is next.
+- Phases 03–06 remain unstarted. Phase 03 is next.
+- External-process crash/power-loss verification remains an optional Phase 02
+  follow-up; repeated in-process restarts do not certify those conditions.
 - Physical-device suspension and non-Chromium behavior remain an explicit optional
   device follow-up; Chromium emulation does not verify them.
 

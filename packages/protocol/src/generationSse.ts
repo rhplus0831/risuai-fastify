@@ -518,6 +518,7 @@ export const DoneEventSchema = Type.Object({
   postGeneration: Type.Optional(PostGenerationFrameSchema),
   persistenceDisposition: Type.Optional(Type.Literal('committed_cleanup_pending')),
   operationState: Type.Optional(GenerationOperationStateSchema),
+  resultMessageId: Type.Optional(Type.String()),
 })
 
 const PromptChatEventPayloadSchema = Type.Union([

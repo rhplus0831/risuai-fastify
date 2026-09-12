@@ -162,6 +162,15 @@ the recovery row only after acknowledgement; failure, writer/session scope loss,
 or re-promotion races keep the warning and recovery action. Retry is a separate
 action and asks for confirmation when the provider may already have run.
 
+Retry responses carry `acceptedRetryRequestId` separately from the live stream
+descriptor. An idempotent retry replay can therefore acknowledge its exact
+retained intent after the attempt has completed and `currentAttempt` is absent.
+The receipt does not recreate a stream: terminal authority still requires strict
+transcript hydration, and captured versions protect newer recovery obligations.
+Terminal SSE carries the authoritative `resultMessageId`; this takes precedence
+over the post-generation patch address, which can name a displaced regenerate
+row.
+
 ## Connected Reader Observation
 
 Reader content admission is separate from an initial writer's coherent shell
@@ -244,6 +253,16 @@ superseded nodes are disconnected and the context is suspended again. Browsers
 without Web Audio construct an `HTMLAudioElement` only for actual playback and
 unload it afterward. Web Push remains the independent background-notification
 path and is not enabled by completion-audio settings.
+
+Effect claim, renewal, and receipt control requests bound authentication,
+transport, and JSON consumption to 30 seconds and abort when their writer
+generation loses access. Even an abort-insensitive response cannot retain the
+local claim waiter indefinitely. Renewal requests do not overlap and are retired
+when the effect settles. A timed-out response does not undo server acceptance;
+subsequent recovery reads the ledger before executing anything again.
+Pending-effect reconciliation continues after an individual chat fails, removes
+only settled generations from its captured snapshot, and preserves newer
+bootstrap snapshots. A failed chat retains its recovery work.
 
 ## Half-Streaming
 

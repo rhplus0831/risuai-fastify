@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import type { PendingGenerationEffect } from '../server/bootstrap'
 import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
 
 const state = vi.hoisted(() => ({
@@ -54,7 +55,7 @@ vi.mock('../plugins/chatOutputListeners', () => ({
   }),
 }))
 const hydration = vi.hoisted(() => ({
-  hydrateChatMessages: vi.fn(async () => undefined),
+  hydrateChatMessages: vi.fn(async (_chatId: string, _options?: { force?: boolean; strict?: boolean }) => undefined),
   getChatMessageOwnerState: vi.fn((chatId: string) => {
     const chats = state.ownerCharacters.flatMap((character) => character.chats ?? [])
     const matches = chats.filter((chat) => chat.id === chatId)
@@ -93,11 +94,13 @@ vi.mock('./generationEffectLedger', async (importOriginal) => {
     ...original,
     runLedgeredGenerationEffect: vi.fn(async (_ref, kind, delivery, effect) => {
       ledger.calls.push(`${delivery}:${kind}`)
-      if (ledger.unavailableKinds.has(kind)) return { executed: false, status: 'unavailable' }
+      const key = `${_ref.generationId}:${kind}`
+      if (ledger.unavailableKinds.has(kind) || ledger.unavailableKinds.has(key))
+        return { executed: false, status: 'unavailable' }
       if (kind === 'notification' || kind === 'tts' || kind === 'completion_sound') {
         return { executed: false, status: 'already_receipted' }
       }
-      if (ledger.receipts.has(kind)) return { executed: false, status: 'already_receipted' }
+      if (ledger.receipts.has(key)) return { executed: false, status: 'already_receipted' }
       const result = await effect({
         idempotencyKey: `test:${kind}`,
         reclaimed: false,
@@ -105,7 +108,7 @@ vi.mock('./generationEffectLedger', async (importOriginal) => {
         isCurrent: () => true,
         signal: new AbortController().signal,
       })
-      ledger.receipts.add(kind)
+      ledger.receipts.add(key)
       return { executed: true, status: result.status, value: result.value }
     }),
   }
@@ -267,7 +270,7 @@ describe('late recovered generation effects', () => {
   })
 
   it('runs only missing durable effects when one already has a receipt', async () => {
-    ledger.receipts.add('igp')
+    ledger.receipts.add('generation-a:igp')
 
     await expect(reconcileRecoveredGenerationEffects(ref)).resolves.toEqual({
       durableEffectsReconciled: true,
@@ -302,9 +305,57 @@ describe('late recovered generation effects', () => {
     await expect(reconcileRecoveredGenerationEffects(ref)).rejects.toThrow('Plugin runtime is not ready')
 
     expect(ledger.calls).toEqual([])
-    expect(ledger.receipts.has('plugin_output')).toBe(false)
+    expect(ledger.receipts.has('generation-a:plugin_output')).toBe(false)
     expect(state.order).toEqual([])
   })
+
+  it.each(['hydration', 'claim'] as const)(
+    'settles Chat B effects despite Chat A %s failure and retries only unresolved work',
+    async (failure) => {
+      const pending = (suffix: string): PendingGenerationEffect => ({
+        ledgerVersion: 1,
+        databaseLineage: 'lineage-a',
+        keyType: 'operation',
+        keyId: `operation-${suffix}`,
+        kind: 'plugin_output',
+        effectClass: 'durable',
+        operationId: `operation-${suffix}`,
+        generationId: `generation-${suffix}`,
+        characterId: 'character-a',
+        chatId: `chat-${suffix}`,
+        messageId: `message-${suffix}`,
+        status: 'pending',
+        createdAt: '2026-09-12T00:00:00.000Z',
+        updatedAt: '2026-09-12T00:00:00.000Z',
+      })
+      const chatB = structuredClone(state.ownerCharacters[0].chats[0])
+      chatB.id = 'chat-b'
+      chatB.message[1].chatId = 'message-b'
+      chatB.message[1].generationInfo.generationId = 'generation-b'
+      state.ownerCharacters[0].chats.push(chatB)
+      setPendingRecoveredGenerationEffects([pending('a'), pending('b')])
+      if (failure === 'hydration')
+        hydration.hydrateChatMessages.mockRejectedValueOnce(new Error('chat A body unavailable'))
+      else ledger.unavailableKinds.add('generation-a:plugin_output')
+
+      await expect(reconcilePendingRecoveredGenerationEffects()).rejects.toThrow(
+        failure === 'hydration' ? 'chat A body unavailable' : 'Generation effects remain unavailable for generation-a',
+      )
+      expect(hydration.hydrateChatMessages.mock.calls.map((call) => call[0])).toEqual(['chat-a', 'chat-b'])
+      expect(ledger.receipts.has('generation-b:plugin_output')).toBe(true)
+      expect(ledger.receipts.has('generation-a:plugin_output')).toBe(false)
+      ledger.unavailableKinds.clear()
+
+      hydration.hydrateChatMessages.mockClear()
+      await expect(reconcilePendingRecoveredGenerationEffects()).resolves.toBeUndefined()
+      expect(hydration.hydrateChatMessages.mock.calls.map((call) => call[0])).toEqual(['chat-a'])
+      expect(ledger.receipts.has('generation-a:plugin_output')).toBe(true)
+      expect(state.order.filter((kind) => kind === 'plugin_output')).toHaveLength(2)
+      hydration.hydrateChatMessages.mockClear()
+      await expect(reconcilePendingRecoveredGenerationEffects()).resolves.toBeUndefined()
+      expect(hydration.hydrateChatMessages).not.toHaveBeenCalled()
+    },
+  )
 
   it('retains pending bootstrap effects when strict chat hydration must be retried', async () => {
     setPendingRecoveredGenerationEffects([
@@ -361,7 +412,7 @@ describe('late recovered generation effects', () => {
 
     ledger.unavailableKinds.clear()
     await expect(reconcilePendingRecoveredGenerationEffects()).resolves.toBeUndefined()
-    expect(ledger.receipts.has('plugin_output')).toBe(true)
+    expect(ledger.receipts.has('generation-a:plugin_output')).toBe(true)
   })
 
   it('permanently skips pending recovery effects without running their callbacks', async () => {

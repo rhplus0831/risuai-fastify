@@ -194,6 +194,154 @@ describe('client generation effect ledger', () => {
     expect(receiptedKinds).toEqual(['notification', 'tts', 'completion_sound'])
   })
 
+  for (const boundary of ['claims-fetch', 'claims-json', 'receipt-fetch', 'receipt-json'] as const) {
+    it.each(['deadline', 'writer-loss'] as const)(
+      `releases a held ${boundary} on %s before its late response`,
+      async (retirement) => {
+        setManagedWriterForTest()
+        vi.useFakeTimers()
+        try {
+          let release!: () => void
+          let heldSignal: AbortSignal | undefined
+          let held = false
+          const barrier = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+            const endpoint = String(input).split('/').at(-1)
+            const body =
+              endpoint === 'claims'
+                ? { status: 'claimed', claimId: 'claim-a', leaseExpiresAt: new Date(Date.now() + 90_000).toISOString() }
+                : { effect: { status: 'completed' } }
+            const response = jsonResponse(body)
+            if (!held && boundary.startsWith(String(endpoint))) {
+              held = true
+              heldSignal = init?.signal ?? undefined
+              if (boundary.endsWith('fetch')) await barrier
+              else
+                response.json = async () => {
+                  await barrier
+                  return body
+                }
+            } else if (endpoint === 'claims' && held) {
+              // The lost receipt may already have committed. A fresh claim reads
+              // that authority instead of dispatching the durable callback twice.
+              return jsonResponse({ status: 'not_claimed', reason: 'already_receipted' })
+            }
+            return response
+          })
+          vi.stubGlobal('fetch', fetchMock)
+          const effect = vi.fn(() => completedGenerationEffect('applied'))
+          let settled = false
+          const pending = runLedgeredGenerationEffect(ref, 'plugin_output', 'live_terminal', effect).then((result) => {
+            settled = true
+            return result
+          })
+          await vi.advanceTimersByTimeAsync(0)
+          expect(held).toBe(true)
+          if (retirement === 'writer-loss') demoteAndRepromoteForTest()
+          else await vi.advanceTimersByTimeAsync(30_000)
+          await vi.advanceTimersByTimeAsync(0)
+          expect(settled).toBe(true)
+          expect(heldSignal?.aborted).toBe(true)
+          await expect(pending).resolves.toMatchObject({ status: 'unavailable' })
+          expect(vi.getTimerCount()).toBe(0)
+
+          await expect(
+            runLedgeredGenerationEffect(ref, 'plugin_output', 'late_recovery', effect),
+          ).resolves.toMatchObject({ executed: false, status: 'already_receipted' })
+          const callsBeforeRelease = fetchMock.mock.calls.length
+          release()
+          await vi.advanceTimersByTimeAsync(120_000)
+          expect(effect).toHaveBeenCalledTimes(boundary.startsWith('receipt') ? 1 : 0)
+          expect(fetchMock).toHaveBeenCalledTimes(callsBeforeRelease)
+          expect(vi.getTimerCount()).toBe(0)
+        } finally {
+          vi.useRealTimers()
+        }
+      },
+    )
+  }
+
+  it('bounds auth before claim transport and ignores late credentials', async () => {
+    setManagedWriterForTest()
+    vi.useFakeTimers()
+    try {
+      let release!: (auth: string) => void
+      vi.mocked(getNodeServerProxyAuth).mockReturnValueOnce(
+        new Promise((resolve) => {
+          release = resolve
+        }),
+      )
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const effect = vi.fn(() => completedGenerationEffect(undefined))
+      let settled = false
+      const pending = runLedgeredGenerationEffect(ref, 'igp', 'late_recovery', effect).then((result) => {
+        settled = true
+        return result
+      })
+      await vi.advanceTimersByTimeAsync(30_000)
+      expect(settled).toBe(true)
+      await expect(pending).resolves.toMatchObject({ executed: false, status: 'unavailable' })
+      release('late-auth')
+      await vi.advanceTimersByTimeAsync(0)
+      expect(fetchMock).not.toHaveBeenCalled()
+      expect(effect).not.toHaveBeenCalled()
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps one pending renewal and cancels it when the receipt settles before its late failure', async () => {
+    setManagedWriterForTest()
+    vi.useFakeTimers()
+    try {
+      let finishEffect!: () => void
+      let failRenewal!: (error: Error) => void
+      const effectBarrier = new Promise<void>((resolve) => {
+        finishEffect = resolve
+      })
+      const renewalBarrier = new Promise<never>((_resolve, reject) => {
+        failRenewal = reject
+      })
+      let renewalSignal: AbortSignal | undefined
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith('/claims'))
+          return jsonResponse({
+            status: 'claimed',
+            claimId: 'claim-a',
+            leaseExpiresAt: new Date(Date.now() + 9_000).toISOString(),
+          })
+        if (String(input).endsWith('/lease')) {
+          renewalSignal = init?.signal ?? undefined
+          const response = jsonResponse({})
+          response.json = () => renewalBarrier
+          return response
+        }
+        return jsonResponse({ effect: { status: 'completed' } })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      const pending = runLedgeredGenerationEffect(ref, 'plugin_output', 'live_terminal', async () => {
+        await effectBarrier
+        return completedGenerationEffect('applied')
+      })
+      await vi.advanceTimersByTimeAsync(15_000)
+      expect(fetchMock.mock.calls.filter(([input]) => String(input).endsWith('/lease'))).toHaveLength(1)
+      finishEffect()
+      await expect(pending).resolves.toMatchObject({ executed: true, status: 'completed' })
+      expect(renewalSignal?.aborted).toBe(true)
+      expect(vi.getTimerCount()).toBe(0)
+      failRenewal(new Error('late renewal body failure'))
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(fetchMock).toHaveBeenCalledTimes(3)
+      expect(vi.getTimerCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it('coalesces concurrent recovery attempts behind one durable claim', async () => {
     let releaseClaim!: () => void
     const claimBarrier = new Promise<void>((resolve) => {
