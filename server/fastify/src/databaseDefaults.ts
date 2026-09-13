@@ -770,6 +770,7 @@ export function normalizeDatabaseDefaults(
   setDefault(database, 'hypaV3Key', typeof database.supaMemoryKey === 'string' ? database.supaMemoryKey : '')
   setDefault(database, 'hypaMemoryKey', '')
   setDefault(database, 'voyageApiKey', '')
+  setDefault(database, 'autoAcquireDisconnectedWriter', true)
   setDefault(database, 'askRemoval', true)
   setDefault(database, 'sdConfig', DEFAULT_SD_CONFIG)
   setDefault(database, 'NAIImgConfig', DEFAULT_NAI_IMG_CONFIG)

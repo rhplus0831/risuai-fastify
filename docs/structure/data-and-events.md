@@ -414,8 +414,11 @@ mixed ownership snapshot.
 Connected readers are part of the sole startup path.
 `src/ts/connectedClientStartup.ts` first discovers ownership. An exclusive page
 may acquire an unowned server or conditionally resume its own writer; an
-initialized server owned by another session opens for reading even when that
-writer is disconnected. An observed writer frame never grants write access.
+initialized server owned by another session can be acquired automatically when
+that writer is disconnected. Settings → Interaction exposes
+`autoAcquireDisconnectedWriter`, defaulting to true. Startup and foreground
+return read the authoritative sidebar preference before conditional acquisition;
+a failed preference read or a connected writer leaves the page reading. An observed writer frame never grants write access.
 Explicit Use this device performs fresh discovery, conditional acquisition,
 current-scope outbox recovery, post-replay hydration, and writer event attachment
 before mutation capabilities return. Cancellation or a current failed switch
@@ -430,8 +433,9 @@ encrypted intents stay scoped to their originating local session and lineage.
 Authentication loss clears protected projections immediately. Lineage changes
 invalidate old request, transcript, and cache identities before replacement.
 
-An interrupted connected reader reconnects using authenticated reads without
-requesting writer acquisition. Writer drafts and pending intents remain scoped
+An interrupted connected reader reconnects using authenticated reads. A foreground
+return may additionally attempt automatic conditional acquisition when the
+preference is enabled; ordinary event reconnects never request acquisition. Writer drafts and pending intents remain scoped
 to their originating session and lineage, while server writer guards apply to
 every mutation path.
 

@@ -78,7 +78,9 @@ Connected-reader and writer startup share one role-first path.
    the database lineage and current writer without adopting the response
    revision as command authority. A tab with exclusive ownership of its local
    identity may conditionally acquire an unowned server or resume its own
-   writer; a foreign writer remains the owner even when disconnected. Without
+   writer. The default-on Interaction preference `autoAcquireDisconnectedWriter`
+   additionally permits conditional acquisition of a disconnected foreign writer
+   at startup and foreground return, without a disconnect confirmation. Without
    tab exclusivity, automatic acquisition stays disabled; setting up a genuinely
    empty server requires explicit confirmation.
 2. For a reader, `installConnectedReaderProjection()` loads the coherent shell,

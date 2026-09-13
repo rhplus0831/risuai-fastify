@@ -4,6 +4,13 @@ import type { SettingItem, SettingSection } from './types'
 export const interactionSettingsItems: SettingItem[] = [
   { id: 'interaction.header', type: 'header', labelKey: 'settingsNavInteraction', options: { level: 'h2' } },
   {
+    id: 'interaction.autoAcquireDisconnectedWriter',
+    type: 'check',
+    labelKey: 'autoAcquireDisconnectedWriter',
+    bindKey: 'autoAcquireDisconnectedWriter',
+    keywords: ['device', 'disconnected', 'writer', 'automatic', 'connection'],
+  },
+  {
     id: 'acc.askRemoval',
     type: 'check',
     labelKey: 'askRemoval',
@@ -167,6 +174,7 @@ export const interactionSettingsSections: SettingSection[] = [
     labelKey: 'settingsSectionNavigationControls',
     descriptionKey: 'settingsSectionNavigationControlsDescription',
     items: settingItems([
+      'interaction.autoAcquireDisconnectedWriter',
       'acc.swipe',
       'acc.botSettingAtStart',
       'acc.showMenuChatList',

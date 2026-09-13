@@ -24,8 +24,9 @@ capabilities consumed by the shell and protocol adapters:
 - Connected startup always resolves a page identity, discovers ownership through authenticated read-only
   bootstrap, and installs a coherent shell for initialized state. An exclusive
   page may conditionally acquire an unowned server or resume its own writer;
-  a foreign owner remains authoritative even while disconnected, so other pages
-  stay connected readers. Discovery failure does not silently request takeover.
+  the default-on Interaction preference `autoAcquireDisconnectedWriter` also
+  permits conditional acquisition of a disconnected foreign writer. Connected
+  foreign writers leave automatic attempts in reader mode. Discovery failure does not silently request takeover.
 - Connected acquisition sends the discovered writer epoch and database lineage
   as preconditions. A stale discovery returns `409 active_writer_changed`; a
   connected foreign writer additionally returns `409 active_writer_connected`

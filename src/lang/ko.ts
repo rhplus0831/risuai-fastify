@@ -1039,6 +1039,7 @@ const languageKoreanBase = {
   textScreenBorder: '말풍선 테두리',
   ttsReadOnlyQuoted: '따옴표 안의 대사만 읽기',
   ttsStop: 'TTS 중지',
+  autoAcquireDisconnectedWriter: '이전 기기의 연결이 끊어졌으면 이 기기를 자동으로 사용',
   askRemoval: '삭제 확인',
   replaceGlobalNote: '글로벌 노트 대체',
   charLoreBook: '캐릭터 로어북',

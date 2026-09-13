@@ -1,3 +1,4 @@
+import { shouldAutoAcquireDisconnectedWriter } from './server/automaticWriterAcquisition'
 import { get } from 'svelte/store'
 import { botMakerMode } from './stores.svelte'
 import { LoadingStatusState, selectedCharID } from './stores/coreStores.svelte'
@@ -247,7 +248,7 @@ import {
 } from './clientSession'
 import { bootstrapOwnership, resolveConnectedClientStartup } from './connectedClientStartup'
 import { startConnectedReaderSync } from './server/connectedReaderSync'
-import { releaseConnectedTabIdentity } from './server/connectedTabIdentity'
+import { releaseConnectedTabIdentity, resolveConnectedTabIdentity } from './server/connectedTabIdentity'
 import { invalidateResourceCacheWork } from './server/resourceCache'
 import { discardReaderProjectionState } from './readerProjectionLifecycle'
 
@@ -915,11 +916,15 @@ function installConnectedSessionLifecycle(): void {
     const abortPendingRecoveryRequests = () => retireConnectedRecoveryLease()
     const resumeConnectedSession = () => {
       if (browserRecoverySuspended()) return
+      const returningFromBackground = recoverySuspended
       recoverySuspended = false
       const state = getClientSessionSnapshot()
       if (!state.managed) return
       if (state.lifecycle === 'recovering-writer') void resumeConnectedWriter()
-      else if (state.lifecycle === 'reading' && !connectedReaderSync) void refreshConnectedReader()
+      else if (state.lifecycle === 'reading') {
+        if (returningFromBackground) void resumeConnectedReader()
+        else if (!connectedReaderSync) void refreshConnectedReader()
+      }
     }
     const offline = () => {
       if (!isClientSessionManaged()) return
@@ -971,6 +976,21 @@ function installConnectedSessionLifecycle(): void {
   }
 }
 
+/** Only a foreground return may automatically promote an existing reader. */
+async function resumeConnectedReader(): Promise<void> {
+  const generation = captureClientSessionGeneration()
+  if (!connectedReaderSync || getClientSessionSnapshot().connection !== 'live') await refreshConnectedReader()
+  const enabled = await shouldAutoAcquireDisconnectedWriter()
+  if (
+    !enabled ||
+    browserRecoverySuspended() ||
+    !isClientSessionGenerationCurrent(generation) ||
+    getClientSessionSnapshot().lifecycle !== 'reading'
+  )
+    return
+  await promoteConnectedReader({ automatic: true })
+}
+
 function scheduleConnectedWriterResume(): void {
   if (
     browserRecoverySuspended() ||
@@ -1013,16 +1033,18 @@ async function resumeConnectedWriter(): Promise<void> {
     if (!ownership) {
       throw new Error(result.status === 'error' ? result.error : 'Server is unavailable')
     }
-    if (
-      ownership.databaseLineage !== getClientSessionSnapshot().databaseLineage ||
-      ownership.writer.sessionId !== getActiveWriterSessionId()
-    ) {
+    const foreignWriter = ownership.writer.sessionId !== getActiveWriterSessionId()
+    const autoAcquire = foreignWriter
+      ? await waitForConnectedRecovery(shouldAutoAcquireDisconnectedWriter(signal), signal)
+      : false
+    if (!connectedRecoveryLeaseIsCurrent(lease)) return
+    if (ownership.databaseLineage !== getClientSessionSnapshot().databaseLineage || (foreignWriter && !autoAcquire)) {
       failClientSessionOperation(operation)
       await refreshConnectedReader()
       return
     }
     // Resume is conditional as well: a writer change between this read and
-    // recovery must never turn reconnection into a takeover.
+    // recovery cannot override a newer owner or disconnect a connected device.
     const verified = await waitForConnectedRecovery(
       fetchServerBootstrap(signal, {
         expectedWriter: { epoch: ownership.writer.epoch, databaseLineage: ownership.databaseLineage },
@@ -1031,6 +1053,14 @@ async function resumeConnectedWriter(): Promise<void> {
     )
     if (!connectedRecoveryLeaseIsCurrent(lease)) return
     if (verified.status !== 'ok') {
+      if (
+        verified.status === 'active-writer-connected' ||
+        (verified.status === 'error' && ['active_writer_changed', 'active_writer_stale'].includes(verified.error))
+      ) {
+        failClientSessionOperation(operation)
+        await refreshConnectedReader()
+        return
+      }
       if (verified.status === 'error' && verified.httpStatus === 401) {
         await discardReaderProjectionState('auth-loss')
         return
@@ -1097,8 +1127,8 @@ export type ConnectedWriterPromotionResult =
   | { status: 'cancelled' | 'superseded' }
   | { status: 'failed'; reason: 'interrupted' | 'retained-work' | 'unavailable' }
 
-/** One explicit switch; reconnect and ordinary reads never call this acquisition path. */
-export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult> {
+/** Automatic foreground switches never confirm disconnection of a live writer. */
+export function promoteConnectedReader(options: { automatic?: boolean } = {}): Promise<ConnectedWriterPromotionResult> {
   if (connectedWriterPromotion && connectedRecoveryLeaseIsCurrent(connectedWriterPromotion.lease))
     return connectedWriterPromotion.promise
   const operation = beginClientPromotion()
@@ -1169,10 +1199,17 @@ export function promoteConnectedReader(): Promise<ConnectedWriterPromotionResult
     if (!observeClientWriter(ownership.writer)) return returnToReader({ status: 'failed', reason: 'unavailable' })
     if (!current()) return superseded()
     if (!discovered.bootstrap.initialized) throw new Error('The server database is not initialized')
+    if (options.automatic) {
+      const identity = await waitForConnectedRecovery(resolveConnectedTabIdentity(), signal)
+      if (!current()) return superseded()
+      if (!identity.exclusive || identity.sessionId !== getClientSessionSnapshot().sessionId)
+        return returnToReader({ status: 'cancelled' })
+    }
     const expectedWriter = { epoch: ownership.writer.epoch, databaseLineage: ownership.databaseLineage }
     let acquired = await waitForConnectedRecovery(fetchServerBootstrap(signal, { expectedWriter }), signal)
     if (!current()) return superseded()
     if (acquired.status === 'active-writer-connected') {
+      if (options.automatic) return returnToReader({ status: 'cancelled' })
       const selection = await waitForConnectedRecovery(
         alertRequiredSelect(
           [language.writerConnectDisconnectExisting, language.cancel],
@@ -2196,6 +2233,18 @@ function restartServerResourceEvents(options: { lifecycle?: boolean; suspensionE
         const writerChanged =
           before.writer?.epoch !== result.ownership.writer.epoch ||
           before.writer.sessionId !== result.ownership.writer.sessionId
+        const autoAcquire =
+          options.suspensionEvidence &&
+          result.ownership.writer.sessionId !== getActiveWriterSessionId() &&
+          (await waitForConnectedRecovery(shouldAutoAcquireDisconnectedWriter(signal), signal))
+        if (!connectedRecoveryLeaseIsCurrent(lease)) return
+        if (autoAcquire) {
+          // Revalidate through writer recovery before exposing a reader projection.
+          releaseConnectedRecoveryLease(lease)
+          setClientConnectionState('interrupted')
+          void resumeConnectedWriter()
+          return
+        }
         if (!observeClientWriter(result.ownership.writer)) {
           releaseConnectedRecoveryLease(lease)
           setClientConnectionState('interrupted')

@@ -1620,6 +1620,7 @@ export const languageEnglish = {
   ttsUseLongAudio: 'Use Long Audio',
   ttsUseReferenceAudioScript: 'Use Reference Audio Script',
   ttsVolume: 'Volume',
+  autoAcquireDisconnectedWriter: 'Automatically use this device when the previous device is disconnected',
   askRemoval: 'Ask Removal',
   replaceGlobalNote: 'Global Note Replacement',
   charLoreBook: 'Character Lorebook',

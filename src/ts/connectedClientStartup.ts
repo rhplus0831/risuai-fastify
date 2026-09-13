@@ -9,6 +9,7 @@ import {
   type ClientSessionOwnership,
 } from './clientSession'
 import { fetchServerBootstrap, fetchServerBootstrapReadOnly, type ServerBootstrapRuntime } from './server/bootstrap'
+import { shouldAutoAcquireDisconnectedWriter } from './server/automaticWriterAcquisition'
 import { resolveConnectedTabIdentity } from './server/connectedTabIdentity'
 
 export interface ConnectedStartupResult {
@@ -24,7 +25,7 @@ export function bootstrapOwnership(runtime: ServerBootstrapRuntime): ClientSessi
   return { databaseLineage: runtime.databaseLineage, writer: runtime.writer }
 }
 
-/** Ownership discovery never treats an offline foreign writer as an unowned server. */
+/** Automatic acquisition remains conditional and never disconnects a live writer. */
 export async function resolveConnectedClientStartup(
   options: {
     onOperationStarted?: (operation: ClientSessionOperation) => void
@@ -56,9 +57,17 @@ export async function resolveConnectedClientStartup(
     initializationConfirmed = await options.onInitializationRequired(operation)
     assertCurrent()
   }
+  const autoAcquire =
+    identity.exclusive &&
+    runtime.initialized &&
+    ownership.writer.sessionId !== null &&
+    ownership.writer.sessionId !== identity.sessionId
+      ? await shouldAutoAcquireDisconnectedWriter()
+      : false
+  assertCurrent()
   if (
     (identity.exclusive || initializationConfirmed) &&
-    (ownership.writer.sessionId === null || ownership.writer.sessionId === identity.sessionId)
+    (ownership.writer.sessionId === null || ownership.writer.sessionId === identity.sessionId || autoAcquire)
   ) {
     // The precondition makes the discovery/acquisition race atomic on the server.
     // In particular, a still-owning reload cannot take back ownership after a

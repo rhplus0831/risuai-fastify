@@ -47,6 +47,7 @@ export const SERVER_SETTINGS_GROUP_BY_KEY: Record<string, SettingsGroup> = {
   hypaV3ProgressOpenChatOnly: 'display',
   antiClaudeOverload: 'runtime',
   apiType: 'providers',
+  autoAcquireDisconnectedWriter: 'sidebar',
   askRemoval: 'sidebar',
   assetMaxDifference: 'advanced',
   assetWidth: 'display',

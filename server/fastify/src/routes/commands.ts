@@ -2071,6 +2071,7 @@ export const SETTINGS_GROUP_KEYS: Record<ReadableSettingsGroup, readonly string[
     'moduleIntergration',
   ],
   sidebar: [
+    'autoAcquireDisconnectedWriter',
     'askRemoval',
     'swipe',
     'instantRemove',
@@ -2109,6 +2110,7 @@ export const SETTINGS_GROUP_KEYS: Record<ReadableSettingsGroup, readonly string[
 
 const BOOLEAN_SETTING_KEYS = new Set([
   'applyAdditionalParamsToAll',
+  'autoAcquireDisconnectedWriter',
   'askRemoval',
   'autoContinueChat',
   'autoScrollToNewMessage',

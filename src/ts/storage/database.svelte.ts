@@ -3036,6 +3036,9 @@ export function setDatabase(data: Database) {
   if (checkNullish(data.voyageApiKey)) {
     data.voyageApiKey = ''
   }
+  if (checkNullish(data.autoAcquireDisconnectedWriter)) {
+    data.autoAcquireDisconnectedWriter = true
+  }
   if (checkNullish(data.askRemoval)) {
     data.askRemoval = true
   }
@@ -3927,6 +3930,7 @@ export interface Database {
   jailbreak: string
   globalNote: string
   temperature: number
+  autoAcquireDisconnectedWriter: boolean
   askRemoval: boolean
   maxContext: number
   maxResponse: number

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 
 const readerApi = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), retry: vi.fn() }))
+const autoWriterApi = vi.hoisted(() => ({ enabled: vi.fn() }))
+vi.mock('./server/automaticWriterAcquisition', () => ({ shouldAutoAcquireDisconnectedWriter: autoWriterApi.enabled }))
 const identityApi = vi.hoisted(() => ({ exclusive: true }))
 
 const bootstrapApi = vi.hoisted(() => ({
@@ -552,6 +554,7 @@ beforeEach(() => {
   clearAppliedServerResourceRevision()
 
   vi.clearAllMocks()
+  autoWriterApi.enabled.mockReset().mockResolvedValue(false)
   runtimeApi.applyGenerationOperationBootstrap.mockReset().mockReturnValue(true)
   readerApi.start.mockImplementation(() => {
     setClientConnectionState('live')
@@ -698,6 +701,71 @@ describe('API-backed client bootstrap', () => {
     expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
     expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
     expect(readerApi.start).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('foreground reader acquisition respects enabled=%s', async (enabled) => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writer: { sessionId: 'foreign-writer', epoch: 1 } }),
+    )
+    await loadData()
+    autoWriterApi.enabled.mockResolvedValue(enabled)
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: getActiveWriterSessionId(), epoch: 2 } }),
+    )
+    visibility.mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.waitFor(() => expect(autoWriterApi.enabled).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe(enabled ? 'writing' : 'reading'))
+    if (enabled) {
+      expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+      expect(bootstrapApi.fetch.mock.calls[0][1]).not.toHaveProperty('disconnectExistingWriter')
+      expect(pendingMutationApi.replay).toHaveBeenCalledOnce()
+    } else expect(bootstrapApi.fetch).not.toHaveBeenCalled()
+  })
+
+  it.each([true, false])('resuming former writer respects automatic acquisition=%s', async (enabled) => {
+    await loadData()
+    autoWriterApi.enabled.mockResolvedValue(enabled)
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({ writer: { sessionId: 'foreign-writer', epoch: 2 } }),
+    )
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 2, writer: { sessionId: 'foreign-writer', epoch: 2 } }),
+    )
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 3, writer: { sessionId: getActiveWriterSessionId(), epoch: 3 } }),
+    )
+    window.dispatchEvent(new Event('pagehide'))
+    window.dispatchEvent(new PageTransitionEvent('pageshow', { persisted: false }))
+    await vi.waitFor(() => expect(autoWriterApi.enabled).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe(enabled ? 'writing' : 'reading'))
+    expect(bootstrapApi.fetch).toHaveBeenCalledTimes(enabled ? 2 : 1)
+    if (enabled)
+      expect(bootstrapApi.fetch.mock.calls[1][1]).toEqual({
+        expectedWriter: { epoch: 2, databaseLineage: 'database-a' },
+      })
+  })
+
+  it('automatically returning readers never disconnect a connected writer', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    bootstrapApi.fetchReadOnly.mockResolvedValue(
+      runtimeBootstrap({ writer: { sessionId: 'foreign-writer', epoch: 1 } }),
+    )
+    await loadData()
+    autoWriterApi.enabled.mockResolvedValue(true)
+    bootstrapApi.fetch.mockResolvedValue({ status: 'active-writer-connected', error: 'active_writer_connected' })
+    visibility.mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.waitFor(() => expect(bootstrapApi.fetch).toHaveBeenCalledOnce())
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe('reading'))
+    expect(bootstrapApi.fetch.mock.calls[0][1]).not.toHaveProperty('disconnectExistingWriter')
+    expect(alertRequiredSelect).not.toHaveBeenCalled()
+    expect(pendingMutationApi.replay).not.toHaveBeenCalled()
   })
 
   it('starts a permanent reader without writer recovery, plugins, effects, or canonical selection', async () => {
@@ -6093,6 +6161,27 @@ describe('resource event reconnect backoff', () => {
 
     expect(eventApi.subscribe).toHaveBeenCalledOnce()
     expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce()
+  })
+
+  it('reclaims a disconnected writer after a foreground ownership probe without a reader projection', async () => {
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible')
+    await loadData()
+    autoWriterApi.enabled.mockResolvedValue(true)
+    bootstrapApi.fetchOwnership.mockResolvedValue(
+      runtimeOwnership({ writer: { sessionId: 'foreign-writer', epoch: 2 } }),
+    )
+    bootstrapApi.fetch.mockResolvedValue(
+      runtimeBootstrap({ writerEpoch: 3, writer: { sessionId: getActiveWriterSessionId(), epoch: 3 } }),
+    )
+    visibility.mockReturnValue('hidden')
+    document.dispatchEvent(new Event('visibilitychange'))
+    visibility.mockReturnValue('visible')
+    document.dispatchEvent(new Event('visibilitychange'))
+    await vi.waitFor(() => expect(bootstrapApi.fetch).toHaveBeenCalledTimes(2))
+    await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe('writing'))
+    expect(readerApi.start).not.toHaveBeenCalled()
+    expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledOnce()
+    expect(bootstrapApi.fetch.mock.calls[1][1]).toEqual({ expectedWriter: { epoch: 2, databaseLineage: 'database-a' } })
   })
 
   it('uses full reader recovery when the foreground ownership probe finds another writer', async () => {

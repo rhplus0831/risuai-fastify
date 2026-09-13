@@ -175,8 +175,9 @@ ownership leaves a healthy stream in place, while a discarded reader stream can
 resume from its applied event cursor. Changed or uncertain ownership takes the
 existing full-bootstrap recovery path. The writer transport retriggers
 current-scope outbox replay after reconnect. A foreign writer frame demotes a
-managed writer into connected reading; only explicit Use this device
-requests acquisition. `connectedReaderSync.ts` uses the same authenticated
+managed writer into connected reading. Use this device requests acquisition;
+the default-on Interaction preference also permits automatic conditional
+acquisition at startup and foreground return when the previous writer is disconnected. `connectedReaderSync.ts` uses the same authenticated
 frame parser without writer headers, with its own bounded backoff, watchdog,
 ownership/lineage checks, and read-only reconciliation. Writer SSE frames carry
 the database lineage with the writer tuple so a restored database is detected
@@ -364,8 +365,10 @@ keepalive flush boundary.
 
 Active writer is server-side. Connected startup discovers ownership before
 writer-intent bootstrap; conditional acquisition checks the discovered lineage
-and writer epoch. A disconnected foreign writer remains an owner, so opening a
-reader or reconnecting it cannot acquire that writer. A still-connected foreign
+and writer epoch. A disconnected foreign writer remains an owner until a
+conditional acquisition succeeds. `autoAcquireDisconnectedWriter` defaults to
+true and enables this acquisition at startup and foreground return. Ordinary
+event reconnection stays read-only. A still-connected foreign
 writer also requires the explicit disconnect handshake. Stale guarded mutations
 receive `423 active_writer_stale`; local projection epochs are freshness fences,
 not writer authority.
@@ -384,7 +387,9 @@ preparation/replay, fresh shell hydration, and writer event attachment. Only
 that successful recovery restores writes. Current cancelled/failed attempts
 return to reading while authenticated under the same lineage; superseded
 attempts cannot change a newer role. Interrupted writers revalidate their own
-ownership before resuming, and become readers when another session has won.
+ownership before resuming, and may conditionally acquire a disconnected foreign
+writer when the preference is enabled. A connected foreign writer, disabled
+preference, or stale acquisition leaves them reading.
 Authentication loss clears reader route intent, optional hydration, disposable
 cache state, authenticated projections, selection, and command/event revisions.
 Database replacement or lineage change clears reader intent, hydration,

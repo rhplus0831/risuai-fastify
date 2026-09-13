@@ -8,7 +8,8 @@ import {
 } from './clientSession'
 import { resolveConnectedClientStartup } from './connectedClientStartup'
 
-const api = vi.hoisted(() => ({ read: vi.fn(), acquire: vi.fn(), identity: vi.fn() }))
+const api = vi.hoisted(() => ({ read: vi.fn(), acquire: vi.fn(), identity: vi.fn(), autoAcquire: vi.fn() }))
+vi.mock('./server/automaticWriterAcquisition', () => ({ shouldAutoAcquireDisconnectedWriter: api.autoAcquire }))
 vi.mock('./server/bootstrap', () => ({ fetchServerBootstrap: api.acquire, fetchServerBootstrapReadOnly: api.read }))
 vi.mock('./server/connectedTabIdentity', () => ({ resolveConnectedTabIdentity: api.identity }))
 
@@ -30,13 +31,14 @@ function runtime(sessionId: string | null, overrides: Record<string, unknown> = 
 beforeEach(() => {
   resetClientSessionForTests()
   vi.resetAllMocks()
+  api.autoAcquire.mockResolvedValue(false)
   api.identity.mockResolvedValue({ sessionId: 'local-tab', exclusive: true, previousSessionId: null })
   api.read.mockResolvedValue(runtime('other-tab'))
   api.acquire.mockResolvedValue(runtime('local-tab', { writerEpoch: 5, writer: { sessionId: 'local-tab', epoch: 5 } }))
 })
 
 describe('connected startup ownership discovery', () => {
-  it('keeps a foreign durable writer, whether or not any event connection remains', async () => {
+  it('keeps a foreign durable writer when automatic acquisition is disabled', async () => {
     const result = await resolveConnectedClientStartup()
     expect(result.role).toBe('reader')
     expect(api.acquire).not.toHaveBeenCalled()
@@ -48,6 +50,24 @@ describe('connected startup ownership discovery', () => {
     })
     expect(canUseClientRecoveryAccess()).toBe(false)
     expect(canUseClientWriteAccess()).toBe(false)
+  })
+
+  it('automatically acquires a disconnected foreign writer when enabled', async () => {
+    api.autoAcquire.mockResolvedValue(true)
+    const result = await resolveConnectedClientStartup()
+    expect(result.role).toBe('writer')
+    expect(api.acquire).toHaveBeenCalledExactlyOnceWith(null, {
+      expectedWriter: { epoch: 4, databaseLineage: 'lineage-a' },
+    })
+    expect(getClientSessionSnapshot().lifecycle).toBe('recovering-writer')
+  })
+
+  it('silently stays a reader when the previous writer is still connected', async () => {
+    api.autoAcquire.mockResolvedValue(true)
+    api.acquire.mockResolvedValue({ status: 'active-writer-connected', error: 'active_writer_connected' })
+    expect((await resolveConnectedClientStartup()).role).toBe('reader')
+    expect(api.acquire).toHaveBeenCalledOnce()
+    expect(api.acquire.mock.calls[0][1]).not.toHaveProperty('disconnectExistingWriter')
   })
 
   it.each([null, 'local-tab'])('conditionally acquires only a no-owner or still-owning session (%s)', async (owner) => {
@@ -78,15 +98,34 @@ describe('connected startup ownership discovery', () => {
     expect(onInitializationRequired).not.toHaveBeenCalled()
   })
 
-  it('settles the losing acquisition race as a reader without confirming or retrying takeover', async () => {
+  it.each([null, 'other-tab'])('settles a losing acquisition race from owner %s as a reader', async (owner) => {
+    api.autoAcquire.mockResolvedValue(true)
     api.read
-      .mockResolvedValueOnce(runtime(null))
+      .mockResolvedValueOnce(runtime(owner))
       .mockResolvedValueOnce(runtime('race-winner', { writerEpoch: 5, writer: { sessionId: 'race-winner', epoch: 5 } }))
     api.acquire.mockResolvedValue({ status: 'error', error: 'active_writer_changed' })
     expect((await resolveConnectedClientStartup()).role).toBe('reader')
     expect(api.acquire).toHaveBeenCalledOnce()
     expect(api.read).toHaveBeenCalledTimes(2)
     expect(getClientSessionSnapshot().writer?.sessionId).toBe('race-winner')
+  })
+
+  it('cannot acquire after startup is superseded while its preference read is pending', async () => {
+    let resolvePreference!: (enabled: boolean) => void
+    api.autoAcquire.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          resolvePreference = resolve
+        }),
+    )
+    const pending = resolveConnectedClientStartup()
+    await vi.waitFor(() => expect(api.autoAcquire).toHaveBeenCalledOnce())
+    beginClientSession('new-tab')
+    resolvePreference(true)
+    await expect(pending).rejects.toThrow('superseded')
+    expect(api.acquire).not.toHaveBeenCalled()
+    expect(getClientSessionSnapshot().sessionId).toBe('new-tab')
+    expect(canUseClientRecoveryAccess()).toBe(false)
   })
 
   it('cannot turn a held ownership discovery into a write after that startup is superseded', async () => {
