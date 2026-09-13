@@ -5,7 +5,11 @@ progress. The codebase and current architecture guides remain the source of
 truth for shipped behavior. Completed or retired planning records belong in
 `.archived-docs/`.
 
-No active plans.
+Active planning and implementation:
+
+- [Chat occupancy and chat-only devices](chat-occupancy/status.md): retain one
+  general owner while allowing different devices to occupy and send in different
+  chats.
 
 Completed implementation and verification records:
 
