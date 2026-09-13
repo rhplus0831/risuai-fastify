@@ -106,6 +106,11 @@ const settingsCases: LazyRouteCase[] = [
     surface: 'settings-language',
   },
   {
+    path: '/settings/interaction',
+    source: 'src/lib/Setting/Pages/InteractionSettings.svelte',
+    surface: 'settings-interaction',
+  },
+  {
     path: '/settings/accessibility',
     source: 'src/lib/Setting/Pages/AccessibilitySettings.svelte',
     surface: 'settings-accessibility',

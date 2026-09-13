@@ -22,6 +22,9 @@ describe('parseRoute', () => {
       ['/settings/other-bots', 'other-bots', 2],
       ['/settings/otherbots', 'otherbots', 2],
       ['/settings/bardwiki', 'bardwiki', 23],
+      ['/settings/accessibility', 'accessibility', 11],
+      ['/settings/interaction', 'interaction', 24],
+      ['/settings/24', '24', 24],
       ['/settings/77', '77', 77],
       ['/settings/5', '5', 17],
       ['/settings/unknown', 'unknown', 17],
@@ -111,6 +114,12 @@ describe('route path planning', () => {
       '/settings/source-code',
     )
     expect(routePathFromState({ ...baseState, settingsOpen: true, settingsMenuIndex: 23 })).toBe('/settings/bardwiki')
+    expect(routePathFromState({ ...baseState, settingsOpen: true, settingsMenuIndex: 24 })).toBe(
+      '/settings/interaction',
+    )
+    expect(routePathFromState({ ...baseState, settingsOpen: true, settingsMenuIndex: 11 })).toBe(
+      '/settings/accessibility',
+    )
     expect(
       routePathFromState({
         ...baseState,

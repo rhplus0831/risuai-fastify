@@ -9,6 +9,7 @@ import { flushPendingSplitPresetPatch } from '../storage/database.svelte'
 import { language } from 'src/lang'
 import { alertError } from '../alert'
 import { accessibilitySettingsItems } from './accessibilitySettingsData'
+import { interactionSettingsItems } from './interactionSettingsData'
 import { advancedSettingsItems } from './advancedSettingsData'
 import {
   basicParameterItems,
@@ -945,6 +946,7 @@ export function checkCondition(item: SettingItem, ctx: SettingContext): boolean 
 
 export function getFullSettingsData(searchTerm = '') {
   const full = accessibilitySettingsItems.concat(
+    interactionSettingsItems,
     advancedSettingsItems,
     basicParameterItems,
     languageSupplementalSettingsItems,

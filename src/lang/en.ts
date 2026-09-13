@@ -1480,6 +1480,10 @@ export const languageEnglish = {
   settingsNavMemory: 'Memory',
   settingsNavDisplayAudio: 'Display & Audio',
   settingsNavLanguage: 'Language',
+  accessibilityDisplaySettingsLink: 'Adjust text size and contrast in Display & Audio',
+  settingsNavInteraction: 'Interaction',
+  settingsSectionInputReachability: 'Input & reachability',
+  settingsSectionInputReachabilityDescription: 'Keep the chat input and menu controls within reach.',
   settingsNavAccessibility: 'Accessibility',
   settingsNavModules: 'Modules',
   settingsNavPlugins: 'Plugins',
@@ -1518,13 +1522,12 @@ export const languageEnglish = {
   requestHistoryError: 'Error',
   settingsNavKeyboardShortcuts: 'Keyboard Shortcuts',
   settingsNavAdvanced: 'Advanced',
-  interactionAccessibility: 'Interaction & Accessibility',
   settingsSectionMotionScrolling: 'Motion & scrolling',
   settingsSectionMotionScrollingDescription:
     'Control animation, automatic movement, and where new-message controls appear.',
-  settingsSectionComposerKeyboard: 'Composer & keyboard',
+  settingsSectionComposerKeyboard: 'Keyboard & editor',
   settingsSectionComposerKeyboardDescription:
-    'Choose how the chat composer behaves across keyboard, desktop, and mobile use.',
+    'Choose how Enter sends messages and which popup editor to use on desktop and mobile.',
   settingsSectionMessageEditing: 'Message editing & deletion',
   settingsSectionMessageEditingDescription:
     'Configure editing gestures and safeguards for destructive message actions.',

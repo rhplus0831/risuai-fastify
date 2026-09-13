@@ -242,6 +242,46 @@ describe('Settings supporter tab', () => {
     expect(routeIntentSpies.prefetch).toHaveBeenNthCalledWith(4, '/settings/bardwiki')
   })
 
+  it.each([
+    ['settingsNavInteraction', '/settings/interaction', 24, 'sendWithEnter', 'reducedMotion'],
+    ['settingsNavAccessibility', '/settings/accessibility', 11, 'reducedMotion', 'sendWithEnter'],
+  ] as const)(
+    'opens %s with its own settings and mobile back navigation',
+    async (label, path, index, included, excluded) => {
+      const button = settingsButton(language[label])
+      expect(button).toBeTruthy()
+      button!.click()
+      await flushClick()
+      expect(get(currentRoute)).toMatchObject({ kind: 'settings', path, index })
+      await applyNavigatedRoute()
+      expect(target.querySelector('h2')?.textContent).toBe(language[label])
+      expect(target.textContent).toContain(language[included])
+      expect(target.textContent).not.toContain(language[excluded])
+      const back = target.querySelector<HTMLButtonElement>('[data-risu-settings-mobile-back]')
+      expect(back).toBeTruthy()
+      back!.click()
+      await flushClick()
+      expect(get(currentRoute)).toMatchObject({ kind: 'settings', path: '/settings', index: -1 })
+    },
+  )
+
+  it('links Accessibility to the display controls', async () => {
+    await navigate('/settings/accessibility')
+    await applyNavigatedRoute()
+
+    const link = Array.from(target.querySelectorAll<HTMLAnchorElement>('a')).find(
+      (candidate) => candidate.textContent?.trim() === language.accessibilityDisplaySettingsLink,
+    )
+    expect(link).toBeTruthy()
+    expect(link!.getAttribute('href')).toBe('/settings/display')
+    link!.click()
+    await flushClick()
+
+    expect(get(currentRoute)).toMatchObject({ kind: 'settings', path: '/settings/display', index: 3 })
+    await applyNavigatedRoute()
+    expect(target.querySelector('h2')?.textContent).toBe(language.display)
+  })
+
   it('opens Memory through its canonical route', async () => {
     const memoryButton = settingsButton(language.settingsNavMemory)
     expect(memoryButton).toBeTruthy()

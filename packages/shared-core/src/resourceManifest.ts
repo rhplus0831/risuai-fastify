@@ -397,6 +397,14 @@ export const RESOURCE_SURFACE_MANIFEST = {
     requirements: [
       group('display', ['render', 'interact', 'mutate']),
       group('sidebar', ['render', 'interact', 'mutate']),
+    ],
+  },
+  'settings:interaction': {
+    family: 'settings',
+    owners: ['src/lib/Setting/Pages/InteractionSettings.svelte', 'src/ts/setting/interactionSettingsData.ts'],
+    requirements: [
+      group('display', ['render', 'interact', 'mutate']),
+      group('sidebar', ['render', 'interact', 'mutate']),
       group('memory', ['render', 'interact', 'mutate']),
       group('advanced', ['render', 'interact', 'mutate']),
       group('providers', ['render', 'interact', 'mutate']),
@@ -838,6 +846,7 @@ export const SETTINGS_RESOURCE_SURFACE_BY_INDEX = {
   21: 'settings:request-history',
   22: 'settings:source-code',
   23: 'settings:bardwiki',
+  24: 'settings:interaction',
   77: 'settings:supporter',
 } as const satisfies Record<number, ResourceSurfaceId>
 

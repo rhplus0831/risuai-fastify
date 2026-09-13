@@ -118,6 +118,7 @@ import { notifyServerCommandLocalEffectApplied } from '../server/commandLocalEff
 import { createDestructiveRefreshToken } from '../server/staleStateGuards'
 import { language } from 'src/lang'
 import { accessibilitySettingsItems } from './accessibilitySettingsData'
+import { interactionSettingsItems } from './interactionSettingsData'
 import { advancedSettingsItems } from './advancedSettingsData'
 import {
   basicParameterItems,
@@ -157,6 +158,7 @@ interface CapturedFetch {
 
 const settingRendererItemSets: SettingItem[][] = [
   accessibilitySettingsItems,
+  interactionSettingsItems,
   advancedSettingsItems,
   basicParameterItems,
   [seedSetting],

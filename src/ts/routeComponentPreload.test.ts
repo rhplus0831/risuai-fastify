@@ -3,6 +3,8 @@ import { parseRoute } from './routerRoute'
 import { beginClientSession, resetClientSessionForTests } from './clientSession'
 import {
   loadBardWikiSettings,
+  loadAccessibilitySettings,
+  loadInteractionSettings,
   loadBotSettings,
   loadDisplaySettings,
   loadGrid,
@@ -30,6 +32,11 @@ describe('route component preload', () => {
 
   it('maps route families to their shell and exact page chunks', () => {
     expect(routeComponentLoaders(parseRoute('/settings'))).toEqual([loadSettings, loadBotSettings])
+    expect(routeComponentLoaders(parseRoute('/settings/interaction'))).toEqual([loadSettings, loadInteractionSettings])
+    expect(routeComponentLoaders(parseRoute('/settings/accessibility'))).toEqual([
+      loadSettings,
+      loadAccessibilitySettings,
+    ])
     expect(routeComponentLoaders(parseRoute('/settings/memory'))).toEqual([loadSettings, loadMemorySettings])
     expect(routeComponentLoaders(parseRoute('/settings/bardwiki'))).toEqual([loadSettings, loadBardWikiSettings])
     expect(routeComponentLoaders(parseRoute('/settings/display'))).toEqual([loadSettings, loadDisplaySettings])

@@ -2,6 +2,7 @@
 
 import { describe, expect, it } from 'vitest'
 import { accessibilitySettingsItems, accessibilitySettingsSections } from './accessibilitySettingsData'
+import { interactionSettingsItems, interactionSettingsSections } from './interactionSettingsData'
 import { advancedSettingsItems, advancedSettingsSections } from './advancedSettingsData'
 import {
   displayChatSettingsSections,
@@ -20,6 +21,7 @@ import { getFullSettingsData } from './utils'
 
 const sections: SettingSection[] = [
   ...accessibilitySettingsSections,
+  ...interactionSettingsSections,
   ...advancedSettingsSections,
   ...displayThemeSettingsSections,
   ...displayLayoutSettingsSections,
@@ -32,6 +34,7 @@ const sections: SettingSection[] = [
 
 const catalog: SettingItem[] = [
   ...accessibilitySettingsItems,
+  ...interactionSettingsItems,
   ...advancedSettingsItems,
   ...displaySettingsItems,
   ...languageSupplementalSettingsItems,
@@ -61,7 +64,7 @@ describe('settings page organization', () => {
   })
 
   it('renders every reorganized catalog item exactly once', () => {
-    const pageLevelIds = new Set(['acc.header', 'adv.header', 'adv.warn'])
+    const pageLevelIds = new Set(['acc.header', 'interaction.header', 'adv.header', 'adv.warn'])
     const expected = catalog.map((item) => item.id).filter((id) => !pageLevelIds.has(id))
     const rendered = [
       ...sections.flatMap((section) => section.items.map((item) => item.id)),
@@ -74,9 +77,15 @@ describe('settings page organization', () => {
   })
 
   it('keeps dependent controls in the same visible section', () => {
-    const sectionFor = (id: string) => sections.find((section) => section.items.some((item) => item.id === id))?.id
+    const sectionFor = (id: string) => {
+      const section = sections.find((section) => section.items.some((item) => item.id === id))
+      expect(section, `Missing visible control: ${id}`).toBeDefined()
+      return section!.id
+    }
 
     expect(sectionFor('acc.autoScrollToNewMessage')).toBe(sectionFor('acc.alwaysScrollToNewMessage'))
+    expect(sectionFor('acc.autoScrollToNewMessage')).toBe(sectionFor('acc.newMessageButtonStyle'))
+    expect(sectionFor('acc.fixedChatTextarea')).toBe(sectionFor('acc.floatingChatInput'))
     expect(sectionFor('display.notification')).toBe(sectionFor('display.autoTranslateNotificationDeferCapSeconds'))
     expect(sectionFor('display.customQuotes')).toBe(sectionFor('display.leadingDoubleQuote'))
     expect(sectionFor('adv.complexRegexCompatibilityMode')).toBe(sectionFor('adv.complexRegexInputTimeoutMs'))
@@ -85,6 +94,10 @@ describe('settings page organization', () => {
   it('keeps relocated leaf IDs available to settings search and Custom Sidebar lookup', () => {
     const allSettings = getFullSettingsData()
     const relocatedIds = [
+      'acc.sendWithEnter',
+      'acc.customSidebarConfig',
+      'adv.scrollToActive',
+      'acc.reducedMotion',
       'acc.hypaV3ProgressOpenChatOnly',
       'acc.showTranslationLoading',
       'acc.applyAdditionalParamsToAll',

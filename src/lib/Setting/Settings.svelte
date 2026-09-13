@@ -1,6 +1,7 @@
 <script lang="ts">
   import {
     AccessibilityIcon,
+    MousePointerClickIcon,
     ActivityIcon,
     PackageIcon,
     BotIcon,
@@ -35,6 +36,7 @@
   import { prefetchRouteIntent } from 'src/ts/routeIntentPrefetch'
   import {
     loadAccessibilitySettings,
+    loadInteractionSettings,
     loadAdvancedSettings,
     loadAgentPresetSettings,
     loadBardWikiSettings,
@@ -275,6 +277,15 @@
           </button>
           {#if !$isLite}
             <button
+              class={navButtonClass($SettingsMenuIndex === 24)}
+              data-risu-route-intent="/settings/interaction"
+              onclick={() => {
+                navigate('/settings/interaction')
+              }}>
+              <MousePointerClickIcon size={20} />
+              <span>{language.settingsNavInteraction}</span>
+            </button>
+            <button
               class={navButtonClass($SettingsMenuIndex === 11)}
               data-risu-route-intent="/settings/accessibility"
               onclick={() => {
@@ -458,6 +469,8 @@
             <LazyComponent loader={loadGlobalRegex} fill testId="settings-global-regex" />
           {:else if $SettingsMenuIndex === 10}
             <LazyComponent loader={loadLanguageSettings} fill testId="settings-language" />
+          {:else if $SettingsMenuIndex === 24}
+            <LazyComponent loader={loadInteractionSettings} fill testId="settings-interaction" />
           {:else if $SettingsMenuIndex === 11}
             <LazyComponent loader={loadAccessibilitySettings} fill testId="settings-accessibility" />
           {:else if $SettingsMenuIndex === 12}

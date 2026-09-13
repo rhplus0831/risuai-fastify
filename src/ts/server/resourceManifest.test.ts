@@ -32,6 +32,7 @@ const canonicalSettingsRoutes = [
   ['/settings/global-regex', 9],
   ['/settings/language', 10],
   ['/settings/accessibility', 11],
+  ['/settings/interaction', 24],
   ['/settings/persona', 12],
   ['/settings/prompt', 13],
   ['/settings/modules', 14],
@@ -175,6 +176,12 @@ describe('route resource manifest', () => {
   })
 
   it.each([
+    ['settings:accessibility', 'reducedMotion', 'mutate'],
+    ['settings:accessibility', 'floatingChatInput', 'mutate'],
+    ['settings:accessibility', 'alwaysScrollToNewMessage', 'mutate'],
+    ['settings:interaction', 'sendWithEnter', 'mutate'],
+    ['settings:interaction', 'useMonacoEditorOnDesktop', 'mutate'],
+    ['settings:interaction', 'enableScrollToActiveChar', 'mutate'],
     ['settings:memory', 'hypaV3ProgressOpenChatOnly', 'mutate'],
     ['settings:memory', 'loreBookDepth', 'mutate'],
     ['settings:memory', 'localActivationInGlobalLorebook', 'mutate'],

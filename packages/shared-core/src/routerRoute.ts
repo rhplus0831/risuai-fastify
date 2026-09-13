@@ -57,6 +57,7 @@ const settingIndexBySlug = new Map<string, number>([
   ['regex', 9],
   ['language', 10],
   ['accessibility', 11],
+  ['interaction', 24],
   ['persona', 12],
   ['prompt', 13],
   ['prompt-template', 13],
@@ -100,6 +101,7 @@ const settingSlugByIndex = new Map<number, string>([
   [21, 'request-history'],
   [22, 'source-code'],
   [23, 'bardwiki'],
+  [24, 'interaction'],
   [77, 'supporter'],
 ])
 

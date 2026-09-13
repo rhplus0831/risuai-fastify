@@ -34,6 +34,7 @@ export const phase1LazyBoundarySources = [
   'src/lib/Setting/Pages/GlobalRegex.svelte',
   'src/lib/Setting/Pages/LanguageSettings.svelte',
   'src/lib/Setting/Pages/AccessibilitySettings.svelte',
+  'src/lib/Setting/Pages/InteractionSettings.svelte',
   'src/lib/Setting/Pages/PersonaSettings.svelte',
   'src/lib/Setting/Pages/Module/ModuleSettings.svelte',
   'src/lib/Setting/Pages/PromptSettings.svelte',

@@ -49,7 +49,8 @@ Primary indexes and canonical slugs are:
 | `8` | `global-lorebook` | Legacy `src/lib/Setting/Pages/GlobalLoreBookSettings.svelte`; nav is visibility-gated |
 | `9` | `global-regex` | Legacy `src/lib/Setting/Pages/GlobalRegex.svelte`; nav is visibility-gated |
 | `10` | `language` | `src/lib/Setting/Pages/LanguageSettings.svelte` |
-| `11` | `accessibility` | `src/lib/Setting/Pages/AccessibilitySettings.svelte`; visible page title is Interaction & Accessibility |
+| `11` | `accessibility` | `src/lib/Setting/Pages/AccessibilitySettings.svelte`; motion, scrolling, and input reachability |
+| `24` | `interaction` | `src/lib/Setting/Pages/InteractionSettings.svelte`; input, editing, and navigation preferences |
 | `12` | `persona` | `src/lib/Setting/Pages/PersonaSettings.svelte` |
 | `13`, `18` | `prompt`, `prompt-settings` | Prompt-template editor and prompt-preset shell |
 | `14` | `modules` | `src/lib/Setting/Pages/Module/ModuleSettings.svelte` |
@@ -224,7 +225,7 @@ contenteditable mode, popup-editor launch, and cleanup. The popup editor
 snapshots the device-specific `useMonacoEditorOnDesktop` or
 `useMonacoEditorOnMobile` choice when it opens. Plain text is the default:
 Monaco lazy-loads only when enabled, while disabled mode renders a full-size
-textarea. The popup toolbar and Accessibility settings update the device
+textarea. The popup toolbar and Interaction settings update the device
 preference. `PopupEditor.svelte.test.ts` guards both modes.
 
 `SliderInput.svelte` supports disabled sentinels, bounded typed numeric entry,
@@ -515,8 +516,10 @@ Requests & response handling, Scripting & regex, Developer diagnostics,
 Experimental, and Legacy & compatibility. The last four rare/risky groups use
 collapsed disclosure. Translation-only options live on Language, plugin
 development/compatibility lives on Plugins, global prompt behavior lives in the
-Prompt Settings tab, and navigation behavior lives under Interaction &
-Accessibility.
+Prompt Settings tab, and navigation behavior lives under Interaction. Accessibility retains reduced motion,
+automatic scrolling and new-message placement, fixed/floating composition, and
+bottom menu placement. Both pages preserve existing setting IDs for search and
+Custom Sidebar shortcuts.
 
 ## Focused Tests
 

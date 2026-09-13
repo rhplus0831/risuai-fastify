@@ -44,6 +44,9 @@ export const loadGlobalRegex = cachedRouteComponentLoader(() => import('../lib/S
 export const loadLanguageSettings = cachedRouteComponentLoader(
   () => import('../lib/Setting/Pages/LanguageSettings.svelte'),
 )
+export const loadInteractionSettings = cachedRouteComponentLoader(
+  () => import('../lib/Setting/Pages/InteractionSettings.svelte'),
+)
 export const loadAccessibilitySettings = cachedRouteComponentLoader(
   () => import('../lib/Setting/Pages/AccessibilitySettings.svelte'),
 )
@@ -123,6 +126,7 @@ const settingsPageLoaders = new Map<number, RouteComponentLoader>([
   [21, loadRequestHistorySettings],
   [22, loadSourceCode],
   [23, loadBardWikiSettings],
+  [24, loadInteractionSettings],
   [77, loadThanksPage],
 ])
 

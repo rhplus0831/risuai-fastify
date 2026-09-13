@@ -58,6 +58,7 @@ export const phase4RouteInventory = {
     'hotkey',
     'hotkeys',
     'input-hooks',
+    'interaction',
     'language',
     'lore',
     'lorebook',

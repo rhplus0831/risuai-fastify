@@ -79,7 +79,7 @@
       "id": "browser-resource-surfaces",
       "owner": "Shared browser hydration and cache resource metadata",
       "path": "packages/shared-core/src/resourceManifest.ts#RESOURCE_SURFACE_MANIFEST",
-      "count": 61,
+      "count": 62,
       "authority": "Shared browser hydration and cache resource metadata",
       "migrationPhase": "Workstream 1 Phase 2 exact operation/policy catalog",
       "driftRule": "Count and owner changes require a reviewed baseline update; policy parity is established in Phase 2.",
