@@ -426,13 +426,16 @@ test('background runtimes cannot delay or fail shell, mutation, and chat readine
       const page = await context.newPage()
       const requested = deferred<void>()
       const release = deferred<void>()
-      await page.route('**/api/v1/settings/display', async (route) => {
+      // Delay the optional runtime itself. Display settings are shared with
+      // chat-generation readiness, so faulting that API would incorrectly
+      // block a required generation dependency rather than background work.
+      await page.route('**/assets/customBackgroundSetting-*.js', async (route) => {
         requested.resolve()
         if (mode === 'failed') {
           await route.fulfill({
             status: 503,
-            contentType: 'application/json',
-            body: JSON.stringify({ error: 'fast_bootstrap_optional_runtime_failure' }),
+            contentType: 'application/javascript',
+            body: 'throw new Error("fast_bootstrap_optional_runtime_failure")',
           })
           return
         }

@@ -196,5 +196,9 @@ export function smallFastBootstrapFixture(): Record<string, unknown> {
     plugins: [],
     pluginCustomStorage: {},
     language: 'en',
+    // Multi-client smoke journeys exercise explicit reader promotion. Keep
+    // their shared baseline stable now that disconnected-writer acquisition is
+    // enabled by default; dedicated acquisition tests can opt the fixture in.
+    autoAcquireDisconnectedWriter: false,
   }
 }

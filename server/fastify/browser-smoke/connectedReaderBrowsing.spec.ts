@@ -27,10 +27,13 @@ const RECONNECTED_TEXT = 'Writer A committed this message while Reader B was off
 // resourceReads.ts registers these exact POST routes with cacheReadRouteOptions;
 // their bodies contain cache hashes and their handlers only return read values.
 const CACHE_READ_PATHS = new Set([
-  ...['display', 'advanced', 'media', 'modules', 'agents', 'language', 'prompt'].map(
+  ...['display', 'advanced', 'media', 'modules', 'agents', 'language', 'prompt', 'sidebar'].map(
     (group) => `/api/v1/settings/${group}`,
   ),
   ...['modules', 'promptPresets', 'personas'].map((name) => `/api/v1/collections/${name}`),
+  '/api/v1/settings',
+  '/api/v1/collections',
+  '/api/v1/characters',
 ])
 
 interface ApiRequestRecord {

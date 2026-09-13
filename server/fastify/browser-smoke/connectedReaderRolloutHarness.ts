@@ -103,7 +103,7 @@ export function recordRolloutApiRequest(request: Request, records: RolloutApiReq
 
 // Exact cacheReadRouteOptions POSTs in resourceReads.ts are pure reads.
 const CACHE_READ_PATHS = new Set([
-  ...['display', 'advanced', 'media', 'modules', 'agents', 'language', 'prompt'].map(
+  ...['display', 'advanced', 'media', 'modules', 'agents', 'language', 'prompt', 'sidebar'].map(
     (group) => `/api/v1/settings/${group}`,
   ),
   ...['modules', 'promptPresets', 'personas'].map((name) => `/api/v1/collections/${name}`),

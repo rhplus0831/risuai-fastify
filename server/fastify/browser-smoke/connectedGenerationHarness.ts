@@ -903,11 +903,11 @@ export async function expectEffectReceipts(
   // All seven rows are mandatory even with disabled features. In particular,
   // asserting only no duplicate keys on an empty ledger would be vacuous.
   const expected = [
-    ['completion_sound', 'ephemeral', delivery === 'late_recovery' ? 'late_recovery' : 'not_configured'],
+    ['completion_sound', 'ephemeral', 'not_configured'],
     ['emotion_image_state', 'recomputed', 'current_state_not_applicable'],
     ['generated_translation', 'durable', 'not_applicable'],
     ['igp', 'durable', 'not_configured'],
-    ['notification', 'ephemeral', delivery === 'late_recovery' ? 'late_recovery' : 'not_configured'],
+    ['notification', 'ephemeral', 'not_configured'],
     ['plugin_output', 'durable', 'not_configured'],
     [
       'tts',

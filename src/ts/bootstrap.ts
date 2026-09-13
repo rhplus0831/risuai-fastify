@@ -979,7 +979,10 @@ function installConnectedSessionLifecycle(): void {
 /** Only a foreground return may automatically promote an existing reader. */
 async function resumeConnectedReader(): Promise<void> {
   const generation = captureClientSessionGeneration()
-  if (!connectedReaderSync || getClientSessionSnapshot().connection !== 'live') await refreshConnectedReader()
+  // An existing reader sync owns reconnect and revision-gap recovery. Starting
+  // an unfenced full bootstrap beside it can race the stream's minimum-revision
+  // refresh and briefly apply an older projection.
+  if (!connectedReaderSync) await refreshConnectedReader()
   const enabled = await shouldAutoAcquireDisconnectedWriter()
   if (
     !enabled ||

@@ -340,7 +340,7 @@
           className="min-h-11 shrink-0 mt-5"
           ariaLabel={`${language.inputHookDelete}: ${hook.name}`}
           onclick={() => deleteHook(hook.id)}>
-            <span class="inline-flex items-center gap-2"
+          <span class="inline-flex items-center gap-2"
             ><TrashIcon size={16} />{language.inputHookSettings.deleteAction}</span>
         </Button>
       </div>

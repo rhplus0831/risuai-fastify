@@ -162,10 +162,7 @@
     <div class="grid gap-2 lg:grid-cols-2" data-risu-agent-list>
       {#each agents as agent, index (agent.id)}
         {@const references = referencingPresets(agent.id)}
-        <article
-          class="risu-card grid gap-2"
-          data-risu-agent-row
-          data-agent-id={agent.id}>
+        <article class="risu-card grid gap-2" data-risu-agent-row data-agent-id={agent.id}>
           <div class="order-2 flex flex-wrap justify-start gap-2" data-risu-agent-actions>
             <Button
               size="sm"

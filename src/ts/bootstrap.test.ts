@@ -719,6 +719,7 @@ describe('API-backed client bootstrap', () => {
     document.dispatchEvent(new Event('visibilitychange'))
     await vi.waitFor(() => expect(autoWriterApi.enabled).toHaveBeenCalledTimes(2))
     await vi.waitFor(() => expect(getClientSessionSnapshot().lifecycle).toBe(enabled ? 'writing' : 'reading'))
+    expect(bootstrapApi.fetchReadOnly).toHaveBeenCalledTimes(enabled ? 2 : 1)
     if (enabled) {
       expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
       expect(bootstrapApi.fetch.mock.calls[0][1]).not.toHaveProperty('disconnectExistingWriter')

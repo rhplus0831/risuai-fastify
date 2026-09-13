@@ -65,6 +65,14 @@ device. Existing owner administrative operations on an unoccupied chat can
 retain their authority, but must check that the affected chat has not become
 foreign-occupied before committing. An explicit administrative handoff must
 first resolve occupancy; owner authority is never an implicit bypass.
+The one-chat-per-session limit applies to chat-only admission, not to the active
+owner: preserve the owner's existing ability to run generation concurrently in
+different chats that it occupies. A later owner demotion does not revoke those
+occupancies or already accepted work, but new chat-only intent waits for an
+explicit normalization to one retained occupancy. That atomic normalization
+examines every occupancy held by the session, releases every nonselected idle
+row regardless of its original claim class, and fails without changes if any
+nonselected row is pinned.
 
 Preserve the existing automatic general-owner acquisition preference and its
 conditional connected-writer protection. Occupying, sending, or viewing a chat

@@ -112,6 +112,7 @@ function browserSmokeDatabase(includeDragFixtures = false): Record<string, unkno
     personas: [],
     plugins: [],
     pluginCustomStorage: {},
+    autoAcquireDisconnectedWriter: false,
     language: 'en',
     loreBookToken: 8000,
     mainPrompt: '',
