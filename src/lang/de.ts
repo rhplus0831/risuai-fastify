@@ -1,4 +1,62 @@
 export const languageGerman = {
+  connectedReaders: {
+    chatOccupancy: {
+      unsupported: 'Nur-Chat-Zugriff ist nicht verfügbar',
+      unsupportedHelp: 'Dieser Server unterstützt keine Nur-Chat-Interaktion. Du kannst weiterlesen.',
+      disabled: 'Nur-Chat-Zugriff ist ausgeschaltet',
+      disabledHelp: 'Neuer Chat-Zugriff ist vorübergehend deaktiviert. Du kannst weiterlesen.',
+      identityUnavailable: 'Dieser Tab kann den Nur-Chat-Zugriff nicht verwenden',
+      identityUnavailableHelp: 'Verwende den ursprünglichen Tab oder lade diese Seite neu. Lesen bleibt möglich.',
+      available: 'Auf diesem Gerät verfügbar',
+      availableHelp: 'Übernimm diesen Chat ausdrücklich zum Senden oder Neuversuchen. Lesen allein belegt ihn nicht.',
+      foreignOwned: 'Auf einem anderen Gerät in Verwendung',
+      foreignOwnedHelp: 'Dieser Chat bleibt hier schreibgeschützt, bis das andere Gerät ihn freigibt.',
+      selfOwned: 'Auf diesem Gerät in Verwendung',
+      selfOwnedHelp: 'Dieses Gerät kann hier senden, die letzte Antwort neu erzeugen und die Generierung stoppen.',
+      switchRequired: 'Wechsel erforderlich',
+      switchRequiredHelp: 'Dieses Gerät verwendet einen anderen Chat. Wechsle ausdrücklich, bevor du diesen änderst.',
+      normalizationRequired: 'Einen Chat zum Behalten auswählen',
+      normalizationRequiredHelp:
+        'Dieses Gerät hat nach Verlust des allgemeinen Schreibzugriffs mehrere Chats behalten. Behalte diesen Chat vor der Interaktion.',
+      normalizationElsewhere: 'Zuerst einen behaltenen Chat auswählen',
+      normalizationElsewhereHelp:
+        'Öffne einen bereits auf diesem Gerät verwendeten Chat, behalte ihn und wechsle dann ausdrücklich hierher.',
+      claim: 'Diesen Chat verwenden',
+      claiming: 'Wird übernommen…',
+      release: 'Chat freigeben',
+      releasing: 'Wird freigegeben…',
+      switchToChat: 'Zu diesem Chat wechseln',
+      switching: 'Wird gewechselt…',
+      keepThisChat: 'Diesen Chat behalten',
+      normalizing: 'Wird aktualisiert…',
+      inputPlaceholder: 'Nachricht eingeben',
+      sending: 'Wird gesendet…',
+      reroll: 'Letzte Antwort neu erzeugen',
+      rerolling: 'Wird neu erzeugt…',
+      stop: 'Generierung stoppen',
+      stopping: 'Wird gestoppt…',
+      unsupportedActions:
+        'Anhänge, Uploads, abgelegte Dateien, Befehle, Eingabe-Hooks, Fortsetzen, allgemeines Neuerzeugen, Nachrichtenbearbeitung, Löschen, Übersetzung und Plugin-Aktionen sind im Nur-Chat-Modus nicht verfügbar.',
+      claimSucceeded: 'Dieser Chat wird jetzt auf diesem Gerät verwendet.',
+      releaseSucceeded: 'Dieser Chat wurde freigegeben. Du kannst weiterlesen.',
+      switchSucceeded: 'Der Chat-Zugriff wurde zu dieser Unterhaltung gewechselt.',
+      normalizationSucceeded: 'Dies ist jetzt der einzige auf diesem Gerät verwendete Chat.',
+      sendAccepted: 'Nachricht angenommen.',
+      sendQueued:
+        'Diese Nachricht bleibt auf diesem Gerät gespeichert; ob der Server sie angenommen hat, ist noch unklar.',
+      sendFailed: 'Die Nachricht wurde nicht angenommen. Dein Entwurf bleibt erhalten.',
+      rerollAccepted: 'Neuerzeugung angenommen.',
+      rerollRetained:
+        'Die Neuerzeugung bleibt auf diesem Gerät gespeichert; ob der Server sie angenommen hat, ist noch unklar.',
+      rerollFailed: 'Die Neuerzeugung wurde nicht angenommen. Die vorhandene Antwort bleibt unverändert.',
+      stopRequested: 'Stopp angefordert. Der Server gleicht die Antwort noch ab.',
+      stopFailed: 'Der Stopp konnte nicht bestätigt werden. Die Generierung läuft möglicherweise noch.',
+      actionUnavailable: 'Diese Aktion ist gerade nicht verfügbar. Aktualisiere und versuche es erneut.',
+      actionFailed: 'Der Chat-Zugriff konnte nicht geändert werden. Aktualisiere und versuche es erneut.',
+      recoveryBlocked:
+        'Angenommene Arbeit muss beendet oder gestoppt werden, bevor der Chat freigegeben oder gewechselt wird.',
+    },
+  },
   generationRecovery: {
     failed:
       'Die App konnte die Wiederherstellung einer vorherigen Generierung nicht abschließen. Neue Nachrichten sind pausiert, aber deine Entwürfe bleiben erhalten.',

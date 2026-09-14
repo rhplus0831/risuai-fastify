@@ -1,6 +1,5 @@
 import {
   canUseClientReadServices,
-  captureClientSessionGeneration,
   clientSessionStore,
   getClientSessionSnapshot,
   isClientSessionGenerationCurrent,
@@ -40,6 +39,7 @@ import {
 import { charactersResourceState } from './resourceState.svelte'
 import { applyServerMemoryJobEvent, applyServerMemoryJobSnapshot } from './memoryJobProjection.svelte'
 import { publishServerBardWikiJobEvent, publishServerBardWikiJobSnapshot } from './bardWikiJobEvents'
+import { applyClientChatOccupancyEvent, configureClientChatOccupancy } from './chatOccupancy'
 
 export interface ConnectedReaderSyncOptions {
   /** Cancels setup owned by a higher-level operation such as explicit promotion. */
@@ -72,8 +72,10 @@ export function calculateConnectedReaderReconnectDelayMs(attempt: number, random
 
 /** A reader owns only authenticated reads, projection application, and its event stream. */
 export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): ConnectedReaderSync {
-  const generation = captureClientSessionGeneration()
-  const lineage = getClientSessionSnapshot().databaseLineage
+  const initialSession = getClientSessionSnapshot()
+  const generation = initialSession.generation
+  const sessionId = initialSession.sessionId
+  const lineage = initialSession.databaseLineage
   let stopped = false
   let epoch = 0
   let attempt = 0
@@ -103,6 +105,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       state.managed &&
       canUseClientReadServices() &&
       isClientSessionGenerationCurrent(generation) &&
+      state.sessionId === sessionId &&
       state.databaseLineage === lineage &&
       (state.lifecycle === 'reading' || state.lifecycle === 'promoting')
     )
@@ -204,6 +207,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       interrupt(sourceEpoch)
       return false
     }
+    configureClientChatOccupancy(runtime.chatOccupancyProtocol, runtime.chatOccupancies, generation)
     if (!current(sourceEpoch)) return false
     options.onWriterEvent?.(runtime.writer)
     if (!current(sourceEpoch)) return false
@@ -399,6 +403,14 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
             return
           }
           if (observeClientWriter(writer) && current(sourceEpoch)) options.onWriterEvent?.(writer)
+        },
+        onOccupancyEvent: (event) => {
+          if (current(sourceEpoch)) {
+            applyClientChatOccupancyEvent(event, {
+              generation,
+              sessionId,
+            })
+          }
         },
         onMemorySnapshot: (snapshot) => {
           if (!acceptMemoryVersion(sourceEpoch, snapshot.streamId, snapshot.version, true)) return

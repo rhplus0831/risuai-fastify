@@ -7,7 +7,10 @@
   import ReaderChatBackground from './ChatScreens/ReaderChatBackground.svelte'
   import { getCustomBackground } from '../ts/characterState'
   import Chats from './ChatScreens/Chats.svelte'
-  import ReadOnlyComposer from './ChatScreens/ReadOnlyComposer.svelte'
+  import ReadOnlyComposer, {
+    type ReaderComposerMode,
+    type ReaderComposerPendingAction,
+  } from './ChatScreens/ReadOnlyComposer.svelte'
   import { createChatReadOwners } from './ChatScreens/chatReadOwners.svelte'
   import { getReaderPanelAppearance, hasReaderChatPanel } from './ChatScreens/readerPanelAppearance'
   import { CHAT_READ_OWNERS_CONTEXT } from './ChatScreens/chatReadOwnersContext'
@@ -43,7 +46,29 @@
   import { ensureReaderDisplayResources, readerDisplayResourcesReady } from '../ts/server/readerDisplayResources'
   import { startReaderGenerationObservation } from '../ts/server/readerGenerationObservation'
   import type { ReaderGenerationView } from '../ts/server/readerGenerationTypes'
+  import {
+    claimClientChatOccupancy,
+    captureClientChatOccupancyAuthority,
+    clientChatOccupancyStore,
+    listClientChatOccupancyAuthorities,
+    normalizeClientChatOccupancies,
+    projectClientChatOccupancy,
+    releaseClientChatOccupancy,
+    switchClientChatOccupancy,
+    type ClientChatOccupancyActionResult,
+    type ClientChatOccupancyAuthority,
+  } from '../ts/server/chatOccupancy'
+  import { coordinateAcceptedChatSend } from '../ts/process/acceptedSendCoordinator.svelte'
+  import { rerollChatOnlyTarget } from '../ts/process/rerollNavigation.svelte'
+  import { abortChatOccupancyGeneration } from '../ts/process/generationStop.svelte'
+  import type { ActiveChatTarget } from '../ts/types/activeChatTarget'
   import { resolveReaderRoute } from '../ts/readerRouteScope'
+  import {
+    chatOnlyDraftStorageKey,
+    readChatOnlyDraft,
+    writeChatOnlyDraft,
+    type ChatOnlyDraftScope,
+  } from '../ts/chatOnlyDrafts'
   import {
     isServerChatMessagePlaceholder,
     type character,
@@ -104,6 +129,15 @@
   let readRun = 0
   let destroyed = false
   let generationView = $state.raw<ReaderGenerationView>({ status: 'idle', projection: null })
+  let occupancyFeedback = $state.raw<{ chatId: string; message: string } | null>(null)
+  let draftOwner = $state.raw<{ key: string; value: string } | null>(null)
+  let retainedSend = $state.raw<{
+    scopeKey: string
+    message: string
+    operationId: string
+    acceptedMessageId: string
+    authority: ClientChatOccupancyAuthority
+  } | null>(null)
   let generationObserver: ReturnType<typeof startReaderGenerationObservation> | null = null
   const incarnation = $derived(getReaderChatIncarnation(characterId, chatId))
   // Scalar scope prevents connection/page updates from recreating an observer; it owns those lifecycles.
@@ -189,6 +223,81 @@
   const displayCharacter = $derived(readOwners.character())
   const displayChat = $derived(readOwners.chat())
   const messages = $derived((readOwners.messages() ?? []) as Message[])
+  const occupancyProjection = $derived.by(() => {
+    void $clientChatOccupancyStore
+    return projectClientChatOccupancy(chatId)
+  })
+  const occupancyAuthorities = $derived.by(() => {
+    void $clientChatOccupancyStore
+    return listClientChatOccupancyAuthorities()
+  })
+  const readerComposerMode = $derived.by<ReaderComposerMode>(() => {
+    const occupancyState = $clientChatOccupancyStore
+    const projection = occupancyProjection
+    if (occupancyState.support === 'unknown' || occupancyState.support === 'unsupported') return 'unsupported'
+    if (occupancyState.identity !== 'exclusive') return 'identity-unavailable'
+    if (projection.kind === 'self-owned') {
+      if (occupancyState.support === 'disabled') return 'disabled-self-owned'
+      if (occupancyAuthorities.length > 1 || projection.occupancy.claimClass === 'owner')
+        return 'normalization-required'
+      return 'self-owned'
+    }
+    if (occupancyState.support === 'disabled') return 'disabled'
+    if (projection.kind === 'foreign-owned') return 'foreign-owned'
+    if (occupancyAuthorities.length > 1 || occupancyAuthorities.some((authority) => authority.claimClass === 'owner'))
+      return 'normalization-elsewhere'
+    return occupancyAuthorities.length === 1 ? 'switch-required' : 'available'
+  })
+  const readerOccupancyPending = $derived.by<ReaderComposerPendingAction>(() => {
+    const pending = $clientChatOccupancyStore.pending
+    if (!pending || (pending.chatId !== chatId && pending.targetChatId !== chatId)) return null
+    return pending.action
+  })
+  const latestRerollTargetMessageId = $derived.by(() => {
+    const latest = messages.at(-1)
+    if (latest?.role !== 'char' || typeof latest.chatId !== 'string' || latest.chatId.length === 0) return null
+    return messages.filter((message) => message.chatId === latest.chatId).length === 1 ? latest.chatId : null
+  })
+  const readerGenerationActive = $derived(
+    generationView.status === 'watching' &&
+      generationView.projection !== null &&
+      generationView.projection.status !== 'interrupted',
+  )
+  const chatOnlyDraftScope = $derived.by<ChatOnlyDraftScope | null>(() => {
+    const session = $clientSessionStore
+    return session.authenticated && session.databaseLineage && session.sessionId
+      ? { databaseLineage: session.databaseLineage, sessionId: session.sessionId, chatId }
+      : null
+  })
+  const activeDraftKey = $derived(chatOnlyDraftScope ? chatOnlyDraftStorageKey(chatOnlyDraftScope) : null)
+  const activeDraftValue = $derived(activeDraftKey && draftOwner?.key === activeDraftKey ? draftOwner.value : '')
+  const activeSendRetained = $derived.by(() => {
+    const retainedIntent = retainedSend
+    const projection = occupancyProjection
+    return Boolean(
+      retainedIntent &&
+      activeDraftKey === retainedIntent.scopeKey &&
+      activeDraftValue.trim() === retainedIntent.message &&
+      $clientSessionStore.generation === retainedIntent.authority.sessionGeneration &&
+      $clientSessionStore.databaseLineage === retainedIntent.authority.databaseLineage &&
+      projection.kind === 'self-owned' &&
+      projection.occupancy.chatId === retainedIntent.authority.chatId &&
+      projection.occupancy.occupancyEpoch === retainedIntent.authority.occupancyEpoch &&
+      projection.occupancy.claimClass === retainedIntent.authority.claimClass,
+    )
+  })
+  $effect(() => {
+    const scope = chatOnlyDraftScope
+    const key = activeDraftKey
+    if (!scope || !key) {
+      draftOwner = null
+      return
+    }
+    if (draftOwner?.key === key) return
+    untrack(() => {
+      draftOwner = { key, value: readChatOnlyDraft(scope) }
+    })
+  })
   const presentation = $derived(resolveUserPersonaPresentation(getReaderTranscriptPersona() as Database, displayChat))
   const simpleCharacter = $derived(displayCharacter ? createSimpleCharacter(displayCharacter) : null)
   const greetingIndex = $derived(displayChat?.fmIndex ?? -1)
@@ -418,6 +527,175 @@
     historyExpanded = true
     void loadWindow(loadPages + getAdditionalChatLoadPages(getReaderNavigationSettings()), false, true)
   }
+  function occupancyResultMessage(result: ClientChatOccupancyActionResult, success: string): string {
+    const copy = language.connectedReaders.chatOccupancy
+    if (result.status === 'ok') return success
+    if (result.status === 'error' && result.error === 'chat_occupancy_recovery_blocked') return copy.recoveryBlocked
+    return result.status === 'error' ? copy.actionFailed : copy.actionUnavailable
+  }
+  async function runOccupancyAction(
+    targetChatId: string,
+    action: () => Promise<ClientChatOccupancyActionResult>,
+    success: string,
+  ): Promise<void> {
+    occupancyFeedback = null
+    const result = await action()
+    if (destroyed || chatId !== targetChatId) return
+    occupancyFeedback = { chatId: targetChatId, message: occupancyResultMessage(result, success) }
+  }
+  function claimCurrentChat(): Promise<void> {
+    const targetChatId = chatId
+    return runOccupancyAction(
+      targetChatId,
+      () => claimClientChatOccupancy(targetChatId),
+      language.connectedReaders.chatOccupancy.claimSucceeded,
+    )
+  }
+  function releaseCurrentChat(): Promise<void> {
+    const targetChatId = chatId
+    return runOccupancyAction(
+      targetChatId,
+      () => releaseClientChatOccupancy(targetChatId),
+      language.connectedReaders.chatOccupancy.releaseSucceeded,
+    )
+  }
+  function switchToCurrentChat(): Promise<void> {
+    const targetChatId = chatId
+    const source = occupancyAuthorities[0]
+    if (!source) {
+      occupancyFeedback = {
+        chatId: targetChatId,
+        message: language.connectedReaders.chatOccupancy.actionUnavailable,
+      }
+      return Promise.resolve()
+    }
+    return runOccupancyAction(
+      targetChatId,
+      () => switchClientChatOccupancy(source.chatId, targetChatId),
+      language.connectedReaders.chatOccupancy.switchSucceeded,
+    )
+  }
+  function normalizeCurrentChat(): Promise<void> {
+    const targetChatId = chatId
+    return runOccupancyAction(
+      targetChatId,
+      () => normalizeClientChatOccupancies(targetChatId),
+      language.connectedReaders.chatOccupancy.normalizationSucceeded,
+    )
+  }
+  function updateCurrentDraft(value: string): void {
+    const scope = chatOnlyDraftScope
+    const key = activeDraftKey
+    if (!scope || !key || scope.chatId !== chatId) return
+    draftOwner = { key, value }
+    writeChatOnlyDraft(scope, value)
+  }
+  function captureReaderTarget(): ActiveChatTarget | null {
+    if (displayCharacter?.chaId !== characterId || displayChat?.id !== chatId) return null
+    return { selectedCharID: -1, chatPage: -1, characterId, chatId }
+  }
+  function updateInteractionFeedback(targetChatId: string, message: string): void {
+    if (!destroyed && chatId === targetChatId) occupancyFeedback = { chatId: targetChatId, message }
+  }
+  function refreshGenerationObserverFor(targetChatId: string): void {
+    if (!destroyed && chatId === targetChatId) generationObserver?.refresh()
+  }
+  function clearAcceptedDraft(scope: ChatOnlyDraftScope, acceptedMessage: string): void {
+    const key = chatOnlyDraftStorageKey(scope)
+    const currentValue = key && draftOwner?.key === key ? draftOwner.value : readChatOnlyDraft(scope)
+    if (currentValue.trim() !== acceptedMessage) return
+    writeChatOnlyDraft(scope, '')
+    if (key && draftOwner?.key === key) draftOwner = { key, value: '' }
+  }
+  async function sendCurrentDraft(message: string, accepted: () => void): Promise<void> {
+    const target = captureReaderTarget()
+    const authority = target?.chatId ? captureClientChatOccupancyAuthority(target.chatId) : null
+    const scope = chatOnlyDraftScope
+    if (!target?.chatId || !authority || authority.claimClass !== 'chat_only' || !scope) {
+      if (target?.chatId)
+        updateInteractionFeedback(target.chatId, language.connectedReaders.chatOccupancy.actionUnavailable)
+      return
+    }
+    const targetChatId = target.chatId
+    const scopeKey = chatOnlyDraftStorageKey(scope)
+    if (!scopeKey) {
+      updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.actionUnavailable)
+      return
+    }
+    if (retainedSend?.scopeKey === scopeKey && retainedSend.message !== message) retainedSend = null
+    let appendAccepted = false
+    try {
+      const result = await coordinateAcceptedChatSend({
+        target,
+        message,
+        chatOccupancy: { authority, interaction: 'send' },
+        onAppendAccepted() {
+          if (appendAccepted) return
+          appendAccepted = true
+          retainedSend = null
+          clearAcceptedDraft(scope, message)
+          accepted()
+          updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.sendAccepted)
+          refreshGenerationObserverFor(targetChatId)
+        },
+        onAppendFailed() {
+          updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.sendFailed)
+        },
+      })
+      if (!appendAccepted && result.status === 'send_retained') {
+        retainedSend = {
+          scopeKey,
+          message,
+          operationId: result.operationId,
+          acceptedMessageId: result.acceptedMessageId,
+          authority,
+        }
+        updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.sendQueued)
+        refreshGenerationObserverFor(targetChatId)
+        return
+      }
+      if (!appendAccepted && result.status === 'append_failed') {
+        updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.sendFailed)
+      }
+    } catch {
+      updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.sendFailed)
+    }
+  }
+  async function rerollCurrentChat(): Promise<void> {
+    const target = captureReaderTarget()
+    if (!target?.chatId) return
+    const targetChatId = target.chatId
+    try {
+      const result = await rerollChatOnlyTarget(target)
+      if (result.status === 'accepted') {
+        updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.rerollAccepted)
+        refreshGenerationObserverFor(targetChatId)
+      } else if (result.status === 'retained') {
+        updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.rerollRetained)
+      } else {
+        updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.rerollFailed)
+      }
+    } catch {
+      updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.rerollFailed)
+    }
+  }
+  async function stopCurrentGeneration(): Promise<void> {
+    const target = captureReaderTarget()
+    if (!target?.chatId) return
+    const targetChatId = target.chatId
+    try {
+      const result = await abortChatOccupancyGeneration(target)
+      updateInteractionFeedback(
+        targetChatId,
+        result.status === 'acknowledged'
+          ? language.connectedReaders.chatOccupancy.stopRequested
+          : language.connectedReaders.chatOccupancy.stopFailed,
+      )
+      refreshGenerationObserverFor(targetChatId)
+    } catch {
+      updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.stopFailed)
+    }
+  }
   function handleScroll(): void {
     chatsInstance?.handleTranscriptScroll()
     if (!scrollContainer || loading || readFailed || messages.length <= loadPages) return
@@ -592,7 +870,23 @@
           data-reader-new-messages
           onclick={() => chatsInstance?.scrollToLatestMessage()}>{language.connectedReaders.newMessages}</button
         >{/if}
-      <ReadOnlyComposer />
+      <ReadOnlyComposer
+        mode={readerComposerMode}
+        occupancyPending={readerOccupancyPending}
+        generationActive={readerGenerationActive}
+        sendRetained={activeSendRetained}
+        rerollTargetMessageId={latestRerollTargetMessageId}
+        draftValue={activeDraftValue}
+        draftScopeKey={activeDraftKey ?? ''}
+        onDraftChange={updateCurrentDraft}
+        feedback={occupancyFeedback?.chatId === chatId ? occupancyFeedback.message : ''}
+        onClaim={claimCurrentChat}
+        onRelease={releaseCurrentChat}
+        onSwitch={switchToCurrentChat}
+        onNormalize={normalizeCurrentChat}
+        onSend={sendCurrentDraft}
+        onReroll={rerollCurrentChat}
+        onStop={stopCurrentGeneration} />
     </div>
   {/snippet}
 </ChatScreenLayout>

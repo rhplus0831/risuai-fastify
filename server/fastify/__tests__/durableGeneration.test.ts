@@ -1229,7 +1229,13 @@ describe('Durable generation', () => {
 
   it('runs protocol-v1 chat-only send and reroll through real finalization without widening scope', async () => {
     await resetHarness({}, true)
-    await seedDatabase(chatOnlyMutationFixture())
+    const scopedFixture = chatOnlyMutationFixture()
+    const scopedCharacter = (scopedFixture.characters as JsonRecord[])[0]!
+    scopedCharacter.chats = [
+      ...(scopedCharacter.chats as JsonRecord[]),
+      { ...durableChat(), id: 'chat-2', name: 'Switch target' },
+    ]
+    await seedDatabase(scopedFixture)
     const replies = ['first scoped reply', 'rerolled scoped reply']
     let providerCalls = 0
     providerImpl = () => {
@@ -1358,9 +1364,123 @@ describe('Durable generation', () => {
           )
           .get(sendOperationId, rerollOperationId),
       ).toEqual({ count: 4 })
+      expect(
+        db
+          .prepare(
+            `SELECT operation_id, status, reason, delivery
+             FROM generation_effects
+             WHERE operation_id IN (?, ?) AND effect_kind = 'igp'
+             ORDER BY operation_id`,
+          )
+          .all(sendOperationId, rerollOperationId),
+      ).toEqual([
+        {
+          operation_id: [sendOperationId, rerollOperationId].sort()[0],
+          status: 'skipped',
+          reason: 'not_configured',
+          delivery: 'server',
+        },
+        {
+          operation_id: [sendOperationId, rerollOperationId].sort()[1],
+          status: 'skipped',
+          reason: 'not_configured',
+          delivery: 'server',
+        },
+      ])
     } finally {
       db.close()
     }
+
+    const switched = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/switch`, {
+      method: 'POST',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': authority.sessionId,
+        'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+      }),
+      body: JSON.stringify({ version: 1, sourceChatId: 'chat-1', targetChatId: 'chat-2' }),
+    })
+    expect(switched.status).toBe(200)
+    const switchedOccupancy = (await switched.json()) as { chatId: string; occupancyEpoch: number }
+    expect(switchedOccupancy.chatId).toBe('chat-2')
+
+    const released = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/chat-2`, {
+      method: 'DELETE',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': authority.sessionId,
+        'risu-chat-occupancy-epoch': String(switchedOccupancy.occupancyEpoch),
+      }),
+      body: JSON.stringify({ version: 1 }),
+    })
+    expect(released.status).toBe(200)
+    expect(await released.json()).toMatchObject({ chatId: 'chat-2', state: 'released' })
+  })
+
+  it('keeps configured chat-only IGP pending without server-side effect dispatch', async () => {
+    await resetHarness({}, true)
+    const scopedFixture = chatOnlyMutationFixture()
+    scopedFixture.igpPrompt = 'Apply the configured IGP transform.'
+    await seedDatabase(scopedFixture)
+    const dispatchProvider = vi.fn(() =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'configured scoped reply' }
+        yield { kind: 'done', finishReason: 'stop' }
+      })(),
+    )
+    providerImpl = dispatchProvider
+    const authority = await claimChatOnly()
+    const operationId = randomUUID()
+    const response = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({ operationId, acceptedMessageId: randomUUID(), baseRevision: authority.revision }),
+        'send',
+      ),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(response.status).toBe(201)
+    await response.json()
+    await waitFor(async () => {
+      const status = await operationStatus(operationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+
+    expect(dispatchProvider).toHaveBeenCalledTimes(1)
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT status, reason, delivery
+             FROM generation_effects WHERE operation_id = ? AND effect_kind = 'igp'`,
+          )
+          .get(operationId),
+      ).toEqual({ status: 'pending', reason: null, delivery: null })
+    } finally {
+      db.close()
+    }
+
+    const blockedRelease = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/chat-1`, {
+      method: 'DELETE',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': authority.sessionId,
+        'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+      }),
+      body: JSON.stringify({ version: 1 }),
+    })
+    expect(blockedRelease.status).toBe(409)
+    expect(await blockedRelease.json()).toMatchObject({
+      error: 'chat_occupancy_recovery_blocked',
+      blocking: expect.arrayContaining([
+        expect.objectContaining({ id: expect.stringContaining(':igp'), kind: 'generation_effect' }),
+      ]),
+    })
   })
 
   it('keeps accepted chat-only work authoritative through normalize and viewer disconnect', async () => {

@@ -27,6 +27,8 @@ const api = vi.hoisted(() => ({
   applyGreeting: vi.fn(),
   lifecycle: vi.fn(),
   stopLifecycle: vi.fn(),
+  configureOccupancy: vi.fn(),
+  applyOccupancy: vi.fn(),
   known: null as number | null,
   applied: null as number | null,
 }))
@@ -68,6 +70,10 @@ vi.mock('./greetingTranslations.svelte', () => ({
 }))
 vi.mock('./resourceState.svelte', () => ({ charactersResourceState: { characters: [] } }))
 vi.mock('./lifecycleRecovery', () => ({ subscribeBrowserLifecycleRecovery: api.lifecycle }))
+vi.mock('./chatOccupancy', () => ({
+  configureClientChatOccupancy: api.configureOccupancy,
+  applyClientChatOccupancyEvent: api.applyOccupancy,
+}))
 
 import {
   beginClientPromotion,
@@ -335,6 +341,32 @@ describe('connected reader synchronization', () => {
     expect(canUseClientWriteAccess()).toBe(false)
     expect(streams[0].stop).not.toHaveBeenCalled()
     expect(callbacks.onLineageChange).not.toHaveBeenCalled()
+  })
+
+  it('installs bootstrap occupancy before subscribing and applies revision-free frames in the reader session scope', async () => {
+    const capability = { version: 1, enabled: true, leaseMs: 90_000, renewAfterMs: 30_000 }
+    const snapshot = { version: 1 as const, databaseLineage: 'database-a', occupancies: [] }
+    api.bootstrap.mockResolvedValue({
+      status: 'ok',
+      bootstrap: {
+        initialized: true,
+        revision: 5,
+        ...ownership,
+        chatOccupancyProtocol: capability,
+        chatOccupancies: snapshot,
+      },
+    })
+    const { sync } = start()
+    await sync.ready
+    const session = getClientSessionSnapshot()
+
+    expect(api.configureOccupancy).toHaveBeenCalledWith(capability, snapshot, session.generation)
+    const event = { type: 'occupancy.snapshot' as const, ...snapshot }
+    streams[0].input.onOccupancyEvent?.(event)
+    expect(api.applyOccupancy).toHaveBeenCalledWith(event, {
+      generation: session.generation,
+      sessionId: 'reader-a',
+    })
   })
 
   it('hands an SSE ownership-lineage change directly to the coordinator', async () => {

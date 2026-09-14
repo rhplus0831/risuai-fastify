@@ -48,6 +48,29 @@ describe('chat occupancy protocol', () => {
     )
     expect(isChatOccupancySnapshot({ ...snapshot, occupancies: [occupied, occupied] })).toBe(false)
     expect(isChatOccupancySnapshot({ version: CHAT_OCCUPANCY_PROTOCOL_VERSION, occupancies: [] })).toBe(false)
+    expect(isChatOccupancySnapshot({ ...snapshot, occupancies: [{ ...occupied, occupantSessionId: null }] })).toBe(
+      false,
+    )
+    expect(
+      isChatOccupancySnapshot({ ...snapshot, occupancies: [{ ...occupied, state: 'released', releasedAtMs: 2_000 }] }),
+    ).toBe(false)
+    expect(
+      isChatOccupancySnapshot({
+        ...snapshot,
+        occupancies: [
+          {
+            ...occupied,
+            occupantSessionId: null,
+            claimClass: null,
+            claimedAtMs: null,
+            leaseExpiresAtMs: null,
+            state: 'released',
+            releasedAtMs: 2_000,
+          },
+        ],
+      }),
+    ).toBe(true)
+    expect(isChatOccupancySnapshot({ ...snapshot, occupancies: [{ ...occupied, state: 'expired' }] })).toBe(true)
     expect(CHAT_OCCUPANCY_RENEW_AFTER_MS).toBeLessThan(CHAT_OCCUPANCY_LEASE_MS)
   })
 
@@ -76,6 +99,7 @@ describe('chat occupancy protocol', () => {
       releasedAtMs: null,
     }
     expect(isChatOccupancyEvent({ ...event, occupancies: [occupied] })).toBe(true)
+    expect(isChatOccupancyEvent({ ...event, occupancies: [{ ...occupied, releasedAtMs: 1_500 }] })).toBe(false)
     expect(isChatOccupancyEvent({ ...event, occupancies: [{ ...occupied, databaseLineage: 'lineage-b' }] })).toBe(false)
     expect(isChatOccupancyEvent({ ...event, occupancies: [occupied, occupied] })).toBe(false)
   })

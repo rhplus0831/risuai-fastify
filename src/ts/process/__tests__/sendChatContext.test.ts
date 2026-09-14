@@ -539,29 +539,32 @@ describe('setupSendChatContext - DB side effects', () => {
     }
   })
 
-  it('performs no timestamp, message-id, or command maintenance for a reattach context', async () => {
-    seedDb({
-      characters: [
-        makeChar({
-          lastInteraction: 123,
-          chats: [
-            makeChat({
-              id: 'chat-1',
-              message: [{ role: 'user', data: 'legacy', chatId: undefined as unknown as string }],
-            }),
-          ],
-        }),
-      ],
-    })
-    const fetchSpy = vi.mocked(fetch)
+  it.each(['none', 'chat-local'] as const)(
+    'performs no timestamp, message-id, or general command maintenance for a %s context',
+    async (maintenanceScope) => {
+      seedDb({
+        characters: [
+          makeChar({
+            lastInteraction: 123,
+            chats: [
+              makeChat({
+                id: 'chat-1',
+                message: [{ role: 'user', data: 'legacy', chatId: undefined as unknown as string }],
+              }),
+            ],
+          }),
+        ],
+      })
+      const fetchSpy = vi.mocked(fetch)
 
-    const ctx = setupSendChatContext({ chatProcessIndex: -1, writeMaintenance: false })
+      const ctx = setupSendChatContext({ chatProcessIndex: -1, maintenanceScope })
 
-    await expect(ctx.persistence).resolves.toEqual({ status: 'ok', acceptedCount: 0 })
-    expect(testDatabaseState.db.characters[0].lastInteraction).toBe(123)
-    expect(testDatabaseState.db.characters[0].chats[0].message[0].chatId).toBeUndefined()
-    expect(fetchSpy).not.toHaveBeenCalled()
-  })
+      await expect(ctx.persistence).resolves.toEqual({ status: 'ok', acceptedCount: 0 })
+      expect(testDatabaseState.db.characters[0].lastInteraction).toBe(123)
+      expect(testDatabaseState.db.characters[0].chats[0].message[0].chatId).toBeUndefined()
+      expect(fetchSpy).not.toHaveBeenCalled()
+    },
+  )
 })
 
 describe('setupSendChatContext - promptInfo seed', () => {

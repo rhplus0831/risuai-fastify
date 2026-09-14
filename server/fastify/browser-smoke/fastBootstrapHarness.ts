@@ -22,6 +22,8 @@ export async function startFastBootstrapHarness(
     temporaryDirectoryPrefix?: string
     /** Default to an unowned API import; explicit modes retain owned/migration/empty producers. */
     databaseSeedMode?: 'unowned-import' | 'writer-import' | 'unowned-migration' | 'empty'
+    /** Opt in only for browser journeys that exercise the unreleased chat-occupancy protocol. */
+    chatOccupancy?: BuildAppOptions['chatOccupancy']
     generationChat?: BuildAppOptions['generationChat']
     /** Opt in only for isolated journeys exercising real background memory work. */
     memoryWorker?: BuildAppOptions['memoryWorker']
@@ -51,6 +53,7 @@ export async function startFastBootstrapHarness(
       requestTrace: { mode: 'agent' },
     },
     assetGc: false,
+    chatOccupancy: options.chatOccupancy,
     memoryWorker: options.memoryWorker ?? false,
     generationChat: options.generationChat,
   })

@@ -24,8 +24,14 @@ import { isClientWriteOperationCurrent } from '../../clientWriteOperation'
 
 import { getNodeServerProxyAuth } from '../../storage/fastifyStorage'
 import type { MessageGenerationInfo } from '../../storage/database.svelte'
-import { setCachedServerCommandRevision } from '../../server/commands'
-import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from '../../server/activeWriterSession'
+import { SERVER_DATABASE_LINEAGE_HEADER, setCachedServerCommandRevision } from '../../server/commands'
+import {
+  ACTIVE_WRITER_SESSION_HEADER,
+  activeWriterSessionHeader,
+  handleActiveWriterStaleResponse,
+} from '../../server/activeWriterSession'
+import { CHAT_OCCUPANCY_EPOCH_HEADER } from '@risuai/protocol/chat-occupancy'
+import { isClientChatOccupancyAuthorityCurrent, type ClientChatOccupancyAuthority } from '../../server/chatOccupancy'
 import {
   beginPostGenerationProgress,
   clearPostGenerationProgress,
@@ -451,6 +457,7 @@ async function openChatResponse(
   operationStream?: ServerChatOperationStream,
   staleAttemptRedirects = 0,
   sourceGeneration = captureClientSessionGeneration(),
+  chatOccupancyAuthority?: ClientChatOccupancyAuthority,
 ): Promise<
   | {
       status: 'ok'
@@ -471,7 +478,13 @@ async function openChatResponse(
 > {
   const canOpen = () =>
     isClientSessionGenerationCurrent(sourceGeneration) &&
-    (reattachJobId || operationStream ? canUseClientReadServices() : canUseClientWriteAccess())
+    (chatOccupancyAuthority
+      ? !!operationStream &&
+        isClientChatOccupancyAuthorityCurrent(chatOccupancyAuthority) &&
+        operationStream.operationId.length > 0
+      : reattachJobId || operationStream
+        ? canUseClientReadServices()
+        : canUseClientWriteAccess())
   if (!canOpen()) return { status: 'error', error: 'client_write_access_required', retryable: false }
   const auth = await getNodeServerProxyAuth()
   if (!canOpen()) return { status: 'aborted' }
@@ -502,7 +515,16 @@ async function openChatResponse(
             headers: {
               'risu-auth': auth,
               'x-risu-caller': operationStream ? 'generation-operation-stream' : 'chat-reattach',
-              ...(canUseClientWriteAccess() ? activeWriterSessionHeader() : {}),
+              ...(chatOccupancyAuthority
+                ? {
+                    ...activeWriterSessionHeader(),
+                    [ACTIVE_WRITER_SESSION_HEADER]: chatOccupancyAuthority.sessionId,
+                    [SERVER_DATABASE_LINEAGE_HEADER]: chatOccupancyAuthority.databaseLineage,
+                    [CHAT_OCCUPANCY_EPOCH_HEADER]: String(chatOccupancyAuthority.occupancyEpoch),
+                  }
+                : canUseClientWriteAccess()
+                  ? activeWriterSessionHeader()
+                  : {}),
             },
             signal: signal ?? undefined,
           })
@@ -558,7 +580,7 @@ async function openChatResponse(
     } catch {
       // ignore parse failure
     }
-    handleActiveWriterStaleResponse(response, body, sourceGeneration)
+    if (!chatOccupancyAuthority) handleActiveWriterStaleResponse(response, body, sourceGeneration)
     if (
       isClientSessionGenerationCurrent(sourceGeneration) &&
       operationStream &&
@@ -580,7 +602,15 @@ async function openChatResponse(
           },
           'stale_attempt_redirect',
         )
-        return openChatResponse(input, signal, undefined, authority.stream, staleAttemptRedirects + 1, sourceGeneration)
+        return openChatResponse(
+          input,
+          signal,
+          undefined,
+          authority.stream,
+          staleAttemptRedirects + 1,
+          sourceGeneration,
+          chatOccupancyAuthority,
+        )
       }
     }
     debugServerChat('server-chat-response-error', { requestUid, status: response.status, error: reason })
@@ -630,6 +660,7 @@ async function fetchDurableTerminalSnapshot(
   jobId: string,
   reference: NonNullable<DoneEvent['terminalSnapshot']>,
   signal: AbortSignal,
+  chatOccupancyAuthority?: ClientChatOccupancyAuthority,
 ): Promise<Omit<DoneEvent, 'type'>> {
   const expectedHref = `${CHAT_ENDPOINT}/${encodeURIComponent(jobId)}/terminal-snapshot`
   if (reference.version !== 1 || reference.href !== expectedHref) {
@@ -642,6 +673,13 @@ async function fetchDurableTerminalSnapshot(
       'risu-auth': auth,
       'x-risu-caller': 'chat-terminal-snapshot',
       ...activeWriterSessionHeader(),
+      ...(chatOccupancyAuthority
+        ? {
+            [ACTIVE_WRITER_SESSION_HEADER]: chatOccupancyAuthority.sessionId,
+            [SERVER_DATABASE_LINEAGE_HEADER]: chatOccupancyAuthority.databaseLineage,
+            [CHAT_OCCUPANCY_EPOCH_HEADER]: String(chatOccupancyAuthority.occupancyEpoch),
+          }
+        : {}),
     },
     signal,
   })
@@ -858,8 +896,15 @@ export async function requestServerChatGeneration(
   signal: AbortSignal | null,
   reattachJobId?: string,
   operationStream?: ServerChatOperationStream,
+  chatOccupancyAuthority?: ClientChatOccupancyAuthority,
 ): Promise<ServerChatGenerationResult> {
-  const sourceGeneration = captureClientSessionGeneration()
+  const sourceGeneration = chatOccupancyAuthority?.sessionGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () =>
+    isClientSessionGenerationCurrent(sourceGeneration) &&
+    (chatOccupancyAuthority ? isClientChatOccupancyAuthorityCurrent(chatOccupancyAuthority) : true)
+  if (chatOccupancyAuthority && (!operationStream || operationStream.operationId.length === 0 || !isCurrent())) {
+    return { status: 'error', error: 'chat_occupancy_authority_stale' }
+  }
   if (!reattachJobId && !operationStream && !canUseClientWriteAccess())
     return { status: 'error', error: 'client_write_access_required' }
   let authoritativeOperationStream = operationStream
@@ -907,7 +952,7 @@ export async function requestServerChatGeneration(
       )
     : () => undefined
   const cancelDurableOnAbort = (): void => {
-    if (!isClientWriteOperationCurrent(sourceGeneration)) return
+    if (chatOccupancyAuthority ? !isCurrent() : !isClientWriteOperationCurrent(sourceGeneration)) return
     // Protocol-v1 Stop is addressed before a job ID exists and stages its own
     // durable control before detaching this viewer.
     if (authoritativeOperationStream?.operationId) {
@@ -922,7 +967,7 @@ export async function requestServerChatGeneration(
     void cancelServerChatGeneration(durableJobId)
   }
   const onOwnerAbort = (): void => {
-    if (!isClientWriteOperationCurrent(sourceGeneration)) {
+    if (chatOccupancyAuthority ? !isCurrent() : !isClientWriteOperationCurrent(sourceGeneration)) {
       retireObserver()
       return
     }
@@ -930,7 +975,7 @@ export async function requestServerChatGeneration(
     if (!authoritativeOperationStream?.operationId) viewerAbortController.abort()
   }
   const stopSessionWatch = clientSessionStore.subscribe(() => {
-    if (!isClientSessionGenerationCurrent(sourceGeneration)) retireObserver()
+    if (!isCurrent()) retireObserver()
   })
   const stopWatchingAbort = (): void => {
     stopSessionWatch()
@@ -952,6 +997,7 @@ export async function requestServerChatGeneration(
     authoritativeOperationStream,
     0,
     sourceGeneration,
+    chatOccupancyAuthority,
   )
   if (opened.status !== 'ok') {
     stopWatchingAbort()
@@ -1186,6 +1232,7 @@ export async function requestServerChatGeneration(
             authoritativeOperationStream,
             0,
             sourceGeneration,
+            chatOccupancyAuthority,
           )
           if (next.status === 'ok') {
             authoritativeOperationStream = next.operationStream ?? authoritativeOperationStream
@@ -1222,7 +1269,7 @@ export async function requestServerChatGeneration(
           let transportError = 'stream ended without a done event'
           try {
             for await (const frame of iterateSseEvents(activeOpened.response.body!, viewerAbortController.signal)) {
-              if (!isClientSessionGenerationCurrent(sourceGeneration)) {
+              if (!isCurrent()) {
                 settleAborted()
                 return
               }
@@ -1416,8 +1463,9 @@ export async function requestServerChatGeneration(
                         durableJobId,
                         donePayload.terminalSnapshot,
                         viewerAbortController.signal,
+                        chatOccupancyAuthority,
                       )
-                      if (!isClientSessionGenerationCurrent(sourceGeneration)) {
+                      if (!isCurrent()) {
                         settleAborted()
                         return
                       }

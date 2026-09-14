@@ -1,4 +1,4 @@
-import { captureClientSessionGeneration, resetClientSessionForTests } from '../clientSession'
+import { captureClientSessionGeneration, getClientSessionSnapshot, resetClientSessionForTests } from '../clientSession'
 import {
   setManagedWriterForTest,
   setManagedReaderForTest,
@@ -14,6 +14,11 @@ const coordinatorMocks = vi.hoisted(() => ({
   clearController: vi.fn(),
   controller: new AbortController(),
   createController: vi.fn(),
+  canUseGenerationOperationProtocol: vi.fn(),
+  captureChatOccupancy: vi.fn(),
+  chatOccupancyCurrent: vi.fn(),
+  collectServerInlayAssetRefs: vi.fn(),
+  flushPendingSelectedPersonaUpdate: vi.fn(),
   reconcileAcceptedSendCompletion: vi.fn(),
   reconcileAcceptedSendGenerationEffects: vi.fn(),
   refreshActiveGenerationJobsFromBootstrap: vi.fn(),
@@ -24,21 +29,25 @@ const coordinatorMocks = vi.hoisted(() => ({
   stageAcceptedSendGenerationOperation: vi.fn(),
   stopGenerationOperation: vi.fn(),
   submitStagedAcceptedSendOperation: vi.fn(),
+  waitForPendingChatGenerationSettingsSave: vi.fn(),
   waitForPendingCharacterScriptDefinitionSave: vi.fn(),
 }))
 
 vi.mock('../chatCommands', () => ({
-  waitForPendingChatGenerationSettingsSave: vi.fn(async () => undefined),
+  waitForPendingChatGenerationSettingsSave: coordinatorMocks.waitForPendingChatGenerationSettingsSave,
 }))
 
 vi.mock('../activeChatGenerationSettings', () => ({
   guardActiveChatGenerationSettingsForSend: vi.fn((state) => ({ status: 'ok', state })),
   resolveActiveChatGenerationSettings: vi.fn(() => ({
+    character: { chaId: 'character-a' },
     chat: { id: 'chat-a', message: [] },
   })),
 }))
 
-vi.mock('../persona', () => ({ flushPendingSelectedPersonaUpdate: vi.fn(async () => undefined) }))
+vi.mock('../persona', () => ({
+  flushPendingSelectedPersonaUpdate: coordinatorMocks.flushPendingSelectedPersonaUpdate,
+}))
 vi.mock('../server/scriptDefinitionOwner.svelte', () => ({
   waitForPendingCharacterScriptDefinitionSave: coordinatorMocks.waitForPendingCharacterScriptDefinitionSave,
 }))
@@ -49,15 +58,22 @@ vi.mock('../../lang', () => ({
     errors: { replyStillSaving: 'reply still saving' },
   },
 }))
-vi.mock('./serverBackedSendChat', () => ({ collectServerInlayAssetRefs: vi.fn(async () => []) }))
+vi.mock('./serverBackedSendChat', () => ({
+  collectServerInlayAssetRefs: coordinatorMocks.collectServerInlayAssetRefs,
+}))
 vi.mock('./request/clientContext', () => ({ readBrowserClientContext: vi.fn(() => ({})) }))
 vi.mock('./request/serverChat', () => ({ SERVER_CHAT_CLIENT_CAPABILITIES: {} }))
 vi.mock('../server/generationOperations', () => ({
+  canUseGenerationOperationProtocol: coordinatorMocks.canUseGenerationOperationProtocol,
   readGenerationOperationStatus: coordinatorMocks.readGenerationOperationStatus,
   retryGenerationOperation: coordinatorMocks.retryGenerationOperation,
   stageAcceptedSendGenerationOperation: coordinatorMocks.stageAcceptedSendGenerationOperation,
   stopGenerationOperation: coordinatorMocks.stopGenerationOperation,
   submitStagedAcceptedSendOperation: coordinatorMocks.submitStagedAcceptedSendOperation,
+}))
+vi.mock('../server/chatOccupancy', () => ({
+  captureClientChatOccupancyAuthority: coordinatorMocks.captureChatOccupancy,
+  isClientChatOccupancyAuthorityCurrent: coordinatorMocks.chatOccupancyCurrent,
 }))
 
 vi.mock('../util', () => ({
@@ -109,6 +125,19 @@ function target(): ActiveChatTarget {
   }
 }
 
+function occupancyAuthority(claimClass: 'owner' | 'chat_only') {
+  const session = getClientSessionSnapshot()
+  return {
+    version: 1 as const,
+    databaseLineage: 'database-a',
+    chatId: 'chat-a',
+    sessionId: session.sessionId,
+    sessionGeneration: session.generation,
+    occupancyEpoch: 7,
+    claimClass,
+  }
+}
+
 function projectAbandonedAcceptedSend(): void {
   applyAcceptedSendOperationProjection({
     operationId: 'operation-abandoned',
@@ -135,6 +164,11 @@ beforeEach(() => {
   resetClientSessionForTests()
   vi.clearAllMocks()
   coordinatorMocks.controller = new AbortController()
+  coordinatorMocks.canUseGenerationOperationProtocol.mockReturnValue(false)
+  coordinatorMocks.captureChatOccupancy.mockReturnValue(null)
+  coordinatorMocks.chatOccupancyCurrent.mockReturnValue(true)
+  coordinatorMocks.collectServerInlayAssetRefs.mockResolvedValue([])
+  coordinatorMocks.flushPendingSelectedPersonaUpdate.mockResolvedValue(undefined)
   coordinatorMocks.createController.mockReturnValue(coordinatorMocks.controller)
   coordinatorMocks.sendChat.mockResolvedValue(true)
   coordinatorMocks.alertConfirm.mockResolvedValue(true)
@@ -146,6 +180,7 @@ beforeEach(() => {
   coordinatorMocks.refreshActiveGenerationJobsFromBootstrap.mockResolvedValue(undefined)
   coordinatorMocks.sleep.mockResolvedValue(undefined)
   coordinatorMocks.waitForPendingCharacterScriptDefinitionSave.mockResolvedValue('idle')
+  coordinatorMocks.waitForPendingChatGenerationSettingsSave.mockResolvedValue(undefined)
   resetAcceptedSendCoordinatorForTests()
 })
 
@@ -268,6 +303,192 @@ describe('accepted send coordinator', () => {
       operationId: 'operation-atomic',
       resultMessageId: 'reply-atomic',
     })
+  })
+
+  it('uses exact chat-only authority without owner preparation or plugin-effect reconciliation', async () => {
+    setManagedReaderForTest()
+    const authority = occupancyAuthority('chat_only')
+    const chatOccupancy = { authority, interaction: 'send' as const }
+    coordinatorMocks.stageAcceptedSendGenerationOperation.mockResolvedValueOnce({
+      request: { acceptedMessageId: 'reader-message' },
+      target: target(),
+      intent: {},
+      handle: {},
+      optimisticMessage: {},
+      rollbackOptimisticAppend: vi.fn(),
+      chatOccupancy,
+    })
+    coordinatorMocks.submitStagedAcceptedSendOperation.mockResolvedValueOnce({
+      status: 'accepted',
+      response: {
+        operation: {
+          operationId: 'reader-operation',
+          acceptedMessageId: 'reader-message',
+          state: 'completed',
+          resultMessageId: 'reader-reply',
+        },
+        append: { disposition: 'accepted', messageId: 'reader-message' },
+      },
+    })
+    coordinatorMocks.readGenerationOperationStatus.mockResolvedValueOnce({
+      status: 'accepted',
+      response: {
+        operation: {
+          operationId: 'reader-operation',
+          acceptedMessageId: 'reader-message',
+          state: 'completed',
+          resultMessageId: 'reader-reply',
+        },
+      },
+    })
+    coordinatorMocks.reconcileAcceptedSendCompletion.mockResolvedValueOnce({ status: 'reconciled', source: 'applied' })
+
+    await expect(
+      coordinateAcceptedChatSend({ target: target(), message: 'reader text', chatOccupancy }),
+    ).resolves.toEqual({
+      status: 'generated',
+      operationId: 'reader-operation',
+      acceptedMessageId: 'reader-message',
+    })
+
+    expect(coordinatorMocks.stageAcceptedSendGenerationOperation).toHaveBeenCalledWith(
+      expect.objectContaining({ target: target(), message: 'reader text', chatOccupancy }),
+    )
+    expect(coordinatorMocks.waitForPendingChatGenerationSettingsSave).not.toHaveBeenCalled()
+    expect(coordinatorMocks.flushPendingSelectedPersonaUpdate).not.toHaveBeenCalled()
+    expect(coordinatorMocks.waitForPendingCharacterScriptDefinitionSave).not.toHaveBeenCalled()
+    expect(coordinatorMocks.collectServerInlayAssetRefs).not.toHaveBeenCalled()
+    expect(coordinatorMocks.reconcileAcceptedSendGenerationEffects).not.toHaveBeenCalled()
+  })
+
+  it('returns the frozen staged identity when chat-only Send transport remains uncertain', async () => {
+    setManagedReaderForTest()
+    const authority = occupancyAuthority('chat_only')
+    const chatOccupancy = { authority, interaction: 'send' as const }
+    coordinatorMocks.stageAcceptedSendGenerationOperation.mockResolvedValueOnce({
+      request: { operationId: 'retained-operation', acceptedMessageId: 'retained-message' },
+      target: target(),
+      intent: {},
+      handle: {},
+      optimisticMessage: {},
+      rollbackOptimisticAppend: vi.fn(),
+      chatOccupancy,
+    })
+    coordinatorMocks.submitStagedAcceptedSendOperation.mockResolvedValueOnce({
+      status: 'retained',
+      error: 'Network error: response lost',
+      code: 'transport_uncertain',
+    })
+    const onAppendAccepted = vi.fn()
+    const onAppendFailed = vi.fn()
+
+    await expect(
+      coordinateAcceptedChatSend({
+        target: target(),
+        message: 'reader text',
+        chatOccupancy,
+        onAppendAccepted,
+        onAppendFailed,
+      }),
+    ).resolves.toEqual({
+      status: 'send_retained',
+      operationId: 'retained-operation',
+      acceptedMessageId: 'retained-message',
+      error: 'Network error: response lost',
+      code: 'transport_uncertain',
+    })
+
+    expect(onAppendAccepted).not.toHaveBeenCalled()
+    expect(onAppendFailed).not.toHaveBeenCalled()
+    expect(coordinatorMocks.readGenerationOperationStatus).not.toHaveBeenCalled()
+    expect(coordinatorMocks.sendChat).not.toHaveBeenCalled()
+    expect(coordinatorMocks.reconcileAcceptedSendGenerationEffects).not.toHaveBeenCalled()
+  })
+
+  it('continues exact-tuple settlement when rollout disables after server admission', async () => {
+    setManagedReaderForTest()
+    const authority = occupancyAuthority('chat_only')
+    const chatOccupancy = { authority, interaction: 'send' as const }
+    let enabled = true
+    coordinatorMocks.chatOccupancyCurrent.mockImplementation(
+      (_authority, options?: { requireEnabled?: boolean }) => enabled || options?.requireEnabled !== true,
+    )
+    coordinatorMocks.stageAcceptedSendGenerationOperation.mockResolvedValueOnce({
+      request: { acceptedMessageId: 'reader-message' },
+      target: target(),
+      intent: {},
+      handle: {},
+      optimisticMessage: {},
+      rollbackOptimisticAppend: vi.fn(),
+      chatOccupancy,
+    })
+    coordinatorMocks.submitStagedAcceptedSendOperation.mockImplementationOnce(async () => {
+      enabled = false
+      return {
+        status: 'accepted',
+        response: {
+          operation: {
+            operationId: 'reader-operation',
+            acceptedMessageId: 'reader-message',
+            state: 'completed',
+            resultMessageId: 'reader-reply',
+          },
+          append: { disposition: 'accepted', messageId: 'reader-message' },
+        },
+      }
+    })
+    coordinatorMocks.readGenerationOperationStatus.mockResolvedValueOnce({
+      status: 'accepted',
+      response: {
+        operation: {
+          operationId: 'reader-operation',
+          acceptedMessageId: 'reader-message',
+          state: 'completed',
+          resultMessageId: 'reader-reply',
+        },
+      },
+    })
+    coordinatorMocks.reconcileAcceptedSendCompletion.mockResolvedValueOnce({ status: 'reconciled', source: 'applied' })
+    const onAppendAccepted = vi.fn()
+
+    await expect(
+      coordinateAcceptedChatSend({ target: target(), message: 'reader text', chatOccupancy, onAppendAccepted }),
+    ).resolves.toEqual({
+      status: 'generated',
+      operationId: 'reader-operation',
+      acceptedMessageId: 'reader-message',
+    })
+
+    expect(onAppendAccepted).toHaveBeenCalledOnce()
+    expect(coordinatorMocks.readGenerationOperationStatus).toHaveBeenCalledWith(
+      'reader-operation',
+      undefined,
+      chatOccupancy,
+    )
+    expect(coordinatorMocks.chatOccupancyCurrent).toHaveBeenCalledWith(authority, { requireEnabled: false })
+  })
+
+  it('automatically carries an owner-class occupancy while retaining owner preparation', async () => {
+    setManagedWriterForTest()
+    coordinatorMocks.canUseGenerationOperationProtocol.mockReturnValue(true)
+    const authority = occupancyAuthority('owner')
+    coordinatorMocks.captureChatOccupancy.mockReturnValue(authority)
+    coordinatorMocks.stageAcceptedSendGenerationOperation.mockResolvedValueOnce({ status: 'error', error: 'stop' })
+
+    await expect(coordinateAcceptedChatSend({ target: target(), message: 'owner text' })).resolves.toEqual({
+      status: 'append_failed',
+    })
+
+    expect(coordinatorMocks.captureChatOccupancy).toHaveBeenCalledWith('chat-a')
+    expect(coordinatorMocks.stageAcceptedSendGenerationOperation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatOccupancy: { authority, interaction: 'send' },
+      }),
+    )
+    expect(coordinatorMocks.waitForPendingChatGenerationSettingsSave).toHaveBeenCalledWith('chat-a')
+    expect(coordinatorMocks.flushPendingSelectedPersonaUpdate).toHaveBeenCalledOnce()
+    expect(coordinatorMocks.waitForPendingCharacterScriptDefinitionSave).toHaveBeenCalledWith('character-a')
+    expect(coordinatorMocks.collectServerInlayAssetRefs).toHaveBeenCalledOnce()
   })
 
   it('starts one captured-target generation after a queued append is accepted', async () => {

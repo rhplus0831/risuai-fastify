@@ -38,6 +38,7 @@ const eventApi = vi.hoisted(() => ({
     onMemoryEvent?: (event: TestMemoryEvent) => void
     onMemorySnapshot?: (snapshot: TestMemorySnapshot) => void
     onWriterEvent?: (event: TestWriterEvent) => void
+    onOccupancyEvent?: (event: any) => void
     onFrame?: (frame?: { event: string; data: string }) => void
     onError?: (error: string) => void
     onClose?: () => void
@@ -118,6 +119,12 @@ const pendingMutationApi = vi.hoisted(() => ({
 const ownershipApi = vi.hoisted(() => ({ count: vi.fn(() => 0), discard: vi.fn(), reset: vi.fn() }))
 const projectionLifecycleApi = vi.hoisted(() => ({ discard: vi.fn(async (_reason: string) => undefined) }))
 const memoryApi = vi.hoisted(() => ({ publish: vi.fn(), applyEvent: vi.fn(() => true), applySnapshot: vi.fn() }))
+const occupancyApi = vi.hoisted(() => ({
+  configure: vi.fn(),
+  applyEvent: vi.fn(),
+  setIdentity: vi.fn(),
+  clearIdentity: vi.fn(),
+}))
 const activeWriterApi = vi.hoisted(() => ({ adoptPendingOwner: vi.fn(), enterTakeover: vi.fn() }))
 const pushApi = vi.hoisted(() => ({
   initialize: vi.fn(async () => undefined),
@@ -305,6 +312,12 @@ vi.mock('./server/memoryJobEvents', () => ({ publishServerMemoryJobEvent: memory
 vi.mock('./server/memoryJobProjection.svelte', () => ({
   applyServerMemoryJobEvent: memoryApi.applyEvent,
   applyServerMemoryJobSnapshot: memoryApi.applySnapshot,
+}))
+vi.mock('./server/chatOccupancy', () => ({
+  configureClientChatOccupancy: occupancyApi.configure,
+  applyClientChatOccupancyEvent: occupancyApi.applyEvent,
+  setClientChatOccupancyIdentity: occupancyApi.setIdentity,
+  clearClientChatOccupancyIdentity: occupancyApi.clearIdentity,
 }))
 
 vi.mock('./server/commands', async (importActual) => {
@@ -556,6 +569,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   autoWriterApi.enabled.mockReset().mockResolvedValue(false)
   runtimeApi.applyGenerationOperationBootstrap.mockReset().mockReturnValue(true)
+  occupancyApi.configure.mockReset()
+  occupancyApi.applyEvent.mockReset()
+  occupancyApi.setIdentity.mockReset()
+  occupancyApi.clearIdentity.mockReset()
   readerApi.start.mockImplementation(() => {
     setClientConnectionState('live')
     return { stop: readerApi.stop, retry: readerApi.retry, ready: Promise.resolve() }
@@ -6070,6 +6087,27 @@ describe('API-backed client bootstrap', () => {
 
     expect(memoryApi.applySnapshot).toHaveBeenCalledWith(snapshot)
     expect(resourceApi.refreshInvalidated).not.toHaveBeenCalled()
+  })
+
+  it('installs bootstrap occupancy and applies owner-stream occupancy frames without changing command revision', async () => {
+    const chatOccupancyProtocol = { version: 1, enabled: true, leaseMs: 90_000, renewAfterMs: 30_000 }
+    const chatOccupancies = { version: 1, databaseLineage: 'database-a', occupancies: [] }
+    bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap({ chatOccupancyProtocol, chatOccupancies }))
+    await loadWebInitialDatabase()
+    const revision = peekCachedServerCommandRevision()
+    const event = { type: 'occupancy.snapshot', ...chatOccupancies }
+
+    expect(occupancyApi.configure).toHaveBeenCalledWith(
+      chatOccupancyProtocol,
+      chatOccupancies,
+      getClientSessionSnapshot().generation,
+    )
+    eventApi.subscriptions[0].onOccupancyEvent?.(event)
+    expect(occupancyApi.applyEvent).toHaveBeenCalledWith(event, {
+      generation: getClientSessionSnapshot().generation,
+      sessionId: getClientSessionSnapshot().sessionId,
+    })
+    expect(peekCachedServerCommandRevision()).toBe(revision)
   })
 
   it('enters the takeover flow only for a different non-null writer session', async () => {

@@ -4,20 +4,20 @@ Updated: 2026-09-14.
 
 ## Execution Cursor
 
-- State: Phase 1 accepted after the complete repository gate and a clean eighth
-  independent GPT 6 Astra High closure review. The feature remains disabled;
-  Phase 2 chat-only interaction has not started.
+- State: Phases 0 and 1 are accepted and committed. Phase 2 chat-only
+  interaction is accepted and ready for its required commit. Phase 3 recovery
+  and completion is next. The feature remains disabled until Phase 4.
 - Planning source: `3c8f5aee1a48fcf35d1611323929f8197c142b6b`.
 - Phase 0 baseline: `ec5765f4f`; the only drift from the planning source is the
   planning package itself. Runtime source remains the inspected baseline.
-- Current work: Phase 1 adds the disabled-by-default protocol, schema, occupancy
-  service, SSE discovery, generation authority/scope, durable pinning, direct
-  and indirect mutation enforcement, immutable accepted configuration, and
-  server-side effect/job restrictions. New chat-only claims remain disabled in
-  production until the Phase 4 release boundary.
+- Current work: Phase 3 closes scoped recovery, lifecycle, and completion-effect
+  behavior on top of the accepted server and chat-only interaction foundations.
+  New chat-only claims remain disabled in production until the Phase 4 release
+  boundary.
 - Phase 0 commit: `d03288053` (`docs: freeze chat occupancy contract`).
-- Next action: commit the accepted Phase 1 server foundation, then begin Phase 2
-  client occupancy coordination and chat-only interaction.
+- Phase 1 commit: `8a11e00e2` (`feat: enforce server chat occupancy`).
+- Next action: commit accepted Phase 2, then implement and prove the Phase 3
+  recovery, lifecycle, and completion-effect matrix.
 
 ## Read Routing
 
@@ -30,10 +30,12 @@ Updated: 2026-09-14.
 
 - **0 — Contract and inventory:** accepted in `d03288053` after full-suite pass
   and independent GPT 6 Astra High closure review.
-- **1 — Server occupancy and enforcement:** accepted after the 7m33.3s full gate
-  and clean eighth independent closure review; completion commit pending.
-- **2 — Chat-only interaction:** pending the Phase 1 completion commit.
-- **3 — Recovery and completion:** pending Phase 2 acceptance/commit.
+- **1 — Server occupancy and enforcement:** accepted and committed in
+  `8a11e00e2` after the 7m33.3s full gate and clean eighth independent closure
+  review.
+- **2 — Chat-only interaction:** accepted at baseline `8a11e00e2`; required
+  phase commit pending.
+- **3 — Recovery and completion:** next after the Phase 2 commit.
 - **4 — Integrated verification and release:** pending Phase 3 acceptance/commit.
 
 ## Decisions and Open Work
@@ -738,6 +740,118 @@ diff --check` passed. A new full suite and fresh closure review remain
   reclaim, pinning, effect, and shutdown repairs. Evidence does not claim Phase
   2 browser interaction, physical-device behavior, external provider behavior,
   or release readiness. Phase 1 is accepted; rollout remains disabled.
+- Phase 2 implementation: the client now owns a dedicated occupancy coordinator
+  and transport, independent of general write capability, with bootstrap and
+  revision-free SSE snapshots, exact session/lineage/epoch authority, Web Lock
+  admission, 30-second renewal, claim/release/switch/normalization, and stale
+  async-callback fencing. Reader UI exposes localized available, foreign,
+  self-owned, pending, switch-required, and unsupported states. Self-owned
+  chats provide Send, the required latest-response Reroll, and Stop on desktop
+  and mobile; Continue, general Regenerate, editor, upload/drop, hook, plugin,
+  and general mutation controls remain unavailable. Navigation-only drafts are
+  isolated in session storage by lineage/session/chat and survive observation
+  and refresh without entering general writer recovery.
+- Phase 2 send/effect containment: generation-only durable intents use a
+  separate isolated occupancy-scoped staging/replay path. Send context consumes
+  authoritative configured settings while skipping character
+  `lastInteraction`, owner editor flushes, general message repair, inlay upload,
+  plugin runtime, and owner maintenance. Submission, revision retry, stream,
+  terminal reconciliation, and Stop retain the captured authority; demoted
+  owner-class claims cannot admit fresh work, while accepted work can settle.
+  Blank IGP in immutable accepted configuration is terminally skipped as
+  `skipped:not_configured`, configured IGP remains pending for its permitted exact
+  message effect, and owner behavior is unchanged. Client/core/UI/send focused
+  validation passed 351, 518, and 104 tests respectively; the server IGP slice
+  passed 117 focused tests; client and server checks, Prettier, and diff checks
+  passed.
+- Phase 2 real-session browser proof: a new opt-in harness keeps production
+  rollout disabled by default. Two repeated Chromium runs passed 4/4 tests
+  using four distinct BrowserContexts (owner, emulated Pixel 7 chat-only,
+  desktop chat-only, and observer) against real Fastify and SQLite. Evidence
+  covers T01/T02/T03/T04/T08/T11: different-chat parallel operations with exact
+  operation/session/epoch/claim-class and message IDs; one provider dispatch per
+  operation; atomic same-chat claim exclusion; owner/loser edit, Send, and Stop
+  rejection; byte-stable settings, characters including `lastInteraction`,
+  modules, plugins, and storage; observer refresh/navigation/draft retention
+  with no claim/Stop/effect requests; explicit cross-chat Switch; owner
+  promotion/demotion independence; and desktop/mobile Send, Reroll, and Stop.
+  This evidence uses controlled providers and Chromium emulation; it does not
+  claim physical-device, browser-suspension, external-provider, restart, or
+  configured-IGP recovery coverage assigned to later phases.
+- First Phase 2 full-gate attempt: 13 of 14 lanes passed. Frontend passed 9,431
+  tests/3 skipped, server passed 4,518 tests/3 skipped, and the new 4-test
+  occupancy browser proof passed. Browser smoke otherwise exposed six shared
+  reader compatibility regressions: five existing observer-generation journeys
+  saw a disabled Stop node, and the unreleased reader composer's deferred row
+  reduced one mobile waifu transcript below its established minimum height.
+  The gate was not accepted. Stop now renders only for exact self-owned
+  occupancy (including retained disabled-rollout work), and unsupported,
+  disabled, or identity-unavailable readers omit only the extra deferred row;
+  enabled chat-only states retain their full explicit controls. Focused reruns
+  passed all five generation journeys, the mobile read-only journey, and 52
+  component tests.
+- Final Phase 2 `pnpm test:all`: passed all 14 lanes in 7m47.4s, including
+  frontend 9,432 passed/3 skipped, server 4,518 passed/3 skipped, browser smoke
+  151/151, UI coverage, compatibility, typechecks, documentation, formatting,
+  Realm scale, and performance gates. The exact source is frozen pending a
+  fresh GPT 6 Astra High closure review; Phase 2 is not accepted until that
+  review is clean.
+- First Phase 2 closure review: GPT 6 Astra High independently matched baseline
+  `8a11e00e2`, all 41 tracked diffs at SHA-256
+  `5aaf2f0e653e5c6bd5ad854cb517cab8d9aa9343f6d54cf7d464beeb34484842`,
+  and the 8-file untracked manifest SHA-256
+  `de629ee7bc97f84bd2898e5e5c9587af40ba45e86000ec2383bdbee58c9e8458`.
+  It inspected all Phase 2 changes, passed 403 focused tests, and found no
+  assertion masking or additional Phase 2 defect, but did not approve the
+  phase. A real built-browser/Fastify probe confirmed one P2: transport-uncertain
+  Send remained durably staged while the reader showed stale claim feedback and
+  re-enabled the same Send, because the coordinator collapsed `retained` into
+  generic generation failure and the UI handled only definitive append failure.
+- Retained-Send repair: the coordinator now returns a distinct `send_retained`
+  outcome with the frozen operation and accepted-message identities plus the
+  transport error/code, without firing accepted or failed callbacks. The reader
+  preserves the draft, shows localized queued/uncertain feedback, refreshes
+  observation, and disables Send/Reroll while the exact unchanged draft and
+  occupancy authority remain retained; editing establishes an explicit fresh
+  intent rather than reusing the old identity. Coordinator, rendered-reader,
+  and composer suites passed 81 tests; `pnpm check`, Prettier, and `git
+  diff --check` passed. Phase 3 retains responsibility for full
+  lost-response/reload/expiry reconciliation.
+- Post-review-repair Phase 2 `pnpm test:all`: passed all 14 lanes in 7m35.3s,
+  including frontend 9,434 passed/3 skipped, server 4,518 passed/3 skipped,
+  browser smoke 151/151, UI coverage, compatibility, typechecks,
+  documentation, formatting, Realm scale, and performance gates. The exact
+  source is frozen pending a fresh closure review.
+- Second Phase 2 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `8a11e00e2`, the 41-path tracked diff SHA-256
+  `a7a055227fd2b4b55b0f2193a152ff2bbfbeb7519336df3d4c55be45439df75c`,
+  and the unchanged 8-file untracked manifest. It passed 426 focused tests and
+  approved the retained-result identity, callbacks, draft preservation,
+  observation refresh, exact-intent resubmission guard, owner compatibility,
+  and browser proof quality, but did not approve Phase 2. One P2 wording defect
+  remained: all locale packs described a lost-response Send or Reroll as
+  definitely unaccepted even though the server may already have committed it.
+- Retained-outcome wording repair: all seven locale packs now say that the
+  request remains on the device and server acceptance is unconfirmed. An
+  English regression forbids the earlier definitive nonacceptance wording.
+  Runtime identity, staging, and admission behavior are unchanged.
+- Final retained-outcome Phase 2 `pnpm test:all`: passed all 14 lanes in 7m39.9s,
+  including frontend 9,435 passed/3 skipped, server 4,518 passed/3 skipped,
+  browser smoke 151/151, UI coverage, compatibility, typechecks,
+  documentation, formatting, Realm scale, and performance gates. The exact
+  source is frozen pending a fresh closure review.
+- Final Phase 2 closure review: a third fresh GPT 6 Astra High reviewer
+  independently matched baseline `8a11e00e2`, all 41 tracked paths at SHA-256
+  `be2300beda2401a19781f1da014ee1a2dbe4471df89dd76d2bdeb327622d59d4`,
+  and the unchanged 8-file untracked manifest SHA-256
+  `de629ee7bc97f84bd2898e5e5c9587af40ba45e86000ec2383bdbee58c9e8458`.
+  It passed 450 focused tests across 10 suites, found no assertion masking or
+  actionable Phase 2 defect, and accepted the phase. It specifically approved
+  the retained-outcome language, frozen operation/message identity, draft
+  preservation, exact-intent resubmission guard, scoped staging/admission,
+  observer UI, accepted-work compatibility, and browser evidence. Phase 3 still
+  owns role-change/reload Stop recovery, uncertain-intent reconciliation, and
+  configured IGP completion; production rollout remains disabled.
 
 ## Status Update Contract
 

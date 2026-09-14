@@ -11,6 +11,7 @@ import {
 import { fetchServerBootstrap, fetchServerBootstrapReadOnly, type ServerBootstrapRuntime } from './server/bootstrap'
 import { shouldAutoAcquireDisconnectedWriter } from './server/automaticWriterAcquisition'
 import { resolveConnectedTabIdentity } from './server/connectedTabIdentity'
+import { setClientChatOccupancyIdentity } from './server/chatOccupancy'
 
 export interface ConnectedStartupResult {
   readonly role: 'reader' | 'writer'
@@ -34,6 +35,7 @@ export async function resolveConnectedClientStartup(
 ): Promise<ConnectedStartupResult> {
   const identity = await resolveConnectedTabIdentity()
   const operation = beginClientSession(identity.sessionId)
+  setClientChatOccupancyIdentity(identity, operation.generation)
   options.onOperationStarted?.(operation)
   const assertCurrent = () => {
     if (!isClientSessionOperationCurrent(operation)) throw new Error('Connected startup was superseded')

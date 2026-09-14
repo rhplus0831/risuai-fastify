@@ -143,6 +143,7 @@ export const legacyDomTestFiles = [
   'src/ts/process/request/tests/pluginProviderModelId.test.ts',
   'src/ts/process/request/tests/serverChat.test.ts',
   'src/ts/process/request/tests/serverPromptAssembly.test.ts',
+  'src/ts/process/rerollNavigation.chatOnly.test.ts',
   'src/ts/process/rerollNavigation.owner.test.ts',
   'src/ts/process/rerollNavigation.rollback.test.ts',
   'src/ts/process/rerollNavigation.test.ts',

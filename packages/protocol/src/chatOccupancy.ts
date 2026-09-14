@@ -144,10 +144,35 @@ function hasCoherentOccupancies(value: {
 }): boolean {
   const chatIds = new Set<string>()
   for (const occupancy of value.occupancies) {
-    if (occupancy.databaseLineage !== value.databaseLineage || chatIds.has(occupancy.chatId)) return false
+    if (
+      occupancy.databaseLineage !== value.databaseLineage ||
+      chatIds.has(occupancy.chatId) ||
+      !hasCoherentProjectionState(occupancy)
+    ) {
+      return false
+    }
     chatIds.add(occupancy.chatId)
   }
   return true
+}
+
+function hasCoherentProjectionState(occupancy: ChatOccupancyProjection): boolean {
+  if (occupancy.state === 'released') {
+    return (
+      occupancy.occupantSessionId === null &&
+      occupancy.claimClass === null &&
+      occupancy.claimedAtMs === null &&
+      occupancy.leaseExpiresAtMs === null &&
+      occupancy.releasedAtMs !== null
+    )
+  }
+  return (
+    occupancy.occupantSessionId !== null &&
+    occupancy.claimClass !== null &&
+    occupancy.claimedAtMs !== null &&
+    occupancy.leaseExpiresAtMs !== null &&
+    occupancy.releasedAtMs === null
+  )
 }
 
 export function isChatOccupancyCapability(value: unknown): value is ChatOccupancyCapability {

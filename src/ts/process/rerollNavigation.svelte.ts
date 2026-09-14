@@ -1,4 +1,9 @@
-import { canUseClientWriteAccess, captureClientSessionGeneration } from '../clientSession'
+import {
+  canUseClientWriteAccess,
+  captureClientSessionGeneration,
+  getClientSessionSnapshot,
+  isClientSessionGenerationCurrent,
+} from '../clientSession'
 import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { get } from 'svelte/store'
 import { SvelteMap } from 'svelte/reactivity'
@@ -19,7 +24,21 @@ import {
   getCharacterResourceOwner,
   getChatMetadataOwnerState,
 } from '../server/resourceState.svelte'
-import { getChatMessageOwnerState } from '../server/chatMessageHydration.svelte'
+import { getChatMessageOwnerState, getReaderChatMessageOwnerState } from '../server/chatMessageHydration.svelte'
+import {
+  captureClientChatOccupancyAuthority,
+  getClientChatOccupancySnapshot,
+  isClientChatOccupancyAuthorityCurrent,
+  type ClientChatOccupancyAuthority,
+} from '../server/chatOccupancy'
+import { getReaderChatIncarnation } from '../server/readerTranscriptProjection.svelte'
+import {
+  canUseGenerationOperationProtocol,
+  stageTargetedGenerationOperation,
+  submitStagedTargetedGenerationOperation,
+} from '../server/generationOperations'
+import { readBrowserClientContext } from './request/clientContext'
+import { SERVER_CHAT_CLIENT_CAPABILITIES } from './request/serverChat'
 
 // Reroll *swipe* state machine, extracted out of `DefaultChatScreen.svelte` so it
 // is unit-testable and so persisted reroll buffers (server alternate rows) can be
@@ -52,6 +71,88 @@ export interface RerollCandidate {
   index: number
   active: boolean
   messages: readonly Message[]
+}
+
+export type ChatOnlyRerollUnavailableReason =
+  | 'invalid-target'
+  | 'target-not-assistant'
+  | 'not-self-occupied'
+  | 'protocol-disabled'
+  | 'protocol-unavailable'
+  | 'stale-authority'
+
+export type ChatOnlyRerollResult =
+  | {
+      readonly status: 'accepted'
+      readonly operationId: string
+    }
+  | {
+      readonly status: 'retained' | 'rejected'
+      readonly error: string
+      readonly code?: string
+      readonly operationId?: string
+    }
+  | {
+      readonly status: 'unavailable'
+      readonly reason: ChatOnlyRerollUnavailableReason
+    }
+
+export interface ChatOnlyRerollSubmission {
+  readonly target: ActiveChatTarget
+  readonly targetMessageId: string
+  readonly readerIncarnation: number
+  readonly occupancy: ClientChatOccupancyAuthority
+  readonly sourceGeneration: number
+}
+
+export interface ChatOnlyRerollDeps {
+  submitReroll: (submission: ChatOnlyRerollSubmission) => Promise<ChatOnlyRerollResult>
+}
+
+const defaultChatOnlyRerollDeps: ChatOnlyRerollDeps = {
+  async submitReroll(submission) {
+    if (!canUseGenerationOperationProtocol()) {
+      return { status: 'unavailable', reason: 'protocol-unavailable' }
+    }
+    if (
+      !isClientSessionGenerationCurrent(submission.sourceGeneration) ||
+      !isClientChatOccupancyAuthorityCurrent(submission.occupancy, { requireEnabled: true }) ||
+      getReaderChatIncarnation(submission.target.characterId, submission.target.chatId) !==
+        submission.readerIncarnation ||
+      chatOnlyRerollTargetMessageId(submission.target) !== submission.targetMessageId
+    ) {
+      return { status: 'unavailable', reason: 'stale-authority' }
+    }
+    const staged = await stageTargetedGenerationOperation({
+      target: submission.target,
+      mode: 'regenerate',
+      targetMessageId: submission.targetMessageId,
+      chatOccupancy: { authority: submission.occupancy, interaction: 'reroll' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: readBrowserClientContext(),
+        clientCapabilities: { ...SERVER_CHAT_CLIENT_CAPABILITIES },
+      },
+    })
+    if ('status' in staged) {
+      return isClientChatOccupancyAuthorityCurrent(submission.occupancy, { requireEnabled: true })
+        ? { status: 'rejected', error: staged.error }
+        : { status: 'unavailable', reason: 'stale-authority' }
+    }
+    const result = await submitStagedTargetedGenerationOperation(staged)
+    if (result.status === 'accepted') {
+      return { status: 'accepted', operationId: result.response.operation.operationId }
+    }
+    return {
+      status: result.status,
+      error: result.error,
+      ...(result.code ? { code: result.code } : {}),
+      operationId:
+        (result.status === 'rejected' ? result.operation?.operationId : undefined) ?? staged.request.operationId,
+    }
+  },
 }
 
 type RerollOperation = {
@@ -133,6 +234,76 @@ function locateRerollTarget(target: ActiveChatTarget): { messages: Message[] } |
   if (matchingChats.length !== 1 || !getChatMetadataOwnerState(target.chatId)) return null
   const transcript = getChatMessageOwnerState(target.chatId)
   return transcript ? { messages: transcript.messages } : null
+}
+
+function chatOnlyRerollTargetMessageId(target: ActiveChatTarget): string | null {
+  if (getReaderChatIncarnation(target.characterId, target.chatId) === null) return null
+  const owner = getReaderChatMessageOwnerState(target.chatId)
+  if (!owner?.resourceLoaded || owner.hydrationPending || owner.hydrationFailed || owner.messages.length === 0)
+    return null
+  const messages = owner.messages
+  const index = messages.length - 1
+  const message = messages[index]
+  if (message?.role !== 'char') return null
+  return uniqueMessageIdAt(messages, index) ?? null
+}
+
+/**
+ * Submit the first-release chat-only Reroll for an explicitly captured chat.
+ *
+ * Chat-only callers deliberately never enter the swipe state machine below:
+ * selecting an existing alternate persists a tail-rewrite command, which is a
+ * general-owner capability. The server-side regenerate operation owns alternate
+ * insertion/selection and terminal reconciliation for this scoped path.
+ */
+export async function rerollChatOnlyTarget(
+  target: ActiveChatTarget,
+  deps: ChatOnlyRerollDeps = defaultChatOnlyRerollDeps,
+): Promise<ChatOnlyRerollResult> {
+  if (!stableOwnerId(target.characterId) || !stableOwnerId(target.chatId)) {
+    return { status: 'unavailable', reason: 'invalid-target' }
+  }
+  const readerIncarnation = getReaderChatIncarnation(target.characterId, target.chatId)
+  if (readerIncarnation === null) {
+    return { status: 'unavailable', reason: 'invalid-target' }
+  }
+  const sourceGeneration = captureClientSessionGeneration()
+  const session = getClientSessionSnapshot()
+  const support = getClientChatOccupancySnapshot().support
+  if (support !== 'enabled') {
+    return {
+      status: 'unavailable',
+      reason: support === 'disabled' ? 'protocol-disabled' : 'protocol-unavailable',
+    }
+  }
+  const occupancy = captureClientChatOccupancyAuthority(target.chatId)
+  if (
+    !occupancy ||
+    occupancy.claimClass !== 'chat_only' ||
+    occupancy.sessionId !== session.sessionId ||
+    occupancy.databaseLineage !== session.databaseLineage
+  ) {
+    return { status: 'unavailable', reason: 'not-self-occupied' }
+  }
+  const targetMessageId = chatOnlyRerollTargetMessageId(target)
+  if (!targetMessageId) {
+    return { status: 'unavailable', reason: 'target-not-assistant' }
+  }
+  if (
+    !isClientSessionGenerationCurrent(sourceGeneration) ||
+    !isClientChatOccupancyAuthorityCurrent(occupancy, { requireEnabled: true }) ||
+    chatOnlyRerollTargetMessageId(target) !== targetMessageId
+  ) {
+    return { status: 'unavailable', reason: 'stale-authority' }
+  }
+  const result = await deps.submitReroll({
+    target: { ...target },
+    targetMessageId,
+    readerIncarnation,
+    occupancy,
+    sourceGeneration,
+  })
+  return result
 }
 
 function currentTailGenerationId(): string | undefined {

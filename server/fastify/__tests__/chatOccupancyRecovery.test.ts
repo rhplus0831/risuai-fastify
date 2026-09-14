@@ -76,6 +76,9 @@ function seedInterruptedGeneration(withResult: boolean): {
   ).run('chat-a', 'message-user', JSON.stringify({ chatId: 'message-user', role: 'user', data: 'accepted user' }))
   const effectiveDatabase = createInitialDatabase()
   Object.assign(effectiveDatabase, {
+    // Recovery fixtures intentionally need a real durable IGP pin. Blank IGP
+    // is terminally classified as not configured when the ledger is created.
+    igpPrompt: 'Configured recovery IGP',
     characters: [
       {
         chaId: 'character-a',

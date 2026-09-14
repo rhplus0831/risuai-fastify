@@ -60,6 +60,11 @@ import { replayPendingMutations } from './server/pendingMutationReplay'
 import { applyGenerationOperationBootstrap, configureGenerationOperationProtocol } from './server/generationOperations'
 import { configureDisplaySourceProtocol } from './server/displaySources'
 import {
+  applyClientChatOccupancyEvent,
+  clearClientChatOccupancyIdentity,
+  configureClientChatOccupancy,
+} from './server/chatOccupancy'
+import {
   countBlockingPendingMutationRecords,
   preparePendingMutationOutbox,
   readSinglePendingMutationOwner,
@@ -653,6 +658,7 @@ async function installConnectedReaderProjection(
   })
   configureGenerationOperationProtocol(runtime.generationOperationProtocol, runtime.databaseLineage)
   configureDisplaySourceProtocol(runtime.displaySourceProtocol, runtime.databaseLineage, runtime.writerEpoch)
+  configureClientChatOccupancy(runtime.chatOccupancyProtocol, runtime.chatOccupancies, generation)
   // A former writer can retain non-shell optimistic values and loaded flags.
   // Replace those with a coherent server snapshot before reader synchronization.
   const resources = options.full
@@ -943,6 +949,7 @@ function installConnectedSessionLifecycle(): void {
       stopFailedWriterPromotionRuntimes()
       connectedReaderSync?.stop()
       connectedReaderSync = null
+      clearClientChatOccupancyIdentity()
       releaseConnectedTabIdentity()
     }
     const pageShow = (event: PageTransitionEvent) => {
@@ -1322,6 +1329,7 @@ export function stopConnectedClientServices(): void {
   if (connectedReaderRefreshTimer) clearTimeout(connectedReaderRefreshTimer)
   connectedReaderRefreshTimer = null
   connectedReaderRefreshAttempt = 0
+  clearClientChatOccupancyIdentity()
   releaseConnectedTabIdentity()
 }
 
@@ -1804,6 +1812,7 @@ export async function loadWebInitialDatabase(
   )
   configureGenerationOperationProtocol(runtime.generationOperationProtocol, runtime.databaseLineage)
   configureDisplaySourceProtocol(runtime.displaySourceProtocol, runtime.databaseLineage, runtime.writerEpoch)
+  configureClientChatOccupancy(runtime.chatOccupancyProtocol, runtime.chatOccupancies, captureClientSessionGeneration())
 
   const { databaseLineage, requestedWriterWasActive, writerEpoch } = firstBootstrap.bootstrap
   if (
@@ -2002,6 +2011,8 @@ export function stopServerResourceEvents() {
 
 async function startServerResourceEvents(options: { replayPendingMutations?: boolean; signal?: AbortSignal } = {}) {
   const eventEpoch = serverResourceEventEpoch + 1
+  const sessionGeneration = captureClientSessionGeneration()
+  const sessionId = getClientSessionSnapshot().sessionId
   serverResourceEventEpoch = eventEpoch
   teardownServerResourceSubscription()
   serverResourceEventsDesired = true
@@ -2036,6 +2047,11 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
       if (isClientSessionManaged()) observeClientWriter(event)
       if (event.sessionId !== null && event.sessionId !== getActiveWriterSessionId()) {
         enterWriterTakeoverFlow()
+      }
+    },
+    onOccupancyEvent: (event) => {
+      if (isCurrentServerResourceEventEpoch(eventEpoch)) {
+        applyClientChatOccupancyEvent(event, { generation: sessionGeneration, sessionId })
       }
     },
     onFrame: (frame) =>

@@ -71,6 +71,8 @@ import {
 } from './generationDisplayProjection.svelte'
 import { updateChatGenerationActivityMetadata } from './generationActivity.svelte'
 import { waitForPendingCharacterScriptDefinitionSave } from '../server/scriptDefinitionOwner.svelte'
+import { isClientChatOccupancyAuthorityCurrent } from '../server/chatOccupancy'
+import type { GenerationOperationChatOccupancy } from '../server/generationOperations'
 
 export interface ServerBackedStageTimings {
   stage1Start: number
@@ -537,9 +539,19 @@ export async function assembleServerBackedSendChat(args: {
    * browser's generation-result persist.
    */
   durable?: boolean
+  chatOccupancy?: GenerationOperationChatOccupancy
 }): Promise<ServerBackedAssemblyResult> {
-  const sourceGeneration = captureClientSessionGeneration()
-  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  const chatOnly = args.chatOccupancy?.authority.claimClass === 'chat_only'
+  const sourceGeneration = args.chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  let occupancyAdmitted = false
+  const isCurrent = () =>
+    args.chatOccupancy
+      ? args.currentChat.id === args.chatOccupancy.authority.chatId &&
+        isClientChatOccupancyAuthorityCurrent(args.chatOccupancy.authority, {
+          requireEnabled: !occupancyAdmitted,
+        }) &&
+        (occupancyAdmitted || chatOnly || isClientWriteOperationCurrent(sourceGeneration))
+      : isClientWriteOperationCurrent(sourceGeneration)
   if (!isCurrent()) return { status: 'aborted' }
   const restorationGuard = captureServerBackedRestorationGuard(args.currentChat.id)
   // `resolveServerPromptAssembly` has already verified that a send ends in a
@@ -576,7 +588,7 @@ export async function assembleServerBackedSendChat(args: {
     input.durable = true
   }
   const wantsServerDispatch = !args.preview && !args.previewPrompt
-  if (wantsServerDispatch) {
+  if (wantsServerDispatch && !chatOnly) {
     const scripts = await waitForPendingCharacterScriptDefinitionSave(args.currentChar.chaId)
     if (!isCurrent()) return { status: 'aborted' }
     if (scripts === 'queued' || scripts === 'failed') {
@@ -590,7 +602,7 @@ export async function assembleServerBackedSendChat(args: {
   // New inlay tokens are server asset ids already. Legacy browser-local ids are
   // uploaded before dispatch and sent as id->assetId aliases only; no inlay bytes
   // ride the chat request anymore.
-  const inlayAssetRefs = await collectServerInlayAssetRefs(args.currentChat)
+  const inlayAssetRefs = chatOnly ? [] : await collectServerInlayAssetRefs(args.currentChat)
   if (!isCurrent()) return { status: 'aborted' }
   if (inlayAssetRefs.length > 0) {
     input.inlayAssetRefs = inlayAssetRefs
@@ -622,12 +634,14 @@ export async function assembleServerBackedSendChat(args: {
         clientContext: readBrowserClientContext(),
         clientCapabilities: { ...SERVER_CHAT_CLIENT_CAPABILITIES },
       },
+      ...(args.chatOccupancy ? { chatOccupancy: args.chatOccupancy } : {}),
     })
     if (!isCurrent()) return { status: 'aborted' }
     if ('status' in staged) {
       return { status: 'failed', error: staged.error, currentChat: args.currentChat }
     }
     const submitted = await submitStagedTargetedGenerationOperation(staged)
+    if (submitted.status === 'accepted') occupancyAdmitted = true
     if (!isCurrent()) return { status: 'aborted' }
     if (submitted.status !== 'accepted' || !submitted.stream) {
       return {
@@ -663,7 +677,19 @@ export async function assembleServerBackedSendChat(args: {
         },
       )
     }
-    served = await requestServerChatGeneration(input, args.abortSignal, undefined, submitted.stream)
+    served = await requestServerChatGeneration(
+      input,
+      args.abortSignal,
+      undefined,
+      submitted.stream,
+      args.chatOccupancy?.authority,
+    )
+  } else if (args.chatOccupancy) {
+    return {
+      status: 'failed',
+      error: 'Occupied-chat generation requires a protocol-v1 targeted operation.',
+      currentChat: args.currentChat,
+    }
   } else {
     served = wantsServerDispatch
       ? await requestServerChatGeneration(input, args.abortSignal)
@@ -676,6 +702,13 @@ export async function assembleServerBackedSendChat(args: {
     served.status === 'error' &&
     served.code === HYPA_CONTEXT_TRUNCATION_CONFIRMATION_REQUIRED
   ) {
+    if (chatOnly) {
+      return {
+        status: 'failed',
+        error: 'This generation requires owner-only chat metadata maintenance.',
+        currentChat: args.currentChat,
+      }
+    }
     const confirmed = await alertConfirm(language.hypaContextTruncationConfirm)
     if (!isCurrent()) return { status: 'aborted' }
     if (!confirmed || args.abortSignal.aborted) return { status: 'aborted' }
@@ -817,8 +850,15 @@ export async function reattachServerBackedSendChat(args: {
   /** The running job's generating mode, so the reattach renders correctly. */
   continue?: boolean
   regenerateMessageId?: string
+  chatOccupancy?: GenerationOperationChatOccupancy
 }): Promise<ServerBackedAssemblyResult> {
-  const sourceGeneration = captureClientSessionGeneration()
+  const sourceGeneration = args.chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () =>
+    args.chatOccupancy
+      ? args.currentChat.id === args.chatOccupancy.authority.chatId &&
+        isClientChatOccupancyAuthorityCurrent(args.chatOccupancy.authority)
+      : isClientWriteOperationCurrent(sourceGeneration)
+  if (!isCurrent()) return { status: 'aborted' }
   const restorationGuard = captureServerBackedRestorationGuard(args.currentChat.id)
   args.setProcessStage(1)
   args.stageTimings.stage1Start = Date.now()
@@ -851,9 +891,10 @@ export async function reattachServerBackedSendChat(args: {
     args.abortSignal,
     args.operationStream ? undefined : args.jobId,
     args.operationStream,
+    args.chatOccupancy?.authority,
   )
 
-  if (!isClientWriteOperationCurrent(sourceGeneration)) return { status: 'aborted' }
+  if (!isCurrent()) return { status: 'aborted' }
   if (served.status === 'aborted') {
     if (regenerateDisplayProjection) finishGenerationDisplayProjection(regenerateDisplayProjection)
     return { status: 'aborted' }
@@ -941,9 +982,14 @@ export async function applyServerBackedTerminal(args: {
   targetMessageId?: string
   restorationGuard?: ServerBackedRestorationGuard
   streamProjection?: StreamMessageProjection
+  chatOccupancy?: GenerationOperationChatOccupancy
 }): Promise<ServerBackedTerminalResult> {
-  const sourceGeneration = captureClientSessionGeneration()
-  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  const sourceGeneration = args.chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () =>
+    args.chatOccupancy
+      ? args.targetChatId === args.chatOccupancy.authority.chatId &&
+        isClientChatOccupancyAuthorityCurrent(args.chatOccupancy.authority)
+      : isClientWriteOperationCurrent(sourceGeneration)
   const superseded = (): ServerBackedTerminalResult => ({
     status: 'cancelled',
     currentChat: args.currentChat,
@@ -979,11 +1025,14 @@ export async function applyServerBackedTerminal(args: {
     Object.assign(args.generationInfo, terminalInfo)
   }
   const contextTarget = { characterId: args.targetCharacterId, chatId: args.targetChatId }
+  const targetMatchesOccupancy = (target: ServerBackedStableChatTarget): boolean =>
+    !args.chatOccupancy || target.chatId === args.chatOccupancy.authority.chatId
   if (args.terminal.status === 'error') {
     const target = targetFromPayloadOrContext(
       args.terminal.restoration ?? args.terminal.generationProjection,
       contextTarget,
     )
+    if (!targetMatchesOccupancy(target)) return superseded()
     const restorationIsFresh =
       !args.restorationGuard ||
       (target.chatId === args.restorationGuard.chatId && isServerBackedRestorationGuardFresh(args.restorationGuard))
@@ -1066,6 +1115,7 @@ export async function applyServerBackedTerminal(args: {
       : false
     if (!isCurrent()) return superseded()
     const target = targetFromPayloadOrContext(postGeneration?.messagePatch, contextTarget)
+    if (!targetMatchesOccupancy(target)) return superseded()
     const generationId = args.generationInfo.generationId ?? ''
     applyInterruptedTerminalSnapshot({
       selectedChar: args.selectedChar,
@@ -1125,6 +1175,7 @@ export async function applyServerBackedTerminal(args: {
   const resendChat = !!postGen?.resendChat
   const generationId = args.generationInfo.generationId ?? ''
   const terminalTarget = targetFromPayloadOrContext(postGen?.messagePatch, contextTarget)
+  if (!targetMatchesOccupancy(terminalTarget)) return superseded()
   const displayAuthorityObserved = await observeDisplayProjectionAuthority(postGen?.messageId ?? generationId)
   if (!isCurrent()) return superseded()
   const terminalProjectionIsFresh = (() => {
@@ -1163,6 +1214,42 @@ export async function applyServerBackedTerminal(args: {
     return assistant?.data === projection.ownedData
   })()
   if (terminalTarget.chatId && generationId) clearGenerationPersistence(terminalTarget.chatId, generationId)
+  if (args.chatOccupancy?.authority.claimClass === 'chat_only') {
+    if (terminalProjectionIsFresh) {
+      const resolution = resolveServerBackedLiveChat({
+        selectedChar: args.selectedChar,
+        selectedChat: args.selectedChat,
+        characterId: terminalTarget.characterId,
+        chatId: terminalTarget.chatId,
+      })
+      if (resolution && postGen?.messagePatch) {
+        applyServerMessagePatch(resolution.chat, postGen.messagePatch, resolution.character)
+      }
+    }
+    if (!isCurrent()) return superseded()
+    if (displayProjection && displayAuthorityObserved) finishGenerationDisplayProjection(displayProjection)
+    const currentChat = resolveServerBackedCurrentChat({
+      selectedChar: args.selectedChar,
+      selectedChat: args.selectedChat,
+      characterId: terminalTarget.characterId,
+      chatId: terminalTarget.chatId,
+      currentChat: args.currentChat,
+    })
+    if (postGen?.agentPresetError) {
+      return {
+        status: 'failed',
+        error: postGen.agentPresetError.message,
+        currentChat,
+        resendChat: false,
+      }
+    }
+    return {
+      status: 'ok',
+      currentChat,
+      resendChat: false,
+      ...(effectLedger ? { effectLedger } : {}),
+    }
+  }
   type InlayFinalizationState = {
     messageId: string
     expectedServerData: string

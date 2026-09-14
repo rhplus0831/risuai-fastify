@@ -1,4 +1,4 @@
-import { resetClientSessionForTests } from '../clientSession'
+import { getClientSessionSnapshot, resetClientSessionForTests } from '../clientSession'
 import {
   setManagedWriterForTest,
   setManagedReaderForTest,
@@ -19,10 +19,13 @@ const operationMocks = vi.hoisted(() => ({
   getBaseRevision: vi.fn(),
   isWriterAccessLost: vi.fn(),
   listPending: vi.fn(),
+  listChatOccupancyPending: vi.fn(),
   peekRevision: vi.fn(),
   reconcileDirectEvent: vi.fn(),
   setRevision: vi.fn(),
   stage: vi.fn(),
+  stageChatOccupancy: vi.fn(),
+  chatOccupancyCurrent: vi.fn(),
   canApplyActiveJobs: vi.fn(() => true),
   setActiveJobs: vi.fn(() => true),
   withDirectReconciliation: vi.fn(),
@@ -49,6 +52,7 @@ vi.mock('../process/reattach', () => ({
   setActiveGenerationJobs: operationMocks.setActiveJobs,
 }))
 vi.mock('./activeWriterSession', () => ({
+  ACTIVE_WRITER_SESSION_HEADER: 'risu-writer-session',
   activeWriterSessionHeader: () => ({ 'risu-writer-session': 'writer-a' }),
   handleActiveWriterStaleResponse: vi.fn(),
   isWriterAccessLost: operationMocks.isWriterAccessLost,
@@ -79,7 +83,12 @@ vi.mock('./pendingMutationOutbox', () => ({
     intent.kind === 'generation-operation-cancel' ||
     intent.kind === 'generation-operation-retry',
   listPendingMutations: operationMocks.listPending,
+  listChatOccupancyGenerationMutations: operationMocks.listChatOccupancyPending,
   stagePendingMutation: operationMocks.stage,
+  stageChatOccupancyGenerationMutation: operationMocks.stageChatOccupancy,
+}))
+vi.mock('./chatOccupancy', () => ({
+  isClientChatOccupancyAuthorityCurrent: operationMocks.chatOccupancyCurrent,
 }))
 vi.mock('./bootstrap', () => ({
   parseGenerationOperations: (values: unknown[]) =>
@@ -97,9 +106,11 @@ import {
   applyGenerationOperationProjection,
   applyGenerationOperationSseEvent,
   captureGenerationOperationViewerFence,
+  configureGenerationOperationProtocol,
   dispatchGenerationOperationPendingReplay,
   generationOperationCancellations,
   generationOperationProjections,
+  readGenerationOperationStatus,
   reconcileGenerationOperationErrorBody,
   reconcileGenerationOperationTranscriptHydration,
   registerGenerationOperationViewer,
@@ -110,6 +121,7 @@ import {
   stageAcceptedSendGenerationOperation,
   stageTargetedGenerationOperation,
   stopGenerationOperation,
+  stopChatOccupancyGeneration,
   submitStagedAcceptedSendOperation,
   submitStagedTargetedGenerationOperation,
 } from './generationOperations'
@@ -128,6 +140,19 @@ import {
 
 const operationId = '11111111-1111-4111-8111-111111111111'
 const messageId = '22222222-2222-4222-8222-222222222222'
+
+function occupancyAuthority(claimClass: 'owner' | 'chat_only' = 'chat_only') {
+  const session = getClientSessionSnapshot()
+  return {
+    version: 1 as const,
+    databaseLineage: 'database-a',
+    chatId: 'chat-a',
+    sessionId: session.sessionId,
+    sessionGeneration: session.generation,
+    occupancyEpoch: 7,
+    claimClass,
+  }
+}
 
 function responseBody(state: GenerationOperationProjection['state'] = 'owned_by_job'): {
   operation: GenerationOperationProjection
@@ -211,6 +236,8 @@ beforeEach(() => {
   operationMocks.peekRevision.mockReturnValue(7)
   operationMocks.isWriterAccessLost.mockReturnValue(false)
   operationMocks.listPending.mockResolvedValue([])
+  operationMocks.listChatOccupancyPending.mockResolvedValue([])
+  operationMocks.chatOccupancyCurrent.mockReturnValue(true)
   operationMocks.getBaseRevision.mockResolvedValue(7)
   operationMocks.beginDispatch.mockResolvedValue('persisted')
   operationMocks.discard.mockResolvedValue('deleted')
@@ -229,6 +256,17 @@ beforeEach(() => {
     ownerWriterSessionId: 'writer-a',
     writerEpoch: 1,
     databaseLineage: 'database-a',
+    phase: 'staged',
+    ready: Promise.resolve('persisted'),
+  }))
+  operationMocks.stageChatOccupancy.mockImplementation((key: string) => ({
+    key,
+    mutationId: 'mutation-chat-a',
+    sequence: 1,
+    ownerWriterSessionId: getClientSessionSnapshot().sessionId,
+    writerEpoch: 7,
+    databaseLineage: 'database-a',
+    authorityKind: 'chat-occupancy',
     phase: 'staged',
     ready: Promise.resolve('persisted'),
   }))
@@ -1193,6 +1231,269 @@ function setReadyManagedWriter(): void {
   setManagedWriterForTest()
   settleCurrentGenerationReadiness()
 }
+
+describe('occupied-chat generation operation client', () => {
+  it('does not let a demoted owner-class occupancy admit fresh generation', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority('owner')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      stageAcceptedSendGenerationOperation({
+        target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+        message: 'demoted owner hello',
+        chatOccupancy: { authority, interaction: 'send' },
+        generation: {
+          syntheticSayNothing: false,
+          resetMessages: false,
+          inlayAssetRefs: [],
+          clientContext: {},
+          clientCapabilities: {},
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'error' })
+    expect(operationMocks.stageChatOccupancy).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('stages and retries an accepted Send under one frozen occupancy tuple', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const chatOccupancy = { authority, interaction: 'send' as const }
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'reader hello',
+      chatOccupancy,
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const accepted = responseBody()
+    accepted.operation.creatorWriterSessionId = authority.sessionId
+    accepted.operation.currentAttempt!.actorWriterSessionId = authority.sessionId
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ error: 'revision_conflict', currentRevision: 8 }), { status: 409 }),
+      )
+      .mockResolvedValueOnce(new Response(JSON.stringify(accepted), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(submitStagedAcceptedSendOperation(staged)).resolves.toMatchObject({ status: 'accepted' })
+
+    expect(operationMocks.stage).not.toHaveBeenCalled()
+    expect(operationMocks.stageChatOccupancy).toHaveBeenCalledWith(
+      `generation-operation-submit:${operationId}`,
+      expect.objectContaining({ kind: 'generation-operation-submit' }),
+      authority,
+      { requireEnabled: true },
+    )
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    const first = fetchMock.mock.calls[0]!
+    const second = fetchMock.mock.calls[1]!
+    for (const call of [first, second]) {
+      expect(call[1]).toEqual(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'risu-writer-session': authority.sessionId,
+            'risu-database-lineage': authority.databaseLineage,
+            'risu-chat-occupancy-epoch': '7',
+          }),
+        }),
+      )
+      expect(JSON.parse(call[1].body)).toMatchObject({
+        chatId: 'chat-a',
+        chatOccupancy: { version: 1, interaction: 'send' },
+      })
+    }
+    expect(JSON.parse(first[1].body).baseRevision).toBe(7)
+    expect(JSON.parse(second[1].body).baseRevision).toBe(8)
+  })
+
+  it('settles an exact accepted Send when rollout disables during its response', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    let enabled = true
+    operationMocks.chatOccupancyCurrent.mockImplementation(
+      (_authority, options?: { requireEnabled?: boolean }) => enabled || options?.requireEnabled !== true,
+    )
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'accepted before rollback',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const accepted = responseBody()
+    accepted.operation.creatorWriterSessionId = authority.sessionId
+    accepted.operation.currentAttempt!.actorWriterSessionId = authority.sessionId
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        enabled = false
+        return new Response(JSON.stringify(accepted), { status: 200 })
+      }),
+    )
+
+    await expect(submitStagedAcceptedSendOperation(staged)).resolves.toMatchObject({ status: 'accepted' })
+
+    expect(get(generationOperationProjections)).toEqual([accepted.operation])
+    expect(operationMocks.reconcileDirectEvent).toHaveBeenCalledWith(
+      accepted.append.event,
+      expect.objectContaining({ messageId }),
+    )
+    expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
+    expect(operationMocks.chatOccupancyCurrent).toHaveBeenCalledWith(authority, { requireEnabled: false })
+  })
+
+  it('retains a staged Send without transport after its occupancy changes', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'stale reader',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    operationMocks.chatOccupancyCurrent.mockReturnValue(false)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(submitStagedAcceptedSendOperation(staged)).resolves.toMatchObject({ status: 'retained' })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reads an admitted operation for settlement after rollout disables', async () => {
+    setManagedReaderForTest()
+    const authority = occupancyAuthority()
+    operationMocks.chatOccupancyCurrent.mockImplementation(
+      (_authority, options?: { requireEnabled?: boolean }) => options?.requireEnabled !== true,
+    )
+    const accepted = responseBody()
+    accepted.operation.creatorWriterSessionId = authority.sessionId
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(accepted), { status: 200 })),
+    )
+
+    await expect(
+      readGenerationOperationStatus(operationId, undefined, { authority, interaction: 'send' }),
+    ).resolves.toMatchObject({ status: 'accepted' })
+    expect(operationMocks.chatOccupancyCurrent).toHaveBeenCalledWith(authority, { requireEnabled: false })
+  })
+
+  it('Stops only its locally admitted operation with control authority that may outlive enablement', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageTargetedGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      mode: 'regenerate',
+      targetMessageId: 'reply-a',
+      chatOccupancy: { authority, interaction: 'reroll' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const operation = {
+      ...responseBody('owned_by_job').operation,
+      creatorWriterSessionId: authority.sessionId,
+      mode: 'regenerate' as const,
+      targetMessageId: 'reply-a',
+      currentAttempt: {
+        ...responseBody().operation.currentAttempt!,
+        actorWriterSessionId: authority.sessionId,
+      },
+    }
+    applyGenerationOperationProjection(operation)
+    const cancelled = { ...operation, state: 'cancelled' as const, stateVersion: 3, projectionEpoch: 4 }
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ operation: cancelled, disposition: 'cancelled', knownAttemptMatched: true }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      stopChatOccupancyGeneration({
+        selectedCharID: -1,
+        chatPage: -1,
+        characterId: 'character-a',
+        chatId: 'chat-a',
+      }),
+    ).resolves.toMatchObject({ status: 'acknowledged', disposition: 'cancelled' })
+
+    expect(operationMocks.stage).not.toHaveBeenCalled()
+    expect(operationMocks.stageChatOccupancy).toHaveBeenLastCalledWith(
+      `generation-operation-cancel:${operationId}`,
+      expect.objectContaining({ kind: 'generation-operation-cancel' }),
+      authority,
+      { requireEnabled: false },
+    )
+    expect(fetchMock).toHaveBeenCalledWith(
+      `/api/v1/generation-operations/${operationId}/cancellation`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-chat-occupancy-epoch': '7',
+        }),
+      }),
+    )
+  })
+
+  it('refuses to Stop a same-chat operation that was not locally admitted', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const operation = {
+      ...responseBody('owned_by_job').operation,
+      creatorWriterSessionId: getClientSessionSnapshot().sessionId,
+    }
+    applyGenerationOperationProjection(operation)
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      stopChatOccupancyGeneration({
+        selectedCharID: -1,
+        chatPage: -1,
+        characterId: 'character-a',
+        chatId: 'chat-a',
+      }),
+    ).resolves.toMatchObject({ status: 'failed' })
+    expect(operationMocks.stageChatOccupancy).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+})
 
 describe('generation operation writer lifecycle', () => {
   it('stops a bootstrapped operation after promotion without a prior local cancellation record', async () => {

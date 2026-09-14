@@ -248,6 +248,46 @@ describe('changeLanguage same-code cache', () => {
     }
   })
 
+  it('defines every chat occupancy state, action, and feedback string in every language pack', async () => {
+    const {
+      languageChinese,
+      languageChineseTraditional,
+      languageEnglish,
+      languageGerman,
+      languageKorean,
+      languageSpanish,
+      languageVietnamese,
+    } = await loadLanguageModule()
+    const englishKeys = Object.keys(languageEnglish.connectedReaders.chatOccupancy).sort()
+
+    for (const pack of [
+      languageEnglish,
+      languageGerman,
+      languageSpanish,
+      languageVietnamese,
+      languageChinese,
+      languageChineseTraditional,
+      languageKorean,
+    ]) {
+      const occupancy = pack.connectedReaders?.chatOccupancy
+      expect(occupancy).toBeDefined()
+      expect(Object.keys(occupancy ?? {}).sort()).toEqual(englishKeys)
+      for (const key of englishKeys) {
+        expect((occupancy as Record<string, unknown>)[key]).toEqual(expect.any(String))
+      }
+    }
+  })
+
+  it('describes retained chat-only submissions as uncertain rather than rejected', async () => {
+    const { languageEnglish } = await loadLanguageModule()
+    const occupancy = languageEnglish.connectedReaders.chatOccupancy
+
+    expect(occupancy.sendQueued).toContain('not yet confirmed')
+    expect(occupancy.rerollRetained).toContain('not yet confirmed')
+    expect(occupancy.sendQueued).not.toContain('has not been accepted')
+    expect(occupancy.rerollRetained).not.toContain('has not been accepted')
+  })
+
   it('defines generation recovery action copy in every language pack', async () => {
     const {
       languageChinese,

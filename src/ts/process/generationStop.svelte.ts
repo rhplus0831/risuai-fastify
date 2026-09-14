@@ -1,12 +1,24 @@
 import { get, writable } from 'svelte/store'
 import { captureActiveChatTarget } from '../chatCommands'
-import { findGenerationOperationIdForTarget, stopGenerationOperation } from '../server/generationOperations'
+import {
+  findGenerationOperationIdForTarget,
+  stopChatOccupancyGeneration,
+  stopGenerationOperation,
+  type GenerationOperationCancellationResult,
+} from '../server/generationOperations'
 import { findChatGenerationActivity } from './generationActivity.svelte'
 import { abortInputHookActivity } from './inputHookActivity.svelte'
 import { activeGenerationJobs } from './reattach'
 import { getServerChatRuntime } from './generationRuntimeBridge'
 
 export const abortChat = writable(false)
+
+/** Stop only the exact operation admitted by this page's occupied-chat authority. */
+export function abortChatOccupancyGeneration(
+  target: NonNullable<ReturnType<typeof captureActiveChatTarget>>,
+): Promise<GenerationOperationCancellationResult> {
+  return stopChatOccupancyGeneration(target)
+}
 
 /**
  * Route an explicit composer Stop to the exact protocol operation whenever one

@@ -29,6 +29,8 @@ export interface SendChatContextResult {
   persistence: Promise<CharacterOwnedDurableBatchResult>
 }
 
+export type SendChatContextMaintenanceScope = 'owner' | 'chat-local' | 'none'
+
 interface SendRollbackSnapshot {
   characterId: string | undefined
   characterIndex: number
@@ -127,7 +129,10 @@ function messageIdBackfillTail(messages: Message[]): { startIndex: number; after
  * lastInteraction stamp, chatId backfill, promptInfo seed (gated on
  * `promptInfoInsideChat`), and tokenizer creation. The optimistic context is
  * returned synchronously together with the exact durable maintenance promise.
- * Reattach callers disable maintenance so they only reconstruct render context.
+ * Occupied-chat callers select `chat-local`: they may use the authoritative
+ * configured settings but cannot stamp the character, backfill ids, or issue a
+ * general command. Reattach callers select `none` and only reconstruct render
+ * context. `writeMaintenance` remains as a compatibility alias for older tests.
  *
  * The coordinator handles the closures (`throwError`,
  * `runCurrentChatFunction`, etc.) and the chat-keyed generation lifecycle around
@@ -136,11 +141,13 @@ function messageIdBackfillTail(messages: Message[]): { startIndex: number; after
 export function setupSendChatContext(args: {
   chatProcessIndex: number
   chatAdditonalTokens?: number
+  maintenanceScope?: SendChatContextMaintenanceScope
   writeMaintenance?: boolean
   target?: ActiveChatTarget | null
   database?: Database
 }): SendChatContextResult {
-  const { chatAdditonalTokens: argChatAdditonalTokens, writeMaintenance = true, target } = args
+  const { chatAdditonalTokens: argChatAdditonalTokens, target } = args
+  const maintenanceScope = args.maintenanceScope ?? (args.writeMaintenance === false ? 'none' : 'owner')
   const serverBacked = canUseServerCommands()
   const selectedChar = resolveOwnedCharacterIndex(target)
   const lastInteraction = Date.now()
@@ -149,7 +156,7 @@ export function setupSendChatContext(args: {
     acceptedCount: 0,
   })
 
-  if (writeMaintenance && serverBacked) {
+  if (maintenanceScope === 'owner' && serverBacked) {
     const steps: Parameters<typeof dispatchCharacterOwnedDurableBatch>[1][number][] = []
     let rollbackSnapshot: SendRollbackSnapshot | null = null
     let characterId: string | undefined

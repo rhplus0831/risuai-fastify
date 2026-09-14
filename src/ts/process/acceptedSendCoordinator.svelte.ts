@@ -19,13 +19,16 @@ import { collectServerInlayAssetRefs } from './serverBackedSendChat'
 import { readBrowserClientContext } from './request/clientContext'
 import { SERVER_CHAT_CLIENT_CAPABILITIES } from './request/serverChat'
 import {
+  canUseGenerationOperationProtocol,
   readGenerationOperationStatus,
   retryGenerationOperation,
   stageAcceptedSendGenerationOperation,
   stopGenerationOperation,
   submitStagedAcceptedSendOperation,
   type GenerationOperationStreamDescriptor,
+  type GenerationOperationChatOccupancy,
 } from '../server/generationOperations'
+import { captureClientChatOccupancyAuthority, isClientChatOccupancyAuthorityCurrent } from '../server/chatOccupancy'
 import {
   acceptedSendRecoveries,
   recordAcceptedSendRecovery,
@@ -50,6 +53,13 @@ type AcceptedAppendResult = Exclude<AppendCurrentChatUserMessageResult, { status
 export type AcceptedSendCoordinatorResult =
   | { status: 'generated' }
   | { status: 'generated'; operationId: string; acceptedMessageId: string }
+  | {
+      status: 'send_retained'
+      operationId: string
+      acceptedMessageId: string
+      error: string
+      code?: string
+    }
   | { status: 'append_failed' }
   | { status: 'generation_failed'; cause: AcceptedSendRecoveryCause; acceptedMessageId?: string }
 
@@ -79,8 +89,36 @@ export interface CoordinateAcceptedChatSendInput {
   message?: string | Message
   draftGeneration?: unknown
   syntheticSayNothing?: boolean
+  /** Exact occupied-chat admission captured synchronously with the target. */
+  chatOccupancy?: GenerationOperationChatOccupancy & { readonly interaction: 'send' }
   onAppendAccepted?: () => void
   onAppendFailed?: (failure: AcceptedSendAppendFailure) => void
+}
+
+function atomicSendAccessIsCurrent(
+  sourceGeneration: number,
+  chatOccupancy?: GenerationOperationChatOccupancy,
+  requireOccupancyEnabled = true,
+): boolean {
+  return chatOccupancy
+    ? chatOccupancy.authority.sessionGeneration === sourceGeneration &&
+        isClientChatOccupancyAuthorityCurrent(chatOccupancy.authority, {
+          requireEnabled: requireOccupancyEnabled,
+        }) &&
+        (!requireOccupancyEnabled ||
+          chatOccupancy.authority.claimClass === 'chat_only' ||
+          isClientWriteOperationCurrent(sourceGeneration))
+    : isClientWriteOperationCurrent(sourceGeneration)
+}
+
+function assertAtomicSendAccess(sourceGeneration: number, chatOccupancy?: GenerationOperationChatOccupancy): void {
+  if (!atomicSendAccessIsCurrent(sourceGeneration, chatOccupancy)) {
+    throw new Error(chatOccupancy ? 'chat_occupancy_authority_stale' : 'client_write_operation_stale')
+  }
+}
+
+function isChatOnlyAccess(chatOccupancy?: GenerationOperationChatOccupancy): boolean {
+  return chatOccupancy?.authority.claimClass === 'chat_only'
 }
 
 interface AcceptedGenerationRequest {
@@ -271,8 +309,10 @@ async function settleBeforeAbort<T>(
 async function acceptedGenerationReachedServer(
   request: AcceptedGenerationRequest,
   sourceGeneration: number,
+  chatOccupancy?: GenerationOperationChatOccupancy,
 ): Promise<AcceptedGenerationAuthorityOutcome> {
-  if (!isClientWriteOperationCurrent(sourceGeneration)) return 'authority_unknown'
+  const isCurrent = () => atomicSendAccessIsCurrent(sourceGeneration, chatOccupancy, false)
+  if (!isCurrent()) return 'authority_unknown'
   if (!request.target.chatId) return 'not_reconciled'
 
   const controller = new AbortController()
@@ -282,8 +322,7 @@ async function acceptedGenerationReachedServer(
       refreshActiveGenerationJobsFromBootstrap(controller.signal),
       controller.signal,
     )
-    if (!isClientWriteOperationCurrent(sourceGeneration) || bootstrap.status === 'aborted' || controller.signal.aborted)
-      return 'authority_unknown'
+    if (!isCurrent() || bootstrap.status === 'aborted' || controller.signal.aborted) return 'authority_unknown'
 
     const completion = await settleBeforeAbort(
       reconcileAcceptedSendCompletion(request.target, request.messageId, {
@@ -293,24 +332,17 @@ async function acceptedGenerationReachedServer(
       }),
       controller.signal,
     )
-    if (
-      !isClientWriteOperationCurrent(sourceGeneration) ||
-      completion.status === 'aborted' ||
-      controller.signal.aborted
-    )
-      return 'authority_unknown'
+    if (!isCurrent() || completion.status === 'aborted' || controller.signal.aborted) return 'authority_unknown'
     if (completion.value.status !== 'reconciled') return 'not_reconciled'
+    if (isChatOnlyAccess(chatOccupancy)) return 'reconciled'
     const effects = await settleBeforeAbort(
       reconcileAcceptedSendGenerationEffects(request.target, request.messageId),
       controller.signal,
     )
-    if (!isClientWriteOperationCurrent(sourceGeneration) || effects.status === 'aborted' || controller.signal.aborted)
-      return 'authority_unknown'
+    if (!isCurrent() || effects.status === 'aborted' || controller.signal.aborted) return 'authority_unknown'
     return effects.value.durableEffectsReconciled ? 'reconciled' : 'not_reconciled'
   } catch {
-    return !isClientWriteOperationCurrent(sourceGeneration) || controller.signal.aborted
-      ? 'authority_unknown'
-      : 'not_reconciled'
+    return !isCurrent() || controller.signal.aborted ? 'authority_unknown' : 'not_reconciled'
   } finally {
     clearTimeout(deadline)
   }
@@ -340,16 +372,22 @@ async function startAcceptedGeneration(
 }
 
 async function prepareAtomicSendGenerationIntent(input: CoordinateAcceptedChatSendInput, sourceGeneration: number) {
-  assertClientWriteOperation(sourceGeneration)
-  const readiness = guardActiveChatGenerationSettingsForSend(
-    resolveActiveChatGenerationSettings({ target: input.target }),
-  )
-  if (readiness.status === 'error') {
-    return { status: 'error' as const, failure: { kind: 'message' as const, message: readiness.error } }
+  assertAtomicSendAccess(sourceGeneration, input.chatOccupancy)
+  const chatOnly = isChatOnlyAccess(input.chatOccupancy)
+  const initialState = resolveActiveChatGenerationSettings({ target: input.target })
+  if (chatOnly) {
+    if (!initialState.character || !initialState.chat) {
+      return { status: 'error' as const, failure: { kind: 'known' as const, reason: 'activeChatMissing' as const } }
+    }
+  } else {
+    const readiness = guardActiveChatGenerationSettingsForSend(initialState)
+    if (readiness.status === 'error') {
+      return { status: 'error' as const, failure: { kind: 'message' as const, message: readiness.error } }
+    }
   }
-  if (input.target.chatId) {
+  if (!chatOnly && input.target.chatId) {
     const settings = await waitForPendingChatGenerationSettingsSave(input.target.chatId)
-    assertClientWriteOperation(sourceGeneration)
+    assertAtomicSendAccess(sourceGeneration, input.chatOccupancy)
     if (settings && settings.status !== 'ok') {
       return {
         status: 'error' as const,
@@ -357,30 +395,31 @@ async function prepareAtomicSendGenerationIntent(input: CoordinateAcceptedChatSe
       }
     }
   }
-  const persona = await flushPendingSelectedPersonaUpdate()
-  assertClientWriteOperation(sourceGeneration)
-  if (persona && persona.status !== 'ok') {
-    return { status: 'error' as const, failure: { kind: 'known' as const, reason: 'personaSettings' as const } }
-  }
-  const scripts = await waitForPendingCharacterScriptDefinitionSave(input.target.characterId)
-  assertClientWriteOperation(sourceGeneration)
-  if (scripts === 'queued' || scripts === 'failed') {
-    return { status: 'error' as const, failure: { kind: 'known' as const, reason: 'characterDefinitions' as const } }
+  if (!chatOnly) {
+    const persona = await flushPendingSelectedPersonaUpdate()
+    assertAtomicSendAccess(sourceGeneration, input.chatOccupancy)
+    if (persona && persona.status !== 'ok') {
+      return { status: 'error' as const, failure: { kind: 'known' as const, reason: 'personaSettings' as const } }
+    }
+    const scripts = await waitForPendingCharacterScriptDefinitionSave(input.target.characterId)
+    assertAtomicSendAccess(sourceGeneration, input.chatOccupancy)
+    if (scripts === 'queued' || scripts === 'failed') {
+      return { status: 'error' as const, failure: { kind: 'known' as const, reason: 'characterDefinitions' as const } }
+    }
   }
   // The waits above may hydrate or replace owner projections. Re-resolve the
   // exact generation target so staging uses one fresh, coherent owner snapshot.
-  const finalReadiness = guardActiveChatGenerationSettingsForSend(
-    resolveActiveChatGenerationSettings({ target: input.target }),
-  )
-  if (finalReadiness.status === 'error') {
+  const finalState = resolveActiveChatGenerationSettings({ target: input.target })
+  const finalReadiness = chatOnly ? null : guardActiveChatGenerationSettingsForSend(finalState)
+  if (finalReadiness?.status === 'error') {
     return { status: 'error' as const, failure: { kind: 'message' as const, message: finalReadiness.error } }
   }
-  const chat = finalReadiness.state.chat
+  const chat = finalReadiness?.state.chat ?? finalState.chat
   if (!chat) {
     return { status: 'error' as const, failure: { kind: 'known' as const, reason: 'activeChatMissing' as const } }
   }
-  const inlayAssetRefs = await collectServerInlayAssetRefs(chat)
-  assertClientWriteOperation(sourceGeneration)
+  const inlayAssetRefs = chatOnly ? [] : await collectServerInlayAssetRefs(chat)
+  assertAtomicSendAccess(sourceGeneration, input.chatOccupancy)
   return {
     status: 'ok' as const,
     generation: {
@@ -397,14 +436,16 @@ async function observeAcceptedOperationStream(
   target: ActiveChatTarget,
   stream: GenerationOperationStreamDescriptor,
   sourceGeneration: number,
+  chatOccupancy?: GenerationOperationChatOccupancy,
 ): Promise<boolean> {
-  if (!isClientWriteOperationCurrent(sourceGeneration)) return false
+  if (!atomicSendAccessIsCurrent(sourceGeneration, chatOccupancy, false)) return false
   const controller = createActiveGenerationAbortController()
   try {
     return await sendChat(-1, {
       signal: controller.signal,
       expectedTarget: target,
       generationOperationStream: stream,
+      ...(chatOccupancy ? { chatOccupancy } : {}),
     })
   } finally {
     clearActiveGenerationAbortController(controller)
@@ -415,7 +456,8 @@ async function coordinateAtomicAcceptedChatSend(
   input: CoordinateAcceptedChatSendInput & { message: string | Message },
   sourceGeneration: number,
 ): Promise<AcceptedSendCoordinatorResult> {
-  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  let admitted = false
+  const isCurrent = () => atomicSendAccessIsCurrent(sourceGeneration, input.chatOccupancy, !admitted)
   if (!isCurrent()) return { status: 'append_failed' }
   let preparedIntent: Awaited<ReturnType<typeof prepareAtomicSendGenerationIntent>>
   try {
@@ -438,6 +480,7 @@ async function coordinateAtomicAcceptedChatSend(
       message: input.message,
       draftGeneration: input.draftGeneration,
       generation: preparedIntent.generation,
+      ...(input.chatOccupancy ? { chatOccupancy: input.chatOccupancy } : {}),
     })
   } catch (error) {
     if (!isCurrent()) return supersededSend()
@@ -457,8 +500,14 @@ async function coordinateAtomicAcceptedChatSend(
   } catch (error) {
     if (!isCurrent()) return supersededSend()
     console.error(error)
-    return { status: 'generation_failed', cause: 'generation_failed' }
+    return {
+      status: 'send_retained',
+      operationId: staged.request.operationId,
+      acceptedMessageId: staged.request.acceptedMessageId,
+      error: error instanceof Error ? error.message : String(error),
+    }
   }
+  if (submitted.status === 'accepted') admitted = true
   if (!isCurrent())
     return supersededSend(
       submitted.status === 'accepted' && submitted.response.append?.disposition === 'accepted'
@@ -468,7 +517,13 @@ async function coordinateAtomicAcceptedChatSend(
   if (submitted.status === 'retained') {
     // The complete intent and optimistic row remain durable. Bootstrap/outbox
     // replay will project the eventual acceptance without appending again.
-    return { status: 'generation_failed', cause: 'generation_failed' }
+    return {
+      status: 'send_retained',
+      operationId: staged.request.operationId,
+      acceptedMessageId: staged.request.acceptedMessageId,
+      error: submitted.error,
+      ...(submitted.code ? { code: submitted.code } : {}),
+    }
   }
   if (submitted.status === 'rejected' && submitted.code === 'generation_finalization_pending') {
     alertError(language.errors.replyStillSaving)
@@ -493,14 +548,14 @@ async function coordinateAtomicAcceptedChatSend(
     (submitted.response.operation.state === 'accepted' || submitted.response.operation.state === 'launching')
   ) {
     if (!isCurrent()) return supersededSend()
-    const status = await readGenerationOperationStatus(operationId)
+    const status = await readGenerationOperationStatus(operationId, undefined, input.chatOccupancy)
     if (!isCurrent()) return supersededSend()
     if (status.status === 'accepted') stream = status.stream
   }
-  if (stream) await observeAcceptedOperationStream(input.target, stream, sourceGeneration)
+  if (stream) await observeAcceptedOperationStream(input.target, stream, sourceGeneration, input.chatOccupancy)
   if (!isCurrent()) return supersededSend()
 
-  const status = await readGenerationOperationStatus(operationId)
+  const status = await readGenerationOperationStatus(operationId, undefined, input.chatOccupancy)
   if (!isCurrent()) return supersededSend()
   if (status.status === 'accepted' && status.response.operation.state === 'completed') {
     const completion = await acceptedGenerationReachedServer(
@@ -513,6 +568,7 @@ async function coordinateAtomicAcceptedChatSend(
         syntheticSayNothing: input.syntheticSayNothing === true,
       },
       sourceGeneration,
+      input.chatOccupancy,
     )
     if (!isCurrent()) return supersededSend()
     if (completion === 'reconciled') return { status: 'generated', operationId, acceptedMessageId }
@@ -529,15 +585,26 @@ async function coordinateAtomicAcceptedChatSend(
 export function coordinateAcceptedChatSend(
   input: CoordinateAcceptedChatSendInput,
 ): Promise<AcceptedSendCoordinatorResult> {
-  const sourceGeneration = input.clientGeneration ?? captureClientSessionGeneration()
-  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
-  if (input.message !== undefined) {
+  const capturedAuthority =
+    !input.chatOccupancy && input.message !== undefined && input.target.chatId && canUseGenerationOperationProtocol()
+      ? captureClientChatOccupancyAuthority(input.target.chatId)
+      : null
+  const effectiveInput: CoordinateAcceptedChatSendInput = capturedAuthority
+    ? { ...input, chatOccupancy: { authority: capturedAuthority, interaction: 'send' } }
+    : input
+  const sourceGeneration =
+    effectiveInput.chatOccupancy?.authority.sessionGeneration ??
+    effectiveInput.clientGeneration ??
+    captureClientSessionGeneration()
+  const isCurrent = () => atomicSendAccessIsCurrent(sourceGeneration, effectiveInput.chatOccupancy)
+  if (effectiveInput.message !== undefined) {
     if (!isCurrent()) return Promise.resolve({ status: 'append_failed' })
     return coordinateAtomicAcceptedChatSend(
-      input as CoordinateAcceptedChatSendInput & { message: string | Message },
+      effectiveInput as CoordinateAcceptedChatSendInput & { message: string | Message },
       sourceGeneration,
     )
   }
+  input = effectiveInput
   if (!input.append) return Promise.resolve({ status: 'append_failed' })
   const id = acceptedSendOperationId(input.target, input.append.messageId)
   const existing = coordinatedOperations.get(id)

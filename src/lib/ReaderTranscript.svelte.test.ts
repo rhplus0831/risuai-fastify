@@ -38,6 +38,7 @@ import {
 import { resetStartupReadinessForTests } from '../ts/startupReadiness'
 import { clearChatBodyParseMemo } from './ChatScreens/ChatBodyParseMemo'
 import { SERVER_CHARACTER_SUMMARY_VERSION } from '@risuai/protocol/character-summary-resource'
+import type { ChatOccupancyProjection } from '@risuai/protocol/chat-occupancy'
 import { demoteClientSession } from '../ts/clientSession'
 import { setManagedWriterForTest } from '../ts/__tests__/managedClientSession'
 import { appendOptimisticGenerationOperationUserMessage } from '../ts/chatCommands'
@@ -56,6 +57,17 @@ import {
   automaticTranslationMessageIds,
   replaceAutomaticTranslationMessageIds,
 } from '../ts/process/generatedMessageTranslationEligibility'
+import {
+  applyClientChatOccupancyEvent,
+  configureClientChatOccupancy,
+  getClientChatOccupancySnapshot,
+  resetClientChatOccupancyForTests,
+  setClientChatOccupancyIdentity,
+} from '../ts/server/chatOccupancy'
+import * as chatOccupancyClient from '../ts/server/chatOccupancy'
+import * as acceptedSendCoordinator from '../ts/process/acceptedSendCoordinator.svelte'
+import * as rerollNavigation from '../ts/process/rerollNavigation.svelte'
+import * as generationStop from '../ts/process/generationStop.svelte'
 
 vi.mock('../ts/server/readerGenerationObservation', () => ({ startReaderGenerationObservation: vi.fn() }))
 
@@ -114,6 +126,44 @@ function startReader() {
   setClientProjectionReady(true)
   setClientConnectionState('live')
   publishReaderFixtures()
+}
+
+function occupancy(
+  chatId: string,
+  occupantSessionId: string | null,
+  occupancyEpoch = 1,
+  claimClass: ChatOccupancyProjection['claimClass'] = occupantSessionId ? 'chat_only' : null,
+): ChatOccupancyProjection {
+  const active = occupantSessionId !== null
+  return {
+    databaseLineage: 'reader-tests',
+    chatId,
+    occupantSessionId,
+    occupancyEpoch,
+    claimClass,
+    state: active ? 'occupied' : 'released',
+    claimedAtMs: active ? Date.now() : null,
+    leaseExpiresAtMs: active ? Date.now() + 90_000 : null,
+    updatedAtMs: Date.now(),
+    releasedAtMs: active ? null : Date.now(),
+  }
+}
+
+function configureReaderOccupancy(rows: ChatOccupancyProjection[], enabled = true): void {
+  const session = getClientSessionSnapshot()
+  expect(
+    setClientChatOccupancyIdentity(
+      { sessionId: 'reader', exclusive: true, previousSessionId: null },
+      session.generation,
+    ),
+  ).toBe(true)
+  expect(
+    configureClientChatOccupancy(
+      { version: 1, enabled, leaseMs: 90_000, renewAfterMs: 30_000 },
+      { version: 1, databaseLineage: 'reader-tests', occupancies: rows },
+      session.generation,
+    ),
+  ).toBe(true)
 }
 
 function publishReaderFixtures() {
@@ -177,12 +227,14 @@ beforeEach(() => {
     })
   resetReaderDisplayResourcesForTests()
   resetClientSessionForTests()
+  resetClientChatOccupancyForTests()
   resetStartupReadinessForTests()
   hydration.resetChatHydration()
   resetGenerationDisplayProjectionsForTests()
   resetHalfStreamingProgressForTests()
   replaceAutomaticTranslationMessageIds([])
   clearChatBodyParseMemo()
+  sessionStorage.clear()
   target = document.createElement('div')
   document.body.appendChild(target)
   vi.spyOn(parser, 'ParseMarkdown').mockImplementation(async (source) => `<p>${source}</p>`)
@@ -199,6 +251,7 @@ afterEach(async () => {
   component = undefined
   resetReaderDisplayResourcesForTests()
   resetClientSessionForTests()
+  resetClientChatOccupancyForTests()
   hydration.resetChatHydration()
   resetGenerationDisplayProjectionsForTests()
   resetHalfStreamingProgressForTests()
@@ -206,10 +259,400 @@ afterEach(async () => {
   clearChatBodyParseMemo()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
+  sessionStorage.clear()
   target.remove()
 })
 
 describe('connected reader transcript', () => {
+  it('presents available, foreign, and self-owned chat states without general write access', async () => {
+    const reader = seedReaderChat(2)
+    withTestDatabaseWrite(() => {
+      reader.chats[0].message.at(-1)!.role = 'char'
+    })
+    startReader()
+    configureReaderOccupancy([])
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+
+    expect(target.querySelector('[data-reader-chat-occupancy-state="available"]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-occupancy-claim]')).not.toBeNull()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.disabled).toBe(true)
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+
+    const generation = getClientSessionSnapshot().generation
+    expect(
+      applyClientChatOccupancyEvent(
+        {
+          type: 'occupancy.snapshot',
+          version: 1,
+          databaseLineage: 'reader-tests',
+          occupancies: [occupancy('reader-chat', 'other-reader', 1)],
+        },
+        { generation, sessionId: 'reader' },
+      ),
+    ).toBe(true)
+    await settle()
+    expect(target.querySelector('[data-reader-chat-occupancy-state="foreign-owned"]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-occupancy-claim]')).toBeNull()
+
+    expect(
+      applyClientChatOccupancyEvent(
+        {
+          type: 'occupancy.snapshot',
+          version: 1,
+          databaseLineage: 'reader-tests',
+          occupancies: [occupancy('reader-chat', 'reader', 2)],
+        },
+        { generation, sessionId: 'reader' },
+      ),
+    ).toBe(true)
+    await settle()
+    expect(target.querySelector('[data-reader-chat-occupancy-state="self-owned"]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-occupancy-release]')).not.toBeNull()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.disabled).toBe(false)
+    expect(target.querySelector<HTMLButtonElement>('[data-reader-composer-reroll]')?.disabled).toBe(false)
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('retains occupancy while browsing and requires an explicit switch before another chat can mutate', async () => {
+    seedReaderChat(2)
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 3)])
+    const other = charactersResourceState.characters[0]
+    const otherChatId = other.chats[0].id!
+    const mounted = mount(ReaderTranscriptSelectionHarness, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    component = mounted
+    await settle()
+    expect(target.querySelector('[data-reader-chat-occupancy-state="self-owned"]')).not.toBeNull()
+
+    mounted.select(other.chaId, otherChatId)
+    await settle()
+    expect(target.querySelector('[data-reader-chat-occupancy-state="switch-required"]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-occupancy-switch]')).not.toBeNull()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.disabled).toBe(true)
+    expect(getClientChatOccupancySnapshot().occupancies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ chatId: 'reader-chat', occupantSessionId: 'reader' })]),
+    )
+
+    mounted.select('reader-character', 'reader-chat')
+    await settle()
+    expect(target.querySelector('[data-reader-chat-occupancy-state="self-owned"]')).not.toBeNull()
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('shows confirmed feedback for explicit Claim, Release, and atomic Switch actions', async () => {
+    seedReaderChat(2)
+    startReader()
+    configureReaderOccupancy([])
+    const claim = vi
+      .spyOn(chatOccupancyClient, 'claimClientChatOccupancy')
+      .mockResolvedValue({ status: 'ok', occupancy: occupancy('reader-chat', 'reader', 1) })
+    const release = vi
+      .spyOn(chatOccupancyClient, 'releaseClientChatOccupancy')
+      .mockResolvedValue({ status: 'ok', occupancy: occupancy('reader-chat', null, 2) })
+    const other = charactersResourceState.characters[0]
+    const otherChatId = other.chats[0].id!
+    const switchChat = vi
+      .spyOn(chatOccupancyClient, 'switchClientChatOccupancy')
+      .mockResolvedValue({ status: 'ok', occupancy: occupancy(otherChatId, 'reader', 2) })
+    const mounted = mount(ReaderTranscriptSelectionHarness, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    component = mounted
+    await settle()
+
+    target.querySelector<HTMLButtonElement>('[data-reader-occupancy-claim]')!.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.claimSucceeded,
+      ),
+    )
+    expect(claim).toHaveBeenCalledWith('reader-chat')
+
+    const generation = getClientSessionSnapshot().generation
+    expect(
+      applyClientChatOccupancyEvent(
+        {
+          type: 'occupancy.snapshot',
+          version: 1,
+          databaseLineage: 'reader-tests',
+          occupancies: [occupancy('reader-chat', 'reader', 1)],
+        },
+        { generation, sessionId: 'reader' },
+      ),
+    ).toBe(true)
+    await settle()
+    target.querySelector<HTMLButtonElement>('[data-reader-occupancy-release]')!.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.releaseSucceeded,
+      ),
+    )
+    expect(release).toHaveBeenCalledWith('reader-chat')
+
+    mounted.select(other.chaId, otherChatId)
+    await settle()
+    target.querySelector<HTMLButtonElement>('[data-reader-occupancy-switch]')!.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.switchSucceeded,
+      ),
+    )
+    expect(switchChat).toHaveBeenCalledWith('reader-chat', otherChatId)
+    expect(getClientChatOccupancySnapshot().occupancies).toEqual(
+      expect.arrayContaining([expect.objectContaining({ chatId: 'reader-chat', occupantSessionId: 'reader' })]),
+    )
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('requires explicit normalization after reader demotion retains owner-class chat access', async () => {
+    seedReaderChat(2)
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 4, 'owner')])
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+
+    expect(target.querySelector('[data-reader-chat-occupancy-state="normalization-required"]')).not.toBeNull()
+    expect(target.querySelector('[data-reader-occupancy-normalize]')).not.toBeNull()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.disabled).toBe(true)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('retains a chat-only draft through foreign events, refresh, navigation, and detach/reopen', async () => {
+    seedReaderChat(2)
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 2)])
+    const other = charactersResourceState.characters[0]
+    const otherChatId = other.chats[0].id!
+    const mounted = mount(ReaderTranscriptSelectionHarness, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    component = mounted
+    await settle()
+    const draft = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
+    draft.value = 'unfinished scoped draft'
+    draft.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'unfinished scoped draft' }))
+    await settle()
+
+    const generation = getClientSessionSnapshot().generation
+    expect(
+      applyClientChatOccupancyEvent(
+        {
+          type: 'occupancy.snapshot',
+          version: 1,
+          databaseLineage: 'reader-tests',
+          occupancies: [occupancy('reader-chat', 'other-reader', 3)],
+        },
+        { generation, sessionId: 'reader' },
+      ),
+    ).toBe(true)
+    await settle()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.value).toBe(
+      'unfinished scoped draft',
+    )
+    target.querySelector<HTMLButtonElement>('[data-reader-refresh]')!.click()
+    await settle()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.value).toBe(
+      'unfinished scoped draft',
+    )
+
+    mounted.select(other.chaId, otherChatId)
+    await settle()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.value).toBe('')
+    mounted.select('reader-character', 'reader-chat')
+    await settle()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.value).toBe(
+      'unfinished scoped draft',
+    )
+
+    await unmount(mounted)
+    component = undefined
+    target.replaceChildren()
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+    expect(target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')?.value).toBe(
+      'unfinished scoped draft',
+    )
+  })
+
+  it('routes Send, Reroll, and Stop through the exact self-owned chat bridges', async () => {
+    const reader = seedReaderChat(2)
+    withTestDatabaseWrite(() => {
+      reader.chats[0].message.at(-1)!.role = 'char'
+    })
+    let finishSend!: () => void
+    const sendCompletion = new Promise<void>((resolve) => {
+      finishSend = resolve
+    })
+    const send = vi.spyOn(acceptedSendCoordinator, 'coordinateAcceptedChatSend').mockImplementation(async (input) => {
+      input.onAppendAccepted?.()
+      await sendCompletion
+      return { status: 'generated' }
+    })
+    const reroll = vi
+      .spyOn(rerollNavigation, 'rerollChatOnlyTarget')
+      .mockResolvedValue({ status: 'accepted', operationId: 'reroll-operation' })
+    const stop = vi.spyOn(generationStop, 'abortChatOccupancyGeneration').mockResolvedValue({
+      status: 'acknowledged',
+      disposition: 'cancelling',
+      operation: {} as never,
+      knownAttemptMatched: true,
+    })
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 2)])
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+
+    const input = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
+    input.value = 'reader-only send'
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'reader-only send' }))
+    await tick()
+    target.querySelector<HTMLButtonElement>('[data-reader-composer-send]')!.click()
+    await vi.waitFor(() => expect(send).toHaveBeenCalledOnce())
+    expect(send.mock.calls[0][0]).toMatchObject({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'reader-character', chatId: 'reader-chat' },
+      message: 'reader-only send',
+      chatOccupancy: {
+        authority: { chatId: 'reader-chat', occupancyEpoch: 2, claimClass: 'chat_only' },
+        interaction: 'send',
+      },
+    })
+    expect(input.value).toBe('')
+    expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+      language.connectedReaders.chatOccupancy.sendAccepted,
+    )
+    expect(observations[0].refresh).toHaveBeenCalledTimes(1)
+
+    project(liveProjection())
+    await settle()
+    const stopControl = target.querySelector<HTMLButtonElement>('[data-reader-composer-stop]')!
+    expect(stopControl.disabled).toBe(false)
+    stopControl.click()
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce())
+    expect(stop).toHaveBeenCalledWith({
+      selectedCharID: -1,
+      chatPage: -1,
+      characterId: 'reader-character',
+      chatId: 'reader-chat',
+    })
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.stopRequested,
+      ),
+    )
+    expect(observations[0].refresh).toHaveBeenCalledTimes(2)
+
+    finishSend()
+    project(null)
+    await settle()
+    target.querySelector<HTMLButtonElement>('[data-reader-composer-reroll]')!.click()
+    await vi.waitFor(() => expect(reroll).toHaveBeenCalledOnce())
+    expect(reroll).toHaveBeenCalledWith({
+      selectedCharID: -1,
+      chatPage: -1,
+      characterId: 'reader-character',
+      chatId: 'reader-chat',
+    })
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.rerollAccepted,
+      ),
+    )
+    expect(observations[0].refresh).toHaveBeenCalledTimes(3)
+    expect(getClientSessionSnapshot().lifecycle).toBe('reading')
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  it('retains its scoped draft when Send is rejected before append acceptance', async () => {
+    seedReaderChat(2)
+    vi.spyOn(acceptedSendCoordinator, 'coordinateAcceptedChatSend').mockImplementation(async (input) => {
+      input.onAppendFailed?.({ kind: 'known', reason: 'appendNotAccepted' })
+      return { status: 'append_failed' }
+    })
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 2)])
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+
+    const input = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
+    input.value = 'keep this draft'
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'keep this draft' }))
+    await tick()
+    target.querySelector<HTMLButtonElement>('[data-reader-composer-send]')!.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.sendFailed,
+      ),
+    )
+    expect(input.value).toBe('keep this draft')
+    expect(observations[0].refresh).not.toHaveBeenCalled()
+  })
+
+  it('shows a retained Send as queued and blocks resubmitting its exact draft', async () => {
+    seedReaderChat(2)
+    const send = vi.spyOn(acceptedSendCoordinator, 'coordinateAcceptedChatSend').mockResolvedValue({
+      status: 'send_retained',
+      operationId: 'retained-operation',
+      acceptedMessageId: 'retained-message',
+      error: 'Network error: response lost',
+    })
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 2)])
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+
+    const input = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
+    const sendButton = target.querySelector<HTMLButtonElement>('[data-reader-composer-send]')!
+    input.value = 'uncertain reader send'
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'uncertain reader send' }))
+    await tick()
+    sendButton.click()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+        language.connectedReaders.chatOccupancy.sendQueued,
+      ),
+    )
+
+    expect(input.value).toBe('uncertain reader send')
+    expect(sendButton.disabled).toBe(true)
+    expect(sendButton.hasAttribute('data-reader-send-retained')).toBe(true)
+    expect(observations[0].refresh).toHaveBeenCalledOnce()
+    sendButton.click()
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }))
+    await settle()
+    expect(send).toHaveBeenCalledOnce()
+
+    input.value = 'explicitly revised send'
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'explicitly revised send' }))
+    await tick()
+    expect(sendButton.disabled).toBe(false)
+    expect(sendButton.hasAttribute('data-reader-send-retained')).toBe(false)
+  })
+
   it('uses confirmed transcript appearance without opening a writer controller', async () => {
     seedReaderChat(3)
     withTestDatabaseWrite(() => {

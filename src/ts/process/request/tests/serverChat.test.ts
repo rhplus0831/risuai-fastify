@@ -1,4 +1,4 @@
-import { resetClientSessionForTests } from '../../../clientSession'
+import { getClientSessionSnapshot, resetClientSessionForTests } from '../../../clientSession'
 import {
   setManagedWriterForTest,
   setManagedReaderForTest,
@@ -14,14 +14,19 @@ const generationOperationMocks = vi.hoisted(() => ({
   registerViewer: vi.fn((_operationId: string, _detach: () => void) => () => undefined),
   stopOperation: vi.fn(async (_operationId: string) => ({ status: 'acknowledged' })),
 }))
+const chatOccupancyMocks = vi.hoisted(() => ({ current: vi.fn(() => true) }))
 
 vi.mock('../../../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'test-auth-token',
 }))
 
 vi.mock('../../../server/activeWriterSession', () => ({
+  ACTIVE_WRITER_SESSION_HEADER: 'risu-writer-session',
   activeWriterSessionHeader: () => ({ 'risu-writer-session': 'writer-session-1' }),
   handleActiveWriterStaleResponse: vi.fn((response: Response) => response.status === 423),
+}))
+vi.mock('../../../server/chatOccupancy', () => ({
+  isClientChatOccupancyAuthorityCurrent: chatOccupancyMocks.current,
 }))
 
 vi.mock('../../../alert', () => alertMocks)
@@ -203,6 +208,8 @@ beforeEach(() => {
   generationOperationMocks.registerViewer.mockReturnValue(() => undefined)
   generationOperationMocks.stopOperation.mockReset()
   generationOperationMocks.stopOperation.mockResolvedValue({ status: 'acknowledged' })
+  chatOccupancyMocks.current.mockReset()
+  chatOccupancyMocks.current.mockReturnValue(true)
 })
 
 afterEach(() => {
@@ -2195,6 +2202,51 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     })
     expect(viewerSignal?.aborted).toBe(false)
     expect(get(activeGenerationJobs)).toEqual([])
+  })
+
+  it('opens and fences an operation stream with the exact captured chat occupancy headers', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: 'database-a',
+      chatId: 'chat-1',
+      sessionId: session.sessionId,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    const stream = {
+      operationId: '11111111-1111-4111-8111-111111111111',
+      acceptedMessageId: '22222222-2222-4222-8222-222222222222',
+      attemptNo: 1,
+      jobId: 'job-operation-a',
+      projectionEpoch: 4,
+      href: '/api/v1/generation-operations/11111111-1111-4111-8111-111111111111/stream?attemptNo=1&jobId=job-operation-a&projectionEpoch=4',
+    }
+    const wire = controlledGenerationStream()
+    const fetchMock = vi.fn(async () => wire.response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = requestServerChatGeneration(baseInput, null, undefined, stream, authority)
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce())
+    expect(fetchMock).toHaveBeenCalledWith(
+      stream.href,
+      expect.objectContaining({
+        method: 'GET',
+        headers: expect.objectContaining({
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-chat-occupancy-epoch': '7',
+        }),
+      }),
+    )
+    expect(chatOccupancyMocks.current).toHaveBeenCalledWith(authority)
+
+    chatOccupancyMocks.current.mockReturnValue(false)
+    wire.send('prompt', {})
+    await expect(pending).resolves.toEqual({ status: 'aborted' })
+    expect(generationOperationMocks.applySseEvent).not.toHaveBeenCalled()
   })
 
   it('exposes negotiated regenerate target metadata on the token stream', async () => {

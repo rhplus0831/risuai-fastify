@@ -8,10 +8,17 @@ import {
 } from './clientSession'
 import { resolveConnectedClientStartup } from './connectedClientStartup'
 
-const api = vi.hoisted(() => ({ read: vi.fn(), acquire: vi.fn(), identity: vi.fn(), autoAcquire: vi.fn() }))
+const api = vi.hoisted(() => ({
+  read: vi.fn(),
+  acquire: vi.fn(),
+  identity: vi.fn(),
+  autoAcquire: vi.fn(),
+  occupancyIdentity: vi.fn(),
+}))
 vi.mock('./server/automaticWriterAcquisition', () => ({ shouldAutoAcquireDisconnectedWriter: api.autoAcquire }))
 vi.mock('./server/bootstrap', () => ({ fetchServerBootstrap: api.acquire, fetchServerBootstrapReadOnly: api.read }))
 vi.mock('./server/connectedTabIdentity', () => ({ resolveConnectedTabIdentity: api.identity }))
+vi.mock('./server/chatOccupancy', () => ({ setClientChatOccupancyIdentity: api.occupancyIdentity }))
 
 function runtime(sessionId: string | null, overrides: Record<string, unknown> = {}) {
   return {
@@ -50,6 +57,10 @@ describe('connected startup ownership discovery', () => {
     })
     expect(canUseClientRecoveryAccess()).toBe(false)
     expect(canUseClientWriteAccess()).toBe(false)
+    expect(api.occupancyIdentity).toHaveBeenCalledWith(
+      { sessionId: 'local-tab', exclusive: true, previousSessionId: null },
+      result.operation.generation,
+    )
   })
 
   it('automatically acquires a disconnected foreign writer when enabled', async () => {

@@ -210,11 +210,20 @@ manual Refresh, so a direct mount cannot bypass this boundary.
 
 `ChatScreenLayout.svelte` owns the shared theme/background/portrait frame;
 writer `ChatScreen` supplies its controllers while `ReaderTranscript` supplies
-its independent read owners and static confirmed portraits. The pure
-`ReadOnlyComposer.svelte` creates no draft, imports no writer controller, and
-renders disabled message, attachment, send, menu, translation, draft, BTW,
-sticker, and reroll semantics. The separate top-right device action owns
-promotion. Mobilechat bubbles expose the same
+its independent read owners and static confirmed portraits.
+`ReadOnlyComposer.svelte` keeps a locally scoped reader draft without importing
+a writer controller. `ReaderTranscript.svelte` stores that draft only in
+`sessionStorage`, namespaced by database lineage, exclusive page session, and
+chat; it never enters the writer draft/outbox or server command paths. Unsupported,
+disabled, duplicate-tab, foreign-occupied, switch-required, and retained-owner
+normalization states stay read-only. A self-occupied chat enables only plain
+Send, latest-response Reroll, and Stop; attachments, input hooks, Continue,
+message editing/deletion/translation, plugins, and the writer reroll/swipe menu
+remain visibly unavailable. Claim, release, atomic switch, and normalization
+are explicit controls backed by the client occupancy coordinator. Navigation
+never invokes any of them, so the current occupancy is retained while another
+chat is observed. The separate top-right device action continues to own general
+writer promotion. Mobilechat bubbles expose the same
 reader-safe plain-text copy action as the other built-in layouts.
 `readerPanelAppearance.ts` derives a local text palette from confirmed app colors
 and the translucent chat panel, and passes its tone through the explicit read

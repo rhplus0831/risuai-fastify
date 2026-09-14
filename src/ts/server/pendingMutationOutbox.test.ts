@@ -1,7 +1,9 @@
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureJsonWork } from '../__tests__/browserWorkProbe'
+import { captureClientSessionGeneration } from '../clientSession'
 const browserEvidence = vi.hoisted(() => ({ entries: [] as Record<string, unknown>[], generation: 0 }))
+const occupancyEvidence = vi.hoisted(() => ({ current: true, enabled: true }))
 vi.mock('./browserDiagnostics', () => ({
   recordBrowserDiagnostic: (entry: Record<string, unknown>) => browserEvidence.entries.push(entry),
   resetBrowserDiagnosticsSession: () => {
@@ -10,6 +12,10 @@ vi.mock('./browserDiagnostics', () => ({
   },
   captureBrowserDiagnosticsGeneration: () => browserEvidence.generation,
   isBrowserDiagnosticsGenerationCurrent: (generation: number) => generation === browserEvidence.generation,
+}))
+vi.mock('./chatOccupancy', () => ({
+  isClientChatOccupancyAuthorityCurrent: (_authority: unknown, options?: { requireEnabled?: boolean }) =>
+    occupancyEvidence.current && (options?.requireEnabled !== true || occupancyEvidence.enabled),
 }))
 
 import {
@@ -26,6 +32,7 @@ import {
   listPendingMutationPredecessors,
   listPendingMutationReceiptAcknowledgements,
   listPendingMutations,
+  listChatOccupancyGenerationMutations,
   MAX_DURABLE_MUTATION_PAYLOAD_BYTES,
   isPendingMutationProjectionFenceCurrent,
   pendingMutationAgentCollectionProjectionTarget,
@@ -55,6 +62,7 @@ import {
   retirePendingMutationLocalProjectionToken,
   setPendingMutationCommitTransactionHookForTests,
   stagePendingMutation,
+  stageChatOccupancyGenerationMutation,
   type DurableMutationIntent,
 } from './pendingMutationOutbox'
 import {
@@ -78,6 +86,8 @@ function settingsIntent(value: string): DurableMutationIntent {
 
 beforeEach(async () => {
   browserEvidence.entries = []
+  occupancyEvidence.current = true
+  occupancyEvidence.enabled = true
   vi.stubGlobal('indexedDB', new IDBFactory())
   resetPendingMutationOutboxForTests()
   resetPersistenceActivityForTests()
@@ -89,6 +99,58 @@ beforeEach(async () => {
   })
 })
 
+function occupancyAuthority() {
+  return {
+    version: 1 as const,
+    databaseLineage: 'database-a',
+    chatId: 'chat-a',
+    sessionId: 'reader-a',
+    sessionGeneration: captureClientSessionGeneration(),
+    occupancyEpoch: 7,
+    claimClass: 'chat_only' as const,
+  }
+}
+
+function occupiedSendIntent(): DurableMutationIntent {
+  return {
+    version: 1,
+    kind: 'generation-operation-submit',
+    requests: [
+      {
+        method: 'POST',
+        path: '/generation-operations',
+        body: {
+          protocolVersion: 1,
+          operationId: '11111111-1111-4111-8111-111111111111',
+          baseRevision: 7,
+          characterId: 'character-a',
+          chatId: 'chat-a',
+          mode: 'send',
+          acceptedMessageId: '22222222-2222-4222-8222-222222222222',
+          message: { role: 'user', data: 'hello', chatId: '22222222-2222-4222-8222-222222222222' },
+          draftGeneration: null,
+          generation: {},
+          chatOccupancy: { version: 1, interaction: 'send' },
+        },
+      },
+    ],
+  }
+}
+
+function occupiedStopIntent(): DurableMutationIntent {
+  return {
+    version: 1,
+    kind: 'generation-operation-cancel',
+    requests: [
+      {
+        method: 'PUT',
+        path: '/generation-operations/11111111-1111-4111-8111-111111111111/cancellation',
+        body: { reason: 'user_stop' },
+      },
+    ],
+  }
+}
+
 afterEach(async () => {
   vi.useRealTimers()
   await clearPendingMutationOutbox()
@@ -99,6 +161,81 @@ afterEach(async () => {
 })
 
 describe('pending mutation outbox', () => {
+  it('isolates occupied-chat generation rows from every general owner listing and counter', async () => {
+    const authority = occupancyAuthority()
+    const handle = stageChatOccupancyGenerationMutation(
+      'generation-operation-submit:11111111-1111-4111-8111-111111111111',
+      occupiedSendIntent(),
+      authority,
+    )
+    await expect(handle.ready).resolves.toBe('persisted')
+
+    await expect(listPendingMutations()).resolves.toEqual([])
+    await expect(countPendingMutationRecords()).resolves.toBe(0)
+    await expect(countBlockingPendingMutationRecords()).resolves.toBe(0)
+    await expect(listChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ intent: expect.objectContaining({ kind: 'generation-operation-submit' }) }),
+    ])
+  })
+
+  it('rejects non-generation and wrong-chat intents from the occupied-chat lane', () => {
+    const authority = occupancyAuthority()
+    expect(() =>
+      stageChatOccupancyGenerationMutation('settings:runtime', settingsIntent('forbidden'), authority),
+    ).toThrow(/generation/u)
+    const wrongChat = occupiedSendIntent()
+    wrongChat.requests[0]!.body.chatId = 'chat-b'
+    expect(() =>
+      stageChatOccupancyGenerationMutation('generation-operation-submit:wrong-chat', wrongChat, authority),
+    ).toThrow(/scoped/u)
+    const smuggled = occupiedSendIntent()
+    smuggled.requests.push({ method: 'PUT', path: '/settings', body: { patch: { username: 'forbidden' } } })
+    expect(() =>
+      stageChatOccupancyGenerationMutation('generation-operation-submit:smuggled', smuggled, authority),
+    ).toThrow(/[Gg]eneration/u)
+    const continueIntent = occupiedSendIntent()
+    continueIntent.requests[0]!.body.mode = 'continue'
+    delete continueIntent.requests[0]!.body.acceptedMessageId
+    expect(() =>
+      stageChatOccupancyGenerationMutation('generation-operation-submit:continue', continueIntent, authority),
+    ).toThrow(/scoped/u)
+  })
+
+  it('supersedes delayed occupied-chat dispatch when the exact authority changes', async () => {
+    const handle = stageChatOccupancyGenerationMutation(
+      'generation-operation-submit:11111111-1111-4111-8111-111111111111',
+      occupiedSendIntent(),
+      occupancyAuthority(),
+    )
+    await expect(handle.ready).resolves.toBe('persisted')
+    occupancyEvidence.current = false
+
+    await expect(beginPendingMutationDispatch(handle)).resolves.toBe('superseded')
+  })
+
+  it('keeps only exact Stop settlement available after rollout disables new submits', async () => {
+    const authority = occupancyAuthority()
+    const submit = stageChatOccupancyGenerationMutation(
+      'generation-operation-submit:send',
+      occupiedSendIntent(),
+      authority,
+    )
+    const stop = stageChatOccupancyGenerationMutation(
+      'generation-operation-cancel:11111111-1111-4111-8111-111111111111',
+      occupiedStopIntent(),
+      authority,
+      { requireEnabled: false },
+    )
+    await expect(Promise.all([submit.ready, stop.ready])).resolves.toEqual(['persisted', 'persisted'])
+    occupancyEvidence.enabled = false
+
+    await expect(listChatOccupancyGenerationMutations(authority, { requireEnabled: false })).resolves.toEqual([
+      expect.objectContaining({ intent: expect.objectContaining({ kind: 'generation-operation-cancel' }) }),
+    ])
+    await expect(beginPendingMutationDispatch(stop)).resolves.toBe('persisted')
+    await expect(beginPendingMutationDispatch(submit)).resolves.toBe('superseded')
+  })
+
   it.each(['replaced', 'successor'] as const)(
     'owns one normalized snapshot when a prepared intent is %s',
     async (expectedStatus) => {

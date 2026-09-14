@@ -278,6 +278,9 @@ export function ensureGenerationEffectLedgerInTransaction(
   const keyType: GenerationEffectKeyType = input.operationProtocolVersion >= 1 ? 'operation' : 'generation'
   const keyId = keyType === 'operation' ? input.operationId : input.generationId
   const now = normalizeTimestamp(input.createdAt)
+  const chatOnlyIgpConfigured = generationScopeIsChatOnly(input.generationScope)
+    ? acceptedIgpConfigured(db, input.databaseLineage, input.operationId)
+    : undefined
   const insert = db.prepare(`
     INSERT OR IGNORE INTO generation_effects (
       database_lineage, key_type, key_id, effect_kind, effect_class,
@@ -288,8 +291,11 @@ export function ensureGenerationEffectLedgerInTransaction(
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   for (const kind of GENERATION_EFFECT_KINDS) {
-    const scopeFiltered =
+    const unsupportedChatOnlyScope =
       generationScopeIsChatOnly(input.generationScope) && (kind === 'plugin_output' || kind === 'emotion_image_state')
+    const notConfigured = kind === 'igp' && chatOnlyIgpConfigured === false
+    const skipped = unsupportedChatOnlyScope || notConfigured
+    const reason = unsupportedChatOnlyScope ? 'unsupported_chat_only_scope' : notConfigured ? 'not_configured' : null
     insert.run(
       input.databaseLineage,
       keyType,
@@ -303,12 +309,12 @@ export function ensureGenerationEffectLedgerInTransaction(
       input.chatId,
       input.messageId,
       ...scopeSqlValues(input.generationScope),
-      scopeFiltered ? 'skipped' : 'pending',
-      scopeFiltered ? 'scope-filter' : null,
-      scopeFiltered ? 'server' : null,
-      scopeFiltered ? 'unsupported_chat_only_scope' : null,
-      scopeFiltered ? now : null,
-      scopeFiltered ? now : null,
+      skipped ? 'skipped' : 'pending',
+      skipped ? 'scope-filter' : null,
+      skipped ? 'server' : null,
+      reason,
+      skipped ? now : null,
+      skipped ? now : null,
       now,
       now,
     )
@@ -322,6 +328,32 @@ export function ensureGenerationEffectLedgerInTransaction(
     characterId: input.characterId,
     chatId: input.chatId,
     messageId: input.messageId,
+  }
+}
+
+/**
+ * Return an answer only when the accepted operation retained a readable
+ * immutable configuration. An absent or malformed snapshot must not guess that
+ * IGP was disabled: leaving the effect pending preserves the recovery fence.
+ */
+function acceptedIgpConfigured(db: DatabaseSync, databaseLineage: string, operationId: string): boolean | undefined {
+  const row = db
+    .prepare(
+      `SELECT effective_configuration_json AS effectiveConfigurationJson
+       FROM generation_operations
+       WHERE database_lineage = ? AND operation_id = ?`,
+    )
+    .get(databaseLineage, operationId) as { effectiveConfigurationJson: string | null } | undefined
+  if (!row?.effectiveConfigurationJson) return undefined
+  try {
+    const configuration = JSON.parse(row.effectiveConfigurationJson) as unknown
+    if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) return undefined
+    const database = (configuration as { database?: unknown }).database
+    if (!database || typeof database !== 'object' || Array.isArray(database)) return undefined
+    const prompt = (database as { igpPrompt?: unknown }).igpPrompt
+    return typeof prompt === 'string' && prompt.trim().length > 0
+  } catch {
+    return undefined
   }
 }
 

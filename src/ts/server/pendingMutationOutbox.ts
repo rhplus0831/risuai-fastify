@@ -13,6 +13,7 @@ import {
   assertClientWriteOperation,
   isClientWriteOperationCurrent,
 } from '../clientWriteOperation'
+import { isClientChatOccupancyAuthorityCurrent, type ClientChatOccupancyAuthority } from './chatOccupancy'
 import { gcm } from '@noble/ciphers/aes.js'
 import {
   findProtocolDurableCommandOperation,
@@ -62,6 +63,8 @@ export interface PendingMutationHandle {
   readonly ownerWriterSessionId: string | null
   readonly writerEpoch: number | null
   readonly databaseLineage: string | null
+  /** Present only for the explicitly isolated occupied-chat generation lane. */
+  readonly authorityKind?: 'chat-occupancy'
   readonly ready: Promise<PendingMutationPersistenceStatus>
   phase: PendingMutationPhase
 }
@@ -145,6 +148,8 @@ interface StoredPendingMutation {
   ownerWriterSessionId: string
   writerEpoch: number
   databaseLineage: string
+  /** Missing historical rows and ordinary owner rows both mean general-owner. */
+  authorityKind?: 'chat-occupancy'
   updatedAt: number
   /** Original queue admission time; legacy rows fall back to their last persisted update. */
   queuedAt?: number
@@ -195,6 +200,10 @@ let lastQueueDiagnostic:
   | { scope: PendingMutationScope; generation: number; count: number; oldest: number | null }
   | undefined
 let handleSessionGenerations = new WeakMap<PendingMutationHandle, number>()
+let handleChatOccupancyAuthorities = new WeakMap<
+  PendingMutationHandle,
+  { authority: ClientChatOccupancyAuthority; requireEnabled: boolean }
+>()
 const pendingMutationStageLockTails = new Map<string, Promise<void>>()
 const admittedPendingMutationWrites = new Set<Promise<PendingMutationPersistenceStatus>>()
 const liveProjectionGenerations = new Map<string, LivePendingMutationProjectionGeneration>()
@@ -212,6 +221,33 @@ function stampPendingHandle(handle: PendingMutationHandle, generation: number): 
   return handle
 }
 
+function stampChatOccupancyHandle(
+  handle: PendingMutationHandle,
+  authority: ClientChatOccupancyAuthority,
+  requireEnabled: boolean,
+): PendingMutationHandle {
+  handleChatOccupancyAuthorities.set(handle, { authority, requireEnabled })
+  return handle
+}
+
+function chatOccupancyMutationAccessIsCurrent(
+  authority: ClientChatOccupancyAuthority,
+  requireEnabled: boolean,
+): boolean {
+  return (
+    isClientChatOccupancyAuthorityCurrent(authority, { requireEnabled }) &&
+    (!requireEnabled || authority.claimClass === 'chat_only' || canUseClientWriteAccess())
+  )
+}
+
+function pendingMutationHandleAccessIsCurrent(handle: PendingMutationHandle, generation: number): boolean {
+  const occupancy = handleChatOccupancyAuthorities.get(handle)
+  return occupancy
+    ? occupancy.authority.sessionGeneration === generation &&
+        chatOccupancyMutationAccessIsCurrent(occupancy.authority, occupancy.requireEnabled)
+    : outboxRecoveryIsCurrent(generation) && canRecoverPendingOwner(handle.ownerWriterSessionId, handle.databaseLineage)
+}
+
 function outboxRecoveryIsCurrent(generation: number): boolean {
   return canUseClientRecoveryAccess() && isClientSessionGenerationCurrent(generation)
 }
@@ -226,9 +262,15 @@ function assertOutboxRecovery(generation: number): void {
   if (!isClientSessionGenerationCurrent(generation)) throw new Error('client_recovery_operation_stale')
 }
 
-function watchOutboxTransaction(transaction: IDBTransaction, generation: number, ordinaryWrite = false): () => void {
+function watchOutboxTransaction(
+  transaction: IDBTransaction,
+  generation: number,
+  ordinaryWrite = false,
+  accessOverride?: () => boolean,
+): () => void {
   const current = () =>
-    ordinaryWrite ? isClientWriteOperationCurrent(generation) : outboxRecoveryIsCurrent(generation)
+    accessOverride?.() ??
+    (ordinaryWrite ? isClientWriteOperationCurrent(generation) : outboxRecoveryIsCurrent(generation))
   const abort = () => {
     if (current()) return
     try {
@@ -487,6 +529,7 @@ export async function readSinglePendingMutationOwner(): Promise<PendingMutationO
     if (isClientSessionManaged() || !isClientSessionGenerationCurrent(generation)) return null
     const owners = new Map<string, PendingMutationOwnerCandidate>()
     for (const mutation of mutations) {
+      if (mutation.authorityKind === 'chat-occupancy') continue
       if (
         !SCOPE_VALUE_PATTERN.test(mutation.ownerWriterSessionId) ||
         !Number.isSafeInteger(mutation.writerEpoch) ||
@@ -648,6 +691,128 @@ export function stagePendingMutation(
   return stageNormalizedPendingMutation(semanticKey, normalizedIntent, previous)
 }
 
+const CHAT_GENERATION_TARGET_DEPENDENCY_PREFIX = 'chat-generation-target:'
+
+/**
+ * Persist only one protocol generation intent under an exact occupied-chat
+ * tuple. This does not install a general outbox scope and its rows are excluded
+ * from every owner listing/replay path.
+ */
+export function stageChatOccupancyGenerationMutation(
+  key: string,
+  intent: DurableMutationIntent,
+  authority: ClientChatOccupancyAuthority,
+  options: { requireEnabled?: boolean } = {},
+): PendingMutationHandle {
+  const requireEnabled = options.requireEnabled ?? true
+  if (!chatOccupancyMutationAccessIsCurrent(authority, requireEnabled)) {
+    throw new Error('chat_occupancy_authority_stale')
+  }
+  const semanticKey = normalizeOutboxKey(key)
+  const normalizedIntent = normalizeIntent({
+    ...intent,
+    dependencyKeys: [
+      ...(intent.dependencyKeys ?? []),
+      `${CHAT_GENERATION_TARGET_DEPENDENCY_PREFIX}${encodeURIComponent(authority.chatId)}`,
+    ],
+  })
+  assertChatOccupancyGenerationIntent(normalizedIntent, authority.chatId)
+  const scope = normalizeScope(authority.sessionId, authority.occupancyEpoch, authority.databaseLineage)
+  const generation = authority.sessionGeneration
+  const mutationId = createMutationId()
+  const sequence = nextMutationSequence()
+  const current = () => chatOccupancyMutationAccessIsCurrent(authority, requireEnabled)
+  const ready = persistPendingMutation(
+    semanticKey,
+    mutationId,
+    sequence,
+    scope,
+    normalizedIntent,
+    null,
+    current,
+    'chat-occupancy',
+  )
+  admittedPendingMutationWrites.add(ready)
+  void ready.then(
+    () => admittedPendingMutationWrites.delete(ready),
+    () => admittedPendingMutationWrites.delete(ready),
+  )
+  const handle = stampChatOccupancyHandle(
+    stampPendingHandle(
+      {
+        key: semanticKey,
+        mutationId,
+        sequence,
+        ownerWriterSessionId: scope.writerSessionId,
+        writerEpoch: scope.writerEpoch,
+        databaseLineage: scope.databaseLineage,
+        authorityKind: 'chat-occupancy',
+        phase: 'staged',
+        ready,
+      },
+      generation,
+    ),
+    authority,
+    requireEnabled,
+  )
+  void ready.then((status) => {
+    if (status !== 'persisted') retirePendingMutationProjectionGeneration(handle)
+  })
+  return handle
+}
+
+function chatGenerationTarget(intent: DurableMutationIntent): string | null {
+  const target = intent.dependencyKeys?.find((key) => key.startsWith(CHAT_GENERATION_TARGET_DEPENDENCY_PREFIX))
+  if (!target) return null
+  try {
+    return decodeURIComponent(target.slice(CHAT_GENERATION_TARGET_DEPENDENCY_PREFIX.length))
+  } catch {
+    return null
+  }
+}
+
+function assertChatOccupancyGenerationIntent(intent: DurableMutationIntent, chatId: string): void {
+  if (!intent.kind || intent.requests.length !== 1 || chatGenerationTarget(intent) !== chatId) {
+    throw new TypeError('Occupied-chat outbox accepts only an exact generation target')
+  }
+  const request = intent.requests[0]
+  if (!request) throw new TypeError('Occupied-chat generation intent is missing its request')
+  if (intent.kind === 'generation-operation-submit') {
+    const occupancy = request.body.chatOccupancy
+    const mode = request.body.mode
+    const interaction =
+      occupancy && typeof occupancy === 'object' && !Array.isArray(occupancy)
+        ? (occupancy as Record<string, unknown>).interaction
+        : undefined
+    if (
+      request.method !== 'POST' ||
+      request.path !== '/generation-operations' ||
+      request.body.chatId !== chatId ||
+      !occupancy ||
+      typeof occupancy !== 'object' ||
+      Array.isArray(occupancy) ||
+      (occupancy as Record<string, unknown>).version !== 1 ||
+      (mode === 'send' ? interaction !== 'send' : mode === 'regenerate' ? interaction !== 'reroll' : true)
+    ) {
+      throw new TypeError('Occupied-chat generation submit is not scoped to its authority')
+    }
+    return
+  }
+  if (intent.kind === 'generation-operation-cancel') {
+    if (request.method !== 'PUT' || !/^\/generation-operations\/[^/?#]+\/cancellation$/u.test(request.path)) {
+      throw new TypeError('Occupied-chat Stop intent is invalid')
+    }
+    return
+  }
+  if (
+    intent.kind !== 'generation-operation-retry' ||
+    request.method !== 'POST' ||
+    !/^\/generation-operations\/[^/?#]+\/retries$/u.test(request.path)
+  ) {
+    throw new TypeError('Occupied-chat generation intent is invalid')
+  }
+}
+
 /** Internal continuation of the normalization ownership boundary. Replacement
  * already owns a normalized snapshot and must not recapture its body. */
 function stageNormalizedPendingMutation(
@@ -724,15 +889,10 @@ export async function beginPendingMutationDispatch(
   handle: PendingMutationHandle,
 ): Promise<PendingMutationPersistenceStatus> {
   const generation = getPendingMutationHandleSessionGeneration(handle)
-  if (
-    !outboxRecoveryIsCurrent(generation) ||
-    !canRecoverPendingOwner(handle.ownerWriterSessionId, handle.databaseLineage) ||
-    handle.phase === 'superseded'
-  )
-    return 'superseded'
+  if (!pendingMutationHandleAccessIsCurrent(handle, generation) || handle.phase === 'superseded') return 'superseded'
   handle.phase = 'dispatching'
   const persistence = await handle.ready
-  if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
+  if (!pendingMutationHandleAccessIsCurrent(handle, generation)) return 'superseded'
   if (persistence !== 'persisted') return persistence
   return markPendingMutationDispatchStarted(handle, generation)
 }
@@ -798,17 +958,19 @@ async function markPendingMutationDispatchStarted(
   generation: number,
 ): Promise<PendingMutationPersistenceStatus> {
   const database = await openOutboxDatabase()
-  if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
+  if (!pendingMutationHandleAccessIsCurrent(handle, generation)) return 'superseded'
   if (!database) return 'unavailable'
   let stopWatch: (() => void) | undefined
   try {
     const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readwrite')
     const done = transactionDone(transaction)
     void done.catch(() => undefined)
-    stopWatch = watchOutboxTransaction(transaction, generation)
+    stopWatch = watchOutboxTransaction(transaction, generation, false, () =>
+      pendingMutationHandleAccessIsCurrent(handle, generation),
+    )
     const store = transaction.objectStore(OUTBOX_MUTATION_STORE)
     const current = await requestResult<StoredPendingMutation | undefined>(store.get(handle.mutationId))
-    if (!outboxRecoveryIsCurrent(generation)) {
+    if (!pendingMutationHandleAccessIsCurrent(handle, generation)) {
       transaction.abort()
       return 'superseded'
     }
@@ -817,10 +979,10 @@ async function markPendingMutationDispatchStarted(
       store.put({ ...current, dispatchStarted: true } satisfies StoredPendingMutation)
     }
     await done
-    if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
+    if (!pendingMutationHandleAccessIsCurrent(handle, generation)) return 'superseded'
     return matches ? 'persisted' : 'superseded'
   } catch (error) {
-    if (!outboxRecoveryIsCurrent(generation)) return 'superseded'
+    if (!pendingMutationHandleAccessIsCurrent(handle, generation)) return 'superseded'
     reportPersistenceWarning('Unable to mark a pending server mutation for dispatch', error)
     return 'unavailable'
   } finally {
@@ -919,7 +1081,9 @@ export async function listPendingMutations(): Promise<PendingMutationOutboxEntry
   for (const record of stored
     .filter(
       (candidate) =>
-        candidate.ownerWriterSessionId === scope.writerSessionId && candidate.databaseLineage === scope.databaseLineage,
+        candidate.authorityKind !== 'chat-occupancy' &&
+        candidate.ownerWriterSessionId === scope.writerSessionId &&
+        candidate.databaseLineage === scope.databaseLineage,
     )
     .sort((left, right) => left.order - right.order)) {
     try {
@@ -941,6 +1105,73 @@ export async function listPendingMutations(): Promise<PendingMutationOutboxEntry
     }
   }
   return outboxRecoveryIsCurrent(generation) ? entries : []
+}
+
+/**
+ * Decrypt only generation rows staged by this exact current occupancy tuple.
+ * This is intentionally not called by the general pending-mutation replay.
+ */
+export async function listChatOccupancyGenerationMutations(
+  authority: ClientChatOccupancyAuthority,
+  options: { requireEnabled?: boolean } = {},
+): Promise<PendingMutationOutboxEntry[]> {
+  const requireEnabled = options.requireEnabled ?? true
+  const authorityIsCurrent = () => chatOccupancyMutationAccessIsCurrent(authority, requireEnabled)
+  if (!authorityIsCurrent()) return []
+  const database = await openOutboxDatabase()
+  if (!database) return []
+  let stored: StoredPendingMutation[]
+  try {
+    const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readonly')
+    stored = await requestResult<StoredPendingMutation[]>(transaction.objectStore(OUTBOX_MUTATION_STORE).getAll())
+    await transactionDone(transaction)
+  } catch (error) {
+    reportPersistenceWarning('Unable to read occupied-chat generation mutations', error)
+    return []
+  }
+  if (!authorityIsCurrent()) return []
+  const entries: PendingMutationOutboxEntry[] = []
+  for (const record of stored
+    .filter(
+      (candidate) =>
+        candidate.authorityKind === 'chat-occupancy' &&
+        candidate.ownerWriterSessionId === authority.sessionId &&
+        candidate.writerEpoch === authority.occupancyEpoch &&
+        candidate.databaseLineage === authority.databaseLineage,
+    )
+    .sort((left, right) => left.order - right.order)) {
+    try {
+      const intent = await decryptIntent(record)
+      if (!authorityIsCurrent()) return []
+      assertChatOccupancyGenerationIntent(intent, authority.chatId)
+      const mutationRequiresEnabled = intent.kind !== 'generation-operation-cancel'
+      if (mutationRequiresEnabled && !chatOccupancyMutationAccessIsCurrent(authority, true)) {
+        continue
+      }
+      const handle = stampChatOccupancyHandle(
+        stampPendingHandle(
+          {
+            key: record.semanticKey,
+            mutationId: record.mutationId,
+            sequence: record.sequence,
+            ownerWriterSessionId: record.ownerWriterSessionId,
+            writerEpoch: record.writerEpoch,
+            databaseLineage: record.databaseLineage,
+            authorityKind: 'chat-occupancy',
+            phase: 'staged',
+            ready: Promise.resolve('persisted'),
+          },
+          authority.sessionGeneration,
+        ),
+        authority,
+        mutationRequiresEnabled,
+      )
+      entries.push({ handle, intent })
+    } catch (error) {
+      reportPersistenceWarning(`Unable to decrypt occupied-chat mutation ${record.semanticKey}`, error)
+    }
+  }
+  return authorityIsCurrent() ? entries : []
 }
 
 /**
@@ -967,7 +1198,9 @@ export async function countPendingMutationRecords(): Promise<number | null> {
     if (!outboxRecoveryIsCurrent(generation)) return null
     const current = stored.filter(
       (candidate) =>
-        candidate.ownerWriterSessionId === scope.writerSessionId && candidate.databaseLineage === scope.databaseLineage,
+        candidate.authorityKind !== 'chat-occupancy' &&
+        candidate.ownerWriterSessionId === scope.writerSessionId &&
+        candidate.databaseLineage === scope.databaseLineage,
     )
     recordPendingQueueDiagnostic(current, scope, diagnosticGeneration)
     return current.length
@@ -1045,7 +1278,9 @@ export async function countBlockingPendingMutationRecords(): Promise<number | nu
     let blocking = 0
     for (const record of stored.filter(
       (candidate) =>
-        candidate.ownerWriterSessionId === scope.writerSessionId && candidate.databaseLineage === scope.databaseLineage,
+        candidate.authorityKind !== 'chat-occupancy' &&
+        candidate.ownerWriterSessionId === scope.writerSessionId &&
+        candidate.databaseLineage === scope.databaseLineage,
     )) {
       const intent = await decryptIntent(record)
       if (!outboxRecoveryIsCurrent(generation)) return null
@@ -1096,6 +1331,7 @@ export async function listPendingMutationPredecessors(
   const scopedPredecessors = records
     .filter(
       (record) =>
+        record.authorityKind === current.authorityKind &&
         record.ownerWriterSessionId === current.ownerWriterSessionId &&
         record.databaseLineage === current.databaseLineage &&
         record.order < current.order,
@@ -1231,6 +1467,7 @@ export function resetPendingMutationOutboxForTests(): void {
   pendingMutationScope = null
   lastQueueDiagnostic = undefined
   handleSessionGenerations = new WeakMap()
+  handleChatOccupancyAuthorities = new WeakMap()
   pendingMutationStageLockTails.clear()
   admittedPendingMutationWrites.clear()
   pendingMutationCommitTransactionHookForTests = null
@@ -1263,11 +1500,22 @@ function persistPendingMutation(
   scope: PendingMutationScope,
   intent: DurableMutationIntent,
   replacement: PendingMutationHandle | null,
+  accessIsCurrent: () => boolean = () => mayPersistCapturedPendingMutationScope(scope),
+  authorityKind?: 'chat-occupancy',
 ): Promise<PendingMutationPersistenceStatus> {
   // This call synchronously queues the origin-wide lock request. In
   // particular, do not load IndexedDB or encryption state before requesting it.
   return withPendingMutationStageLock(scope, () =>
-    persistPendingMutationLocked(semanticKey, mutationId, sequence, scope, intent, replacement),
+    persistPendingMutationLocked(
+      semanticKey,
+      mutationId,
+      sequence,
+      scope,
+      intent,
+      replacement,
+      accessIsCurrent,
+      authorityKind,
+    ),
   ).catch((error) => {
     reportPersistenceWarning('Unable to persist a pending server mutation', error)
     return 'unavailable'
@@ -1281,11 +1529,13 @@ async function persistPendingMutationLocked(
   scope: PendingMutationScope,
   intent: DurableMutationIntent,
   replacement: PendingMutationHandle | null,
+  accessIsCurrent: () => boolean,
+  authorityKind?: 'chat-occupancy',
 ): Promise<PendingMutationPersistenceStatus> {
-  if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
+  if (!accessIsCurrent()) return 'superseded'
   const replacementPersistence = replacement ? await replacement.ready : null
   const persistedReplacement = replacementPersistence === 'persisted' ? replacement : null
-  if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
+  if (!accessIsCurrent()) return 'superseded'
 
   try {
     const payload = serializePendingMutationIntent(intent)
@@ -1296,7 +1546,7 @@ async function persistPendingMutationLocked(
     if (!database || !encryptionKey) return 'unavailable'
 
     while (true) {
-      if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
+      if (!accessIsCurrent()) return 'superseded'
       const lastCommittedOrder = await readPendingMutationOrderBase(database, scope)
       const candidateOrder = nextPendingMutationOrder(lastCommittedOrder)
       // Each attempt gets a new nonce. A CAS loss changes the authenticated
@@ -1308,7 +1558,7 @@ async function persistPendingMutationLocked(
         mutationAdditionalData(semanticKey, mutationId, sequence, candidateOrder, scope),
         payload,
       )
-      if (!mayPersistCapturedPendingMutationScope(scope)) return 'superseded'
+      if (!accessIsCurrent()) return 'superseded'
 
       const committed = await commitPendingMutationOrderAndRow({
         database,
@@ -1321,6 +1571,8 @@ async function persistPendingMutationLocked(
         iv,
         ciphertext,
         replacement: persistedReplacement,
+        accessIsCurrent,
+        authorityKind,
       })
       if (committed.status === 'order-raced') continue
       if (committed.status !== 'persisted') return 'superseded'
@@ -1346,6 +1598,8 @@ interface CommitPendingMutationInput {
   iv: Uint8Array<ArrayBuffer>
   ciphertext: ArrayBuffer
   replacement: PendingMutationHandle | null
+  accessIsCurrent: () => boolean
+  authorityKind?: 'chat-occupancy'
 }
 
 type CommitPendingMutationResult =
@@ -1426,7 +1680,7 @@ function commitPendingMutationOrderAndRow(input: CommitPendingMutationInput): Pr
           outcome = { status: 'order-raced' }
           return
         }
-        if (currentRequest.result !== undefined || !mayPersistCapturedPendingMutationScope(input.scope)) {
+        if (currentRequest.result !== undefined || !input.accessIsCurrent()) {
           outcome = { status: 'superseded' }
           return
         }
@@ -1455,6 +1709,7 @@ function commitPendingMutationOrderAndRow(input: CommitPendingMutationInput): Pr
           ownerWriterSessionId: input.scope.writerSessionId,
           writerEpoch: input.scope.writerEpoch,
           databaseLineage: input.scope.databaseLineage,
+          ...(input.authorityKind ? { authorityKind: input.authorityKind } : {}),
           updatedAt: Date.now(),
           queuedAt: replacementDeleted && replaced ? (replaced.queuedAt ?? replaced.updatedAt) : Date.now(),
           keyKind: input.encryptionKey.keyKind,
@@ -2304,7 +2559,8 @@ function storedMutationMatchesHandle(
     current.semanticKey === handle.key &&
     current.ownerWriterSessionId === handle.ownerWriterSessionId &&
     current.writerEpoch === handle.writerEpoch &&
-    current.databaseLineage === handle.databaseLineage
+    current.databaseLineage === handle.databaseLineage &&
+    current.authorityKind === handle.authorityKind
   )
 }
 

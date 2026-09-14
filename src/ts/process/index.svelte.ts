@@ -66,6 +66,11 @@ import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generatio
 import { isChatVisible, markChatUnread } from './chatUnread.svelte'
 import { registerGenerationProcessRuntime } from './generationRuntimeBridge'
 import { hydrateCharacterShell } from '../server/characterShellHydration.svelte'
+import { captureClientChatOccupancyAuthority, isClientChatOccupancyAuthorityCurrent } from '../server/chatOccupancy'
+import {
+  canUseGenerationOperationProtocol,
+  type GenerationOperationChatOccupancy,
+} from '../server/generationOperations'
 
 export interface OpenAIChat {
   role: 'system' | 'user' | 'assistant' | 'function'
@@ -130,6 +135,8 @@ export interface SendChatArgs {
   reattachJobId?: string
   /** Attach the just-accepted protocol-v1 operation without issuing a legacy generation POST. */
   generationOperationStream?: ServerChatOperationStream
+  /** Exact occupied-chat admission captured with `expectedTarget`. */
+  chatOccupancy?: GenerationOperationChatOccupancy
 }
 
 function chatGenerationSettingsSaveError(
@@ -170,8 +177,19 @@ function refreshLegacyGenerationProjection(): void {
 }
 
 export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): Promise<boolean> {
-  const sourceGeneration = captureClientSessionGeneration()
-  const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
+  let chatOccupancy = arg.chatOccupancy
+  let sourceGeneration = chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  let occupancyAdmitted = !!(chatOccupancy && arg.generationOperationStream)
+  const isCurrent = () =>
+    chatOccupancy
+      ? chatOccupancy.authority.sessionGeneration === sourceGeneration &&
+        isClientChatOccupancyAuthorityCurrent(chatOccupancy.authority, {
+          requireEnabled: !occupancyAdmitted,
+        }) &&
+        (occupancyAdmitted ||
+          chatOccupancy.authority.claimClass === 'chat_only' ||
+          isClientWriteOperationCurrent(sourceGeneration))
+      : isClientWriteOperationCurrent(sourceGeneration)
   if (!isCurrent()) return false
   chatProcessStage.set(0)
   const abortSignal = arg.signal ?? new AbortController().signal
@@ -226,11 +244,36 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
 
   const generationTarget = arg.expectedTarget === undefined ? captureActiveChatTarget() : arg.expectedTarget
   if (!generationTarget) return false
+  if (!chatOccupancy && arg.regenerateMessageId && generationTarget.chatId && canUseGenerationOperationProtocol()) {
+    const authority = captureClientChatOccupancyAuthority(generationTarget.chatId)
+    if (authority) {
+      chatOccupancy = { authority, interaction: 'reroll' }
+      sourceGeneration = authority.sessionGeneration
+    }
+  }
+  const chatOnly = chatOccupancy?.authority.claimClass === 'chat_only'
+  const targetIsCurrent = () =>
+    chatOccupancy
+      ? generationTarget.chatId === chatOccupancy.authority.chatId && isCurrent()
+      : isCurrent() && isActiveChatTargetFresh(generationTarget)
+  if (
+    chatOccupancy &&
+    (!arg.expectedTarget ||
+      !generationTarget.chatId ||
+      generationTarget.chatId !== chatOccupancy.authority.chatId ||
+      (chatOccupancy.interaction === 'send' && !!arg.regenerateMessageId) ||
+      (chatOccupancy.interaction === 'reroll' && !arg.regenerateMessageId) ||
+      arg.continue ||
+      arg.preview ||
+      arg.previewPrompt)
+  ) {
+    return false
+  }
   let generationSettingsState = resolveActiveChatGenerationSettings({ target: generationTarget })
   if (generationSettingsState.character && isServerCharacterShell(generationSettingsState.character)) {
     const characterId = generationSettingsState.character.chaId
     if (!characterId || !(await hydrateCharacterShell(characterId))) return false
-    if (!isCurrent() || !isActiveChatTargetFresh(generationTarget)) return false
+    if (!targetIsCurrent()) return false
     generationSettingsState = resolveActiveChatGenerationSettings({ target: generationTarget })
   }
   if (!generationSettingsState.character || !generationSettingsState.chat) return false
@@ -301,7 +344,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
       database: generationSettingsState.db,
       chatProcessIndex,
       chatAdditonalTokens: arg.chatAdditonalTokens,
-      writeMaintenance: !attachesDurableGeneration,
+      maintenanceScope: chatOnly ? 'chat-local' : attachesDurableGeneration ? 'none' : 'owner',
       target: generationTarget,
     })
     selectedChar = ctx.selectedChar
@@ -314,7 +357,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
     currentChar = nowChatroom
     let currentChat = nowChatroom.chats[selectedChat]
 
-    if (!attachesDurableGeneration) {
+    if (!attachesDurableGeneration && !chatOnly) {
       const contextPersistence = await ctx.persistence
       if (!isCurrent()) return false
       if (contextPersistence.status !== 'ok') {
@@ -374,6 +417,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         // correct row; see `serverGenerationTargetMessageId`.
         continue: arg.continue,
         regenerateMessageId: arg.regenerateMessageId,
+        ...(chatOccupancy ? { chatOccupancy } : {}),
       })
       if (!isCurrent()) return false
       if (reattached.status === 'aborted') {
@@ -445,7 +489,9 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         regenerateMessageId: arg.regenerateMessageId,
         syntheticSayNothing: arg.syntheticSayNothing,
         durable: serverDurable,
+        ...(chatOccupancy ? { chatOccupancy } : {}),
       })
+      if (chatOccupancy && serverAssembly.status === 'assembled') occupancyAdmitted = true
       if (!isCurrent()) return false
       if (serverAssembly.status === 'aborted') {
         return false
@@ -463,7 +509,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         return false
       }
       if (serverAssembly.status === 'preview') {
-        if (!isCurrent() || !isActiveChatTargetFresh(generationTarget)) return false
+        if (!targetIsCurrent()) return false
         if (serverAssembly.body !== undefined) previewBody = serverAssembly.body
         if (serverAssembly.formated !== undefined) previewFormated = serverAssembly.formated
         return true
@@ -482,6 +528,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
     // assemblyRoute.type === 'local' falls through to the local assembler below.
 
     if (!assembledByServer) {
+      if (chatOccupancy) return false
       const localAssembly = await assembleLocalSendChatPrompt({
         database: generationSettingsState.db,
         currentChar,
@@ -548,6 +595,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
       // and issues the DELETE on any abort — including mid-assembly — so it is not
       // wired here (a bare disconnect only detaches; an explicit stop cancels).
     } else {
+      if (chatOccupancy) return false
       const dispatch = await dispatchRequest({
         database: generationSettingsState.db,
         formated,
@@ -644,6 +692,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         targetMessageId: serverGenerationTargetMessageId,
         restorationGuard: serverDispatch?.restorationGuard,
         streamProjection: orchestrate.streamProjection,
+        ...(chatOccupancy ? { chatOccupancy } : {}),
       })
       if (!isCurrent()) return false
       currentChat = terminalResult.currentChat
@@ -668,27 +717,30 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
       // text after the terminal frame is reconciled. Append IGP to that exact
       // stable row; if the terminal cannot identify it safely, do not fall back
       // to whichever chat happens to be selected now.
-      await runLedgeredGenerationEffect(effectLedger, 'igp', 'live_terminal', async (effectContext) => {
-        if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
-        const promptTemplate =
-          settingsResourceState.status === 'ready' ? String(settingsResourceState.value.igpPrompt ?? '') : ''
-        if (!terminalResult.igpTarget || !promptTemplate.trim()) {
-          return skippedGenerationEffect('not_configured')
-        }
-        errorTargetMessageId = terminalResult.igpTarget.messageId
-        const updated = await evaluateIgp({
-          promptTemplate,
-          database: generationSettingsState.db,
-          igpEffect: effectContext.igpEffect,
-          isCurrent: effectContext.isCurrent,
-          abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
-          waitForPersistence: !!effectLedger,
-          target: terminalResult.igpTarget,
+      if (!chatOnly) {
+        await runLedgeredGenerationEffect(effectLedger, 'igp', 'live_terminal', async (effectContext) => {
+          if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
+          const promptTemplate =
+            settingsResourceState.status === 'ready' ? String(settingsResourceState.value.igpPrompt ?? '') : ''
+          if (!terminalResult.igpTarget || !promptTemplate.trim()) {
+            return skippedGenerationEffect('not_configured')
+          }
+          errorTargetMessageId = terminalResult.igpTarget.messageId
+          const updated = await evaluateIgp({
+            promptTemplate,
+            database: generationSettingsState.db,
+            igpEffect: effectContext.igpEffect,
+            isCurrent: effectContext.isCurrent,
+            abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
+            waitForPersistence: !!effectLedger,
+            target: terminalResult.igpTarget,
+          })
+          return updated ? completedGenerationEffect(undefined) : skippedGenerationEffect('target_changed')
         })
-        return updated ? completedGenerationEffect(undefined) : skippedGenerationEffect('target_changed')
-      })
+      }
       if (!isCurrent()) return false
       if (terminalResult.resendChat) {
+        if (chatOccupancy) return false
         serverRequestedResend = true
         if ((arg.serverResendDepth ?? 0) >= MAX_SERVER_RESEND_DEPTH) {
           throwError(SERVER_RESEND_CAP_ERROR)
@@ -699,6 +751,11 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
     }
 
     if (!isCurrent()) return false
+    if (chatOnly) {
+      if (attachesDurableGeneration) reattachOutcome = { status: 'completed' }
+      if (generationTarget.chatId && !isChatVisible(generationTarget.chatId)) markChatUnread(generationTarget.chatId)
+      return true
+    }
     const stage4 = await runStage4({
       database: generationSettingsState.db,
       req,

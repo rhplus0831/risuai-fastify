@@ -2,8 +2,10 @@ import {
   canUseClientWriteAccess,
   canUseClientRecoveryAccess,
   captureClientSessionGeneration,
+  getClientSessionSnapshot,
   isClientSessionGenerationCurrent,
 } from '../clientSession'
+import { CHAT_OCCUPANCY_EPOCH_HEADER } from '@risuai/protocol/chat-occupancy'
 import { get, writable } from 'svelte/store'
 import {
   appendOptimisticGenerationOperationUserMessage,
@@ -39,7 +41,12 @@ import {
   type GenerationRecoveryObligationInput,
   type GenerationRecoveryObligationToken,
 } from '../process/generationRecoveryObligations'
-import { activeWriterSessionHeader, handleActiveWriterStaleResponse, isWriterAccessLost } from './activeWriterSession'
+import {
+  ACTIVE_WRITER_SESSION_HEADER,
+  activeWriterSessionHeader,
+  handleActiveWriterStaleResponse,
+  isWriterAccessLost,
+} from './activeWriterSession'
 import {
   getServerCommandBaseRevision,
   peekCachedServerCommandRevision,
@@ -55,7 +62,9 @@ import {
   discardPendingMutation,
   isGenerationOperationPendingIntent,
   listPendingMutations,
+  listChatOccupancyGenerationMutations,
   stagePendingMutation,
+  stageChatOccupancyGenerationMutation,
   type DurableMutationIntent,
   type PendingMutationHandle,
 } from './pendingMutationOutbox'
@@ -69,6 +78,9 @@ import { recordGenerationRecoveryEvent } from './protocolDiagnostics'
 import { registerGenerationOperationsRuntime } from '../process/generationRuntimeBridge'
 import { language } from '../../lang'
 import { canGenerate, getGenerationReadinessDiagnostic } from '../startupReadiness'
+import { isClientChatOccupancyAuthorityCurrent, type ClientChatOccupancyAuthority } from './chatOccupancy'
+import { markChatMessageMutationIntent } from './chatMessageMutationIntent'
+import { getChatTranscriptOwnerState } from './chatTranscriptOwner'
 
 const GENERATION_OPERATIONS_ENDPOINT = '/api/v1/generation-operations'
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
@@ -76,17 +88,53 @@ const MAX_REVISION_RETRIES = 3
 const CANCELLATION_STATUS_TIMEOUT_MS = 10_000
 const CANCELLATION_RECONCILE_DELAYS_MS = [250, 500, 1_000, 2_000, 4_000, 5_000] as const
 
-type GenerationOperationAccess = 'ordinary' | 'pending-replay'
+type GenerationOperationAccess = 'ordinary' | 'pending-replay' | 'chat-occupancy' | 'chat-occupancy-control'
 
-function canUseGenerationOperationAccess(access: GenerationOperationAccess): boolean {
+export interface GenerationOperationChatOccupancy {
+  readonly authority: ClientChatOccupancyAuthority
+  readonly interaction: 'send' | 'reroll'
+}
+
+function canUseGenerationOperationAccess(
+  access: GenerationOperationAccess,
+  occupancyAuthority?: ClientChatOccupancyAuthority,
+): boolean {
+  if (access === 'chat-occupancy' || access === 'chat-occupancy-control') {
+    if (
+      !occupancyAuthority ||
+      !isClientChatOccupancyAuthorityCurrent(occupancyAuthority, {
+        requireEnabled: access === 'chat-occupancy',
+      })
+    ) {
+      return false
+    }
+    return (
+      access === 'chat-occupancy-control' ||
+      occupancyAuthority.claimClass === 'chat_only' ||
+      (!isWriterAccessLost() && canUseClientWriteAccess() && canGenerate())
+    )
+  }
   return (
     !isWriterAccessLost() &&
     (access === 'pending-replay' ? canUseClientRecoveryAccess() : canUseClientWriteAccess() && canGenerate())
   )
 }
 
-function generationAccessIsCurrent(access: GenerationOperationAccess, sourceGeneration: number): boolean {
-  return canUseGenerationOperationAccess(access) && isClientSessionGenerationCurrent(sourceGeneration)
+function generationAccessIsCurrent(
+  access: GenerationOperationAccess,
+  sourceGeneration: number,
+  occupancyAuthority?: ClientChatOccupancyAuthority,
+): boolean {
+  return (
+    canUseGenerationOperationAccess(access, occupancyAuthority) && isClientSessionGenerationCurrent(sourceGeneration)
+  )
+}
+
+function generationSettlementAccess(
+  access: GenerationOperationAccess,
+  occupancyAuthority?: ClientChatOccupancyAuthority,
+): GenerationOperationAccess {
+  return occupancyAuthority && access === 'chat-occupancy' ? 'chat-occupancy-control' : access
 }
 
 const stagedOperationGenerations = new WeakMap<PendingMutationHandle, number>()
@@ -119,6 +167,7 @@ interface GenerationOperationSubmitRequestBase extends Record<string, unknown> {
   chatId: string
   draftGeneration: unknown
   generation: GenerationOperationGenerationIntent
+  chatOccupancy?: { version: 1; interaction: GenerationOperationChatOccupancy['interaction'] }
 }
 
 export type GenerationOperationSubmitRequest = GenerationOperationSubmitRequestBase &
@@ -208,6 +257,7 @@ export interface StagedAcceptedSendOperation {
   optimisticMessage: Message
   optimisticChatBodyProjectionEpoch: number
   rollbackOptimisticAppend: () => void
+  chatOccupancy?: GenerationOperationChatOccupancy
 }
 
 export interface StagedTargetedGenerationOperation {
@@ -215,6 +265,7 @@ export interface StagedTargetedGenerationOperation {
   request: GenerationOperationSubmitRequest & { mode: 'continue' | 'regenerate' }
   intent: DurableMutationIntent & { kind: 'generation-operation-submit' }
   handle: PendingMutationHandle
+  chatOccupancy?: GenerationOperationChatOccupancy
 }
 
 export type GenerationOperationDispatchResult =
@@ -242,6 +293,7 @@ interface GenerationOperationCancellationRuntime {
   viewers: Set<GenerationOperationViewer>
   reconcileAttempt: number
   reconcileTimer?: ReturnType<typeof setTimeout>
+  chatOccupancy?: GenerationOperationChatOccupancy
 }
 
 interface GenerationOperationViewer {
@@ -313,6 +365,93 @@ function targetMatches(left: ActiveChatTarget | undefined, right: ActiveChatTarg
   return left.selectedCharID === right.selectedCharID && left.chatPage === right.chatPage
 }
 
+function chatOccupancyAccessForTarget(
+  target: ActiveChatTarget,
+  chatOccupancy: GenerationOperationChatOccupancy | undefined,
+  expected: readonly string[],
+):
+  | {
+      access: GenerationOperationAccess
+      sourceGeneration: number
+      authority?: ClientChatOccupancyAuthority
+    }
+  | { error: string } {
+  const sourceGeneration = chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  if (!chatOccupancy) return { access: 'ordinary', sourceGeneration }
+  if (
+    !target.chatId ||
+    target.chatId !== chatOccupancy.authority.chatId ||
+    !expected.includes(chatOccupancy.interaction)
+  ) {
+    return { error: 'The chat occupancy authority does not match this generation target.' }
+  }
+  if (
+    chatOccupancy.authority.claimClass === 'chat_only' &&
+    chatOccupancy.interaction !== 'send' &&
+    chatOccupancy.interaction !== 'reroll'
+  ) {
+    return { error: 'This interaction is unavailable in chat-only mode.' }
+  }
+  if (!generationAccessIsCurrent('chat-occupancy', sourceGeneration, chatOccupancy.authority)) {
+    return { error: 'The chat occupancy changed before generation could start.' }
+  }
+  return { access: 'chat-occupancy', sourceGeneration, authority: chatOccupancy.authority }
+}
+
+function stageGenerationOperationIntent(
+  key: string,
+  intent: DurableMutationIntent,
+  chatOccupancy?: GenerationOperationChatOccupancy,
+): PendingMutationHandle {
+  return chatOccupancy
+    ? stageChatOccupancyGenerationMutation(key, intent, chatOccupancy.authority, {
+        requireEnabled: intent.kind !== 'generation-operation-cancel',
+      })
+    : stagePendingMutation(key, intent)
+}
+
+function appendOptimisticChatOccupancyUserMessage(
+  target: ActiveChatTarget,
+  message: Message,
+  authority: ClientChatOccupancyAuthority,
+): { status: 'ok'; rollback: () => void; projectionEpoch: number } | { status: 'error'; error: string } {
+  if (
+    !target.chatId ||
+    target.chatId !== authority.chatId ||
+    !isClientChatOccupancyAuthorityCurrent(authority, { requireEnabled: true })
+  ) {
+    return { status: 'error', error: 'The chat occupancy changed before the message could be staged.' }
+  }
+  const transcript = getChatTranscriptOwnerState(target.chatId)
+  if (!transcript || transcript.characterId !== target.characterId) {
+    return { status: 'error', error: 'The occupied chat transcript is unavailable.' }
+  }
+  const messageId = message.chatId
+  if (!messageId || transcript.messages.some((candidate) => candidate.chatId === messageId)) {
+    return { status: 'error', error: 'The accepted message id is unavailable.' }
+  }
+  transcript.messages.push(message)
+  markChatMessageMutationIntent(target.chatId)
+  let active = true
+  return {
+    status: 'ok',
+    projectionEpoch: transcript.projectionEpoch,
+    rollback: () => {
+      if (!active) return
+      active = false
+      const current = getChatTranscriptOwnerState(target.chatId!)
+      if (
+        !current ||
+        current.characterId !== target.characterId ||
+        current.projectionEpoch !== transcript.projectionEpoch
+      )
+        return
+      const index = current.messages.findIndex((candidate) => candidate === message || candidate.chatId === messageId)
+      if (index >= 0) current.messages.splice(index, 1)
+    },
+  }
+}
+
 function cancellationRuntime(operationId: string): GenerationOperationCancellationRuntime {
   let runtime = cancellationRuntimeByOperationId.get(operationId)
   if (!runtime) {
@@ -357,8 +496,11 @@ function trackLocalGenerationOperation(
   operationId: string,
   target: ActiveChatTarget,
   rollbackOptimisticAppend: () => void,
+  chatOccupancy?: GenerationOperationChatOccupancy,
 ): void {
-  cancellationRuntime(operationId).rollbackOptimisticAppend = rollbackOptimisticAppend
+  const runtime = cancellationRuntime(operationId)
+  runtime.rollbackOptimisticAppend = rollbackOptimisticAppend
+  runtime.chatOccupancy = chatOccupancy
   updateGenerationOperationCancellation(operationId, (previous) => ({
     operationId,
     target: { ...target },
@@ -377,14 +519,20 @@ function trackLocalGenerationOperation(
 
 export function findGenerationOperationIdForTarget(target: ActiveChatTarget | null | undefined): string | undefined {
   if (!target) return undefined
+  const sessionId = getClientSessionSnapshot().sessionId
   const authoritativeJob = authoritativeGenerationJobForChat(target.chatId)
   if (authoritativeJob?.operationId && isProtocolGenerationOperationJob(authoritativeJob)) {
-    return authoritativeJob.operationId
+    const operation = get(generationOperationProjections).find(
+      (candidate) => candidate.operationId === authoritativeJob.operationId,
+    )
+    if (operation?.creatorWriterSessionId === sessionId || canUseClientWriteAccess())
+      return authoritativeJob.operationId
   }
   const authoritativeOperation = get(generationOperationProjections)
     .filter(
       (operation) =>
         operation.protocolVersion === 1 &&
+        (operation.creatorWriterSessionId === sessionId || canUseClientWriteAccess()) &&
         operation.chatId === target.chatId &&
         (operation.state === 'accepted' ||
           operation.state === 'launching' ||
@@ -529,16 +677,23 @@ export async function stageAcceptedSendGenerationOperation(input: {
   message: string | Message
   draftGeneration?: unknown
   generation: GenerationOperationGenerationIntent
+  chatOccupancy?: GenerationOperationChatOccupancy & { readonly interaction: 'send' }
 }): Promise<StagedAcceptedSendOperation | { status: 'error'; error: string }> {
-  const sourceGeneration = captureClientSessionGeneration()
-  if (!canUseGenerationOperationAccess('ordinary')) {
+  if (input.chatOccupancy && !canUseGenerationOperationProtocol()) {
+    return { status: 'error', error: 'This server does not support occupied-chat generation.' }
+  }
+  const admission = chatOccupancyAccessForTarget(input.target, input.chatOccupancy, ['send'])
+  if ('error' in admission) return { status: 'error', error: admission.error }
+  const { access, sourceGeneration } = admission
+  if (!canUseGenerationOperationAccess(access, admission.authority)) {
     return { status: 'error', error: generationNotReadyError() }
   }
   if (!input.target.characterId || !input.target.chatId) {
     return { status: 'error', error: 'The active chat has no durable server identity.' }
   }
-  const baseRevision = peekCachedServerCommandRevision() ?? (await getServerCommandBaseRevision())
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration))
+  const cachedRevision = peekCachedServerCommandRevision()
+  const baseRevision = cachedRevision ?? (input.chatOccupancy ? null : await getServerCommandBaseRevision())
+  if (!generationAccessIsCurrent(access, sourceGeneration, admission.authority))
     return { status: 'error', error: generationNotReadyError() }
   if (baseRevision === null) return { status: 'error', error: 'The server revision is unavailable.' }
 
@@ -559,33 +714,43 @@ export async function stageAcceptedSendGenerationOperation(input: {
     acceptedMessageId,
     message: toMessageSnapshot(optimisticMessage),
     draftGeneration: cloneJson(input.draftGeneration ?? null),
+    ...(input.chatOccupancy
+      ? { chatOccupancy: { version: 1 as const, interaction: input.chatOccupancy.interaction } }
+      : {}),
     generation: cloneJson(input.generation),
   }
   const intent = operationIntentForSubmit(request)
-  const handle = stagePendingMutation(`generation-operation-submit:${operationId}`, intent)
+  const handle = stageGenerationOperationIntent(
+    `generation-operation-submit:${operationId}`,
+    intent,
+    input.chatOccupancy,
+  )
   stagedOperationGenerations.set(handle, sourceGeneration)
   const persistence = await handle.ready
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration))
+  if (!generationAccessIsCurrent(access, sourceGeneration, admission.authority))
     return { status: 'error', error: generationNotReadyError() }
   if (persistence !== 'persisted') {
     return { status: 'error', error: 'The accepted send could not be staged durably.' }
   }
-  const { getChatTranscriptOwnerState } = await import('./chatTranscriptOwner')
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration))
+  if (!generationAccessIsCurrent(access, sourceGeneration, admission.authority))
     return { status: 'error', error: generationNotReadyError() }
-  const optimistic = appendOptimisticGenerationOperationUserMessage(input.target, optimisticMessage)
+  const optimistic =
+    input.chatOccupancy?.authority.claimClass === 'chat_only'
+      ? appendOptimisticChatOccupancyUserMessage(input.target, optimisticMessage, input.chatOccupancy.authority)
+      : appendOptimisticGenerationOperationUserMessage(input.target, optimisticMessage)
   if (optimistic.status === 'error') {
     await discardPendingMutation(handle)
     return optimistic
   }
-  const transcriptOwner = getChatTranscriptOwnerState(input.target.chatId)
-  if (!transcriptOwner) {
+  const transcriptOwner = 'projectionEpoch' in optimistic ? undefined : getChatTranscriptOwnerState(input.target.chatId)
+  if (!('projectionEpoch' in optimistic) && !transcriptOwner) {
     optimistic.rollback()
     await discardPendingMutation(handle)
     return { status: 'error', error: 'The active chat transcript owner is unavailable.' }
   }
-  const optimisticChatBodyProjectionEpoch = transcriptOwner.projectionEpoch
-  trackLocalGenerationOperation(operationId, input.target, optimistic.rollback)
+  const optimisticChatBodyProjectionEpoch =
+    'projectionEpoch' in optimistic ? optimistic.projectionEpoch : transcriptOwner!.projectionEpoch
+  trackLocalGenerationOperation(operationId, input.target, optimistic.rollback, input.chatOccupancy)
   return {
     target: { ...input.target },
     request,
@@ -594,6 +759,7 @@ export async function stageAcceptedSendGenerationOperation(input: {
     optimisticMessage,
     optimisticChatBodyProjectionEpoch,
     rollbackOptimisticAppend: optimistic.rollback,
+    ...(input.chatOccupancy ? { chatOccupancy: input.chatOccupancy } : {}),
   }
 }
 
@@ -603,9 +769,16 @@ export async function stageTargetedGenerationOperation(input: {
   targetMessageId: string
   draftGeneration?: unknown
   generation: GenerationOperationGenerationIntent
+  chatOccupancy?: GenerationOperationChatOccupancy
 }): Promise<StagedTargetedGenerationOperation | { status: 'error'; error: string }> {
-  const sourceGeneration = captureClientSessionGeneration()
-  if (!canUseGenerationOperationAccess('ordinary')) {
+  if (input.chatOccupancy && !canUseGenerationOperationProtocol()) {
+    return { status: 'error', error: 'This server does not support occupied-chat generation.' }
+  }
+  const expectedInteraction = input.mode === 'continue' ? (['continue'] as const) : (['reroll', 'regenerate'] as const)
+  const admission = chatOccupancyAccessForTarget(input.target, input.chatOccupancy, expectedInteraction)
+  if ('error' in admission) return { status: 'error', error: admission.error }
+  const { access, sourceGeneration } = admission
+  if (!canUseGenerationOperationAccess(access, admission.authority)) {
     return { status: 'error', error: generationNotReadyError() }
   }
   if (!input.target.characterId || !input.target.chatId) {
@@ -614,8 +787,9 @@ export async function stageTargetedGenerationOperation(input: {
   if (!input.targetMessageId) {
     return { status: 'error', error: 'The generation target has no durable message identity.' }
   }
-  const baseRevision = peekCachedServerCommandRevision() ?? (await getServerCommandBaseRevision())
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration))
+  const cachedRevision = peekCachedServerCommandRevision()
+  const baseRevision = cachedRevision ?? (input.chatOccupancy ? null : await getServerCommandBaseRevision())
+  if (!generationAccessIsCurrent(access, sourceGeneration, admission.authority))
     return { status: 'error', error: generationNotReadyError() }
   if (baseRevision === null) return { status: 'error', error: 'The server revision is unavailable.' }
 
@@ -629,19 +803,32 @@ export async function stageTargetedGenerationOperation(input: {
     mode: input.mode,
     targetMessageId: input.targetMessageId,
     draftGeneration: cloneJson(input.draftGeneration ?? null),
+    ...(input.chatOccupancy
+      ? { chatOccupancy: { version: 1 as const, interaction: input.chatOccupancy.interaction } }
+      : {}),
     generation: cloneJson(input.generation),
   }
   const intent = operationIntentForSubmit(request)
-  const handle = stagePendingMutation(`generation-operation-submit:${operationId}`, intent)
+  const handle = stageGenerationOperationIntent(
+    `generation-operation-submit:${operationId}`,
+    intent,
+    input.chatOccupancy,
+  )
   stagedOperationGenerations.set(handle, sourceGeneration)
   const persistence = await handle.ready
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration))
+  if (!generationAccessIsCurrent(access, sourceGeneration, admission.authority))
     return { status: 'error', error: generationNotReadyError() }
   if (persistence !== 'persisted') {
     return { status: 'error', error: 'The generation operation could not be staged durably.' }
   }
-  trackLocalGenerationOperation(operationId, input.target, () => undefined)
-  return { target: { ...input.target }, request, intent, handle }
+  trackLocalGenerationOperation(operationId, input.target, () => undefined, input.chatOccupancy)
+  return {
+    target: { ...input.target },
+    request,
+    intent,
+    handle,
+    ...(input.chatOccupancy ? { chatOccupancy: input.chatOccupancy } : {}),
+  }
 }
 
 function errorMessage(body: unknown, response: Response): string {
@@ -1381,8 +1568,12 @@ async function dispatchGenerationOperationCancellation(
   access: GenerationOperationAccess,
   sourceGeneration = captureClientSessionGeneration(),
   recoveryObligationIsCurrent?: () => boolean,
+  occupancyAuthority?: ClientChatOccupancyAuthority,
 ): Promise<GenerationOperationCancellationResult> {
-  if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false)
+  if (
+    !generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority) ||
+    recoveryObligationIsCurrent?.() === false
+  )
     return { status: 'failed', error: generationNotReadyError() }
   if (!handle.databaseLineage) return { status: 'failed', error: 'The Stop intent has no database lineage.' }
   const persistence = await beginPendingMutationDispatch(handle)
@@ -1404,7 +1595,10 @@ async function dispatchGenerationOperationCancellation(
           : `Unable to prepare Stop: ${String(error)}`,
     }
   }
-  if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false)
+  if (
+    !generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority) ||
+    recoveryObligationIsCurrent?.() === false
+  )
     return { status: 'failed', error: generationNotReadyError() }
   const obligation = beginGenerationRecoveryObligation({
     ...recoveryIdentity,
@@ -1424,6 +1618,12 @@ async function dispatchGenerationOperationCancellation(
         'risu-auth': auth,
         [SERVER_DATABASE_LINEAGE_HEADER]: handle.databaseLineage,
         ...activeWriterSessionHeader(),
+        ...(occupancyAuthority
+          ? {
+              [ACTIVE_WRITER_SESSION_HEADER]: occupancyAuthority.sessionId,
+              [CHAT_OCCUPANCY_EPOCH_HEADER]: String(occupancyAuthority.occupancyEpoch),
+            }
+          : {}),
       },
       body: JSON.stringify(request.body),
       signal: controller.signal,
@@ -1449,7 +1649,7 @@ async function dispatchGenerationOperationCancellation(
   }
   if (!response.ok) {
     const operation = operationFromBody(body)
-    const current = generationAccessIsCurrent(access, sourceGeneration)
+    const current = generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority)
     if (current && operation && operationMatchesRecoveryAddress(operation, recoveryIdentity)) {
       applyGenerationOperationProjection(operation)
     }
@@ -1457,7 +1657,9 @@ async function dispatchGenerationOperationCancellation(
       response.status >= 400 && response.status < 500 && response.status !== 408 && response.status !== 429
     if (current && definitiveRejection) settleGenerationRecoveryObligation(obligation)
     else markGenerationRecoveryObligationUncertain(obligation)
-    handleActiveWriterStaleResponse(response, body, sourceGeneration)
+    if (access !== 'chat-occupancy' && access !== 'chat-occupancy-control') {
+      handleActiveWriterStaleResponse(response, body, sourceGeneration)
+    }
     return {
       status: 'failed',
       error: errorMessage(body, response),
@@ -1469,7 +1671,7 @@ async function dispatchGenerationOperationCancellation(
     markGenerationRecoveryObligationUncertain(obligation)
     return { status: 'failed', error: 'Invalid generation cancellation response.' }
   }
-  if (!generationAccessIsCurrent(access, sourceGeneration)) {
+  if (!generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority)) {
     markGenerationRecoveryObligationUncertain(obligation)
     return { status: 'acknowledged', ...parsed }
   }
@@ -1498,10 +1700,15 @@ async function sendGenerationOperationCancellation(
   },
   access: GenerationOperationAccess = 'ordinary',
   recoveryObligationIsCurrent?: () => boolean,
+  occupancy?: GenerationOperationChatOccupancy,
 ): Promise<GenerationOperationCancellationResult> {
-  const sourceGeneration = captureClientSessionGeneration()
-  if (!canUseGenerationOperationAccess(access)) return { status: 'failed', error: generationNotReadyError() }
   const runtime = cancellationRuntime(operationId)
+  const chatOccupancy = occupancy ?? runtime.chatOccupancy
+  const sourceGeneration = chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  const effectiveAccess = chatOccupancy ? 'chat-occupancy-control' : access
+  if (!canUseGenerationOperationAccess(effectiveAccess, chatOccupancy?.authority)) {
+    return { status: 'failed', error: generationNotReadyError() }
+  }
   if (runtime.inFlight) return runtime.inFlight
   const dispatch = (async (): Promise<GenerationOperationCancellationResult> => {
     let handle = existing?.handle ?? runtime.handle
@@ -1520,10 +1727,10 @@ async function sendGenerationOperationCancellation(
       }))
       let staged: Awaited<PendingMutationHandle['ready']>
       try {
-        handle = stagePendingMutation(`generation-operation-cancel:${operationId}`, intent)
+        handle = stageGenerationOperationIntent(`generation-operation-cancel:${operationId}`, intent, chatOccupancy)
         staged = await handle.ready
       } catch (error) {
-        if (!generationAccessIsCurrent(access, sourceGeneration))
+        if (!generationAccessIsCurrent(effectiveAccess, sourceGeneration, chatOccupancy?.authority))
           return { status: 'failed', error: generationNotReadyError() }
         const failed = {
           status: 'failed' as const,
@@ -1541,7 +1748,7 @@ async function sendGenerationOperationCancellation(
         }))
         return failed
       }
-      if (!generationAccessIsCurrent(access, sourceGeneration))
+      if (!generationAccessIsCurrent(effectiveAccess, sourceGeneration, chatOccupancy?.authority))
         return { status: 'failed', error: generationNotReadyError() }
       if (staged !== 'persisted') {
         const failed = { status: 'failed' as const, error: 'The Stop intent could not be staged durably.' }
@@ -1560,7 +1767,7 @@ async function sendGenerationOperationCancellation(
       runtime.handle = handle
       runtime.intent = intent
     }
-    if (!generationAccessIsCurrent(access, sourceGeneration))
+    if (!generationAccessIsCurrent(effectiveAccess, sourceGeneration, chatOccupancy?.authority))
       return { status: 'failed', error: generationNotReadyError() }
     updateGenerationOperationCancellation(operationId, (previous) => ({
       operationId,
@@ -1578,9 +1785,10 @@ async function sendGenerationOperationCancellation(
       result = await dispatchGenerationOperationCancellation(
         handle,
         intent,
-        access,
+        effectiveAccess,
         sourceGeneration,
         recoveryObligationIsCurrent,
+        chatOccupancy?.authority,
       )
     } catch (error) {
       result = {
@@ -1588,7 +1796,7 @@ async function sendGenerationOperationCancellation(
         error: error instanceof Error ? error.message : String(error),
       }
     }
-    if (!generationAccessIsCurrent(access, sourceGeneration)) return result
+    if (!generationAccessIsCurrent(effectiveAccess, sourceGeneration, chatOccupancy?.authority)) return result
     if (result.status === 'failed') {
       updateGenerationOperationCancellation(operationId, (previous) =>
         cancellationAuthorityEstablished(previous)
@@ -1620,16 +1828,51 @@ export function stopGenerationOperation(operationId: string): Promise<Generation
   return sendGenerationOperationCancellation(operationId)
 }
 
+/** Stop only this page's admitted protocol operation for the captured occupied chat. */
+export function stopChatOccupancyGeneration(target: ActiveChatTarget): Promise<GenerationOperationCancellationResult> {
+  const operationId = findGenerationOperationIdForTarget(target)
+  if (!operationId || !target.chatId) {
+    return Promise.resolve({ status: 'failed', error: 'No owned generation is active for this chat.' })
+  }
+  const operation = get(generationOperationProjections).find((candidate) => candidate.operationId === operationId)
+  const session = getClientSessionSnapshot()
+  if (!operation || operation.chatId !== target.chatId || operation.creatorWriterSessionId !== session.sessionId) {
+    return Promise.resolve({ status: 'failed', error: 'No owned generation is active for this chat.' })
+  }
+  const admittedOccupancy = cancellationRuntimeByOperationId.get(operationId)?.chatOccupancy
+  const authority = admittedOccupancy?.authority
+  if (
+    !authority ||
+    authority.chatId !== target.chatId ||
+    authority.sessionId !== operation.creatorWriterSessionId ||
+    !isClientChatOccupancyAuthorityCurrent(authority)
+  ) {
+    return Promise.resolve({ status: 'failed', error: 'The chat occupancy changed before Stop could start.' })
+  }
+  return sendGenerationOperationCancellation(
+    operationId,
+    undefined,
+    'chat-occupancy-control',
+    undefined,
+    admittedOccupancy,
+  )
+}
+
 export async function refreshGenerationOperationCancellation(
   operationId: string,
 ): Promise<GenerationOperationCancellationResult | GenerationOperationDispatchResult> {
-  const sourceGeneration = captureClientSessionGeneration()
+  const chatOccupancy = cancellationRuntimeByOperationId.get(operationId)?.chatOccupancy
+  const sourceGeneration = chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () =>
+    chatOccupancy
+      ? generationAccessIsCurrent('chat-occupancy-control', sourceGeneration, chatOccupancy.authority)
+      : isClientSessionGenerationCurrent(sourceGeneration)
   clearCancellationReconcileTimer(operationId)
   const controller = new AbortController()
   const deadline = setTimeout(() => controller.abort(), CANCELLATION_STATUS_TIMEOUT_MS)
   let status: GenerationOperationDispatchResult
   try {
-    status = await readGenerationOperationStatus(operationId, controller.signal)
+    status = await readGenerationOperationStatus(operationId, controller.signal, chatOccupancy)
   } catch (error) {
     status = {
       status: 'retained',
@@ -1638,7 +1881,7 @@ export async function refreshGenerationOperationCancellation(
   } finally {
     clearTimeout(deadline)
   }
-  if (!isClientSessionGenerationCurrent(sourceGeneration)) return status
+  if (!isCurrent()) return status
   if (status.status !== 'accepted') {
     updateGenerationOperationCancellation(operationId, (previous) => ({
       operationId,
@@ -1844,8 +2087,12 @@ async function dispatchPendingGenerationOperation(
   acceptedSendLocalEffect?: MessageMutationLocalEffect,
   sourceGeneration = captureClientSessionGeneration(),
   recoveryObligationIsCurrent?: () => boolean,
+  occupancyAuthority?: ClientChatOccupancyAuthority,
 ): Promise<GenerationOperationDispatchResult> {
-  if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false) {
+  if (
+    !generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority) ||
+    recoveryObligationIsCurrent?.() === false
+  ) {
     return { status: 'retained', error: generationNotReadyError() }
   }
   if (
@@ -1871,7 +2118,10 @@ async function dispatchPendingGenerationOperation(
   ): Promise<GenerationOperationDispatchResult> => {
     let revisionRetries = 0
     while (true) {
-      if (!generationAccessIsCurrent(access, sourceGeneration) || recoveryObligationIsCurrent?.() === false) {
+      if (
+        !generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority) ||
+        recoveryObligationIsCurrent?.() === false
+      ) {
         return { status: 'retained', error: generationNotReadyError() }
       }
       const obligation = beginGenerationRecoveryObligation({ ...recoveryIdentity, sourceGeneration })
@@ -1884,6 +2134,12 @@ async function dispatchPendingGenerationOperation(
             'risu-auth': auth,
             [SERVER_DATABASE_LINEAGE_HEADER]: handle.databaseLineage,
             ...activeWriterSessionHeader(),
+            ...(occupancyAuthority
+              ? {
+                  [ACTIVE_WRITER_SESSION_HEADER]: occupancyAuthority.sessionId,
+                  [CHAT_OCCUPANCY_EPOCH_HEADER]: String(occupancyAuthority.occupancyEpoch),
+                }
+              : {}),
           },
           body: JSON.stringify(body),
         })
@@ -1917,7 +2173,11 @@ async function dispatchPendingGenerationOperation(
         if (appendReconciliation.status === 'invalid') {
           return retainedAmbiguousGenerationOperation(obligation, 'Invalid accepted-send append response.')
         }
-        const responseIsCurrent = generationAccessIsCurrent(access, sourceGeneration)
+        // The server response is the admission boundary. Once this exact
+        // operation was accepted, finish its local settlement even if the
+        // rollout switch disables new occupied-chat submissions meanwhile.
+        const settlementAccess = generationSettlementAccess(access, occupancyAuthority)
+        const responseIsCurrent = generationAccessIsCurrent(settlementAccess, sourceGeneration, occupancyAuthority)
         if (responseIsCurrent) {
           applyGenerationOperationProjection(parsed.operation)
           if (recoveryIdentity.kind === 'retry' && parsed.acceptedRetryRequestId === recoveryIdentity.retryRequestId) {
@@ -1934,7 +2194,7 @@ async function dispatchPendingGenerationOperation(
           markGenerationRecoveryObligationUncertain(obligation)
         }
         await discardPendingMutation(handle)
-        if (!generationAccessIsCurrent(access, sourceGeneration))
+        if (!generationAccessIsCurrent(settlementAccess, sourceGeneration, occupancyAuthority))
           return { status: 'accepted', response: parsed, stream: generationOperationStreamDescriptor(parsed) }
         if (parsed.append?.revision !== undefined) setCachedServerCommandRevision(parsed.append.revision)
         if (appendReconciliation.event && reconcileResponseEvent) {
@@ -1954,14 +2214,16 @@ async function dispatchPendingGenerationOperation(
         Number.isSafeInteger((responseBody as Record<string, unknown>).currentRevision) &&
         revisionRetries < MAX_REVISION_RETRIES
       const discardsFailure = shouldDiscardOperationFailure(code, response.status)
-      const responseIsCurrent = generationAccessIsCurrent(access, sourceGeneration)
+      const responseIsCurrent = generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority)
       if (responseIsCurrent && (retriesRevisionConflict || discardsFailure)) {
         settleGenerationRecoveryObligation(obligation)
       } else {
         markGenerationRecoveryObligationUncertain(obligation)
       }
-      handleActiveWriterStaleResponse(response, responseBody, sourceGeneration)
-      if (!generationAccessIsCurrent(access, sourceGeneration))
+      if (access !== 'chat-occupancy' && access !== 'chat-occupancy-control') {
+        handleActiveWriterStaleResponse(response, responseBody, sourceGeneration)
+      }
+      if (!generationAccessIsCurrent(access, sourceGeneration, occupancyAuthority))
         return { status: 'retained', error: errorMessage(responseBody, response), ...(code ? { code } : {}) }
       if (retriesRevisionConflict) {
         body.baseRevision = (responseBody as Record<string, unknown>).currentRevision
@@ -1991,10 +2253,11 @@ export async function submitStagedAcceptedSendOperation(
   staged: StagedAcceptedSendOperation,
 ): Promise<GenerationOperationDispatchResult> {
   const sourceGeneration = stagedOperationGenerations.get(staged.handle) ?? captureClientSessionGeneration()
+  const access = staged.chatOccupancy ? 'chat-occupancy' : 'ordinary'
   const result = await dispatchPendingGenerationOperation(
     staged.handle,
     staged.intent,
-    'ordinary',
+    access,
     {
       kind: 'messageMutation',
       operation: 'append',
@@ -2003,8 +2266,12 @@ export async function submitStagedAcceptedSendOperation(
       chatBodyProjectionEpoch: staged.optimisticChatBodyProjectionEpoch,
     },
     sourceGeneration,
+    undefined,
+    staged.chatOccupancy?.authority,
   )
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration)) return result
+  const resultAccess =
+    result.status === 'accepted' ? generationSettlementAccess(access, staged.chatOccupancy?.authority) : access
+  if (!generationAccessIsCurrent(resultAccess, sourceGeneration, staged.chatOccupancy?.authority)) return result
   if (result.status === 'accepted') {
     if (result.response.append?.disposition !== 'accepted') staged.rollbackOptimisticAppend()
   } else if (result.status === 'rejected') {
@@ -2019,14 +2286,19 @@ export async function submitStagedTargetedGenerationOperation(
   staged: StagedTargetedGenerationOperation,
 ): Promise<GenerationOperationDispatchResult> {
   const sourceGeneration = stagedOperationGenerations.get(staged.handle) ?? captureClientSessionGeneration()
+  const access = staged.chatOccupancy ? 'chat-occupancy' : 'ordinary'
   const result = await dispatchPendingGenerationOperation(
     staged.handle,
     staged.intent,
-    'ordinary',
+    access,
     undefined,
     sourceGeneration,
+    undefined,
+    staged.chatOccupancy?.authority,
   )
-  if (!generationAccessIsCurrent('ordinary', sourceGeneration)) return result
+  const resultAccess =
+    result.status === 'accepted' ? generationSettlementAccess(access, staged.chatOccupancy?.authority) : access
+  if (!generationAccessIsCurrent(resultAccess, sourceGeneration, staged.chatOccupancy?.authority)) return result
   if (result.status === 'rejected') {
     updateGenerationOperationCancellation(staged.request.operationId, () => null)
     cancellationRuntimeByOperationId.delete(staged.request.operationId)
@@ -2037,13 +2309,30 @@ export async function submitStagedTargetedGenerationOperation(
 export async function readGenerationOperationStatus(
   operationId: string,
   signal?: AbortSignal,
+  chatOccupancy?: GenerationOperationChatOccupancy,
 ): Promise<GenerationOperationDispatchResult> {
-  const sourceGeneration = captureClientSessionGeneration()
+  const sourceGeneration = chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
+  const isCurrent = () =>
+    chatOccupancy
+      ? generationAccessIsCurrent('chat-occupancy-control', sourceGeneration, chatOccupancy.authority)
+      : isClientSessionGenerationCurrent(sourceGeneration)
+  if (!isCurrent()) return { status: 'retained', error: generationNotReadyError() }
   const auth = await getNodeServerProxyAuth()
+  if (!isCurrent()) return { status: 'retained', error: generationNotReadyError() }
   let response: Response
   try {
     response = await fetch(`${GENERATION_OPERATIONS_ENDPOINT}/${encodeURIComponent(operationId)}`, {
-      headers: { 'risu-auth': auth },
+      headers: {
+        'risu-auth': auth,
+        ...(chatOccupancy
+          ? {
+              ...activeWriterSessionHeader(),
+              [ACTIVE_WRITER_SESSION_HEADER]: chatOccupancy.authority.sessionId,
+              [SERVER_DATABASE_LINEAGE_HEADER]: chatOccupancy.authority.databaseLineage,
+              [CHAT_OCCUPANCY_EPOCH_HEADER]: String(chatOccupancy.authority.occupancyEpoch),
+            }
+          : {}),
+      },
       signal,
     })
   } catch (error) {
@@ -2070,7 +2359,7 @@ export async function readGenerationOperationStatus(
   }
   const parsed = responseFromBody(body)
   if (!parsed) return { status: 'retained', error: 'Invalid generation operation status response.' }
-  if (isClientSessionGenerationCurrent(sourceGeneration)) applyGenerationOperationProjection(parsed.operation)
+  if (isCurrent()) applyGenerationOperationProjection(parsed.operation)
   return { status: 'accepted', response: parsed, stream: generationOperationStreamDescriptor(parsed) }
 }
 
@@ -2254,6 +2543,68 @@ export async function dispatchGenerationOperationPendingReplay(
   if (result.status === 'accepted') return { disposition: 'succeeded', result }
   if (result.status === 'rejected') return { disposition: 'discarded', result }
   return { disposition: 'retained', result }
+}
+
+/**
+ * Explicitly replay only this page's exact occupied-chat generation rows.
+ * General startup replay never calls this function or sees these rows.
+ */
+export async function replayChatOccupancyGenerationMutations(
+  authority: ClientChatOccupancyAuthority,
+): Promise<GenerationOperationPendingReplayOutcome[]> {
+  if (!isClientChatOccupancyAuthorityCurrent(authority)) return []
+  const entries = await listChatOccupancyGenerationMutations(authority, { requireEnabled: false })
+  const outcomes: GenerationOperationPendingReplayOutcome[] = []
+  for (const entry of entries) {
+    if (!isClientChatOccupancyAuthorityCurrent(authority)) break
+    if (entry.intent.kind === 'generation-operation-cancel') {
+      const operationId = operationIdFromPendingPath(entry.intent.requests[0]?.path ?? '', 'cancellation')
+      if (!operationId) {
+        await discardPendingMutation(entry.handle)
+        outcomes.push({ disposition: 'discarded' })
+        continue
+      }
+      const result = await sendGenerationOperationCancellation(
+        operationId,
+        {
+          handle: entry.handle,
+          intent: entry.intent as DurableMutationIntent & { kind: 'generation-operation-cancel' },
+        },
+        'chat-occupancy-control',
+        undefined,
+        { authority, interaction: 'send' },
+      )
+      outcomes.push({
+        disposition:
+          result.status === 'acknowledged' && cancellationDispositionIsTerminal(result.disposition)
+            ? 'succeeded'
+            : 'retained',
+        result,
+      })
+      continue
+    }
+    if (!isClientChatOccupancyAuthorityCurrent(authority, { requireEnabled: true })) {
+      outcomes.push({
+        disposition: 'retained',
+        result: { status: 'retained', error: 'Occupied-chat generation is disabled.' },
+      })
+      continue
+    }
+    const result = await dispatchPendingGenerationOperation(
+      entry.handle,
+      entry.intent,
+      'chat-occupancy',
+      undefined,
+      authority.sessionGeneration,
+      undefined,
+      authority,
+    )
+    outcomes.push({
+      disposition: result.status === 'accepted' ? 'succeeded' : result.status === 'rejected' ? 'discarded' : 'retained',
+      result,
+    })
+  }
+  return outcomes
 }
 
 registerGenerationOperationsRuntime({
