@@ -3,6 +3,12 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { openDatabase } from '../src/db.js'
+import { getDatabaseLineage } from '../src/databaseLineage.js'
+import {
+  createGenerationOperation,
+  generationEffectiveConfigurationFingerprint,
+  reserveGenerationOperationAttempt,
+} from '../src/generationOperations.js'
 import { createEmbedMemoryJobBatchHandler, createEmbedMemoryJobHandler } from '../src/memoryEmbedJobHandler.js'
 import {
   MEMORY_EMBEDDING_APPROX_CHARS_PER_TOKEN,
@@ -130,6 +136,58 @@ function seedChunkAndJob(db: ReturnType<typeof openDatabase>, jobPayload = paylo
   })
 }
 
+function acceptedGenerationProvenance(db: ReturnType<typeof openDatabase>, acceptedDatabase: unknown) {
+  const databaseLineage = getDatabaseLineage(db)
+  const operationId = 'operation-memory-embed'
+  const generationScope = { admissionKind: 'legacy_owner' as const }
+  const effectiveConfiguration = {
+    version: 1,
+    database: acceptedDatabase,
+    promptInfo: {},
+    resolvedMainProfile: {},
+  }
+  const operation = createGenerationOperation(db, {
+    databaseLineage,
+    operationId,
+    protocolVersion: 1,
+    requestOrigin: 'accepted_send',
+    creatorWriterSessionId: 'writer-a',
+    creatorWriterEpoch: 1,
+    generationScope,
+    effectiveConfiguration,
+    effectiveConfigurationFingerprint: generationEffectiveConfigurationFingerprint(effectiveConfiguration),
+    bindingServerInstanceId: 'server-a',
+    characterId: 'character-a',
+    chatId: 'chat-1',
+    mode: 'send',
+    acceptedMessageId: 'message-a',
+    requestFingerprint: 'a'.repeat(64),
+    intent: { mode: 'send' },
+    acceptedRevision: 0,
+    state: 'accepted',
+  })
+  const reservation = reserveGenerationOperationAttempt(db, {
+    databaseLineage,
+    operationId,
+    expectedState: 'accepted',
+    expectedStateVersion: operation.stateVersion,
+    retryRequestId: 'retry-memory-embed',
+    jobId: 'generation-job-memory-embed',
+    serverInstanceId: 'server-a',
+    actorWriterSessionId: 'writer-a',
+    actorWriterEpoch: 1,
+    launchRevision: 0,
+  })
+  if (reservation.status !== 'applied' || !reservation.operation.currentAttempt) {
+    throw new Error('failed to reserve accepted embed generation attempt')
+  }
+  return {
+    operationId,
+    operationAttemptNo: reservation.operation.currentAttempt.attemptNo,
+    generationScope,
+  }
+}
+
 function seedBatchJob(
   db: ReturnType<typeof openDatabase>,
   input: { id: string; chunkId: string; text: string; model?: string },
@@ -171,6 +229,67 @@ async function withProtocolMetrics<T>(run: (metrics: ProtocolMetric[]) => Promis
 }
 
 describe('embed memory job handler', () => {
+  it('uses the accepted generation configuration after live embedding settings change', async () => {
+    const db = openDatabase(makeDataDir())
+    try {
+      const acceptedDatabase = database()
+      acceptedDatabase.hypaCustomSettings.model = 'accepted-embed-model'
+      acceptedDatabase.hypaCustomSettings.url = 'https://accepted.example/v1'
+      const provenance = acceptedGenerationProvenance(db, acceptedDatabase)
+      createMemoryChunk(db, {
+        id: 'chunk-1',
+        chatId: 'chat-1',
+        messageId: 'm1',
+        rangeStartSeq: 0,
+        rangeEndSeq: 1,
+        text: 'accepted chunk',
+      })
+      const job = enqueueMemoryJob(db, {
+        id: 'job-1',
+        chatId: 'chat-1',
+        kind: 'embed',
+        payload: payload(),
+        ...provenance,
+      })
+
+      acceptedDatabase.hypaCustomSettings.model = 'mutated-after-enqueue'
+      const loadDatabase = vi.fn(() => {
+        const live = database()
+        live.hypaCustomSettings.model = 'later-live-model'
+        live.hypaCustomSettings.url = 'https://later.example/v1'
+        return live
+      })
+      const embed = vi.fn(async () => ({
+        model: 'accepted-embed-model',
+        vectors: [new Float32Array([1])],
+        dim: 1,
+      }))
+
+      const worker = new MemoryWorker({
+        db,
+        batchHandlers: {
+          embed: createEmbedMemoryJobBatchHandler({ db, loadDatabase, embed }),
+        },
+      })
+      expect(job.status).toBe('pending')
+      expect(await worker.tick()).toBe(true)
+
+      expect(loadDatabase).not.toHaveBeenCalled()
+      expect(embed).toHaveBeenCalledWith(
+        expect.objectContaining({
+          request: expect.objectContaining({
+            endpoint: 'https://accepted.example/v1/embeddings',
+            wireModel: 'accepted-embed-model',
+          }),
+        }),
+      )
+      expect(listMemoryEmbeddings(db, { chatId: 'chat-1', chunkId: 'chunk-1' })).toHaveLength(1)
+      expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'completed' })
+    } finally {
+      db.close()
+    }
+  })
+
   it('fetches an embedding, writes the vector, and lets the worker complete the job', async () => {
     const db = openDatabase(makeDataDir())
     try {
@@ -427,6 +546,49 @@ describe('embed memory job handler', () => {
       await expect(handler(job)).rejects.toThrow('embedding dimension mismatch: expected 3, got 2')
       expect(listMemoryEmbeddings(db, { chatId: 'chat-1' })).toHaveLength(0)
     } finally {
+      db.close()
+    }
+  })
+
+  it('does not retry or write an embedding when cancellation wins a held provider error', async () => {
+    const db = openDatabase(makeDataDir())
+    let releaseProvider!: () => void
+    let tick: Promise<boolean> | undefined
+    try {
+      seedChunkAndJob(db)
+      const providerGate = new Promise<void>((resolve) => {
+        releaseProvider = resolve
+      })
+      let signalStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        signalStarted = resolve
+      })
+      const worker = new MemoryWorker({
+        db,
+        batchHandlers: {
+          embed: createEmbedMemoryJobBatchHandler({
+            db,
+            loadDatabase: database,
+            embed: async () => {
+              signalStarted()
+              await providerGate
+              return { error: 'late embedding provider error after cancellation' }
+            },
+          }),
+        },
+      })
+
+      tick = worker.tick()
+      await started
+      expect(cancelMemoryJob(db, 'job-1')).toMatchObject({ status: 'cancelled' })
+      releaseProvider()
+      await expect(tick).resolves.toBe(true)
+
+      expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'cancelled', error: null })
+      expect(listMemoryEmbeddings(db, { chatId: 'chat-1', chunkId: 'chunk-1' })).toEqual([])
+    } finally {
+      releaseProvider?.()
+      await tick
       db.close()
     }
   })
@@ -922,6 +1084,100 @@ describe('embed memory job handler', () => {
       expect(Array.from(embeddings[1].vector)).toEqual([3, 4])
       expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'completed' })
       expect(getMemoryJob(db, 'job-2')).toMatchObject({ status: 'completed' })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('excludes a malformed same-attempt contextual sibling before provider dispatch', async () => {
+    const db = openDatabase(makeDataDir())
+    try {
+      const acceptedDatabase = database()
+      const provenance = acceptedGenerationProvenance(db, acceptedDatabase)
+      createMemoryChunk(db, {
+        id: 'chunk-a-valid',
+        chatId: 'chat-1',
+        messageId: 'valid',
+        rangeStartSeq: 0,
+        rangeEndSeq: 0,
+        text: 'authorized contextual text',
+      })
+      createMemoryChunk(db, {
+        id: 'chunk-z-malformed',
+        chatId: 'chat-1',
+        messageId: 'malformed',
+        rangeStartSeq: 1,
+        rangeEndSeq: 1,
+        text: 'malformed contextual text must stay private',
+      })
+      enqueueMemoryJob(db, {
+        id: 'job-1-valid',
+        chatId: 'chat-1',
+        kind: 'embed',
+        payload: payload('chunk-a-valid', 'voyageContext3'),
+        maxAttempts: 1,
+        ...provenance,
+      })
+      enqueueMemoryJob(db, {
+        id: 'job-2-malformed',
+        chatId: 'chat-1',
+        kind: 'embed',
+        payload: payload('chunk-z-malformed', 'voyageContext3'),
+        maxAttempts: 1,
+        operationId: provenance.operationId,
+        operationAttemptNo: provenance.operationAttemptNo,
+      })
+      const loadDatabase = vi.fn(database)
+      const embedGroups = vi.fn(async (opts: { groups: readonly (readonly string[])[] }) => ({
+        model: 'voyage-context-3',
+        groups: [opts.groups[0].map(() => new Float32Array([1]))],
+        dim: 1,
+      }))
+      const worker = new MemoryWorker({
+        db,
+        batchHandlers: {
+          embed: createEmbedMemoryJobBatchHandler({
+            db,
+            loadDatabase,
+            embedGroups: embedGroups as never,
+          }),
+        },
+      })
+
+      expect(await worker.tick()).toBe(true)
+
+      expect(loadDatabase).not.toHaveBeenCalled()
+      expect(embedGroups).toHaveBeenCalledOnce()
+      expect((embedGroups.mock.calls as any[][])[0][0].groups).toEqual([['authorized contextual text']])
+      expect(listMemoryEmbeddings(db, { chatId: 'chat-1', model: 'voyageContext3' })).toEqual([
+        expect.objectContaining({ chunkId: 'chunk-a-valid', groupIndex: 0 }),
+      ])
+      expect(getMemoryJob(db, 'job-1-valid')).toMatchObject({ status: 'completed', error: null })
+      expect(getMemoryJob(db, 'job-2-malformed')).toMatchObject({
+        status: 'failed',
+        error: 'generation_job_lineage_missing',
+      })
+
+      createMemoryChunk(db, {
+        id: 'chunk-direct-malformed',
+        chatId: 'chat-1',
+        messageId: 'direct-malformed',
+        rangeStartSeq: 2,
+        rangeEndSeq: 2,
+        text: 'direct malformed text must stay private',
+      })
+      const directMalformed = enqueueMemoryJob(db, {
+        id: 'job-direct-malformed',
+        chatId: 'chat-1',
+        kind: 'embed',
+        payload: payload('chunk-direct-malformed', 'voyageContext3'),
+        operationId: provenance.operationId,
+        operationAttemptNo: provenance.operationAttemptNo,
+      })
+      await expect(
+        createEmbedMemoryJobHandler({ db, loadDatabase, embedGroups: embedGroups as never })(directMalformed),
+      ).rejects.toThrow('generation_job_lineage_missing')
+      expect(embedGroups).toHaveBeenCalledOnce()
     } finally {
       db.close()
     }

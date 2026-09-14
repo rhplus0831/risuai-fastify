@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { FastifyBaseLogger, FastifyInstance } from 'fastify'
+import type { ChatOccupancyEvent } from '@risuai/protocol/chat-occupancy'
 import type { ActiveWriterState } from '../activeWriter.js'
 import { readActiveWriterSessionId, trackConnectedWriterSession } from '../activeWriter.js'
 import type { AuthState } from '../auth.js'
@@ -23,6 +24,7 @@ import { listBardWikiJobSnapshotSummaries } from '../bardWikiRepository.js'
 import { emitProtocolMetric, protocolDurationMs, protocolMetricsEnabled, protocolNowMs } from '../protocolMetrics.js'
 import { writeBoundedRaw } from '../streamBackpressure.js'
 import type { WriterEvent } from '../writerEvents.js'
+import type { ChatOccupancyEventSource } from '../chatOccupancy.js'
 
 function formatSseComment(comment: string): string {
   return `: ${comment}\n\n`
@@ -44,7 +46,18 @@ function formatWriterEvent(event: { databaseLineage: string; sessionId: string |
   return `event: writer\ndata: ${JSON.stringify(event)}\n\n`
 }
 
-type EventStreamFrameType = 'writer' | 'connected' | 'command' | 'memory_snapshot' | 'memory' | 'heartbeat'
+function formatOccupancyEvent(event: ChatOccupancyEvent): string {
+  return `event: occupancy\ndata: ${JSON.stringify(event)}\n\n`
+}
+
+type EventStreamFrameType =
+  | 'writer'
+  | 'occupancy'
+  | 'connected'
+  | 'command'
+  | 'memory_snapshot'
+  | 'memory'
+  | 'heartbeat'
 type EventStreamCloseReason = 'normal_close' | 'client_abort' | 'slow_consumer_overflow' | 'replay_unavailable'
 
 interface EventStreamMetricTracker {
@@ -57,6 +70,7 @@ export function createEventStreamMetricTracker(logger?: FastifyBaseLogger): Even
   const startedAt = protocolNowMs()
   const frameCounts: Record<EventStreamFrameType, number> = {
     writer: 0,
+    occupancy: 0,
     connected: 0,
     command: 0,
     memory_snapshot: 0,
@@ -65,6 +79,7 @@ export function createEventStreamMetricTracker(logger?: FastifyBaseLogger): Even
   }
   const frameBytes: Record<EventStreamFrameType, number> = {
     writer: 0,
+    occupancy: 0,
     connected: 0,
     command: 0,
     memory_snapshot: 0,
@@ -109,6 +124,7 @@ export function registerEventsRoutes(
   commandEvents: CommandEventSink,
   memoryEvents: MemoryEventBus,
   activeWriterState: ActiveWriterState,
+  chatOccupancy: ChatOccupancyEventSource,
 ): void {
   app.get('/api/v1/events', { exposeHeadRoute: false }, async (req, reply) => {
     if (!(await requireAuth(authState, req, reply))) return
@@ -125,13 +141,16 @@ export function registerEventsRoutes(
     let liveCommandDelivery = false
     let liveMemoryDelivery = false
     let liveWriterDelivery = false
+    let liveOccupancyDelivery = false
     const queuedCommandEvents: CommandEvent[] = []
     const queuedMemoryEvents: MemoryEvent[] = []
     const queuedWriterEvents: WriterEvent[] = []
+    const queuedOccupancyEvents: ChatOccupancyEvent[] = []
     let heartbeat: NodeJS.Timeout | null = null
     let unsubscribeCommand: (() => void) | null = null
     let unsubscribeMemory: (() => void) | null = null
     let unsubscribeWriter: (() => void) | null = null
+    let unsubscribeOccupancy: (() => void) | null = null
     let disconnectWriterSession: (() => void) | null = null
     let cleanedUp = false
     let streamMetrics: EventStreamMetricTracker | null = null
@@ -144,6 +163,7 @@ export function registerEventsRoutes(
       unsubscribeCommand?.()
       unsubscribeMemory?.()
       unsubscribeWriter?.()
+      unsubscribeOccupancy?.()
       disconnectWriterSession?.()
       req.raw.off('aborted', onRequestAborted)
       req.raw.off('close', onRequestClose)
@@ -196,11 +216,24 @@ export function registerEventsRoutes(
       }
       queuedWriterEvents.push(event)
     })
+    // Subscribe before taking the complete snapshot. A transition that commits
+    // during snapshot preparation is queued and delivered after the initial
+    // hint instead of being lost in the setup window.
+    unsubscribeOccupancy = chatOccupancy.subscribe((event) => {
+      if (liveOccupancyDelivery) {
+        if (!reply.raw.writableEnded) {
+          sendFrame('occupancy', formatOccupancyEvent(event))
+        }
+        return
+      }
+      queuedOccupancyEvents.push(event)
+    })
     const initialOwnership = getDatabaseOwnershipSnapshot(db)
     const initialWriterEvent = {
       databaseLineage: initialOwnership.databaseLineage,
       ...initialOwnership.writer,
     }
+    const initialOccupancyEvent = chatOccupancy.eventSnapshot()
     const snapshotVersion = memoryEvents.snapshotVersion()
     const memorySnapshot: MemoryJobSnapshot = {
       type: 'memory.snapshot',
@@ -274,6 +307,7 @@ export function registerEventsRoutes(
       'x-accel-buffering': 'no',
     })
     sendFrame('writer', formatWriterEvent(initialWriterEvent))
+    sendFrame('occupancy', formatOccupancyEvent(initialOccupancyEvent))
     sendFrame('connected', formatSseComment('connected'))
     sendFrame('memory_snapshot', formatMemorySnapshot(memorySnapshot))
     for (const event of queuedWriterEvents) {
@@ -283,6 +317,13 @@ export function registerEventsRoutes(
     }
     queuedWriterEvents.length = 0
     liveWriterDelivery = true
+    for (const event of queuedOccupancyEvents) {
+      if (!reply.raw.writableEnded) {
+        sendFrame('occupancy', formatOccupancyEvent(event))
+      }
+    }
+    queuedOccupancyEvents.length = 0
+    liveOccupancyDelivery = true
     for (const event of replay.events) {
       if (!reply.raw.writableEnded) {
         sendFrame('command', formatCommandEvent(event))

@@ -7,6 +7,7 @@ import {
   MEMORY_JOB_KINDS,
   MEMORY_JOB_STATUSES,
   MEMORY_JOB_TERMINAL_STATUSES,
+  assertMemoryJobGenerationScope,
   cancelMemoryJob,
   enqueueMemoryJob,
   getMemoryJob,
@@ -21,6 +22,12 @@ import {
   type MemoryEventSink,
 } from '../memoryEvents.js'
 import { ValidationError } from '../repository.js'
+import {
+  assertGenerationJobControlInTransaction,
+  assertManualChatMutationAllowedInTransaction,
+  runImmediateChatMutationTransaction,
+  sendChatMutationError,
+} from './chatOccupancyMutation.js'
 
 interface CreateMemoryJobBody {
   chatId?: unknown
@@ -98,11 +105,13 @@ export function registerMemoryJobRoutes(
       reply.code(400)
       return badRequest('body must be an object')
     }
-    if (!isNonEmptyString(body.chatId)) {
+    const chatId = body.chatId
+    if (!isNonEmptyString(chatId)) {
       reply.code(400)
       return badRequest('chatId must be a non-empty string')
     }
-    if (!isMemoryJobKind(body.kind)) {
+    const kind = body.kind
+    if (!isMemoryJobKind(kind)) {
       reply.code(400)
       return badRequest('kind must be one of: chunk, embed, summarize')
     }
@@ -120,15 +129,17 @@ export function registerMemoryJobRoutes(
         return badRequest('nextRunAt must be a valid timestamp when provided')
       }
     }
-
     try {
-      const job = enqueueMemoryJob(db, {
-        id: randomUUID(),
-        chatId: body.chatId,
-        kind: body.kind,
-        payload: body.payload ?? {},
-        maxAttempts: typeof maxAttempts === 'number' ? maxAttempts : undefined,
-        nextRunAt: typeof body.nextRunAt === 'string' ? body.nextRunAt : undefined,
+      const job = runImmediateChatMutationTransaction(db, () => {
+        assertManualChatMutationAllowedInTransaction(db, chatId, req)
+        return enqueueMemoryJob(db, {
+          id: randomUUID(),
+          chatId,
+          kind,
+          payload: body.payload ?? {},
+          maxAttempts: typeof maxAttempts === 'number' ? maxAttempts : undefined,
+          nextRunAt: typeof body.nextRunAt === 'string' ? body.nextRunAt : undefined,
+        })
       })
       emitRouteJobEvent(db, options.onEvent, job.id)
       options.wakeWorker?.()
@@ -139,7 +150,7 @@ export function registerMemoryJobRoutes(
         reply.code(400)
         return badRequest(err.message)
       }
-      throw err
+      return sendChatMutationError(reply, err)
     }
   })
 
@@ -200,7 +211,23 @@ export function registerMemoryJobRoutes(
 
   app.delete<{ Params: { id: string } }>('/api/v1/memory/jobs/:id', async (req, reply) => {
     if (!(await requireAuth(authState, req, reply))) return
-    const job = cancelMemoryJob(db, req.params.id)
+    let job
+    try {
+      job = runImmediateChatMutationTransaction(db, () => {
+        const existing = getMemoryJob(db, req.params.id)
+        if (!existing) return null
+        assertGenerationJobControlInTransaction(db, {
+          chatId: existing.chatId,
+          operationId: existing.operationId,
+          generationScope: existing.generationScope,
+          request: req,
+          assertPersistedScope: () => assertMemoryJobGenerationScope(db, existing),
+        })
+        return cancelMemoryJob(db, existing.id)
+      })
+    } catch (error) {
+      return sendChatMutationError(reply, error)
+    }
     if (!job) {
       reply.code(404)
       return { error: 'memory job not found or not cancellable' }

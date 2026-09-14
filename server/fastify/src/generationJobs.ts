@@ -73,6 +73,18 @@ export class GenerationJobRegistry {
     }
   }
 
+  /** Gracefully finish every attached SSE viewer before HTTP connection drain. */
+  async closeViewers(): Promise<void> {
+    const closed: Promise<void>[] = []
+    for (const job of this.registry.list()) {
+      for (const client of [...job.clients]) {
+        client.close()
+        if (client.closeSettled) closed.push(client.closeSettled)
+      }
+    }
+    await Promise.all(closed)
+  }
+
   /**
    * The currently *running* (not done) job for a chat, if any. A completed,
    * uncollected job does not count — the submission lock releases at completion so the

@@ -16,6 +16,8 @@ import {
 import { reconcileGenerationOperationsAtStartup } from '../generationOperations.js'
 import { MaintenanceBusyError } from '../maintenanceCoordinator.js'
 import { attachMaintenanceAbort } from '../maintenanceRequest.js'
+import { assertDatabaseReplacementAllowedInTransaction, ChatOccupancyError } from '../chatOccupancy.js'
+import { listGenerationOccupancyPins } from '../generationScope.js'
 
 interface CreateBody {
   label?: unknown
@@ -77,6 +79,8 @@ export function registerBackupRoutes(
       const { revision, event, databaseLineage, writerEpoch } = await restoreBackup(db, dataDir, req.params.id, {
         automaticBackupRetention: options.automaticBackupRetention,
         signal: requestAbort.signal,
+        beforeReplace: (innerDb) =>
+          assertDatabaseReplacementAllowedInTransaction(innerDb, { pinQuery: listGenerationOccupancyPins }),
         onCommitted({ event }) {
           if (options.serverInstanceId) {
             reconcileGenerationOperationsAtStartup(db, options.serverInstanceId, req.log)
@@ -86,6 +90,10 @@ export function registerBackupRoutes(
       })
       return { revision, event, databaseLineage, writerEpoch }
     } catch (err) {
+      if (err instanceof ChatOccupancyError) {
+        reply.code(err.statusCode)
+        return { error: err.code, ...err.details }
+      }
       if (err instanceof MaintenanceBusyError) {
         reply.code(503)
         return { error: err.code }

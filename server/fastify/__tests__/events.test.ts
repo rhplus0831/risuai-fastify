@@ -22,6 +22,7 @@ import { ACTIVE_WRITER_SESSION_HEADER, DISCONNECT_EXISTING_WRITER_HEADER } from 
 import { createMemoryEventBus, type MemoryEvent, type MemoryEventSink } from '../src/memoryEvents.js'
 import { createEventStreamMetricTracker } from '../src/routes/events.js'
 import { enqueueBardWikiJob } from '../src/bardWikiJobs.js'
+import type { ChatOccupancyService } from '../src/chatOccupancy.js'
 
 interface CapturedProtocolMetric extends Record<string, unknown> {
   metric: string
@@ -74,14 +75,17 @@ interface Harness {
   app: FastifyInstance
   dataDir: string
   commandEvents: TrackingCommandEventSink
+  chatOccupancy: ChatOccupancyService
   closed: boolean
 }
 
-async function startHarness(opts: { dataDir?: string; memoryEvents?: MemoryEventSink } = {}): Promise<Harness> {
+async function startHarness(
+  opts: { dataDir?: string; memoryEvents?: MemoryEventSink; chatOccupancyEnabled?: boolean } = {},
+): Promise<Harness> {
   process.env.LOG_LEVEL = 'silent'
   const dataDir = opts.dataDir ?? mkdtempSync(path.join(tmpdir(), 'risu-fastify-events-'))
   const commandEvents = new TrackingCommandEventSink()
-  const { app } = await buildApp({
+  const { app, chatOccupancy } = await buildApp({
     config: {
       host: '127.0.0.1',
       port: 0,
@@ -92,11 +96,12 @@ async function startHarness(opts: { dataDir?: string; memoryEvents?: MemoryEvent
       hubUrl: 'https://sv.risuai.xyz',
     },
     commandEvents,
+    chatOccupancy: { enabled: opts.chatOccupancyEnabled === true },
     memoryEvents: opts.memoryEvents,
     memoryWorker: false,
     bardWikiWorker: false,
   })
-  return { app, dataDir, commandEvents, closed: false }
+  return { app, dataDir, commandEvents, chatOccupancy, closed: false }
 }
 
 async function stopHarness(h: Harness, removeDataDir = true): Promise<void> {
@@ -480,11 +485,118 @@ describe('command events stream', () => {
       expect(parseSseJsonEvents(text, 'writer')).toEqual([
         { databaseLineage: expect.any(String), sessionId: null, epoch: 0 },
       ])
+      expect(parseSseJsonEvents(text, 'occupancy')).toEqual([
+        {
+          type: 'occupancy.snapshot',
+          version: 1,
+          databaseLineage: expect.any(String),
+          occupancies: [],
+        },
+      ])
       expect(text).not.toContain('id: ')
       expect(text).toContain(': connected\n\n')
     } finally {
       abort.abort()
       reader?.releaseLock()
+    }
+  })
+
+  it('queues occupancy transitions during initial snapshot setup and streams later mutations without revisions', async () => {
+    await stopHarness(harness)
+    harness = await startHarness({ chatOccupancyEnabled: true })
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await importDatabase(harness.app, assertion, {
+      characters: [
+        {
+          chaId: 'character-occupancy',
+          name: 'Occupancy',
+          chats: [{ id: 'chat-occupancy', message: [] }],
+        },
+      ],
+    })
+    const bootstrap = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/bootstrap',
+      headers: { 'risu-auth': assertion },
+    })
+    const databaseLineage = bootstrap.json().databaseLineage as string
+    const originalEventSnapshot = harness.chatOccupancy.eventSnapshot.bind(harness.chatOccupancy)
+    let queuedSetupStarted = false
+    let queuedClaim: ReturnType<ChatOccupancyService['claim']> | null = null
+    vi.spyOn(harness.chatOccupancy, 'eventSnapshot').mockImplementation(() => {
+      if (queuedSetupStarted) return originalEventSnapshot()
+      const initial = originalEventSnapshot()
+      queuedSetupStarted = true
+      queuedClaim = harness.chatOccupancy.claim({
+        databaseLineage,
+        chatId: 'chat-occupancy',
+        sessionId: 'reader-occupancy',
+        claimClass: 'chat_only',
+        expectedOccupancyEpoch: 0,
+      })
+      return initial
+    })
+
+    const baseUrl = await listen(harness.app)
+    const abort = new AbortController()
+    const response = await fetch(`${baseUrl}/api/v1/events`, {
+      headers: { 'risu-auth': assertion },
+      signal: abort.signal,
+    })
+    const reader = response.body!.getReader()
+    try {
+      const setupText = await readUntil(reader, (chunk) => parseSseJsonEvents(chunk, 'occupancy').length >= 2)
+      const setupEvents = parseSseJsonEvents(setupText, 'occupancy') as Array<Record<string, unknown>>
+      expect(setupEvents).toHaveLength(2)
+      expect(setupEvents[0]).toEqual({
+        type: 'occupancy.snapshot',
+        version: 1,
+        databaseLineage,
+        occupancies: [],
+      })
+      expect(setupEvents[1]).toMatchObject({
+        type: 'occupancy.snapshot',
+        version: 1,
+        databaseLineage,
+        occupancies: [
+          {
+            databaseLineage,
+            chatId: 'chat-occupancy',
+            occupantSessionId: 'reader-occupancy',
+            occupancyEpoch: 1,
+            state: 'occupied',
+          },
+        ],
+      })
+      expect(setupText).not.toContain('id: ')
+      expect(setupEvents.every((event) => !('revision' in event))).toBe(true)
+
+      const claimed = queuedClaim as ReturnType<ChatOccupancyService['claim']> | null
+      if (!claimed) throw new Error('expected the setup claim to run')
+      harness.chatOccupancy.renew({
+        databaseLineage,
+        chatId: 'chat-occupancy',
+        sessionId: 'reader-occupancy',
+        occupancyEpoch: claimed.occupancyEpoch,
+      })
+      const liveText = await readUntil(reader, (chunk) => chunk.includes('event: occupancy\n'))
+      const liveEvents = parseSseJsonEvents(liveText, 'occupancy') as Array<Record<string, unknown>>
+      expect(liveEvents).toHaveLength(1)
+      expect(liveEvents[0]).toMatchObject({
+        databaseLineage,
+        occupancies: [{ chatId: 'chat-occupancy', occupancyEpoch: claimed.occupancyEpoch }],
+      })
+      expect(liveText).not.toContain('id: ')
+
+      const after = await harness.app.inject({
+        method: 'GET',
+        url: '/api/v1/bootstrap',
+        headers: { 'risu-auth': assertion },
+      })
+      expect(after.json().revision).toBe(revision)
+    } finally {
+      abort.abort()
+      reader.releaseLock()
     }
   })
 
@@ -1196,8 +1308,8 @@ describe('command events stream', () => {
     await waitFor(() => harness.commandEvents.activeListeners === 0)
     await waitFor(() => capturedMetrics.some((metric) => metric.metric === 'event_stream_connection'))
     expect(capturedMetrics.find((metric) => metric.metric === 'event_stream_connection')).toMatchObject({
-      frameCount: 3,
-      frameCounts: { writer: 1, connected: 1, memory_snapshot: 1 },
+      frameCount: 4,
+      frameCounts: { writer: 1, occupancy: 1, connected: 1, memory_snapshot: 1 },
       closeReason: 'client_abort',
       writeOverflow: false,
     })

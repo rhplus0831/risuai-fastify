@@ -282,6 +282,38 @@ describe('explicit BardWiki confirmation', () => {
 })
 
 describe('automatic BardWiki confirmation', () => {
+  it('uses accepted settings instead of a later live confirmation policy', () => {
+    appendActiveMessage(2, 'user-b', 'user', 'What happens next?')
+    appendActiveMessage(3, 'assistant-b', 'char', 'The door opens.')
+    const acceptedSettings = {
+      ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      enabledByDefault: true,
+      confirmationPolicy: 'automatic' as const,
+      modelProfileId: 'accepted-profile',
+    }
+    const db = new DatabaseSync(path.join(dataDir, 'risu.db'))
+    try {
+      const result = createOrReuseAutomaticBardWikiConfirmation(db, {
+        chatId: 'chat-a',
+        acceptedUserMessageId: 'user-b',
+        resultAssistantMessageId: 'assistant-b',
+        acceptedSettings,
+      })
+      expect(result).toMatchObject({ created: true, receipt: { confirmationMode: 'automatic' } })
+      const payload = JSON.parse(
+        (
+          db.prepare('SELECT payload_json FROM bardwiki_jobs WHERE id = ?').get(result!.job.id) as {
+            payload_json: string
+          }
+        ).payload_json,
+      ) as Record<string, unknown>
+      expect(payload.acceptedSettings).toEqual(acceptedSettings)
+      expect(payload.modelProfileId).toBe('accepted-profile')
+    } finally {
+      db.close()
+    }
+  })
+
   it('anchors to the accepted send and queues only its exact preceding active turn', async () => {
     appendActiveMessage(2, 'user-b', 'user', 'What happens next?')
     appendActiveMessage(3, 'assistant-b', 'char', 'The door opens.')

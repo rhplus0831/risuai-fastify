@@ -1579,6 +1579,7 @@ export async function runStartTrigger(
           execBudget: ctx.luaExecBudget,
           ...(ctx.requestHistoryDb ? { requestHistoryDb: ctx.requestHistoryDb } : {}),
           ...(ctx.assetDataDir ? { assetDataDir: ctx.assetDataDir } : {}),
+          allowGeneratedAssetWrites: ctx.allowGeneratedAssetWrites,
         },
       )
       throwServerLuaFailure(result, `Lua ${mode} trigger failed`)

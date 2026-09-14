@@ -3,6 +3,12 @@ import { isDeepStrictEqual } from 'node:util'
 import { getChatMessages } from './messageStore.js'
 import type { AssembleMutationPayload } from './prompt/assemble.js'
 import type { GenerationFinalizationTargetSnapshot } from './routes/generationChat.js'
+import {
+  scopeFromColumns,
+  scopeSqlValues,
+  type GenerationScopeColumns,
+  type PersistedGenerationScope,
+} from './generationScope.js'
 
 export type GenerationFinalizationMode = 'send' | 'continue' | 'regenerate'
 
@@ -30,6 +36,11 @@ export interface GenerationFinalizationAttempt {
   acceptedMessageId?: string
   terminalOutcome?: 'completed' | 'cancelled'
   automaticConfirmationEligible?: boolean
+  /** Original non-durable owner authority, rechecked at every publication attempt. */
+  compatibilityAuthority?: { databaseLineage: string; sessionId: string }
+  generationScope?: PersistedGenerationScope
+  /** Set only while finishing an operation marked by the v39-to-v40 migration. */
+  preOccupancyAuthority?: true
   chatId: string
   mode: GenerationFinalizationMode
   targetMessageId?: string
@@ -41,7 +52,7 @@ export interface GenerationFinalizationAttempt {
   targetSnapshot?: GenerationFinalizationTargetSnapshot
 }
 
-interface GenerationFinalizationRetryRow {
+interface GenerationFinalizationRetryRow extends GenerationScopeColumns {
   generation_id: string
   database_lineage: string | null
   operation_id: string | null
@@ -50,6 +61,8 @@ interface GenerationFinalizationRetryRow {
   actor_writer_epoch: number | null
   accepted_message_id: string | null
   terminal_outcome: 'completed' | 'cancelled' | null
+  compatibility_database_lineage: string | null
+  compatibility_session_id: string | null
   chat_id: string
   mode: GenerationFinalizationMode
   target_message_id: string | null
@@ -218,6 +231,15 @@ export function createGenerationFinalizationRetryTable(db: DatabaseSync): void {
       actor_writer_epoch INTEGER CHECK (actor_writer_epoch IS NULL OR actor_writer_epoch >= 0),
       accepted_message_id TEXT,
       terminal_outcome TEXT CHECK (terminal_outcome IS NULL OR terminal_outcome IN ('completed', 'cancelled')),
+      compatibility_database_lineage TEXT,
+      compatibility_session_id TEXT,
+      admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only')),
+      occupancy_database_lineage TEXT,
+      occupancy_session_id TEXT,
+      occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0),
+      occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only')),
+      permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0),
+      permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json)),
       chat_id TEXT NOT NULL,
       mode TEXT NOT NULL CHECK (mode IN ('send', 'continue', 'regenerate')),
       target_message_id TEXT,
@@ -236,6 +258,51 @@ export function createGenerationFinalizationRetryTable(db: DatabaseSync): void {
     CREATE INDEX IF NOT EXISTS idx_generation_finalization_retries_status
       ON generation_finalization_retries (status, updated_at);
   `)
+  ensureGenerationFinalizationScopeColumns(db)
+}
+
+function ensureGenerationFinalizationScopeColumns(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(generation_finalization_retries)').all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  )
+  const columns: ReadonlyArray<readonly [string, string]> = [
+    [
+      'compatibility_database_lineage',
+      'ALTER TABLE generation_finalization_retries ADD COLUMN compatibility_database_lineage TEXT',
+    ],
+    [
+      'compatibility_session_id',
+      'ALTER TABLE generation_finalization_retries ADD COLUMN compatibility_session_id TEXT',
+    ],
+    [
+      'admission_kind',
+      "ALTER TABLE generation_finalization_retries ADD COLUMN admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only'))",
+    ],
+    [
+      'occupancy_database_lineage',
+      'ALTER TABLE generation_finalization_retries ADD COLUMN occupancy_database_lineage TEXT',
+    ],
+    ['occupancy_session_id', 'ALTER TABLE generation_finalization_retries ADD COLUMN occupancy_session_id TEXT'],
+    [
+      'occupancy_epoch',
+      'ALTER TABLE generation_finalization_retries ADD COLUMN occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0)',
+    ],
+    [
+      'occupancy_claim_class',
+      "ALTER TABLE generation_finalization_retries ADD COLUMN occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only'))",
+    ],
+    [
+      'permission_scope_version',
+      'ALTER TABLE generation_finalization_retries ADD COLUMN permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0)',
+    ],
+    [
+      'permission_scope_json',
+      'ALTER TABLE generation_finalization_retries ADD COLUMN permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json))',
+    ],
+  ]
+  for (const [name, sql] of columns) if (!existing.has(name)) db.exec(sql)
 }
 
 export function enqueueGenerationFinalizationRetry(
@@ -251,12 +318,23 @@ export function enqueueGenerationFinalizationRetry(
     attempt.operationAttemptNo,
     attempt.actorWriterSessionId,
     attempt.actorWriterEpoch,
-    attempt.terminalOutcome,
   ]
   const hasOperationLineage =
-    operationLineageValues.some((value) => value !== undefined) || attempt.acceptedMessageId !== undefined
-  if (hasOperationLineage && operationLineageValues.some((value) => value === undefined)) {
+    operationLineageValues.some((value) => value !== undefined) ||
+    attempt.acceptedMessageId !== undefined ||
+    attempt.terminalOutcome !== undefined ||
+    attempt.generationScope !== undefined
+  if (
+    hasOperationLineage &&
+    (operationLineageValues.some((value) => value === undefined) ||
+      (attempt.terminalOutcome === undefined &&
+        attempt.generationScope === undefined &&
+        attempt.preOccupancyAuthority !== true))
+  ) {
     throw new Error('Protocol generation finalization attempts require complete operation lineage')
+  }
+  if (hasOperationLineage && attempt.compatibilityAuthority) {
+    throw new Error('Generation finalization attempts cannot mix operation and compatibility authority')
   }
   const result = db
     .prepare(
@@ -270,6 +348,15 @@ export function enqueueGenerationFinalizationRetry(
         actor_writer_epoch,
         accepted_message_id,
         terminal_outcome,
+        compatibility_database_lineage,
+        compatibility_session_id,
+        admission_kind,
+        occupancy_database_lineage,
+        occupancy_session_id,
+        occupancy_epoch,
+        occupancy_claim_class,
+        permission_scope_version,
+        permission_scope_json,
         chat_id,
         mode,
         target_message_id,
@@ -282,7 +369,7 @@ export function enqueueGenerationFinalizationRetry(
         terminal_error,
         updated_at
       )
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
       ON CONFLICT(generation_id) DO UPDATE SET
         database_lineage = excluded.database_lineage,
         operation_id = excluded.operation_id,
@@ -291,6 +378,15 @@ export function enqueueGenerationFinalizationRetry(
         actor_writer_epoch = excluded.actor_writer_epoch,
         accepted_message_id = excluded.accepted_message_id,
         terminal_outcome = excluded.terminal_outcome,
+        compatibility_database_lineage = excluded.compatibility_database_lineage,
+        compatibility_session_id = excluded.compatibility_session_id,
+        admission_kind = excluded.admission_kind,
+        occupancy_database_lineage = excluded.occupancy_database_lineage,
+        occupancy_session_id = excluded.occupancy_session_id,
+        occupancy_epoch = excluded.occupancy_epoch,
+        occupancy_claim_class = excluded.occupancy_claim_class,
+        permission_scope_version = excluded.permission_scope_version,
+        permission_scope_json = excluded.permission_scope_json,
         chat_id = excluded.chat_id,
         mode = excluded.mode,
         target_message_id = excluded.target_message_id,
@@ -313,6 +409,9 @@ export function enqueueGenerationFinalizationRetry(
       attempt.actorWriterEpoch ?? null,
       attempt.acceptedMessageId ?? null,
       attempt.terminalOutcome ?? null,
+      attempt.compatibilityAuthority?.databaseLineage ?? null,
+      attempt.compatibilityAuthority?.sessionId ?? null,
+      ...scopeSqlValues(attempt.generationScope),
       attempt.chatId,
       attempt.mode,
       attempt.targetMessageId ?? null,
@@ -382,6 +481,15 @@ export function listPendingGenerationFinalizationRetries(
           actor_writer_epoch,
           accepted_message_id,
           terminal_outcome,
+          compatibility_database_lineage,
+          compatibility_session_id,
+          admission_kind,
+          occupancy_database_lineage,
+          occupancy_session_id,
+          occupancy_epoch,
+          occupancy_claim_class,
+          permission_scope_version,
+          permission_scope_json,
           chat_id,
           mode,
           target_message_id,
@@ -406,37 +514,11 @@ export function listPendingGenerationFinalizationRetries(
     .flatMap((row) => {
       const nextAttemptAt = retryNextAttemptAt(row.updated_at, row.failure_count, options)
       if (Date.parse(nextAttemptAt) > nowMs) return []
-      const alternateMessages = JSON.parse(row.alternate_messages_json) as GenerationFinalizationMessage[]
-      const mutations = parseGenerationFinalizationMutations(row.chat_var_mutations_json)
+      const attempt = parseGenerationFinalizationAttempt(row)
       const legacySnapshotMissing =
         (row.mode === 'continue' || row.mode === 'regenerate') && row.target_snapshot_json === null
       return {
-        attempt: {
-          generationId: row.generation_id,
-          ...(row.database_lineage !== null ? { databaseLineage: row.database_lineage } : {}),
-          ...(row.operation_id !== null ? { operationId: row.operation_id } : {}),
-          ...(row.operation_attempt_no !== null ? { operationAttemptNo: row.operation_attempt_no } : {}),
-          ...(row.actor_writer_session_id !== null ? { actorWriterSessionId: row.actor_writer_session_id } : {}),
-          ...(row.actor_writer_epoch !== null ? { actorWriterEpoch: row.actor_writer_epoch } : {}),
-          ...(row.accepted_message_id !== null ? { acceptedMessageId: row.accepted_message_id } : {}),
-          ...(row.terminal_outcome !== null ? { terminalOutcome: row.terminal_outcome } : {}),
-          chatId: row.chat_id,
-          mode: row.mode,
-          ...(row.target_message_id !== null ? { targetMessageId: row.target_message_id } : {}),
-          message: JSON.parse(row.message_json) as GenerationFinalizationMessage,
-          ...(alternateMessages.length > 0 ? { alternateMessages } : {}),
-          chatVarMutations: mutations.chatVarMutations,
-          ...(mutations.characterFieldMutations?.length
-            ? { characterFieldMutations: mutations.characterFieldMutations }
-            : {}),
-          ...(mutations.localLoreMutation ? { localLoreMutation: mutations.localLoreMutation } : {}),
-          ...(mutations.automaticConfirmationEligible !== undefined
-            ? { automaticConfirmationEligible: mutations.automaticConfirmationEligible }
-            : {}),
-          ...(row.target_snapshot_json !== null
-            ? { targetSnapshot: JSON.parse(row.target_snapshot_json) as GenerationFinalizationTargetSnapshot }
-            : {}),
-        },
+        attempt,
         replayability: legacySnapshotMissing ? ('legacy_snapshot_missing' as const) : ('replayable' as const),
         createdAt: row.created_at,
         failureCount: row.failure_count,
@@ -463,6 +545,15 @@ function listGenerationFinalizationRetryRows(
           actor_writer_epoch,
           accepted_message_id,
           terminal_outcome,
+          compatibility_database_lineage,
+          compatibility_session_id,
+          admission_kind,
+          occupancy_database_lineage,
+          occupancy_session_id,
+          occupancy_epoch,
+          occupancy_claim_class,
+          permission_scope_version,
+          permission_scope_json,
           chat_id,
           mode,
           target_message_id,
@@ -486,9 +577,46 @@ function listGenerationFinalizationRetryRows(
     ) as unknown as GenerationFinalizationRetryRow[]
 }
 
+function compatibilityAuthorityFromRow(
+  row: GenerationFinalizationRetryRow,
+): GenerationFinalizationAttempt['compatibilityAuthority'] {
+  const hasDatabaseLineage = row.compatibility_database_lineage !== null
+  const hasSessionId = row.compatibility_session_id !== null
+  if (hasDatabaseLineage !== hasSessionId) {
+    throw new Error(`Generation finalization retry ${row.generation_id} has incomplete compatibility authority`)
+  }
+  if (!hasDatabaseLineage || !hasSessionId) return undefined
+
+  const mixedAuthorityValues = [
+    row.database_lineage,
+    row.operation_id,
+    row.operation_attempt_no,
+    row.actor_writer_session_id,
+    row.actor_writer_epoch,
+    row.accepted_message_id,
+    row.terminal_outcome,
+    row.admission_kind,
+    row.occupancy_database_lineage,
+    row.occupancy_session_id,
+    row.occupancy_epoch,
+    row.occupancy_claim_class,
+    row.permission_scope_version,
+    row.permission_scope_json,
+  ]
+  if (mixedAuthorityValues.some((value) => value !== null)) {
+    throw new Error(`Generation finalization retry ${row.generation_id} mixes compatibility and operation authority`)
+  }
+  return {
+    databaseLineage: row.compatibility_database_lineage!,
+    sessionId: row.compatibility_session_id!,
+  }
+}
+
 function parseGenerationFinalizationAttempt(row: GenerationFinalizationRetryRow): GenerationFinalizationAttempt {
   const alternateMessages = JSON.parse(row.alternate_messages_json) as GenerationFinalizationMessage[]
   const mutations = parseGenerationFinalizationMutations(row.chat_var_mutations_json)
+  const compatibilityAuthority = compatibilityAuthorityFromRow(row)
+  const generationScope = scopeFromColumns(row)
   return {
     generationId: row.generation_id,
     ...(row.database_lineage !== null ? { databaseLineage: row.database_lineage } : {}),
@@ -498,6 +626,8 @@ function parseGenerationFinalizationAttempt(row: GenerationFinalizationRetryRow)
     ...(row.actor_writer_epoch !== null ? { actorWriterEpoch: row.actor_writer_epoch } : {}),
     ...(row.accepted_message_id !== null ? { acceptedMessageId: row.accepted_message_id } : {}),
     ...(row.terminal_outcome !== null ? { terminalOutcome: row.terminal_outcome } : {}),
+    ...(compatibilityAuthority ? { compatibilityAuthority } : {}),
+    ...(generationScope ? { generationScope } : {}),
     chatId: row.chat_id,
     mode: row.mode,
     ...(row.target_message_id !== null ? { targetMessageId: row.target_message_id } : {}),

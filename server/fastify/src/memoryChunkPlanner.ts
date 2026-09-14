@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { HypaV3MemoryPlan, HypaV3PlannedWindow } from './memoryPlanner.js'
 import type { PromptMessage } from './prompt/promptMessage.js'
+import { scopeSqlValues, type PersistedGenerationScope } from './generationScope.js'
 import {
   createMemoryChunk,
   enqueueMemoryJob,
@@ -35,6 +36,9 @@ export interface PlanHypaV3ChunkJobsInput {
   model?: string
   maxAttempts?: number
   nextRunAt?: string
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
   onJobCreated?: (job: MemoryJob) => void
 }
 
@@ -94,6 +98,10 @@ export function planHypaV3ChunkJobs(input: PlanHypaV3ChunkJobsInput): PlanHypaV3
       const payload = buildSummarizeJobPayload({ chunkId, model, window })
       const jobId = buildSummarizeJobId(input.chatId, chunkId, model)
       const existingJob = getMemoryJob(input.db, jobId)
+      const retainedJob =
+        existingJob && chunk.status !== 'summarized'
+          ? retainExistingJobAuthority(input.db, existingJob, input)
+          : existingJob
       const shouldEnqueue = chunk.status !== 'summarized' && existingJob === null
       const job = shouldEnqueue
         ? enqueueMemoryJob(input.db, {
@@ -103,8 +111,11 @@ export function planHypaV3ChunkJobs(input: PlanHypaV3ChunkJobsInput): PlanHypaV3
             payload,
             maxAttempts: input.maxAttempts,
             nextRunAt: input.nextRunAt,
+            operationId: input.operationId,
+            operationAttemptNo: input.operationAttemptNo,
+            generationScope: input.generationScope,
           })
-        : existingJob
+        : retainedJob
       if (shouldEnqueue) jobsCreated += 1
 
       planned.push({
@@ -123,6 +134,51 @@ export function planHypaV3ChunkJobs(input: PlanHypaV3ChunkJobsInput): PlanHypaV3
     if (item.jobCreated && item.job) input.onJobCreated?.(item.job)
   }
   return result
+}
+
+/**
+ * Prompt preview may have planned the same deterministic job immediately before
+ * an accepted operation. While that job is still untouched, bind it to the
+ * accepted attempt instead of silently keeping the old live-configuration
+ * path. Claimed/retried jobs and jobs already owned by another accepted attempt
+ * retain their original immutable authority.
+ */
+function retainExistingJobAuthority(
+  db: DatabaseSync,
+  job: MemoryJob,
+  input: Pick<PlanHypaV3ChunkJobsInput, 'operationId' | 'operationAttemptNo' | 'generationScope'>,
+): MemoryJob {
+  const requestedProvenance =
+    input.operationId !== undefined || input.operationAttemptNo !== undefined || input.generationScope !== undefined
+  const existingProvenance =
+    job.operationId !== undefined || job.operationAttemptNo !== undefined || job.generationScope !== undefined
+  if (!requestedProvenance || existingProvenance || job.status !== 'pending' || job.attemptCount !== 0) return job
+
+  const result = db
+    .prepare(
+      `UPDATE memory_jobs
+       SET operation_id = ?, operation_attempt_no = ?,
+           admission_kind = ?, occupancy_database_lineage = ?, occupancy_session_id = ?,
+           occupancy_epoch = ?, occupancy_claim_class = ?, permission_scope_version = ?,
+           permission_scope_json = ?
+       WHERE id = ? AND instance_id = ? AND status = 'pending' AND attempt_count = 0
+         AND operation_id IS NULL AND operation_attempt_no IS NULL
+         AND admission_kind IS NULL AND occupancy_database_lineage IS NULL
+         AND occupancy_session_id IS NULL AND occupancy_epoch IS NULL
+         AND occupancy_claim_class IS NULL AND permission_scope_version IS NULL
+         AND permission_scope_json IS NULL`,
+    )
+    .run(
+      input.operationId ?? null,
+      input.operationAttemptNo ?? null,
+      ...scopeSqlValues(input.generationScope),
+      job.id,
+      job.instanceId,
+    )
+  if (result.changes !== 1) {
+    throw new ValidationError(`memory job ${job.id} changed while binding accepted generation authority`)
+  }
+  return getMemoryJob(db, job.id) as MemoryJob
 }
 
 export function buildSummarizeJobPayload(input: {
@@ -185,6 +241,18 @@ function shortHash(value: string): string {
 }
 
 function withTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  if (db.isTransaction) {
+    db.exec('SAVEPOINT hypa_chunk_planning')
+    try {
+      const result = fn()
+      db.exec('RELEASE SAVEPOINT hypa_chunk_planning')
+      return result
+    } catch (error) {
+      db.exec('ROLLBACK TO SAVEPOINT hypa_chunk_planning')
+      db.exec('RELEASE SAVEPOINT hypa_chunk_planning')
+      throw error
+    }
+  }
   db.exec('BEGIN IMMEDIATE')
   try {
     const result = fn()

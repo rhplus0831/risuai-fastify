@@ -42,6 +42,15 @@ import {
   persistCommandMutationReceipt,
   type CommandMutationReceiptKey,
 } from '../commandMutationReceipts.js'
+import {
+  assertChatMutationAllowedInTransaction,
+  assertChatsAvailableForMutationInTransaction,
+  assertChatsUnoccupiedInTransaction,
+  assertForeignOccupiedChatStatePreservedInTransaction,
+  captureForeignOccupiedChatStateInTransaction,
+  resolveMessageChatIdsInTransaction,
+} from '../chatOccupancy.js'
+import { listGenerationOccupancyPins } from '../generationScope.js'
 
 export type { CommandMutationReceiptKey } from '../commandMutationReceipts.js'
 
@@ -134,6 +143,17 @@ export interface TargetedCommandMutationArgs<TExtra extends Record<string, unkno
    */
   chatGenerationSettingsScopedRead?: ChatGenerationSettingsMutationTarget
   characterScopedRead?: CharacterMutationTarget
+  /** Authenticated page session for foreign-occupancy checks. */
+  /** `null` denotes a compatibility owner request without a session header. */
+  occupancyActorSessionId?: string | null
+  /** Normal chat-local targets: the actor's own occupancy remains writable. */
+  occupancyDirectChatIds?: readonly string[]
+  /**
+   * Additional destructive/indirect targets resolved while the command's
+   * `BEGIN IMMEDIATE` transaction is held. These reject even the actor's own
+   * occupancy and are re-evaluated at publication time.
+   */
+  occupancyAffectedChatIds?: (db: DatabaseSync) => readonly string[]
   mutate: (
     database: unknown,
     db: DatabaseSync,
@@ -249,6 +269,14 @@ export function applyTargetedCommandMutation<TExtra extends Record<string, unkno
       throw new RevisionMismatchError(currentRevision)
     }
 
+    const occupancyEnforced = args.occupancyActorSessionId !== undefined || args.eventOrigin !== undefined
+    const actorSessionId = args.occupancyActorSessionId ?? args.eventOrigin?.writerSessionId ?? null
+    const occupiedChatSnapshot = occupancyEnforced
+      ? captureForeignOccupiedChatStateInTransaction(args.db, actorSessionId, {
+          pinQuery: listGenerationOccupancyPins,
+        })
+      : undefined
+
     const loadStartedAt = protocolNowMs()
     const persisted = args.skipDatabaseLoad
       ? undefined
@@ -269,6 +297,8 @@ export function applyTargetedCommandMutation<TExtra extends Record<string, unkno
                 : loadPersisted(args.db, args.dataDir)
     loadMs = protocolDurationMs(loadStartedAt)
 
+    assertTargetedMutationOccupancy(args)
+
     // The callback owns its targeted SQLite writes (kit writers); capture which
     // physical tables it — and any broad fallback — actually touched.
     beginTableWriteCapture()
@@ -285,6 +315,11 @@ export function applyTargetedCommandMutation<TExtra extends Record<string, unkno
       replaceAllCharactersInTable(args.db, persisted.database)
       replaceAllCollectionsInTable(args.db, persisted.database)
       replaceAllSettingsInTable(args.db, persisted.database)
+    }
+    if (occupiedChatSnapshot) {
+      assertForeignOccupiedChatStatePreservedInTransaction(args.db, occupiedChatSnapshot, {
+        pinQuery: listGenerationOccupancyPins,
+      })
     }
     const revision = bumpRevision(args.db)
     const event: CommandEvent = { ...mutation.event, revision }
@@ -338,6 +373,35 @@ export function applyTargetedCommandMutation<TExtra extends Record<string, unkno
       mutationPath: args.mutationPath,
     })
     throw err
+  }
+}
+
+function assertTargetedMutationOccupancy<TExtra extends Record<string, unknown>>(
+  args: TargetedCommandMutationArgs<TExtra>,
+): void {
+  if (args.occupancyAffectedChatIds) {
+    assertChatsUnoccupiedInTransaction(args.db, args.occupancyAffectedChatIds(args.db), {
+      pinQuery: listGenerationOccupancyPins,
+    })
+  }
+  const occupancyEnforced = args.occupancyActorSessionId !== undefined || args.eventOrigin !== undefined
+  if (!occupancyEnforced) return
+  const actorSessionId = args.occupancyActorSessionId ?? args.eventOrigin?.writerSessionId ?? null
+
+  const scopedChatIds = args.chatScopedRead?.messageId
+    ? resolveMessageChatIdsInTransaction(args.db, args.chatScopedRead.messageId)
+    : args.chatScopedRead?.chatId
+      ? [args.chatScopedRead.chatId]
+      : args.chatGenerationSettingsScopedRead
+        ? [args.chatGenerationSettingsScopedRead.chatId]
+        : []
+  const directChatIds = new Set([...(args.occupancyDirectChatIds ?? []), ...scopedChatIds])
+  for (const chatId of directChatIds) {
+    if (actorSessionId === null) {
+      assertChatsAvailableForMutationInTransaction(args.db, { chatIds: [chatId], includePins: false })
+    } else {
+      assertChatMutationAllowedInTransaction(args.db, chatId, actorSessionId)
+    }
   }
 }
 

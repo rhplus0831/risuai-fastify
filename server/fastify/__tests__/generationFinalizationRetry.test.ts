@@ -70,6 +70,47 @@ describe('generation finalization retry scheduling', () => {
     ])
   })
 
+  it('round-trips legacy compatibility authority for queued publication recovery', () => {
+    enqueueGenerationFinalizationRetry(db, {
+      generationId: 'generation-compatibility',
+      compatibilityAuthority: { databaseLineage: 'lineage-a', sessionId: 'owner-a' },
+      chatId: 'chat-a',
+      mode: 'send',
+      message: { role: 'char', data: 'compatibility partial', chatId: 'generation-compatibility' },
+      chatVarMutations: [],
+      targetSnapshot: { mode: 'send', kind: 'tail', transcriptLength: 0 },
+    })
+
+    expect(listPendingGenerationFinalizationRetries(db)[0]?.attempt.compatibilityAuthority).toEqual({
+      databaseLineage: 'lineage-a',
+      sessionId: 'owner-a',
+    })
+  })
+
+  it('fails closed when a retained compatibility authority pair is incomplete or mixed', () => {
+    enqueueSend('generation-incomplete-compatibility')
+    db.prepare(
+      `UPDATE generation_finalization_retries
+       SET compatibility_database_lineage = 'lineage-a'
+       WHERE generation_id = 'generation-incomplete-compatibility'`,
+    ).run()
+    expect(() => listPendingGenerationFinalizationRetries(db)).toThrow('incomplete compatibility authority')
+
+    db.prepare(
+      `UPDATE generation_finalization_retries
+       SET compatibility_session_id = 'owner-a', database_lineage = 'operation-lineage'
+       WHERE generation_id = 'generation-incomplete-compatibility'`,
+    ).run()
+    expect(() => listPendingGenerationFinalizationRetries(db)).toThrow('mixes compatibility and operation authority')
+
+    db.prepare(
+      `UPDATE generation_finalization_retries
+       SET database_lineage = NULL, admission_kind = 'legacy_owner'
+       WHERE generation_id = 'generation-incomplete-compatibility'`,
+    ).run()
+    expect(() => listPendingGenerationFinalizationRetries(db)).toThrow('mixes compatibility and operation authority')
+  })
+
   it('keeps a failed row out of replay selection until its calculated due time', () => {
     enqueueSend('generation-a')
     markGenerationFinalizationRetryFailure(db, 'generation-a', 'temporary failure', false)

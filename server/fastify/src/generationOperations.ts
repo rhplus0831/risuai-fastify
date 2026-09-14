@@ -2,10 +2,17 @@ import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import type { FastifyBaseLogger } from 'fastify'
 import { getDatabaseLineage } from './databaseLineage.js'
+import {
+  scopeFromColumns,
+  scopeSqlValues,
+  type GenerationScopeColumns,
+  type PersistedGenerationScope,
+} from './generationScope.js'
 import { emitProtocolMetric, protocolDurationMs, protocolNowMs } from './protocolMetrics.js'
 
 export const GENERATION_OPERATION_PROTOCOL_VERSION = 1
 export const GENERATION_OPERATION_RECENT_TERMINAL_LIMIT = 100
+export const GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES = 8 * 1024 * 1024
 
 export const GENERATION_OPERATION_STATES = [
   'cancel_requested',
@@ -56,8 +63,8 @@ const ALLOWED_TRANSITIONS: Readonly<Record<GenerationOperationState, ReadonlySet
   owned_by_job: new Set(['stopping', 'finalizing', 'retryable', 'terminal_failed', 'abandoned', 'invalidated']),
   stopping: new Set(['finalizing', 'cancelled', 'abandoned', 'invalidated']),
   finalizing: new Set(['completed', 'cancelled', 'terminal_failed', 'abandoned', 'invalidated']),
-  retryable: new Set(['launching', 'cancelled', 'invalidated']),
-  abandoned: new Set(['launching', 'cancelled', 'invalidated']),
+  retryable: new Set(['launching', 'terminal_failed', 'cancelled', 'invalidated']),
+  abandoned: new Set(['launching', 'terminal_failed', 'cancelled', 'invalidated']),
   completed: new Set(),
   cancelled: new Set(),
   terminal_failed: new Set(),
@@ -98,13 +105,15 @@ const ATTEMPT_STATUS_BY_TRANSITION: Readonly<
   },
 }
 
-interface GenerationOperationRow {
+interface GenerationOperationRow extends GenerationScopeColumns {
   database_lineage: string
   operation_id: string
   protocol_version: number
   request_origin: GenerationOperationRequestOrigin
   creator_writer_session_id: string
   creator_writer_epoch: number
+  effective_configuration_json: string | null
+  effective_configuration_fingerprint: string | null
   binding_server_instance_id: string | null
   character_id: string | null
   chat_id: string | null
@@ -135,6 +144,7 @@ interface GenerationOperationRow {
   server_instance_id: string | null
   actor_writer_session_id: string | null
   actor_writer_epoch: number | null
+  accepted_effective_configuration_fingerprint: string | null
   launch_revision: number | null
   provider_dispatch_started_at: string | null
   provider_dispatch_finished_at: string | null
@@ -177,7 +187,7 @@ interface StartupJournalRow {
   actor_writer_session_id: string
   actor_writer_epoch: number
   accepted_message_id: string | null
-  terminal_outcome: GenerationOperationTerminalOutcome
+  terminal_outcome: GenerationOperationTerminalOutcome | null
   generation_id: string
 }
 
@@ -189,6 +199,7 @@ export interface GenerationOperationAttemptProjection {
   serverInstanceId: string
   actorWriterSessionId: string
   actorWriterEpoch: number
+  acceptedEffectiveConfigurationFingerprint?: string
   launchRevision: number
   providerDispatchStartedAt?: string
   providerDispatchFinishedAt?: string
@@ -209,6 +220,8 @@ export interface GenerationOperationProjection {
   projectionEpoch: number
   creatorWriterSessionId: string
   creatorWriterEpoch: number
+  generationScope?: PersistedGenerationScope
+  effectiveConfigurationFingerprint?: string
   bindingServerInstanceId?: string
   characterId?: string
   chatId?: string
@@ -239,6 +252,9 @@ export interface CreateGenerationOperationInput {
   requestOrigin: GenerationOperationRequestOrigin
   creatorWriterSessionId: string
   creatorWriterEpoch: number
+  generationScope?: PersistedGenerationScope
+  effectiveConfiguration?: unknown
+  effectiveConfigurationFingerprint?: string | null
   bindingServerInstanceId?: string | null
   characterId?: string | null
   chatId?: string | null
@@ -276,6 +292,13 @@ export interface GenerationOperationTransitionInput {
 export interface GenerationOperationStoredRequest {
   requestFingerprint?: string
   intent?: unknown
+  effectiveConfiguration?: unknown
+  effectiveConfigurationFingerprint?: string
+}
+
+export interface GenerationOperationAttemptAcceptedConfiguration {
+  effectiveConfiguration: unknown
+  effectiveConfigurationFingerprint: string
 }
 
 export interface GenerationOperationLineage {
@@ -311,6 +334,9 @@ export interface BindCancelledGenerationOperationInput {
   acceptedMessageId?: string | null
   targetMessageId?: string | null
   clientDraftGeneration?: unknown
+  generationScope?: PersistedGenerationScope
+  effectiveConfiguration?: unknown
+  effectiveConfigurationFingerprint?: string | null
   requestFingerprint: string
   intent: unknown
   updatedAt?: string
@@ -336,6 +362,21 @@ export interface GenerationOperationStartupSweepResult {
   changedOperationCount: number
 }
 
+export interface ExpiredGenerationOccupancyRecoveryInput {
+  databaseLineage: string
+  chatId: string
+  occupantSessionId: string
+  occupancyEpoch: number
+  nowMs: number
+}
+
+export interface ExpiredGenerationOccupancyRecoveryResult {
+  examinedOperationCount: number
+  completedFromResultCount: number
+  terminalFailedCount: number
+  skippedEffectCount: number
+}
+
 export class InvalidGenerationOperationTransitionError extends Error {
   constructor(
     readonly from: GenerationOperationState,
@@ -353,6 +394,19 @@ export class GenerationOperationAttemptConflictError extends Error {
   }
 }
 
+export class GenerationEffectiveConfigurationTooLargeError extends Error {
+  readonly statusCode = 413
+  readonly code = 'generation_effective_configuration_too_large'
+
+  constructor(
+    readonly actualBytes: number,
+    readonly maxBytes = GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES,
+  ) {
+    super(`Effective generation configuration exceeds ${maxBytes} bytes`)
+    this.name = 'GenerationEffectiveConfigurationTooLargeError'
+  }
+}
+
 export function createGenerationOperationTables(db: DatabaseSync): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS generation_operations (
@@ -363,6 +417,17 @@ export function createGenerationOperationTables(db: DatabaseSync): void {
         CHECK (request_origin IN ('unbound', 'accepted_send', 'continue', 'regenerate', 'legacy')),
       creator_writer_session_id TEXT NOT NULL,
       creator_writer_epoch INTEGER NOT NULL CHECK (creator_writer_epoch >= 0),
+      pre_occupancy_authority INTEGER NOT NULL DEFAULT 0 CHECK (pre_occupancy_authority IN (0, 1)),
+      admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only')),
+      occupancy_database_lineage TEXT,
+      occupancy_session_id TEXT,
+      occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0),
+      occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only')),
+      permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0),
+      permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json)),
+      effective_configuration_json TEXT
+        CHECK (effective_configuration_json IS NULL OR json_valid(effective_configuration_json)),
+      effective_configuration_fingerprint TEXT,
       binding_server_instance_id TEXT,
 
       character_id TEXT,
@@ -429,6 +494,15 @@ export function createGenerationOperationTables(db: DatabaseSync): void {
         )
       ),
       CHECK (
+        admission_kind IS NULL
+        OR admission_kind = 'legacy_owner'
+        OR (
+          occupancy_database_lineage IS NOT NULL AND occupancy_session_id IS NOT NULL
+          AND occupancy_epoch IS NOT NULL AND occupancy_claim_class IS NOT NULL
+          AND permission_scope_version IS NOT NULL AND permission_scope_json IS NOT NULL
+        )
+      ),
+      CHECK (
         request_origin IN ('unbound', 'legacy')
         OR mode IS NULL OR mode <> 'send'
         OR accepted_message_id IS NOT NULL
@@ -453,6 +527,14 @@ export function createGenerationOperationTables(db: DatabaseSync): void {
       server_instance_id TEXT NOT NULL,
       actor_writer_session_id TEXT NOT NULL,
       actor_writer_epoch INTEGER NOT NULL CHECK (actor_writer_epoch >= 0),
+      accepted_admission_kind TEXT CHECK (accepted_admission_kind IS NULL OR accepted_admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only')),
+      accepted_occupancy_database_lineage TEXT,
+      accepted_occupancy_session_id TEXT,
+      accepted_occupancy_epoch INTEGER CHECK (accepted_occupancy_epoch IS NULL OR accepted_occupancy_epoch >= 0),
+      accepted_occupancy_claim_class TEXT CHECK (accepted_occupancy_claim_class IS NULL OR accepted_occupancy_claim_class IN ('owner', 'chat_only')),
+      accepted_permission_scope_version INTEGER CHECK (accepted_permission_scope_version IS NULL OR accepted_permission_scope_version > 0),
+      accepted_permission_scope_json TEXT CHECK (accepted_permission_scope_json IS NULL OR json_valid(accepted_permission_scope_json)),
+      accepted_effective_configuration_fingerprint TEXT,
       status TEXT NOT NULL CHECK (status IN (
         'reserved', 'running', 'stopping', 'finalizing',
         'completed', 'cancelled', 'retryable_failed',
@@ -479,7 +561,102 @@ export function createGenerationOperationTables(db: DatabaseSync): void {
       epoch INTEGER NOT NULL CHECK (epoch >= 0)
     );
   `)
+  ensureGenerationOperationScopeColumns(db)
+  ensureGenerationOperationConfigurationColumns(db)
+  ensureGenerationAttemptScopeColumns(db)
   db.prepare('INSERT OR IGNORE INTO generation_operation_projection_state (id, epoch) VALUES (1, 0)').run()
+}
+
+function ensureGenerationOperationConfigurationColumns(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(generation_operations)').all() as Array<{ name: string }>).map((row) => row.name),
+  )
+  if (!existing.has('effective_configuration_json')) {
+    db.exec(
+      'ALTER TABLE generation_operations ADD COLUMN effective_configuration_json TEXT CHECK (effective_configuration_json IS NULL OR json_valid(effective_configuration_json))',
+    )
+  }
+  if (!existing.has('effective_configuration_fingerprint')) {
+    db.exec('ALTER TABLE generation_operations ADD COLUMN effective_configuration_fingerprint TEXT')
+  }
+}
+
+function ensureGenerationOperationScopeColumns(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(generation_operations)').all() as Array<{ name: string }>).map((row) => row.name),
+  )
+  const columns: ReadonlyArray<readonly [string, string]> = [
+    [
+      'pre_occupancy_authority',
+      'ALTER TABLE generation_operations ADD COLUMN pre_occupancy_authority INTEGER NOT NULL DEFAULT 0 CHECK (pre_occupancy_authority IN (0, 1))',
+    ],
+    [
+      'admission_kind',
+      "ALTER TABLE generation_operations ADD COLUMN admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only'))",
+    ],
+    ['occupancy_database_lineage', 'ALTER TABLE generation_operations ADD COLUMN occupancy_database_lineage TEXT'],
+    ['occupancy_session_id', 'ALTER TABLE generation_operations ADD COLUMN occupancy_session_id TEXT'],
+    [
+      'occupancy_epoch',
+      'ALTER TABLE generation_operations ADD COLUMN occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0)',
+    ],
+    [
+      'occupancy_claim_class',
+      "ALTER TABLE generation_operations ADD COLUMN occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only'))",
+    ],
+    [
+      'permission_scope_version',
+      'ALTER TABLE generation_operations ADD COLUMN permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0)',
+    ],
+    [
+      'permission_scope_json',
+      'ALTER TABLE generation_operations ADD COLUMN permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json))',
+    ],
+  ]
+  for (const [name, sql] of columns) if (!existing.has(name)) db.exec(sql)
+}
+
+function ensureGenerationAttemptScopeColumns(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(generation_operation_attempts)').all() as Array<{ name: string }>).map(
+      (row) => row.name,
+    ),
+  )
+  const columns: ReadonlyArray<readonly [string, string]> = [
+    [
+      'accepted_admission_kind',
+      "ALTER TABLE generation_operation_attempts ADD COLUMN accepted_admission_kind TEXT CHECK (accepted_admission_kind IS NULL OR accepted_admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only'))",
+    ],
+    [
+      'accepted_occupancy_database_lineage',
+      'ALTER TABLE generation_operation_attempts ADD COLUMN accepted_occupancy_database_lineage TEXT',
+    ],
+    [
+      'accepted_occupancy_session_id',
+      'ALTER TABLE generation_operation_attempts ADD COLUMN accepted_occupancy_session_id TEXT',
+    ],
+    [
+      'accepted_occupancy_epoch',
+      'ALTER TABLE generation_operation_attempts ADD COLUMN accepted_occupancy_epoch INTEGER CHECK (accepted_occupancy_epoch IS NULL OR accepted_occupancy_epoch >= 0)',
+    ],
+    [
+      'accepted_occupancy_claim_class',
+      "ALTER TABLE generation_operation_attempts ADD COLUMN accepted_occupancy_claim_class TEXT CHECK (accepted_occupancy_claim_class IS NULL OR accepted_occupancy_claim_class IN ('owner', 'chat_only'))",
+    ],
+    [
+      'accepted_permission_scope_version',
+      'ALTER TABLE generation_operation_attempts ADD COLUMN accepted_permission_scope_version INTEGER CHECK (accepted_permission_scope_version IS NULL OR accepted_permission_scope_version > 0)',
+    ],
+    [
+      'accepted_permission_scope_json',
+      'ALTER TABLE generation_operation_attempts ADD COLUMN accepted_permission_scope_json TEXT CHECK (accepted_permission_scope_json IS NULL OR json_valid(accepted_permission_scope_json))',
+    ],
+    [
+      'accepted_effective_configuration_fingerprint',
+      'ALTER TABLE generation_operation_attempts ADD COLUMN accepted_effective_configuration_fingerprint TEXT',
+    ],
+  ]
+  for (const [name, sql] of columns) if (!existing.has(name)) db.exec(sql)
 }
 
 export function getGenerationOperationProjectionEpoch(db: DatabaseSync): number {
@@ -546,6 +723,24 @@ export function generationOperationRequestFingerprint(request: unknown): string 
   return createHash('sha256').update(canonicalizeGenerationOperationSemantics(semantics), 'utf8').digest('hex')
 }
 
+export function generationEffectiveConfigurationFingerprint(configuration: unknown): string {
+  const canonical = canonicalizeGenerationOperationSemantics(configuration)
+  const bytes = Buffer.byteLength(canonical, 'utf8')
+  if (bytes > GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES) {
+    throw new GenerationEffectiveConfigurationTooLargeError(bytes)
+  }
+  return createHash('sha256').update(canonical, 'utf8').digest('hex')
+}
+
+export function assertGenerationEffectiveConfigurationFingerprint(
+  configuration: unknown,
+  fingerprint: string | undefined,
+): void {
+  if (!fingerprint || generationEffectiveConfigurationFingerprint(configuration) !== fingerprint) {
+    throw new Error('Accepted effective generation configuration fingerprint mismatch')
+  }
+}
+
 export function createGenerationOperation(
   db: DatabaseSync,
   input: CreateGenerationOperationInput,
@@ -577,14 +772,18 @@ export function insertGenerationOperationInTransaction(
     `
         INSERT INTO generation_operations (
           database_lineage, operation_id, protocol_version, request_origin,
-          creator_writer_session_id, creator_writer_epoch, binding_server_instance_id,
+          creator_writer_session_id, creator_writer_epoch,
+          admission_kind, occupancy_database_lineage, occupancy_session_id, occupancy_epoch,
+          occupancy_claim_class, permission_scope_version, permission_scope_json,
+          effective_configuration_json, effective_configuration_fingerprint,
+          binding_server_instance_id,
           character_id, chat_id, mode, accepted_message_id, target_message_id,
           client_draft_generation_json, request_fingerprint, intent_json, accepted_revision,
           state, state_version, projection_epoch, current_attempt_no,
           desired_terminal_outcome, result_message_id, failure_code, failure_phase, last_error,
           provider_may_have_run, cancel_requested_at, runner_settled_at, terminal_at,
           created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL, NULL, NULL, 0, ?, NULL, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, NULL, NULL, NULL, NULL, NULL, NULL, 0, ?, NULL, NULL, ?, ?)
       `,
   ).run(
     input.databaseLineage,
@@ -593,6 +792,9 @@ export function insertGenerationOperationInTransaction(
     input.requestOrigin,
     input.creatorWriterSessionId,
     input.creatorWriterEpoch,
+    ...scopeSqlValues(input.generationScope),
+    input.effectiveConfiguration === undefined ? null : JSON.stringify(input.effectiveConfiguration),
+    input.effectiveConfigurationFingerprint ?? null,
     input.bindingServerInstanceId ?? null,
     input.characterId ?? null,
     input.chatId ?? null,
@@ -755,6 +957,9 @@ export function bindCancelledGenerationOperationInTransaction(
       `
           UPDATE generation_operations
           SET request_origin = ?, binding_server_instance_id = ?, character_id = ?, chat_id = ?, mode = ?,
+              admission_kind = ?, occupancy_database_lineage = ?, occupancy_session_id = ?, occupancy_epoch = ?,
+              occupancy_claim_class = ?, permission_scope_version = ?, permission_scope_json = ?,
+              effective_configuration_json = ?, effective_configuration_fingerprint = ?,
               accepted_message_id = ?, target_message_id = ?, client_draft_generation_json = ?,
               request_fingerprint = ?, intent_json = ?, accepted_revision = NULL,
               state = 'cancelled', state_version = state_version + 1, projection_epoch = ?,
@@ -770,6 +975,9 @@ export function bindCancelledGenerationOperationInTransaction(
       input.characterId,
       input.chatId,
       input.mode,
+      ...scopeSqlValues(input.generationScope),
+      input.effectiveConfiguration === undefined ? null : JSON.stringify(input.effectiveConfiguration),
+      input.effectiveConfigurationFingerprint ?? null,
       input.acceptedMessageId ?? null,
       input.targetMessageId ?? null,
       input.clientDraftGeneration === undefined ? null : JSON.stringify(input.clientDraftGeneration),
@@ -873,10 +1081,15 @@ export function reserveGenerationOperationAttemptInTransaction(
     `
         INSERT INTO generation_operation_attempts (
           database_lineage, operation_id, attempt_no, retry_request_id, job_id, server_instance_id,
-          actor_writer_session_id, actor_writer_epoch, status, launch_revision,
+          actor_writer_session_id, actor_writer_epoch,
+          accepted_admission_kind, accepted_occupancy_database_lineage, accepted_occupancy_session_id,
+          accepted_occupancy_epoch, accepted_occupancy_claim_class,
+          accepted_permission_scope_version, accepted_permission_scope_json,
+          accepted_effective_configuration_fingerprint,
+          status, launch_revision,
           provider_dispatch_started_at, provider_dispatch_finished_at, runner_settled_at,
           finalization_generation_id, failure_code, last_error, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'reserved', ?, NULL, NULL, NULL, NULL, NULL, NULL, ?, ?)
       `,
   ).run(
     input.databaseLineage,
@@ -887,6 +1100,14 @@ export function reserveGenerationOperationAttemptInTransaction(
     input.serverInstanceId,
     input.actorWriterSessionId,
     input.actorWriterEpoch,
+    current.admission_kind ?? null,
+    current.occupancy_database_lineage ?? null,
+    current.occupancy_session_id ?? null,
+    current.occupancy_epoch ?? null,
+    current.occupancy_claim_class ?? null,
+    current.permission_scope_version ?? null,
+    current.permission_scope_json ?? null,
+    current.effective_configuration_fingerprint ?? null,
     input.launchRevision,
     normalizedCreatedAt,
     normalizedCreatedAt,
@@ -917,17 +1138,181 @@ export function getGenerationOperationStoredRequest(
   const row = db
     .prepare(
       `
-        SELECT request_fingerprint, intent_json
+        SELECT request_fingerprint, intent_json,
+               effective_configuration_json, effective_configuration_fingerprint
         FROM generation_operations
         WHERE database_lineage = ? AND operation_id = ?
       `,
     )
-    .get(databaseLineage, operationId) as { request_fingerprint: string | null; intent_json: string | null } | undefined
+    .get(databaseLineage, operationId) as
+    | {
+        request_fingerprint: string | null
+        intent_json: string | null
+        effective_configuration_json: string | null
+        effective_configuration_fingerprint: string | null
+      }
+    | undefined
   if (!row) return undefined
   return {
     ...(row.request_fingerprint !== null ? { requestFingerprint: row.request_fingerprint } : {}),
     ...(row.intent_json !== null ? { intent: JSON.parse(row.intent_json) as unknown } : {}),
+    ...(row.effective_configuration_json !== null
+      ? { effectiveConfiguration: JSON.parse(row.effective_configuration_json) as unknown }
+      : {}),
+    ...(row.effective_configuration_fingerprint !== null
+      ? { effectiveConfigurationFingerprint: row.effective_configuration_fingerprint }
+      : {}),
   }
+}
+
+/** Resolve configuration only when the exact historical attempt retained the
+ * same immutable fingerprint as its parent accepted operation. */
+export function getGenerationOperationAttemptAcceptedConfiguration(
+  db: DatabaseSync,
+  databaseLineage: string,
+  operationId: string,
+  attemptNo: number,
+): GenerationOperationAttemptAcceptedConfiguration | undefined {
+  const row = db
+    .prepare(
+      `
+        SELECT o.effective_configuration_json, o.effective_configuration_fingerprint,
+               a.accepted_effective_configuration_fingerprint
+        FROM generation_operations o
+        JOIN generation_operation_attempts a
+          ON a.database_lineage = o.database_lineage AND a.operation_id = o.operation_id
+        WHERE o.database_lineage = ? AND o.operation_id = ? AND a.attempt_no = ?
+      `,
+    )
+    .get(databaseLineage, operationId, attemptNo) as
+    | {
+        effective_configuration_json: string | null
+        effective_configuration_fingerprint: string | null
+        accepted_effective_configuration_fingerprint: string | null
+      }
+    | undefined
+  if (
+    !row ||
+    row.effective_configuration_json === null ||
+    row.effective_configuration_fingerprint === null ||
+    row.accepted_effective_configuration_fingerprint === null
+  ) {
+    return undefined
+  }
+  if (row.accepted_effective_configuration_fingerprint !== row.effective_configuration_fingerprint) {
+    throw new Error('Accepted attempt effective generation configuration fingerprint mismatch')
+  }
+  return {
+    effectiveConfiguration: JSON.parse(row.effective_configuration_json) as unknown,
+    effectiveConfigurationFingerprint: row.effective_configuration_fingerprint,
+  }
+}
+
+/**
+ * Recognize only a completed translation target that crossed the v39 -> v40
+ * migration without accepted configuration/occupancy columns. The migration's
+ * parent-operation marker is authoritative; nullable child columns alone are
+ * not enough because a malformed current row can also contain NULLs.
+ */
+export function hasPreOccupancyGeneratedTranslationAuthority(
+  db: DatabaseSync,
+  input: {
+    databaseLineage: string
+    operationId: string
+    generationId: string
+    effectKeyType: 'operation' | 'generation'
+    effectKeyId: string
+    effectAttemptNo?: number
+    chatId: string
+    messageId: string
+  },
+): boolean {
+  if (
+    (input.effectKeyType === 'operation' && input.effectKeyId !== input.operationId) ||
+    (input.effectKeyType === 'generation' && input.effectKeyId !== input.generationId)
+  ) {
+    return false
+  }
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 AS found
+         FROM generation_operations AS o
+         JOIN generation_operation_attempts AS a
+           ON a.database_lineage = o.database_lineage
+          AND a.operation_id = o.operation_id
+          AND (a.job_id = ? OR a.finalization_generation_id = ?)
+          AND (? IS NULL OR a.attempt_no = ?)
+         JOIN messages AS m
+           ON m.chat_id = ? AND m.uid = ? AND m.alternate = 0 AND m.role = 'char'
+         WHERE o.database_lineage = ?
+           AND o.operation_id = ?
+           AND (
+             (o.protocol_version >= 1 AND ? = 'operation')
+             OR (o.protocol_version = 0 AND ? = 'generation')
+           )
+           AND o.chat_id = ?
+           AND o.state = 'completed'
+           AND o.result_message_id = ?
+           AND o.pre_occupancy_authority = 1
+           AND o.admission_kind IS NULL
+           AND o.occupancy_database_lineage IS NULL
+           AND o.occupancy_session_id IS NULL
+           AND o.occupancy_epoch IS NULL
+           AND o.occupancy_claim_class IS NULL
+           AND o.permission_scope_version IS NULL
+           AND o.permission_scope_json IS NULL
+           AND o.effective_configuration_json IS NULL
+           AND o.effective_configuration_fingerprint IS NULL
+           AND a.accepted_admission_kind IS NULL
+           AND a.accepted_occupancy_database_lineage IS NULL
+           AND a.accepted_occupancy_session_id IS NULL
+           AND a.accepted_occupancy_epoch IS NULL
+           AND a.accepted_occupancy_claim_class IS NULL
+           AND a.accepted_permission_scope_version IS NULL
+           AND a.accepted_permission_scope_json IS NULL
+           AND a.accepted_effective_configuration_fingerprint IS NULL
+           AND json_valid(m.json)
+           AND json_extract(m.json, '$.generationInfo.databaseLineage') = ?
+           AND json_extract(m.json, '$.generationInfo.operationId') = ?
+           AND (
+             json_type(m.json, '$.generationInfo.operationAttemptNo') IS NOT NULL
+             OR json_type(m.json, '$.generationInfo.attemptNo') IS NOT NULL
+           )
+           AND (
+             json_type(m.json, '$.generationInfo.operationAttemptNo') IS NULL
+             OR json_extract(m.json, '$.generationInfo.operationAttemptNo') = a.attempt_no
+           )
+           AND (
+             json_type(m.json, '$.generationInfo.attemptNo') IS NULL
+             OR json_extract(m.json, '$.generationInfo.attemptNo') = a.attempt_no
+           )
+           AND json_extract(m.json, '$.generationInfo.generationId') = ?
+           AND (
+             json_type(m.json, '$.generationInfo.jobId') IS NULL
+             OR json_extract(m.json, '$.generationInfo.jobId') = ?
+           )
+         LIMIT 1`,
+      )
+      .get(
+        input.generationId,
+        input.generationId,
+        input.effectAttemptNo ?? null,
+        input.effectAttemptNo ?? null,
+        input.chatId,
+        input.messageId,
+        input.databaseLineage,
+        input.operationId,
+        input.effectKeyType,
+        input.effectKeyType,
+        input.chatId,
+        input.messageId,
+        input.databaseLineage,
+        input.operationId,
+        input.generationId,
+        input.generationId,
+      ),
+  )
 }
 
 export function generationOperationForRetryRequest(
@@ -1133,6 +1518,189 @@ export function listGenerationOperationProjections(
     [databaseLineage, databaseLineage, recentTerminalLimit],
   )
   return rows.map(projectionFromRow)
+}
+
+/**
+ * Freeze and reconcile non-live accepted work before an expired occupancy is
+ * reassigned. This primitive deliberately runs inside the claimant's existing
+ * `BEGIN IMMEDIATE` transaction: either transcript/journal inspection,
+ * terminal dispositions, effect settlement, and the new claim commit together,
+ * or none of them do. It never reserves an attempt or dispatches a provider.
+ */
+export function reconcileExpiredGenerationOccupancyInTransaction(
+  db: DatabaseSync,
+  input: ExpiredGenerationOccupancyRecoveryInput,
+): ExpiredGenerationOccupancyRecoveryResult {
+  if (!db.isTransaction) throw new Error('Expired occupancy recovery requires an immediate transaction')
+  if (!Number.isSafeInteger(input.occupancyEpoch) || input.occupancyEpoch < 0) {
+    throw new Error('Expired occupancy recovery epoch is invalid')
+  }
+  if (!Number.isSafeInteger(input.nowMs) || input.nowMs < 0) {
+    throw new Error('Expired occupancy recovery time is invalid')
+  }
+  if (getDatabaseLineage(db) !== input.databaseLineage) return emptyExpiredOccupancyRecoveryResult()
+  const occupancy = db
+    .prepare(
+      `SELECT 1 AS found
+       FROM chat_occupancies
+       WHERE database_lineage = ? AND chat_id = ? AND occupant_session_id = ?
+         AND occupancy_epoch = ? AND lease_expires_at_ms IS NOT NULL AND lease_expires_at_ms <= ?`,
+    )
+    .get(input.databaseLineage, input.chatId, input.occupantSessionId, input.occupancyEpoch, input.nowMs)
+  if (!occupancy) return emptyExpiredOccupancyRecoveryResult()
+
+  const operations = db
+    .prepare(
+      `SELECT operation_id, state, state_version
+       FROM generation_operations
+       WHERE database_lineage = ? AND chat_id = ?
+         AND occupancy_database_lineage = ? AND occupancy_session_id = ? AND occupancy_epoch = ?
+         AND state IN ('abandoned', 'retryable')
+       ORDER BY operation_id`,
+    )
+    .all(
+      input.databaseLineage,
+      input.chatId,
+      input.databaseLineage,
+      input.occupantSessionId,
+      input.occupancyEpoch,
+    ) as Array<{ operation_id: string; state: 'abandoned' | 'retryable'; state_version: number }>
+
+  const now = new Date(input.nowMs).toISOString()
+  let projectionEpoch: number | undefined
+  let completedFromResultCount = 0
+  let terminalFailedCount = 0
+  for (const operation of operations) {
+    const pendingJournal = db
+      .prepare(
+        `SELECT 1 AS found
+         FROM generation_finalization_retries
+         WHERE database_lineage = ? AND operation_id = ? AND status = 'pending'
+         LIMIT 1`,
+      )
+      .get(input.databaseLineage, operation.operation_id)
+    if (pendingJournal) continue
+
+    const result = db
+      .prepare(
+        `SELECT uid
+         FROM messages
+         WHERE chat_id = ? AND alternate = 0 AND json_valid(json)
+           AND json_extract(json, '$.generationInfo.databaseLineage') = ?
+           AND json_extract(json, '$.generationInfo.operationId') = ?
+         ORDER BY seq DESC
+         LIMIT 1`,
+      )
+      .get(input.chatId, input.databaseLineage, operation.operation_id) as { uid: string } | undefined
+    projectionEpoch ??= bumpGenerationOperationProjectionEpoch(db)
+    const nextState = result ? 'completed' : 'terminal_failed'
+    const failureCode = result ? null : 'occupancy_recovery_expired'
+    const attemptStatus = result ? 'completed' : 'terminal_failed'
+    db.prepare(
+      `UPDATE generation_operation_attempts
+       SET status = ?, runner_settled_at = COALESCE(runner_settled_at, ?),
+           failure_code = ?, last_error = NULL, updated_at = ?
+       WHERE database_lineage = ? AND operation_id = ?
+         AND attempt_no = (
+           SELECT MAX(attempt_no) FROM generation_operation_attempts
+           WHERE database_lineage = ? AND operation_id = ?
+         )
+         AND status IN ('reserved', 'running', 'stopping', 'finalizing', 'retryable_failed', 'abandoned')`,
+    ).run(
+      attemptStatus,
+      now,
+      failureCode,
+      now,
+      input.databaseLineage,
+      operation.operation_id,
+      input.databaseLineage,
+      operation.operation_id,
+    )
+    const changed = db
+      .prepare(
+        `UPDATE generation_operations
+         SET state = ?, state_version = state_version + 1, projection_epoch = ?,
+             current_attempt_no = NULL, desired_terminal_outcome = NULL,
+             result_message_id = ?, failure_code = ?, failure_phase = ?, last_error = NULL,
+             runner_settled_at = COALESCE(runner_settled_at, ?), terminal_at = ?, updated_at = ?
+         WHERE database_lineage = ? AND operation_id = ? AND state = ? AND state_version = ?`,
+      )
+      .run(
+        nextState,
+        projectionEpoch,
+        result?.uid ?? null,
+        failureCode,
+        result ? null : 'occupancy_recovery',
+        now,
+        now,
+        now,
+        input.databaseLineage,
+        operation.operation_id,
+        operation.state,
+        operation.state_version,
+      )
+    if (changed.changes !== 1) throw new Error('Expired occupancy operation recovery raced inside transaction')
+    if (result) completedFromResultCount += 1
+    else terminalFailedCount += 1
+  }
+
+  const skippedEffects = db
+    .prepare(
+      `UPDATE generation_effects
+       SET status = 'skipped',
+           claim_id = COALESCE(claim_id, 'occupancy-recovery:' || generation_id || ':' || effect_kind),
+           delivery = COALESCE(delivery, CASE WHEN effect_kind = 'generated_translation' THEN 'server' ELSE 'late_recovery' END),
+           reason = 'occupancy_recovery_expired', last_error = NULL,
+           claimed_at = COALESCE(claimed_at, ?), lease_expires_at = NULL,
+           settled_at = ?, updated_at = ?
+       WHERE database_lineage = ? AND chat_id = ?
+         AND occupancy_database_lineage = ? AND occupancy_session_id = ? AND occupancy_epoch = ?
+         AND status IN ('pending', 'claimed')
+         AND operation_id IN (
+           SELECT operation_id FROM generation_operations
+           WHERE database_lineage = ? AND chat_id = ?
+             AND state IN ('completed', 'cancelled', 'terminal_failed', 'invalidated')
+             AND (
+               generation_effects.effect_kind <> 'generated_translation'
+               OR state <> 'completed'
+               OR result_message_id IS NULL
+               OR result_message_id <> generation_effects.message_id
+             )
+         )
+         AND NOT EXISTS (
+           SELECT 1 FROM generation_finalization_retries AS retry
+           WHERE retry.database_lineage = generation_effects.database_lineage
+             AND retry.operation_id = generation_effects.operation_id AND retry.status = 'pending'
+         )`,
+    )
+    .run(
+      now,
+      now,
+      now,
+      input.databaseLineage,
+      input.chatId,
+      input.databaseLineage,
+      input.occupantSessionId,
+      input.occupancyEpoch,
+      input.databaseLineage,
+      input.chatId,
+    )
+
+  return {
+    examinedOperationCount: operations.length,
+    completedFromResultCount,
+    terminalFailedCount,
+    skippedEffectCount: Number(skippedEffects.changes),
+  }
+}
+
+function emptyExpiredOccupancyRecoveryResult(): ExpiredGenerationOccupancyRecoveryResult {
+  return {
+    examinedOperationCount: 0,
+    completedFromResultCount: 0,
+    terminalFailedCount: 0,
+    skippedEffectCount: 0,
+  }
 }
 
 export function reconcileGenerationOperationsAtStartup(
@@ -1448,6 +2016,7 @@ function selectGenerationOperationRows(
         SELECT o.*,
                a.attempt_no, a.retry_request_id, a.job_id, a.status AS attempt_status,
                a.server_instance_id, a.actor_writer_session_id, a.actor_writer_epoch,
+               a.accepted_effective_configuration_fingerprint,
                a.launch_revision, a.provider_dispatch_started_at, a.provider_dispatch_finished_at,
                a.runner_settled_at AS attempt_runner_settled_at,
                a.finalization_generation_id, a.failure_code AS attempt_failure_code,
@@ -1474,6 +2043,10 @@ function projectionFromRow(row: GenerationOperationRow): GenerationOperationProj
     projectionEpoch: row.projection_epoch,
     creatorWriterSessionId: row.creator_writer_session_id,
     creatorWriterEpoch: row.creator_writer_epoch,
+    ...(scopeFromColumns(row) ? { generationScope: scopeFromColumns(row)! } : {}),
+    ...(row.effective_configuration_fingerprint !== null
+      ? { effectiveConfigurationFingerprint: row.effective_configuration_fingerprint }
+      : {}),
     ...(row.binding_server_instance_id !== null ? { bindingServerInstanceId: row.binding_server_instance_id } : {}),
     ...(row.character_id !== null ? { characterId: row.character_id } : {}),
     ...(row.chat_id !== null ? { chatId: row.chat_id } : {}),
@@ -1494,6 +2067,9 @@ function projectionFromRow(row: GenerationOperationRow): GenerationOperationProj
             serverInstanceId: row.server_instance_id!,
             actorWriterSessionId: row.actor_writer_session_id!,
             actorWriterEpoch: row.actor_writer_epoch!,
+            ...(row.accepted_effective_configuration_fingerprint !== null
+              ? { acceptedEffectiveConfigurationFingerprint: row.accepted_effective_configuration_fingerprint }
+              : {}),
             launchRevision: row.launch_revision!,
             ...(row.provider_dispatch_started_at !== null
               ? { providerDispatchStartedAt: row.provider_dispatch_started_at }
@@ -1567,6 +2143,7 @@ function startupJournalMatches(
   journal: StartupJournalRow,
 ): boolean {
   return (
+    journal.terminal_outcome !== null &&
     journal.operation_id === operation.operation_id &&
     journal.operation_attempt_no === attempt.attempt_no &&
     journal.actor_writer_session_id === attempt.actor_writer_session_id &&

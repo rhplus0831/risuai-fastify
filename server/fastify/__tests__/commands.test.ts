@@ -14,6 +14,7 @@ import { createCommandEventSink, type CommandEventSink } from '../src/commands/e
 import { applyJsonCommandMutation, applyMessageFreeJsonCommandMutation } from '../src/commands/mutations.js'
 import { getSchemaState, openDatabase } from '../src/db.js'
 import { getDatabaseLineage } from '../src/databaseLineage.js'
+import { ChatOccupancyService } from '../src/chatOccupancy.js'
 import { addAlternateMessage } from '../src/messageStore.js'
 import {
   createMemoryChunk,
@@ -12586,6 +12587,53 @@ describe('message history commands', () => {
     }
   })
 
+  it('rechecks chat occupancy before publishing a greeting translation after its provider await', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await importGreetingTranslationFixture(harness.app, assertion, {
+      echoMessage: 'translation that must not cross occupancy',
+      echoDelay: 0.2,
+    })
+    const translating = harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/commands/characters/char-a/greetings/-1/translate',
+      headers: { 'risu-auth': assertion },
+      payload: { baseRevision: revision, chatId: 'chat-a', jobId: 'occupancy-race-greeting-job' },
+    })
+    await waitForActiveGreetingTranslation(harness.app, assertion, {
+      characterId: 'char-a',
+      chatId: 'chat-a',
+      greetingIndex: -1,
+    })
+
+    const db = openDatabase(harness.dataDir)
+    try {
+      new ChatOccupancyService(db).claim({
+        databaseLineage: getDatabaseLineage(db),
+        chatId: 'chat-a',
+        sessionId: 'reader-after-provider-start',
+        claimClass: 'chat_only',
+        expectedOccupancyEpoch: 0,
+      })
+    } finally {
+      db.close()
+    }
+
+    const result = await translating
+    expect(result.statusCode).toBe(423)
+    expect(result.json()).toMatchObject({
+      error: 'chat_occupied',
+      conflictingChatIds: ['chat-a'],
+      safeRelease: expect.any(String),
+    })
+    const after = openDatabase(harness.dataDir)
+    try {
+      expect(after.prepare('SELECT COUNT(*) AS count FROM greeting_translations').get()).toEqual({ count: 0 })
+      expect(getSchemaState(after).revision).toBe(revision)
+    } finally {
+      after.close()
+    }
+  })
+
   it('preserves a greeting row changed while the provider request is pending', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const revision = await importGreetingTranslationFixture(harness.app, assertion, {
@@ -12708,6 +12756,46 @@ describe('message history commands', () => {
       messageId: 'msg-a',
       translation: { text: 'translated after concurrent edit' },
     })
+  })
+
+  it('rejects raw translation publication when a foreign occupant claims its resolved chat mid-provider', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await importMessageTranslationFixture(harness.app, assertion, {
+      echoMessage: 'translation that must not cross occupancy',
+      echoDelay: 0.2,
+    })
+    const translating = harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/commands/messages/msg-a/translate',
+      headers: { 'risu-auth': assertion, 'risu-writer-session': 'owner-a' },
+      payload: { baseRevision: revision },
+    })
+    await waitForActiveMessageTranslation(harness.app, assertion, {
+      chatId: 'chat-a',
+      messageId: 'msg-a',
+    })
+    const occupancyDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      new ChatOccupancyService(occupancyDb).claim({
+        databaseLineage: getDatabaseLineage(occupancyDb),
+        chatId: 'chat-a',
+        sessionId: 'reader-a',
+        claimClass: 'chat_only',
+        expectedOccupancyEpoch: 0,
+      })
+    } finally {
+      occupancyDb.close()
+    }
+    const result = await translating
+    expect(result.statusCode).toBe(423)
+    expect(result.json()).toMatchObject({
+      error: 'chat_occupied',
+      chatId: 'chat-a',
+      conflictingChatIds: ['chat-a'],
+    })
+    const messages = await persistedChatMessages(harness.app, assertion, 'chat-a')
+    expect(messages).toEqual([expect.objectContaining({ chatId: 'msg-a', data: 'hello raw' })])
+    expect(messages[0]).not.toHaveProperty('translation')
   })
 
   it('lets a newer raw translation supersede the operation that previously owned the message', async () => {

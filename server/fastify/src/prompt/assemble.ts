@@ -13,6 +13,8 @@ import type {
 import type { PromptItem } from './promptTemplate.js'
 import type { CbsCallbackMemo } from './cbsCallbackMemo.js'
 import type { ReportedClientContext } from '@risuai/protocol/client-context'
+import type { BardWikiGlobalSettings } from '@risuai/protocol'
+import type { PersistedGenerationScope } from '../generationScope.js'
 import type { PromptMessage } from './promptMessage.js'
 import { trimUntilPunctuation } from '@risuai/shared-core/punctuation'
 import { hypaV3PresetIndexFromStableId } from '@risuai/shared-core/hypa-v3-preset-selection-identity'
@@ -156,6 +158,10 @@ export interface AssembleDeps {
   loadDatabase(): Database | null
   resolveSpeakerName?: (characterId: string) => string | undefined
   loadMemoryDatabase?(): DatabaseSync | null
+  /** Recheck the accepted generation or compatibility tuple while the memory
+   * database's write transaction is active. Production persisting routes bind
+   * this after any asynchronous query-embedding preparation. */
+  assertPromptMemoryMutationAuthorityInTransaction?: () => void
   /** Server asset root used by Lua image generation. */
   assetDataDir?: string
   loadPromptMemoryQueryVectors?(): MemorySelectionInput['queryVectors']
@@ -203,6 +209,24 @@ export interface PromptMemoryChunkPlanningDiagnostics {
   errors: string[]
 }
 
+/**
+ * Fully resolved, server-owned generation configuration captured atomically
+ * when a durable operation is accepted. The transcript in `database` is the
+ * accepted transcript, so an attempt and every explicit retry see the same
+ * prompt/configuration inputs even if settings are edited later.
+ */
+export interface AcceptedEffectiveGenerationConfiguration {
+  version: 1
+  database: Database
+  /** Supplemental translator settings include the separately persisted preset
+   * collection, which is not part of generation assembly's normal projection. */
+  translationSettings?: Record<string, unknown>
+  promptInfo: MessagePresetInfo
+  resolvedMainProfile: ResolvedModelProfile
+  acceptedBardWikiSettings?: BardWikiGlobalSettings
+  speakerNames?: Readonly<Record<string, string | undefined>>
+}
+
 export interface AssembleInput {
   chatId: string
   characterId: string
@@ -212,6 +236,13 @@ export interface AssembleInput {
   userMessage?: string
   /** Durable identity of a protocol-v1 accepted user row already in the transcript. */
   acceptedMessageId?: string
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
+  acceptedEffectiveConfiguration?: AcceptedEffectiveGenerationConfiguration
+  /** Compatibility-only identity rechecked at each inline persistence boundary. */
+  compatibilityWriterSessionId?: string
+  compatibilityDatabaseLineage?: string
   /** Retry-only: the accepted row's submit-time input hooks already committed. */
   reuseAcceptedSubmitTransforms?: boolean
   /** Original-compatible send from an assistant tail without appending a user row. */
@@ -655,6 +686,7 @@ export interface AssemblyState {
   /** Server asset root used by Lua image generation. */
   assetDataDir?: string
   promptMemoryQueryVectors?: MemorySelectionInput['queryVectors']
+  assertPromptMemoryMutationAuthorityInTransaction?: () => void
   enqueuePromptMemoryFollowUpJob?: (job: EnqueueMemoryJobInput) => MemoryJob
   onPromptMemoryJobEnqueued?: (job: MemoryJob) => void
   executeAgentPresetStep?: AgentPresetStepExecutor
@@ -723,6 +755,18 @@ function resolveScope(input: AssembleInput, deps: AssembleDeps): ResolvedScope {
   }
   const currentChat = currentChar.chats[chatPage]
 
+  if (input.acceptedEffectiveConfiguration) {
+    return {
+      database,
+      currentChar,
+      currentChat,
+      promptInfo: input.acceptedEffectiveConfiguration.promptInfo,
+      resolvedMainProfile: input.acceptedEffectiveConfiguration.resolvedMainProfile,
+      selectedCharID,
+      chatPage,
+    }
+  }
+
   const effective = buildEffectiveGenerationConfig({
     database,
     currentChar,
@@ -766,6 +810,7 @@ export function beginAssembly(input: AssembleInput, deps: AssembleDeps): Assembl
     luaExecBudget,
     ...(memoryDatabase ? { requestHistoryDb: memoryDatabase } : {}),
     ...(deps.assetDataDir ? { assetDataDir: deps.assetDataDir } : {}),
+    allowGeneratedAssetWrites: input.generationScope?.admissionKind !== 'chat_only',
     cbsCallbackMemo,
     unsupportedTriggerEffectTypes,
     clientContext: input.clientContext,
@@ -842,6 +887,7 @@ export function beginAssembly(input: AssembleInput, deps: AssembleDeps): Assembl
     promptMemoryQueryVectors: deps.loadPromptMemoryQueryVectors?.() ?? [],
     promptMemoryQueryDiagnostics:
       deps.loadPromptMemoryQueryDiagnostics?.() ?? emptyPromptMemoryQueryDiagnostics(undefined, 'feature-disabled'),
+    assertPromptMemoryMutationAuthorityInTransaction: deps.assertPromptMemoryMutationAuthorityInTransaction,
     enqueuePromptMemoryFollowUpJob: deps.enqueuePromptMemoryFollowUpJob,
     onPromptMemoryJobEnqueued: deps.onPromptMemoryJobEnqueued,
     resolveStoredAsset: deps.resolveStoredAsset,
@@ -1201,6 +1247,7 @@ async function runInputTrigger(state: AssemblyState): Promise<void> {
           execBudget: state.luaExecBudget,
           ...(state.memoryDatabase ? { requestHistoryDb: state.memoryDatabase } : {}),
           ...(state.assetDataDir ? { assetDataDir: state.assetDataDir } : {}),
+          allowGeneratedAssetWrites: state.ctx.allowGeneratedAssetWrites,
         },
       )
       throwServerLuaFailure(result, `Lua ${mode} trigger failed`)
@@ -2143,52 +2190,86 @@ function buildPromptMemoryRowsForAssembly(state: AssemblyState, hypaTokenBudget:
   )
   const chatId = state.currentChat.id ?? state.input.chatId
   const embeddingModel = resolvePromptMemoryEmbeddingModel(state.database)
-  const planning = planPromptMemoryChunksForAssembly({
-    state,
-    memoryDb,
-    chatId,
-    enabled,
-    settings,
-  })
-  state.promptMemoryChunkPlanningDiagnostics = planning.diagnostics
-  state.promptMemoryHistoryStartIndex = planning.summarizedPrefixStartIndex
-  state.promptMemorySummarizedHistoryTokens = planning.summarizedPrefixTokens
-  const selection = selectPromptMemory({
-    db: memoryDb,
-    enabled,
-    chatId,
-    summaryModel: settings.summarizationModel,
-    embeddingModel,
-    queryVectors: state.promptMemoryQueryVectors ?? [],
-    availableTokens: clampHypaTokenBudget(
-      Math.floor((state.database.maxContext ?? 0) * settings.memoryTokensRatio),
-      hypaTokenBudget,
-    ),
-    settings: {
-      recentMemoryRatio: settings.recentMemoryRatio,
-      similarMemoryRatio: settings.similarMemoryRatio,
-    },
-    summarySnapshot: planning.summarySnapshot,
-    getSummaryTokenCost: createPromptMemorySummaryTokenCost(state.database),
-  })
-  selection.diagnostics.hotPathWork.generatedQueryEmbeddings =
-    state.promptMemoryQueryDiagnostics?.status === 'success' && state.promptMemoryQueryDiagnostics.vectors > 0
-  selection.diagnostics.hotPathWork.calledProviders = state.promptMemoryQueryDiagnostics?.providerCallAttempted ?? false
-  state.promptMemorySelectionDiagnostics = selection.diagnostics
+  const memoryPreparationReadOnly = state.input.mode === 'preview' || state.input.mode === 'preview_prompt'
+  const prepare = (onJobCreated: ((job: MemoryJob) => void) | undefined): PromptMessage[] => {
+    const planning = planPromptMemoryChunksForAssembly({
+      state,
+      memoryDb,
+      chatId,
+      enabled,
+      settings,
+      memoryPreparationReadOnly,
+      onJobCreated,
+    })
+    state.promptMemoryChunkPlanningDiagnostics = planning.diagnostics
+    state.promptMemoryHistoryStartIndex = planning.summarizedPrefixStartIndex
+    state.promptMemorySummarizedHistoryTokens = planning.summarizedPrefixTokens
+    const selection = selectPromptMemory({
+      db: memoryDb,
+      enabled,
+      chatId,
+      summaryModel: settings.summarizationModel,
+      embeddingModel,
+      queryVectors: state.promptMemoryQueryVectors ?? [],
+      availableTokens: clampHypaTokenBudget(
+        Math.floor((state.database.maxContext ?? 0) * settings.memoryTokensRatio),
+        hypaTokenBudget,
+      ),
+      settings: {
+        recentMemoryRatio: settings.recentMemoryRatio,
+        similarMemoryRatio: settings.similarMemoryRatio,
+      },
+      summarySnapshot: planning.summarySnapshot,
+      getSummaryTokenCost: createPromptMemorySummaryTokenCost(state.database),
+    })
+    selection.diagnostics.hotPathWork.generatedQueryEmbeddings =
+      state.promptMemoryQueryDiagnostics?.status === 'success' && state.promptMemoryQueryDiagnostics.vectors > 0
+    selection.diagnostics.hotPathWork.calledProviders =
+      state.promptMemoryQueryDiagnostics?.providerCallAttempted ?? false
+    state.promptMemorySelectionDiagnostics = selection.diagnostics
 
-  const assembled = assemblePromptMemoryRows(selection)
-  state.promptMemoryRowAssemblyDiagnostics = assembled.diagnostics
-  state.promptMemoryFollowUpDiagnostics = enqueuePromptMemoryFollowUps({
-    db: memoryDb,
-    chatId,
-    summaryModel: settings.summarizationModel,
-    embeddingModel,
-    diagnostics: selection.diagnostics.missingMemory,
-    enqueueJob: state.enqueuePromptMemoryFollowUpJob,
-    onJobCreated: state.onPromptMemoryJobEnqueued,
-  })
-  state.promptMemoryRows = assembled.rows
-  return assembled.rows
+    const assembled = assemblePromptMemoryRows(selection)
+    state.promptMemoryRowAssemblyDiagnostics = assembled.diagnostics
+    state.promptMemoryFollowUpDiagnostics = memoryPreparationReadOnly
+      ? emptyPromptMemoryFollowUpDiagnostics()
+      : enqueuePromptMemoryFollowUps({
+          db: memoryDb,
+          chatId,
+          summaryModel: settings.summarizationModel,
+          embeddingModel,
+          diagnostics: selection.diagnostics.missingMemory,
+          operationId: state.input.operationId,
+          operationAttemptNo: state.input.operationAttemptNo,
+          generationScope: state.input.generationScope,
+          enqueueJob: state.enqueuePromptMemoryFollowUpJob,
+          onJobCreated,
+        })
+    state.promptMemoryRows = assembled.rows
+    return assembled.rows
+  }
+
+  const assertAuthority = state.assertPromptMemoryMutationAuthorityInTransaction
+  if (memoryPreparationReadOnly || !enabled || !assertAuthority) {
+    return prepare(state.onPromptMemoryJobEnqueued)
+  }
+
+  const createdJobs: MemoryJob[] = []
+  const ownsTransaction = !memoryDb.isTransaction
+  if (ownsTransaction) memoryDb.exec('BEGIN IMMEDIATE')
+  try {
+    // Query embeddings are asynchronous and deliberately happen before this
+    // point. Revalidate the original operation/compatibility identity only
+    // after acquiring the write lock, then publish every Hypa mutation under
+    // that same transaction so a claim cannot interleave partway through.
+    assertAuthority()
+    const rows = prepare((job) => createdJobs.push(job))
+    if (ownsTransaction) memoryDb.exec('COMMIT')
+    for (const job of createdJobs) state.onPromptMemoryJobEnqueued?.(job)
+    return rows
+  } catch (error) {
+    if (ownsTransaction && memoryDb.isTransaction) memoryDb.exec('ROLLBACK')
+    throw error
+  }
 }
 
 function createPromptMemorySummaryTokenCost(db: Database): (summary: MemorySummary) => number {
@@ -2213,6 +2294,8 @@ function planPromptMemoryChunksForAssembly(input: {
   chatId: string
   enabled: boolean
   settings: ReturnType<typeof normalizeHypaV3Settings>['settings']
+  memoryPreparationReadOnly: boolean
+  onJobCreated?: (job: MemoryJob) => void
 }): {
   diagnostics: PromptMemoryChunkPlanningDiagnostics
   summarySnapshot?: MemorySummarySnapshot
@@ -2233,12 +2316,14 @@ function planPromptMemoryChunksForAssembly(input: {
     const currentChatMemos = chats.map((chat) => chat.memo).filter(isNonEmptyString)
     summarySnapshot = loadMemorySummarySnapshot(input.memoryDb, { chatId: input.chatId })
     if (!input.settings.preserveOrphanedMemory && currentChatMemos.length > 0) {
-      const cleaned = cleanupOrphanedMemoryWithSummarySnapshot(input.memoryDb, {
-        chatId: input.chatId,
-        currentChatMemos,
-        preserveOrphanedMemory: input.settings.preserveOrphanedMemory,
-        summarySnapshot,
-      })
+      const cleaned = input.memoryPreparationReadOnly
+        ? previewOrphanedMemoryCleanupSnapshot(summarySnapshot, currentChatMemos)
+        : cleanupOrphanedMemoryWithSummarySnapshot(input.memoryDb, {
+            chatId: input.chatId,
+            currentChatMemos,
+            preserveOrphanedMemory: input.settings.preserveOrphanedMemory,
+            summarySnapshot,
+          })
       diagnostics.cleanup = cleaned.cleanup
       summarySnapshot = cleaned.summarySnapshot
     }
@@ -2262,21 +2347,55 @@ function planPromptMemoryChunksForAssembly(input: {
     diagnostics.plannerWarnings.push(...plan.warnings.map((warning) => warning.message))
     diagnostics.plannerErrors.push(...plan.errors.map((error) => error.message))
 
-    const planned = planHypaV3ChunkJobs({
-      db: input.memoryDb,
-      chatId: input.chatId,
-      chats,
-      plan,
-      model: input.settings.summarizationModel,
-      onJobCreated: input.state.onPromptMemoryJobEnqueued,
-    })
-    diagnostics.plannedWindows = planned.planned.length
-    diagnostics.chunksCreated = planned.chunksCreated
-    diagnostics.jobsCreated = planned.jobsCreated
+    if (input.memoryPreparationReadOnly) {
+      diagnostics.plannedWindows = plan.plannedWindows.length
+    } else {
+      const planned = planHypaV3ChunkJobs({
+        db: input.memoryDb,
+        chatId: input.chatId,
+        chats,
+        plan,
+        model: input.settings.summarizationModel,
+        operationId: input.state.input.operationId,
+        operationAttemptNo: input.state.input.operationAttemptNo,
+        generationScope: input.state.input.generationScope,
+        onJobCreated: input.onJobCreated,
+      })
+      diagnostics.plannedWindows = planned.planned.length
+      diagnostics.chunksCreated = planned.chunksCreated
+      diagnostics.jobsCreated = planned.jobsCreated
+    }
   } catch (error) {
     diagnostics.errors.push(errorMessage(error, 'failed to plan Hypa V3 memory chunks'))
   }
   return { diagnostics, summarySnapshot, summarizedPrefixStartIndex, summarizedPrefixTokens }
+}
+
+function previewOrphanedMemoryCleanupSnapshot(
+  summarySnapshot: MemorySummarySnapshot,
+  currentChatMemos: readonly string[],
+): { cleanup: CleanupOrphanedMemoryResult; summarySnapshot: MemorySummarySnapshot } {
+  const currentMemoSet = new Set(currentChatMemos)
+  const orphanedSummaries = summarySnapshot.summaries.filter((summary) => {
+    const chatMemos = readSummaryChatMemos(summary)
+    return chatMemos !== null && chatMemos.some((memo) => !currentMemoSet.has(memo))
+  })
+  const deletedSummaryIds = new Set(orphanedSummaries.map((summary) => summary.id))
+  const deletedChunkIds = new Set(orphanedSummaries.map((summary) => summary.chunkId))
+  return {
+    cleanup: {
+      // Preview assembly only filters its in-memory view. Keep the mutation
+      // diagnostics truthful: no persisted cleanup was published.
+      summariesDeleted: 0,
+      chunksDeleted: 0,
+    },
+    summarySnapshot: {
+      chatId: summarySnapshot.chatId,
+      summaries: summarySnapshot.summaries.filter(
+        (summary) => !deletedSummaryIds.has(summary.id) && !deletedChunkIds.has(summary.chunkId),
+      ),
+    },
+  }
 }
 
 function emptyPromptMemoryChunkPlanningDiagnostics(): PromptMemoryChunkPlanningDiagnostics {
@@ -2384,6 +2503,7 @@ function buildLuaEditTriggerContext(state: AssemblyState): {
     execBudget: state.luaExecBudget,
     ...(state.memoryDatabase ? { requestHistoryDb: state.memoryDatabase } : {}),
     ...(state.assetDataDir ? { assetDataDir: state.assetDataDir } : {}),
+    allowGeneratedAssetWrites: state.ctx.allowGeneratedAssetWrites,
     moduleTriggers: getModuleTriggers(getActiveModules(db, state.currentChar, state.currentChat)),
   }
   return { editCtx, varEngine }
@@ -2967,6 +3087,7 @@ async function runOutputTrigger(
             execBudget: state.luaExecBudget,
             ...(state.memoryDatabase ? { requestHistoryDb: state.memoryDatabase } : {}),
             ...(state.assetDataDir ? { assetDataDir: state.assetDataDir } : {}),
+            allowGeneratedAssetWrites: state.ctx.allowGeneratedAssetWrites,
           },
         )
       } catch (error) {

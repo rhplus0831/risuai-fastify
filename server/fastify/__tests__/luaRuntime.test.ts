@@ -1042,6 +1042,67 @@ describe('server Lua runtime — similarity', () => {
 })
 
 describe('server Lua runtime — generateImage', () => {
+  it('blocks restricted asset scope before image-provider dispatch or publication', async () => {
+    const { ctx } = makeRuntime({ database: { sdProvider: 'dalle', dallEQuality: 'standard' } })
+    let executeCalls = 0
+    let persistCalls = 0
+    ctx.allowGeneratedAssetWrites = false
+    ctx.luaImageGeneration = {
+      execute: async () => {
+        executeCalls++
+        return { bytes: Buffer.from('unreachable'), contentType: 'image/png' }
+      },
+      persist: () => {
+        persistCalls++
+        return 'unreachable-asset'
+      },
+    }
+    const code = `
+      listenEdit('editRequest', function(id, data, meta)
+        data[1].content = generateImage(id, 'a lighthouse'):await()
+        return data
+      end)
+    `
+
+    const result = await runServerLua({ code, mode: 'editRequest', data: rows('orig'), lowLevelAccess: true }, ctx)
+
+    expect(result.error).toBeUndefined()
+    expect((result.res as PromptMessage[])[0].content).toBe('Error: Image generation failed')
+    expect(executeCalls).toBe(0)
+    expect(persistCalls).toBe(0)
+  })
+
+  it('rechecks restricted asset scope immediately before publication', async () => {
+    const { ctx } = makeRuntime({ database: { sdProvider: 'dalle', dallEQuality: 'standard' } })
+    let executeCalls = 0
+    let persistCalls = 0
+    ctx.allowGeneratedAssetWrites = true
+    ctx.luaImageGeneration = {
+      execute: async () => {
+        executeCalls++
+        ctx.allowGeneratedAssetWrites = false
+        return { bytes: Buffer.from('provider-result'), contentType: 'image/png' }
+      },
+      persist: () => {
+        persistCalls++
+        return 'forbidden-asset'
+      },
+    }
+    const code = `
+      listenEdit('editRequest', function(id, data, meta)
+        data[1].content = generateImage(id, 'a lighthouse'):await()
+        return data
+      end)
+    `
+
+    const result = await runServerLua({ code, mode: 'editRequest', data: rows('orig'), lowLevelAccess: true }, ctx)
+
+    expect(result.error).toBeUndefined()
+    expect((result.res as PromptMessage[])[0].content).toBe('Error: Image generation failed')
+    expect(executeCalls).toBe(1)
+    expect(persistCalls).toBe(0)
+  })
+
   it('uses the configured image model, persists the image, and returns an inlay marker', async () => {
     const { ctx } = makeRuntime({
       database: {

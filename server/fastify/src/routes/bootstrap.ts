@@ -35,6 +35,12 @@ import { DISPLAY_SOURCE_PROTOCOL_VERSION } from '@risuai/protocol/display-source
 import { STARTUP_TELEMETRY_PROTOCOL_VERSION } from '@risuai/protocol/startup-telemetry'
 import { DIAGNOSTICS_VERSION } from '@risuai/protocol/diagnostics'
 import { BROWSER_DIAGNOSTICS_VERSION } from '@risuai/protocol/remote-diagnostics'
+import {
+  CHAT_OCCUPANCY_LEASE_MS,
+  CHAT_OCCUPANCY_PROTOCOL_VERSION,
+  CHAT_OCCUPANCY_RENEW_AFTER_MS,
+} from '@risuai/protocol/chat-occupancy'
+import type { ChatOccupancyService } from '../chatOccupancy.js'
 
 export const ASSET_BASE_URL = '/api/v1/assets'
 export const WRITER_OBSERVER_SESSION_HEADER = 'risu-writer-observer-session'
@@ -76,6 +82,8 @@ export function registerBootstrapRoutes(
   greetingTranslationJobs?: GreetingTranslationJobRegistry,
   clientDiagnostics = false,
   browserDiagnostics = false,
+  chatOccupancy?: ChatOccupancyService,
+  chatOccupancyEnabled = false,
 ): void {
   app.get('/api/v1/bootstrap', { exposeHeadRoute: false }, async (req, reply) => {
     const metricStartedAt = protocolNowMs()
@@ -144,6 +152,17 @@ export function registerBootstrapRoutes(
       assetBaseUrl: ASSET_BASE_URL,
       generationOperationProtocol: { version: GENERATION_OPERATION_PROTOCOL_VERSION },
       displaySourceProtocol: { version: DISPLAY_SOURCE_PROTOCOL_VERSION },
+      chatOccupancyProtocol: {
+        version: CHAT_OCCUPANCY_PROTOCOL_VERSION,
+        enabled: chatOccupancyEnabled,
+        leaseMs: CHAT_OCCUPANCY_LEASE_MS,
+        renewAfterMs: CHAT_OCCUPANCY_RENEW_AFTER_MS,
+      },
+      chatOccupancies: chatOccupancy?.snapshot() ?? {
+        version: CHAT_OCCUPANCY_PROTOCOL_VERSION,
+        databaseLineage: ownership.databaseLineage,
+        occupancies: [],
+      },
       ...(clientDiagnostics ? { clientDiagnostics: { version: DIAGNOSTICS_VERSION } } : {}),
       ...(browserDiagnostics ? { browserDiagnostics: { version: BROWSER_DIAGNOSTICS_VERSION } } : {}),
       ...(protocolMetricsEnabled()

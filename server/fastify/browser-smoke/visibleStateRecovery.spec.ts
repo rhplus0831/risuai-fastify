@@ -236,15 +236,30 @@ test('the character sidebar survives an old-lineage response and in-place writer
   })
   await heldCommand.started
 
-  let importedResponse: BrowserFetchResult
-  try {
-    importedResponse = await importStateForResync(page)
-  } finally {
-    heldCommand.release()
-  }
-  expect(importedResponse.status, diagnostics()).toBe(200)
-  const imported = requireRevisionedResponseBody(importedResponse.body, 'RisuSave import')
-  expect(imported.databaseLineage, diagnostics()).toEqual(expect.stringMatching(/\S/))
+  const imported = await (async () => {
+    try {
+      const importedResponse = await importStateForResync(page)
+      expect(importedResponse.status, diagnostics()).toBe(200)
+      const imported = requireRevisionedResponseBody(importedResponse.body, 'RisuSave import')
+      expect(imported.databaseLineage, diagnostics()).toEqual(expect.stringMatching(/\S/))
+
+      // The conflict response deliberately retains the legacy forced-reload
+      // fallback when it belongs to the current client generation. Wait until
+      // the import event has first installed the replacement reader generation
+      // so this journey deterministically proves the intended in-place path.
+      await expect
+        .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot()), {
+          timeout: 30_000,
+        })
+        .toMatchObject({
+          lifecycle: 'reading',
+          databaseLineage: imported.databaseLineage,
+        })
+      return imported
+    } finally {
+      heldCommand.release()
+    }
+  })()
 
   const lineageConflictResponse = await lineageConflictResponsePromise
   expect(await lineageConflictResponse.json(), diagnostics()).toMatchObject({

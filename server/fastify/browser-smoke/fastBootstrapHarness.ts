@@ -105,6 +105,10 @@ export async function startFastBootstrapHarness(
 }
 
 export async function closeFastBootstrapHarness(harness: FastBootstrapHarness): Promise<void> {
+  // A page close can settle before its keep-alive/SSE sockets disappear from
+  // Node's connection set. Force those browser-only test connections down so
+  // Fastify's graceful close cannot consume the enclosing Playwright timeout.
+  harness.app.server.closeAllConnections()
   await harness.app.close().catch(() => undefined)
   fs.rmSync(harness.dataDir, { recursive: true, force: true })
 }

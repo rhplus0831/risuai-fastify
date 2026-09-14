@@ -38,6 +38,8 @@ const NON_USER_STATE_TABLES = new Set([
   // initialized application state. Writer ownership may also advance while an
   // otherwise empty database is waiting for first-run initialization.
   'database_metadata',
+  // Occupancy rows are live access-control metadata, not initialized user data.
+  'chat_occupancies',
   'generation_operation_projection_state',
   'schema_version',
 ])

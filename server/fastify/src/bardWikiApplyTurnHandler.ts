@@ -1,6 +1,8 @@
 import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { decodeProviderGenerationSettings } from './prompt/generationInputDecoder.js'
 import type { DatabaseSync } from 'node:sqlite'
+import { isDeepStrictEqual } from 'node:util'
+import { isBardWikiGlobalSettings, type BardWikiGlobalSettings } from '@risuai/protocol'
 import {
   COMMAND_EVENT_CATALOG,
   persistCommandEvent,
@@ -23,7 +25,13 @@ import {
   resolveEffectiveBardWikiSettingsForChat,
   type BardWikiSourcePair,
 } from './bardWikiReceipts.js'
-import { getBardWikiJob, type BardWikiApplyTurnJobPayload, type BardWikiJob } from './bardWikiJobs.js'
+import {
+  assertBardWikiJobGenerationScope,
+  getBardWikiJobAcceptedEffectiveConfiguration,
+  getBardWikiJob,
+  type BardWikiApplyTurnJobPayload,
+  type BardWikiJob,
+} from './bardWikiJobs.js'
 import {
   analyzeBardWikiEvent,
   BARDWIKI_EVENT_MODEL_OUTPUT_MAX_BYTES,
@@ -66,6 +74,7 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
   return async (job: BardWikiJob, context: BardWikiJobHandlerContext): Promise<void> => {
     const lineage = getDatabaseLineage(options.db)
     if (job.kind !== 'apply_turn') throw new BardWikiJobHandlerError('bardwiki_invalid_job', 'Expected apply_turn job')
+    assertBardWikiJobGenerationScope(options.db, job)
     const payload = job.payload as BardWikiApplyTurnJobPayload
     if (payload.promptVersion !== BARDWIKI_EVENT_PROMPT_VERSION) {
       throw new BardWikiJobHandlerError(
@@ -83,13 +92,14 @@ export function createBardWikiApplyTurnHandler(options: BardWikiApplyTurnHandler
 
     const source = readCurrentSourceOrObsolete(options.db, receipt, payload)
     if (!source) return
-    const settings = resolveEffectiveBardWikiSettingsForChat(options.db, job.chatId)
+    const acceptedConfiguration = getBardWikiJobAcceptedEffectiveConfiguration(options.db, job)
+    const settings = resolveAnalysisSettings(options.db, job, payload, acceptedConfiguration)
     if (!settings.enabledByDefault) {
       throw new BardWikiJobHandlerError('bardwiki_disabled', 'BardWiki is disabled for this chat', {
         retryable: false,
       })
     }
-    const database = loadAnalysisDatabase(options, job.chatId)
+    const database = loadAnalysisDatabase(options, job.chatId, acceptedConfiguration)
     let originalOutput: string
     try {
       originalOutput = await analyze({
@@ -337,7 +347,34 @@ function markReceiptObsolete(db: DatabaseSync, receiptId: string): void {
   ).run(receiptId)
 }
 
-function loadAnalysisDatabase(options: BardWikiApplyTurnHandlerOptions, chatId: string): BardWikiGenerationDatabase {
+function loadAnalysisDatabase(
+  options: BardWikiApplyTurnHandlerOptions,
+  chatId: string,
+  accepted: unknown,
+): BardWikiGenerationDatabase {
+  if (accepted !== undefined) {
+    if (
+      !accepted ||
+      typeof accepted !== 'object' ||
+      Array.isArray(accepted) ||
+      (accepted as Record<string, unknown>).version !== 1
+    ) {
+      throw new BardWikiJobHandlerError(
+        'generation_job_configuration_stale',
+        'Accepted generation configuration is invalid',
+        { retryable: false },
+      )
+    }
+    const database = (accepted as Record<string, unknown>).database
+    if (!database || typeof database !== 'object' || Array.isArray(database)) {
+      throw new BardWikiJobHandlerError(
+        'generation_job_configuration_stale',
+        'Accepted generation provider settings are invalid',
+        { retryable: false },
+      )
+    }
+    return decodeProviderGenerationSettings(structuredClone(database))
+  }
   const loaded = options.loadDatabase
     ? options.loadDatabase(chatId)
     : loadPersistedDatabaseForMemoryJob(options.db, options.dataDir, chatId)
@@ -345,6 +382,42 @@ function loadAnalysisDatabase(options: BardWikiApplyTurnHandlerOptions, chatId: 
     throw new BardWikiJobHandlerError('bardwiki_model_unavailable', 'BardWiki model settings are unavailable')
   }
   return decodeProviderGenerationSettings(loaded)
+}
+
+function resolveAnalysisSettings(
+  db: DatabaseSync,
+  job: BardWikiJob,
+  payload: BardWikiApplyTurnJobPayload,
+  acceptedConfiguration: unknown,
+): BardWikiGlobalSettings {
+  if (acceptedConfiguration === undefined) {
+    return payload.acceptedSettings ?? resolveEffectiveBardWikiSettingsForChat(db, job.chatId)
+  }
+  if (
+    !acceptedConfiguration ||
+    typeof acceptedConfiguration !== 'object' ||
+    Array.isArray(acceptedConfiguration) ||
+    (acceptedConfiguration as Record<string, unknown>).version !== 1
+  ) {
+    throw new BardWikiJobHandlerError(
+      'generation_job_configuration_stale',
+      'Accepted generation configuration is invalid',
+      { retryable: false },
+    )
+  }
+  const acceptedSettings = (acceptedConfiguration as Record<string, unknown>).acceptedBardWikiSettings
+  if (
+    !isBardWikiGlobalSettings(acceptedSettings) ||
+    !payload.acceptedSettings ||
+    !isDeepStrictEqual(acceptedSettings, payload.acceptedSettings)
+  ) {
+    throw new BardWikiJobHandlerError(
+      'generation_job_configuration_stale',
+      'Accepted BardWiki settings do not match the job payload',
+      { retryable: false },
+    )
+  }
+  return structuredClone(acceptedSettings)
 }
 
 function commitChangeSet(
@@ -368,6 +441,7 @@ function commitChangeSet(
       transactionOpen = false
       return null
     }
+    assertBardWikiJobGenerationScope(db, currentJob)
     if (currentReceipt.state === 'applied' && currentReceipt.eventDocumentId) {
       db.exec('COMMIT')
       transactionOpen = false

@@ -24,6 +24,8 @@ import {
 import { setupAuthedClient } from './helpers/auth.js'
 import { readResourceDatabaseFromFetch, type RuntimeBootstrap } from './helpers/resourceDatabase.js'
 import { createExtractedModelPreset, createExtractedPromptPreset } from '@risuai/shared-core/preset-split'
+import { GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES } from '../src/generationOperations.js'
+import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 
 // Durable generation lives on a detached job whose lifecycle is not tied to the
 // request connection, so these use a real listening server + `fetch`. `app.inject`
@@ -70,6 +72,7 @@ function newController(): AbortController {
 async function startHarness(
   generationChatOverrides: Record<string, unknown> = {},
   existingDataDir?: string,
+  chatOccupancyEnabled = false,
 ): Promise<Harness> {
   process.env.LOG_LEVEL = 'silent'
   const dataDir = existingDataDir ?? mkdtempSync(path.join(tmpdir(), 'risu-durable-'))
@@ -90,6 +93,7 @@ async function startHarness(
       onDurableLifecycleTransition: (transition, job) => durableLifecycleHook?.(transition, job),
       ...generationChatOverrides,
     },
+    chatOccupancy: { enabled: chatOccupancyEnabled },
     commandEvents,
   })
   await app.listen({ port: 0, host: '127.0.0.1' })
@@ -228,10 +232,13 @@ async function seedDatabase(database: unknown): Promise<void> {
   await seedDatabaseForHarness(harness, assertion, database)
 }
 
-async function resetHarness(generationChatOverrides: Record<string, unknown> = {}): Promise<void> {
+async function resetHarness(
+  generationChatOverrides: Record<string, unknown> = {},
+  chatOccupancyEnabled = false,
+): Promise<void> {
   await harness.app.close()
   rmSync(harness.dataDir, { recursive: true, force: true })
-  harness = await startHarness(generationChatOverrides)
+  harness = await startHarness(generationChatOverrides, undefined, chatOccupancyEnabled)
   ;({ assertion } = await setupAuthedClient(harness.app))
   await seedDatabase(fixtureDatabase)
 }
@@ -487,16 +494,89 @@ function atomicTargetedRequest(args: {
   }
 }
 
-function postAtomicOperation(databaseLineage: string, body: JsonRecord, writerSession = 'writer-a'): Promise<Response> {
+function postAtomicOperation(
+  databaseLineage: string,
+  body: JsonRecord,
+  writerSession = 'writer-a',
+  occupancyEpoch?: number,
+): Promise<Response> {
+  const headers = authHeaders({
+    'content-type': 'application/json',
+    'risu-database-lineage': databaseLineage,
+    'risu-writer-session': writerSession,
+  })
+  if (occupancyEpoch !== undefined) headers['risu-chat-occupancy-epoch'] = String(occupancyEpoch)
   return fetch(`${harness.baseUrl}/api/v1/generation-operations`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(body),
+  })
+}
+
+interface ChatOccupancyAuthority {
+  databaseLineage: string
+  revision: number
+  sessionId: string
+  occupancyEpoch: number
+}
+
+async function claimChatOccupancy(
+  claimClass: 'owner' | 'chat_only',
+  sessionId: string,
+): Promise<ChatOccupancyAuthority> {
+  const authority = await operationAuthority('owner-a')
+  const response = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/chat-1/claim`, {
     method: 'POST',
     headers: authHeaders({
       'content-type': 'application/json',
-      'risu-database-lineage': databaseLineage,
-      'risu-writer-session': writerSession,
+      'risu-database-lineage': authority.databaseLineage,
+      'risu-writer-session': sessionId,
+      'risu-chat-occupancy-epoch': '0',
     }),
-    body: JSON.stringify(body),
+    body: JSON.stringify({ version: 1, claimClass }),
   })
+  expect(response.status).toBe(200)
+  const occupancy = (await response.json()) as { occupancyEpoch: number }
+  return {
+    databaseLineage: authority.databaseLineage,
+    revision: authority.revision,
+    sessionId,
+    occupancyEpoch: occupancy.occupancyEpoch,
+  }
+}
+
+async function claimChatOnly(sessionId = 'reader-a'): Promise<ChatOccupancyAuthority> {
+  return claimChatOccupancy('chat_only', sessionId)
+}
+
+function withChatOccupancy(request: JsonRecord, interaction: 'send' | 'reroll' | 'continue' | 'regenerate') {
+  return { ...request, chatOccupancy: { version: 1, interaction } }
+}
+
+function chatOnlyMutationFixture(): JsonRecord {
+  const database = structuredClone(fixtureDatabase) as JsonRecord
+  const character = (database.characters as JsonRecord[])[0]!
+  character.triggerscript = [
+    {
+      comment: '',
+      type: 'output',
+      conditions: [],
+      effect: [
+        {
+          type: 'triggerlua',
+          code: `
+            listenEdit('editOutput', function(id, data)
+              setCharacterFirstMessage(id, 'forbidden chat-only greeting')
+              upsertLocalLoreBook(id, 'forbidden-chat-only-lore', 'forbidden chat-only lore')
+              return data .. ' [scoped]'
+            end)
+          `,
+        },
+        { type: 'setvar', operator: '=', var: 'mood', value: 'allowed-chat-value' },
+      ],
+    },
+  ]
+  return database
 }
 
 async function operationStatus(operationId: string): Promise<AtomicOperationResponse> {
@@ -868,6 +948,621 @@ function seedGenerationFinalizationRetryRow(
 }
 
 describe('Durable generation', () => {
+  it('enforces the exact protocol-v1 chat-only tuple and rejects unsupported targeted interactions', async () => {
+    await resetHarness({}, true)
+    await seedChatWithMessages([
+      { role: 'user', data: 'greet me', chatId: 'msg-user-chat-only' },
+      { role: 'char', data: 'old reply', chatId: 'msg-char-chat-only', saying: 'char-1' },
+    ])
+    const authority = await claimChatOnly()
+    const request = () =>
+      atomicSendRequest({
+        operationId: randomUUID(),
+        acceptedMessageId: randomUUID(),
+        baseRevision: authority.revision,
+      })
+
+    const missingEpoch = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(request(), 'send'),
+      authority.sessionId,
+    )
+    expect(missingEpoch.status).toBe(409)
+    expect(await missingEpoch.json()).toMatchObject({ error: 'chat_occupancy_stale' })
+
+    const missingProtocol = await postAtomicOperation(
+      authority.databaseLineage,
+      request(),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(missingProtocol.status).toBe(426)
+    expect(await missingProtocol.json()).toMatchObject({ error: 'chat_occupancy_protocol_required' })
+
+    const wrongVersion = await postAtomicOperation(
+      authority.databaseLineage,
+      { ...request(), chatOccupancy: { version: 2, interaction: 'send' } },
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(wrongVersion.status).toBe(400)
+    expect(await wrongVersion.json()).toEqual({ error: 'chatOccupancy.version must be 1' })
+
+    const staleEpoch = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(request(), 'send'),
+      authority.sessionId,
+      authority.occupancyEpoch + 1,
+    )
+    expect(staleEpoch.status).toBe(409)
+    expect(await staleEpoch.json()).toMatchObject({ error: 'chat_occupancy_stale', chatId: 'chat-1' })
+
+    const wrongSession = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(request(), 'send'),
+      'reader-foreign',
+      authority.occupancyEpoch,
+    )
+    expect(wrongSession.status).toBe(409)
+    expect(await wrongSession.json()).toMatchObject({ error: 'chat_occupancy_stale', chatId: 'chat-1' })
+
+    const foreignOwner = await postAtomicOperation(authority.databaseLineage, request(), 'owner-a')
+    expect(foreignOwner.status).toBe(423)
+    expect(await foreignOwner.json()).toMatchObject({ error: 'chat_occupied', chatId: 'chat-1' })
+
+    for (const interaction of ['continue', 'regenerate'] as const) {
+      const targeted = atomicTargetedRequest({
+        operationId: randomUUID(),
+        baseRevision: authority.revision,
+        mode: interaction,
+        targetMessageId: 'msg-char-chat-only',
+      })
+      const response = await postAtomicOperation(
+        authority.databaseLineage,
+        withChatOccupancy(targeted, interaction),
+        authority.sessionId,
+        authority.occupancyEpoch,
+      )
+      expect(response.status).toBe(409)
+      expect(await response.json()).toMatchObject({
+        error: 'chat_only_interaction_unsupported',
+        interaction,
+      })
+    }
+  })
+
+  it('keeps scoped Stop authority with the originating session while preserving legacy owner handoff', async () => {
+    await resetHarness({}, true)
+    const ownerGate = makeGatedProvider({ before: 'owner handoff partial' })
+    providerImpl = ownerGate.dispatchProvider
+    const ownerAuthority = await claimChatOccupancy('owner', 'owner-a')
+    const ownerOperationId = randomUUID()
+    const ownerSubmit = await postAtomicOperation(
+      ownerAuthority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({
+          operationId: ownerOperationId,
+          acceptedMessageId: randomUUID(),
+          baseRevision: ownerAuthority.revision,
+        }),
+        'send',
+      ),
+      ownerAuthority.sessionId,
+      ownerAuthority.occupancyEpoch,
+    )
+    expect(ownerSubmit.status).toBe(201)
+    await waitFor(async () => {
+      const status = await operationStatus(ownerOperationId)
+      return status.operation.state === 'owned_by_job' ? status : undefined
+    })
+
+    await fetch(`${harness.baseUrl}/api/v1/bootstrap`, {
+      headers: authHeaders({ 'risu-writer-session': 'owner-b' }),
+    })
+    const foreignOwnerStop = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(ownerOperationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': ownerAuthority.databaseLineage,
+          'risu-writer-session': 'owner-b',
+        }),
+        body: JSON.stringify({ reason: 'user_stop' }),
+      },
+    )
+    expect(foreignOwnerStop.status).toBe(423)
+    expect(await foreignOwnerStop.json()).toMatchObject({ error: 'generation_operation_foreign_session' })
+    expect((await operationStatus(ownerOperationId)).operation).toMatchObject({
+      operationId: ownerOperationId,
+      state: 'owned_by_job',
+      generationScope: { admissionKind: 'owner_occupancy', occupancySessionId: ownerAuthority.sessionId },
+    })
+
+    const originatingOwnerStop = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(ownerOperationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': ownerAuthority.databaseLineage,
+          'risu-writer-session': ownerAuthority.sessionId,
+        }),
+        body: JSON.stringify({ reason: 'user_stop' }),
+      },
+    )
+    expect(originatingOwnerStop.status).toBe(202)
+    expect(await originatingOwnerStop.json()).toMatchObject({
+      disposition: 'cancelling',
+      operation: { operationId: ownerOperationId, state: 'stopping' },
+    })
+    await waitFor(async () => {
+      const status = await operationStatus(ownerOperationId)
+      return status.operation.state === 'cancelled' ? status : undefined
+    })
+
+    await resetHarness({}, true)
+    const chatOnlyGate = makeGatedProvider({ before: 'chat-only partial' })
+    providerImpl = chatOnlyGate.dispatchProvider
+    const chatOnlyAuthority = await claimChatOnly()
+    const chatOnlyOperationId = randomUUID()
+    const chatOnlySubmit = await postAtomicOperation(
+      chatOnlyAuthority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({
+          operationId: chatOnlyOperationId,
+          acceptedMessageId: randomUUID(),
+          baseRevision: chatOnlyAuthority.revision,
+        }),
+        'send',
+      ),
+      chatOnlyAuthority.sessionId,
+      chatOnlyAuthority.occupancyEpoch,
+    )
+    expect(chatOnlySubmit.status).toBe(201)
+    await waitFor(async () => {
+      const status = await operationStatus(chatOnlyOperationId)
+      return status.operation.state === 'owned_by_job' ? status : undefined
+    })
+    const foreignChatOnlyStop = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(chatOnlyOperationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': chatOnlyAuthority.databaseLineage,
+          'risu-writer-session': 'owner-a',
+        }),
+        body: JSON.stringify({ reason: 'user_stop' }),
+      },
+    )
+    expect(foreignChatOnlyStop.status).toBe(423)
+    expect(await foreignChatOnlyStop.json()).toMatchObject({ error: 'generation_operation_foreign_session' })
+    expect((await operationStatus(chatOnlyOperationId)).operation.state).toBe('owned_by_job')
+
+    const originatingStop = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(chatOnlyOperationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': chatOnlyAuthority.databaseLineage,
+          'risu-writer-session': chatOnlyAuthority.sessionId,
+        }),
+        body: JSON.stringify({ reason: 'user_stop' }),
+      },
+    )
+    expect(originatingStop.status).toBe(202)
+    await waitFor(async () => {
+      const status = await operationStatus(chatOnlyOperationId)
+      return status.operation.state === 'cancelled' ? status : undefined
+    })
+
+    await resetHarness({}, true)
+    const legacyGate = makeGatedProvider({ before: 'legacy handoff partial' })
+    providerImpl = legacyGate.dispatchProvider
+    const legacyAuthority = await operationAuthority('legacy-a')
+    const legacyOperationId = randomUUID()
+    const legacySubmit = await postAtomicOperation(
+      legacyAuthority.databaseLineage,
+      atomicSendRequest({
+        operationId: legacyOperationId,
+        acceptedMessageId: randomUUID(),
+        baseRevision: legacyAuthority.revision,
+      }),
+      'legacy-a',
+    )
+    expect(legacySubmit.status).toBe(201)
+    await waitFor(async () => {
+      const status = await operationStatus(legacyOperationId)
+      return status.operation.state === 'owned_by_job' ? status : undefined
+    })
+    const runningLegacy = await operationStatus(legacyOperationId)
+    expect(runningLegacy.operation.generationScope).toEqual({
+      admissionKind: 'legacy_owner',
+    })
+    const legacyJobId = runningLegacy.operation.currentAttempt?.jobId
+    expect(legacyJobId).toEqual(expect.any(String))
+    await fetch(`${harness.baseUrl}/api/v1/bootstrap`, {
+      headers: authHeaders({ 'risu-writer-session': 'legacy-b' }),
+    })
+    const omittedLowLevelStop = await fetch(
+      `${harness.baseUrl}/api/v1/generate/chat/${encodeURIComponent(legacyJobId!)}`,
+      {
+        method: 'DELETE',
+        headers: authHeaders(),
+      },
+    )
+    expect(omittedLowLevelStop.status).toBe(400)
+    expect(await omittedLowLevelStop.json()).toEqual({ error: 'risu-writer-session header is required' })
+    expect((await operationStatus(legacyOperationId)).operation.state).toBe('owned_by_job')
+
+    const foreignLowLevelStop = await fetch(
+      `${harness.baseUrl}/api/v1/generate/chat/${encodeURIComponent(legacyJobId!)}`,
+      {
+        method: 'DELETE',
+        headers: authHeaders({ 'risu-writer-session': 'reader-foreign' }),
+      },
+    )
+    expect(foreignLowLevelStop.status).toBe(423)
+    expect(await foreignLowLevelStop.json()).toEqual({ error: 'generation_operation_foreign_session' })
+    expect((await operationStatus(legacyOperationId)).operation.state).toBe('owned_by_job')
+
+    const legacyHandoffStop = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(legacyOperationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': legacyAuthority.databaseLineage,
+          'risu-writer-session': 'legacy-b',
+        }),
+        body: JSON.stringify({ reason: 'user_stop' }),
+      },
+    )
+    expect(legacyHandoffStop.status).toBe(202)
+    expect(await legacyHandoffStop.json()).toMatchObject({
+      disposition: 'cancelling',
+      operation: { operationId: legacyOperationId, state: 'stopping' },
+    })
+  })
+
+  it('runs protocol-v1 chat-only send and reroll through real finalization without widening scope', async () => {
+    await resetHarness({}, true)
+    await seedDatabase(chatOnlyMutationFixture())
+    const replies = ['first scoped reply', 'rerolled scoped reply']
+    let providerCalls = 0
+    providerImpl = () => {
+      const content = replies[providerCalls++]!
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content }
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+    const authority = await claimChatOnly()
+    const sendOperationId = randomUUID()
+    const acceptedMessageId = randomUUID()
+    const send = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({
+          operationId: sendOperationId,
+          acceptedMessageId,
+          baseRevision: authority.revision,
+        }),
+        'send',
+      ),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(send.status).toBe(201)
+    await send.json()
+    const completedSend = await waitFor(async () => {
+      const status = await operationStatus(sendOperationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+    const firstResultMessageId = completedSend.operation.resultMessageId as string
+
+    let boot = await bootstrap()
+    expect((await chatMessages(boot)).at(-1)).toMatchObject({
+      role: 'char',
+      data: 'first scoped reply [scoped]',
+      chatId: firstResultMessageId,
+    })
+    expect(boot.database.characters[0].firstMessage).toBe('Greetings.')
+    expect(boot.database.characters[0].chats[0].localLore).toEqual([])
+    expect(boot.database.characters[0].chats[0].scriptstate).toEqual({ $mood: 'allowed-chat-value' })
+
+    const rerollAuthority = await operationAuthority('owner-a')
+    const rerollOperationId = randomUUID()
+    const reroll = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(
+        atomicTargetedRequest({
+          operationId: rerollOperationId,
+          baseRevision: rerollAuthority.revision,
+          mode: 'regenerate',
+          targetMessageId: firstResultMessageId,
+        }),
+        'reroll',
+      ),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(reroll.status).toBe(201)
+    await reroll.json()
+    await waitFor(async () => {
+      const status = await operationStatus(rerollOperationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+
+    boot = await bootstrap()
+    const hydration = await chatHydration(boot)
+    expect(hydration.message.at(-1)).toMatchObject({ role: 'char', data: 'rerolled scoped reply [scoped]' })
+    expect(hydration.alternates).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ chatId: firstResultMessageId, data: 'first scoped reply [scoped]' }),
+        expect.objectContaining({ data: 'rerolled scoped reply [scoped]' }),
+      ]),
+    )
+    expect(boot.database.characters[0].firstMessage).toBe('Greetings.')
+    expect(boot.database.characters[0].chats[0].localLore).toEqual([])
+    expect(boot.database.characters[0].chats[0].scriptstate).toEqual({ $mood: 'allowed-chat-value' })
+    expect(providerCalls).toBe(2)
+
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      const operations = db
+        .prepare(
+          `SELECT operation_id, admission_kind, occupancy_database_lineage, occupancy_session_id,
+                  occupancy_epoch, occupancy_claim_class, permission_scope_version
+           FROM generation_operations WHERE operation_id IN (?, ?) ORDER BY operation_id`,
+        )
+        .all(sendOperationId, rerollOperationId) as unknown as JsonRecord[]
+      expect(operations).toHaveLength(2)
+      expect(operations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            admission_kind: 'chat_only',
+            occupancy_database_lineage: authority.databaseLineage,
+            occupancy_session_id: authority.sessionId,
+            occupancy_epoch: authority.occupancyEpoch,
+            occupancy_claim_class: 'chat_only',
+            permission_scope_version: 1,
+          }),
+        ]),
+      )
+      expect(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM generation_operation_attempts
+             WHERE operation_id IN (?, ?) AND accepted_admission_kind = 'chat_only'
+               AND accepted_occupancy_session_id = ? AND accepted_occupancy_epoch = ?`,
+          )
+          .get(sendOperationId, rerollOperationId, authority.sessionId, authority.occupancyEpoch),
+      ).toEqual({ count: 2 })
+      expect(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM generation_effects
+             WHERE operation_id IN (?, ?) AND admission_kind = 'chat_only'`,
+          )
+          .get(sendOperationId, rerollOperationId),
+      ).toEqual({ count: 14 })
+      expect(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM generation_effects
+             WHERE operation_id IN (?, ?) AND effect_kind IN ('plugin_output', 'emotion_image_state')
+               AND status = 'skipped' AND reason = 'unsupported_chat_only_scope'`,
+          )
+          .get(sendOperationId, rerollOperationId),
+      ).toEqual({ count: 4 })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('keeps accepted chat-only work authoritative through normalize and viewer disconnect', async () => {
+    await resetHarness({}, true)
+    const gated = makeGatedProvider({ before: 'accepted before disconnect', after: ' and normalized' })
+    providerImpl = gated.dispatchProvider
+    const authority = await claimChatOnly()
+    const operationId = randomUUID()
+    const submit = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({ operationId, acceptedMessageId: randomUUID(), baseRevision: authority.revision }),
+        'send',
+      ),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(submit.status).toBe(201)
+    await submit.json()
+    // The accepting HTTP request is already closed: the provider remains
+    // detached with no viewer while the first token is gated in replay state.
+    await waitFor(async () => {
+      const current = await operationStatus(operationId)
+      return current.operation.providerMayHaveRun === true ? current : undefined
+    })
+
+    const normalized = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/normalize`, {
+      method: 'POST',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': authority.sessionId,
+        'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+      }),
+      body: JSON.stringify({ version: 1, selectedChatId: 'chat-1' }),
+    })
+    expect(normalized.status).toBe(200)
+    expect(await normalized.json()).toMatchObject({
+      occupantSessionId: authority.sessionId,
+      occupancyEpoch: authority.occupancyEpoch,
+      claimClass: 'chat_only',
+    })
+
+    const pinnedRelease = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/chat-1`, {
+      method: 'DELETE',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': authority.sessionId,
+        'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+      }),
+      body: JSON.stringify({ version: 1 }),
+    })
+    expect(pinnedRelease.status).toBe(409)
+    expect(await pinnedRelease.json()).toMatchObject({ error: 'chat_occupancy_recovery_blocked' })
+
+    gated.release()
+    await waitFor(async () => {
+      const status = await operationStatus(operationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+    expect((await chatMessages(await bootstrap())).at(-1)).toMatchObject({
+      role: 'char',
+      data: 'accepted before disconnect and normalized',
+    })
+  })
+
+  it('revalidates a token-then-provider-failure partial and suppresses forbidden chat-only writes', async () => {
+    await resetHarness({}, true)
+    await seedDatabase(chatOnlyMutationFixture())
+    providerImpl = () =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'retained failed partial' }
+        yield { kind: 'error', error: 'injected post-token failure', nonRetryable: true }
+      })()
+    const authority = await claimChatOnly()
+    const operationId = randomUUID()
+    const submit = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({ operationId, acceptedMessageId: randomUUID(), baseRevision: authority.revision }),
+        'send',
+      ),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(submit.status).toBe(201)
+    await submit.json()
+    const terminal = await waitFor(async () => {
+      const status = await operationStatus(operationId)
+      return ['terminal_failed', 'completed', 'cancelled', 'retryable', 'abandoned'].includes(status.operation.state)
+        ? status
+        : undefined
+    })
+    expect(terminal.operation).toMatchObject({
+      state: 'terminal_failed',
+      resultMessageId: expect.any(String),
+      failureCode: 'provider_failed',
+    })
+
+    const boot = await bootstrap()
+    expect((await chatMessages(boot)).at(-1)).toMatchObject({
+      role: 'char',
+      data: 'retained failed partial [scoped]',
+    })
+    expect(boot.database.characters[0].firstMessage).toBe('Greetings.')
+    expect(boot.database.characters[0].chats[0].localLore).toEqual([])
+    expect(boot.database.characters[0].chats[0].scriptstate).toEqual({ $mood: 'allowed-chat-value' })
+    expect(generationFinalizationRetryRows()).toEqual([])
+
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT accepted_admission_kind, accepted_occupancy_session_id, accepted_occupancy_epoch
+             FROM generation_operation_attempts WHERE operation_id = ?`,
+          )
+          .get(operationId),
+      ).toEqual({
+        accepted_admission_kind: 'chat_only',
+        accepted_occupancy_session_id: authority.sessionId,
+        accepted_occupancy_epoch: authority.occupancyEpoch,
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('uses acceptance-time BardWiki settings for automatic confirmation after a live config edit', async () => {
+    const acceptedBardWikiSettings = {
+      ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      enabledByDefault: true,
+      memoryMode: 'bardwiki' as const,
+      confirmationPolicy: 'automatic' as const,
+      modelProfileId: 'accepted-bard-profile',
+      promptPresetId: 'accepted-bard-prompt',
+      canonicalUpdates: true,
+    }
+    await seedChatWithMessages(
+      [
+        { role: 'user', data: 'prior question', chatId: 'bard-prior-user' },
+        { role: 'char', data: 'prior answer', chatId: 'bard-prior-assistant', saying: 'char-1' },
+      ],
+      { bardWiki: acceptedBardWikiSettings },
+    )
+    const gated = makeGatedProvider({ before: 'next answer', after: ' completed' })
+    providerImpl = gated.dispatchProvider
+    const authority = await operationAuthority()
+    const operationId = randomUUID()
+    const acceptedMessageId = randomUUID()
+    const response = await postAtomicOperation(
+      authority.databaseLineage,
+      atomicSendRequest({ operationId, acceptedMessageId, baseRevision: authority.revision }),
+    )
+    expect(response.status).toBe(201)
+    await response.json()
+    await waitFor(async () => {
+      const current = await operationStatus(operationId)
+      return current.operation.providerMayHaveRun === true ? current : undefined
+    })
+    executeDatabase(`
+      UPDATE settings
+      SET data_json = json_set(
+        data_json,
+        '$.bardWiki.enabledByDefault', json('false'),
+        '$.bardWiki.confirmationPolicy', 'manual',
+        '$.bardWiki.modelProfileId', 'later-bard-profile',
+        '$.bardWiki.promptPresetId', 'later-bard-prompt',
+        '$.bardWiki.canonicalUpdates', json('false')
+      )
+      WHERE id = 1
+    `)
+    gated.release()
+    await waitFor(async () => {
+      const status = await operationStatus(operationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      const operationRow = db
+        .prepare('SELECT effective_configuration_json FROM generation_operations WHERE operation_id = ?')
+        .get(operationId) as { effective_configuration_json: string }
+      const effectiveConfiguration = JSON.parse(operationRow.effective_configuration_json) as JsonRecord
+      expect(effectiveConfiguration.acceptedBardWikiSettings).toEqual(acceptedBardWikiSettings)
+      const jobRow = db
+        .prepare("SELECT operation_id, payload_json FROM bardwiki_jobs WHERE kind = 'apply_turn'")
+        .get() as { operation_id: string; payload_json: string }
+      expect(jobRow.operation_id).toBe(operationId)
+      const payload = JSON.parse(jobRow.payload_json) as JsonRecord
+      expect(payload.acceptedSettings).toEqual(acceptedBardWikiSettings)
+      expect(payload).toMatchObject({
+        modelProfileId: 'accepted-bard-profile',
+        promptPresetId: 'accepted-bard-prompt',
+        canonicalEnabled: true,
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   it('accepts a targeted regenerate while the assistant remains authoritative through admission', async () => {
     await seedChatWithMessages([
       { role: 'user', data: 'greet me', chatId: 'msg-user-1' },
@@ -1783,7 +2478,53 @@ describe('Durable generation', () => {
     }
   })
 
-  it('loads configuration and the accepted message freshly after preflight and append', async () => {
+  it('rejects an oversized effective configuration with 413 before provider dispatch', async () => {
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      db.prepare(
+        "UPDATE prompt_presets SET data_json = json_set(data_json, '$.mainPrompt', ?) WHERE json_extract(data_json, '$.id') = ?",
+      ).run('x'.repeat(GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES), DURABLE_PROMPT_PRESET_ID)
+    } finally {
+      db.close()
+    }
+    let providerCalls = 0
+    providerImpl = () => {
+      providerCalls += 1
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+    const authority = await operationAuthority()
+    const operationId = randomUUID()
+    const acceptedMessageId = randomUUID()
+    const response = await postAtomicOperation(
+      authority.databaseLineage,
+      atomicSendRequest({
+        operationId,
+        acceptedMessageId,
+        baseRevision: authority.revision,
+      }),
+    )
+    expect(response.status).toBe(413)
+    expect(await response.json()).toMatchObject({
+      error: 'generation_effective_configuration_too_large',
+      maxBytes: GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES,
+    })
+    expect(providerCalls).toBe(0)
+    const stored = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        stored.prepare('SELECT COUNT(*) AS count FROM generation_operations WHERE operation_id = ?').get(operationId),
+      ).toEqual({ count: 0 })
+      expect(stored.prepare('SELECT COUNT(*) AS count FROM messages WHERE uid = ?').get(acceptedMessageId)).toEqual({
+        count: 0,
+      })
+    } finally {
+      stored.close()
+    }
+  })
+
+  it('uses the accepted effective configuration and accepted message after a later settings edit', async () => {
     await seedDatabase({
       ...fixtureDatabase,
       promptPresets: [
@@ -1794,6 +2535,7 @@ describe('Durable generation', () => {
     const operationId = randomUUID()
     const acceptedMessageId = randomUUID()
     const acceptedText = 'Accepted text must enter the new assembly snapshot'
+    const acceptedPrompt = fixtureDatabase.promptPresets[0].mainPrompt
     const updatedPrompt = 'Selected prompt changed after acceptance'
     let configurationRevision = 0
     let dispatchedPrompt = ''
@@ -1840,8 +2582,9 @@ describe('Durable generation', () => {
       return status.operation.state === 'completed' ? status : undefined
     })
     expect(configurationRevision).toBe(authority.revision + 2)
-    expect(dispatchedSetting).toBe(updatedPrompt)
-    expect(dispatchedPrompt).toContain(updatedPrompt)
+    expect(dispatchedSetting).toBe(acceptedPrompt)
+    expect(dispatchedPrompt).toContain(acceptedPrompt)
+    expect(dispatchedPrompt).not.toContain(updatedPrompt)
     expect(dispatchedPrompt).toContain(acceptedText)
   })
 
@@ -4041,13 +4784,14 @@ describe('Durable generation', () => {
   // If the target chat is gone at completion, persistence fails gracefully with a
   // job error and no bad write.
   it.each(['modern-import', 'modern-restore', 'compatibility-import', 'compatibility-restore'] as const)(
-    'isolates a live %s generation from an identical-source database replacement',
+    'enforces database-replacement pinning for a live %s generation',
     async (schedule) => {
       const gated = makeGatedProvider({ before: 'Obsolete', after: ' generation output' })
       providerImpl = gated.dispatchProvider
       const authority = await operationAuthority()
       const controller = newController()
       let stream: Response
+      let generationId = ''
       if (schedule.startsWith('modern')) {
         const response = await postAtomicOperation(
           authority.databaseLineage,
@@ -4059,14 +4803,20 @@ describe('Durable generation', () => {
         )
         expect(response.status).toBe(201)
         const accepted = (await response.json()) as AtomicOperationResponse
+        generationId = accepted.operation.currentAttempt!.jobId
         stream = await fetch(harness.baseUrl + accepted.stream!.href, {
           headers: authHeaders(),
           signal: controller.signal,
         })
-      } else stream = await postDurable({}, { signal: controller.signal })
+      } else stream = await postDurable({}, { signal: controller.signal, writerSession: 'writer-a' })
       try {
-        await readSse(stream, (event) => event.type === 'token')
+        await readSse(stream, (event) => {
+          if (event.type === 'job_accepted') generationId = event.data.jobId as string
+          return event.type === 'token'
+        })
         const snapshot = await bootstrap()
+        let replacement
+        let backupId: string | undefined
         if (schedule.endsWith('restore')) {
           const saved = await harness.app.inject({
             method: 'POST',
@@ -4075,35 +4825,75 @@ describe('Durable generation', () => {
             payload: { label: 'live generation' },
           })
           expect(saved.statusCode, saved.body).toBe(201)
-          const restored = await harness.app.inject({
+          backupId = saved.json().id as string
+          replacement = await harness.app.inject({
             method: 'POST',
-            url: `/api/v1/backups/${saved.json().id}/restore`,
+            url: `/api/v1/backups/${backupId}/restore`,
             headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
           })
-          expect(restored.statusCode, restored.body).toBe(200)
         } else {
-          const imported = await harness.app.inject({
+          replacement = await harness.app.inject({
             method: 'POST',
             url: '/api/v1/import/risusave',
             headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
             payload: { database: snapshot.database },
           })
-          expect(imported.statusCode, imported.body).toBe(200)
         }
-        const before = await bootstrap()
+        expect(replacement.statusCode, replacement.body).toBe(423)
+        expect(replacement.json()).toMatchObject({ error: 'chat_occupied', conflictingChatIds: ['chat-1'] })
+        const preserved = await operationAuthority()
+        expect(preserved.databaseLineage).toBe(authority.databaseLineage)
+        expect(await chatMessages(await bootstrap())).toEqual(await chatMessages(snapshot))
+
         gated.release()
         await waitFor(async () => ((await bootstrap()).activeGenerationJobs.length === 0 ? true : undefined))
-        const after = await bootstrap()
-        expect(await chatMessages(after)).toEqual(await chatMessages(before))
-        expect(JSON.stringify(await chatMessages(after))).not.toContain('Obsolete generation output')
+        const listedEffects = await harness.app.inject({
+          method: 'GET',
+          url: `/api/v1/generation-effects/${generationId}`,
+          headers: authHeaders(),
+        })
+        const igp = (listedEffects.json().effects as Array<JsonRecord>).find((effect) => effect.kind === 'igp')!
+        const claimedIgp = await harness.app.inject({
+          method: 'POST',
+          url: `/api/v1/generation-effects/${generationId}/igp/claims`,
+          headers: authHeaders({
+            'risu-writer-session': 'writer-a',
+            'risu-database-lineage': authority.databaseLineage,
+          }),
+          payload: { delivery: 'late_recovery', messageId: igp.messageId },
+        })
+        expect(claimedIgp.statusCode, claimedIgp.body).toBe(201)
+        const settledIgp = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/v1/generation-effects/${generationId}/igp/receipt`,
+          headers: authHeaders({
+            'risu-writer-session': 'writer-a',
+            'risu-database-lineage': authority.databaseLineage,
+          }),
+          payload: { claimId: claimedIgp.json().claimId, status: 'skipped', reason: 'test_settled' },
+        })
+        expect(settledIgp.statusCode, settledIgp.body).toBe(200)
+        const afterSettlement = schedule.endsWith('restore')
+          ? await harness.app.inject({
+              method: 'POST',
+              url: `/api/v1/backups/${backupId!}/restore`,
+              headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
+            })
+          : await harness.app.inject({
+              method: 'POST',
+              url: '/api/v1/import/risusave',
+              headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
+              payload: { database: snapshot.database },
+            })
+        expect(afterSettlement.statusCode, afterSettlement.body).toBe(200)
       } finally {
-        gated.release()
         controller.abort()
+        gated.release()
       }
     },
   )
 
-  it('records a job error when the target chat vanishes mid-generation (gotcha C)', async () => {
+  it('prevents database replacement from making a pinned target chat vanish mid-generation', async () => {
     const gated = makeGatedProvider({ before: 'Hel', after: 'lo' })
     providerImpl = gated.dispatchProvider
 
@@ -4140,24 +4930,26 @@ describe('Durable generation', () => {
     })()
 
     await waitFor(async () => (jobId.length > 0 ? true : undefined))
-    // Replace the whole database so chat-1 no longer exists, then let the job finish.
-    await seedDatabase({
-      ...fixtureDatabase,
-      characters: [{ ...fixtureDatabase.characters[0], chats: [] }],
+    const replacement = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/import/risusave',
+      headers: authHeaders(),
+      payload: {
+        database: {
+          ...fixtureDatabase,
+          characters: [{ ...fixtureDatabase.characters[0], chats: [] }],
+        },
+      },
     })
+    expect(replacement.statusCode, replacement.body).toBe(423)
+    expect(replacement.json()).toMatchObject({ error: 'chat_occupied', conflictingChatIds: ['chat-1'] })
     gated.release()
     await livePromise
 
-    expect(live.some((e) => e.type === 'error')).toBe(true)
-    // No bad write: the imported db has no chat-1 to receive a message.
+    expect(live.some((event) => event.type === 'error')).toBe(false)
+    expect(live.some((event) => event.type === 'done')).toBe(true)
     const boot = await bootstrap()
-    expect(boot.database.characters[0].chats).toEqual([])
-    const terminalRow = await waitFor(async () => {
-      const row = generationFinalizationRetryRows()[0]
-      return row?.status === 'terminal' ? row : undefined
-    })
-    expect(terminalRow.failure_count).toBeGreaterThan(0)
-    expect(terminalRow.terminal_error).toContain('Chat not found')
+    expect(JSON.stringify(await chatMessages(boot))).toContain('Hello')
     controller.abort()
   })
 

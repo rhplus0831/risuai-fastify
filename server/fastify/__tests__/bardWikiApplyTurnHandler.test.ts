@@ -10,6 +10,12 @@ import { createInitialDatabase } from '../src/databaseDefaults.js'
 import { createCommandEventSink } from '../src/commands/events.js'
 import { getSchemaState, openDatabase } from '../src/db.js'
 import { cancelBardWikiJob, getBardWikiJob } from '../src/bardWikiJobs.js'
+import { getDatabaseLineage } from '../src/databaseLineage.js'
+import {
+  createGenerationOperation,
+  generationEffectiveConfigurationFingerprint,
+  reserveGenerationOperationAttempt,
+} from '../src/generationOperations.js'
 import { createOrReuseExplicitBardWikiConfirmation, hashBardWikiMessageContent } from '../src/bardWikiReceipts.js'
 import {
   createBardWikiDocument,
@@ -101,7 +107,111 @@ function workerFor(
   })
 }
 
+function bindApplyJobToAcceptedConfiguration(
+  db: DatabaseSync,
+  bardWikiJobId: string,
+  effectiveConfiguration: unknown,
+): void {
+  const databaseLineage = getDatabaseLineage(db)
+  const operation = createGenerationOperation(db, {
+    databaseLineage,
+    operationId: 'accepted-operation',
+    protocolVersion: 1,
+    requestOrigin: 'legacy',
+    creatorWriterSessionId: 'accepted-session',
+    creatorWriterEpoch: 0,
+    generationScope: { admissionKind: 'legacy_owner' },
+    effectiveConfiguration,
+    effectiveConfigurationFingerprint: generationEffectiveConfigurationFingerprint(effectiveConfiguration),
+    characterId: 'character-a',
+    chatId: 'chat-a',
+    mode: 'send',
+    requestFingerprint: 'c'.repeat(64),
+    intent: { mode: 'send' },
+    acceptedRevision: 0,
+    state: 'accepted',
+  })
+  const reservation = reserveGenerationOperationAttempt(db, {
+    databaseLineage,
+    operationId: operation.operationId,
+    expectedState: 'accepted',
+    expectedStateVersion: operation.stateVersion,
+    retryRequestId: 'accepted-retry',
+    jobId: 'accepted-generation-job',
+    serverInstanceId: 'server-a',
+    actorWriterSessionId: 'accepted-session',
+    actorWriterEpoch: 0,
+    launchRevision: 0,
+  })
+  if (reservation.status !== 'applied') throw new Error('failed to reserve accepted test operation')
+  db.prepare(
+    `UPDATE bardwiki_jobs
+     SET operation_id = ?, operation_attempt_no = ?, admission_kind = 'legacy_owner'
+     WHERE id = ?`,
+  ).run(operation.operationId, reservation.operation.currentAttempt!.attemptNo, bardWikiJobId)
+}
+
 describe('BardWiki apply-turn handler', () => {
+  it('uses the accepted provider and BardWiki settings after later configuration edits', async () => {
+    const harness = createHarness()
+    const acceptedDatabase = createInitialDatabase() as unknown as Record<string, unknown>
+    acceptedDatabase.temperature = 0.17
+    const acceptedSettings = {
+      ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+      enabledByDefault: true,
+      canonicalUpdates: false,
+      modelProfileId: 'accepted-profile',
+      promptPresetId: 'accepted-prompt',
+    }
+    const storedJob = getBardWikiJob(harness.db, harness.confirmation.job.id)!
+    harness.db
+      .prepare('UPDATE bardwiki_jobs SET payload_json = ? WHERE id = ?')
+      .run(JSON.stringify({ ...storedJob.payload, acceptedSettings }), storedJob.id)
+    bindApplyJobToAcceptedConfiguration(harness.db, storedJob.id, {
+      version: 1,
+      database: acceptedDatabase,
+      promptInfo: {},
+      resolvedMainProfile: {},
+      acceptedBardWikiSettings: acceptedSettings,
+    })
+
+    const liveDatabase = createInitialDatabase() as unknown as Record<string, unknown>
+    liveDatabase.temperature = 0.91
+    const loadDatabase = vi.fn(() => liveDatabase)
+    let observedTemperature: unknown
+    let observedSettings: unknown
+    try {
+      const worker = workerFor(harness, {
+        db: harness.db,
+        dataDir: harness.dataDir,
+        loadDatabase,
+        analyze: async (request) => {
+          observedTemperature = (request.database as unknown as Record<string, unknown>).temperature
+          observedSettings = request.settings
+          return VALID_DRAFT
+        },
+      })
+      const current = createInitialDatabase() as unknown as Record<string, unknown>
+      current.bardWiki = {
+        ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+        enabledByDefault: false,
+        canonicalUpdates: true,
+        modelProfileId: 'later-profile',
+        promptPresetId: 'later-prompt',
+      }
+      harness.db.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(current))
+
+      await expect(worker.tick()).resolves.toBe(true)
+
+      expect(loadDatabase).not.toHaveBeenCalled()
+      expect(observedTemperature).toBe(0.17)
+      expect(observedSettings).toEqual(acceptedSettings)
+      expect(getBardWikiJob(harness.db, storedJob.id)?.status).toBe('completed')
+    } finally {
+      harness.db.close()
+    }
+  })
+
   it('commits one forced event document, provenance, manifest, revision, event, and prompt-search row', async () => {
     const harness = createHarness({ pathCollision: true })
     const commandEvents = createCommandEventSink()

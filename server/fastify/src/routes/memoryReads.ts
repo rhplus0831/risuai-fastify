@@ -13,6 +13,11 @@ import {
   updateMemorySummary,
 } from '../memoryRepository.js'
 import { ValidationError } from '../repository.js'
+import {
+  assertManualChatMutationAllowedInTransaction,
+  runImmediateChatMutationTransaction,
+  sendChatMutationError,
+} from './chatOccupancyMutation.js'
 
 interface MemoryReadParams {
   chatId: string
@@ -331,32 +336,36 @@ export function registerMemoryReadRoutes(app: FastifyInstance, db: DatabaseSync,
             : [...new Set((tags as string[]).map((tag) => tag.trim()).filter((tag) => tag.length > 0))]
       }
 
-      const existing = getMemorySummary(db, req.params.summaryId)
-      if (!existing) {
-        reply.code(404)
-        return badRequest('memory summary not found')
-      }
-
-      const metadataPatchRequested = ['isImportant', 'categoryId', 'tags'].some((key) => hasOwn(req.body, key))
-      const metadata = isObject(existing.metadata) ? { ...existing.metadata } : {}
-      if (hasOwn(req.body, 'isImportant')) metadata.isImportant = req.body.isImportant
-      if (hasOwn(req.body, 'categoryId')) {
-        if (req.body.categoryId === null || req.body.categoryId === '') delete metadata.categoryId
-        else metadata.categoryId = req.body.categoryId
-      }
-      if (hasOwn(req.body, 'tags')) {
-        if (normalizedTags === null) {
-          delete metadata.tags
-        } else {
-          metadata.tags = normalizedTags
-        }
-      }
-
       try {
-        const summary = updateMemorySummary(db, req.params.summaryId, {
-          ...(typeof req.body.text === 'string' ? { text: req.body.text, tokens: 0 } : {}),
-          ...(metadataPatchRequested ? { metadata } : {}),
+        const summary = runImmediateChatMutationTransaction(db, () => {
+          const existing = getMemorySummary(db, req.params.summaryId)
+          if (!existing) return null
+          assertManualChatMutationAllowedInTransaction(db, existing.chatId, req)
+
+          const metadataPatchRequested = ['isImportant', 'categoryId', 'tags'].some((key) => hasOwn(req.body, key))
+          const metadata = isObject(existing.metadata) ? { ...existing.metadata } : {}
+          if (hasOwn(req.body, 'isImportant')) metadata.isImportant = req.body.isImportant
+          if (hasOwn(req.body, 'categoryId')) {
+            if (req.body.categoryId === null || req.body.categoryId === '') delete metadata.categoryId
+            else metadata.categoryId = req.body.categoryId
+          }
+          if (hasOwn(req.body, 'tags')) {
+            if (normalizedTags === null) {
+              delete metadata.tags
+            } else {
+              metadata.tags = normalizedTags
+            }
+          }
+
+          return updateMemorySummary(db, req.params.summaryId, {
+            ...(typeof req.body.text === 'string' ? { text: req.body.text, tokens: 0 } : {}),
+            ...(metadataPatchRequested ? { metadata } : {}),
+          })
         })
+        if (!summary) {
+          reply.code(404)
+          return badRequest('memory summary not found')
+        }
         if (prefersMinimalResponse(req.headers.prefer)) {
           reply.header('preference-applied', PREFER_RETURN_MINIMAL)
           return { summaryId: req.params.summaryId }
@@ -367,7 +376,7 @@ export function registerMemoryReadRoutes(app: FastifyInstance, db: DatabaseSync,
           reply.code(400)
           return badRequest(error.message)
         }
-        throw error
+        return sendChatMutationError(reply, error)
       }
     },
   )
@@ -378,7 +387,17 @@ export function registerMemoryReadRoutes(app: FastifyInstance, db: DatabaseSync,
       reply.code(400)
       return badRequest('summaryId must be a non-empty string')
     }
-    const summary = deleteMemorySummary(db, req.params.summaryId)
+    let summary
+    try {
+      summary = runImmediateChatMutationTransaction(db, () => {
+        const existing = getMemorySummary(db, req.params.summaryId)
+        if (!existing) return null
+        assertManualChatMutationAllowedInTransaction(db, existing.chatId, req)
+        return deleteMemorySummary(db, existing.id)
+      })
+    } catch (error) {
+      return sendChatMutationError(reply, error)
+    }
     if (!summary) {
       reply.code(404)
       return badRequest('memory summary not found')

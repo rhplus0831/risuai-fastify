@@ -129,7 +129,20 @@ async function withSqliteSelectReadInstrumentation<T>(
 }
 
 function expectSettingsCommandReadOnlySettings(readCountByTable: Record<string, number>): void {
-  expect(readCountByTable).toEqual({ schema_version: 1, settings: 1 })
+  expectCommandReadCountsWithOccupancyPreservation(readCountByTable, { schema_version: 1, settings: 1 })
+}
+
+const OCCUPANCY_PRESERVATION_READ_TABLES = ['chat_occupancies', 'database_metadata', 'sqlite_master'] as const
+
+function expectCommandReadCountsWithOccupancyPreservation(
+  readCountByTable: Record<string, number>,
+  domainReadCountByTable: Record<string, number>,
+  occupancyGuardPasses = 1,
+): void {
+  expect(readCountByTable).toEqual({
+    ...domainReadCountByTable,
+    ...Object.fromEntries(OCCUPANCY_PRESERVATION_READ_TABLES.map((table) => [table, occupancyGuardPasses])),
+  })
 }
 
 function expectCollectionCommandReadOnlyTables(
@@ -141,7 +154,7 @@ function expectCollectionCommandReadOnlyTables(
     settings: 1,
     ...Object.fromEntries(collectionTables.map((table) => [table, 1])),
   }
-  expect(readCountByTable).toEqual(expected)
+  expectCommandReadCountsWithOccupancyPreservation(readCountByTable, expected)
 }
 
 function expectCollectionLoadOnlyTables(
@@ -226,7 +239,11 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
       expect(loadRun.result.statusCode, JSON.stringify(loadRun.result.json())).toBe(200)
       expect(loadRun.corpusLoadCount).toBe(0)
       expect(loadRun.loadCountByTable).toEqual({})
-      expect(readCountByTable).toEqual({ schema_version: 1, settings: 1, characters: 1 })
+      expectCommandReadCountsWithOccupancyPreservation(readCountByTable, {
+        schema_version: 1,
+        settings: 1,
+        characters: 1,
+      })
       revision = loadRun.result.json().revision
     }
 
@@ -273,7 +290,12 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     expect(loadRun.result.statusCode, JSON.stringify(loadRun.result.json())).toBe(200)
     expect(loadRun.corpusLoads.map((load) => load.table)).toEqual(['modules'])
     expect(loadRun.loadCountByTable).toEqual({ modules: 1 })
-    expect(readCountByTable).toEqual({ schema_version: 1, settings: 1, modules: 1, characters: 1 })
+    expectCommandReadCountsWithOccupancyPreservation(readCountByTable, {
+      schema_version: 1,
+      settings: 1,
+      modules: 1,
+      characters: 1,
+    })
   })
 
   it('compact definition mutations retain exact character and module-scoped read budgets', async () => {
@@ -297,7 +319,11 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
       expect(loadRun.result.statusCode, JSON.stringify(loadRun.result.json())).toBe(200)
       expect(loadRun.corpusLoadCount).toBe(0)
       expect(loadRun.loadCountByTable).toEqual({})
-      expect(readCountByTable).toEqual({ schema_version: 1, settings: 1, characters: 1 })
+      expectCommandReadCountsWithOccupancyPreservation(readCountByTable, {
+        schema_version: 1,
+        settings: 1,
+        characters: 1,
+      })
       revision = loadRun.result.json().revision
     }
 
@@ -570,16 +596,20 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     const { result: res, loadCountByTable } = loadRun
     expect(res.statusCode).toBe(200)
     expect(loadCountByTable).toEqual({ modules: 1, personas: 1 })
-    expect(readCountByTable).toEqual({
-      schema_version: 1,
-      settings: 1,
-      modules: 1,
-      model_presets: 1,
-      prompt_presets: 1,
-      personas: 1,
-      chats: 1,
-      characters: 1,
-    })
+    expectCommandReadCountsWithOccupancyPreservation(
+      readCountByTable,
+      {
+        schema_version: 1,
+        settings: 1,
+        modules: 1,
+        model_presets: 1,
+        prompt_presets: 1,
+        personas: 1,
+        chats: 1,
+        characters: 1,
+      },
+      2,
+    )
 
     const db = openDatabase(harness.dataDir)
     try {

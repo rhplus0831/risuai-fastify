@@ -3726,6 +3726,7 @@ export async function applyImport(
   dataDir: string,
   database: unknown,
   options: {
+    beforeReplace?: (db: DatabaseSync) => void
     beforeRevision?: (db: DatabaseSync) => void
     cloneBeforeMessageSplit?: boolean
     automaticBackupRetention?: number
@@ -3747,7 +3748,6 @@ export async function applyImport(
     // Creating the safety snapshot can yield to the event loop. Do not begin the
     // destructive transaction if the requesting client disconnected meanwhile.
     throwIfImportAborted(lease.signal)
-    assertMaintenanceWriteFence(db, safetyFence)
     // The imported payload carries embedded `message[]`; split them into the
     // messages table and persist the message-free domain tables. By default we
     // persist a *clone* so the caller's `database` object is left fully hydrated —
@@ -3761,6 +3761,13 @@ export async function applyImport(
     db.exec('BEGIN IMMEDIATE')
     transactionOpen = true
     try {
+      // Recheck destructive publication guards after asynchronous staging and
+      // while the old live graph is still visible under the write lock.
+      options.beforeReplace?.(db)
+      // Occupancy/pin conflicts are more actionable than the generic write
+      // fence when both changed during staging. Evaluate the scoped guard first
+      // while retaining the fence and replacement under this same write lock.
+      assertMaintenanceWriteFence(db, safetyFence)
       // A caller may pass an already-normalized throwaway object and opt out of
       // the repository clone. In that path, run the pre-revision hook before the
       // destructive message split so legacy memory backfill can still read
@@ -4149,6 +4156,7 @@ function saveDir(dataDir: string): string {
 //   - push_subscriptions: origin/device registrations bound to the live VAPID
 //     identity, whose key file is outside the backup contract.
 //   - database_metadata: live lineage/writer ownership; restore rotates lineage.
+//   - chat_occupancies: live per-chat authority; lineage rotation clears it.
 //   - command_mutation_receipts: lineage-scoped idempotency records that must not
 //     cross a replacement boundary.
 //   - request_history: device-local diagnostic telemetry; restore clears it when
@@ -4203,6 +4211,7 @@ export const SQLITE_BACKUP_EXCLUDED_TABLES = {
   bardwiki_document_search: 'Derived lexical projection rebuilt from authoritative BardWiki documents on restore.',
   push_subscriptions: 'Origin/device registrations bound to the live VAPID identity.',
   database_metadata: 'Live lineage and writer ownership; restore rotates lineage.',
+  chat_occupancies: 'Live per-chat authority; restore clears it when rotating lineage.',
   command_mutation_receipts: 'Lineage-scoped idempotency records; restore clears them.',
   request_history: 'Device-local diagnostic telemetry; restore clears it when rotating lineage.',
   schema_version: 'Live schema metadata; restore copies only the snapshot revision.',
@@ -4918,6 +4927,7 @@ function assertRestoreScratchIsUnused(journal: RestoreSwapJournal): void {
 }
 
 interface RestoreSqliteHooks {
+  beforeReplace?: () => void
   beforeCommit?: (databaseLineage: string) => void
   afterCommit?: (databaseLineage: string) => void
   onPostCommitError?: (error: unknown) => void
@@ -5075,6 +5085,7 @@ function restoreSqliteFromBackup(
     let databaseLineage: string
     let committed = false
     try {
+      hooks.beforeReplace?.()
       for (const table of SQLITE_BACKUP_TABLES) {
         db.exec(`DELETE FROM ${table}`)
       }
@@ -5116,6 +5127,7 @@ function restoreSqliteFromBackup(
     db.exec('BEGIN')
     db.exec('PRAGMA defer_foreign_keys = ON')
     try {
+      hooks.beforeReplace?.()
       // Keep the live schema version current; only the snapshot's revision is
       // part of the restored durable state.
       const schemaVersionExists = db
@@ -5210,6 +5222,8 @@ export async function restoreBackup(
   options: {
     automaticBackupRetention?: number
     signal?: AbortSignal
+    /** Runs in the restore transaction before any live table is replaced. */
+    beforeReplace?: (db: DatabaseSync) => void
     /** Synchronous route effects must precede post-commit retention awaits. */
     onCommitted?: (result: RestoreBackupResult) => void
   } = {},
@@ -5247,7 +5261,6 @@ export async function restoreBackup(
       path.join(backupDir(dataDir, id), 'assets'),
     )
     lease.signal.throwIfAborted()
-    assertMaintenanceWriteFence(db, safetyFence)
 
     writeRestoreSwapJournal(journalFile, journal, true)
     try {
@@ -5272,6 +5285,12 @@ export async function restoreBackup(
       updateRestoreSwapJournal(journalFile, journal, { phase: 'save-parked' })
 
       databaseLineage = restoreSqliteFromBackup(db, usableDatabasePayloads.sqlite ? backupSqlite : null, {
+        beforeReplace: () => {
+          // Prefer the occupancy/pin diagnosis when staging raced accepted
+          // chat work, then retain the generic write fence in the transaction.
+          options.beforeReplace?.(db)
+          assertMaintenanceWriteFence(db, safetyFence)
+        },
         beforeCommit: (nextDatabaseLineage) => {
           // Retain the transaction's lineage in memory too, so an ambiguous COMMIT
           // error that is resolved as committed can still return the correct

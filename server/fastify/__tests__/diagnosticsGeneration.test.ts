@@ -384,7 +384,19 @@ describe('safe generation evidence', () => {
         cleanupComplete: true,
       })
       expect(dispatch).toHaveBeenCalledTimes(1)
-      expect(readOperationState()).toBe(operationState)
+      expect(readOperationState()).toBe('terminal_failed')
+      expect(
+        h.db
+          .prepare(
+            `SELECT COUNT(*) AS operationCount,
+                    COUNT(DISTINCT result_message_id) AS resultCount
+             FROM generation_operations`,
+          )
+          .get(),
+      ).toEqual({ operationCount: 1, resultCount: 1 })
+      expect(h.db.prepare("SELECT COUNT(*) AS messageCount FROM messages WHERE role = 'char'").get()).toEqual({
+        messageCount: 1,
+      })
     },
   )
 

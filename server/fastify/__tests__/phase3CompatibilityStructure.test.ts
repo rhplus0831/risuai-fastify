@@ -26,7 +26,7 @@ const EXPECTED_COMMAND_ROUTE_COUNT = 165
 const EXPECTED_COMMAND_ROUTE_DIGEST = '6cf578fff081487c445f780af234697ff41635daf5a6b12450c833b26f3cbe7e'
 const EXPECTED_COMMAND_EVENT_COUNT = 150
 const EXPECTED_COMMAND_EVENT_DIGEST = 'd3d6a356bea9e728b5e2cae0422f696dee8065534eb5bb7781d471c6617859cd'
-const EXPECTED_SQLITE_SCHEMA_DIGEST = '8d5936e7ab85badf3bac393270d800efb0e1f2749b286660a345348027f42f5c'
+const EXPECTED_SQLITE_SCHEMA_DIGEST = 'e73449597b467f8e3e0be5a9374bd872c7aea3a3f5873f122c64654d7e11365a'
 
 /**
  * Persisted event history from before reusable Agents can still contain these
@@ -130,6 +130,7 @@ const PERSISTED_TABLE_CLASSIFICATION: Record<string, { class: PersistedTableClas
   bot_presets: { class: 'shared-logical-state', owner: 'legacy preset collection' },
   characters: { class: 'shared-logical-state', owner: 'character repository' },
   chat_hypa_v3: { class: 'shared-logical-state', owner: 'chat memory projection' },
+  chat_occupancies: { class: 'server-operational', owner: 'chat occupancy authority' },
   chats: { class: 'shared-logical-state', owner: 'chat repository' },
   command_events: { class: 'command-durability', owner: 'command event replay' },
   command_mutation_receipts: { class: 'command-durability', owner: 'mutation idempotency' },

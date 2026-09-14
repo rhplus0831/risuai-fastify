@@ -2,6 +2,13 @@ import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { recordTableWrite } from './protocolMetrics.js'
+import {
+  generationScopeIsChatOnly,
+  scopeFromColumns,
+  scopeSqlValues,
+  type GenerationScopeColumns,
+  type PersistedGenerationScope,
+} from './generationScope.js'
 
 export const GENERATION_EFFECT_LEDGER_VERSION = 1
 export const GENERATION_EFFECT_CLAIM_LEASE_MS = 5 * 60_000
@@ -42,13 +49,14 @@ const CLIENT_EFFECT_KINDS = new Set<GenerationEffectKind>([
   'emotion_image_state',
 ])
 
-interface GenerationEffectRow {
+interface GenerationEffectRow extends GenerationScopeColumns {
   database_lineage: string
   key_type: GenerationEffectKeyType
   key_id: string
   effect_kind: GenerationEffectKind
   effect_class: GenerationEffectClass
   operation_id: string | null
+  operation_attempt_no: number | null
   generation_id: string
   character_id: string
   chat_id: string
@@ -73,10 +81,12 @@ export interface GenerationEffectProjection {
   kind: GenerationEffectKind
   effectClass: GenerationEffectClass
   operationId?: string
+  operationAttemptNo?: number
   generationId: string
   characterId: string
   chatId: string
   messageId: string
+  generationScope?: PersistedGenerationScope
   status: GenerationEffectStatus
   claimId?: string
   delivery?: GenerationEffectDelivery
@@ -103,11 +113,13 @@ export interface GenerationEffectLedgerRef {
 export interface EnsureGenerationEffectLedgerInput {
   databaseLineage: string
   operationId: string
+  operationAttemptNo?: number
   operationProtocolVersion: number
   generationId: string
   characterId: string
   chatId: string
   messageId: string
+  generationScope?: PersistedGenerationScope
   createdAt?: string
 }
 
@@ -175,10 +187,18 @@ export function createGenerationEffectLedgerTable(db: DatabaseSync): void {
       )),
       effect_class TEXT NOT NULL CHECK (effect_class IN ('durable', 'ephemeral', 'recomputed')),
       operation_id TEXT,
+      operation_attempt_no INTEGER CHECK (operation_attempt_no IS NULL OR operation_attempt_no > 0),
       generation_id TEXT NOT NULL,
       character_id TEXT NOT NULL,
       chat_id TEXT NOT NULL,
       message_id TEXT NOT NULL,
+      admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only')),
+      occupancy_database_lineage TEXT,
+      occupancy_session_id TEXT,
+      occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0),
+      occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only')),
+      permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0),
+      permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json)),
       status TEXT NOT NULL CHECK (status IN ('pending', 'claimed', 'completed', 'skipped', 'failed')),
       claim_id TEXT,
       delivery TEXT CHECK (delivery IS NULL OR delivery IN ('server', 'live_terminal', 'late_recovery')),
@@ -209,10 +229,46 @@ export function createGenerationEffectLedgerTable(db: DatabaseSync): void {
     'lease_expires_at',
     'ALTER TABLE generation_effects ADD COLUMN lease_expires_at TEXT',
   )
+  ensureGenerationEffectScopeColumns(db)
   db.exec(`
     CREATE INDEX IF NOT EXISTS generation_effects_recoverable_claims
       ON generation_effects (database_lineage, status, lease_expires_at, effect_kind);
   `)
+}
+
+function ensureGenerationEffectScopeColumns(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(generation_effects)').all() as Array<{ name: string }>).map((row) => row.name),
+  )
+  const columns: ReadonlyArray<readonly [string, string]> = [
+    [
+      'admission_kind',
+      "ALTER TABLE generation_effects ADD COLUMN admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only'))",
+    ],
+    ['occupancy_database_lineage', 'ALTER TABLE generation_effects ADD COLUMN occupancy_database_lineage TEXT'],
+    [
+      'operation_attempt_no',
+      'ALTER TABLE generation_effects ADD COLUMN operation_attempt_no INTEGER CHECK (operation_attempt_no IS NULL OR operation_attempt_no > 0)',
+    ],
+    ['occupancy_session_id', 'ALTER TABLE generation_effects ADD COLUMN occupancy_session_id TEXT'],
+    [
+      'occupancy_epoch',
+      'ALTER TABLE generation_effects ADD COLUMN occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0)',
+    ],
+    [
+      'occupancy_claim_class',
+      "ALTER TABLE generation_effects ADD COLUMN occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only'))",
+    ],
+    [
+      'permission_scope_version',
+      'ALTER TABLE generation_effects ADD COLUMN permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0)',
+    ],
+    [
+      'permission_scope_json',
+      'ALTER TABLE generation_effects ADD COLUMN permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json))',
+    ],
+  ]
+  for (const [name, sql] of columns) if (!existing.has(name)) db.exec(sql)
 }
 
 export function ensureGenerationEffectLedgerInTransaction(
@@ -225,11 +281,15 @@ export function ensureGenerationEffectLedgerInTransaction(
   const insert = db.prepare(`
     INSERT OR IGNORE INTO generation_effects (
       database_lineage, key_type, key_id, effect_kind, effect_class,
-      operation_id, generation_id, character_id, chat_id, message_id,
-      status, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      operation_id, operation_attempt_no, generation_id, character_id, chat_id, message_id,
+      admission_kind, occupancy_database_lineage, occupancy_session_id, occupancy_epoch,
+      occupancy_claim_class, permission_scope_version, permission_scope_json,
+      status, claim_id, delivery, reason, claimed_at, settled_at, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `)
   for (const kind of GENERATION_EFFECT_KINDS) {
+    const scopeFiltered =
+      generationScopeIsChatOnly(input.generationScope) && (kind === 'plugin_output' || kind === 'emotion_image_state')
     insert.run(
       input.databaseLineage,
       keyType,
@@ -237,10 +297,18 @@ export function ensureGenerationEffectLedgerInTransaction(
       kind,
       EFFECT_CLASS[kind],
       input.operationId,
+      input.operationAttemptNo ?? null,
       input.generationId,
       input.characterId,
       input.chatId,
       input.messageId,
+      ...scopeSqlValues(input.generationScope),
+      scopeFiltered ? 'skipped' : 'pending',
+      scopeFiltered ? 'scope-filter' : null,
+      scopeFiltered ? 'server' : null,
+      scopeFiltered ? 'unsupported_chat_only_scope' : null,
+      scopeFiltered ? now : null,
+      scopeFiltered ? now : null,
       now,
       now,
     )
@@ -657,10 +725,12 @@ function projectionFromRow(row: GenerationEffectRow): GenerationEffectProjection
     kind: row.effect_kind,
     effectClass: row.effect_class,
     ...(row.operation_id !== null ? { operationId: row.operation_id } : {}),
+    ...(row.operation_attempt_no !== null ? { operationAttemptNo: row.operation_attempt_no } : {}),
     generationId: row.generation_id,
     characterId: row.character_id,
     chatId: row.chat_id,
     messageId: row.message_id,
+    ...(scopeFromColumns(row) ? { generationScope: scopeFromColumns(row)! } : {}),
     status: row.status,
     ...(row.claim_id !== null ? { claimId: row.claim_id } : {}),
     ...(row.delivery !== null ? { delivery: row.delivery } : {}),

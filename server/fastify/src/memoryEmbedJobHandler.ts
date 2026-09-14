@@ -16,9 +16,12 @@ import {
 import { normalizeHypaV3Settings, type HypaV3Settings } from './memoryPlanner.js'
 import {
   createMemoryEmbedding,
+  assertMemoryJobGenerationScope,
+  getMemoryJobAcceptedEffectiveConfiguration,
   getMemoryChunk,
-  getMemoryJob,
   listMemoryEmbeddings,
+  memoryJobInstanceMayTransition,
+  memoryJobMayApplyResult,
   type MemoryJob,
 } from './memoryRepository.js'
 import { loadPersistedDatabaseForMemoryJob } from './repository.js'
@@ -65,8 +68,9 @@ export function createEmbedMemoryJobHandler(
     if (job.kind !== 'embed') {
       throw new Error(`embed handler received ${job.kind} job`)
     }
+    assertMemoryJobGenerationScope(opts.db, job)
 
-    const database = loadDatabase(opts)
+    const database = loadDatabase(opts, job)
     const settings = resolveHypaV3Settings(database)
     const result = await executeEmbedJob({
       opts,
@@ -79,9 +83,9 @@ export function createEmbedMemoryJobHandler(
       signal: context?.signal,
     })
     assertDatabaseLineage(opts.db, lineage)
+    assertMemoryJobGenerationScope(opts.db, job)
     if (result.kind === 'existing') return
-    const currentJob = getMemoryJob(opts.db, job.id)
-    if (currentJob?.status !== 'pending' && currentJob?.status !== 'running') return
+    if (!memoryJobMayApplyResult(opts.db, job)) return
     persistEmbedding(opts.db, result)
   }
 }
@@ -93,9 +97,10 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
 
   return async (firstJob, context): Promise<void> => {
     const lineage = getDatabaseLineage(opts.db)
-    const database = loadDatabase(opts)
-    const settings = resolveHypaV3Settings(database)
-    const maxConcurrent = Math.max(1, settings.embeddingMaxConcurrent)
+    assertMemoryJobGenerationScope(opts.db, firstJob)
+    const databaseResolver = createEmbedJobDatabaseResolver(opts)
+    const firstDatabase = databaseResolver(firstJob)
+    const firstSettings = resolveHypaV3Settings(firstDatabase)
     const jobs = [firstJob]
     // Bounded drain leave any overflow pending for later
     // ticks instead of materializing one chat's whole backlog into a single
@@ -107,31 +112,38 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
     }
 
     const orderedJobs = [...jobs].sort(compareEmbedJobs)
-    const contextualModel = contextualVoyageBatchModel(orderedJobs)
+    const authority = partitionMemoryJobsByAuthority(opts.db, orderedJobs)
+    for (const invalid of authority.invalid) {
+      retryMemoryJobAfterHandlerError(opts, context, invalid.job, invalid.error)
+    }
+    if (authority.valid.length === 0) return
+
+    const maxConcurrent = Math.min(...authority.valid.map((job) => embedJobMaxConcurrent(databaseResolver, job)))
+    const contextualModel = contextualVoyageBatchModel(authority.valid)
     if (contextualModel) {
-      const modelRequest = resolveMemoryEmbeddingModel(database, contextualModel)
+      const modelRequest = resolveMemoryEmbeddingModel(firstDatabase, contextualModel)
       if (modelRequest.ok === false) {
         commitContextualBatchResults(
           opts,
           context,
-          orderedJobs.map((job) => ({ job, error: modelRequest.error })),
+          authority.valid.map((job) => ({ job, error: modelRequest.error })),
         )
         return
       }
 
       let plan: ContextualSubBatchPlan
       try {
-        plan = planContextualSubBatches(opts, orderedJobs, modelRequest.request)
+        plan = planContextualSubBatches(opts, authority.valid, modelRequest.request)
       } catch (error) {
         const message = error instanceof Error && error.message ? error.message : String(error)
         commitContextualBatchResults(
           opts,
           context,
-          orderedJobs.map((job) => ({ job, error: message })),
+          authority.valid.map((job) => ({ job, error: message })),
         )
         return
       }
-      emitContextualSubBatchSplitMetric(orderedJobs, plan, modelRequest.request)
+      emitContextualSubBatchSplitMetric(authority.valid, plan, modelRequest.request)
 
       // Token-aware sub-batches, each committed independently an
       // oversized or failing sub-batch retries alone instead of failing the
@@ -140,7 +152,7 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
         const results = await executeContextualEmbedJobs({
           opts,
           jobs: subBatch,
-          settings,
+          settings: firstSettings,
           modelRequest: modelRequest.request,
           embedGroups,
           acquireRateLimit,
@@ -154,8 +166,11 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
       return
     }
 
-    const results = await runWithConcurrency(orderedJobs, maxConcurrent, async (job) => {
+    const results = await runWithConcurrency(authority.valid, maxConcurrent, async (job) => {
       try {
+        assertMemoryJobGenerationScope(opts.db, job)
+        const database = databaseResolver(job)
+        const settings = resolveHypaV3Settings(database)
         return {
           job,
           result: await executeEmbedJob({
@@ -202,7 +217,19 @@ type EmbedExecutionResult =
       groupIndex: number | null
     }
 
-type BatchJobResult = { job: MemoryJob; result: EmbedExecutionResult } | { job: MemoryJob; error: string }
+type BatchJobResult = { job: MemoryJob; result: EmbedExecutionResult } | BatchJobError
+
+interface BatchJobError {
+  job: MemoryJob
+  error: string
+  /** This job failed its own pre-dispatch authority fence, not the shared provider request. */
+  isolated?: boolean
+}
+
+interface MemoryJobAuthorityPartition {
+  valid: MemoryJob[]
+  invalid: BatchJobError[]
+}
 
 interface ContextualSubBatchBudget {
   tokenBudget: number
@@ -254,6 +281,7 @@ async function executeEmbedJob(input: {
   if (input.signal?.aborted) {
     throw input.signal.reason instanceof Error ? input.signal.reason : new Error('memory job cancelled')
   }
+  assertMemoryJobGenerationScope(input.opts.db, input.job)
   const abortScope = createMemoryProviderAbortScope(input.signal, input.opts.providerFetchDeadlineMs)
   if (modelRequest.request.provider === 'voyage-contextual') {
     let embedding: Awaited<ReturnType<NonNullable<EmbedMemoryJobHandlerOptions['embedGroups']>>>
@@ -465,8 +493,13 @@ async function executeContextualEmbedJobs(input: {
   acquireRateLimit: EmbeddingRateLimiter
   signal?: AbortSignal
 }): Promise<BatchJobResult[]> {
+  const initialAuthority = partitionMemoryJobsByAuthority(input.opts.db, input.jobs)
+  const isolatedErrors = initialAuthority.invalid
+  let activeJobs = initialAuthority.valid
+  if (activeJobs.length === 0) return isolatedErrors
+
   try {
-    const parsed = input.jobs.map((job) => {
+    let parsed = activeJobs.map((job) => {
       const payload = parseEmbedPayload(job.payload)
       const chunk = getMemoryChunk(input.opts.db, payload.chunkId)
       if (!chunk) {
@@ -478,8 +511,8 @@ async function executeContextualEmbedJobs(input: {
       return { job, payload, chunk }
     })
 
-    const groupChunkIds = parsed.map((item) => item.chunk.id)
-    const groupId = buildEmbeddingGroupId(input.jobs[0].chatId, parsed[0].payload.model, groupChunkIds)
+    let groupChunkIds = parsed.map((item) => item.chunk.id)
+    let groupId = buildEmbeddingGroupId(activeJobs[0].chatId, parsed[0].payload.model, groupChunkIds)
     const existing = new Map(
       parsed.map((item) => [
         item.chunk.id,
@@ -491,10 +524,13 @@ async function executeContextualEmbedJobs(input: {
       ]),
     )
     if ([...existing.values()].every(Boolean)) {
-      return parsed.map(({ job, payload, chunk }) => ({
-        job,
-        result: { kind: 'existing', job, payload, chunkId: chunk.id },
-      }))
+      return [
+        ...parsed.map(({ job, payload, chunk }) => ({
+          job,
+          result: { kind: 'existing' as const, job, payload, chunkId: chunk.id },
+        })),
+        ...isolatedErrors,
+      ]
     }
     assertChunksWithinEmbeddingLimits(
       input.modelRequest,
@@ -509,6 +545,27 @@ async function executeContextualEmbedJobs(input: {
     if (input.signal?.aborted) {
       throw input.signal.reason instanceof Error ? input.signal.reason : new Error('memory job cancelled')
     }
+
+    // The rate limiter may wait. Revalidate every member after that async gap
+    // and immediately before constructing the shared provider request. A bad
+    // sibling must contribute neither its text nor contextual group identity.
+    const dispatchAuthority = partitionMemoryJobsByAuthority(input.opts.db, activeJobs)
+    isolatedErrors.push(...dispatchAuthority.invalid)
+    activeJobs = dispatchAuthority.valid
+    if (activeJobs.length === 0) return isolatedErrors
+    const activeIds = new Set(activeJobs.map((job) => job.id))
+    parsed = parsed.filter(({ job }) => activeIds.has(job.id))
+    groupChunkIds = parsed.map((item) => item.chunk.id)
+    groupId = buildEmbeddingGroupId(activeJobs[0].chatId, parsed[0].payload.model, groupChunkIds)
+    assertChunksWithinEmbeddingLimits(
+      input.modelRequest,
+      parsed.map((item) => ({ id: item.chunk.id, text: item.chunk.text })),
+    )
+    assertContextualGroupWithinEmbeddingLimits(
+      input.modelRequest,
+      parsed.map((item) => item.chunk.text),
+    )
+
     const abortScope = createMemoryProviderAbortScope(input.signal, input.opts.providerFetchDeadlineMs)
     let embedding: Awaited<ReturnType<NonNullable<EmbedMemoryJobHandlerOptions['embedGroups']>>>
     try {
@@ -530,7 +587,7 @@ async function executeContextualEmbedJobs(input: {
       throw new Error(`embedding response count mismatch: expected ${parsed.length}, got ${vectors?.length ?? 0}`)
     }
 
-    return parsed.map(({ job, payload, chunk }, index) => {
+    const results = parsed.map(({ job, payload, chunk }, index): BatchJobResult => {
       const existingEmbedding = existing.get(chunk.id)
       if (existingEmbedding) {
         return {
@@ -552,9 +609,10 @@ async function executeContextualEmbedJobs(input: {
         },
       }
     })
+    return [...results, ...isolatedErrors]
   } catch (error) {
     const message = error instanceof Error && error.message ? error.message : String(error)
-    return input.jobs.map((job) => ({ job, error: message }))
+    return [...activeJobs.map((job) => ({ job, error: message })), ...isolatedErrors]
   }
 }
 
@@ -565,12 +623,12 @@ function commitIndependentBatchResults(
 ): void {
   for (const item of results) {
     if ('error' in item) {
-      context.retryOrFail(item.job.id, item.error || 'embed job failed')
+      retryMemoryJobAfterHandlerError(opts, context, item.job, item.error || 'embed job failed')
       continue
     }
 
     try {
-      if (getMemoryJob(opts.db, item.job.id)?.status !== 'running') {
+      if (!memoryJobMayApplyResult(opts.db, item.job)) {
         continue
       }
       if (item.result.kind === 'embedding') {
@@ -589,15 +647,31 @@ function commitContextualBatchResults(
   context: Parameters<MemoryJobBatchHandler>[1],
   results: readonly BatchJobResult[],
 ): void {
-  const failed = results.find((item): item is { job: MemoryJob; error: string } => 'error' in item)
+  const isolatedFailures = results.filter((item): item is BatchJobError => 'error' in item && item.isolated === true)
+  for (const failed of isolatedFailures) {
+    retryMemoryJobAfterHandlerError(opts, context, failed.job, failed.error || 'embed job failed')
+  }
+
+  const groupResults = results.filter((item) => !('error' in item && item.isolated === true))
+  const failed = groupResults.find((item): item is BatchJobError => 'error' in item)
   if (failed) {
-    retryContextualBatch(context, results, failed.error || 'embed job failed')
+    retryContextualBatch(opts, context, groupResults, failed.error || 'embed job failed')
     return
   }
 
-  const successful = (results as Array<{ job: MemoryJob; result: EmbedExecutionResult }>).filter(
-    (item) => getMemoryJob(opts.db, item.job.id)?.status === 'running',
-  )
+  const successful: Array<{ job: MemoryJob; result: EmbedExecutionResult }> = []
+  for (const item of groupResults as Array<{ job: MemoryJob; result: EmbedExecutionResult }>) {
+    try {
+      if (memoryJobMayApplyResult(opts.db, item.job)) successful.push(item)
+    } catch (error) {
+      retryMemoryJobAfterHandlerError(
+        opts,
+        context,
+        item.job,
+        error instanceof Error && error.message ? error.message : String(error),
+      )
+    }
+  }
   if (successful.length === 0) return
 
   try {
@@ -613,31 +687,60 @@ function commitContextualBatchResults(
       context.complete(item.job.id)
     }
   } catch (error) {
-    retryContextualBatch(context, successful, error instanceof Error && error.message ? error.message : String(error))
+    retryContextualBatch(
+      opts,
+      context,
+      successful,
+      error instanceof Error && error.message ? error.message : String(error),
+    )
   }
 }
 
 function retryContextualBatch(
+  opts: EmbedMemoryJobHandlerOptions,
   context: Parameters<MemoryJobBatchHandler>[1],
   results: ReadonlyArray<{ job: MemoryJob }>,
   error: string,
 ): void {
   for (const item of results) {
-    context.retryOrFail(item.job.id, error)
+    retryMemoryJobAfterHandlerError(opts, context, item.job, error)
+  }
+}
+
+function retryMemoryJobAfterHandlerError(
+  opts: EmbedMemoryJobHandlerOptions,
+  context: Parameters<MemoryJobBatchHandler>[1],
+  job: MemoryJob,
+  error: string,
+): void {
+  try {
+    if (memoryJobMayApplyResult(opts.db, job)) context.retryOrFail(job.id, error)
+  } catch (scopeError) {
+    if (!memoryJobInstanceMayTransition(opts.db, job)) return
+    context.retryOrFail(
+      job.id,
+      scopeError instanceof Error && scopeError.message ? scopeError.message : String(scopeError),
+    )
   }
 }
 
 function createEmbeddingRateLimiter(opts: EmbedMemoryJobHandlerOptions): EmbeddingRateLimiter {
   const sleep = opts.sleep ?? defaultSleep
   const now = opts.now ?? Date.now
-  let nextRequestAtMs = 0
+  let lastRequestAtMs: number | undefined
+  let lastIntervalMs = 0
 
   return async (settings) => {
     const requestsPerMinute = Math.max(1, settings.embeddingRequestsPerMinute)
     const intervalMs = Math.ceil(60_000 / requestsPerMinute)
     const current = now()
-    const waitMs = Math.max(0, nextRequestAtMs - current)
-    nextRequestAtMs = Math.max(current, nextRequestAtMs) + intervalMs
+    const requestAt =
+      lastRequestAtMs === undefined
+        ? current
+        : Math.max(current, lastRequestAtMs + Math.max(lastIntervalMs, intervalMs))
+    const waitMs = Math.max(0, requestAt - current)
+    lastRequestAtMs = requestAt
+    lastIntervalMs = intervalMs
     if (waitMs > 0) await sleep(waitMs)
   }
 }
@@ -684,7 +787,14 @@ function compareEmbedJobs(left: MemoryJob, right: MemoryJob): number {
 function contextualVoyageBatchModel(jobs: readonly MemoryJob[]): MemoryEmbeddingModel | null {
   const model = tryParseEmbedPayload(jobs[0]?.payload)?.model
   if (!isVoyageContextualModel(model)) return null
-  return jobs.every((job) => tryParseEmbedPayload(job.payload)?.model === model) ? model : null
+  const configurationIdentity = memoryJobConfigurationIdentity(jobs[0])
+  return jobs.every(
+    (job) =>
+      tryParseEmbedPayload(job.payload)?.model === model &&
+      memoryJobConfigurationIdentity(job) === configurationIdentity,
+  )
+    ? model
+    : null
 }
 
 function isVoyageContextualModel(
@@ -717,7 +827,9 @@ function parseEmbedPayload(payload: unknown): HypaV3EmbedJobPayload {
   }
 }
 
-function loadDatabase(opts: EmbedMemoryJobHandlerOptions): MemoryEmbeddingJobDatabase {
+function loadDatabase(opts: EmbedMemoryJobHandlerOptions, job: MemoryJob): MemoryEmbeddingJobDatabase {
+  const accepted = getMemoryJobAcceptedEffectiveConfiguration(opts.db, job)
+  if (accepted) return accepted.database as MemoryEmbeddingJobDatabase
   // Memory-job-scoped read settings + hypa presets + chat-id
   // stubs only — never the whole characters/chats/collections payload parse.
   const database = opts.loadDatabase
@@ -729,6 +841,61 @@ function loadDatabase(opts: EmbedMemoryJobHandlerOptions): MemoryEmbeddingJobDat
     throw new Error('persisted database is missing')
   }
   return database as MemoryEmbeddingJobDatabase
+}
+
+function createEmbedJobDatabaseResolver(
+  opts: EmbedMemoryJobHandlerOptions,
+): (job: MemoryJob) => MemoryEmbeddingJobDatabase {
+  const databases = new Map<string, MemoryEmbeddingJobDatabase>()
+  return (job) => {
+    // Cache hits share only configuration bytes, never authority. Every job
+    // must cross its own persisted scope fence before using that configuration.
+    assertMemoryJobGenerationScope(opts.db, job)
+    const key = memoryJobConfigurationIdentity(job)
+    const existing = databases.get(key)
+    if (existing) return existing
+    const database = loadDatabase(opts, job)
+    databases.set(key, database)
+    return database
+  }
+}
+
+function embedJobMaxConcurrent(
+  resolveDatabase: (job: MemoryJob) => MemoryEmbeddingJobDatabase,
+  job: MemoryJob,
+): number {
+  try {
+    return Math.max(1, resolveHypaV3Settings(resolveDatabase(job)).embeddingMaxConcurrent)
+  } catch {
+    // The per-job execution path records its own configuration failure. Keep
+    // the batch conservative until that job reaches the guarded error path.
+    return 1
+  }
+}
+
+function memoryJobConfigurationIdentity(job: MemoryJob): string {
+  if (job.operationId && job.operationAttemptNo !== undefined) {
+    return `operation:${job.operationId}:${job.operationAttemptNo}:scope:${JSON.stringify(job.generationScope ?? null)}`
+  }
+  return 'legacy-live'
+}
+
+function partitionMemoryJobsByAuthority(db: DatabaseSync, jobs: readonly MemoryJob[]): MemoryJobAuthorityPartition {
+  const valid: MemoryJob[] = []
+  const invalid: BatchJobError[] = []
+  for (const job of jobs) {
+    try {
+      assertMemoryJobGenerationScope(db, job)
+      valid.push(job)
+    } catch (error) {
+      invalid.push({
+        job,
+        error: error instanceof Error && error.message ? error.message : String(error),
+        isolated: true,
+      })
+    }
+  }
+  return { valid, invalid }
 }
 
 function resolveHypaV3Settings(database: MemoryEmbeddingJobDatabase): HypaV3Settings {
@@ -756,13 +923,17 @@ function persistEmbedding(
     groupId: string | null
     groupIndex: number | null
   },
-): void {
+): boolean {
   if (input.vector.length !== input.dim) {
     throw new Error(`embedding dimension mismatch: expected ${input.dim}, got ${input.vector.length}`)
   }
 
   db.exec('BEGIN IMMEDIATE')
   try {
+    if (!memoryJobMayApplyResult(db, input.job)) {
+      db.exec('ROLLBACK')
+      return false
+    }
     const existing = listMemoryEmbeddings(db, {
       chatId: input.job.chatId,
       chunkId: input.payload.chunkId,
@@ -780,6 +951,7 @@ function persistEmbedding(
       })
     }
     db.exec('COMMIT')
+    return true
   } catch (error) {
     db.exec('ROLLBACK')
     throw error
@@ -796,12 +968,13 @@ function persistEmbeddingGroup(
     groupId: string | null
     groupIndex: number | null
   }>,
-): void {
-  if (inputs.length === 0) return
+): boolean {
+  if (inputs.length === 0) return true
 
   db.exec('BEGIN IMMEDIATE')
   try {
     for (const input of inputs) {
+      if (!memoryJobMayApplyResult(db, input.job)) continue
       if (input.vector.length !== input.dim) {
         throw new Error(`embedding dimension mismatch: expected ${input.dim}, got ${input.vector.length}`)
       }
@@ -823,6 +996,7 @@ function persistEmbeddingGroup(
       })
     }
     db.exec('COMMIT')
+    return true
   } catch (error) {
     db.exec('ROLLBACK')
     throw error

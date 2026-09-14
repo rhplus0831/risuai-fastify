@@ -32,6 +32,8 @@ export interface AutomaticBardWikiConfirmationInput {
   acceptedUserMessageId?: string
   resultAssistantMessageId: string
   fallbackMessages?: readonly unknown[]
+  /** Effective settings captured with the accepted generation operation. */
+  acceptedSettings?: BardWikiGlobalSettings
 }
 
 export interface BardWikiSourcePair {
@@ -189,7 +191,9 @@ export function createOrReuseAutomaticBardWikiConfirmation(
   db: DatabaseSync,
   input: AutomaticBardWikiConfirmationInput,
 ): ExplicitBardWikiConfirmationResult | null {
-  const settings = resolveEffectiveBardWikiSettingsForChat(db, input.chatId)
+  const settings = input.acceptedSettings
+    ? structuredClone(input.acceptedSettings)
+    : resolveEffectiveBardWikiSettingsForChat(db, input.chatId)
   if (!settings.enabledByDefault || settings.confirmationPolicy !== 'automatic') return null
   const source =
     resolveAutomaticBardWikiSourcePair(db, input) ??
@@ -303,7 +307,7 @@ function createOrReuseBardWikiConfirmationInTransaction(
     if (existing.state !== 'queued') {
       throw new BardWikiValidationError('bardwiki_confirmation_inconsistent')
     }
-    const repairedJob = insertApplyTurnJob(db, existing.id, source, settings)
+    const repairedJob = insertApplyTurnJob(db, existing.id, source, settings, existing.confirmationMode)
     linkReceiptJob(db, existing.id, repairedJob.id)
     return {
       receipt: requireReceipt(db, existing.id),
@@ -328,7 +332,7 @@ function createOrReuseBardWikiConfirmationInTransaction(
     confirmationMode,
     randomUUID(),
   )
-  const job = insertApplyTurnJob(db, receiptId, source, settings)
+  const job = insertApplyTurnJob(db, receiptId, source, settings, confirmationMode)
   linkReceiptJob(db, receiptId, job.id)
   return {
     receipt: requireReceipt(db, receiptId),
@@ -425,6 +429,7 @@ function insertApplyTurnJob(
   receiptId: string,
   source: BardWikiSourcePair,
   settings: BardWikiGlobalSettings,
+  confirmationMode: BardWikiReceiptSummary['confirmationMode'],
 ): BardWikiJob {
   return enqueueBardWikiJob(db, {
     chatId: source.chatId,
@@ -439,6 +444,7 @@ function insertApplyTurnJob(
       promptVersion: BARDWIKI_EVENT_PROMPT_VERSION,
       canonicalEnabled: settings.canonicalUpdates,
       repairAttemptCount: 0,
+      ...(confirmationMode === 'automatic' ? { acceptedSettings: settings } : {}),
     },
   })
 }

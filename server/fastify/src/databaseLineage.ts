@@ -131,5 +131,8 @@ export function rotateDatabaseLineage(db: DatabaseSync): string {
     throw new Error('database metadata lineage row is missing')
   }
   db.exec('DELETE FROM command_mutation_receipts')
+  // Occupancy authority never crosses a whole-database replacement. Retained
+  // epochs fence one lineage only; old clients also fail the new lineage tuple.
+  db.exec('DELETE FROM chat_occupancies')
   return databaseLineage
 }

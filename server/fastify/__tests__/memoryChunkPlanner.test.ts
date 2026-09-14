@@ -141,6 +141,61 @@ describe('Hypa V3 chunk/job planning bridge', () => {
     }
   })
 
+  it('binds an untouched preview-planned job to the first accepted operation without rewriting that authority', () => {
+    const db = openDatabase(makeDataDir())
+    try {
+      const chats = ['m0', 'm1', 'm2', 'tail'].map((memo) => chat(memo))
+      const plan = planStandardHypaV3Memory({
+        chats,
+        currentTokens: 100,
+        maxContextTokens: 100,
+        maxResponseTokens: 0,
+        settings: {
+          maxChatsPerSummary: 2,
+          queryChatCount: 1,
+          summarizationModel: 'subModel',
+        },
+        tokenizeChat: fixedTokenizer({ m0: 10, m1: 10, m2: 10, tail: 10 }),
+      })
+      const preview = planHypaV3ChunkJobs({ db, chatId: 'chat-1', chats, plan })
+      const accepted = planHypaV3ChunkJobs({
+        db,
+        chatId: 'chat-1',
+        chats,
+        plan,
+        operationId: 'operation-accepted',
+        operationAttemptNo: 2,
+        generationScope: { admissionKind: 'legacy_owner' },
+      })
+
+      expect(accepted.jobsCreated).toBe(0)
+      expect(accepted.planned[0].job).toMatchObject({
+        id: preview.planned[0].job?.id,
+        instanceId: preview.planned[0].job?.instanceId,
+        operationId: 'operation-accepted',
+        operationAttemptNo: 2,
+        generationScope: { admissionKind: 'legacy_owner' },
+      })
+
+      const laterOperation = planHypaV3ChunkJobs({
+        db,
+        chatId: 'chat-1',
+        chats,
+        plan,
+        operationId: 'operation-later',
+        operationAttemptNo: 1,
+        generationScope: { admissionKind: 'chat_only' },
+      })
+      expect(laterOperation.planned[0].job).toMatchObject({
+        operationId: 'operation-accepted',
+        operationAttemptNo: 2,
+        generationScope: { admissionKind: 'legacy_owner' },
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   it('does not reset summarized chunks during replanning', () => {
     const db = openDatabase(makeDataDir())
     try {

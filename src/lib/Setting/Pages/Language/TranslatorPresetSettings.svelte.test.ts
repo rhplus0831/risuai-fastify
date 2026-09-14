@@ -2225,6 +2225,9 @@ describe('TranslatorPresetSettings server-backed edits', () => {
             ],
           },
         ])
+        // Both PATCH and DELETE have reached retained feedback; row visibility
+        // alone does not mean the async click handler has settled.
+        expect(alertNormal).toHaveBeenCalledTimes(2)
       })
       expect(commandSpies.deleteInputs).toEqual([])
       expect(getDatabase().translatorPresets.map((preset) => preset.id)).toEqual(['preset-b'])

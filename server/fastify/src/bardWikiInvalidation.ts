@@ -53,6 +53,10 @@ export function invalidateBardWikiReceiptsForTranscriptMutation(
         )
         .run(receipt.id)
       if (changed.changes !== 1) continue
+      // Reconciliation is exact-fence server maintenance created by the
+      // already-authorized transcript mutation. Copying the obsolete source
+      // generation tuple would make this cleanup stale after a release and
+      // re-claim, leaving the cleanup job itself as a permanent occupancy pin.
       const job = enqueueBardWikiJob(db, {
         chatId,
         receiptId: receipt.id,

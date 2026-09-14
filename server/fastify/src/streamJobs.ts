@@ -51,6 +51,8 @@ export type StreamJobFrame = string | Buffer
 export interface JobClient {
   send(frame: StreamJobFrame): void
   close(): void
+  /** Resolves once a graceful transport close has finished, when observable. */
+  readonly closeSettled?: Promise<void>
   readonly open: boolean
   readonly bufferedBytes?: number
 }

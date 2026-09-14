@@ -97,6 +97,8 @@ describe('bootstrap runtime metadata', () => {
       assetBaseUrl: '/api/v1/assets',
       generationOperationProtocol: { version: 1 },
       displaySourceProtocol: { version: 1 },
+      chatOccupancyProtocol: { version: 1, enabled: false, leaseMs: 90_000, renewAfterMs: 30_000 },
+      chatOccupancies: { version: 1, databaseLineage: expect.any(String), occupancies: [] },
       generationOperationProjectionEpoch: 0,
       generationOperations: [],
       activeGenerationJobs: [],
@@ -132,6 +134,8 @@ describe('bootstrap runtime metadata', () => {
       assetBaseUrl: '/api/v1/assets',
       generationOperationProtocol: { version: 1 },
       displaySourceProtocol: { version: 1 },
+      chatOccupancyProtocol: { version: 1, enabled: false, leaseMs: 90_000, renewAfterMs: 30_000 },
+      chatOccupancies: { version: 1, databaseLineage: expect.any(String), occupancies: [] },
       generationOperationProjectionEpoch: 1,
       generationOperations: [],
       activeGenerationJobs: [],
@@ -380,6 +384,11 @@ describe('bootstrap runtime metadata', () => {
       expect(compressed.headers['content-encoding']).toBe('gzip')
       expect(gunzipSync(compressed.rawPayload).toString('utf8')).toBe(uncompressed.body)
       expect(compressed.rawPayload.length).toBeLessThan(uncompressed.rawPayload.length * 0.7)
+      expect(uncompressed.json().chatOccupancies).toEqual({
+        version: 1,
+        databaseLineage: uncompressed.json().databaseLineage,
+        occupancies: [],
+      })
     } finally {
       await app.close()
       db.close()

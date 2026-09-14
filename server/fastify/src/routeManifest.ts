@@ -129,6 +129,72 @@ export const PROTOCOL_ROUTE_POLICIES = [
     },
   },
   {
+    id: 'chat-occupancy-snapshot',
+    auth: {
+      decision: 'required',
+      reason: 'Occupancy discovery exposes authenticated per-chat session authority.',
+    },
+    activeWriter: {
+      decision: 'not-applicable',
+      reason: 'Read-only occupancy discovery never acquires or changes authority.',
+    },
+  },
+  {
+    id: 'chat-occupancy-claim',
+    auth: {
+      decision: 'required',
+      reason: 'A claim changes authenticated per-chat authority.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The occupancy service authorizes owner or chat-only admission without granting general writer access.',
+    },
+  },
+  {
+    id: 'chat-occupancy-renew',
+    auth: {
+      decision: 'required',
+      reason: 'Lease renewal requires the authenticated exact occupancy tuple.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'Exact occupancy authority, not general writer ownership, fences renewal.',
+    },
+  },
+  {
+    id: 'chat-occupancy-release',
+    auth: {
+      decision: 'required',
+      reason: 'Release requires the authenticated exact occupancy tuple.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'Exact occupancy authority and durable pins, not general writer ownership, fence release.',
+    },
+  },
+  {
+    id: 'chat-occupancy-switch',
+    auth: {
+      decision: 'required',
+      reason: 'Switch atomically transfers an authenticated session between chats.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The occupancy service checks exact source authority and target availability.',
+    },
+  },
+  {
+    id: 'chat-occupancy-normalize',
+    auth: {
+      decision: 'required',
+      reason: 'Normalization contracts demoted session authority to one chat-only occupancy.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The occupancy service checks all session rows and pins atomically without general writer access.',
+    },
+  },
+  {
     id: 'diagnostics-read',
     auth: {
       decision: 'required',
@@ -1050,8 +1116,8 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Atomic generation acceptance reads and mutates the private transcript.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Atomic generation acceptance appends and owns durable generation intent.',
+      decision: 'auth-session',
+      reason: 'Atomic generation acceptance self-enforces exact occupancy or compatibility owner authority.',
     },
   },
   {
@@ -1083,8 +1149,8 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Operation cancellation controls private durable generation work.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Cancellation records a durable lifecycle fence.',
+      decision: 'auth-session',
+      reason: 'Cancellation resolves the stored operation and originating admission authority.',
     },
   },
   {
@@ -1094,8 +1160,8 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Operation retry launches an exact retained generation intent.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Retry reserves and launches a new durable attempt.',
+      decision: 'auth-session',
+      reason: 'Retry reuses the immutable stored operation scope and originating session authority.',
     },
   },
   {
@@ -1116,8 +1182,8 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Claiming grants the exact browser generation effect delivery authority.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Only the active writer may claim durable or observable generation effects.',
+      decision: 'auth-session',
+      reason: 'Effect claims resolve their stored operation scope and originating session authority.',
     },
   },
   {
@@ -1127,8 +1193,8 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Lease renewal extends the exact browser generation effect delivery authority.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Only the active writer may renew its generation effect claim lease.',
+      decision: 'auth-session',
+      reason: 'Effect lease renewal is fenced by the stored claim and generation admission scope.',
     },
   },
   {
@@ -1138,8 +1204,8 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Effect completion receipts are private durable operation metadata.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Only the active writer may settle its generation effect claim.',
+      decision: 'auth-session',
+      reason: 'Effect settlement is fenced by the stored claim and generation admission scope.',
     },
   },
   {
@@ -1184,8 +1250,9 @@ export const PROTOCOL_ROUTE_POLICIES = [
       reason: 'Generation cancel controls an authenticated durable generation job.',
     },
     activeWriter: {
-      decision: 'active-writer',
-      reason: 'Cancel is authorized by the current active writer during writer handoff.',
+      decision: 'auth-session',
+      reason:
+        'Cancel resolves the stored generation target and revalidates its accepted occupancy or compatibility authority.',
     },
   },
   {

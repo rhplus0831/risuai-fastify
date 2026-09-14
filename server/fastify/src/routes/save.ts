@@ -59,6 +59,8 @@ import type { LegacyRisuSaveEnvelopeKind } from '../risuSave/legacyEnvelopeCodec
 import { importRateLimit } from '../routeRateLimits.js'
 import { emitProtocolMetric, protocolDurationMs, protocolMetricsEnabled, protocolNowMs } from '../protocolMetrics.js'
 import type { GreetingTranslationRow } from '../translation/greetingTranslationStore.js'
+import { assertDatabaseReplacementAllowedInTransaction, ChatOccupancyError } from '../chatOccupancy.js'
+import { listGenerationOccupancyPins } from '../generationScope.js'
 
 interface ImportBody {
   database?: unknown
@@ -183,6 +185,10 @@ export function registerSaveRoutes(
         ...(memoryLegacyReport ? { memoryLegacyReport } : {}),
       }
     } catch (err) {
+      if (err instanceof ChatOccupancyError) {
+        reply.code(err.statusCode)
+        return { error: err.code, ...err.details }
+      }
       if (err instanceof MaintenanceBusyError) {
         reply.code(503)
         return { error: err.code }
@@ -310,6 +316,10 @@ export function registerSaveRoutes(
         },
       }
     } catch (err) {
+      if (err instanceof ChatOccupancyError) {
+        reply.code(err.statusCode)
+        return { error: err.code, ...err.details }
+      }
       if (err instanceof MaintenanceBusyError) {
         reply.code(503)
         return { error: err.code }
@@ -656,6 +666,7 @@ async function applyImportedDatabase(
     automaticBackupRetention?: number
     signal?: AbortSignal
     maintenanceLease?: MaintenanceLease
+    beforeReplace?: (db: DatabaseSync) => void
     beforeRevision?: (db: DatabaseSync) => void
     onImportRollback?: () => void
   } = {},
@@ -676,6 +687,10 @@ async function applyImportedDatabase(
       signal: options.signal,
       maintenanceLease: options.maintenanceLease,
       cloneBeforeMessageSplit: options.cloneBeforeMessageSplit,
+      beforeReplace: (innerDb) => {
+        assertDatabaseReplacementAllowedInTransaction(innerDb, { pinQuery: listGenerationOccupancyPins })
+        options.beforeReplace?.(innerDb)
+      },
       beforeRevision: () => {
         const backfill = replaceLegacyHypaV3MemoryRowsInTransaction(
           db,

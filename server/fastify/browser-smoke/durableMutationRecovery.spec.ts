@@ -67,21 +67,37 @@ for (const fault of ['lost-after-commit', 'malformed-after-commit', 'before-acce
     let faulting = true
     let first = true
     const ids: string[] = []
+    let resolveFirstFault!: () => void
+    const firstFaultSettled = new Promise<void>((resolve) => {
+      resolveFirstFault = resolve
+    })
+    let firstFaultDidSettle = false
     await page.route(commandPath, async (route) => {
       ids.push(route.request().headers()['risu-mutation-id'] ?? '')
       if (!faulting) return route.continue()
-      if (!first || fault === 'before-acceptance') return route.abort('connectionclosed')
-      first = false
-      const response = await route.fetch()
-      expect(response.status()).toBe(200)
-      if (fault === 'malformed-after-commit')
-        return route.fulfill({ response, body: '{broken receipt', contentType: 'application/json' })
-      await route.abort('connectionclosed')
+      try {
+        if (!first || fault === 'before-acceptance') return await route.abort('connectionclosed')
+        first = false
+        const response = await route.fetch()
+        expect(response.status()).toBe(200)
+        if (fault === 'malformed-after-commit')
+          return await route.fulfill({ response, body: '{broken receipt', contentType: 'application/json' })
+        await route.abort('connectionclosed')
+      } finally {
+        if (!firstFaultDidSettle) {
+          firstFaultDidSettle = true
+          resolveFirstFault()
+        }
+      }
     })
     await flip(page)
     await expect(toggle(page)).toBeChecked()
     await expect.poll(async () => (await lifecycle(page)).outbox.length).toBe(1)
     await expect(page.locator('.saving-animation')).toBeVisible()
+    // Local staging precedes transport. Await the injected boundary itself so
+    // an after-commit case cannot inspect SQLite while route.fetch() is still
+    // completing the server transaction under parallel browser-suite load.
+    await firstFaultSettled
     expect(truth().revision).toBe(before.revision + (fault === 'before-acceptance' ? 0 : 1))
     const id = (await lifecycle(page)).outbox[0]!.mutationId
     let failAck = true

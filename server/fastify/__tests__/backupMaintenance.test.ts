@@ -30,6 +30,7 @@ import {
 import { setupAuthedClient } from './helpers/auth.js'
 import { createCommandEventSink, type CommandEventSink } from '../src/commands/events.js'
 import * as generationOperations from '../src/generationOperations.js'
+import { assertDatabaseReplacementAllowedInTransaction, ChatOccupancyService } from '../src/chatOccupancy.js'
 
 const sqliteHook = vi.hoisted(() => ({ before: undefined as (() => Promise<void>) | undefined }))
 vi.mock('node:sqlite', async (importOriginal) => {
@@ -498,6 +499,80 @@ describe('backup maintenance ownership', () => {
       expect(getDatabaseLineage(db)).toBe(beforeLineage)
       expect((loadPersisted(db, dataDir).database as Record<string, unknown>).tag).toBe('before')
       expect(listBackups(dataDir)).toHaveLength(source ? 2 : 1)
+    },
+  )
+
+  it.each([
+    ['import', 'occupancy'],
+    ['import', 'pin'],
+    ['restore', 'occupancy'],
+    ['restore', 'pin'],
+  ] as const)(
+    'rechecks a real %s %s race after safety-backup staging and rolls publication back atomically',
+    async (operation, blocker) => {
+      db.prepare('INSERT INTO characters (id, position, data_json) VALUES (?, ?, ?)').run(
+        'occupancy-character',
+        0,
+        JSON.stringify({ chaId: 'occupancy-character', name: 'Protected' }),
+      )
+      db.prepare('INSERT INTO chats (id, character_id, position, data_json) VALUES (?, ?, ?, ?)').run(
+        'occupancy-chat',
+        'occupancy-character',
+        0,
+        JSON.stringify({ id: 'occupancy-chat', name: 'Protected chat' }),
+      )
+      const source = operation === 'restore' ? await createBackup(db, dataDir, 'occupancy race source') : undefined
+      const before = {
+        lineage: getDatabaseLineage(db),
+        revision: getSchemaState(db).revision,
+        chat: db.prepare('SELECT * FROM chats WHERE id = ?').get('occupancy-chat'),
+      }
+      const barrier = pauseCopy()
+      let stagedPins: Array<{ id: string; kind: string }> = []
+      const replacing = track(
+        source
+          ? restoreBackup(db, dataDir, source.id, {
+              beforeReplace: (innerDb) =>
+                assertDatabaseReplacementAllowedInTransaction(innerDb, {
+                  pinQuery: (_pinDb, chatId) => (chatId === 'occupancy-chat' ? stagedPins : []),
+                }),
+            })
+          : applyImport(
+              db,
+              dataDir,
+              { characters: [], tag: 'replacement' },
+              {
+                beforeReplace: (innerDb) =>
+                  assertDatabaseReplacementAllowedInTransaction(innerDb, {
+                    pinQuery: (_pinDb, chatId) => (chatId === 'occupancy-chat' ? stagedPins : []),
+                  }),
+              },
+            ),
+      )
+
+      await barrier.entered
+      if (blocker === 'occupancy') {
+        new ChatOccupancyService(db).claim({
+          databaseLineage: before.lineage,
+          chatId: 'occupancy-chat',
+          sessionId: 'reader-during-staging',
+          claimClass: 'chat_only',
+          expectedOccupancyEpoch: 0,
+        })
+      } else {
+        stagedPins = [{ id: 'work-accepted-during-staging', kind: 'generation_operation' }]
+      }
+      barrier.resume()
+
+      await expect(replacing).rejects.toMatchObject({
+        code: 'chat_occupied',
+        details: { conflictingChatIds: ['occupancy-chat'] },
+      })
+      expect({
+        lineage: getDatabaseLineage(db),
+        revision: getSchemaState(db).revision,
+        chat: db.prepare('SELECT * FROM chats WHERE id = ?').get('occupancy-chat'),
+      }).toEqual(before)
     },
   )
 

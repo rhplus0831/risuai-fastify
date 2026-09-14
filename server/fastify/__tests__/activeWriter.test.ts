@@ -646,17 +646,20 @@ describe('active writer session guard', () => {
     })
   })
 
-  it('keeps streaming observe and public asset exceptions outside the writer gate', async () => {
+  it('keeps self-enforced generation control, streaming observe, and public asset exceptions outside the writer gate', async () => {
     await bootstrapSession(harness.app, 'session-a')
     await bootstrapSession(harness.app, 'session-b')
 
-    expectStaleWriter(
-      await harness.app.inject({
-        method: 'DELETE',
-        url: '/api/v1/generate/chat/job-1',
-        headers: authedHeaders('session-a'),
-      }),
-    )
+    const missingCancel = await harness.app.inject({
+      method: 'DELETE',
+      url: '/api/v1/generate/chat/job-1',
+      headers: authedHeaders('session-a'),
+    })
+    expect(missingCancel.statusCode).toBe(404)
+    expect(missingCancel.json()).toMatchObject({
+      disposition: 'not_found',
+      error: 'generation_job_not_found',
+    })
 
     const reattach = await harness.app.inject({
       method: 'GET',

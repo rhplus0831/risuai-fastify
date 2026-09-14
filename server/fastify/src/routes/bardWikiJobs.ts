@@ -1,9 +1,19 @@
 import type { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance } from 'fastify'
 import type { AuthState } from '../auth.js'
-import { cancelBardWikiJob, getBardWikiJob, retryFailedBardWikiJob } from '../bardWikiJobs.js'
+import {
+  assertBardWikiJobGenerationScope,
+  cancelBardWikiJob,
+  getBardWikiJob,
+  retryFailedBardWikiJob,
+} from '../bardWikiJobs.js'
 import { buildBardWikiJobEvent, emitMemoryEventSafely, type MemoryEventSink } from '../memoryEvents.js'
 import { requireAuth } from '../http.js'
+import {
+  assertGenerationJobControlInTransaction,
+  runImmediateChatMutationTransaction,
+  sendChatMutationError,
+} from './chatOccupancyMutation.js'
 
 export function registerBardWikiJobRoutes(
   app: FastifyInstance,
@@ -17,7 +27,23 @@ export function registerBardWikiJobRoutes(
 ): void {
   app.post<{ Params: { jobId: string } }>('/api/v1/bardwiki/jobs/:jobId/retry', async (req, reply) => {
     if (!(await requireAuth(authState, req, reply))) return
-    const job = retryFailedBardWikiJob(db, req.params.jobId)
+    let job
+    try {
+      job = runImmediateChatMutationTransaction(db, () => {
+        const existing = getBardWikiJob(db, req.params.jobId)
+        if (!existing) return null
+        assertGenerationJobControlInTransaction(db, {
+          chatId: existing.chatId,
+          operationId: existing.operationId,
+          generationScope: existing.generationScope,
+          request: req,
+          assertPersistedScope: () => assertBardWikiJobGenerationScope(db, existing),
+        })
+        return retryFailedBardWikiJob(db, existing.id)
+      })
+    } catch (error) {
+      return sendChatMutationError(reply, error)
+    }
     if (!job) {
       reply.code(409)
       return { error: 'bardwiki_job_not_retryable' }
@@ -29,13 +55,29 @@ export function registerBardWikiJobRoutes(
 
   app.delete<{ Params: { jobId: string } }>('/api/v1/bardwiki/jobs/:jobId', async (req, reply) => {
     if (!(await requireAuth(authState, req, reply))) return
-    const existing = getBardWikiJob(db, req.params.jobId)
-    if (!existing) {
-      reply.code(404)
-      return { error: 'bardwiki_job_not_found' }
+    let job
+    try {
+      job = runImmediateChatMutationTransaction(db, () => {
+        const existing = getBardWikiJob(db, req.params.jobId)
+        if (!existing) return null
+        assertGenerationJobControlInTransaction(db, {
+          chatId: existing.chatId,
+          operationId: existing.operationId,
+          generationScope: existing.generationScope,
+          request: req,
+          assertPersistedScope: () => assertBardWikiJobGenerationScope(db, existing),
+        })
+        return cancelBardWikiJob(db, existing.id)
+      })
+    } catch (error) {
+      return sendChatMutationError(reply, error)
     }
-    const job = cancelBardWikiJob(db, existing.id)
     if (!job) {
+      const existing = getBardWikiJob(db, req.params.jobId)
+      if (!existing) {
+        reply.code(404)
+        return { error: 'bardwiki_job_not_found' }
+      }
       reply.code(409)
       return { error: 'bardwiki_job_not_cancellable' }
     }

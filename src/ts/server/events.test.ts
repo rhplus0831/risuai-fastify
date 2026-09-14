@@ -19,7 +19,7 @@ import {
 } from '../clientSession'
 import { enterClientWriter } from '../__tests__/clientSession'
 import type { CommandEvent } from './commands'
-import type { ServerMemoryEvent, ServerMemoryJobSnapshot, ServerWriterEvent } from './events'
+import type { ServerChatOccupancyEvent, ServerMemoryEvent, ServerMemoryJobSnapshot, ServerWriterEvent } from './events'
 import type { ServerBardWikiJobEvent } from './bardWikiJobEvents'
 
 interface CapturedFetch {
@@ -286,12 +286,34 @@ describe('server command event subscription helper', () => {
       },
     }
     const writerEvent: ServerWriterEvent = { databaseLineage: 'database-a', sessionId: 'writer-b', epoch: 2 }
+    const occupancyEvent: ServerChatOccupancyEvent = {
+      type: 'occupancy.snapshot',
+      version: 1,
+      databaseLineage: 'database-a',
+      occupancies: [
+        {
+          databaseLineage: 'database-a',
+          chatId: 'chat-a',
+          occupantSessionId: 'reader-a',
+          occupancyEpoch: 4,
+          claimClass: 'chat_only',
+          state: 'occupied',
+          claimedAtMs: 1_000,
+          leaseExpiresAtMs: 91_000,
+          updatedAtMs: 1_000,
+          releasedAtMs: null,
+        },
+      ],
+    }
     const calls = stubEventsFetch(
       [
         ': connected',
         '',
         'event: writer',
         `data: ${JSON.stringify(writerEvent)}`,
+        '',
+        'event: occupancy',
+        `data: ${JSON.stringify(occupancyEvent)}`,
         '',
         'event: command',
         `data: ${JSON.stringify(commandEvent)}`,
@@ -318,6 +340,7 @@ describe('server command event subscription helper', () => {
     const memorySnapshots: ServerMemoryJobSnapshot[] = []
     const bardWikiSeen: ServerBardWikiJobEvent[] = []
     const writerSeen: ServerWriterEvent[] = []
+    const occupancySeen: ServerChatOccupancyEvent[] = []
 
     const subscription = await subscribeServerCommandEvents({
       onCommandEvent: (event) => seen.push(event),
@@ -325,6 +348,7 @@ describe('server command event subscription helper', () => {
       onBardWikiEvent: (event) => bardWikiSeen.push(event),
       onMemorySnapshot: (snapshot) => memorySnapshots.push(snapshot),
       onWriterEvent: (event) => writerSeen.push(event),
+      onOccupancyEvent: (event) => occupancySeen.push(event),
     })
 
     expect(subscription.status).toBe('ok')
@@ -333,11 +357,13 @@ describe('server command event subscription helper', () => {
     await waitFor(() => memorySnapshots.length === 1)
     await waitFor(() => bardWikiSeen.length === 1)
     await waitFor(() => writerSeen.length === 1)
+    await waitFor(() => occupancySeen.length === 1)
     expect(seen).toEqual([commandEvent])
     expect(memorySeen).toEqual([memoryEvent])
     expect(memorySnapshots).toEqual([memorySnapshot])
     expect(bardWikiSeen).toEqual([bardWikiEvent])
     expect(writerSeen).toEqual([writerEvent])
+    expect(occupancySeen).toEqual([occupancyEvent])
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatchObject({
       url: '/api/v1/events',
@@ -345,6 +371,58 @@ describe('server command event subscription helper', () => {
       authHeader: 'events-auth-token',
       writerSessionHeader: expect.any(String),
     })
+  })
+
+  it('parses occupancy snapshots independently and rejects revision, id, duplicate, or mixed-lineage frames', async () => {
+    const base = {
+      type: 'occupancy.snapshot',
+      version: 1,
+      databaseLineage: 'database-a',
+      occupancies: [],
+    }
+    const occupied = {
+      databaseLineage: 'database-a',
+      chatId: 'chat-a',
+      occupantSessionId: 'reader-a',
+      occupancyEpoch: 1,
+      claimClass: 'chat_only',
+      state: 'occupied',
+      claimedAtMs: 1_000,
+      leaseExpiresAtMs: 91_000,
+      updatedAtMs: 1_000,
+      releasedAtMs: null,
+    }
+    stubEventsFetch(
+      [
+        'event: occupancy',
+        `data: ${JSON.stringify(base)}`,
+        '',
+        'event: occupancy',
+        `data: ${JSON.stringify({ ...base, revision: 7 })}`,
+        '',
+        'event: occupancy',
+        `data: ${JSON.stringify({ ...base, id: '7' })}`,
+        '',
+        'event: occupancy',
+        `data: ${JSON.stringify({ ...base, occupancies: [occupied, occupied] })}`,
+        '',
+        'event: occupancy',
+        `data: ${JSON.stringify({
+          ...base,
+          occupancies: [{ ...occupied, databaseLineage: 'database-b' }],
+        })}`,
+        '',
+      ].join('\n'),
+    )
+    const onOccupancyEvent = vi.fn()
+    const onCommandEvent = vi.fn()
+
+    const subscription = await subscribeServerCommandEvents({ onCommandEvent, onOccupancyEvent })
+
+    expect(subscription.status).toBe('ok')
+    await waitFor(() => onOccupancyEvent.mock.calls.length === 1)
+    expect(onOccupancyEvent).toHaveBeenCalledWith(base)
+    expect(onCommandEvent).not.toHaveBeenCalled()
   })
 
   it('ignores malformed writer frames', async () => {

@@ -10,6 +10,8 @@ import fastifyWebsocket from '@fastify/websocket'
 import { allowApplicationFileRead, allowDiagnosticStaticFile } from './diagnosticsStaticFiles.js'
 import { onDiagnosticBadUrl } from './diagnosticsRequestRouting.js'
 import { createActiveWriterState, registerActiveWriterGuard } from './activeWriter.js'
+import { ChatOccupancyService, type ChatOccupancyServiceOptions } from './chatOccupancy.js'
+import { listGenerationOccupancyPins } from './generationScope.js'
 import { registerBardWikiReadRoutes } from './routes/bardWiki.js'
 import { registerBardWikiJobRoutes } from './routes/bardWikiJobs.js'
 import {
@@ -30,6 +32,7 @@ import { registerBackupRoutes } from './routes/backups.js'
 import { registerStorageUsageRoutes } from './routes/storageUsage.js'
 import { registerBootstrapRoutes } from './routes/bootstrap.js'
 import { registerOwnershipRoutes } from './routes/ownership.js'
+import { registerChatOccupancyRoutes } from './routes/chatOccupancy.js'
 import { registerCommandRoutes } from './routes/commands.js'
 import { registerResourceReadRoutes } from './routes/resourceReads.js'
 import { registerEventsRoutes } from './routes/events.js'
@@ -105,6 +108,7 @@ import {
 import { createPushNotificationService } from './pushNotifications.js'
 import {
   getGenerationOperationProjection,
+  reconcileExpiredGenerationOccupancyInTransaction,
   reconcileGenerationOperationsAtStartup,
   transitionGenerationOperation,
 } from './generationOperations.js'
@@ -153,6 +157,7 @@ export interface BuildAppOptions {
   embeddingOperations?: EmbeddingOperationRouteOptions
   ttsSynthesis?: TtsSynthesisRouteOptions
   imageGeneration?: ImageGenerationRouteOptions
+  chatOccupancy?: ChatOccupancyServiceOptions & { enabled?: boolean }
   /**
    * Periodic server-side asset GC. `false` disables the timer (tests that do
    * not exercise GC). An options object tunes the grace window / interval.
@@ -165,6 +170,7 @@ export interface BuiltApp {
   config: AppConfig
   generationJobs: GenerationJobRegistry
   diagnostics: ReturnType<typeof createDiagnosticsRuntime>
+  chatOccupancy: ChatOccupancyService
 }
 
 function isPathWithin(parent: string, child: string): boolean {
@@ -267,6 +273,28 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   // observe a database/filesystem mixture.
   recoverInterruptedRestoreSwaps(db, config.dataDir, app.log)
   const activeWriterState = createActiveWriterState(db)
+  let generationJobRegistry: GenerationJobRegistry
+  const injectedOccupancyPins = opts.chatOccupancy?.pinQuery
+  const injectedExpiredOccupancyReconciler = opts.chatOccupancy?.reconcileExpiredOccupancy
+  const chatOccupancyService = new ChatOccupancyService(db, {
+    ...opts.chatOccupancy,
+    pinQuery(pinDb, chatId) {
+      return [
+        ...listGenerationOccupancyPins(pinDb, chatId),
+        ...(generationJobRegistry
+          ? generationJobRegistry.registry
+              .list()
+              .filter((job) => !job.done && job.chatId === chatId)
+              .map((job) => ({ id: job.id, kind: 'generation_runtime' }))
+          : []),
+        ...(injectedOccupancyPins?.(pinDb, chatId) ?? []),
+      ]
+    },
+    reconcileExpiredOccupancy(recoveryDb, input) {
+      reconcileExpiredGenerationOccupancyInTransaction(recoveryDb, input)
+      injectedExpiredOccupancyReconciler?.(recoveryDb, input)
+    },
+  })
   // Legacy memory backfill reads chat.message[]; hydrate from the table (or the
   // still-embedded legacy db.json before boot import retires it) so it sees the
   // real history.
@@ -376,7 +404,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   const streamJobRegistry = new JobRegistry()
   // Separately GC-ticked registry for detached chat generations and their
   // transient chatId→jobId submission lock.
-  const generationJobRegistry = new GenerationJobRegistry(config.dataDir)
+  generationJobRegistry = new GenerationJobRegistry(config.dataDir)
   const messageTranslationJobRegistry = new MessageTranslationJobRegistry(() => getDatabaseLineage(db))
   const greetingTranslationJobRegistry = new GreetingTranslationJobRegistry(() => getDatabaseLineage(db))
   const gcTimer = setInterval(() => {
@@ -402,10 +430,13 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
 
   // preClose precedes Fastify's HTTP drain: active backup requests must receive
   // shutdown cancellation while they still own their copy leases.
-  app.addHook('preClose', () => {
-    // Start cancellation immediately; HTTP connection drain and maintenance
-    // cleanup proceed together. onClose awaits the same drain before SQLite.
+  app.addHook('preClose', async () => {
+    // Start cancellation immediately; maintenance requests can publish their
+    // bounded shutdown response while generation SSE viewers close cleanly.
+    // Awaiting viewer completion before Fastify's idle sweep prevents a socket
+    // that becomes idle just after that sweep from blocking `server.close()`.
     void closeMaintenance(config.dataDir)
+    await generationJobRegistry.closeViewers()
   })
 
   app.addHook('onClose', async () => {
@@ -462,9 +493,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     greetingTranslationJobRegistry,
     diagnostics.enabled,
     diagnosticsRuntime.browserEnabled,
+    chatOccupancyService,
+    opts.chatOccupancy?.enabled === true,
   )
   registerOwnershipRoutes(app, db, authState)
   registerActiveWriterGuard(app, activeWriterState)
+  registerChatOccupancyRoutes(app, authState, chatOccupancyService, {
+    enabled: opts.chatOccupancy?.enabled === true,
+  })
   registerClientDiagnosticsRoutes(app, authState, diagnostics, diagnosticsRuntime.source, diagnosticIdentity)
   registerRemoteDiagnosticsRoutes(
     app,
@@ -511,7 +547,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   )
   registerDisplaySourceRoutes(app, authState, displaySourceService)
   registerLoreTokenCountRoutes(app, db, config.dataDir, authState)
-  registerEventsRoutes(app, db, authState, commandEventSink, memoryEventBus, activeWriterState)
+  registerEventsRoutes(app, db, authState, commandEventSink, memoryEventBus, activeWriterState, chatOccupancyService)
   const canReadApplicationFile = (file: string) => allowApplicationFileRead(config, file)
   registerAssetsRoutes(app, db, authState, config.dataDir, activeWriterState, canReadApplicationFile)
   registerStorageUsageRoutes(app, authState, config.dataDir)
@@ -546,6 +582,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     serverInstanceId,
     {
       ...opts.generationChat,
+      chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
       pushNotifications: opts.generationChat?.pushNotifications ?? pushNotifications,
       onPromptMemoryJobEnqueued: (job) => {
         emitMemoryEvent(buildMemoryJobEvent(job))
@@ -565,6 +602,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     messageTranslationJobs: messageTranslationJobRegistry,
     generationChatOptions: {
       ...opts.generationChat,
+      chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
       pushNotifications: opts.generationChat?.pushNotifications ?? pushNotifications,
       onPromptMemoryJobEnqueued: (job) => {
         emitMemoryEvent(buildMemoryJobEvent(job))
@@ -577,6 +615,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
       onBardWikiJobEnqueued,
     },
     generationTrace: config.generationTrace,
+    chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
   })
   registerGenerationEffectRoutes(app, db, authState)
   const finalizationRetryRaw = opts.generationChat?.finalizationRetry
@@ -667,5 +706,11 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     })
   }
 
-  return { app, config, generationJobs: generationJobRegistry, diagnostics: diagnosticsRuntime }
+  return {
+    app,
+    config,
+    generationJobs: generationJobRegistry,
+    diagnostics: diagnosticsRuntime,
+    chatOccupancy: chatOccupancyService,
+  }
 }

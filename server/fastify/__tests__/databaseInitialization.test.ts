@@ -35,6 +35,17 @@ describe('database initialization assessment', () => {
       ).run()
       expect(assessDatabaseInitialization(db)).toEqual({ state: 'uninitialized', evidence: [] })
 
+      const { lineage } = db.prepare('SELECT lineage FROM database_metadata WHERE id = 1').get() as {
+        lineage: string
+      }
+      db.prepare(
+        `INSERT INTO chat_occupancies (
+          chat_id, database_lineage, occupant_session_id, occupancy_epoch, claim_class,
+          claimed_at_ms, lease_expires_at_ms, updated_at_ms, released_at_ms
+        ) VALUES ('removed-chat', ?, NULL, 2, NULL, NULL, NULL, 1000, 1000)`,
+      ).run(lineage)
+      expect(assessDatabaseInitialization(db)).toEqual({ state: 'uninitialized', evidence: [] })
+
       db.exec('CREATE TABLE future_user_state (id TEXT PRIMARY KEY, data_json TEXT NOT NULL)')
       expect(assessDatabaseInitialization(db)).toEqual({ state: 'uninitialized', evidence: [] })
     } finally {

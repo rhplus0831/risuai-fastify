@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 import { openDatabase } from '../src/db.js'
 import {
   BardWikiJobValidationError,
@@ -67,6 +68,7 @@ function applyPayload(receiptId = 'receipt-a') {
     promptVersion: 'bardwiki-event-v1',
     canonicalEnabled: false,
     repairAttemptCount: 0,
+    acceptedSettings: { ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS, enabledByDefault: true },
   }
 }
 
@@ -110,6 +112,17 @@ describe('BardWiki job payload contract', () => {
       /SHA-256/u,
     )
     expect(() => enqueueApply({ receiptId: 'receipt-b' })).toThrow(/receiptId must match/u)
+    expect(() =>
+      enqueueBardWikiJob(db, {
+        chatId: 'chat-a',
+        receiptId: 'receipt-a',
+        kind: 'reconcile_receipt',
+        payload: { receiptId: 'receipt-a', changeSetId: 'change-a' },
+        operationId: 'obsolete-operation',
+        operationAttemptNo: 1,
+        generationScope: { admissionKind: 'legacy_owner' },
+      }),
+    ).toThrow(/must not inherit source-generation authority/u)
   })
 })
 

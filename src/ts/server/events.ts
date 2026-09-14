@@ -9,6 +9,7 @@ import type {
 } from '../process/request/serverMemory'
 import { activeWriterSessionHeader, isWriterAccessLost } from './activeWriterSession'
 import type { BardWikiJobSummary } from '@risuai/protocol'
+import { isChatOccupancyEvent, type ChatOccupancyEvent } from '@risuai/protocol/chat-occupancy'
 import type { ServerBardWikiJobEvent } from './bardWikiJobEvents'
 import {
   canUseClientReadServices,
@@ -57,6 +58,8 @@ export interface ServerWriterEvent {
 }
 
 export type ServerWriterEventHandler = (event: ServerWriterEvent) => void
+export type ServerChatOccupancyEvent = ChatOccupancyEvent
+export type ServerChatOccupancyEventHandler = (event: ServerChatOccupancyEvent) => void
 
 export interface SubscribeServerCommandEventsInput {
   /** Reader streams never register a connected writer session. */
@@ -66,6 +69,8 @@ export interface SubscribeServerCommandEventsInput {
   onBardWikiEvent?: (event: ServerBardWikiJobEvent) => void
   onMemorySnapshot?: ServerMemorySnapshotHandler
   onWriterEvent?: ServerWriterEventHandler
+  /** Revision-free occupancy discovery, independent of command-event replay. */
+  onOccupancyEvent?: ServerChatOccupancyEventHandler
   onFrame?: (frame: { event: string; data: string; id?: string }) => void
   onError?: (error: string) => void
   onClose?: () => void
@@ -240,6 +245,9 @@ export async function subscribeServerCommandEvents(
         } else if (frame.event === 'writer') {
           const event = parseWriterEvent(frame.data)
           if (event) input.onWriterEvent?.(event)
+        } else if (frame.event === 'occupancy') {
+          const event = parseChatOccupancyEvent(frame.data)
+          if (event) input.onOccupancyEvent?.(event)
         }
       }
       completed = true
@@ -260,6 +268,16 @@ export async function subscribeServerCommandEvents(
     status: 'ok',
     unsubscribe: stop,
   }
+}
+
+function parseChatOccupancyEvent(data: string): ServerChatOccupancyEvent | null {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(data)
+  } catch {
+    return null
+  }
+  return isChatOccupancyEvent(parsed) ? parsed : null
 }
 
 function parseWriterEvent(data: string): ServerWriterEvent | null {

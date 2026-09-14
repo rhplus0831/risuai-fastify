@@ -8,8 +8,8 @@ import {
 
 describe('route-operation catalog', () => {
   it('publishes unique reviewed operation identifiers and exact descriptors', () => {
-    expect(PROTOCOL_ROUTE_OPERATION_CATALOG).toHaveLength(111)
-    expect(new Set(PROTOCOL_ROUTE_OPERATION_CATALOG.map(({ id }) => id)).size).toBe(111)
+    expect(PROTOCOL_ROUTE_OPERATION_CATALOG).toHaveLength(117)
+    expect(new Set(PROTOCOL_ROUTE_OPERATION_CATALOG.map(({ id }) => id)).size).toBe(117)
 
     for (const operation of PROTOCOL_ROUTE_OPERATION_CATALOG) {
       expect(isProtocolRouteOperationDescriptor(operation), operation.id).toBe(true)
@@ -41,6 +41,12 @@ describe('route-operation catalog', () => {
     )
     expect(actual).toEqual([
       'ownership:no-store',
+      'chat-occupancy-snapshot:no-store',
+      'chat-occupancy-claim:no-store',
+      'chat-occupancy-renew:no-store',
+      'chat-occupancy-release:no-store',
+      'chat-occupancy-switch:no-store',
+      'chat-occupancy-normalize:no-store',
       'diagnostics-read:no-store',
       'support-diagnostics-read:no-store',
       'browser-diagnostics-upload:no-store',

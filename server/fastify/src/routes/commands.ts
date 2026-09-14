@@ -338,6 +338,7 @@ import { readPluginStorageBulkPatch, readPluginStorageKey, readPluginStorageValu
 import { validateOptionalServerAssetRef } from '../commands/assets.js'
 import { requireAuth } from '../http.js'
 import { getSchemaState } from '../db.js'
+import { ChatOccupancyError } from '../chatOccupancy.js'
 import type { ChatGenerationSettings } from '@risuai/shared-core/chat-generation-settings'
 import {
   MODEL_PRESET_FIELDS,
@@ -444,11 +445,81 @@ function commandEventOrigin(req: FastifyRequest): CommandEventOrigin | undefined
 function commandMutationContext(req: FastifyRequest, eventSink: CommandEventSink) {
   const origin = commandEventOrigin(req)
   const mutationReceiptKey = readCommandMutationReceiptKey(req)
+  const routeChatId = (req.params as { chatId?: unknown } | undefined)?.chatId
   return {
     eventSink,
     ...(origin ? { eventOrigin: origin } : {}),
+    occupancyActorSessionId: origin?.writerSessionId ?? null,
+    ...(typeof routeChatId === 'string' && routeChatId.length > 0 ? { occupancyDirectChatIds: [routeChatId] } : {}),
     ...(mutationReceiptKey ? { mutationReceiptKey } : {}),
   }
+}
+
+function chatIdsForCharacterInTransaction(db: DatabaseSync, characterId: string): string[] {
+  return (
+    db.prepare('SELECT id FROM chats WHERE character_id = ? ORDER BY id').all(characterId) as unknown as Array<{
+      id: string
+    }>
+  ).map((row) => row.id)
+}
+
+function chatIdsForFolderInTransaction(db: DatabaseSync, folderId: string): string[] {
+  return (
+    db
+      .prepare("SELECT id FROM chats WHERE json_extract(data_json, '$.folderId') = ? ORDER BY id")
+      .all(folderId) as unknown as Array<{ id: string }>
+  ).map((row) => row.id)
+}
+
+function nextChatHeadPositionInTransaction(db: DatabaseSync, characterId: string): number {
+  const row = db.prepare('SELECT MIN(position) AS position FROM chats WHERE character_id = ?').get(characterId) as {
+    position: number | null
+  }
+  return row.position === null ? 0 : row.position - 1
+}
+
+function changedChatIdsForReorderInTransaction(
+  db: DatabaseSync,
+  characterId: string,
+  requestedChatIds: readonly string[],
+  folderByChatId: Readonly<Record<string, string | null>>,
+): string[] {
+  const rows = db
+    .prepare('SELECT id, position, data_json FROM chats WHERE character_id = ? ORDER BY position')
+    .all(characterId) as unknown as Array<{ id: string; position: number; data_json: string }>
+  const requestedPosition = new Map(requestedChatIds.map((chatId, index) => [chatId, index]))
+  return rows.flatMap((row) => {
+    const nextPosition = requestedPosition.get(row.id)
+    if (nextPosition !== row.position) return [row.id]
+    if (!Object.prototype.hasOwnProperty.call(folderByChatId, row.id)) return []
+    const stored = JSON.parse(row.data_json) as Record<string, unknown>
+    return stored.folderId === folderByChatId[row.id] ? [] : [row.id]
+  })
+}
+
+function remappedGreetingChatIdsInTransaction(
+  db: DatabaseSync,
+  characterId: string,
+  body: CharacterCommandBody,
+): string[] {
+  const characterRow = db.prepare('SELECT data_json FROM characters WHERE id = ?').get(characterId) as
+    | { data_json: string }
+    | undefined
+  if (!characterRow) return []
+  const character = JSON.parse(characterRow.data_json) as Record<string, unknown>
+  const greetingCount = Array.isArray(character.alternateGreetings)
+    ? character.alternateGreetings.filter((value): value is string => typeof value === 'string').length
+    : 0
+  const mutation = readAlternateGreetingMutation(body, greetingCount)
+  const chatRows = db
+    .prepare('SELECT id, data_json FROM chats WHERE character_id = ? ORDER BY id')
+    .all(characterId) as unknown as Array<{ id: string; data_json: string }>
+  return chatRows.flatMap((row) => {
+    const chat = JSON.parse(row.data_json) as Record<string, unknown>
+    const before = chat.fmIndex
+    const after = remapAlternateGreetingIndex(before, greetingCount, mutation.operation)
+    return before === after ? [] : [row.id]
+  })
 }
 
 function readCommandMutationReceiptKey(req: FastifyRequest): CommandMutationReceiptKey | undefined {
@@ -6148,6 +6219,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: (innerDb) => remappedGreetingChatIdsInTransaction(innerDb, characterId, body),
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const target = ensureCharacterDatabaseObject(database)
@@ -6160,13 +6232,18 @@ export function registerCommandRoutes(
           appliedGreetingMutation = mutation.operation
           character.alternateGreetings = mutation.alternateGreetings
           const chats = readStrictCharacterChats(character)
+          const changedChats: Record<string, unknown>[] = []
           const chatGreetingIndices = chats.map((chat) => {
+            const previousFmIndex = chat.fmIndex
             const fmIndex = remapAlternateGreetingIndex(chat.fmIndex, currentGreetings.length, mutation.operation)
             chat.fmIndex = fmIndex
+            if (fmIndex !== previousFmIndex) changedChats.push(chat)
             return { chatId: chat.id, fmIndex }
           })
 
-          writeCharacterChatRows(innerDb, characterId, chats as Record<string, unknown>[])
+          for (const changedChat of changedChats) {
+            writeSingleChatRow(innerDb, changedChat.id as string, changedChat)
+          }
           writeSingleCharacterRow(innerDb, characterId, character)
           remapAlternateGreetingTranslations(innerDb, characterId, mutation.operation)
           return {
@@ -6216,6 +6293,7 @@ export function registerCommandRoutes(
       })
     } catch (err) {
       if (
+        err instanceof ChatOccupancyError ||
         err instanceof RevisionMismatchError ||
         err instanceof ValidationError ||
         err instanceof EntityNotFoundError
@@ -6245,6 +6323,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: (innerDb) => chatIdsForCharacterInTransaction(innerDb, characterId),
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const target = ensureCharacterDatabaseObject(database)
@@ -6332,6 +6411,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: (innerDb) => chatIdsForCharacterInTransaction(innerDb, characterId),
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         // Character deletion does not hydrate messages; it removes character,
         // chat, message, and hypa rows directly, then persists settings pointers.
@@ -6475,6 +6555,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: () => [chat.id],
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const { target, modules } = readStrictModuleCommandTarget(database)
@@ -6511,8 +6592,12 @@ export function registerCommandRoutes(
           } else if (previousSelectedChatId) {
             selectChatStrict(character, previousSelectedChatId)
           }
-          writeCharacterChatRows(innerDb, characterId, character.chats as Record<string, unknown>[])
-          insertCharacterChatRow(innerDb, characterId, 0, chat as Record<string, unknown>)
+          insertCharacterChatRow(
+            innerDb,
+            characterId,
+            nextChatHeadPositionInTransaction(innerDb, characterId),
+            chat as Record<string, unknown>,
+          )
           replaceActiveChatMessages(innerDb, chat.id, chatMessages)
           if (chat.hypaV3Data !== undefined && chat.hypaV3Data !== null) {
             setChatHypaV3(innerDb, chat.id, chat.hypaV3Data)
@@ -6568,6 +6653,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: (innerDb) => chatIdsForCharacterInTransaction(innerDb, characterId),
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const { target, modules } = readStrictModuleCommandTarget(database)
@@ -6639,6 +6725,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyDirectChatIds: Object.keys(patch).length > 0 ? [chatId] : [],
         mutationPath: TARGETED_MUTATION_PATHS.chatRow,
         ...(hasModulePatch ? {} : { chatScopedRead: { chatId, exactChatRow: true } }),
         mutate(database, innerDb) {
@@ -6712,6 +6799,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: () => [chatId],
         mutationPath: TARGETED_MUTATION_PATHS.chatRow,
         chatScopedRead: { chatId },
         mutate(database, innerDb) {
@@ -6840,6 +6928,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: () => [chatId],
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         // Chat deletion works on metadata only; orphan message/hypa rows are
         // removed with targeted deletes. Global sibling id de-dup mutates the
@@ -6874,7 +6963,6 @@ export function registerCommandRoutes(
           }
           const characterId = character.chaId as string
           deleteCharacterChatRow(innerDb, chatId, characterId)
-          writeCharacterChatRows(innerDb, characterId, chats as Record<string, unknown>[])
           writeSingleCharacterRow(innerDb, characterId, character)
           deleteChatMessages(innerDb, chatId)
           deleteChatHypaV3(innerDb, chatId)
@@ -6918,6 +7006,8 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyDirectChatIds: Object.keys(sourcePatch).length > 0 ? [sourceChatId] : [],
+        occupancyAffectedChatIds: () => [forkedChat.id],
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const { target, modules } = readStrictModuleCommandTarget(database)
@@ -6978,15 +7068,19 @@ export function registerCommandRoutes(
           } else if (previousSelectedChatId) {
             selectChatStrict(character, previousSelectedChatId)
           }
-          // Surgical fork persistence, scoped to the source character: re-stamp
-          // its existing chat-row positions (source chat's `sourcePatch` rides
-          // along) — the `unshift`ed new chat is a no-op UPDATE until it is
-          // INSERTed at position 0 — then persist the forked chat's messages to
-          // the message store and write the character row (`chatPage`/folder).
-          // Existing chats' messages are untouched (UPDATE, not DELETE+reINSERT).
+          // Keep every existing chat row byte-identical. A head position before
+          // the current minimum preserves display order without re-stamping
+          // siblings; only an explicit source patch updates the source row.
           const characterId = character.chaId as string
-          writeCharacterChatRows(innerDb, characterId, character.chats as Record<string, unknown>[])
-          insertCharacterChatRow(innerDb, characterId, 0, nextChat as Record<string, unknown>)
+          if (Object.keys(sourcePatch).length > 0) {
+            writeSingleChatRow(innerDb, sourceChatId, chats[chatIndex + 1])
+          }
+          insertCharacterChatRow(
+            innerDb,
+            characterId,
+            nextChatHeadPositionInTransaction(innerDb, characterId),
+            nextChat as Record<string, unknown>,
+          )
           replaceActiveChatMessages(innerDb, nextChat.id, forkedMessages)
           if (nextChat.hypaV3Data !== undefined && nextChat.hypaV3Data !== null) {
             setChatHypaV3(innerDb, nextChat.id, nextChat.hypaV3Data)
@@ -7036,6 +7130,8 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: (innerDb) =>
+          changedChatIdsForReorderInTransaction(innerDb, characterId, chatIds, folderByChatId),
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const characters = readStrictCharacterGraph(database)
@@ -7177,6 +7273,7 @@ export function registerCommandRoutes(
         dataDir,
         baseRevision,
         ...commandMutationContext(req, eventSink),
+        occupancyAffectedChatIds: (innerDb) => chatIdsForFolderInTransaction(innerDb, folderId),
         mutationPath: TARGETED_MUTATION_PATHS.characterRow,
         mutate(database, innerDb) {
           const characters = readStrictCharacterGraph(database)
@@ -7488,6 +7585,7 @@ export function registerCommandRoutes(
       })
     } catch (err) {
       if (
+        err instanceof ChatOccupancyError ||
         err instanceof RevisionMismatchError ||
         err instanceof ValidationError ||
         err instanceof EntityNotFoundError
@@ -11021,7 +11119,11 @@ function recordOrBlank(value: unknown): Record<string, unknown> {
 function sendCommandError(
   reply: FastifyReply,
   err: unknown,
-): { error: string; currentRevision?: number; databaseLineage?: string } {
+): { error: string; currentRevision?: number; databaseLineage?: string; [key: string]: unknown } {
+  if (err instanceof ChatOccupancyError) {
+    reply.code(err.statusCode)
+    return { error: err.code, ...err.details }
+  }
   if (err instanceof DatabaseLineageConflictError) {
     reply.code(409)
     return { error: 'database_lineage_conflict', databaseLineage: err.databaseLineage }

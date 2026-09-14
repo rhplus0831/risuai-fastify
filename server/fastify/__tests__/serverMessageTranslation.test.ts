@@ -24,6 +24,7 @@ import {
 } from '../src/repository.js'
 import { sourceHash, upsertGreetingTranslation } from '../src/translation/greetingTranslationStore.js'
 import { resolveRawMessageTranslatorIdentity } from '../src/translation/rawMessageTranslation.js'
+import { ChatOccupancyService } from '../src/chatOccupancy.js'
 
 const serverTranslationMocks = vi.hoisted(() => ({
   dispatchChatProvider: vi.fn(),
@@ -61,6 +62,62 @@ afterEach(() => {
 })
 
 describe('runServerMessageTranslation', () => {
+  it('rejects a manual translation publication when a foreign occupant claims the target during provider work', async () => {
+    const database = createInitialDatabase() as unknown as Record<string, unknown>
+    Object.assign(database, {
+      translator: 'ko',
+      translatorInputLanguage: 'en',
+      translatorType: 'llm',
+      translatorSendTextAsIs: true,
+      modelProfiles: [{ id: 'translate-profile', name: 'Translate', providerId: 'debug-echo', modelId: 'debug-echo' }],
+      modelRoleProfiles: { translate: { mode: 'profile', profileId: 'translate-profile' } },
+      characters: [
+        {
+          chaId: 'char-a',
+          name: 'A',
+          chatPage: 0,
+          chatFolders: [],
+          chats: [
+            {
+              id: 'chat-a',
+              name: 'Chat',
+              note: '',
+              localLore: [],
+              message: [{ role: 'char', data: 'source', chatId: 'message-a' }],
+            },
+          ],
+        },
+      ],
+    })
+    writePersistedWithMessages(db, dataDir, { _version: 1, database, assets: [] })
+    let releaseProvider!: () => void
+    serverTranslationMocks.dispatchChatProvider.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        releaseProvider = resolve
+      })
+      return textFrames('translated')
+    })
+    const translating = runServerMessageTranslation({
+      db,
+      dataDir,
+      eventSink: createCommandEventSink(),
+      messageId: 'message-a',
+      occupancyActorSessionId: 'owner-a',
+    })
+    await vi.waitFor(() => expect(serverTranslationMocks.dispatchChatProvider).toHaveBeenCalledTimes(1))
+    new ChatOccupancyService(db).claim({
+      databaseLineage: getDatabaseLineage(db),
+      chatId: 'chat-a',
+      sessionId: 'reader-a',
+      claimClass: 'chat_only',
+      expectedOccupancyEpoch: 0,
+    })
+    releaseProvider()
+    await expect(translating).rejects.toThrow('chat_occupied')
+    const persisted = resolveActiveMessageLocationById(db, 'message-a')
+    expect(persisted.ok && persisted.location.message.translation).toBeUndefined()
+  })
+
   it('hydrates a persisted multi-step preset and stores the final chained LLM output', async () => {
     writePersistedWithMessages(db, dataDir, {
       _version: 1,

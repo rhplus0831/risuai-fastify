@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
+import type { PersistedGenerationScope } from './generationScope.js'
 
 export const BARDWIKI_DOCUMENT_KINDS = [
   'event',
@@ -153,6 +154,9 @@ export interface BardWikiJobSummary {
   nextRunAt: string
   createdAt: string
   updatedAt: string
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
 }
 
 export interface BardWikiDocumentWriteInput {
@@ -317,6 +321,15 @@ export function createBardWikiTables(db: DatabaseSync): void {
       attempt_count INTEGER NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
       max_attempts INTEGER NOT NULL DEFAULT 3 CHECK (max_attempts > 0),
       next_run_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+      operation_id TEXT,
+      operation_attempt_no INTEGER CHECK (operation_attempt_no IS NULL OR operation_attempt_no > 0),
+      admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only')),
+      occupancy_database_lineage TEXT,
+      occupancy_session_id TEXT,
+      occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0),
+      occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only')),
+      permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0),
+      permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json)),
       created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
       updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     );
@@ -409,6 +422,43 @@ export function createBardWikiTables(db: DatabaseSync): void {
       PRIMARY KEY (rebuild_job_id, ordinal)
     );
   `)
+  ensureBardWikiJobScopeColumns(db)
+}
+
+function ensureBardWikiJobScopeColumns(db: DatabaseSync): void {
+  const existing = new Set(
+    (db.prepare('PRAGMA table_info(bardwiki_jobs)').all() as Array<{ name: string }>).map((row) => row.name),
+  )
+  const columns: ReadonlyArray<readonly [string, string]> = [
+    ['operation_id', 'ALTER TABLE bardwiki_jobs ADD COLUMN operation_id TEXT'],
+    [
+      'operation_attempt_no',
+      'ALTER TABLE bardwiki_jobs ADD COLUMN operation_attempt_no INTEGER CHECK (operation_attempt_no IS NULL OR operation_attempt_no > 0)',
+    ],
+    [
+      'admission_kind',
+      "ALTER TABLE bardwiki_jobs ADD COLUMN admission_kind TEXT CHECK (admission_kind IS NULL OR admission_kind IN ('legacy_owner', 'owner_occupancy', 'chat_only'))",
+    ],
+    ['occupancy_database_lineage', 'ALTER TABLE bardwiki_jobs ADD COLUMN occupancy_database_lineage TEXT'],
+    ['occupancy_session_id', 'ALTER TABLE bardwiki_jobs ADD COLUMN occupancy_session_id TEXT'],
+    [
+      'occupancy_epoch',
+      'ALTER TABLE bardwiki_jobs ADD COLUMN occupancy_epoch INTEGER CHECK (occupancy_epoch IS NULL OR occupancy_epoch >= 0)',
+    ],
+    [
+      'occupancy_claim_class',
+      "ALTER TABLE bardwiki_jobs ADD COLUMN occupancy_claim_class TEXT CHECK (occupancy_claim_class IS NULL OR occupancy_claim_class IN ('owner', 'chat_only'))",
+    ],
+    [
+      'permission_scope_version',
+      'ALTER TABLE bardwiki_jobs ADD COLUMN permission_scope_version INTEGER CHECK (permission_scope_version IS NULL OR permission_scope_version > 0)',
+    ],
+    [
+      'permission_scope_json',
+      'ALTER TABLE bardwiki_jobs ADD COLUMN permission_scope_json TEXT CHECK (permission_scope_json IS NULL OR json_valid(permission_scope_json))',
+    ],
+  ]
+  for (const [name, sql] of columns) if (!existing.has(name)) db.exec(sql)
 }
 
 export function normalizeBardWikiText(value: string): string {

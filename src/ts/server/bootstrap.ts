@@ -18,6 +18,12 @@ import {
   type OwnershipResponse,
   type OwnershipWriter,
 } from '@risuai/protocol/ownership'
+import {
+  isChatOccupancyCapability,
+  isChatOccupancySnapshot,
+  type ChatOccupancyCapability,
+  type ChatOccupancySnapshot,
+} from '@risuai/protocol/chat-occupancy'
 
 const BOOTSTRAP_ENDPOINT = '/api/v1/bootstrap'
 const WRITER_OBSERVER_SESSION_HEADER = 'risu-writer-observer-session'
@@ -281,6 +287,8 @@ export interface ServerBootstrapRuntime {
   writer?: BootstrapWriter
   generationOperationProtocol?: { version: number }
   displaySourceProtocol?: { version: number }
+  chatOccupancyProtocol?: ChatOccupancyCapability
+  chatOccupancies?: ChatOccupancySnapshot
   generationOperationProjectionEpoch?: number
   generationOperations?: GenerationOperationProjection[]
   /**
@@ -545,6 +553,10 @@ function applyServerBootstrapBody(
     ...(writer ? { writer } : {}),
     generationOperationProtocol: parseGenerationOperationProtocol(record.generationOperationProtocol),
     displaySourceProtocol: parseGenerationOperationProtocol(record.displaySourceProtocol),
+    ...(isChatOccupancyCapability(record.chatOccupancyProtocol)
+      ? { chatOccupancyProtocol: record.chatOccupancyProtocol }
+      : {}),
+    ...(isChatOccupancySnapshot(record.chatOccupancies) ? { chatOccupancies: record.chatOccupancies } : {}),
     ...(isStartupTelemetryConfiguration(record.startupTelemetry) ? { startupTelemetry: record.startupTelemetry } : {}),
     ...(isDiagnosticsConfiguration(record.clientDiagnostics) ? { clientDiagnostics: record.clientDiagnostics } : {}),
     ...(isBrowserDiagnosticsConfiguration(record.browserDiagnostics)

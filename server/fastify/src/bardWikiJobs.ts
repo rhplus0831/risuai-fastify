@@ -1,6 +1,20 @@
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
+import { isBardWikiGlobalSettings, type BardWikiGlobalSettings } from '@risuai/protocol'
 import { BARDWIKI_JOB_KINDS, BARDWIKI_JOB_STATUSES, type BardWikiJobSummary } from './bardWikiRepository.js'
+import {
+  GenerationAdmissionError,
+  assertPersistedGenerationScopeInTransaction,
+  scopeFromColumns,
+  scopeSqlValues,
+  type GenerationScopeColumns,
+  type PersistedGenerationScope,
+} from './generationScope.js'
+import { getDatabaseLineage } from './databaseLineage.js'
+import {
+  assertGenerationEffectiveConfigurationFingerprint,
+  type GenerationOperationStoredRequest,
+} from './generationOperations.js'
 
 export const BARDWIKI_JOB_DEFAULT_MAX_ATTEMPTS = 3
 export const BARDWIKI_JOB_DEFAULT_BACKOFF_BASE_MS = 1_000
@@ -23,6 +37,8 @@ export interface BardWikiApplyTurnJobPayload {
   promptVersion: string
   canonicalEnabled: boolean
   repairAttemptCount: number
+  /** Exact effective BardWiki settings captured when this work was accepted. */
+  acceptedSettings?: BardWikiGlobalSettings
 }
 
 export interface BardWikiReconcileReceiptJobPayload {
@@ -57,6 +73,9 @@ export interface EnqueueBardWikiJobInput {
   payload: unknown
   maxAttempts?: number
   nextRunAt?: string | Date
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
 }
 
 export interface BardWikiJobRetryOptions {
@@ -69,7 +88,7 @@ export interface PruneTerminalBardWikiJobsOptions {
   retentionMs?: number
 }
 
-interface BardWikiJobRow {
+interface BardWikiJobRow extends GenerationScopeColumns {
   id: string
   instance_id: string
   chat_id: string
@@ -84,6 +103,8 @@ interface BardWikiJobRow {
   next_run_at: string
   created_at: string
   updated_at: string
+  operation_id: string | null
+  operation_attempt_no: number | null
 }
 
 export class BardWikiJobValidationError extends Error {
@@ -99,7 +120,7 @@ export function readBardWikiJobPayload(kind: BardWikiJobKind, value: unknown): B
   const payload = requireObject(value, 'BardWiki job payload')
   switch (kind) {
     case 'apply_turn': {
-      requireExactKeys(payload, [
+      const keys = [
         'receiptId',
         'expectedUserContentHash',
         'expectedAssistantContentHash',
@@ -108,7 +129,10 @@ export function readBardWikiJobPayload(kind: BardWikiJobKind, value: unknown): B
         'promptVersion',
         'canonicalEnabled',
         'repairAttemptCount',
-      ])
+      ]
+      if (Object.hasOwn(payload, 'acceptedSettings')) keys.push('acceptedSettings')
+      requireExactKeys(payload, keys)
+      const acceptedSettings = readAcceptedBardWikiSettings(payload.acceptedSettings)
       return {
         receiptId: requireBoundedString(payload.receiptId, 'receiptId'),
         expectedUserContentHash: requireContentHash(payload.expectedUserContentHash, 'expectedUserContentHash'),
@@ -121,6 +145,7 @@ export function readBardWikiJobPayload(kind: BardWikiJobKind, value: unknown): B
         promptVersion: requireBoundedString(payload.promptVersion, 'promptVersion'),
         canonicalEnabled: requireBoolean(payload.canonicalEnabled, 'canonicalEnabled'),
         repairAttemptCount: requireInteger(payload.repairAttemptCount, 'repairAttemptCount', 0, 1),
+        ...(acceptedSettings ? { acceptedSettings } : {}),
       }
     }
     case 'reconcile_receipt': {
@@ -180,6 +205,14 @@ export function enqueueBardWikiJob(db: DatabaseSync, input: EnqueueBardWikiJobIn
   const chatId = requireBoundedString(input.chatId, 'chatId')
   const receiptId = input.receiptId === undefined ? null : requireOptionalBoundedString(input.receiptId, 'receiptId')
   const kind = requireBardWikiJobKind(input.kind)
+  if (
+    kind === 'reconcile_receipt' &&
+    (input.operationId !== undefined || input.operationAttemptNo !== undefined || input.generationScope !== undefined)
+  ) {
+    throw new BardWikiJobValidationError(
+      'reconcile_receipt is exact-fence server maintenance and must not inherit source-generation authority',
+    )
+  }
   const payload = readBardWikiJobPayload(kind, input.payload)
   if (kind === 'rebuild_chat') {
     if ((payload as BardWikiRebuildChatJobPayload).chatId !== chatId) {
@@ -199,9 +232,24 @@ export function enqueueBardWikiJob(db: DatabaseSync, input: EnqueueBardWikiJobIn
   db.prepare(
     `INSERT INTO bardwiki_jobs (
       id, instance_id, chat_id, receipt_id, kind, status, payload_json,
-      error_code, error_summary, attempt_count, max_attempts, next_run_at
-    ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, 0, ?, ?)`,
-  ).run(id, instanceId, chatId, receiptId, kind, payloadJson, maxAttempts, nextRunAt)
+      error_code, error_summary, attempt_count, max_attempts, next_run_at,
+      operation_id, operation_attempt_no, admission_kind, occupancy_database_lineage,
+      occupancy_session_id, occupancy_epoch, occupancy_claim_class,
+      permission_scope_version, permission_scope_json
+    ) VALUES (?, ?, ?, ?, ?, 'pending', ?, NULL, NULL, 0, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  ).run(
+    id,
+    instanceId,
+    chatId,
+    receiptId,
+    kind,
+    payloadJson,
+    maxAttempts,
+    nextRunAt,
+    input.operationId ?? null,
+    input.operationAttemptNo ?? null,
+    ...scopeSqlValues(input.generationScope),
+  )
   return getBardWikiJob(db, id) as BardWikiJob
 }
 
@@ -209,6 +257,104 @@ export function getBardWikiJob(db: DatabaseSync, id: string): BardWikiJob | null
   requireBoundedString(id, 'job id')
   const row = db.prepare('SELECT * FROM bardwiki_jobs WHERE id = ?').get(id) as unknown as BardWikiJobRow | undefined
   return row ? mapBardWikiJobRow(row) : null
+}
+
+export function assertBardWikiJobGenerationScope(db: DatabaseSync, job: BardWikiJob): void {
+  if (job.kind === 'reconcile_receipt') {
+    if (job.operationId !== undefined || job.operationAttemptNo !== undefined || job.generationScope !== undefined) {
+      throw new GenerationAdmissionError(409, 'bardwiki_reconcile_authority_invalid')
+    }
+    return
+  }
+  if (!job.generationScope && job.operationId === undefined && job.operationAttemptNo === undefined) return
+  const current = getBardWikiJob(db, job.id)
+  if (
+    !current ||
+    current.chatId !== job.chatId ||
+    current.operationId !== job.operationId ||
+    current.operationAttemptNo !== job.operationAttemptNo ||
+    JSON.stringify(current.generationScope) !== JSON.stringify(job.generationScope)
+  ) {
+    throw new GenerationAdmissionError(409, 'generation_job_target_stale')
+  }
+  if (!job.operationId || job.operationAttemptNo === undefined) {
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_missing')
+  }
+  const lineage = db
+    .prepare(
+      `SELECT o.chat_id AS chat_id
+       FROM generation_operations AS o
+       JOIN generation_operation_attempts AS a
+         ON a.database_lineage = o.database_lineage
+        AND a.operation_id = o.operation_id
+        AND a.attempt_no = ?
+       WHERE o.database_lineage = ? AND o.operation_id = ?`,
+    )
+    .get(job.operationAttemptNo, getDatabaseLineage(db), job.operationId) as { chat_id: string } | undefined
+  if (!lineage || lineage.chat_id !== job.chatId) {
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_stale')
+  }
+  if (job.generationScope) {
+    assertPersistedGenerationScopeInTransaction(db, {
+      ...current.generationScope!,
+      databaseLineage: getDatabaseLineage(db),
+      chatId: job.chatId,
+      sessionId: job.generationScope.occupancySessionId ?? '',
+    })
+  }
+}
+
+/**
+ * Resolve the provider/configuration snapshot owned by the generation attempt
+ * that accepted an automatic BardWiki job. Unlinked legacy/manual jobs return
+ * undefined and retain their pre-migration live-database behavior.
+ */
+export function getBardWikiJobAcceptedEffectiveConfiguration(
+  db: DatabaseSync,
+  job: BardWikiJob,
+): GenerationOperationStoredRequest['effectiveConfiguration'] | undefined {
+  const operationId = job.operationId
+  const operationAttemptNo = job.operationAttemptNo
+  if (operationId === undefined && operationAttemptNo === undefined) return undefined
+  if (operationId === undefined || operationAttemptNo === undefined) {
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_missing')
+  }
+  assertBardWikiJobGenerationScope(db, job)
+  const row = db
+    .prepare(
+      `SELECT o.effective_configuration_json AS effective_configuration_json,
+              o.effective_configuration_fingerprint AS effective_configuration_fingerprint,
+              a.accepted_effective_configuration_fingerprint AS accepted_effective_configuration_fingerprint
+       FROM generation_operations AS o
+       JOIN generation_operation_attempts AS a
+         ON a.database_lineage = o.database_lineage
+        AND a.operation_id = o.operation_id
+        AND a.attempt_no = ?
+       WHERE o.database_lineage = ? AND o.operation_id = ? AND o.chat_id = ?`,
+    )
+    .get(operationAttemptNo, getDatabaseLineage(db), operationId, job.chatId) as
+    | {
+        effective_configuration_json: string | null
+        effective_configuration_fingerprint: string | null
+        accepted_effective_configuration_fingerprint: string | null
+      }
+    | undefined
+  if (
+    !row ||
+    row.effective_configuration_json === null ||
+    row.effective_configuration_fingerprint === null ||
+    row.accepted_effective_configuration_fingerprint !== row.effective_configuration_fingerprint
+  ) {
+    throw new GenerationAdmissionError(409, 'generation_job_configuration_missing')
+  }
+  let configuration: unknown
+  try {
+    configuration = JSON.parse(row.effective_configuration_json) as unknown
+    assertGenerationEffectiveConfigurationFingerprint(configuration, row.effective_configuration_fingerprint)
+  } catch {
+    throw new GenerationAdmissionError(409, 'generation_job_configuration_stale')
+  }
+  return configuration
 }
 
 export function listBardWikiJobs(
@@ -480,6 +626,9 @@ function mapBardWikiJobRow(row: BardWikiJobRow): BardWikiJob {
     nextRunAt: row.next_run_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.operation_id !== null ? { operationId: row.operation_id } : {}),
+    ...(row.operation_attempt_no !== null ? { operationAttemptNo: row.operation_attempt_no } : {}),
+    ...(scopeFromColumns(row) ? { generationScope: scopeFromColumns(row)! } : {}),
   }
 }
 
@@ -538,6 +687,14 @@ function requireContentHash(value: unknown, label: string): string {
 function requireBoolean(value: unknown, label: string): boolean {
   if (typeof value !== 'boolean') throw new BardWikiJobValidationError(`${label} must be boolean`)
   return value
+}
+
+function readAcceptedBardWikiSettings(value: unknown): BardWikiGlobalSettings | undefined {
+  if (value === undefined) return undefined
+  if (!isBardWikiGlobalSettings(value)) {
+    throw new BardWikiJobValidationError('acceptedSettings must match the BardWiki global settings contract')
+  }
+  return structuredClone(value)
 }
 
 function requireInteger(value: unknown, label: string, minimum: number, maximum: number): number {

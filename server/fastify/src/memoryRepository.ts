@@ -1,4 +1,14 @@
 import { randomUUID } from 'node:crypto'
+import {
+  GenerationAdmissionError,
+  assertPersistedGenerationScopeInTransaction,
+  scopeFromColumns,
+  scopeSqlValues,
+  type GenerationScopeColumns,
+  type PersistedGenerationScope,
+} from './generationScope.js'
+import { getDatabaseLineage } from './databaseLineage.js'
+import { assertGenerationEffectiveConfigurationFingerprint } from './generationOperations.js'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import { ValidationError } from './repository.js'
 
@@ -131,6 +141,14 @@ export interface MemoryJob {
   nextRunAt: string
   createdAt: string
   updatedAt: string
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
+}
+
+export interface MemoryJobAcceptedEffectiveConfiguration {
+  version: 1
+  database: Record<string, unknown>
 }
 
 export interface MemoryJobListItem {
@@ -156,6 +174,9 @@ export interface CreateMemoryJobInput {
   attemptCount?: number
   maxAttempts?: number
   nextRunAt?: string
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
 }
 
 export interface EnqueueMemoryJobInput {
@@ -165,6 +186,9 @@ export interface EnqueueMemoryJobInput {
   payload: unknown
   maxAttempts?: number
   nextRunAt?: string
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
 }
 
 export interface MemoryJobRetryOptions {
@@ -246,7 +270,7 @@ interface MemoryEmbeddingRow {
   created_at: string
 }
 
-interface MemoryJobRow {
+interface MemoryJobRow extends GenerationScopeColumns {
   id: string
   instance_id: string
   chat_id: string
@@ -259,6 +283,8 @@ interface MemoryJobRow {
   next_run_at: string
   created_at: string
   updated_at: string
+  operation_id?: string | null
+  operation_attempt_no?: number | null
 }
 
 function isOneOf<T extends readonly string[]>(values: T, value: string): value is T[number] {
@@ -479,6 +505,9 @@ export function mapMemoryJobRow(row: MemoryJobRow): MemoryJob {
     nextRunAt: row.next_run_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    ...(row.operation_id != null ? { operationId: row.operation_id } : {}),
+    ...(row.operation_attempt_no != null ? { operationAttemptNo: row.operation_attempt_no } : {}),
+    ...(scopeFromColumns(row) ? { generationScope: scopeFromColumns(row)! } : {}),
   }
 }
 
@@ -994,13 +1023,20 @@ export function cleanupOrphanedMemoryWithSummarySnapshot(
     }
   }
 
-  db.exec('BEGIN IMMEDIATE')
+  const ownsTransaction = !db.isTransaction
+  if (ownsTransaction) db.exec('BEGIN IMMEDIATE')
+  else db.exec('SAVEPOINT orphaned_memory_cleanup')
   try {
     deleteByIds(db, 'memory_summaries', summaryIds)
     deleteByIds(db, 'memory_chunks', chunkIds)
-    db.exec('COMMIT')
+    if (ownsTransaction) db.exec('COMMIT')
+    else db.exec('RELEASE SAVEPOINT orphaned_memory_cleanup')
   } catch (error) {
-    db.exec('ROLLBACK')
+    if (ownsTransaction && db.isTransaction) db.exec('ROLLBACK')
+    else if (db.isTransaction) {
+      db.exec('ROLLBACK TO SAVEPOINT orphaned_memory_cleanup')
+      db.exec('RELEASE SAVEPOINT orphaned_memory_cleanup')
+    }
     throw error
   }
 
@@ -1144,8 +1180,17 @@ export function createMemoryJob(db: DatabaseSync, input: CreateMemoryJobInput): 
         error,
         attempt_count,
         max_attempts,
-        next_run_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        next_run_at,
+        operation_id,
+        operation_attempt_no,
+        admission_kind,
+        occupancy_database_lineage,
+        occupancy_session_id,
+        occupancy_epoch,
+        occupancy_claim_class,
+        permission_scope_version,
+        permission_scope_json
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
     input.id,
     input.instanceId ?? randomUUID(),
@@ -1157,6 +1202,9 @@ export function createMemoryJob(db: DatabaseSync, input: CreateMemoryJobInput): 
     attemptCount,
     maxAttempts,
     nextRunAt,
+    input.operationId ?? null,
+    input.operationAttemptNo ?? null,
+    ...scopeSqlValues(input.generationScope),
   )
   return getMemoryJob(db, input.id) as MemoryJob
 }
@@ -1171,6 +1219,9 @@ export function enqueueMemoryJob(db: DatabaseSync, input: EnqueueMemoryJobInput)
     error: null,
     maxAttempts: input.maxAttempts,
     nextRunAt: input.nextRunAt,
+    operationId: input.operationId,
+    operationAttemptNo: input.operationAttemptNo,
+    generationScope: input.generationScope,
   })
 }
 
@@ -1178,6 +1229,189 @@ export function getMemoryJob(db: DatabaseSync, id: string): MemoryJob | null {
   requireString(id, 'job id')
   const row = getRow<MemoryJobRow>(db.prepare('SELECT * FROM memory_jobs WHERE id = ?'), id)
   return row ? mapMemoryJobRow(row) : null
+}
+
+export function assertMemoryJobGenerationScope(db: DatabaseSync, job: MemoryJob): void {
+  const current = getMemoryJob(db, job.id)
+  if (
+    !current ||
+    current.instanceId !== job.instanceId ||
+    current.chatId !== job.chatId ||
+    current.operationId !== job.operationId ||
+    current.operationAttemptNo !== job.operationAttemptNo ||
+    JSON.stringify(current.generationScope) !== JSON.stringify(job.generationScope)
+  ) {
+    throw new GenerationAdmissionError(409, 'generation_job_target_stale')
+  }
+  if (!job.generationScope) {
+    if (job.operationId === undefined && job.operationAttemptNo === undefined) return
+    if (hasPreOccupancyMemoryJobAuthority(db, job)) return
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_missing')
+  }
+  if (job.operationId === undefined || job.operationAttemptNo === undefined) {
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_missing')
+  }
+  const lineage = db
+    .prepare(
+      `SELECT o.chat_id AS chat_id
+       FROM generation_operations AS o
+       JOIN generation_operation_attempts AS a
+         ON a.database_lineage = o.database_lineage
+        AND a.operation_id = o.operation_id
+        AND a.attempt_no = ?
+       WHERE o.database_lineage = ? AND o.operation_id = ?`,
+    )
+    .get(job.operationAttemptNo, getDatabaseLineage(db), job.operationId) as { chat_id: string } | undefined
+  if (!lineage || lineage.chat_id !== job.chatId) {
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_stale')
+  }
+  assertPersistedGenerationScopeInTransaction(db, {
+    ...current.generationScope!,
+    databaseLineage: getDatabaseLineage(db),
+    chatId: job.chatId,
+    sessionId: job.generationScope.occupancySessionId ?? '',
+  })
+}
+
+/**
+ * Automatic memory work spawned by an accepted generation must use the same
+ * bounded configuration as that operation. Jobs without generation provenance
+ * predate this contract (or are explicit manual work) and keep the legacy live
+ * configuration path.
+ */
+export function getMemoryJobAcceptedEffectiveConfiguration(
+  db: DatabaseSync,
+  job: MemoryJob,
+): MemoryJobAcceptedEffectiveConfiguration | undefined {
+  if (job.operationId === undefined && job.operationAttemptNo === undefined && !job.generationScope) return undefined
+  assertMemoryJobGenerationScope(db, job)
+  // A genuine v39 operation could not capture a configuration snapshot. Its
+  // migration marker and exact job/attempt relation were validated above, so
+  // it alone keeps the historical live-configuration retry behavior.
+  if (!job.generationScope) return undefined
+  if (job.operationId === undefined || job.operationAttemptNo === undefined) {
+    throw new GenerationAdmissionError(409, 'generation_job_lineage_missing')
+  }
+  const row = db
+    .prepare(
+      `SELECT o.effective_configuration_json AS effective_configuration_json,
+              o.effective_configuration_fingerprint AS effective_configuration_fingerprint,
+              a.accepted_effective_configuration_fingerprint AS accepted_effective_configuration_fingerprint
+       FROM generation_operations AS o
+       JOIN generation_operation_attempts AS a
+         ON a.database_lineage = o.database_lineage
+        AND a.operation_id = o.operation_id
+        AND a.attempt_no = ?
+       WHERE o.database_lineage = ? AND o.operation_id = ? AND o.chat_id = ?`,
+    )
+    .get(job.operationAttemptNo, getDatabaseLineage(db), job.operationId, job.chatId) as
+    | {
+        effective_configuration_json: string | null
+        effective_configuration_fingerprint: string | null
+        accepted_effective_configuration_fingerprint: string | null
+      }
+    | undefined
+  if (
+    !row ||
+    row.effective_configuration_json === null ||
+    row.effective_configuration_fingerprint === null ||
+    row.accepted_effective_configuration_fingerprint !== row.effective_configuration_fingerprint
+  ) {
+    throw new GenerationAdmissionError(409, 'generation_job_configuration_missing')
+  }
+  let configuration: unknown
+  try {
+    configuration = JSON.parse(row.effective_configuration_json) as unknown
+    assertGenerationEffectiveConfigurationFingerprint(configuration, row.effective_configuration_fingerprint)
+  } catch {
+    throw new GenerationAdmissionError(409, 'generation_job_configuration_stale')
+  }
+  if (!isRecord(configuration) || configuration.version !== 1 || !isRecord(configuration.database)) {
+    throw new GenerationAdmissionError(409, 'generation_job_configuration_stale')
+  }
+  return {
+    version: 1,
+    database: structuredClone(configuration.database),
+  }
+}
+
+/**
+ * Recognize only memory work linked to an operation that genuinely crossed the
+ * v39 -> v40 migration. Nullable child columns are not authority: the migration
+ * marker, current lineage, exact operation/attempt/job/chat relation, and the
+ * absence of every modern scope/configuration field must all agree. Operation
+ * settlement does not revoke an already-enqueued memory job: like modern
+ * persisted scope, this compatibility authority lasts until the memory job is
+ * terminal.
+ */
+function hasPreOccupancyMemoryJobAuthority(db: DatabaseSync, job: MemoryJob): boolean {
+  if (job.operationId === undefined || job.operationAttemptNo === undefined || job.generationScope) return false
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1 AS found
+         FROM memory_jobs AS j
+         JOIN generation_operations AS o
+           ON o.database_lineage = ?
+          AND o.operation_id = j.operation_id
+          AND o.chat_id = j.chat_id
+         JOIN generation_operation_attempts AS a
+           ON a.database_lineage = o.database_lineage
+          AND a.operation_id = o.operation_id
+          AND a.attempt_no = j.operation_attempt_no
+         WHERE j.id = ? AND j.instance_id = ? AND j.chat_id = ?
+           AND j.operation_id = ? AND j.operation_attempt_no = ?
+           AND o.pre_occupancy_authority = 1
+           AND o.admission_kind IS NULL
+           AND o.occupancy_database_lineage IS NULL
+           AND o.occupancy_session_id IS NULL
+           AND o.occupancy_epoch IS NULL
+           AND o.occupancy_claim_class IS NULL
+           AND o.permission_scope_version IS NULL
+           AND o.permission_scope_json IS NULL
+           AND o.effective_configuration_json IS NULL
+           AND o.effective_configuration_fingerprint IS NULL
+           AND a.accepted_admission_kind IS NULL
+           AND a.accepted_occupancy_database_lineage IS NULL
+           AND a.accepted_occupancy_session_id IS NULL
+           AND a.accepted_occupancy_epoch IS NULL
+           AND a.accepted_occupancy_claim_class IS NULL
+           AND a.accepted_permission_scope_version IS NULL
+           AND a.accepted_permission_scope_json IS NULL
+           AND a.accepted_effective_configuration_fingerprint IS NULL
+           AND j.admission_kind IS NULL
+           AND j.occupancy_database_lineage IS NULL
+           AND j.occupancy_session_id IS NULL
+           AND j.occupancy_epoch IS NULL
+           AND j.occupancy_claim_class IS NULL
+           AND j.permission_scope_version IS NULL
+           AND j.permission_scope_json IS NULL
+         LIMIT 1`,
+      )
+      .get(getDatabaseLineage(db), job.id, job.instanceId, job.chatId, job.operationId, job.operationAttemptNo),
+  )
+}
+
+/** Recheck the exact job instance and durable generation authority immediately before a result write. */
+export function memoryJobMayApplyResult(db: DatabaseSync, job: MemoryJob): boolean {
+  if (!memoryJobInstanceMayTransition(db, job)) return false
+  assertMemoryJobGenerationScope(db, job)
+  return true
+}
+
+/** Job-state cleanup may proceed for the same live instance even when its generation scope is invalid. */
+export function memoryJobInstanceMayTransition(db: DatabaseSync, job: MemoryJob): boolean {
+  const current = getMemoryJob(db, job.id)
+  if (
+    !current ||
+    current.instanceId !== job.instanceId ||
+    current.status !== job.status ||
+    current.attemptCount !== job.attemptCount ||
+    (current.status !== 'pending' && current.status !== 'running')
+  ) {
+    return false
+  }
+  return true
 }
 
 export function listMemoryJobs(

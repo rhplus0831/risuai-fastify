@@ -11,6 +11,7 @@ import {
 } from '../pushNotifications.js'
 import { loadPersistedForChatMutation, loadSettingsFromSqlite } from '../repository.js'
 import type { PostGenerationTranslationFrame } from '../prompt/sseEvents.js'
+import type { AcceptedEffectiveGenerationConfiguration } from '../prompt/assemble.js'
 import { isServerAutoTranslationEligible } from './serverAutoTranslationEligibility.js'
 import { runServerMessageTranslation, type RunServerMessageTranslationInput } from './serverMessageTranslation.js'
 
@@ -29,9 +30,12 @@ export interface GeneratedChatCompletionInput {
   chatId: string
   characterId?: string
   completedAt?: number
+  /** Immutable server-derived configuration captured with the accepted attempt. */
+  acceptedEffectiveConfiguration?: AcceptedEffectiveGenerationConfiguration
   pushNotifications?: false | PushNotificationService
   runMessageTranslation?: ServerMessageTranslationRunner
   onTranslationStarted?: (input: { chatId: string; messageId: string; jobId: string }) => void
+  assertWriteAllowed?: RunServerMessageTranslationInput['assertWriteAllowed']
 }
 
 export interface GeneratedChatCompletionFollowup {
@@ -66,8 +70,10 @@ function notifyChatCompletion(
 function generatedMessageIsEligible(input: GeneratedChatCompletionInput, settings: Record<string, unknown>): boolean {
   const resolved = resolveActiveMessageLocationById(input.db, input.messageId)
   if (resolved.ok === false || resolved.location.chatId !== input.chatId) return false
-  const persisted = loadPersistedForChatMutation(input.db, input.dataDir, { messageId: input.messageId })
-  const characters = normalizeAllCharacterChats(persisted.database)
+  const database = input.acceptedEffectiveConfiguration
+    ? structuredClone(input.acceptedEffectiveConfiguration.database)
+    : loadPersistedForChatMutation(input.db, input.dataDir, { messageId: input.messageId }).database
+  const characters = normalizeAllCharacterChats(database)
   const { chat } = requireChatLocation(characters, input.chatId)
   return isServerAutoTranslationEligible({
     chatAutoTranslate: chat.autoTranslate,
@@ -92,7 +98,14 @@ export async function handleGeneratedChatCompletion(
   let settings: Record<string, unknown> | null = null
   let eligible = false
   try {
-    settings = loadSettingsFromSqlite(input.db)
+    settings = input.acceptedEffectiveConfiguration
+      ? input.acceptedEffectiveConfiguration.translationSettings
+        ? {
+            ...(structuredClone(input.acceptedEffectiveConfiguration.database) as unknown as Record<string, unknown>),
+            ...structuredClone(input.acceptedEffectiveConfiguration.translationSettings),
+          }
+        : null
+      : loadSettingsFromSqlite(input.db)
     eligible = settings !== null && generatedMessageIsEligible(input, settings)
   } catch {
     eligible = false
@@ -117,6 +130,10 @@ export async function handleGeneratedChatCompletion(
       messageTranslationJobs: input.messageTranslationJobs,
       messageId: input.messageId,
       jobId,
+      ...(input.acceptedEffectiveConfiguration
+        ? { acceptedEffectiveConfiguration: input.acceptedEffectiveConfiguration }
+        : {}),
+      ...(input.assertWriteAllowed ? { assertWriteAllowed: input.assertWriteAllowed } : {}),
     })
   } catch (error) {
     if (notificationsEnabled) notifyChatCompletion(input.pushNotifications, context)

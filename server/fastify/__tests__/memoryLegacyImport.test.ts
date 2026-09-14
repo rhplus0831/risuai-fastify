@@ -6,6 +6,7 @@ import { buildApp } from '../src/app.js'
 import { openDatabase } from '../src/db.js'
 import { backfillLegacyHypaV3MemoryRows, LEGACY_HYPA_V3_SUMMARY_MODEL } from '../src/memoryLegacyImport.js'
 import {
+  cancelMemoryJob,
   createMemoryJob,
   listMemoryChunks,
   listMemoryEmbeddings,
@@ -246,7 +247,7 @@ describe('legacy Hypa V3 memory import', () => {
     }
   })
 
-  it('replaces memory rows during JSON import without creating embeddings or jobs', async () => {
+  it('rejects replacement while a memory job pins the chat, then replaces all memory rows after cancellation', async () => {
     const dataDir = makeDataDir()
     const { app } = await buildApp({
       config: {
@@ -258,6 +259,8 @@ describe('legacy Hypa V3 memory import', () => {
         trustProxy: false,
         hubUrl: 'https://sv.risuai.xyz',
       },
+      memoryWorker: false,
+      assetGc: false,
     })
     try {
       const { assertion } = await setupAuthedClient(app)
@@ -291,6 +294,37 @@ describe('legacy Hypa V3 memory import', () => {
           text: 'user: hello\nchar: hi',
           status: 'summarized',
         })
+      } finally {
+        db.close()
+      }
+
+      const blocked = await app.inject({
+        method: 'POST',
+        url: '/api/v1/import/risusave',
+        headers: { 'risu-auth': assertion },
+        payload: { database: { characters: [] } },
+      })
+      expect(blocked.statusCode).toBe(423)
+      expect(blocked.json()).toMatchObject({
+        error: 'chat_occupied',
+        chatId: 'chat-1',
+        conflictingChatIds: ['chat-1'],
+        conflicts: [
+          {
+            chatId: 'chat-1',
+            occupancy: null,
+            blocking: [{ id: 'old-job', kind: 'memory_job' }],
+          },
+        ],
+        safeRelease: expect.stringContaining('exact lineage/chat/epoch tuple'),
+      })
+
+      db = openDatabase(dataDir)
+      try {
+        expect(listMemoryChunks(db, { chatId: 'chat-1' })).toHaveLength(2)
+        expect(listMemorySummaries(db, { chatId: 'chat-1' })).toHaveLength(2)
+        expect(listMemoryJobs(db)).toEqual([expect.objectContaining({ id: 'old-job', status: 'pending' })])
+        expect(cancelMemoryJob(db, 'old-job')).toMatchObject({ id: 'old-job', status: 'cancelled' })
       } finally {
         db.close()
       }

@@ -738,6 +738,8 @@ export interface ServerLuaRuntimeContext {
   requestHistoryDb?: DatabaseSync
   /** Server asset root used to persist Lua-generated inlays. */
   assetDataDir?: string
+  /** False for restricted accepted operations; image execution is skipped. */
+  allowGeneratedAssetWrites?: boolean
   /** Test/alternate adapter seam; production uses the shared embedding adapters. */
   luaSimilarity?: {
     embed?: typeof embedTexts
@@ -1505,6 +1507,9 @@ function buildLuaImageGenerationRequest(
 }
 
 async function persistLuaGeneratedImage(state: RuntimeState, image: GeneratedImage): Promise<string> {
+  if (state.ctx.allowGeneratedAssetWrites === false) {
+    throw new Error('generated asset writes are unavailable for this operation')
+  }
   if (state.ctx.luaImageGeneration?.persist) {
     return await state.ctx.luaImageGeneration.persist(image)
   }
@@ -1518,6 +1523,7 @@ async function persistLuaGeneratedImage(state: RuntimeState, image: GeneratedIma
 }
 
 async function runLuaImageGeneration(state: RuntimeState, prompt: string, negativePrompt: string): Promise<string> {
+  if (state.ctx.allowGeneratedAssetWrites === false) return LUA_IMAGE_GENERATION_FAILURE
   try {
     const request = parseImageGenerationRequest(
       buildLuaImageGenerationRequest(state.ctx.database, String(prompt ?? ''), String(negativePrompt ?? '')),

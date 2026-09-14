@@ -24,7 +24,7 @@ import {
   type MemoryJob,
 } from '../src/memoryRepository.js'
 import { LEGACY_HYPA_V3_SUMMARY_MODEL } from '../src/memorySummaryCompatibility.js'
-import { EntityNotFoundError } from '../src/repository.js'
+import { EntityNotFoundError, listInlayCatalogEntries } from '../src/repository.js'
 import {
   assemblePrompt,
   applyRequestTrigger,
@@ -3093,6 +3093,11 @@ describe('fillMemoryAndPostHistory', () => {
   it('plans missing Hypa chunks and summarize jobs before prompt memory selection', async () => {
     const memoryDb = openDatabase(makeDataDir())
     try {
+      const operationAuthority = {
+        operationId: 'operation-memory-planning',
+        operationAttemptNo: 2,
+        generationScope: { admissionKind: 'legacy_owner' as const },
+      }
       const db = memoryEnabledDatabase({
         maxContext: 100,
         maxResponse: 0,
@@ -3115,7 +3120,7 @@ describe('fillMemoryAndPostHistory', () => {
       const visiblePendingJobs: MemoryJob[] = []
 
       const first = beginAssembly(
-        baseInput(),
+        baseInput(operationAuthority),
         depsFor(db, {
           loadMemoryDatabase: () => memoryDb,
           loadPromptMemoryQueryVectors: () => [],
@@ -3154,6 +3159,7 @@ describe('fillMemoryAndPostHistory', () => {
         chatId: 'chat-1',
         kind: 'summarize',
         status: 'pending',
+        ...operationAuthority,
         payload: {
           chunkId: chunks[0].id,
           model: 'memory',
@@ -3165,7 +3171,7 @@ describe('fillMemoryAndPostHistory', () => {
       })
 
       const second = beginAssembly(
-        baseInput(),
+        baseInput(operationAuthority),
         depsFor(db, {
           loadMemoryDatabase: () => memoryDb,
           loadPromptMemoryQueryVectors: () => [],
@@ -4627,6 +4633,108 @@ describe('assembly message capture dirty flags', () => {
     expect(cloneMetrics.messageSharingEnvelopeClones.input).toBe(1)
     expect(cloneMetrics.messageSharingEnvelopeClones.start).toBe(1)
     expect(cloneMetrics.messageSharingEnvelopeClones.output).toBe(1)
+  })
+
+  it('keeps configured Lua image generation inside the accepted asset-publication scope', async () => {
+    const imageBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8Z0AAAAASUVORK5CYII='
+    const fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ data: [{ b64_json: imageBase64 }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    )
+    const triggerCode = `
+      onInput = async(function(id)
+        local image = generateImage(id, 'a lighthouse'):await()
+        setChatVar(id, 'inputAsset', image)
+      end)
+
+      onStart = async(function(id)
+        local image = generateImage(id, 'a lighthouse'):await()
+        setChatVar(id, 'startAsset', image)
+      end)
+
+      onOutput = async(function(id)
+        local image = generateImage(id, 'a lighthouse'):await()
+        setChatVar(id, 'outputAsset', image)
+      end)
+    `
+    const makeImageDatabase = () =>
+      m1Db([], {
+        db: {
+          sdProvider: 'dalle',
+          dallEQuality: 'standard',
+          openAIKey: 'test-openai-key',
+        },
+        char: {
+          lowLevelAccess: true,
+          triggerscript: [
+            {
+              comment: '',
+              type: 'output',
+              conditions: [],
+              effect: [{ type: 'triggerlua', code: triggerCode }],
+            },
+          ] as never,
+        },
+      })
+    const run = async (admissionKind: 'chat_only' | 'owner_occupancy') => {
+      const dataDir = makeDataDir()
+      const assetDb = openDatabase(dataDir)
+      try {
+        const assembled = await assemblePrompt(
+          baseInput({ generationScope: { admissionKind } }),
+          depsFor(makeImageDatabase(), {
+            loadMemoryDatabase: () => assetDb,
+            assetDataDir: dataDir,
+          }),
+        )
+        const post = await runServerPostGeneration(assembled.state!, {
+          completionText: 'assistant reply',
+          generationId: `generation-${admissionKind}`,
+        })
+        return {
+          assembled,
+          post,
+          catalog: listInlayCatalogEntries(assetDb),
+        }
+      } finally {
+        assetDb.close()
+      }
+    }
+
+    const restricted = await run('chat_only')
+
+    expect(fetchSpy).not.toHaveBeenCalled()
+    expect(restricted.catalog).toEqual([])
+    expect(restricted.post.finalText).toBe('assistant reply')
+    expect(restricted.assembled.state?.currentChat.message.at(-1)?.data).toBe('assistant reply')
+    expect(restricted.assembled.mutations?.chatVarMutations).toEqual(
+      expect.arrayContaining([
+        { key: '$inputAsset', before: null, after: 'Error: Image generation failed' },
+        { key: '$startAsset', before: null, after: 'Error: Image generation failed' },
+      ]),
+    )
+    expect(restricted.post.mutations.chatVarMutations).toEqual([
+      { key: '$outputAsset', before: null, after: 'Error: Image generation failed' },
+    ])
+
+    const owner = await run('owner_occupancy')
+
+    expect(fetchSpy).toHaveBeenCalledTimes(3)
+    expect(owner.catalog).toHaveLength(1)
+    expect(owner.post.finalText).toBe('assistant reply')
+    expect(owner.assembled.state?.currentChat.message.at(-1)?.data).toBe('assistant reply')
+    expect(owner.assembled.mutations?.chatVarMutations).toEqual(
+      expect.arrayContaining([
+        { key: '$inputAsset', before: null, after: expect.stringMatching(/^\{\{inlay::[a-f0-9]{64}\}\}$/) },
+        { key: '$startAsset', before: null, after: expect.stringMatching(/^\{\{inlay::[a-f0-9]{64}\}\}$/) },
+      ]),
+    )
+    expect(owner.post.mutations.chatVarMutations).toEqual([
+      { key: '$outputAsset', before: null, after: expect.stringMatching(/^\{\{inlay::[a-f0-9]{64}\}\}$/) },
+    ])
   })
 
   it('captures input-trigger transcript rewrites once and keeps restoration at the original transcript', async () => {

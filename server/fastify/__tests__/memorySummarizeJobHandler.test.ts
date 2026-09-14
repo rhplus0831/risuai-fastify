@@ -4,6 +4,14 @@ import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { invalidateUnsummarizedMemoryForChat } from '../src/memoryInvalidation.js'
 import { openDatabase } from '../src/db.js'
+import { getDatabaseLineage } from '../src/databaseLineage.js'
+import {
+  createGenerationOperation,
+  generationEffectiveConfigurationFingerprint,
+  reserveGenerationOperationAttempt,
+} from '../src/generationOperations.js'
+import { planHypaV3ChunkJobs } from '../src/memoryChunkPlanner.js'
+import { planStandardHypaV3Memory } from '../src/memoryPlanner.js'
 import {
   createSummarizeMemoryJobBatchHandler,
   createSummarizeMemoryJobHandler,
@@ -26,6 +34,7 @@ import { DEFAULT_SUMMARIZATION_PROMPT } from '../src/memorySummaryPrompt.js'
 import { createInitialDatabase } from '../src/databaseDefaults.js'
 import { createBackup, restoreBackup, writePersistedWithMessages } from '../src/repository.js'
 import { assertScopedLoadOnHotPath } from './helpers/loadCostHarness.js'
+import type { PromptMessage } from '../src/prompt/promptMessage.js'
 
 const dataDirs: string[] = []
 
@@ -122,6 +131,58 @@ function seedChunkAndJob(db: ReturnType<typeof openDatabase>, jobPayload = paylo
   })
 }
 
+function acceptedGenerationProvenance(db: ReturnType<typeof openDatabase>, acceptedDatabase: unknown) {
+  const databaseLineage = getDatabaseLineage(db)
+  const operationId = 'operation-memory-summary'
+  const generationScope = { admissionKind: 'legacy_owner' as const }
+  const effectiveConfiguration = {
+    version: 1,
+    database: acceptedDatabase,
+    promptInfo: {},
+    resolvedMainProfile: {},
+  }
+  const operation = createGenerationOperation(db, {
+    databaseLineage,
+    operationId,
+    protocolVersion: 1,
+    requestOrigin: 'accepted_send',
+    creatorWriterSessionId: 'writer-a',
+    creatorWriterEpoch: 1,
+    generationScope,
+    effectiveConfiguration,
+    effectiveConfigurationFingerprint: generationEffectiveConfigurationFingerprint(effectiveConfiguration),
+    bindingServerInstanceId: 'server-a',
+    characterId: 'character-a',
+    chatId: 'chat-1',
+    mode: 'send',
+    acceptedMessageId: 'message-a',
+    requestFingerprint: 'a'.repeat(64),
+    intent: { mode: 'send' },
+    acceptedRevision: 0,
+    state: 'accepted',
+  })
+  const reservation = reserveGenerationOperationAttempt(db, {
+    databaseLineage,
+    operationId,
+    expectedState: 'accepted',
+    expectedStateVersion: operation.stateVersion,
+    retryRequestId: 'retry-memory-summary',
+    jobId: 'generation-job-memory-summary',
+    serverInstanceId: 'server-a',
+    actorWriterSessionId: 'writer-a',
+    actorWriterEpoch: 1,
+    launchRevision: 0,
+  })
+  if (reservation.status !== 'applied' || !reservation.operation.currentAttempt) {
+    throw new Error('failed to reserve accepted summary generation attempt')
+  }
+  return {
+    operationId,
+    operationAttemptNo: reservation.operation.currentAttempt.attemptNo,
+    generationScope,
+  }
+}
+
 function seedBatchJob(
   db: ReturnType<typeof openDatabase>,
   input: {
@@ -151,6 +212,157 @@ function seedBatchJob(
 }
 
 describe('summarize memory job handler', () => {
+  it('uses the accepted generation configuration after live summary settings and profiles change', async () => {
+    const db = openDatabase(makeDataDir())
+    try {
+      const acceptedDatabase = database({ summarizationPrompt: 'Accepted prompt: {{slot}}' })
+      const provenance = acceptedGenerationProvenance(db, acceptedDatabase)
+      const chats: PromptMessage[] = [
+        { role: 'assistant', content: 'accepted source', memo: 'm0' },
+        { role: 'assistant', content: 'accepted second', memo: 'm1' },
+        { role: 'assistant', content: 'recent tail', memo: 'tail' },
+      ]
+      const plan = planStandardHypaV3Memory({
+        chats,
+        currentTokens: 100,
+        maxContextTokens: 100,
+        maxResponseTokens: 0,
+        settings: {
+          maxChatsPerSummary: 2,
+          queryChatCount: 1,
+          summarizationModel: 'subModel',
+        },
+        tokenizeChat: () => 10,
+      })
+      const planned = planHypaV3ChunkJobs({
+        db,
+        chatId: 'chat-1',
+        chats,
+        plan,
+        ...provenance,
+      })
+      const job = planned.planned[0]?.job
+      if (!job) throw new Error('accepted planner did not create a summarize job')
+      const chunkId = planned.planned[0].chunk.id
+
+      ;(acceptedDatabase.hypaV3Presets[0].settings as Record<string, unknown>).summarizationPrompt =
+        'Mutated after enqueue: {{slot}}'
+      acceptedDatabase.modelProfiles[0].providerOptions.requestModel = 'mutated-after-enqueue'
+      const loadDatabase = vi.fn(() => {
+        const live = database({ summarizationPrompt: 'Later live prompt: {{slot}}' })
+        live.modelProfiles[0].providerOptions.requestModel = 'later-live-model'
+        return live
+      })
+      const summarize = vi.fn(async () => ({ text: 'accepted summary', tokens: 2 }))
+
+      const worker = new MemoryWorker({
+        db,
+        batchHandlers: {
+          summarize: createSummarizeMemoryJobBatchHandler({ db, loadDatabase, summarize }),
+        },
+      })
+      expect(job.status).toBe('pending')
+      expect(await worker.tick()).toBe(true)
+
+      expect(loadDatabase).not.toHaveBeenCalled()
+      expect(summarize).toHaveBeenCalledWith(
+        [
+          { role: 'user', content: 'assistant: accepted source\nassistant: accepted second' },
+          { role: 'system', content: 'Accepted prompt: {{slot}}' },
+        ],
+        expect.objectContaining({ model: 'gpt-4o-mini' }),
+      )
+      expect(listMemorySummaries(db, { chatId: 'chat-1', chunkId })).toEqual([
+        expect.objectContaining({ text: 'accepted summary' }),
+      ])
+      expect(getMemoryJob(db, job.id)).toMatchObject({ status: 'completed' })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('fails a modern operation-linked job whose generation scope is missing before provider dispatch', async () => {
+    const db = openDatabase(makeDataDir())
+    try {
+      const acceptedDatabase = database()
+      const databaseLineage = getDatabaseLineage(db)
+      const effectiveConfiguration = {
+        version: 1,
+        database: acceptedDatabase,
+        promptInfo: {},
+        resolvedMainProfile: {},
+      }
+      const operation = createGenerationOperation(db, {
+        databaseLineage,
+        operationId: 'operation-modern-null-scope',
+        protocolVersion: 1,
+        requestOrigin: 'accepted_send',
+        creatorWriterSessionId: 'writer-a',
+        creatorWriterEpoch: 1,
+        effectiveConfiguration,
+        effectiveConfigurationFingerprint: generationEffectiveConfigurationFingerprint(effectiveConfiguration),
+        bindingServerInstanceId: 'server-a',
+        characterId: 'character-a',
+        chatId: 'chat-1',
+        mode: 'send',
+        acceptedMessageId: 'message-a',
+        requestFingerprint: 'b'.repeat(64),
+        intent: { mode: 'send' },
+        acceptedRevision: 0,
+        state: 'accepted',
+      })
+      const reservation = reserveGenerationOperationAttempt(db, {
+        databaseLineage,
+        operationId: operation.operationId,
+        expectedState: 'accepted',
+        expectedStateVersion: operation.stateVersion,
+        retryRequestId: 'retry-modern-null-scope',
+        jobId: 'generation-job-modern-null-scope',
+        serverInstanceId: 'server-a',
+        actorWriterSessionId: 'writer-a',
+        actorWriterEpoch: 1,
+        launchRevision: 0,
+      })
+      if (reservation.status !== 'applied' || !reservation.operation.currentAttempt) {
+        throw new Error('failed to reserve modern null-scope attempt')
+      }
+      createMemoryChunk(db, {
+        id: 'chunk-modern-null-scope',
+        chatId: 'chat-1',
+        messageId: 'm1',
+        rangeStartSeq: 0,
+        rangeEndSeq: 1,
+        text: 'must not reach provider',
+      })
+      enqueueMemoryJob(db, {
+        id: 'job-modern-null-scope',
+        chatId: 'chat-1',
+        kind: 'summarize',
+        payload: payload('chunk-modern-null-scope'),
+        maxAttempts: 1,
+        operationId: operation.operationId,
+        operationAttemptNo: reservation.operation.currentAttempt.attemptNo,
+      })
+      const summarize = vi.fn(async () => ({ text: 'must not persist', tokens: 1 }))
+      const worker = new MemoryWorker({
+        db,
+        batchHandlers: {
+          summarize: createSummarizeMemoryJobBatchHandler({ db, loadDatabase: database, summarize }),
+        },
+      })
+
+      expect(await worker.tick()).toBe(true)
+
+      expect(summarize).not.toHaveBeenCalled()
+      expect(getMemoryJob(db, 'job-modern-null-scope')).toMatchObject({
+        status: 'failed',
+        error: 'generation_job_lineage_missing',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   it('builds the prompt, writes the summary, marks the chunk summarized, and lets the worker complete the job', async () => {
     const db = openDatabase(makeDataDir())
     try {
@@ -526,6 +738,50 @@ describe('summarize memory job handler', () => {
       expect(getMemoryChunk(db, 'chunk-1')).toMatchObject({ status: 'failed' })
       expect(listMemorySummaries(db, { chatId: 'chat-1', chunkId: 'chunk-1' })).toHaveLength(0)
     } finally {
+      db.close()
+    }
+  })
+
+  it('does not mark a chunk failed when cancellation wins a held provider error', async () => {
+    const db = openDatabase(makeDataDir())
+    let releaseProvider!: () => void
+    let tick: Promise<boolean> | undefined
+    try {
+      seedChunkAndJob(db)
+      const providerStarted = new Promise<void>((resolve) => {
+        releaseProvider = resolve
+      })
+      let signalStarted!: () => void
+      const started = new Promise<void>((resolve) => {
+        signalStarted = resolve
+      })
+      const worker = new MemoryWorker({
+        db,
+        batchHandlers: {
+          summarize: createSummarizeMemoryJobBatchHandler({
+            db,
+            loadDatabase: database,
+            summarize: async () => {
+              signalStarted()
+              await providerStarted
+              return { error: 'late provider error after cancellation' }
+            },
+          }),
+        },
+      })
+
+      tick = worker.tick()
+      await started
+      expect(cancelMemoryJob(db, 'job-1')).toMatchObject({ status: 'cancelled' })
+      releaseProvider()
+      await expect(tick).resolves.toBe(true)
+
+      expect(getMemoryJob(db, 'job-1')).toMatchObject({ status: 'cancelled', error: null })
+      expect(getMemoryChunk(db, 'chunk-1')).toMatchObject({ status: 'pending' })
+      expect(listMemorySummaries(db, { chatId: 'chat-1', chunkId: 'chunk-1' })).toEqual([])
+    } finally {
+      releaseProvider?.()
+      await tick
       db.close()
     }
   })

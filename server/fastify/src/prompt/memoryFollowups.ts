@@ -11,6 +11,7 @@ import {
   type MemoryJob,
 } from '../memoryRepository.js'
 import type { PromptMemoryMissingMemoryDiagnostics } from './memoryAdapter.js'
+import type { PersistedGenerationScope } from '../generationScope.js'
 import { isMemorySummaryCompatibleWithModel } from '../memorySummaryCompatibility.js'
 
 const EMBED_JOB_ID_PREFIX = 'hypav3-embed'
@@ -34,6 +35,9 @@ export interface EnqueuePromptMemoryFollowUpsInput {
   summaryModel: string
   embeddingModel: string
   diagnostics: PromptMemoryMissingMemoryDiagnostics
+  operationId?: string
+  operationAttemptNo?: number
+  generationScope?: PersistedGenerationScope
   enqueueJob?: (job: EnqueueMemoryJobInput) => MemoryJob
   onJobCreated?: (job: MemoryJob) => void
 }
@@ -80,6 +84,9 @@ export function enqueuePromptMemoryFollowUps(
       chatId: input.chatId,
       kind: 'summarize',
       payload,
+      operationId: input.operationId,
+      operationAttemptNo: input.operationAttemptNo,
+      generationScope: input.generationScope,
     })
     result.summarizeChunkIds.push(chunkId)
   }
@@ -107,6 +114,9 @@ export function enqueuePromptMemoryFollowUps(
       chatId: input.chatId,
       kind: 'embed',
       payload,
+      operationId: input.operationId,
+      operationAttemptNo: input.operationAttemptNo,
+      generationScope: input.generationScope,
     })
     result.embedChunkIds.push(chunkId)
   }

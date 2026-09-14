@@ -5,6 +5,9 @@ import path from 'node:path'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 import { createInitialDatabase } from '../src/databaseDefaults.js'
 import { getSchemaState, openDatabase } from '../src/db.js'
+import { getDatabaseLineage } from '../src/databaseLineage.js'
+import { CHAT_ONLY_GENERATION_ALLOWLIST, listGenerationOccupancyPins } from '../src/generationScope.js'
+import { ChatOccupancyService } from '../src/chatOccupancy.js'
 import { applyTargetedCommandMutation } from '../src/commands/mutations.js'
 import { applyBardWikiVaultImport, encodeBardWikiVault, decodeBardWikiVault } from '../src/bardWikiVault.js'
 import { createBardWikiRebuildHandler, enqueueBardWikiRebuild } from '../src/bardWikiRebuildHandler.js'
@@ -173,6 +176,103 @@ describe('BardWiki source lifecycle', () => {
         'bardwiki.document.created',
         'bardwiki.reconciliation.completed',
       ])
+    } finally {
+      harness.db.close()
+    }
+  })
+
+  it('settles reroll reconciliation after release and re-claim without inheriting the obsolete source scope', async () => {
+    const harness = createHarness()
+    try {
+      await harness.worker.tick()
+      const sourceJobId = harness.confirmation.job.id
+      const databaseLineage = getDatabaseLineage(harness.db)
+      const occupancy = new ChatOccupancyService(harness.db, { pinQuery: listGenerationOccupancyPins })
+      const oldClaim = occupancy.claim({
+        databaseLineage,
+        chatId: 'chat-a',
+        sessionId: 'old-session',
+        claimClass: 'chat_only',
+        expectedOccupancyEpoch: 0,
+      })
+      harness.db
+        .prepare(
+          `UPDATE bardwiki_jobs
+           SET operation_id = 'old-operation', operation_attempt_no = 1,
+               admission_kind = 'chat_only', occupancy_database_lineage = ?,
+               occupancy_session_id = 'old-session', occupancy_epoch = ?,
+               occupancy_claim_class = 'chat_only', permission_scope_version = 1,
+               permission_scope_json = ?
+           WHERE id = ?`,
+        )
+        .run(databaseLineage, oldClaim.occupancyEpoch, JSON.stringify(CHAT_ONLY_GENERATION_ALLOWLIST), sourceJobId)
+      const released = occupancy.release({
+        databaseLineage,
+        chatId: 'chat-a',
+        sessionId: 'old-session',
+        occupancyEpoch: oldClaim.occupancyEpoch,
+      })
+      const newClaim = occupancy.claim({
+        databaseLineage,
+        chatId: 'chat-a',
+        sessionId: 'new-session',
+        claimClass: 'chat_only',
+        expectedOccupancyEpoch: released.occupancyEpoch,
+      })
+      expect(newClaim.occupancyEpoch).toBeGreaterThan(oldClaim.occupancyEpoch)
+
+      writeGenerationChatMessage(
+        harness.db,
+        'chat-a',
+        { chatId: 'assistant-reroll', role: 'char', data: 'A replacement after ownership changed.' },
+        'assistant-a',
+      )
+
+      const reconcile = harness.db
+        .prepare(
+          `SELECT id, operation_id, operation_attempt_no, admission_kind
+           FROM bardwiki_jobs WHERE kind = 'reconcile_receipt'`,
+        )
+        .get() as {
+        id: string
+        operation_id: string | null
+        operation_attempt_no: number | null
+        admission_kind: string | null
+      }
+      expect(reconcile).toMatchObject({
+        operation_id: null,
+        operation_attempt_no: null,
+        admission_kind: null,
+      })
+      expect(listGenerationOccupancyPins(harness.db, 'chat-a')).toContainEqual({
+        id: reconcile.id,
+        kind: 'bardwiki_job',
+      })
+      expect(() =>
+        occupancy.release({
+          databaseLineage,
+          chatId: 'chat-a',
+          sessionId: 'new-session',
+          occupancyEpoch: newClaim.occupancyEpoch,
+        }),
+      ).toThrow(/chat_occupancy_recovery_blocked/u)
+
+      await harness.worker.tick()
+
+      expect(getBardWikiJob(harness.db, reconcile.id)?.status).toBe('completed')
+      expect(getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)?.state).toBe('obsolete')
+      expect(listGenerationOccupancyPins(harness.db, 'chat-a')).not.toContainEqual({
+        id: reconcile.id,
+        kind: 'bardwiki_job',
+      })
+      expect(
+        occupancy.release({
+          databaseLineage,
+          chatId: 'chat-a',
+          sessionId: 'new-session',
+          occupancyEpoch: newClaim.occupancyEpoch,
+        }),
+      ).toMatchObject({ state: 'released' })
     } finally {
       harness.db.close()
     }

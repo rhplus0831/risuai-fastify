@@ -14,6 +14,7 @@ import { applyTargetedCommandMutation, type CommandMutationReceiptKey } from '..
 import { getChatMessages, resolveActiveMessageLocationById, updateActiveMessageById } from '../messageStore.js'
 import { createDetachedAbort } from '../requestAbort.js'
 import type { MessageTranslationJobHandle, MessageTranslationJobRegistry } from '../messageTranslationJobs.js'
+import type { AcceptedEffectiveGenerationConfiguration } from '../prompt/assemble.js'
 import { getSourceValidGreetingTranslation, selectedGreeting } from './greetingTranslationStore.js'
 import {
   resolveRawMessageTranslatorIdentity,
@@ -30,6 +31,15 @@ export interface RunServerMessageTranslationInput {
   jobId?: string
   eventOrigin?: CommandEventOrigin
   mutationReceiptKey?: CommandMutationReceiptKey
+  /** Immutable server-derived configuration captured with an accepted generation attempt. */
+  acceptedEffectiveConfiguration?: AcceptedEffectiveGenerationConfiguration
+  /** Manual-command actor; null means no occupancy exemption. */
+  occupancyActorSessionId?: string | null
+  /** Revalidate accepted operation/scope and exact target inside publication. */
+  assertWriteAllowed?: (
+    db: DatabaseSync,
+    target: { databaseLineage: string; chatId: string; messageId: string },
+  ) => void
 }
 
 interface LiveMessageSource {
@@ -37,6 +47,41 @@ interface LiveMessageSource {
   messageIndex: number
   data: string
   translation: unknown
+}
+
+function resolveTranslationConfiguration(
+  input: RunServerMessageTranslationInput,
+  source: LiveMessageSource,
+): {
+  settings: Record<string, unknown>
+  character: Record<string, unknown>
+  chat: Record<string, unknown>
+} {
+  if (input.acceptedEffectiveConfiguration) {
+    if (!input.acceptedEffectiveConfiguration.translationSettings) {
+      throw new ValidationError('Accepted generation translation configuration is missing')
+    }
+    const database = structuredClone(input.acceptedEffectiveConfiguration.database)
+    const characters = normalizeAllCharacterChats(database)
+    const { character, chat } = requireChatLocation(characters, source.chatId)
+    return {
+      settings: {
+        ...(database as unknown as Record<string, unknown>),
+        ...structuredClone(input.acceptedEffectiveConfiguration.translationSettings),
+      },
+      character: character as unknown as Record<string, unknown>,
+      chat: chat as unknown as Record<string, unknown>,
+    }
+  }
+
+  const settings = loadSettingsWithTranslatorPresetsFromSqlite(input.db)
+  if (settings === null) {
+    throw new ValidationError('database is not initialized')
+  }
+  const persisted = loadPersistedForChatMutation(input.db, input.dataDir, { messageId: input.messageId })
+  const characters = normalizeAllCharacterChats(persisted.database)
+  const { character, chat } = requireChatLocation(characters, source.chatId)
+  return { settings, character, chat }
 }
 
 function readLiveMessageSource(db: DatabaseSync, messageId: string): LiveMessageSource {
@@ -76,14 +121,7 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
       messageId: input.messageId,
       ...(input.jobId ? { jobId: input.jobId } : {}),
     })
-    const settings = loadSettingsWithTranslatorPresetsFromSqlite(input.db)
-    if (settings === null) {
-      throw new ValidationError('database is not initialized')
-    }
-
-    const persisted = loadPersistedForChatMutation(input.db, input.dataDir, { messageId: input.messageId })
-    const characters = normalizeAllCharacterChats(persisted.database)
-    const { character, chat } = requireChatLocation(characters, source.chatId)
+    const { settings, character, chat } = resolveTranslationConfiguration(input, source)
     const greeting = selectedGreeting(character, chat)
     const characterId = typeof character.chaId === 'string' ? character.chaId : ''
     const translatorIdentity = resolveRawMessageTranslatorIdentity({ settings, character, chat })
@@ -96,6 +134,8 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
           greeting.source,
         )
       : null
+    const sidebarToggles = (chat.generationSettings as { sidebarToggles?: Record<string, string> } | undefined)
+      ?.sidebarToggles
     const translation = await translateRawMessageData({
       settings,
       character,
@@ -119,7 +159,7 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
           ...(typeof chat.name === 'string' ? { chatName: chat.name } : {}),
           messageId: input.messageId,
         },
-        ...(chat.generationSettings?.sidebarToggles ? { toggles: { ...chat.generationSettings.sidebarToggles } } : {}),
+        ...(sidebarToggles ? { toggles: { ...sidebarToggles } } : {}),
       },
     })
 
@@ -137,6 +177,9 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
       baseRevision: getSchemaState(input.db).revision,
       eventSink: input.eventSink,
       ...(input.eventOrigin ? { eventOrigin: input.eventOrigin } : {}),
+      ...(input.occupancyActorSessionId !== undefined
+        ? { occupancyActorSessionId: input.occupancyActorSessionId }
+        : {}),
       ...(input.mutationReceiptKey ? { mutationReceiptKey: input.mutationReceiptKey } : {}),
       mutationPath: 'targeted-message',
       chatScopedRead: { messageId: input.messageId },
@@ -150,6 +193,11 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
           throw new EntityNotFoundError(`Message not found: ${input.messageId}`)
         }
         const { location } = resolved
+        input.assertWriteAllowed?.(targetDb, {
+          databaseLineage,
+          chatId: location.chatId,
+          messageId: input.messageId,
+        })
         requireChatLocation(characters, location.chatId)
         if (translationJob && !translationJob.isCurrent()) {
           throw new ValidationError(`Message translation is no longer current: ${input.messageId}`)

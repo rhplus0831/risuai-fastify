@@ -74,6 +74,8 @@ export interface ExpandContext {
   requestHistoryDb?: DatabaseSync
   /** Server-only asset root for Lua-generated inlays. */
   assetDataDir?: string
+  /** Accepted generation scope may forbid publishing generated assets. */
+  allowGeneratedAssetWrites?: boolean
   /** Optional per-assembly CBS callback memo. Browser/local calls omit this. */
   cbsCallbackMemo?: CbsCallbackMemo
   /** Effective main-request model metadata exposed through CBS `metadata`. */

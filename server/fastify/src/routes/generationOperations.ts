@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto'
+import { CHAT_OCCUPANCY_EPOCH_HEADER } from '@risuai/protocol/chat-occupancy'
 import type { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
-import type { AssembleInput } from '../prompt/assemble.js'
+import type { AcceptedEffectiveGenerationConfiguration, AssembleInput } from '../prompt/assemble.js'
 import { readActiveWriterSessionId } from '../activeWriter.js'
 import type { AuthState } from '../auth.js'
 import { requireAuth } from '../http.js'
@@ -30,10 +31,13 @@ import {
 import { activeMessageIdExists, appendChatMessage, getChatMessages } from '../messageStore.js'
 import {
   GENERATION_OPERATION_PROTOCOL_VERSION,
+  GenerationEffectiveConfigurationTooLargeError,
   GenerationOperationAttemptConflictError,
+  assertGenerationEffectiveConfigurationFingerprint,
   bindCancelledGenerationOperationInTransaction,
   createGenerationOperation,
   generationOperationForRetryRequest,
+  generationEffectiveConfigurationFingerprint,
   generationOperationRequestFingerprint,
   getGenerationOperationProjection,
   getGenerationOperationProjectionEpoch,
@@ -51,6 +55,7 @@ import type { MessageTranslationJobRegistry } from '../messageTranslationJobs.js
 import { generationSubmitRateLimit } from '../routeRateLimits.js'
 import {
   attachGenerationOperationViewer,
+  captureAcceptedEffectiveGenerationConfiguration,
   launchGenerationOperation,
   preflightGenerationOperationSettings,
   readGenerationClientCapabilities,
@@ -61,8 +66,38 @@ import {
 import type { GenerationTraceOptions } from '../generation/generationTraceSidecar.js'
 import { findUncommittedGenerationFinalizationForChat } from '../generationFinalizationRetry.js'
 import { readRequestTraceUid } from '../requestTrace.js'
+import {
+  GenerationAdmissionError,
+  admitGenerationInTransaction,
+  assertPersistedGenerationScopeInTransaction,
+  type PersistedGenerationScope,
+} from '../generationScope.js'
 
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
+
+function acceptedEffectiveConfiguration(
+  stored: ReturnType<typeof getGenerationOperationStoredRequest>,
+): AcceptedEffectiveGenerationConfiguration {
+  const configuration = stored?.effectiveConfiguration
+  if (!isRecord(configuration) || configuration.version !== 1 || !isRecord(configuration.database)) {
+    throw new OperationHttpError(409, 'operation_effective_configuration_missing')
+  }
+  try {
+    assertGenerationEffectiveConfigurationFingerprint(configuration, stored?.effectiveConfigurationFingerprint)
+  } catch {
+    throw new OperationHttpError(409, 'operation_effective_configuration_invalid')
+  }
+  return configuration as unknown as AcceptedEffectiveGenerationConfiguration
+}
+
+function captureBoundedEffectiveConfiguration(
+  db: DatabaseSync,
+  dataDir: string,
+  input: AssembleInput,
+): { configuration: AcceptedEffectiveGenerationConfiguration; fingerprint: string } {
+  const configuration = captureAcceptedEffectiveGenerationConfiguration(db, dataDir, input)
+  return { configuration, fingerprint: generationEffectiveConfigurationFingerprint(configuration) }
+}
 
 interface AtomicGenerationOperationRequest {
   protocolVersion: 1
@@ -75,6 +110,10 @@ interface AtomicGenerationOperationRequest {
   targetMessageId?: string
   message?: MessageRecord
   draftGeneration: unknown
+  chatOccupancy?: {
+    version: 1
+    interaction: 'send' | 'reroll' | 'continue' | 'regenerate'
+  }
   generation: {
     syntheticSayNothing: boolean
     resetMessages: boolean
@@ -94,6 +133,7 @@ interface GenerationOperationIntent {
   targetMessageId?: string
   message?: MessageRecord
   draftGeneration: unknown
+  chatOccupancy?: AtomicGenerationOperationRequest['chatOccupancy']
   generation: AtomicGenerationOperationRequest['generation']
 }
 
@@ -127,6 +167,7 @@ export interface GenerationOperationRouteDependencies {
   messageTranslationJobs: MessageTranslationJobRegistry
   generationChatOptions?: GenerationChatRouteOptions
   generationTrace?: GenerationTraceOptions
+  chatOccupancyEnabled?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -157,6 +198,31 @@ function readRequiredWriterSessionId(req: FastifyRequest): string {
   const writerSessionId = readActiveWriterSessionId(req)
   if (!writerSessionId) throw new ValidationError('risu-writer-session header is required')
   return writerSessionId
+}
+
+function readOptionalOccupancyEpoch(req: FastifyRequest): number | undefined {
+  const raw = req.headers[CHAT_OCCUPANCY_EPOCH_HEADER]
+  const value = Array.isArray(raw) ? raw[0] : raw
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^(0|[1-9]\d*)$/u.test(value) || !Number.isSafeInteger(Number(value))) {
+    throw new ValidationError(`${CHAT_OCCUPANCY_EPOCH_HEADER} must be a non-negative integer`)
+  }
+  return Number(value)
+}
+
+function normalizeChatOccupancy(value: unknown): AtomicGenerationOperationRequest['chatOccupancy'] {
+  if (!isRecord(value) || value.version !== 1) {
+    throw new ValidationError('chatOccupancy.version must be 1')
+  }
+  if (
+    value.interaction !== 'send' &&
+    value.interaction !== 'reroll' &&
+    value.interaction !== 'continue' &&
+    value.interaction !== 'regenerate'
+  ) {
+    throw new ValidationError('chatOccupancy.interaction is invalid')
+  }
+  return { version: 1, interaction: value.interaction }
 }
 
 function normalizeGenerationOptions(value: unknown): AtomicGenerationOperationRequest['generation'] {
@@ -202,6 +268,18 @@ function parseSubmitRequest(body: unknown): AtomicGenerationOperationRequest {
   }
   if (body.draftGeneration === undefined) throw new ValidationError('draftGeneration is required')
   const generation = normalizeGenerationOptions(body.generation)
+  const chatOccupancy = body.chatOccupancy === undefined ? undefined : normalizeChatOccupancy(body.chatOccupancy)
+  if (
+    chatOccupancy &&
+    !(
+      (body.mode === 'send' && chatOccupancy.interaction === 'send') ||
+      (body.mode === 'continue' && chatOccupancy.interaction === 'continue') ||
+      (body.mode === 'regenerate' &&
+        (chatOccupancy.interaction === 'reroll' || chatOccupancy.interaction === 'regenerate'))
+    )
+  ) {
+    throw new ValidationError('chatOccupancy.interaction must match mode')
+  }
   if (body.mode === 'send') {
     const acceptedMessageId = canonicalUuid(body.acceptedMessageId, 'acceptedMessageId')
     const message = createMessageRecord(structuredClone(body.message), 'message')
@@ -222,6 +300,7 @@ function parseSubmitRequest(body: unknown): AtomicGenerationOperationRequest {
       acceptedMessageId,
       message,
       draftGeneration: structuredClone(body.draftGeneration),
+      ...(chatOccupancy ? { chatOccupancy } : {}),
       generation,
     }
   }
@@ -237,6 +316,7 @@ function parseSubmitRequest(body: unknown): AtomicGenerationOperationRequest {
     mode: body.mode,
     targetMessageId: requiredString(body.targetMessageId, 'targetMessageId'),
     draftGeneration: structuredClone(body.draftGeneration),
+    ...(chatOccupancy ? { chatOccupancy } : {}),
     generation,
   }
 }
@@ -251,6 +331,7 @@ function intentFromRequest(request: AtomicGenerationOperationRequest): Generatio
     ...(request.targetMessageId ? { targetMessageId: request.targetMessageId } : {}),
     ...(request.message ? { message: structuredClone(request.message) } : {}),
     draftGeneration: structuredClone(request.draftGeneration),
+    ...(request.chatOccupancy ? { chatOccupancy: structuredClone(request.chatOccupancy) } : {}),
     generation: structuredClone(request.generation),
   }
 }
@@ -295,6 +376,49 @@ function validateTargetInTransaction(db: DatabaseSync, request: AtomicGeneration
   }
 }
 
+function assertOperationControlInTransaction(
+  db: DatabaseSync,
+  operation: GenerationOperationProjection,
+  sessionId: string,
+  chatOccupancyEnabled: boolean,
+  control: 'retry' | 'cancel',
+): void {
+  const originatingSession = operation.creatorWriterSessionId === sessionId
+  const scope = operation.generationScope
+  if (scope && scope.admissionKind !== 'legacy_owner') {
+    if (!originatingSession) {
+      throw new OperationHttpError(423, 'generation_operation_foreign_session')
+    }
+    if (!operation.chatId || !scope.occupancySessionId) {
+      throw new OperationHttpError(409, 'generation_scope_invalid')
+    }
+    assertPersistedGenerationScopeInTransaction(db, {
+      ...scope,
+      databaseLineage: getDatabaseLineage(db),
+      chatId: operation.chatId,
+      sessionId,
+    })
+    return
+  }
+  if (!operation.chatId) {
+    if (!originatingSession) throw new OperationHttpError(423, 'generation_operation_foreign_session')
+    return
+  }
+  if (control === 'cancel' && originatingSession) return
+  if (!originatingSession && (control !== 'cancel' || getDatabaseWriterMetadata(db).sessionId !== sessionId)) {
+    throw new OperationHttpError(423, 'generation_operation_foreign_session')
+  }
+  // Rows accepted before occupancy scope existed retain compatibility owner
+  // semantics. They never gain a fabricated occupancy tuple.
+  admitGenerationInTransaction(db, {
+    databaseLineage: getDatabaseLineage(db),
+    chatId: operation.chatId,
+    sessionId,
+    interaction: operation.mode ?? 'send',
+    chatOnlyEnabled: chatOccupancyEnabled,
+  })
+}
+
 function acceptSubmitTransaction(args: {
   db: DatabaseSync
   dataDir: string
@@ -302,6 +426,8 @@ function acceptSubmitTransaction(args: {
   databaseLineage: string
   writerSessionId: string
   writerEpoch: number
+  occupancyEpoch?: number
+  chatOccupancyEnabled: boolean
   serverInstanceId: string
 }): SubmitMutationResult & { liveEvent?: CommandEvent } {
   const { db, request } = args
@@ -315,6 +441,15 @@ function acceptSubmitTransaction(args: {
     if (existing) {
       const stored = getGenerationOperationStoredRequest(db, args.databaseLineage, request.operationId)
       if (existing.requestOrigin === 'unbound' && existing.state === 'cancel_requested') {
+        const generationScope = admitGenerationInTransaction(db, {
+          databaseLineage: args.databaseLineage,
+          chatId: request.chatId,
+          sessionId: args.writerSessionId,
+          occupancyProtocolVersion: request.chatOccupancy?.version,
+          occupancyEpoch: args.occupancyEpoch,
+          interaction: request.chatOccupancy?.interaction ?? request.mode,
+          chatOnlyEnabled: args.chatOccupancyEnabled,
+        })
         const bound = bindCancelledGenerationOperationInTransaction(db, {
           databaseLineage: args.databaseLineage,
           operationId: request.operationId,
@@ -327,6 +462,7 @@ function acceptSubmitTransaction(args: {
           acceptedMessageId: request.acceptedMessageId,
           targetMessageId: request.targetMessageId,
           clientDraftGeneration: request.draftGeneration,
+          generationScope,
           requestFingerprint: fingerprint,
           intent,
         })
@@ -341,6 +477,9 @@ function acceptSubmitTransaction(args: {
       }
       if (stored?.requestFingerprint !== fingerprint) {
         throw new OperationHttpError(409, 'operation_id_conflict')
+      }
+      if (existing.creatorWriterSessionId !== args.writerSessionId) {
+        throw new OperationHttpError(423, 'generation_operation_foreign_session')
       }
       db.exec('COMMIT')
       committed = true
@@ -378,6 +517,15 @@ function acceptSubmitTransaction(args: {
     const { character } = requireChatLocation(characters, request.chatId)
     if (character.chaId !== request.characterId) throw new EntityNotFoundError('chat does not belong to character')
     validateTargetInTransaction(db, request)
+    const generationScope = admitGenerationInTransaction(db, {
+      databaseLineage: args.databaseLineage,
+      chatId: request.chatId,
+      sessionId: args.writerSessionId,
+      occupancyProtocolVersion: request.chatOccupancy?.version,
+      occupancyEpoch: args.occupancyEpoch,
+      interaction: request.chatOccupancy?.interaction ?? request.mode,
+      chatOnlyEnabled: args.chatOccupancyEnabled,
+    })
     const settingsPreflight = preflightGenerationOperationSettings(
       assembleInputForIntent(intent, currentRevision).input,
       args.dataDir,
@@ -414,6 +562,11 @@ function acceptSubmitTransaction(args: {
       }
       persistCommandEvent(db, liveEvent)
     }
+    const acceptedConfiguration = captureBoundedEffectiveConfiguration(
+      db,
+      args.dataDir,
+      assembleInputForIntent(intent, acceptedRevision).input,
+    )
     const operation = insertGenerationOperationInTransaction(db, {
       databaseLineage: args.databaseLineage,
       operationId: request.operationId,
@@ -421,6 +574,9 @@ function acceptSubmitTransaction(args: {
       requestOrigin: request.mode === 'send' ? 'accepted_send' : request.mode,
       creatorWriterSessionId: args.writerSessionId,
       creatorWriterEpoch: args.writerEpoch,
+      generationScope,
+      effectiveConfiguration: acceptedConfiguration.configuration,
+      effectiveConfigurationFingerprint: acceptedConfiguration.fingerprint,
       bindingServerInstanceId: args.serverInstanceId,
       characterId: request.characterId,
       chatId: request.chatId,
@@ -511,6 +667,8 @@ function launchCommittedOperation(args: {
   eventSink: CommandEventSink
   reuseAcceptedSubmitTransforms?: boolean
 }): GenerationOperationProjection {
+  const stored = getGenerationOperationStoredRequest(args.db, getDatabaseLineage(args.db), args.operation.operationId)
+  const effectiveConfiguration = stored?.effectiveConfiguration ? acceptedEffectiveConfiguration(stored) : undefined
   let operation = args.operation
   if (operation.state === 'accepted' || operation.state === 'retryable' || operation.state === 'abandoned') {
     const reservation = reserveGenerationOperationAttempt(args.db, {
@@ -533,6 +691,7 @@ function launchCommittedOperation(args: {
   if (operation.state !== 'launching') return operation
   if (operation.currentAttempt?.serverInstanceId !== args.dependencies.serverInstanceId) return operation
   const { input, chatBody } = intentAssembleInput(operation, args.intent, args.reuseAcceptedSubmitTransforms)
+  if (effectiveConfiguration) input.acceptedEffectiveConfiguration = effectiveConfiguration
   try {
     return launchGenerationOperation({
       operation,
@@ -585,6 +744,16 @@ function sendOperationError(reply: FastifyReply, error: unknown): unknown {
   if (error instanceof GenerationOperationAttemptConflictError) {
     return reply.code(409).send({ error: 'stale_generation_attempt' })
   }
+  if (error instanceof GenerationEffectiveConfigurationTooLargeError) {
+    return reply.code(error.statusCode).send({
+      error: error.code,
+      actualBytes: error.actualBytes,
+      maxBytes: error.maxBytes,
+    })
+  }
+  if (error instanceof GenerationAdmissionError) {
+    return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+  }
   const sqliteCode =
     error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''
   if (sqliteCode.startsWith('SQLITE_CONSTRAINT')) {
@@ -611,6 +780,7 @@ export function registerGenerationOperationRoutes(
         const databaseLineage = readRequestedDatabaseLineage(req)
         const writerSessionId = readRequiredWriterSessionId(req)
         const writerEpoch = getDatabaseWriterMetadata(db).epoch
+        const occupancyEpoch = readOptionalOccupancyEpoch(req)
         const result = acceptSubmitTransaction({
           db,
           dataDir,
@@ -618,6 +788,8 @@ export function registerGenerationOperationRoutes(
           databaseLineage,
           writerSessionId,
           writerEpoch,
+          occupancyEpoch,
+          chatOccupancyEnabled: dependencies.chatOccupancyEnabled === true,
           serverInstanceId: dependencies.serverInstanceId,
         })
         if (result.liveEvent) {
@@ -737,6 +909,13 @@ export function registerGenerationOperationRoutes(
           assertDatabaseLineage(db, databaseLineage)
           const current = getGenerationOperationProjection(db, databaseLineage, operationId)
           if (!current) {
+            admitGenerationInTransaction(db, {
+              databaseLineage,
+              chatId: '__unbound__',
+              sessionId: writerSessionId,
+              interaction: 'send',
+              chatOnlyEnabled: dependencies.chatOccupancyEnabled === true,
+            })
             operation = insertGenerationOperationInTransaction(db, {
               databaseLineage,
               operationId,
@@ -749,6 +928,13 @@ export function registerGenerationOperationRoutes(
             disposition = 'cancelled_before_acceptance'
           } else {
             operation = current
+            assertOperationControlInTransaction(
+              db,
+              current,
+              writerSessionId,
+              dependencies.chatOccupancyEnabled === true,
+              'cancel',
+            )
             knownAttemptMatched =
               (body.knownStateVersion === undefined || body.knownStateVersion === current.stateVersion) &&
               (body.knownAttemptNo === undefined || body.knownAttemptNo === current.currentAttempt?.attemptNo) &&
@@ -875,9 +1061,19 @@ export function registerGenerationOperationRoutes(
           }
           const current = getGenerationOperationProjection(db, databaseLineage, operationId)
           if (!current) throw new OperationHttpError(404, 'generation_operation_not_found')
+          assertOperationControlInTransaction(
+            db,
+            current,
+            writerSessionId,
+            dependencies.chatOccupancyEnabled === true,
+            'retry',
+          )
           const stored = getGenerationOperationStoredRequest(db, databaseLineage, operationId)
           if (!stored?.intent || !isRecord(stored.intent)) {
             throw new OperationHttpError(409, 'operation_intent_missing')
+          }
+          if (stored.effectiveConfiguration) {
+            acceptedEffectiveConfiguration(stored)
           }
           intent = stored.intent as unknown as GenerationOperationIntent
           if (replay) {
@@ -901,6 +1097,7 @@ export function registerGenerationOperationRoutes(
               message: intent.message,
               draftGeneration: intent.draftGeneration,
               generation: intent.generation,
+              chatOccupancy: intent.chatOccupancy,
             }
             validateTargetInTransaction(db, exactRequest)
             if (current.mode === 'send') {
@@ -909,20 +1106,22 @@ export function registerGenerationOperationRoutes(
                 throw new OperationHttpError(409, 'operation_target_stale', { operation: current })
               }
             }
-            const settingsPreflight = preflightGenerationOperationSettings(
-              assembleInputForIntent(intent, current.acceptedRevision).input,
-              dataDir,
-              db,
-            )
-            if (settingsPreflight.status === 'rejected') {
-              const details = isRecord(settingsPreflight.body)
-                ? settingsPreflight.body
-                : { message: String(settingsPreflight.body) }
-              throw new OperationHttpError(
-                settingsPreflight.statusCode,
-                typeof details.error === 'string' ? details.error : 'generation_settings_not_ready',
-                details,
+            if (!stored.effectiveConfiguration) {
+              const settingsPreflight = preflightGenerationOperationSettings(
+                assembleInputForIntent(intent, current.acceptedRevision).input,
+                dataDir,
+                db,
               )
+              if (settingsPreflight.status === 'rejected') {
+                const details = isRecord(settingsPreflight.body)
+                  ? settingsPreflight.body
+                  : { message: String(settingsPreflight.body) }
+                throw new OperationHttpError(
+                  settingsPreflight.statusCode,
+                  typeof details.error === 'string' ? details.error : 'generation_settings_not_ready',
+                  details,
+                )
+              }
             }
             const reservation = reserveGenerationOperationAttemptInTransaction(db, {
               databaseLineage,

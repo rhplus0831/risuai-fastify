@@ -34,6 +34,8 @@ export interface RunServerGreetingTranslationInput {
   greetingIndex: number
   jobId?: string
   eventOrigin?: CommandEventOrigin
+  /** `null` denotes a compatibility owner request without a session header. */
+  occupancyActorSessionId?: string | null
   mutationReceiptKey?: CommandMutationReceiptKey
 }
 
@@ -163,6 +165,10 @@ export async function runServerGreetingTranslation(input: RunServerGreetingTrans
       baseRevision: getSchemaState(input.db).revision,
       eventSink: input.eventSink,
       ...(input.eventOrigin ? { eventOrigin: input.eventOrigin } : {}),
+      ...(input.occupancyActorSessionId !== undefined
+        ? { occupancyActorSessionId: input.occupancyActorSessionId }
+        : {}),
+      occupancyDirectChatIds: [input.chatId],
       ...(input.mutationReceiptKey ? { mutationReceiptKey: input.mutationReceiptKey } : {}),
       mutationPath: 'targeted-greeting-translation',
       skipDatabaseLoad: true,

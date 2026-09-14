@@ -81,6 +81,7 @@ describe('@risuai/protocol import boundary', () => {
       'characterSummaryResource.ts',
       'chatMessagesResource.ts',
       'chatMetadata.ts',
+      'chatOccupancy.ts',
       'clientContext.ts',
       'diagnosticEvents.ts',
       'diagnostics.ts',

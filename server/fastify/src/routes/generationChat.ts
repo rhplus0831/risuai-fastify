@@ -13,6 +13,7 @@ import type { PromptMultimodal, PromptMessage } from '../prompt/promptMessage.js
 import { trimUntilPunctuation } from '@risuai/shared-core/punctuation'
 import type { CompletionStreamFrame } from '../generation/frames.js'
 import { HYPA_CONTEXT_TRUNCATION_CONFIRMATION_REQUIRED } from '@risuai/protocol/hypa-context-truncation'
+import { isBardWikiGlobalSettings } from '@risuai/protocol'
 import type { AuthState } from '../auth.js'
 import { getSchemaState } from '../db.js'
 import { requireAuth } from '../http.js'
@@ -24,6 +25,7 @@ import {
   isValidAssetId,
   loadPersistedForGenerationAssembly,
   loadPersistedForGenerationPreflight,
+  loadSettingsWithTranslatorPresetsFromSqlite,
   writeSingleChatRow,
   writeSingleChatRowExact,
   writeSingleCharacterRow,
@@ -37,6 +39,7 @@ import {
   type AssembleDeps,
   type AssembleAbortReason,
   type AssembleInput,
+  type AcceptedEffectiveGenerationConfiguration,
   type AssembleMutationPayload,
   type AssembleMutationSource,
   type AssembleResult,
@@ -46,6 +49,7 @@ import {
 } from '../prompt/assemble.js'
 import {
   applyProfileBoundGenerationFields,
+  buildEffectiveGenerationConfig,
   resolveGenerationPreflightConfiguration,
   isChatGenerationSettingsIncompleteAssemblyError,
   isModelProfileGenerationGuardAssemblyError,
@@ -153,27 +157,45 @@ import {
 import { normalizeReportedClientContext } from '@risuai/protocol/client-context'
 import {
   GenerationOperationAttemptConflictError,
+  GenerationEffectiveConfigurationTooLargeError,
+  assertGenerationEffectiveConfigurationFingerprint,
+  generationEffectiveConfigurationFingerprint,
   assertGenerationOperationDispatchable,
   completeGenerationOperationFinalizationInTransaction,
   getGenerationOperationProjection,
+  getGenerationOperationAttemptAcceptedConfiguration,
+  getGenerationOperationStoredRequest,
+  hasPreOccupancyGeneratedTranslationAuthority,
   generationOperationRequestFingerprint,
   insertGenerationOperationInTransaction,
   markGenerationOperationProviderDispatchFinished,
   markGenerationOperationProviderDispatchStarted,
   reserveGenerationOperationAttemptInTransaction,
   transitionGenerationOperation,
+  transitionGenerationOperationInTransaction,
   type GenerationOperationLineage,
   type GenerationOperationProjection,
   type GenerationOperationTerminalOutcome,
 } from '../generationOperations.js'
 import {
+  GENERATION_EFFECT_CLAIM_LEASE_MS,
   claimGenerationEffect,
   ensureGenerationEffectLedgerInTransaction,
   generationEffectLedgerRef,
+  listGenerationEffects,
   listPendingServerGenerationEffects,
+  renewGenerationEffectClaim,
   settleGenerationEffect,
   type GenerationEffectLedgerRef,
 } from '../generationEffects.js'
+import {
+  GenerationAdmissionError,
+  admitGenerationInTransaction,
+  assertPersistedGenerationScopeInTransaction,
+  generationScopeIsChatOnly,
+  scopeSqlValues,
+  type PersistedGenerationScope,
+} from '../generationScope.js'
 
 const ALLOWED_MODES = new Set(['send', 'continue', 'preview', 'preview_prompt', 'regenerate'])
 const SERVER_INLAY_SIGNATURE_CONTENT_TYPE = 'application/x-risu-inlay-signature+json'
@@ -265,6 +287,7 @@ export interface GenerationChatRouteOptions {
   runMessageTranslation?: ServerMessageTranslationRunner
   onPromptMemoryJobEnqueued?: (job: MemoryJob) => void
   onBardWikiJobEnqueued?: (job: BardWikiJobSummary) => void
+  chatOccupancyEnabled?: boolean
   finalizationRetry?:
     | false
     | {
@@ -957,7 +980,7 @@ export function createRequestScopedStoredAssetResolver(
 export function createGenerationAssemblyResources(
   db: DatabaseSync,
   dataDir: string,
-  target: Pick<AssembleInput, 'characterId' | 'chatId'>,
+  target: Pick<AssembleInput, 'characterId' | 'chatId' | 'acceptedEffectiveConfiguration'>,
 ): { loadDatabase(): Database | null; resolveSpeakerName(characterId: string): string | undefined } {
   let database: Database | null = null
   let loaded = false
@@ -965,6 +988,34 @@ export function createGenerationAssemblyResources(
   return {
     loadDatabase() {
       if (loaded) return database
+      if (target.acceptedEffectiveConfiguration) {
+        database = structuredClone(target.acceptedEffectiveConfiguration.database)
+        // The accepted snapshot freezes configuration, not operation-owned
+        // transcript/runtime state. A retry must observe submit transforms and
+        // partial bookkeeping already committed by its own earlier attempt.
+        const live = loadPersistedForGenerationAssembly(db, dataDir, target)
+        if (live.database !== null) {
+          const liveDatabase = decodeGenerationDatabase(live.database)
+          const acceptedCharacter = database.characters.find((character) => character.chaId === target.characterId)
+          const acceptedChat = acceptedCharacter?.chats.find((chat) => chat.id === target.chatId)
+          const liveCharacter = liveDatabase.characters.find((character) => character.chaId === target.characterId)
+          const liveChat = liveCharacter?.chats.find((chat) => chat.id === target.chatId)
+          if (acceptedChat && liveChat) {
+            const acceptedRecord = acceptedChat as unknown as Record<string, unknown>
+            const liveRecord = liveChat as unknown as Record<string, unknown>
+            for (const field of ['message', 'scriptstate', 'lastMemory', 'hypaV3Data'] as const) {
+              if (Object.hasOwn(liveRecord, field)) acceptedRecord[field] = structuredClone(liveRecord[field])
+              else delete acceptedRecord[field]
+            }
+          }
+        }
+        for (const [id, name] of Object.entries(target.acceptedEffectiveConfiguration.speakerNames ?? {})) {
+          speakerNames.set(id, name)
+        }
+        for (const owner of database.characters ?? []) speakerNames.set(owner.chaId, owner.name)
+        loaded = true
+        return database
+      }
       const persisted = loadPersistedForGenerationAssembly(db, dataDir, target)
       if (persisted.database === null && persisted.missingTarget && persisted.missingTarget !== 'database') {
         throw new EntityNotFoundError(generationTargetMissingMessage(persisted.missingTarget, target))
@@ -981,6 +1032,53 @@ export function createGenerationAssemblyResources(
   }
 }
 
+/** Capture the fully resolved server configuration in the same transaction as acceptance. */
+export function captureAcceptedEffectiveGenerationConfiguration(
+  db: DatabaseSync,
+  dataDir: string,
+  target: Pick<AssembleInput, 'characterId' | 'chatId'>,
+): AcceptedEffectiveGenerationConfiguration {
+  const persisted = loadPersistedForGenerationAssembly(db, dataDir, target)
+  if (persisted.database === null) {
+    throw new EntityNotFoundError(generationTargetMissingMessage(persisted.missingTarget, target))
+  }
+  const database = decodeGenerationDatabase(persisted.database)
+  const selectedCharID = database.characters.findIndex((character) => character.chaId === target.characterId)
+  if (selectedCharID < 0) throw new EntityNotFoundError(`character not found: ${target.characterId}`)
+  const currentChar = database.characters[selectedCharID]
+  const chatPage = currentChar.chats.findIndex((chat) => chat.id === target.chatId)
+  if (chatPage < 0) throw new EntityNotFoundError(`chat not found: ${target.chatId}`)
+  const effective = buildEffectiveGenerationConfig({
+    database,
+    currentChar,
+    currentChat: currentChar.chats[chatPage],
+    selectedCharID,
+    chatPage,
+  })
+  effective.currentChar.chatPage = chatPage
+  const acceptedBardWikiSettings = resolveEffectiveBardWikiSettings(
+    readBardWikiGlobalSettings(effective.database.bardWiki),
+    getBardWikiChatSettings(db, target.chatId),
+  )
+  const translationSettings = loadSettingsWithTranslatorPresetsFromSqlite(db)
+  if (translationSettings === null) throw new ValidationError('database is not initialized')
+  const effectiveDatabase = effective.database as unknown as Record<string, unknown>
+  const acceptedTranslationOverrides = Object.fromEntries(
+    Object.entries(translationSettings)
+      .filter(([key, value]) => !isDeepStrictEqual(effectiveDatabase[key], value))
+      .map(([key, value]) => [key, structuredClone(value)]),
+  )
+  return {
+    version: 1,
+    database: effective.database,
+    translationSettings: acceptedTranslationOverrides,
+    promptInfo: effective.promptInfo,
+    resolvedMainProfile: effective.resolvedMainProfile,
+    acceptedBardWikiSettings,
+    ...(persisted.speakerNames ? { speakerNames: persisted.speakerNames } : {}),
+  }
+}
+
 function generationTargetMissingMessage(
   missing: 'database' | 'character' | 'chat' | undefined,
   target: Pick<AssembleInput, 'characterId' | 'chatId'>,
@@ -993,7 +1091,7 @@ function generationTargetMissingMessage(
 function loadDatabaseDeps(
   dataDir: string,
   db: DatabaseSync,
-  target: Pick<AssembleInput, 'characterId' | 'chatId'>,
+  target: AssembleInput,
   measurement?: PromptAssemblyMeasurement,
   signal?: AbortSignal,
   agentPresetProgress?: AgentPresetProgressReporter,
@@ -1022,6 +1120,12 @@ function loadDatabaseDeps(
       return database
     },
     loadMemoryDatabase: () => db,
+    ...(target.generationScope || (target.compatibilityWriterSessionId && target.compatibilityDatabaseLineage)
+      ? {
+          assertPromptMemoryMutationAuthorityInTransaction: () =>
+            assertAssembleInputWriteAuthorityInTransaction(db, target),
+        }
+      : {}),
     loadPromptMemoryQueryVectors: () => promptMemoryQueryPrefetch.vectors,
     loadPromptMemoryQueryDiagnostics: () => promptMemoryQueryPrefetch.diagnostics,
     onPromptMemoryJobEnqueued: undefined,
@@ -1714,6 +1818,39 @@ function persistedAssemblyReplacementSource(
  * revision); a composite chat-transcript event reconciles both writes.
  * Returns the bumped revision, or `undefined` when there is nothing to write.
  */
+function assertAssembleInputWriteAuthorityInTransaction(db: DatabaseSync, input: AssembleInput): void {
+  if (input.generationScope) {
+    if (!input.operationId || input.operationAttemptNo === undefined) {
+      throw new GenerationAdmissionError(409, 'generation_operation_lineage_missing')
+    }
+    const operation = getGenerationOperationProjection(db, getDatabaseLineage(db), input.operationId)
+    if (
+      !operation ||
+      operation.chatId !== input.chatId ||
+      operation.currentAttempt?.attemptNo !== input.operationAttemptNo ||
+      JSON.stringify(operation.generationScope) !== JSON.stringify(input.generationScope)
+    ) {
+      throw new GenerationAdmissionError(409, 'generation_operation_lineage_stale')
+    }
+    assertPersistedGenerationScopeInTransaction(db, {
+      ...input.generationScope,
+      databaseLineage: getDatabaseLineage(db),
+      chatId: input.chatId,
+      sessionId: input.generationScope.occupancySessionId ?? input.compatibilityWriterSessionId ?? '',
+    })
+    return
+  }
+  if (input.compatibilityWriterSessionId && input.compatibilityDatabaseLineage) {
+    admitGenerationInTransaction(db, {
+      databaseLineage: input.compatibilityDatabaseLineage,
+      chatId: input.chatId,
+      sessionId: input.compatibilityWriterSessionId,
+      interaction: finalizationModeFromInput(input),
+      chatOnlyEnabled: false,
+    })
+  }
+}
+
 function persistAssemblyMutations(args: {
   db: DatabaseSync
   dataDir: string
@@ -1734,8 +1871,9 @@ function persistAssemblyMutations(args: {
     }
   }
   const hasVarWrite = Object.keys(patch).length > 0 || deleteKeys.length > 0
-  const hasCharacterWrite = (args.mutations.characterFieldMutations?.length ?? 0) > 0
-  const hasLocalLoreWrite = args.mutations.localLoreMutation !== undefined
+  const chatOnlyScope = generationScopeIsChatOnly(args.input.generationScope)
+  const hasCharacterWrite = !chatOnlyScope && (args.mutations.characterFieldMutations?.length ?? 0) > 0
+  const hasLocalLoreWrite = !chatOnlyScope && args.mutations.localLoreMutation !== undefined
   const lastMemoryMutation = args.mutations.chatMetadataMutations?.find((mutation) => mutation.key === 'lastMemory')
   const hasMetadataWrite = lastMemoryMutation !== undefined
   const injectReplacements = args.mutations.messageMutations.filter(
@@ -1782,6 +1920,7 @@ function persistAssemblyMutations(args: {
           Boolean,
         ) as import('../commands/characters.js').CharacterRecord[]
         const { character, chat } = requireChatLocationExact(characters, args.input.chatId)
+        assertAssembleInputWriteAuthorityInTransaction(targetDb, args.input)
         validateGenerationChatVarMutationsFresh({
           chatId: args.input.chatId,
           chat,
@@ -1790,12 +1929,12 @@ function persistAssemblyMutations(args: {
         applyGenerationCharacterFieldMutationsFresh({
           characterId: character.chaId as string,
           character,
-          characterFieldMutations: args.mutations.characterFieldMutations,
+          characterFieldMutations: chatOnlyScope ? undefined : args.mutations.characterFieldMutations,
         })
         applyGenerationLocalLoreMutationFresh({
           chatId: args.input.chatId,
           chat,
-          localLoreMutation: args.mutations.localLoreMutation,
+          localLoreMutation: chatOnlyScope ? undefined : args.mutations.localLoreMutation,
         })
         if (hasVarWrite) {
           chat.scriptstate ??= {}
@@ -2465,14 +2604,70 @@ function handlePersistedGenerationCompletion(args: {
   pushNotifications?: false | PushNotificationService
   runMessageTranslation?: ServerMessageTranslationRunner
   generationId?: string
+  acceptedEffectiveConfiguration?: AcceptedEffectiveGenerationConfiguration
+  compatibilityAuthority?: {
+    databaseLineage: string
+    sessionId: string
+    interaction: GenerationFinalizationMode
+  }
 }): Promise<{ translation?: PostGenerationFrame['translation']; revision?: number; translationStarted?: boolean }> {
   const messageId = args.targetMessageId ?? args.message.chatId
   if (typeof messageId !== 'string' || messageId.trim().length === 0) {
     notifyChatCompletion(args.pushNotifications, { characterId: args.characterId, chatId: args.chatId })
     return Promise.resolve({})
   }
-  const run = () =>
-    handleGeneratedChatCompletion({
+  const compatibilityAuthority = args.compatibilityAuthority
+  let translationWriteGuard: Parameters<typeof handleGeneratedChatCompletion>[0]['assertWriteAllowed'] =
+    compatibilityAuthority
+      ? (targetDb, target) => {
+          if (target.databaseLineage !== compatibilityAuthority.databaseLineage || target.chatId !== args.chatId) {
+            throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+          }
+          admitGenerationInTransaction(targetDb, {
+            databaseLineage: compatibilityAuthority.databaseLineage,
+            chatId: target.chatId,
+            sessionId: compatibilityAuthority.sessionId,
+            interaction: compatibilityAuthority.interaction,
+            chatOnlyEnabled: false,
+          })
+        }
+      : undefined
+  let translationEffect: ReturnType<typeof listGenerationEffects>[number] | undefined
+  let historicalTranslationAuthority = false
+  let translationClaimId: string | undefined
+  const acceptedTranslationConfiguration = (): AcceptedEffectiveGenerationConfiguration | undefined => {
+    if (!translationEffect) return args.acceptedEffectiveConfiguration
+    if (!translationEffect.operationId) {
+      throw new Error('Generated translation effect is missing its accepted operation attempt')
+    }
+    if (historicalTranslationAuthority) return undefined
+    if (translationEffect.operationAttemptNo === undefined) {
+      throw new Error('Generated translation effect is missing its accepted operation attempt')
+    }
+    const stored = getGenerationOperationAttemptAcceptedConfiguration(
+      args.db,
+      translationEffect.databaseLineage,
+      translationEffect.operationId,
+      translationEffect.operationAttemptNo,
+    )
+    if (!stored) throw new Error('Generated translation effect accepted configuration is missing')
+    assertGenerationEffectiveConfigurationFingerprint(
+      stored.effectiveConfiguration,
+      stored.effectiveConfigurationFingerprint,
+    )
+    if (
+      !isRecord(stored.effectiveConfiguration) ||
+      stored.effectiveConfiguration.version !== 1 ||
+      !isRecord(stored.effectiveConfiguration.database) ||
+      !isRecord(stored.effectiveConfiguration.translationSettings)
+    ) {
+      throw new Error('Generated translation effect accepted configuration is invalid')
+    }
+    return stored.effectiveConfiguration as unknown as AcceptedEffectiveGenerationConfiguration
+  }
+  const run = () => {
+    const acceptedEffectiveConfiguration = acceptedTranslationConfiguration()
+    return handleGeneratedChatCompletion({
       db: args.db,
       dataDir: args.dataDir,
       eventSink: args.eventSink,
@@ -2481,8 +2676,10 @@ function handlePersistedGenerationCompletion(args: {
       chatId: args.chatId,
       ...(args.characterId ? { characterId: args.characterId } : {}),
       completedAt: args.completedAt,
+      ...(acceptedEffectiveConfiguration ? { acceptedEffectiveConfiguration } : {}),
       pushNotifications: args.pushNotifications,
       runMessageTranslation: args.runMessageTranslation,
+      ...(translationWriteGuard ? { assertWriteAllowed: translationWriteGuard } : {}),
       onTranslationStarted: ({ jobId }) =>
         args.emit?.({
           type: 'post_generation_progress',
@@ -2497,6 +2694,7 @@ function handlePersistedGenerationCompletion(args: {
           pendingLlmCounts: { LLM: 0, axLLM: 0 },
         }),
     })
+  }
 
   const generationId = args.generationId?.trim()
   if (!generationId) {
@@ -2508,6 +2706,75 @@ function handlePersistedGenerationCompletion(args: {
   }
 
   const databaseLineage = getDatabaseLineage(args.db)
+  translationEffect = listGenerationEffects(args.db, generationId, databaseLineage).find(
+    (effect) => effect.kind === 'generated_translation',
+  )
+  historicalTranslationAuthority = Boolean(
+    translationEffect &&
+    translationEffect.operationId &&
+    translationEffect.generationScope === undefined &&
+    hasPreOccupancyGeneratedTranslationAuthority(args.db, {
+      databaseLineage,
+      operationId: translationEffect.operationId,
+      generationId: translationEffect.generationId,
+      effectKeyType: translationEffect.keyType,
+      effectKeyId: translationEffect.keyId,
+      effectAttemptNo: translationEffect.operationAttemptNo,
+      chatId: translationEffect.chatId,
+      messageId: translationEffect.messageId,
+    }),
+  )
+  const guardedTranslationEffect = translationEffect
+  if (guardedTranslationEffect && (guardedTranslationEffect.generationScope || historicalTranslationAuthority)) {
+    if (guardedTranslationEffect.generationScope) {
+      assertPersistedGenerationScopeInTransaction(args.db, {
+        ...guardedTranslationEffect.generationScope,
+        databaseLineage,
+        chatId: guardedTranslationEffect.chatId,
+        sessionId: guardedTranslationEffect.generationScope.occupancySessionId ?? '',
+      })
+    }
+    translationWriteGuard = (targetDb, target) => {
+      const storedEffect = listGenerationEffects(targetDb, generationId, target.databaseLineage).find(
+        (effect) => effect.kind === 'generated_translation',
+      )
+      if (
+        !storedEffect ||
+        storedEffect.chatId !== target.chatId ||
+        storedEffect.messageId !== target.messageId ||
+        storedEffect.keyType !== guardedTranslationEffect.keyType ||
+        storedEffect.keyId !== guardedTranslationEffect.keyId ||
+        storedEffect.operationId !== guardedTranslationEffect.operationId ||
+        storedEffect.operationAttemptNo !== guardedTranslationEffect.operationAttemptNo ||
+        storedEffect.status !== 'claimed' ||
+        storedEffect.claimId !== translationClaimId
+      ) {
+        throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+      }
+      if (guardedTranslationEffect.generationScope) {
+        assertPersistedGenerationScopeInTransaction(targetDb, {
+          ...guardedTranslationEffect.generationScope,
+          databaseLineage: target.databaseLineage,
+          chatId: target.chatId,
+          sessionId: guardedTranslationEffect.generationScope.occupancySessionId ?? '',
+        })
+      } else if (
+        !guardedTranslationEffect.operationId ||
+        !hasPreOccupancyGeneratedTranslationAuthority(targetDb, {
+          databaseLineage: target.databaseLineage,
+          operationId: guardedTranslationEffect.operationId,
+          generationId,
+          effectKeyType: guardedTranslationEffect.keyType,
+          effectKeyId: guardedTranslationEffect.keyId,
+          effectAttemptNo: guardedTranslationEffect.operationAttemptNo,
+          chatId: target.chatId,
+          messageId: target.messageId,
+        })
+      ) {
+        throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+      }
+    }
+  }
   const claim = claimGenerationEffect(args.db, {
     databaseLineage,
     generationId,
@@ -2516,35 +2783,80 @@ function handlePersistedGenerationCompletion(args: {
     messageId,
   })
   if (claim.status !== 'claimed') return Promise.resolve({})
+  translationClaimId = claim.claimId
 
-  return run().then(
-    (followup) => {
-      settleGenerationEffect(args.db, {
-        databaseLineage,
-        generationId,
-        kind: 'generated_translation',
-        claimId: claim.claimId,
-        status: followup.translationStarted ? 'completed' : 'skipped',
-        reason: followup.translationStarted ? null : 'not_applicable',
-      })
-      return {
-        translationStarted: followup.translationStarted,
-        ...(followup.frame ? { translation: followup.frame } : {}),
-        ...(followup.revision !== undefined ? { revision: followup.revision } : {}),
+  let renewalTimer: ReturnType<typeof setInterval> | undefined
+  const stopRenewal = (): void => {
+    if (!renewalTimer) return
+    clearInterval(renewalTimer)
+    renewalTimer = undefined
+  }
+  renewalTimer = setInterval(
+    () => {
+      try {
+        if (
+          !renewGenerationEffectClaim(args.db, {
+            databaseLineage,
+            generationId,
+            kind: 'generated_translation',
+            claimId: claim.claimId,
+          })
+        ) {
+          stopRenewal()
+        }
+      } catch {
+        stopRenewal()
       }
     },
-    (error) => {
-      settleGenerationEffect(args.db, {
-        databaseLineage,
-        generationId,
-        kind: 'generated_translation',
-        claimId: claim.claimId,
-        status: 'failed',
-        lastError: errorMessage(error, 'generated-message translation failed'),
-      })
-      throw error
-    },
+    Math.max(1_000, Math.floor(GENERATION_EFFECT_CLAIM_LEASE_MS / 3)),
   )
+  renewalTimer.unref?.()
+
+  return Promise.resolve()
+    .then(run)
+    .then(
+      (followup) => {
+        const settle = (status: 'completed' | 'failed' | 'skipped', lastError?: string) => {
+          stopRenewal()
+          return settleGenerationEffect(args.db, {
+            databaseLineage,
+            generationId,
+            kind: 'generated_translation',
+            claimId: claim.claimId,
+            status,
+            reason: status === 'skipped' ? 'not_applicable' : null,
+            ...(lastError ? { lastError } : {}),
+          })
+        }
+        if (followup.translationStarted && followup.translation && followup.frame?.status === 'running') {
+          void followup.translation.then(
+            () => settle('completed'),
+            (error) => settle('failed', errorMessage(error, 'generated-message translation failed')),
+          )
+        } else if (followup.frame?.status === 'failed') {
+          settle('failed', followup.frame.error)
+        } else {
+          settle(followup.translationStarted ? 'completed' : 'skipped')
+        }
+        return {
+          translationStarted: followup.translationStarted,
+          ...(followup.frame ? { translation: followup.frame } : {}),
+          ...(followup.revision !== undefined ? { revision: followup.revision } : {}),
+        }
+      },
+      (error) => {
+        stopRenewal()
+        settleGenerationEffect(args.db, {
+          databaseLineage,
+          generationId,
+          kind: 'generated_translation',
+          claimId: claim.claimId,
+          status: 'failed',
+          lastError: errorMessage(error, 'generated-message translation failed'),
+        })
+        throw error
+      },
+    )
 }
 
 /**
@@ -2639,6 +2951,14 @@ async function buildPostGenerationFrame(args: {
       targetSnapshot,
       alternateMessages,
       automaticConfirmationEligible: finalizationModeFromInput(args.input) === 'send',
+      ...(args.input.compatibilityWriterSessionId && args.input.compatibilityDatabaseLineage
+        ? {
+            compatibilityAuthority: {
+              databaseLineage: args.input.compatibilityDatabaseLineage,
+              sessionId: args.input.compatibilityWriterSessionId,
+            },
+          }
+        : {}),
     })
   } catch (err) {
     emitProtocolMetric('generation_persistence', {
@@ -2685,6 +3005,18 @@ async function buildPostGenerationFrame(args: {
     emit: args.emit,
     pushNotifications: args.pushNotifications,
     runMessageTranslation: args.runMessageTranslation,
+    ...(args.input.compatibilityWriterSessionId && args.input.compatibilityDatabaseLineage
+      ? {
+          compatibilityAuthority: {
+            databaseLineage: args.input.compatibilityDatabaseLineage,
+            sessionId: args.input.compatibilityWriterSessionId,
+            interaction: finalizationModeFromInput(args.input),
+          },
+        }
+      : {}),
+    ...(args.input.acceptedEffectiveConfiguration
+      ? { acceptedEffectiveConfiguration: args.input.acceptedEffectiveConfiguration }
+      : {}),
   })
   return {
     frame: buildPostGenerationFrameBody(
@@ -3002,8 +3334,91 @@ function readWriterSessionHeader(req: FastifyRequest): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null
 }
 
+/**
+ * Apply the same cancellation authority policy as the operation-level Stop
+ * route. Scoped operations stay bound to their originating occupancy, while
+ * pre-occupancy operations may be controlled by their historical origin or by
+ * the current owner after a fresh compatibility admission.
+ */
+function assertGenerationJobCancellationControl(args: {
+  db: DatabaseSync
+  databaseLineage: string
+  operation: GenerationOperationProjection | undefined
+  job: StreamJob
+  sessionId: string
+  chatOccupancyEnabled: boolean
+}): void {
+  const currentDatabaseLineage = getDatabaseLineage(args.db)
+  if (currentDatabaseLineage !== args.databaseLineage) {
+    throw new GenerationAdmissionError(409, 'database_lineage_conflict', {
+      databaseLineage: currentDatabaseLineage,
+    })
+  }
+  const { operation } = args
+  if (operation) {
+    const originatingSession = operation.creatorWriterSessionId === args.sessionId
+    const scope = operation.generationScope
+    if (scope && scope.admissionKind !== 'legacy_owner') {
+      if (!originatingSession) {
+        throw new GenerationAdmissionError(423, 'generation_operation_foreign_session')
+      }
+      if (!operation.chatId || !scope.occupancySessionId) {
+        throw new GenerationAdmissionError(409, 'generation_scope_invalid')
+      }
+      assertPersistedGenerationScopeInTransaction(args.db, {
+        ...scope,
+        databaseLineage: args.databaseLineage,
+        chatId: operation.chatId,
+        sessionId: args.sessionId,
+      })
+      return
+    }
+    if (!operation.chatId) {
+      if (!originatingSession) {
+        throw new GenerationAdmissionError(423, 'generation_operation_foreign_session')
+      }
+      return
+    }
+    if (originatingSession) return
+    if (getDatabaseWriterMetadata(args.db).sessionId !== args.sessionId) {
+      throw new GenerationAdmissionError(423, 'generation_operation_foreign_session')
+    }
+    admitGenerationInTransaction(args.db, {
+      databaseLineage: args.databaseLineage,
+      chatId: operation.chatId,
+      sessionId: args.sessionId,
+      interaction: operation.mode ?? 'send',
+      chatOnlyEnabled: args.chatOccupancyEnabled,
+    })
+    return
+  }
+  if (args.job.chatId) {
+    admitGenerationInTransaction(args.db, {
+      databaseLineage: args.databaseLineage,
+      chatId: args.job.chatId,
+      sessionId: args.sessionId,
+      interaction: args.job.mode ?? 'send',
+      chatOnlyEnabled: args.chatOccupancyEnabled,
+    })
+  }
+}
+
 /** An SSE-backed `JobClient`: writes raw frame strings to the reply's raw socket. */
 function makeSseJobClient(reply: FastifyReply): JobClient {
+  let resolveClosed!: () => void
+  const closed = new Promise<void>((resolve) => {
+    resolveClosed = resolve
+  })
+  const settleClosed = (): void => {
+    reply.raw.removeListener('finish', settleClosed)
+    reply.raw.removeListener('close', settleClosed)
+    resolveClosed()
+  }
+  if (reply.raw.writableFinished || reply.raw.destroyed) resolveClosed()
+  else {
+    reply.raw.once('finish', settleClosed)
+    reply.raw.once('close', settleClosed)
+  }
   return {
     send(frame) {
       if (typeof frame === 'string') {
@@ -3017,6 +3432,7 @@ function makeSseJobClient(reply: FastifyReply): JobClient {
         // ignore
       }
     },
+    closeSettled: closed,
     get open() {
       return directGenerationResponseIsWritable(reply.raw)
     },
@@ -3044,9 +3460,66 @@ function generationOperationLineageForJob(job: StreamJob): GenerationOperationLi
   }
 }
 
+function hasPreOccupancyGenerationFinalizationAuthority(
+  db: DatabaseSync,
+  input: {
+    databaseLineage: string
+    operationId: string
+    operationAttemptNo: number
+    generationId: string
+    actorWriterSessionId: string
+    actorWriterEpoch: number
+    chatId: string
+  },
+): boolean {
+  return Boolean(
+    db
+      .prepare(
+        `SELECT 1
+         FROM generation_operations AS o
+         JOIN generation_operation_attempts AS a
+           ON a.database_lineage = o.database_lineage
+          AND a.operation_id = o.operation_id
+          AND a.attempt_no = ?
+         WHERE o.database_lineage = ?
+           AND o.operation_id = ?
+           AND o.chat_id = ?
+           AND o.pre_occupancy_authority = 1
+           AND o.admission_kind IS NULL
+           AND o.occupancy_database_lineage IS NULL
+           AND o.occupancy_session_id IS NULL
+           AND o.occupancy_epoch IS NULL
+           AND o.occupancy_claim_class IS NULL
+           AND o.permission_scope_version IS NULL
+           AND o.permission_scope_json IS NULL
+           AND a.job_id = ?
+           AND a.actor_writer_session_id = ?
+           AND a.actor_writer_epoch = ?
+           AND a.accepted_admission_kind IS NULL
+           AND a.accepted_occupancy_database_lineage IS NULL
+           AND a.accepted_occupancy_session_id IS NULL
+           AND a.accepted_occupancy_epoch IS NULL
+           AND a.accepted_occupancy_claim_class IS NULL
+           AND a.accepted_permission_scope_version IS NULL
+           AND a.accepted_permission_scope_json IS NULL`,
+      )
+      .get(
+        input.operationAttemptNo,
+        input.databaseLineage,
+        input.operationId,
+        input.chatId,
+        input.generationId,
+        input.actorWriterSessionId,
+        input.actorWriterEpoch,
+      ),
+  )
+}
+
 function generationFinalizationLineageForJob(
+  db: DatabaseSync,
   job: StreamJob,
-  terminalOutcome: GenerationOperationTerminalOutcome,
+  terminalOutcome: GenerationOperationTerminalOutcome | undefined,
+  expectedScope: PersistedGenerationScope | undefined,
 ): Pick<
   GenerationFinalizationAttempt,
   | 'databaseLineage'
@@ -3055,10 +3528,39 @@ function generationFinalizationLineageForJob(
   | 'actorWriterSessionId'
   | 'actorWriterEpoch'
   | 'acceptedMessageId'
-  | 'terminalOutcome'
-> {
+  | 'generationScope'
+  | 'preOccupancyAuthority'
+> &
+  Partial<Pick<GenerationFinalizationAttempt, 'terminalOutcome'>> {
   const lineage = generationOperationLineageForJob(job)
   if (!lineage) return {}
+  const operation = getGenerationOperationProjection(db, lineage.databaseLineage, lineage.operationId)
+  const exactAttempt =
+    operation?.chatId === job.chatId &&
+    operation?.currentAttempt?.attemptNo === lineage.attemptNo &&
+    operation?.currentAttempt?.jobId === lineage.jobId &&
+    operation?.currentAttempt?.actorWriterSessionId === job.writerSessionId &&
+    operation?.currentAttempt?.actorWriterEpoch === job.writerEpoch
+  const exactScope =
+    operation?.generationScope !== undefined &&
+    expectedScope !== undefined &&
+    JSON.stringify(operation.generationScope) === JSON.stringify(expectedScope)
+  const preOccupancyAuthority =
+    exactAttempt &&
+    operation?.generationScope === undefined &&
+    expectedScope === undefined &&
+    hasPreOccupancyGenerationFinalizationAuthority(db, {
+      databaseLineage: lineage.databaseLineage,
+      operationId: lineage.operationId,
+      operationAttemptNo: lineage.attemptNo,
+      generationId: lineage.jobId,
+      actorWriterSessionId: job.writerSessionId!,
+      actorWriterEpoch: job.writerEpoch!,
+      chatId: job.chatId!,
+    })
+  if (!operation || !exactAttempt || (!exactScope && !preOccupancyAuthority)) {
+    throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
+  }
   return {
     databaseLineage: lineage.databaseLineage,
     operationId: lineage.operationId,
@@ -3066,7 +3568,9 @@ function generationFinalizationLineageForJob(
     actorWriterSessionId: job.writerSessionId!,
     actorWriterEpoch: job.writerEpoch!,
     ...(job.acceptedMessageId ? { acceptedMessageId: job.acceptedMessageId } : {}),
-    terminalOutcome,
+    ...(operation.generationScope ? { generationScope: operation.generationScope } : {}),
+    ...(preOccupancyAuthority ? { preOccupancyAuthority: true as const } : {}),
+    ...(terminalOutcome ? { terminalOutcome } : {}),
   }
 }
 
@@ -3350,7 +3854,7 @@ function finalizationAlreadyPersisted(args: {
 function automaticConfirmationAcceptedUserMessageId(args: {
   mode?: GenerationFinalizationMode
   targetSnapshot?: GenerationFinalizationTargetSnapshot
-  operationLineage?: { acceptedMessageId?: string; terminalOutcome: GenerationOperationTerminalOutcome }
+  operationLineage?: { acceptedMessageId?: string; terminalOutcome?: GenerationOperationTerminalOutcome }
 }): string | undefined {
   if (args.mode !== 'send') return undefined
   if (args.operationLineage?.acceptedMessageId) return args.operationLineage.acceptedMessageId
@@ -3704,13 +4208,18 @@ function persistServerGenerationResult(args: {
   mode?: GenerationFinalizationMode
   automaticConfirmationEligible?: boolean
   targetSnapshot?: GenerationFinalizationTargetSnapshot
+  compatibilityAuthority?: { databaseLineage: string; sessionId: string }
   operationLineage?: {
     databaseLineage: string
     operationId: string
     operationAttemptNo: number
     generationId: string
-    terminalOutcome: GenerationOperationTerminalOutcome
+    actorWriterSessionId: string
+    actorWriterEpoch: number
+    terminalOutcome?: GenerationOperationTerminalOutcome
     acceptedMessageId?: string
+    generationScope?: PersistedGenerationScope
+    preOccupancyAuthority?: true
   }
 }): GenerationFinalizationPersistenceResult {
   let bardWikiJobEnqueued: BardWikiJobSummary | undefined
@@ -3761,6 +4270,81 @@ function persistServerGenerationResult(args: {
           Boolean,
         ) as import('../commands/characters.js').CharacterRecord[]
         const { character, chat } = requireChatLocationExact(characters, args.chatId)
+        if (args.operationLineage) {
+          const operation = getGenerationOperationProjection(
+            targetDb,
+            args.operationLineage.databaseLineage,
+            args.operationLineage.operationId,
+          )
+          const attempt = targetDb
+            .prepare(
+              `SELECT job_id AS jobId, actor_writer_session_id AS actorWriterSessionId,
+                      actor_writer_epoch AS actorWriterEpoch, finalization_generation_id AS finalizationGenerationId
+               FROM generation_operation_attempts
+               WHERE database_lineage = ? AND operation_id = ? AND attempt_no = ?`,
+            )
+            .get(
+              args.operationLineage.databaseLineage,
+              args.operationLineage.operationId,
+              args.operationLineage.operationAttemptNo,
+            ) as
+            | {
+                jobId: string
+                actorWriterSessionId: string
+                actorWriterEpoch: number
+                finalizationGenerationId: string | null
+              }
+            | undefined
+          const terminalBindingInvalid = args.operationLineage.terminalOutcome
+            ? operation?.state !== 'finalizing' ||
+              attempt?.finalizationGenerationId !== args.operationLineage.generationId
+            : !operation ||
+              !['owned_by_job', 'retryable', 'abandoned', 'terminal_failed'].includes(operation.state) ||
+              attempt?.jobId !== args.operationLineage.generationId
+          const scopedAuthorityValid =
+            args.operationLineage.generationScope !== undefined &&
+            JSON.stringify(operation?.generationScope) === JSON.stringify(args.operationLineage.generationScope)
+          const preOccupancyAuthorityValid =
+            args.operationLineage.preOccupancyAuthority === true &&
+            args.operationLineage.generationScope === undefined &&
+            operation?.generationScope === undefined &&
+            hasPreOccupancyGenerationFinalizationAuthority(targetDb, {
+              databaseLineage: args.operationLineage.databaseLineage,
+              operationId: args.operationLineage.operationId,
+              operationAttemptNo: args.operationLineage.operationAttemptNo,
+              generationId: args.operationLineage.generationId,
+              actorWriterSessionId: args.operationLineage.actorWriterSessionId,
+              actorWriterEpoch: args.operationLineage.actorWriterEpoch,
+              chatId: args.chatId,
+            })
+          if (
+            !operation ||
+            !attempt ||
+            operation.chatId !== args.chatId ||
+            attempt.actorWriterSessionId !== args.operationLineage.actorWriterSessionId ||
+            attempt.actorWriterEpoch !== args.operationLineage.actorWriterEpoch ||
+            terminalBindingInvalid ||
+            (!scopedAuthorityValid && !preOccupancyAuthorityValid)
+          ) {
+            throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
+          }
+          if (args.operationLineage.generationScope) {
+            assertPersistedGenerationScopeInTransaction(targetDb, {
+              ...args.operationLineage.generationScope,
+              databaseLineage: args.operationLineage.databaseLineage,
+              chatId: args.chatId,
+              sessionId: args.operationLineage.generationScope.occupancySessionId ?? '',
+            })
+          }
+        } else if (args.compatibilityAuthority) {
+          admitGenerationInTransaction(targetDb, {
+            databaseLineage: args.compatibilityAuthority.databaseLineage,
+            chatId: args.chatId,
+            sessionId: args.compatibilityAuthority.sessionId,
+            interaction: args.mode ?? 'send',
+            chatOnlyEnabled: false,
+          })
+        }
         if (args.targetSnapshot) {
           const freshness = validateGenerationFinalizationTargetFresh({
             chatId: args.chatId,
@@ -3776,13 +4360,14 @@ function persistServerGenerationResult(args: {
           chat,
           chatVarMutations: args.chatVarMutations,
         })
+        const chatOnlyScope = generationScopeIsChatOnly(args.operationLineage?.generationScope)
         const characterFieldResult = applyGenerationCharacterFieldMutationsDroppingConflicts({
           character,
-          characterFieldMutations: args.characterFieldMutations,
+          characterFieldMutations: chatOnlyScope ? undefined : args.characterFieldMutations,
         })
         const localLoreResult = applyGenerationLocalLoreMutationDroppingConflicts({
           chat,
-          localLoreMutation: args.localLoreMutation,
+          localLoreMutation: chatOnlyScope ? undefined : args.localLoreMutation,
         })
         const droppedScriptMutations = [
           ...chatVarResult.dropped,
@@ -3846,13 +4431,48 @@ function persistServerGenerationResult(args: {
         const effectiveFinalizationMode = args.mode ?? args.targetSnapshot?.mode ?? 'send'
         if (effectiveFinalizationMode === 'send' && args.automaticConfirmationEligible === true) {
           const acceptedUserMessageId = automaticConfirmationAcceptedUserMessageId(args)
+          const storedEffectiveConfiguration = args.operationLineage
+            ? getGenerationOperationStoredRequest(
+                targetDb,
+                args.operationLineage.databaseLineage,
+                args.operationLineage.operationId,
+              )?.effectiveConfiguration
+            : undefined
+          const acceptedBardWikiSettings =
+            isRecord(storedEffectiveConfiguration) &&
+            isBardWikiGlobalSettings(storedEffectiveConfiguration.acceptedBardWikiSettings)
+              ? storedEffectiveConfiguration.acceptedBardWikiSettings
+              : undefined
           const confirmation = createOrReuseAutomaticBardWikiConfirmation(targetDb, {
             chatId: args.chatId,
             resultAssistantMessageId: write.messageId,
             ...(acceptedUserMessageId ? { acceptedUserMessageId } : {}),
             fallbackMessages: chat.message,
+            ...(acceptedBardWikiSettings ? { acceptedSettings: acceptedBardWikiSettings } : {}),
           })
           if (confirmation?.created) bardWikiJobEnqueued = confirmation.job
+          if (confirmation?.created && args.operationLineage?.generationScope) {
+            targetDb
+              .prepare(
+                `UPDATE bardwiki_jobs
+                 SET operation_id = ?, operation_attempt_no = ?, admission_kind = ?,
+                     occupancy_database_lineage = ?, occupancy_session_id = ?, occupancy_epoch = ?,
+                     occupancy_claim_class = ?, permission_scope_version = ?, permission_scope_json = ?
+                 WHERE id = ?`,
+              )
+              .run(
+                args.operationLineage.operationId,
+                args.operationLineage.operationAttemptNo,
+                ...scopeSqlValues(args.operationLineage.generationScope),
+                confirmation.job.id,
+              )
+            bardWikiJobEnqueued = {
+              ...confirmation.job,
+              operationId: args.operationLineage.operationId,
+              operationAttemptNo: args.operationLineage.operationAttemptNo,
+              generationScope: args.operationLineage.generationScope,
+            }
+          }
         }
         if (hasScriptstateWrite || hasLocalLoreWrite) {
           if (hasLocalLoreWrite) {
@@ -3876,7 +4496,7 @@ function persistServerGenerationResult(args: {
                 id: write.messageId,
                 parentId: args.chatId,
               }
-        if (args.operationLineage) {
+        if (args.operationLineage?.terminalOutcome) {
           completeGenerationOperationFinalizationInTransaction(targetDb, {
             databaseLineage: args.operationLineage.databaseLineage,
             operationId: args.operationLineage.operationId,
@@ -3885,12 +4505,42 @@ function persistServerGenerationResult(args: {
             terminalOutcome: args.operationLineage.terminalOutcome,
             resultMessageId: write.messageId,
           })
+        } else if (args.operationLineage) {
+          const failedOperation = getGenerationOperationProjection(
+            targetDb,
+            args.operationLineage.databaseLineage,
+            args.operationLineage.operationId,
+          )
+          if (
+            failedOperation?.state === 'owned_by_job' ||
+            failedOperation?.state === 'retryable' ||
+            failedOperation?.state === 'abandoned'
+          ) {
+            const transitioned = transitionGenerationOperationInTransaction(targetDb, {
+              databaseLineage: args.operationLineage.databaseLineage,
+              operationId: args.operationLineage.operationId,
+              expectedState: failedOperation.state,
+              expectedStateVersion: failedOperation.stateVersion,
+              nextState: 'terminal_failed',
+              resultMessageId: write.messageId,
+              failureCode: 'provider_failed',
+              failurePhase: 'provider',
+              providerMayHaveRun: true,
+              runnerSettledAt: new Date().toISOString(),
+            })
+            if (transitioned.status !== 'applied') {
+              throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
+            }
+          } else if (failedOperation?.state !== 'terminal_failed') {
+            throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
+          }
         }
         const effectLedger =
           args.operationLineage?.terminalOutcome === 'completed'
             ? ensureGenerationEffectLedgerInTransaction(targetDb, {
                 databaseLineage: args.operationLineage.databaseLineage,
                 operationId: args.operationLineage.operationId,
+                operationAttemptNo: args.operationLineage.operationAttemptNo,
                 operationProtocolVersion:
                   getGenerationOperationProjection(
                     targetDb,
@@ -3901,6 +4551,7 @@ function persistServerGenerationResult(args: {
                 characterId: character.chaId as string,
                 chatId: args.chatId,
                 messageId: write.messageId,
+                generationScope: args.operationLineage.generationScope,
               })
             : undefined
         return {
@@ -3955,7 +4606,7 @@ function persistServerGenerationResult(args: {
         characterFieldMutations: [],
         droppedScriptMutations: [],
         bookkeepingErrors: [],
-        ...(args.operationLineage
+        ...(args.operationLineage?.terminalOutcome === 'completed'
           ? {
               effectLedger: generationEffectLedgerRef(
                 args.db,
@@ -3974,8 +4625,12 @@ function finalizationModeFromInput(input: AssembleInput): GenerationFinalization
   return input.mode === 'continue' || input.mode === 'regenerate' ? input.mode : 'send'
 }
 
-function isTerminalGenerationFinalizationError(err: unknown): boolean {
-  return err instanceof EntityNotFoundError || err instanceof ValidationError
+function isTerminalGenerationFinalizationError(err: unknown, attempt?: GenerationFinalizationAttempt): boolean {
+  return (
+    err instanceof EntityNotFoundError ||
+    err instanceof ValidationError ||
+    (attempt?.compatibilityAuthority !== undefined && err instanceof GenerationAdmissionError)
+  )
 }
 
 function persistGenerationFinalizationAttempt(args: {
@@ -3984,6 +4639,27 @@ function persistGenerationFinalizationAttempt(args: {
   eventSink: CommandEventSink
   attempt: GenerationFinalizationAttempt
 }): GenerationFinalizationPersistenceResult {
+  const hasCompleteOperationLineage =
+    args.attempt.databaseLineage !== undefined &&
+    args.attempt.operationId !== undefined &&
+    args.attempt.operationAttemptNo !== undefined &&
+    args.attempt.actorWriterSessionId !== undefined &&
+    args.attempt.actorWriterEpoch !== undefined
+  const preOccupancyAuthority =
+    hasCompleteOperationLineage &&
+    args.attempt.generationScope === undefined &&
+    hasPreOccupancyGenerationFinalizationAuthority(args.db, {
+      databaseLineage: args.attempt.databaseLineage!,
+      operationId: args.attempt.operationId!,
+      operationAttemptNo: args.attempt.operationAttemptNo!,
+      generationId: args.attempt.generationId,
+      actorWriterSessionId: args.attempt.actorWriterSessionId!,
+      actorWriterEpoch: args.attempt.actorWriterEpoch!,
+      chatId: args.attempt.chatId,
+    })
+  if (hasCompleteOperationLineage && args.attempt.generationScope === undefined && !preOccupancyAuthority) {
+    throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
+  }
   return persistServerGenerationResult({
     db: args.db,
     dataDir: args.dataDir,
@@ -3998,18 +4674,20 @@ function persistGenerationFinalizationAttempt(args: {
     mode: args.attempt.mode,
     targetSnapshot: args.attempt.targetSnapshot,
     automaticConfirmationEligible: args.attempt.automaticConfirmationEligible === true,
-    ...(args.attempt.databaseLineage &&
-    args.attempt.operationId &&
-    args.attempt.operationAttemptNo !== undefined &&
-    args.attempt.terminalOutcome
+    ...(args.attempt.compatibilityAuthority ? { compatibilityAuthority: args.attempt.compatibilityAuthority } : {}),
+    ...(hasCompleteOperationLineage && (args.attempt.generationScope || preOccupancyAuthority)
       ? {
           operationLineage: {
-            databaseLineage: args.attempt.databaseLineage,
-            operationId: args.attempt.operationId,
-            operationAttemptNo: args.attempt.operationAttemptNo,
+            databaseLineage: args.attempt.databaseLineage!,
+            operationId: args.attempt.operationId!,
+            operationAttemptNo: args.attempt.operationAttemptNo!,
             generationId: args.attempt.generationId,
-            terminalOutcome: args.attempt.terminalOutcome,
+            actorWriterSessionId: args.attempt.actorWriterSessionId!,
+            actorWriterEpoch: args.attempt.actorWriterEpoch!,
+            ...(args.attempt.terminalOutcome ? { terminalOutcome: args.attempt.terminalOutcome } : {}),
             ...(args.attempt.acceptedMessageId ? { acceptedMessageId: args.attempt.acceptedMessageId } : {}),
+            ...(args.attempt.generationScope ? { generationScope: args.attempt.generationScope } : {}),
+            ...(preOccupancyAuthority ? { preOccupancyAuthority: true as const } : {}),
           },
         }
       : {}),
@@ -4066,7 +4744,7 @@ function recordConfirmedGenerationFinalizationFailure(args: {
       args.db,
       args.attempt.generationId,
       errorMessage(args.err, 'failed to persist the generation result'),
-      isTerminalGenerationFinalizationError(args.err),
+      isTerminalGenerationFinalizationError(args.err, args.attempt),
     )
     return undefined
   } catch (bookkeepingError) {
@@ -4145,7 +4823,11 @@ function persistConfirmedGenerationFinalization(args: {
       attempt: args.attempt,
       err,
     })
-    if (isTerminalGenerationFinalizationError(err) && args.attempt.databaseLineage && args.attempt.operationId) {
+    if (
+      isTerminalGenerationFinalizationError(err, args.attempt) &&
+      args.attempt.databaseLineage &&
+      args.attempt.operationId
+    ) {
       const operation = getGenerationOperationProjection(
         args.db,
         args.attempt.databaseLineage,
@@ -4166,7 +4848,7 @@ function persistConfirmedGenerationFinalization(args: {
       }
     }
     return finish({
-      kind: isTerminalGenerationFinalizationError(err) ? 'rejected' : 'queued',
+      kind: isTerminalGenerationFinalizationError(err, args.attempt) ? 'rejected' : 'queued',
       error: err,
       ...(bookkeepingError ? { bookkeepingError } : {}),
       journalConfirmed: true,
@@ -4281,9 +4963,8 @@ function withGenerationRecoveryDiagnostics<T>(
       let operationId = refs.operationId
       if (!operationId) {
         try {
-          // Failed partials deliberately omit finalization lineage to keep the
-          // operation failed. Its authoritative attempt still binds the job to
-          // the original diagnostic operation across a process restart.
+          // Legacy retry rows can lack direct operation lineage. Recover the
+          // diagnostic correlation from the immutable attempt/job binding.
           operationId = (
             db
               .prepare(
@@ -4475,6 +5156,14 @@ export function retryQueuedGenerationFinalizations(args: {
             completedAt: Date.now(),
             pushNotifications: args.pushNotifications,
             runMessageTranslation: args.runMessageTranslation,
+            ...(attempt.compatibilityAuthority
+              ? {
+                  compatibilityAuthority: {
+                    ...attempt.compatibilityAuthority,
+                    interaction: attempt.mode,
+                  },
+                }
+              : {}),
           }).catch(() => {
             // Persistence already succeeded; follow-up translation/notification is best-effort.
           })
@@ -4572,6 +5261,31 @@ export function retryQueuedGenerationFinalizations(args: {
   return { attempted: retries.length, persisted, terminal, retryable }
 }
 
+function terminallySkipUnavailableGeneratedTranslation(
+  db: DatabaseSync,
+  effect: ReturnType<typeof listPendingServerGenerationEffects>[number],
+  reason: 'target_missing' | 'target_not_assistant',
+): boolean {
+  const claim = claimGenerationEffect(db, {
+    databaseLineage: effect.databaseLineage,
+    generationId: effect.generationId,
+    kind: 'generated_translation',
+    delivery: 'server',
+    messageId: effect.messageId,
+  })
+  if (claim.status !== 'claimed') return false
+  return Boolean(
+    settleGenerationEffect(db, {
+      databaseLineage: effect.databaseLineage,
+      generationId: effect.generationId,
+      kind: 'generated_translation',
+      claimId: claim.claimId,
+      status: 'skipped',
+      reason,
+    }),
+  )
+}
+
 /** Resume server-owned translation effects that were pending at process loss. */
 export async function retryPendingGenerationCompletionEffects(args: {
   db: DatabaseSync
@@ -4586,7 +5300,17 @@ export async function retryPendingGenerationCompletionEffects(args: {
     const message = getChatMessages(args.db, effect.chatId).find(
       (candidate) => candidate.chatId === effect.messageId,
     ) as unknown as Message | undefined
-    if (!message || message.role !== 'char') continue
+    if (!message || message.role !== 'char') {
+      const reconciled = withGenerationRecoveryDiagnostics(args.db, effect, () =>
+        terminallySkipUnavailableGeneratedTranslation(
+          args.db,
+          effect,
+          message ? 'target_not_assistant' : 'target_missing',
+        ),
+      )
+      if (reconciled) settled += 1
+      continue
+    }
     await withGenerationRecoveryDiagnostics(args.db, effect, () =>
       handlePersistedGenerationCompletion({
         db: args.db,
@@ -4655,7 +5379,7 @@ async function buildDurablePostGeneration(args: {
   })
   const completedAt = Date.now()
   const operationLineage = generationOperationLineageForJob(args.job)
-  if (operationLineage) {
+  if (args.job && operationLineage) {
     try {
       const operation = markGenerationOperationProviderDispatchFinished(args.db, operationLineage)
       updateJobOperationProjection(args.job, operation)
@@ -4712,7 +5436,7 @@ async function buildDurablePostGeneration(args: {
     eventSink: args.eventSink,
     attempt: {
       generationId: args.generationId,
-      ...generationFinalizationLineageForJob(args.job, 'completed'),
+      ...generationFinalizationLineageForJob(args.db, args.job, 'completed', args.input.generationScope),
       automaticConfirmationEligible: true,
       chatId: args.input.chatId,
       mode: finalizationModeFromInput(args.input),
@@ -5008,7 +5732,7 @@ async function persistCancelledPartialResult(args: {
     eventSink: args.eventSink,
     attempt: {
       generationId: args.generationId,
-      ...generationFinalizationLineageForJob(args.job, 'cancelled'),
+      ...generationFinalizationLineageForJob(args.db, args.job, 'cancelled', args.input.generationScope),
       automaticConfirmationEligible: false,
       chatId: args.input.chatId,
       mode: finalizationModeFromInput(args.input),
@@ -5036,6 +5760,7 @@ async function persistFailedPartialResult(args: {
   state: AssemblyState
   input: AssembleInput
   generationId: string
+  job?: StreamJob
   generationInfo: Record<string, unknown>
   promptInfo?: Record<string, unknown>
   text: string
@@ -5044,6 +5769,16 @@ async function persistFailedPartialResult(args: {
   metricContext?: PromptAssemblyMetricContext
 }): Promise<ProviderFailurePostGenerationResult | undefined> {
   if (args.text.length === 0) return undefined
+  const operationLineage = args.job ? generationOperationLineageForJob(args.job) : undefined
+  if (args.job && operationLineage) {
+    try {
+      const operation = markGenerationOperationProviderDispatchFinished(args.db, operationLineage)
+      updateJobOperationProjection(args.job, operation)
+    } catch {
+      // The started marker is the authority boundary. Finalization below still
+      // validates the exact accepted operation/attempt/job/scope tuple.
+    }
+  }
   const {
     postGen,
     message,
@@ -5072,6 +5807,18 @@ async function persistFailedPartialResult(args: {
     eventSink: args.eventSink,
     attempt: {
       generationId: args.generationId,
+      ...(args.job
+        ? generationFinalizationLineageForJob(args.db, args.job, undefined, args.input.generationScope)
+        : {}),
+      ...(!args.job && args.input.compatibilityWriterSessionId && args.input.compatibilityDatabaseLineage
+        ? {
+            compatibilityAuthority: {
+              databaseLineage: args.input.compatibilityDatabaseLineage,
+              sessionId: args.input.compatibilityWriterSessionId,
+            },
+          }
+        : {}),
+      automaticConfirmationEligible: false,
       chatId: args.input.chatId,
       mode: finalizationModeFromInput(args.input),
       message,
@@ -5265,6 +6012,7 @@ async function runGenerationJob(args: {
     providerMayHaveRun: false,
   })
   let lastTerminalError: string | undefined
+  let deferProviderErrorSettlement = false
   const emit = (event: PromptChatEvent): void => {
     if (event.type === 'error') lastTerminalError = event.error
     if (event.type === 'done') {
@@ -5284,13 +6032,15 @@ async function runGenerationJob(args: {
         durationMs: protocolDurationMs(diagnosticStartedAt),
         ...(event.outcome === 'cancelled' ? { cancellationOrigin: 'unknown' } : {}),
       })
-      settleGenerationOperationWithoutResult({
-        db,
-        job,
-        failureCode: event.outcome === 'cancelled' ? 'user_stop' : 'generation_ended_without_result',
-        failurePhase: event.outcome === 'cancelled' ? 'cancellation' : 'runner',
-        ...(lastTerminalError ? { lastError: lastTerminalError } : {}),
-      })
+      if (!(deferProviderErrorSettlement && lastTerminalError)) {
+        settleGenerationOperationWithoutResult({
+          db,
+          job,
+          failureCode: event.outcome === 'cancelled' ? 'user_stop' : 'generation_ended_without_result',
+          failurePhase: event.outcome === 'cancelled' ? 'cancellation' : 'runner',
+          ...(lastTerminalError ? { lastError: lastTerminalError } : {}),
+        })
+      }
     }
     registry.registry.pushRaw(job, formatPromptChatFrame(lineageEventForJob(db, job, event)))
   }
@@ -5512,6 +6262,7 @@ async function runGenerationJob(args: {
             terminalDoneEmitted = true
           }
           if (frames) {
+            deferProviderErrorSettlement = true
             const transportResult = await emitProviderChunks(frames, emit, signal, {
               tokenProgress: halfStreamingTokenProgress(database, providerStartedAt),
               doneMetadata: () => {
@@ -5550,6 +6301,7 @@ async function runGenerationJob(args: {
                       input,
                       text: completionText,
                       generationId,
+                      job,
                       generationInfo,
                       promptInfo: successfulResult.prompt.promptInfo,
                       emit,
@@ -5586,10 +6338,12 @@ async function runGenerationJob(args: {
                 })
               },
             })
+            deferProviderErrorSettlement = false
             terminalDoneEmitted = transportResult.status !== 'aborted'
             if (transportResult.status === 'error') {
               const retainedFailedPartial =
                 transportResult.failurePostGeneration?.frame !== undefined &&
+                transportResult.failurePostGeneration.persistenceDisposition !== 'queued' &&
                 transportResult.failurePostGeneration.persistenceDisposition !== 'rejected' &&
                 transportResult.failurePostGeneration.persistenceDisposition !== 'unconfirmed'
               settleGenerationOperationWithoutResult({
@@ -5870,6 +6624,12 @@ export function launchGenerationOperation(args: LaunchGenerationOperationArgs): 
     slidingDeadline: true,
   })
   try {
+    const scopedInput: AssembleInput = {
+      ...args.input,
+      operationId: args.operation.operationId,
+      operationAttemptNo: attempt.attemptNo,
+      ...(args.operation.generationScope ? { generationScope: args.operation.generationScope } : {}),
+    }
     args.generationJobs.registry.enableReplay(job)
     job.chatId = args.operation.chatId
     job.writerSessionId = attempt.actorWriterSessionId
@@ -5913,7 +6673,7 @@ export function launchGenerationOperation(args: LaunchGenerationOperationArgs): 
             registry: args.generationJobs,
             job,
             db: args.db,
-            input: args.input,
+            input: scopedInput,
             dataDir: args.dataDir,
             eventSink: args.eventSink,
             clientCapabilities: args.clientCapabilities,
@@ -5987,6 +6747,7 @@ function startDurableGeneration(args: {
     const databaseLineage = getDatabaseLineage(args.db)
     const operationId = randomUUID()
     let reservation: ReturnType<typeof reserveGenerationOperationAttemptInTransaction>
+    let acceptedEffectiveConfiguration: AcceptedEffectiveGenerationConfiguration | undefined
     args.db.exec('BEGIN IMMEDIATE')
     let transactionOpen = true
     try {
@@ -6001,6 +6762,16 @@ function startDurableGeneration(args: {
         })
         return
       }
+      const generationScope = admitGenerationInTransaction(args.db, {
+        databaseLineage,
+        chatId: input.chatId,
+        sessionId: writerSessionId,
+        interaction: finalizationModeFromInput(input),
+        chatOnlyEnabled: args.options.chatOccupancyEnabled === true,
+      })
+      const effectiveConfiguration = captureAcceptedEffectiveGenerationConfiguration(args.db, args.dataDir, input)
+      acceptedEffectiveConfiguration = effectiveConfiguration
+      const effectiveConfigurationFingerprint = generationEffectiveConfigurationFingerprint(effectiveConfiguration)
       const accepted = insertGenerationOperationInTransaction(args.db, {
         databaseLineage,
         operationId,
@@ -6008,6 +6779,9 @@ function startDurableGeneration(args: {
         requestOrigin: 'legacy',
         creatorWriterSessionId: writerSessionId,
         creatorWriterEpoch: writerEpoch,
+        generationScope,
+        effectiveConfiguration,
+        effectiveConfigurationFingerprint,
         bindingServerInstanceId: args.serverInstanceId,
         characterId: input.characterId,
         chatId: input.chatId,
@@ -6037,10 +6811,14 @@ function startDurableGeneration(args: {
       throw error
     }
     if (reservation.status !== 'applied') throw new Error('legacy generation attempt reservation failed')
+    if (!acceptedEffectiveConfiguration) throw new Error('legacy effective generation configuration is missing')
     const launched = launchGenerationOperation({
       operation: reservation.operation,
       db: args.db,
-      input,
+      input: {
+        ...input,
+        acceptedEffectiveConfiguration,
+      },
       dataDir: args.dataDir,
       eventSink: args.eventSink,
       clientCapabilities: args.clientCapabilities,
@@ -6048,7 +6826,9 @@ function startDurableGeneration(args: {
       generationTrace: args.generationTrace,
       generationJobs,
       messageTranslationJobs: args.messageTranslationJobs,
-      preparedAssembly: args.preparedAssembly,
+      // Assembly must consume the exact accepted configuration, never a
+      // pre-acceptance optimization snapshot.
+      preparedAssembly: undefined,
       deferredFailure: args.deferredFailure,
       metricContext: args.metricContext,
       attachInitialViewer(attachedJob) {
@@ -6078,6 +6858,18 @@ function startDurableGeneration(args: {
       reply.code(409).send({
         error: 'generation_in_progress',
         reason: 'A generation is already running for this chat.',
+      })
+      return
+    }
+    if (!reply.sent && error instanceof GenerationAdmissionError) {
+      reply.code(error.statusCode).send({ error: error.code, ...error.details })
+      return
+    }
+    if (!reply.sent && error instanceof GenerationEffectiveConfigurationTooLargeError) {
+      reply.code(error.statusCode).send({
+        error: error.code,
+        actualBytes: error.actualBytes,
+        maxBytes: error.maxBytes,
       })
       return
     }
@@ -6117,6 +6909,26 @@ export function registerGenerationChatRoutes(
     const input = toChatGenerationAssembleInput(body)
     const clientCapabilities = readGenerationClientCapabilities(body)
     const durable = body.durable === true && isPersistingMode(input.mode)
+    if (!durable && isPersistingMode(input.mode)) {
+      const compatibilityWriterSessionId = readWriterSessionHeader(req) ?? 'legacy'
+      const compatibilityDatabaseLineage = getDatabaseLineage(db)
+      try {
+        admitGenerationInTransaction(db, {
+          databaseLineage: compatibilityDatabaseLineage,
+          chatId: input.chatId,
+          sessionId: compatibilityWriterSessionId,
+          interaction: finalizationModeFromInput(input),
+          chatOnlyEnabled: false,
+        })
+      } catch (error) {
+        if (error instanceof GenerationAdmissionError) {
+          return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+        }
+        throw error
+      }
+      input.compatibilityWriterSessionId = compatibilityWriterSessionId
+      input.compatibilityDatabaseLineage = compatibilityDatabaseLineage
+    }
     const metricContext = createPromptAssemblyMetricContext({
       req,
       input,
@@ -6268,9 +7080,9 @@ export function registerGenerationChatRoutes(
     },
   )
 
-  // Explicit cancel is authorized by the current active writer. It aborts provider
-  // dispatch; the runner persists the streaming-so-far text and clears the
-  // submission lock. A bare disconnect only detaches.
+  // Explicit cancel uses the operation's scoped or historical-control policy. It
+  // aborts provider dispatch; the runner persists the streaming-so-far text and
+  // clears the submission lock. A bare disconnect only detaches.
   app.delete<{ Params: { id: string } }>('/api/v1/generate/chat/:id', async (req, reply) => {
     if (!(await requireAuth(authState, req, reply))) return
     const job = generationJobs.registry.get(req.params.id)
@@ -6286,6 +7098,34 @@ export function registerGenerationChatRoutes(
     let operation = lineage
       ? getGenerationOperationProjection(db, lineage.databaseLineage, lineage.operationId)
       : undefined
+    let controlSessionId = readWriterSessionHeader(req)
+    if (!controlSessionId) {
+      const ownerlessCompatibility =
+        getDatabaseWriterMetadata(db).sessionId === null &&
+        (!operation || operation.generationScope?.admissionKind === 'legacy_owner')
+      if (!ownerlessCompatibility) {
+        return reply.code(400).send({ error: 'risu-writer-session header is required' })
+      }
+      // Before any durable writer has been established, the compatibility
+      // generation path records the fixed `legacy` identity. Never recover an
+      // omitted request identity from the target operation or job itself.
+      controlSessionId = 'legacy'
+    }
+    try {
+      assertGenerationJobCancellationControl({
+        db,
+        databaseLineage: lineage?.databaseLineage ?? getDatabaseLineage(db),
+        operation,
+        job,
+        sessionId: controlSessionId,
+        chatOccupancyEnabled: options.chatOccupancyEnabled === true,
+      })
+    } catch (error) {
+      if (error instanceof GenerationAdmissionError) {
+        return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+      }
+      throw error
+    }
     if (operation?.state === 'completed') {
       return { disposition: 'already_completed', jobId: job.id, operation }
     }

@@ -7,9 +7,12 @@ import { buildHypaV3SummaryPrompt } from './memorySummaryPrompt.js'
 import { normalizeHypaV3Settings, type HypaV3Settings } from './memoryPlanner.js'
 import {
   createMemorySummary,
+  assertMemoryJobGenerationScope,
+  getMemoryJobAcceptedEffectiveConfiguration,
   getMemoryChunk,
-  getMemoryJob,
   listMemorySummaries,
+  memoryJobInstanceMayTransition,
+  memoryJobMayApplyResult,
   updateMemoryChunkStatus,
   type MemoryJob,
 } from './memoryRepository.js'
@@ -64,8 +67,9 @@ export function createSummarizeMemoryJobHandler(
     if (job.kind !== 'summarize') {
       throw new Error(`summarize handler received ${job.kind} job`)
     }
+    assertMemoryJobGenerationScope(opts.db, job)
 
-    const database = resolveChatBoundMemoryDatabase(loadDatabase(opts, job.chatId), job.chatId)
+    const database = resolveChatBoundMemoryDatabase(loadDatabase(opts, job), job.chatId)
     const settings = resolveHypaV3Settings(database)
     const result = await executeSummarizeJob({
       opts,
@@ -77,9 +81,12 @@ export function createSummarizeMemoryJobHandler(
       signal: context?.signal,
     })
     assertDatabaseLineage(opts.db, lineage)
-    if (result.kind === 'existing') return
-    const currentJob = getMemoryJob(opts.db, job.id)
-    if (currentJob?.status !== 'pending' && currentJob?.status !== 'running') return
+    assertMemoryJobGenerationScope(opts.db, job)
+    if (!memoryJobMayApplyResult(opts.db, job)) return
+    if (result.kind === 'existing') {
+      updateMemoryChunkStatusForJob(opts.db, job, result.chunkId, 'summarized')
+      return
+    }
     persistSummary(opts.db, result)
   }
 }
@@ -90,9 +97,9 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
 
   return async (firstJob, context): Promise<void> => {
     const lineage = getDatabaseLineage(opts.db)
-    const database = resolveChatBoundMemoryDatabase(loadDatabase(opts, firstJob.chatId), firstJob.chatId)
-    const settings = resolveHypaV3Settings(database)
-    const maxConcurrent = Math.max(1, settings.summarizationMaxConcurrent)
+    assertMemoryJobGenerationScope(opts.db, firstJob)
+    const databaseResolver = createSummarizeJobDatabaseResolver(opts)
+    databaseResolver(firstJob)
     const jobs = [firstJob]
     // Bounded drain leave any overflow pending for later
     // ticks instead of holding the single-flight worker for one chat's
@@ -104,9 +111,13 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
     }
 
     const orderedJobs = [...jobs].sort(compareSummarizeJobs)
+    const maxConcurrent = Math.min(...orderedJobs.map((job) => summarizeJobMaxConcurrent(databaseResolver, job)))
     await runWithConcurrency(orderedJobs, maxConcurrent, async (job) => {
       try {
         assertDatabaseLineage(opts.db, lineage)
+        assertMemoryJobGenerationScope(opts.db, job)
+        const database = databaseResolver(job)
+        const settings = resolveHypaV3Settings(database)
         const result = await executeSummarizeJob({
           opts,
           job,
@@ -117,17 +128,20 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
           signal: context.signalFor(job.id),
         })
         assertDatabaseLineage(opts.db, lineage)
-        if (getMemoryJob(opts.db, job.id)?.status !== 'running') {
+        assertMemoryJobGenerationScope(opts.db, job)
+        if (!memoryJobMayApplyResult(opts.db, job)) {
           return
         }
         // Persist and publish each completion while other requests are still running.
         if (result.kind === 'summary') {
           persistSummary(opts.db, result)
+        } else {
+          updateMemoryChunkStatusForJob(opts.db, job, result.chunkId, 'summarized')
         }
         context.complete(job.id)
       } catch (error) {
         const message = error instanceof Error && error.message ? error.message : String(error)
-        context.retryOrFail(job.id, message || 'summarize job failed')
+        retryMemoryJobAfterHandlerError(opts, context, job, message || 'summarize job failed')
       }
     })
   }
@@ -177,14 +191,13 @@ async function executeSummarizeJob(input: {
     chunkId: chunk.id,
   }).find((summary) => isMemorySummaryCompatibleWithModel(summary, payload.model))
   if (existing) {
-    updateMemoryChunkStatus(input.opts.db, chunk.id, 'summarized')
     return { kind: 'existing', job: input.job, payload, chunkId: chunk.id }
   }
 
   assertChatExists(input.database, input.job.chatId)
   const modelRequest = resolveMemorySummaryModel(input.database, payload.model)
   if (modelRequest.ok === false) {
-    markChunkFailed(input.opts.db, chunk.id)
+    updateMemoryChunkStatusForJob(input.opts.db, input.job, chunk.id, 'failed')
     throw new Error(modelRequest.error)
   }
 
@@ -229,29 +242,12 @@ async function executeSummarizeJob(input: {
         signal: abortScope.signal,
       }),
     )
-    if ('error' in summary) {
-      completeRequestHistory(historyHandle, {
-        status: abortScope.signal.aborted ? 'cancelled' : 'error',
-        error: summary.error,
-      })
-    } else {
-      completeRequestHistory(historyHandle, {
-        status: 'success',
-        response: summary.text,
-        metadata: { outputTokens: summary.tokens },
-      })
-    }
   } catch (error) {
-    const current = getMemoryJob(input.opts.db, input.job.id)
-    if (
-      getDatabaseLineage(input.opts.db) === lineage &&
-      current?.instanceId === input.job.instanceId &&
-      current.status === 'running'
-    ) {
-      markChunkFailed(input.opts.db, chunk.id)
-    }
+    const mayApplyResult =
+      getDatabaseLineage(input.opts.db) === lineage && memoryJobMayApplyResult(input.opts.db, input.job)
+    if (mayApplyResult) updateMemoryChunkStatusForJob(input.opts.db, input.job, chunk.id, 'failed')
     completeRequestHistory(historyHandle, {
-      status: abortScope.signal.aborted ? 'cancelled' : 'error',
+      status: abortScope.signal.aborted || !mayApplyResult ? 'cancelled' : 'error',
       error: error instanceof Error ? error.message : String(error),
     })
     throw error
@@ -259,10 +255,21 @@ async function executeSummarizeJob(input: {
     abortScope.dispose()
   }
   assertDatabaseLineage(input.opts.db, lineage)
+  const mayApplyResult = memoryJobMayApplyResult(input.opts.db, input.job)
   if ('error' in summary) {
-    markChunkFailed(input.opts.db, chunk.id)
+    if (mayApplyResult) updateMemoryChunkStatusForJob(input.opts.db, input.job, chunk.id, 'failed')
+    completeRequestHistory(historyHandle, {
+      status: mayApplyResult ? 'error' : 'cancelled',
+      error: summary.error,
+    })
     throw new Error(summary.error)
   }
+  completeRequestHistory(historyHandle, {
+    status: mayApplyResult ? 'success' : 'cancelled',
+    response: summary.text,
+    metadata: { outputTokens: summary.tokens },
+  })
+  if (!mayApplyResult) throw new Error('memory job is no longer active')
 
   return {
     kind: 'summary',
@@ -297,14 +304,20 @@ function memoryRequestHistoryScope(
 function createSummaryRateLimiter(opts: SummarizeMemoryJobHandlerOptions): SummaryRateLimiter {
   const sleep = opts.sleep ?? defaultSleep
   const now = opts.now ?? Date.now
-  let nextRequestAtMs = 0
+  let lastRequestAtMs: number | undefined
+  let lastIntervalMs = 0
 
   return async (settings) => {
     const requestsPerMinute = Math.max(1, settings.summarizationRequestsPerMinute)
     const intervalMs = Math.ceil(60_000 / requestsPerMinute)
     const current = now()
-    const waitMs = Math.max(0, nextRequestAtMs - current)
-    nextRequestAtMs = Math.max(current, nextRequestAtMs) + intervalMs
+    const requestAt =
+      lastRequestAtMs === undefined
+        ? current
+        : Math.max(current, lastRequestAtMs + Math.max(lastIntervalMs, intervalMs))
+    const waitMs = Math.max(0, requestAt - current)
+    lastRequestAtMs = requestAt
+    lastIntervalMs = intervalMs
     if (waitMs > 0) await sleep(waitMs)
   }
 }
@@ -388,18 +401,66 @@ function parseSummarizePayload(payload: unknown): HypaV3SummarizeJobPayload {
   }
 }
 
-function loadDatabase(opts: SummarizeMemoryJobHandlerOptions, chatId: string): Database {
+function loadDatabase(opts: SummarizeMemoryJobHandlerOptions, job: MemoryJob): Database {
+  const accepted = getMemoryJobAcceptedEffectiveConfiguration(opts.db, job)
+  if (accepted) return decodeMemoryGenerationSettings(accepted.database)
   // The default scoped read keeps only the target chat's generation settings
   // and bound model/prompt preset rows; sibling chats remain id-only stubs.
   const database = opts.loadDatabase
     ? opts.loadDatabase()
     : opts.dataDir
-      ? loadPersistedDatabaseForMemoryJob(opts.db, opts.dataDir, chatId)
+      ? loadPersistedDatabaseForMemoryJob(opts.db, opts.dataDir, job.chatId)
       : null
   if (!isRecord(database)) {
     throw new Error('persisted database is missing')
   }
   return decodeMemoryGenerationSettings(database)
+}
+
+function createSummarizeJobDatabaseResolver(opts: SummarizeMemoryJobHandlerOptions): (job: MemoryJob) => Database {
+  const databases = new Map<string, Database>()
+  return (job) => {
+    const key = memoryJobConfigurationIdentity(job)
+    const existing = databases.get(key)
+    if (existing) return existing
+    const database = resolveChatBoundMemoryDatabase(loadDatabase(opts, job), job.chatId)
+    databases.set(key, database)
+    return database
+  }
+}
+
+function summarizeJobMaxConcurrent(resolveDatabase: (job: MemoryJob) => Database, job: MemoryJob): number {
+  try {
+    return Math.max(1, resolveHypaV3Settings(resolveDatabase(job)).summarizationMaxConcurrent)
+  } catch {
+    // The per-job execution path records its own configuration failure. Keep
+    // the batch conservative until that job reaches the guarded error path.
+    return 1
+  }
+}
+
+function memoryJobConfigurationIdentity(job: MemoryJob): string {
+  if (job.operationId && job.operationAttemptNo !== undefined) {
+    return `operation:${job.operationId}:${job.operationAttemptNo}`
+  }
+  return 'legacy-live'
+}
+
+function retryMemoryJobAfterHandlerError(
+  opts: SummarizeMemoryJobHandlerOptions,
+  context: Parameters<MemoryJobBatchHandler>[1],
+  job: MemoryJob,
+  error: string,
+): void {
+  try {
+    if (memoryJobMayApplyResult(opts.db, job)) context.retryOrFail(job.id, error)
+  } catch (scopeError) {
+    if (!memoryJobInstanceMayTransition(opts.db, job)) return
+    context.retryOrFail(
+      job.id,
+      scopeError instanceof Error && scopeError.message ? scopeError.message : String(scopeError),
+    )
+  }
 }
 
 function resolveChatBoundMemoryDatabase(database: Database, chatId: string): Database {
@@ -454,9 +515,13 @@ function persistSummary(
     text: string
     tokens: number
   },
-): void {
+): boolean {
   db.exec('BEGIN IMMEDIATE')
   try {
+    if (!memoryJobMayApplyResult(db, input.job)) {
+      db.exec('ROLLBACK')
+      return false
+    }
     const existing = listMemorySummaries(db, {
       chatId: input.job.chatId,
       chunkId: input.payload.chunkId,
@@ -483,16 +548,32 @@ function persistSummary(
     }
     updateMemoryChunkStatus(db, input.payload.chunkId, 'summarized')
     db.exec('COMMIT')
+    return true
   } catch (error) {
     db.exec('ROLLBACK')
-    markChunkFailed(db, input.payload.chunkId)
+    updateMemoryChunkStatusForJob(db, input.job, input.payload.chunkId, 'failed')
     throw error
   }
 }
 
-function markChunkFailed(db: DatabaseSync, chunkId: string): void {
-  if (getMemoryChunk(db, chunkId)) {
-    updateMemoryChunkStatus(db, chunkId, 'failed')
+function updateMemoryChunkStatusForJob(
+  db: DatabaseSync,
+  job: MemoryJob,
+  chunkId: string,
+  status: 'summarized' | 'failed',
+): boolean {
+  db.exec('BEGIN IMMEDIATE')
+  try {
+    if (!memoryJobMayApplyResult(db, job) || !getMemoryChunk(db, chunkId)) {
+      db.exec('ROLLBACK')
+      return false
+    }
+    updateMemoryChunkStatus(db, chunkId, status)
+    db.exec('COMMIT')
+    return true
+  } catch (error) {
+    db.exec('ROLLBACK')
+    throw error
   }
 }
 

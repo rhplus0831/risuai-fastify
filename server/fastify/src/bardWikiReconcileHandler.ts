@@ -13,7 +13,12 @@ import {
   getBardWikiReceiptSummary,
   updateBardWikiDocument,
 } from './bardWikiRepository.js'
-import { getBardWikiJob, type BardWikiJob, type BardWikiReconcileReceiptJobPayload } from './bardWikiJobs.js'
+import {
+  assertBardWikiJobGenerationScope,
+  getBardWikiJob,
+  type BardWikiJob,
+  type BardWikiReconcileReceiptJobPayload,
+} from './bardWikiJobs.js'
 import { BardWikiJobHandlerError, type BardWikiJobHandlerContext } from './bardWikiWorker.js'
 
 interface ChangeManifestRow {
@@ -71,6 +76,7 @@ function reconcileReceipt(
       transactionOpen = false
       return null
     }
+    assertBardWikiJobGenerationScope(db, currentJob)
     const manifest = db
       .prepare(
         `SELECT document_id, before_version, before_hash, after_version, after_hash
