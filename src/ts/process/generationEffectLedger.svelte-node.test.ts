@@ -12,6 +12,7 @@ import {
   setClientConnectionState,
   canUseClientRecoveryAccess,
   canUseClientWriteAccess,
+  getClientSessionSnapshot,
 } from '../clientSession'
 import {
   setManagedWriterForTest,
@@ -21,18 +22,32 @@ import {
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  abandonPreparedGenerationInlay,
+  beginPreparedGenerationInlay,
+  commitClaimedIgpEffect,
   completedGenerationEffect,
+  executeClaimedIgpEffect,
+  finalizePreparedGenerationInlay,
+  hasActiveGenerationInlayPreparation,
+  isGenerationInlayPreparationActive,
+  registerActiveGenerationInlayPreparation,
   resetGenerationEffectLedgerForTests,
   runLedgeredGenerationEffect,
   setGenerationEffectTimingObserverForTests,
   type GenerationEffectExecutionContext,
 } from './generationEffectLedger'
+import { setCachedServerCommandRevision } from '../server/commands'
 import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
 
 vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: vi.fn().mockResolvedValue('auth') }))
 vi.mock('../server/activeWriterSession', () => ({
+  ACTIVE_WRITER_SESSION_HEADER: 'risu-writer-session',
   activeWriterSessionHeader: () => ({ 'risu-writer-session': 'writer-a' }),
   handleActiveWriterStaleResponse: () => false,
+}))
+vi.mock('../server/chatOccupancy', () => ({
+  clientChatOccupancyStore: { subscribe: (subscriber: () => void) => (subscriber(), () => {}) },
+  isClientChatOccupancyAuthorityCurrent: () => true,
 }))
 
 const ref: ServerGenerationEffectLedgerRef = {
@@ -60,6 +75,427 @@ beforeEach(() => {
 })
 
 describe('client generation effect ledger', () => {
+  it('scopes an active inlay acknowledgement window to its exact operation and message', () => {
+    const preparationId = 'preparation-local-a'
+    const retire = registerActiveGenerationInlayPreparation(ref, preparationId)
+    const siblingGeneration = { ...ref, keyId: 'operation-b', messageId: 'message-b' }
+
+    expect(hasActiveGenerationInlayPreparation(ref)).toBe(true)
+    expect(isGenerationInlayPreparationActive(ref, preparationId)).toBe(true)
+    expect(hasActiveGenerationInlayPreparation(siblingGeneration)).toBe(false)
+
+    retire()
+    expect(hasActiveGenerationInlayPreparation(ref)).toBe(false)
+  })
+
+  it('executes configured IGP through exact occupancy authority without general writer access', async () => {
+    setManagedReaderForTest()
+    expect(canUseClientWriteAccess()).toBe(false)
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    const fetchMock = vi.fn(async () => jsonResponse({ type: 'success', result: '[accepted IGP]' }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      executeClaimedIgpEffect(
+        ref,
+        { generationId: ref.generationId, claimId: 'claim-a' },
+        authority,
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual({ status: 'success', result: '[accepted IGP]' })
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-effects/${ref.generationId}/igp/completion`,
+      expect.objectContaining({
+        method: 'POST',
+        headers: expect.objectContaining({
+          'risu-auth': 'auth',
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': ref.databaseLineage,
+        }),
+        body: JSON.stringify({ claimId: 'claim-a' }),
+      }),
+    )
+  })
+
+  it('commits an occupied-chat IGP claim through the strict exact-scope route', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    setCachedServerCommandRevision(18)
+    const fetchMock = vi.fn(async () =>
+      jsonResponse({
+        revision: 19,
+        chatId: ref.chatId,
+        messageId: ref.messageId,
+        event: {
+          type: 'message.updated',
+          revision: 19,
+          resource: 'message',
+          id: ref.messageId,
+          parentId: ref.chatId,
+        },
+        effect: { status: 'completed', claimId: 'claim-a' },
+      }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      commitClaimedIgpEffect(ref, { generationId: ref.generationId, claimId: 'claim-a' }, authority, {
+        data: 'terminal [IGP]',
+        expectedData: 'terminal',
+        expectedGenerationId: ref.generationId,
+      }),
+    ).resolves.toBe('accepted')
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-effects/${ref.generationId}/igp/commit`,
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({
+          'risu-auth': 'auth',
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': ref.databaseLineage,
+        }),
+        body: JSON.stringify({
+          baseRevision: 18,
+          claimId: 'claim-a',
+          data: 'terminal [IGP]',
+          expectedData: 'terminal',
+          expectedGenerationId: ref.generationId,
+        }),
+      }),
+    )
+  })
+
+  it('retries the same claimed IGP identity after an ambiguous lost response without widening its body', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    setCachedServerCommandRevision(23)
+    const response = {
+      revision: 24,
+      chatId: ref.chatId,
+      messageId: ref.messageId,
+      event: {
+        type: 'message.updated',
+        revision: 24,
+        resource: 'message',
+        id: ref.messageId,
+        parentId: ref.chatId,
+      },
+      effect: { status: 'completed', claimId: 'claim-lost' },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('connection lost'))
+      .mockResolvedValueOnce(jsonResponse(response))
+    vi.stubGlobal('fetch', fetchMock)
+    const commit = () =>
+      commitClaimedIgpEffect(ref, { generationId: ref.generationId, claimId: 'claim-lost' }, authority, {
+        data: 'terminal once',
+        expectedData: 'terminal',
+        expectedGenerationId: ref.generationId,
+      })
+
+    await expect(commit()).resolves.toBe('ambiguous')
+    await expect(commit()).resolves.toBe('accepted')
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.map((call) => call[1]?.body)).toEqual([
+      JSON.stringify({
+        baseRevision: 23,
+        claimId: 'claim-lost',
+        data: 'terminal once',
+        expectedData: 'terminal',
+        expectedGenerationId: ref.generationId,
+      }),
+      JSON.stringify({
+        baseRevision: 23,
+        claimId: 'claim-lost',
+        data: 'terminal once',
+        expectedData: 'terminal',
+        expectedGenerationId: ref.generationId,
+      }),
+    ])
+  })
+
+  it('carries exact accepted-operation lineage through prepare, finalize, and abandon mutations', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'owner' as const,
+    }
+    const preparationId = 'preparation-stable-a'
+    setCachedServerCommandRevision(30)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const action = String(input).split('/').at(-1)
+      const baseRevision = JSON.parse(String(init?.body)).baseRevision as number
+      return jsonResponse({
+        revision: baseRevision + 1,
+        chatId: ref.chatId,
+        messageId: ref.messageId,
+        preparationId,
+        ...(action === 'inlay-preparation'
+          ? { inlayPreparation: 'prepared' }
+          : action === 'inlay-abandonment'
+            ? { inlayPreparation: 'abandoned' }
+            : { inlayFinalization: 'committed' }),
+        event: {
+          type: 'message.updated',
+          revision: baseRevision + 1,
+          resource: 'message',
+          id: ref.messageId,
+          parentId: ref.chatId,
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      beginPreparedGenerationInlay(ref, authority, {
+        operationId: ref.keyId,
+        preparationId,
+        expectedData: '<ImgGen="cat">',
+      }),
+    ).resolves.toBe('accepted')
+    await expect(
+      finalizePreparedGenerationInlay(ref, authority, {
+        operationId: ref.keyId,
+        preparationId,
+        expectedData: '<ImgGen="cat">',
+        finalData: '{{inlay::asset-a}}',
+      }),
+    ).resolves.toBe('accepted')
+    await expect(
+      abandonPreparedGenerationInlay(ref, authority, {
+        operationId: ref.keyId,
+        preparationId,
+      }),
+    ).resolves.toBe('accepted')
+
+    expect(fetchMock.mock.calls.map(([input]) => String(input))).toEqual([
+      `/api/v1/generation-effects/${ref.generationId}/igp/inlay-preparation`,
+      `/api/v1/generation-effects/${ref.generationId}/igp/inlay-finalization`,
+      `/api/v1/generation-effects/${ref.generationId}/igp/inlay-abandonment`,
+    ])
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init).toMatchObject({
+        method: 'PUT',
+        headers: expect.objectContaining({
+          'risu-auth': 'auth',
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': ref.databaseLineage,
+        }),
+      })
+    }
+    expect(fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))).toEqual([
+      {
+        baseRevision: 30,
+        operationId: ref.keyId,
+        preparationId,
+        expectedData: '<ImgGen="cat">',
+      },
+      {
+        baseRevision: 31,
+        operationId: ref.keyId,
+        preparationId,
+        expectedData: '<ImgGen="cat">',
+        finalData: '{{inlay::asset-a}}',
+      },
+      { baseRevision: 32, operationId: ref.keyId, preparationId },
+    ])
+  })
+
+  it('uses captured accepted authority only to abandon after local role loss', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'owner' as const,
+    }
+    const preparationId = 'preparation-transferred-a'
+    setCachedServerCommandRevision(35)
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      const baseRevision = JSON.parse(String(init?.body)).baseRevision as number
+      return jsonResponse({
+        revision: baseRevision + 1,
+        chatId: ref.chatId,
+        messageId: ref.messageId,
+        preparationId,
+        inlayPreparation: 'abandoned',
+        event: {
+          type: 'message.updated',
+          revision: baseRevision + 1,
+          resource: 'message',
+          id: ref.messageId,
+          parentId: ref.chatId,
+        },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    demoteAndRepromoteForTest()
+
+    await expect(
+      finalizePreparedGenerationInlay(ref, authority, {
+        operationId: ref.keyId,
+        preparationId,
+        expectedData: '<ImgGen="cat">',
+        finalData: '{{inlay::asset-a}}',
+      }),
+    ).resolves.toBe('target_stale')
+    expect(fetchMock).not.toHaveBeenCalled()
+
+    await expect(
+      abandonPreparedGenerationInlay(ref, authority, {
+        operationId: ref.keyId,
+        preparationId,
+      }),
+    ).resolves.toBe('accepted')
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-effects/${ref.generationId}/igp/inlay-abandonment`,
+      expect.objectContaining({
+        method: 'PUT',
+        headers: expect.objectContaining({
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': ref.databaseLineage,
+        }),
+      }),
+    )
+  })
+
+  it('replays a lost preparation response with the same durable identity before any provider may start', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'owner' as const,
+    }
+    const input = {
+      operationId: ref.keyId,
+      preparationId: 'preparation-lost-a',
+      expectedData: '<ImgGen="cat">',
+    }
+    setCachedServerCommandRevision(40)
+    const accepted = {
+      revision: 41,
+      chatId: ref.chatId,
+      messageId: ref.messageId,
+      preparationId: input.preparationId,
+      inlayPreparation: 'prepared',
+      event: {
+        type: 'message.updated',
+        revision: 41,
+        resource: 'message',
+        id: ref.messageId,
+        parentId: ref.chatId,
+      },
+    }
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('lost response'))
+      .mockResolvedValueOnce(jsonResponse(accepted))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(beginPreparedGenerationInlay(ref, authority, input)).resolves.toBe('ambiguous')
+    await expect(beginPreparedGenerationInlay(ref, authority, input)).resolves.toBe('accepted')
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.map(([, init]) => init?.body)).toEqual([
+      JSON.stringify({ baseRevision: 40, ...input }),
+      JSON.stringify({ baseRevision: 40, ...input }),
+    ])
+  })
+
+  it('retries revision conflict without changing finalization authority or payload', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const authority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'owner' as const,
+    }
+    const input = {
+      operationId: ref.keyId,
+      preparationId: 'preparation-conflict-a',
+      expectedData: '<ImgGen="cat">',
+      finalData: '{{inlay::asset-a}}',
+    }
+    setCachedServerCommandRevision(50)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ error: 'revision_conflict', currentRevision: 54 }, 409))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          revision: 55,
+          chatId: ref.chatId,
+          messageId: ref.messageId,
+          preparationId: input.preparationId,
+          inlayFinalization: 'committed',
+          event: {
+            type: 'message.updated',
+            revision: 55,
+            resource: 'message',
+            id: ref.messageId,
+            parentId: ref.chatId,
+          },
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(finalizePreparedGenerationInlay(ref, authority, input)).resolves.toBe('accepted')
+    const bodies = fetchMock.mock.calls.map(([, init]) => JSON.parse(String(init?.body)))
+    expect(bodies).toEqual([
+      { baseRevision: 50, ...input },
+      { baseRevision: 54, ...input },
+    ])
+  })
+
   it('reports the isolated callback duration and outcome', async () => {
     const timings: Array<{ kind: string; delivery: string; durationMs: number; status: string }> = []
     setGenerationEffectTimingObserverForTests((timing) => timings.push(timing))

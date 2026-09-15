@@ -26,6 +26,9 @@ import { readResourceDatabaseFromFetch, type RuntimeBootstrap } from './helpers/
 import { createExtractedModelPreset, createExtractedPromptPreset } from '@risuai/shared-core/preset-split'
 import { GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES } from '../src/generationOperations.js'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
+import { listGenerationOccupancyPins } from '../src/generationScope.js'
+import { generationEffectHasExactTerminalTranscriptBinding, listGenerationEffects } from '../src/generationEffects.js'
+import { getChatMessages } from '../src/messageStore.js'
 
 // Durable generation lives on a detached job whose lifecycle is not tied to the
 // request connection, so these use a real listening server + `fetch`. `app.inject`
@@ -225,6 +228,7 @@ afterEach(async () => {
   openControllers.clear()
   harness.app.server.closeAllConnections()
   await harness.app.close()
+  vi.restoreAllMocks()
   rmSync(harness.dataDir, { recursive: true, force: true })
 })
 
@@ -243,10 +247,13 @@ async function resetHarness(
   await seedDatabase(fixtureDatabase)
 }
 
-async function restartHarness(generationChatOverrides: Record<string, unknown> = {}): Promise<void> {
+async function restartHarness(
+  generationChatOverrides: Record<string, unknown> = {},
+  chatOccupancyEnabled = false,
+): Promise<void> {
   const dataDir = harness.dataDir
   await harness.app.close()
-  harness = await startHarness(generationChatOverrides, dataDir)
+  harness = await startHarness(generationChatOverrides, dataDir, chatOccupancyEnabled)
 }
 
 async function seedDatabaseForHarness(target: Harness, targetAssertion: string, database: unknown): Promise<number> {
@@ -574,6 +581,83 @@ function chatOnlyMutationFixture(): JsonRecord {
         },
         { type: 'setvar', operator: '=', var: 'mood', value: 'allowed-chat-value' },
       ],
+    },
+  ]
+  return database
+}
+
+function configuredIgpLifecycleFixture(
+  messages: Array<Record<string, unknown>>,
+  options: { useSayNothing: boolean; autoTranslate: boolean; inlayViewScreen?: boolean },
+): JsonRecord {
+  const database = structuredClone(fixtureDatabase) as JsonRecord
+  Object.assign(database, {
+    useSayNothing: options.useSayNothing,
+    providerCredentials: [
+      {
+        id: 'accepted-igp-credential',
+        name: 'Accepted IGP credential',
+        type: 'apiKey',
+        apiKey: 'accepted-igp-key',
+      },
+    ],
+    modelProfiles: [
+      {
+        id: 'accepted-igp-profile',
+        name: 'Accepted IGP profile',
+        providerId: 'custom-api',
+        modelId: 'custom-api',
+        providerOptions: {
+          credentialId: 'accepted-igp-credential',
+          baseUrl: 'https://accepted-igp.example/v1',
+          requestModel: 'accepted-igp-model',
+        },
+      },
+      {
+        id: 'accepted-translation-profile',
+        name: 'Accepted translation profile',
+        providerId: 'debug-echo',
+        modelId: 'debug-echo',
+        providerOptions: {
+          baseUrl: 'debug://accepted-translation',
+          requestModel: 'accepted-translation-model',
+        },
+      },
+    ],
+    modelRoleProfiles: {
+      emotion: { mode: 'profile', profileId: 'accepted-igp-profile' },
+      translate: { mode: 'profile', profileId: 'accepted-translation-profile' },
+    },
+    igpPrompt:
+      '<|im_start|>system<|im_sep|>Last={{lastmessage}}; Char={{lastcharmessage}}; Index={{lastmessageid}}; Definition={{char}}.<|im_end|>',
+    translator: options.autoTranslate ? 'ko' : '',
+    translatorInputLanguage: 'en',
+    translatorType: 'llm',
+    translatorSendTextAsIs: true,
+    translatorPresetId: 'accepted-translation-preset',
+    translatorPrompt: 'Translate {{slot::content}}',
+    translatorPresets: [
+      {
+        id: 'accepted-translation-preset',
+        name: 'Accepted translation preset',
+        prompt: 'Translate {{slot::content}}',
+        maxResponse: 111,
+      },
+    ],
+    autoTranslateNotificationDeferCapSeconds: 0,
+    useStreaming: false,
+    halfStreaming: false,
+  })
+  const character = (database.characters as JsonRecord[])[0]!
+  if (options.inlayViewScreen) {
+    character.inlayViewScreen = true
+    character.viewScreen = 'emotion'
+  }
+  character.chats = [
+    {
+      ...durableChat(messages),
+      autoTranslate: options.autoTranslate,
+      translatorPresetId: 'accepted-translation-preset',
     },
   ]
   return database
@@ -1208,6 +1292,19 @@ describe('Durable generation', () => {
     expect(await foreignLowLevelStop.json()).toEqual({ error: 'generation_operation_foreign_session' })
     expect((await operationStatus(legacyOperationId)).operation.state).toBe('owned_by_job')
 
+    const linkedPinDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      linkedPinDb
+        .prepare(
+          `INSERT INTO memory_jobs (
+             id, instance_id, chat_id, kind, status, payload_json, next_run_at,
+             operation_id, operation_attempt_no, admission_kind
+           ) VALUES (?, ?, 'chat-1', 'summarize', 'pending', '{}', ?, ?, 1, 'legacy_owner')`,
+        )
+        .run('legacy-linked-stop-pin', 'legacy-linked-stop-pin-instance', '2999-01-01T00:00:00.000Z', legacyOperationId)
+    } finally {
+      linkedPinDb.close()
+    }
     const legacyHandoffStop = await fetch(
       `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(legacyOperationId)}/cancellation`,
       {
@@ -1225,6 +1322,19 @@ describe('Durable generation', () => {
       disposition: 'cancelling',
       operation: { operationId: legacyOperationId, state: 'stopping' },
     })
+    await waitFor(async () => {
+      const status = await operationStatus(legacyOperationId)
+      return status.operation.state === 'cancelled' ? status : undefined
+    })
+    const retainedPinDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(listGenerationOccupancyPins(retainedPinDb, 'chat-1')).toContainEqual({
+        id: 'legacy-linked-stop-pin',
+        kind: 'memory_job',
+      })
+    } finally {
+      retainedPinDb.close()
+    }
   })
 
   it('runs protocol-v1 chat-only send and reroll through real finalization without widening scope', async () => {
@@ -1482,6 +1592,367 @@ describe('Durable generation', () => {
       ]),
     })
   })
+
+  it.each([
+    {
+      label: 'live Reroll',
+      mode: 'regenerate' as const,
+      interaction: 'reroll' as const,
+      delivery: 'live_terminal' as const,
+      restartBeforeEffect: false,
+      useSayNothing: false,
+      autoTranslate: true,
+      providerText: 'REROLL-RAW-LIVE <Emotion="happy">',
+      finalText: 'REROLL-RAW-LIVE <Emotion="happy">',
+      inlayFinalText: 'REROLL-RAW-LIVE {{emotion::happy}}',
+      terminalIndex: '1',
+      resultIdentity: 'replace' as const,
+    },
+    {
+      label: 'recovered Reroll',
+      mode: 'regenerate' as const,
+      interaction: 'reroll' as const,
+      delivery: 'late_recovery' as const,
+      restartBeforeEffect: true,
+      useSayNothing: false,
+      autoTranslate: true,
+      providerText: 'REROLL-RAW-RECOVERED <Emotion="focused">',
+      finalText: 'REROLL-RAW-RECOVERED <Emotion="focused">',
+      inlayFinalText: 'REROLL-RAW-RECOVERED {{emotion::focused}}',
+      terminalIndex: '1',
+      resultIdentity: 'replace' as const,
+    },
+    {
+      label: 'live extend Continue',
+      mode: 'continue' as const,
+      interaction: 'continue' as const,
+      delivery: 'live_terminal' as const,
+      restartBeforeEffect: false,
+      useSayNothing: false,
+      autoTranslate: false,
+      providerText: ' plus-extend <Emotion="calm">',
+      finalText: 'Existing assistant plus-extend <Emotion="calm">',
+      inlayFinalText: 'Existing assistant plus-extend {{emotion::calm}}',
+      terminalIndex: '1',
+      resultIdentity: 'extend' as const,
+    },
+    {
+      label: 'recovered append Continue',
+      mode: 'continue' as const,
+      interaction: 'continue' as const,
+      delivery: 'late_recovery' as const,
+      restartBeforeEffect: true,
+      useSayNothing: true,
+      autoTranslate: false,
+      providerText: ' plus-append',
+      finalText: '*says nothing* plus-append',
+      inlayFinalText: undefined,
+      terminalIndex: '2',
+      resultIdentity: 'append' as const,
+    },
+  ])(
+    'binds configured IGP to the exact $label result across real operation finalization',
+    async ({
+      mode,
+      interaction,
+      delivery,
+      restartBeforeEffect,
+      useSayNothing,
+      autoTranslate,
+      providerText,
+      finalText,
+      inlayFinalText,
+      terminalIndex,
+      resultIdentity,
+    }) => {
+      await resetHarness({}, true)
+      const targetMessageId = 'accepted-assistant-target'
+      await seedDatabase(
+        configuredIgpLifecycleFixture(
+          [
+            { role: 'user', data: 'Accepted user', chatId: 'accepted-user' },
+            {
+              role: 'char',
+              data: 'Existing assistant',
+              chatId: targetMessageId,
+              saying: 'char-1',
+              generationInfo: { generationId: 'prior-generation', operationId: 'prior-operation' },
+            },
+          ],
+          { useSayNothing, autoTranslate, inlayViewScreen: inlayFinalText !== undefined },
+        ),
+      )
+      providerImpl = () =>
+        (async function* (): AsyncGenerator<CompletionStreamFrame> {
+          yield { kind: 'token', content: providerText }
+          yield { kind: 'done', finishReason: 'stop' }
+        })()
+
+      const nativeFetch = globalThis.fetch
+      const igpProviderRequests: Array<{ url: string; headers: Headers; body: JsonRecord }> = []
+      vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+        const url = String(input)
+        if (!url.startsWith('https://accepted-igp.example/')) return nativeFetch(input, init)
+        igpProviderRequests.push({
+          url,
+          headers: new Headers(init?.headers),
+          body: JSON.parse(String(init?.body)) as JsonRecord,
+        })
+        return new Response(
+          JSON.stringify({ choices: [{ message: { role: 'assistant', content: 'IGP-LIFECYCLE' } }] }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
+      })
+
+      const authority = await claimChatOccupancy('owner', 'owner-a')
+      const operationId = randomUUID()
+      const submitted = await postAtomicOperation(
+        authority.databaseLineage,
+        withChatOccupancy(
+          atomicTargetedRequest({
+            operationId,
+            baseRevision: authority.revision,
+            mode,
+            targetMessageId,
+          }),
+          interaction,
+        ),
+        authority.sessionId,
+        authority.occupancyEpoch,
+      )
+      expect(submitted.status).toBe(201)
+      const accepted = (await submitted.json()) as AtomicOperationResponse
+      const generationId = accepted.operation.currentAttempt?.jobId
+      expect(generationId).toEqual(expect.any(String))
+      if (typeof generationId !== 'string') throw new Error('accepted operation omitted generation id')
+      const completed = await waitFor(async () => {
+        const status = await operationStatus(operationId)
+        return status.operation.state === 'completed' ? status : undefined
+      })
+      const resultMessageId = completed.operation.resultMessageId as string
+      expect(completed.operation).toMatchObject({
+        operationId,
+        mode,
+        targetMessageId,
+        resultMessageId,
+        generationScope: {
+          admissionKind: 'owner_occupancy',
+          occupancySessionId: authority.sessionId,
+          occupancyEpoch: authority.occupancyEpoch,
+        },
+      })
+      if (resultIdentity === 'extend') {
+        expect(resultMessageId).toBe(targetMessageId)
+      } else {
+        expect(resultMessageId).not.toBe(targetMessageId)
+      }
+
+      const settledEffects = await waitFor(async () => {
+        const response = await harness.app.inject({
+          method: 'GET',
+          url: `/api/v1/generation-effects/${generationId}`,
+          headers: authHeaders(),
+        })
+        expect(response.statusCode, response.body).toBe(200)
+        const effects = response.json().effects as JsonRecord[]
+        const translation = effects.find((effect) => effect.kind === 'generated_translation')
+        return translation?.status === (autoTranslate ? 'completed' : 'skipped') ? effects : undefined
+      })
+      expect(settledEffects).toContainEqual(expect.objectContaining({ kind: 'igp', status: 'pending' }))
+      if (autoTranslate) {
+        expect(settledEffects).toContainEqual(
+          expect.objectContaining({ kind: 'generated_translation', status: 'completed', delivery: 'server' }),
+        )
+      }
+
+      let hydration = await chatHydration(await bootstrap())
+      const terminalBeforeIgp = hydration.message.find((message) => message.chatId === resultMessageId)
+      expect(terminalBeforeIgp).toMatchObject({ role: 'char', data: finalText })
+      if (autoTranslate) expect(terminalBeforeIgp?.translation).toEqual(expect.any(Object))
+      if (resultIdentity === 'replace') {
+        expect(hydration.message.some((message) => message.chatId === targetMessageId)).toBe(false)
+        expect(hydration.alternates).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ chatId: targetMessageId, data: 'Existing assistant' }),
+            expect.objectContaining({ chatId: resultMessageId, data: finalText }),
+          ]),
+        )
+      } else if (resultIdentity === 'append') {
+        expect(hydration.message).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ chatId: targetMessageId, data: 'Existing assistant' }),
+            expect.objectContaining({ chatId: resultMessageId, data: finalText }),
+          ]),
+        )
+      }
+
+      const effectHeaders = authHeaders({
+        'risu-writer-session': authority.sessionId,
+        'risu-database-lineage': authority.databaseLineage,
+      })
+      const effectInputText = inlayFinalText ?? finalText
+      if (inlayFinalText !== undefined) {
+        const inlayBaseRevision = (await bootstrap()).revision
+        const inlayPayload = {
+          baseRevision: inlayBaseRevision,
+          patch: { data: inlayFinalText },
+          expectedData: finalText,
+          expectedChatId: 'chat-1',
+          ...(resultIdentity === 'extend' ? {} : { expectedGenerationId: generationId }),
+          generationInlayFinalization: { generationId, operationId },
+        }
+        const beforeRejectedInlay = await chatHydration(await bootstrap())
+        const rejectedInlay = await harness.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/commands/messages/${resultMessageId}`,
+          headers: { ...effectHeaders, 'risu-mutation-id': `owner-inlay-rejected-${delivery}` },
+          payload: {
+            ...inlayPayload,
+            patch: { data: `${finalText} ARBITRARY` },
+          },
+        })
+        expect(rejectedInlay.statusCode, rejectedInlay.body).toBe(400)
+        expect(await chatHydration(await bootstrap())).toEqual(beforeRejectedInlay)
+        const inlayHeaders = { ...effectHeaders, 'risu-mutation-id': `owner-inlay-${delivery}` }
+        const inlayCommitted = await harness.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/commands/messages/${resultMessageId}`,
+          headers: inlayHeaders,
+          payload: inlayPayload,
+        })
+        expect(inlayCommitted.statusCode, inlayCommitted.body).toBe(200)
+        const inlayReplayed = await harness.app.inject({
+          method: 'PATCH',
+          url: `/api/v1/commands/messages/${resultMessageId}`,
+          headers: inlayHeaders,
+          payload: { ...inlayPayload, baseRevision: inlayBaseRevision + 99 },
+        })
+        expect(inlayReplayed.statusCode, inlayReplayed.body).toBe(200)
+        expect(inlayReplayed.json()).toEqual(inlayCommitted.json())
+        hydration = await chatHydration(await bootstrap())
+        expect(hydration.message.find((message) => message.chatId === resultMessageId)).toMatchObject({
+          role: 'char',
+          data: inlayFinalText,
+        })
+      }
+
+      if (restartBeforeEffect) await restartHarness({}, true)
+      expect((await operationStatus(operationId)).operation).toMatchObject({
+        state: 'completed',
+        generationScope: {
+          admissionKind: 'owner_occupancy',
+          occupancySessionId: authority.sessionId,
+          occupancyEpoch: authority.occupancyEpoch,
+        },
+      })
+      if (inlayFinalText !== undefined) {
+        const authorityDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+        try {
+          const retainedEffect = listGenerationEffects(authorityDb, generationId, authority.databaseLineage).find(
+            (effect) => effect.kind === 'igp',
+          )!
+          expect(retainedEffect).toMatchObject({
+            operationId,
+            status: 'pending',
+            generationScope: {
+              admissionKind: 'owner_occupancy',
+              occupancySessionId: authority.sessionId,
+              occupancyEpoch: authority.occupancyEpoch,
+            },
+          })
+          const retainedMessages = getChatMessages(authorityDb, 'chat-1')
+          expect(generationEffectHasExactTerminalTranscriptBinding(authorityDb, retainedEffect, retainedMessages)).toBe(
+            true,
+          )
+        } finally {
+          authorityDb.close()
+        }
+      }
+      const claimed = await harness.app.inject({
+        method: 'POST',
+        url: `/api/v1/generation-effects/${generationId}/igp/claims`,
+        headers: effectHeaders,
+        payload: { delivery, messageId: resultMessageId },
+      })
+      expect(claimed.statusCode, claimed.body).toBe(201)
+      const claimId = claimed.json().claimId as string
+      const completion = await harness.app.inject({
+        method: 'POST',
+        url: `/api/v1/generation-effects/${generationId}/igp/completion`,
+        headers: effectHeaders,
+        payload: { claimId },
+      })
+      expect(completion.statusCode, completion.body).toBe(200)
+      expect(completion.json()).toMatchObject({ type: 'success', result: 'IGP-LIFECYCLE' })
+      expect(igpProviderRequests).toHaveLength(1)
+      expect(igpProviderRequests[0].url).toBe('https://accepted-igp.example/v1/chat/completions')
+      expect(igpProviderRequests[0].headers.get('authorization')).toBe('Bearer accepted-igp-key')
+      expect(igpProviderRequests[0].body.model).toBe('accepted-igp-model')
+      expect(igpProviderRequests[0].body.messages).toEqual([
+        {
+          role: 'system',
+          content: `Last=${effectInputText}; Char=${effectInputText}; Index=${terminalIndex}; Definition=Tess.`,
+        },
+      ])
+
+      const baseRevision = (await bootstrap()).revision
+      const committedText = `${effectInputText}[IGP-LIFECYCLE]`
+      const committed = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/v1/generation-effects/${generationId}/igp/commit`,
+        headers: effectHeaders,
+        payload: {
+          baseRevision,
+          claimId,
+          data: committedText,
+          expectedData: effectInputText,
+          expectedGenerationId: generationId,
+        },
+      })
+      expect(committed.statusCode, committed.body).toBe(200)
+      expect(committed.json()).toMatchObject({
+        revision: baseRevision + 1,
+        chatId: 'chat-1',
+        messageId: resultMessageId,
+        effect: { kind: 'igp', status: 'completed', claimId },
+      })
+      const replayedCommit = await harness.app.inject({
+        method: 'PUT',
+        url: `/api/v1/generation-effects/${generationId}/igp/commit`,
+        headers: effectHeaders,
+        payload: {
+          baseRevision: baseRevision + 99,
+          claimId,
+          data: committedText,
+          expectedData: effectInputText,
+          expectedGenerationId: generationId,
+        },
+      })
+      expect(replayedCommit.statusCode, replayedCommit.body).toBe(200)
+      expect(replayedCommit.json()).toEqual(committed.json())
+      for (let receiptAttempt = 0; receiptAttempt < 2; receiptAttempt += 1) {
+        const acknowledged = await harness.app.inject({
+          method: 'PUT',
+          url: `/api/v1/generation-effects/${generationId}/igp/receipt`,
+          headers: effectHeaders,
+          payload: { claimId, status: 'completed' },
+        })
+        expect(acknowledged.statusCode, acknowledged.body).toBe(200)
+        expect(acknowledged.json()).toMatchObject({ effect: { kind: 'igp', status: 'completed', claimId } })
+      }
+
+      hydration = await chatHydration(await bootstrap())
+      const terminalAfterIgp = hydration.message.find((message) => message.chatId === resultMessageId)
+      expect(terminalAfterIgp).toMatchObject({
+        role: 'char',
+        data: committedText,
+      })
+      if (autoTranslate) expect(terminalAfterIgp?.translation).toBeNull()
+    },
+  )
 
   it('keeps accepted chat-only work authoritative through normalize and viewer disconnect', async () => {
     await resetHarness({}, true)
@@ -2085,6 +2556,172 @@ describe('Durable generation', () => {
     }
   })
 
+  it('binds an exact chat-only Stop-before-submit after handoff without admitting the delayed send', async () => {
+    await resetHarness({}, true)
+    let providerCalls = 0
+    providerImpl = () => {
+      providerCalls += 1
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+    const authority = await claimChatOnly()
+    const operationId = randomUUID()
+    const acceptedMessageId = randomUUID()
+    const unscopedCancellation = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': authority.sessionId,
+          'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+        }),
+        body: JSON.stringify({ reason: 'user_stop', chatId: 'chat-1' }),
+      },
+    )
+    expect(unscopedCancellation.status).toBe(400)
+
+    const unsupportedContinueCancellation = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': authority.sessionId,
+          'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+        }),
+        body: JSON.stringify({
+          reason: 'user_stop',
+          chatId: 'chat-1',
+          chatOccupancy: { version: 1, interaction: 'continue' },
+        }),
+      },
+    )
+    expect(unsupportedContinueCancellation.status).toBe(409)
+    expect(await unsupportedContinueCancellation.json()).toEqual({
+      error: 'chat_only_interaction_unsupported',
+      interaction: 'continue',
+    })
+    const cancellation = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': authority.sessionId,
+          'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+        }),
+        body: JSON.stringify({
+          reason: 'user_stop',
+          chatId: 'chat-1',
+          chatOccupancy: { version: 1, interaction: 'send' },
+        }),
+      },
+    )
+    expect(cancellation.status).toBe(200)
+    expect(await cancellation.json()).toMatchObject({
+      disposition: 'cancelled_before_acceptance',
+      operation: {
+        operationId,
+        state: 'cancel_requested',
+        chatId: 'chat-1',
+        generationScope: {
+          admissionKind: 'chat_only',
+          occupancySessionId: authority.sessionId,
+          occupancyEpoch: authority.occupancyEpoch,
+        },
+      },
+    })
+
+    const release = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/chat-1`, {
+      method: 'DELETE',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': authority.sessionId,
+        'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+      }),
+      body: JSON.stringify({ version: 1 }),
+    })
+    expect(release.status).toBe(200)
+    const releasedEpoch = (await release.json()).occupancyEpoch
+    const handoff = await fetch(`${harness.baseUrl}/api/v1/chat-occupancies/chat-1/claim`, {
+      method: 'POST',
+      headers: authHeaders({
+        'content-type': 'application/json',
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': 'reader-b',
+        'risu-chat-occupancy-epoch': String(releasedEpoch),
+      }),
+      body: JSON.stringify({ version: 1, claimClass: 'chat_only' }),
+    })
+    expect(handoff.status).toBe(200)
+
+    const repeatedCancellation = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': authority.sessionId,
+          'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+        }),
+        body: JSON.stringify({
+          reason: 'user_stop',
+          chatId: 'chat-1',
+          chatOccupancy: { version: 1, interaction: 'send' },
+        }),
+      },
+    )
+    expect(repeatedCancellation.status).toBe(200)
+    expect(await repeatedCancellation.json()).toMatchObject({
+      disposition: 'cancelled_before_acceptance',
+      operation: { operationId, state: 'cancel_requested' },
+    })
+
+    const delayedSubmit = await postAtomicOperation(
+      authority.databaseLineage,
+      withChatOccupancy(
+        atomicSendRequest({
+          operationId,
+          acceptedMessageId,
+          baseRevision: authority.revision,
+        }),
+        'send',
+      ),
+      authority.sessionId,
+      authority.occupancyEpoch,
+    )
+    expect(delayedSubmit.status).toBe(200)
+    expect(await delayedSubmit.json()).toMatchObject({
+      operation: {
+        operationId,
+        state: 'cancelled',
+        acceptedMessageId,
+        generationScope: {
+          admissionKind: 'chat_only',
+          occupancySessionId: authority.sessionId,
+          occupancyEpoch: authority.occupancyEpoch,
+        },
+      },
+      append: { disposition: 'not_appended', messageId: acceptedMessageId },
+    })
+    expect(providerCalls).toBe(0)
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(db.prepare('SELECT COUNT(*) AS count FROM messages WHERE uid = ?').get(acceptedMessageId)).toEqual({
+        count: 0,
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   it('converges a submit/cancel arrival race on the same operation without an escaping runner', async () => {
     const gated = makeGatedProvider({ before: 'racing partial' })
     let providerCalls = 0
@@ -2242,6 +2879,38 @@ describe('Durable generation', () => {
     expect(status.operation.currentAttempt).toBeUndefined()
     expect(providerCalls).toBe(0)
 
+    const blockedAuthority = await operationAuthority()
+    const blockedId = randomUUID()
+    const blocked = await postAtomicOperation(
+      blockedAuthority.databaseLineage,
+      atomicSendRequest({
+        operationId: blockedId,
+        acceptedMessageId: randomUUID(),
+        baseRevision: blockedAuthority.revision,
+        text: 'follow-up after expired assembly',
+      }),
+    )
+    expect(blocked.status).toBe(409)
+    expect(await blocked.json()).toMatchObject({ error: 'chat_occupancy_recovery_blocked' })
+
+    const cancellation = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': 'writer-a',
+        }),
+        body: JSON.stringify({ reason: 'user_stop', knownStateVersion: status.operation.stateVersion }),
+      },
+    )
+    expect(cancellation.status).toBe(200)
+    expect(await cancellation.json()).toMatchObject({
+      disposition: 'cancelled',
+      operation: { operationId, state: 'cancelled' },
+    })
+
     const next = await operationAuthority()
     const nextId = randomUUID()
     const followUp = await postAtomicOperation(
@@ -2250,7 +2919,7 @@ describe('Durable generation', () => {
         operationId: nextId,
         acceptedMessageId: randomUUID(),
         baseRevision: next.revision,
-        text: 'follow-up after expired assembly',
+        text: 'follow-up after terminal assembly cancellation',
       }),
     )
     expect(followUp.status).toBe(201)
@@ -2723,6 +3392,8 @@ describe('Durable generation', () => {
       }),
     )
     expect(first.status).toBe(201)
+    const acceptedFirst = (await first.json()) as AtomicOperationResponse
+    const firstGenerationId = acceptedFirst.operation.currentAttempt!.jobId
 
     authority = await operationAuthority()
     const blockedOperationId = randomUUID()
@@ -2745,6 +3416,61 @@ describe('Durable generation', () => {
       const status = await operationStatus(firstOperationId)
       return status.operation.state === 'completed' ? status : undefined
     })
+    await fetch(`${harness.baseUrl}/api/v1/bootstrap`, {
+      headers: authHeaders({ 'risu-writer-session': 'writer-b' }),
+    })
+    const terminalReceipt = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(firstOperationId)}/cancellation`,
+      {
+        method: 'PUT',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': 'writer-b',
+        }),
+        body: JSON.stringify({ reason: 'user_stop' }),
+      },
+    )
+    expect(terminalReceipt.status).toBe(200)
+    expect(await terminalReceipt.json()).toMatchObject({
+      disposition: 'already_completed',
+      operation: { operationId: firstOperationId, state: 'completed' },
+    })
+    await fetch(`${harness.baseUrl}/api/v1/bootstrap`, {
+      headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
+    })
+    const listedEffects = await harness.app.inject({
+      method: 'GET',
+      url: `/api/v1/generation-effects/${firstGenerationId}`,
+      headers: authHeaders(),
+    })
+    const pendingIgp = (listedEffects.json().effects as Array<JsonRecord>).find((effect) => effect.kind === 'igp')!
+    const claimedIgp = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/generation-effects/${firstGenerationId}/igp/claims`,
+      headers: authHeaders({
+        'risu-writer-session': 'writer-a',
+        'risu-database-lineage': authority.databaseLineage,
+      }),
+      payload: { delivery: 'late_recovery', messageId: pendingIgp.messageId },
+    })
+    expect(claimedIgp.statusCode, claimedIgp.body).toBe(201)
+    const settledIgp = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/v1/generation-effects/${firstGenerationId}/igp/receipt`,
+      headers: authHeaders({
+        'risu-writer-session': 'writer-a',
+        'risu-database-lineage': authority.databaseLineage,
+      }),
+      payload: { claimId: claimedIgp.json().claimId, status: 'skipped', reason: 'test_settled' },
+    })
+    expect(settledIgp.statusCode, settledIgp.body).toBe(200)
+    const recoveredDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(listGenerationOccupancyPins(recoveredDb, 'chat-1')).toEqual([])
+    } finally {
+      recoveredDb.close()
+    }
 
     const legacyGate = makeGatedProvider({ before: 'legacy', after: ' result' })
     providerImpl = legacyGate.dispatchProvider
@@ -3090,6 +3816,13 @@ describe('Durable generation', () => {
       })
       expect(missing.status).toBe(404)
 
+      const recoveryDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+      try {
+        expect(listGenerationOccupancyPins(recoveryDb, 'chat-1')).toEqual([])
+      } finally {
+        recoveryDb.close()
+      }
+
       durableLifecycleHook = undefined
       const retry = await postDurable({})
       expect(retry.status).toBe(200)
@@ -3422,6 +4155,109 @@ describe('Durable generation', () => {
     expect(commandEventTypeCount('generation.persisted')).toBe(1)
   })
 
+  it.each(['corrupt_binding', 'stale_occupancy', 'malformed_message'] as const)(
+    'terminalizes a modern %s finalization retry without writing or retaining a pin',
+    async (testCase) => {
+      await resetHarness({ finalizationRetry: false }, true)
+      const gated = makeGatedProvider({ before: 'scoped queued', after: ' result' })
+      providerImpl = gated.dispatchProvider
+      const authority = await claimChatOnly()
+      const operationId = randomUUID()
+      const acceptedMessageId = randomUUID()
+      const submit = await postAtomicOperation(
+        authority.databaseLineage,
+        withChatOccupancy(
+          atomicSendRequest({
+            operationId,
+            acceptedMessageId,
+            baseRevision: authority.revision,
+          }),
+          'send',
+        ),
+        authority.sessionId,
+        authority.occupancyEpoch,
+      )
+      expect(submit.status).toBe(201)
+      const accepted = (await submit.json()) as AtomicOperationResponse
+      const generationId = accepted.operation.currentAttempt!.jobId
+
+      executeDatabase(`
+        CREATE TRIGGER fail_scoped_generation_message_insert
+        BEFORE INSERT ON messages
+        WHEN NEW.role = 'char'
+        BEGIN
+          SELECT RAISE(FAIL, 'injected scoped persistence failure');
+        END;
+      `)
+      gated.release()
+      await waitFor(async () => {
+        const row = generationFinalizationRetryRows().find((retry) => retry.generation_id === generationId)
+        return row?.status === 'pending' && row.failure_count === 1 ? row : undefined
+      })
+
+      const corrupt = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+      try {
+        corrupt.exec('DROP TRIGGER fail_scoped_generation_message_insert')
+        if (testCase === 'corrupt_binding') {
+          corrupt
+            .prepare(
+              `UPDATE generation_finalization_retries
+               SET actor_writer_epoch = actor_writer_epoch + 1
+               WHERE generation_id = ?`,
+            )
+            .run(generationId)
+        } else if (testCase === 'stale_occupancy') {
+          corrupt
+            .prepare(
+              `UPDATE chat_occupancies SET occupancy_epoch = occupancy_epoch + 1
+               WHERE chat_id = ? AND database_lineage = ?`,
+            )
+            .run('chat-1', authority.databaseLineage)
+        } else {
+          corrupt
+            .prepare(`UPDATE generation_finalization_retries SET message_json = 'null' WHERE generation_id = ?`)
+            .run(generationId)
+        }
+      } finally {
+        corrupt.close()
+      }
+
+      expect(retryQueuedFinalizationsOnce()).toEqual({
+        attempted: 1,
+        persisted: 0,
+        terminal: 1,
+        retryable: 0,
+      })
+      expect(generationFinalizationRetryRows()).toContainEqual(
+        expect.objectContaining({
+          generation_id: generationId,
+          status: 'terminal',
+          terminal_error: expect.any(String),
+        }),
+      )
+      expect((await chatMessages(await bootstrap())).some((message) => message.role === 'char')).toBe(false)
+
+      const verify = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+      try {
+        expect(
+          verify
+            .prepare(
+              `SELECT state, failure_code AS failureCode, failure_phase AS failurePhase
+               FROM generation_operations WHERE operation_id = ?`,
+            )
+            .get(operationId),
+        ).toEqual({
+          state: 'terminal_failed',
+          failureCode: testCase === 'malformed_message' ? 'malformed_finalization_journal' : 'operation_target_stale',
+          failurePhase: 'finalization',
+        })
+        expect(listGenerationOccupancyPins(verify, 'chat-1')).toEqual([])
+      } finally {
+        verify.close()
+      }
+    },
+  )
+
   it('preserves the confirmed queue and original persistence error when retry bookkeeping fails', async () => {
     await resetHarness({ finalizationRetry: false })
     const gated = makeGatedProvider({ before: 'bookkeeping', after: ' result' })
@@ -3554,6 +4390,15 @@ describe('Durable generation', () => {
       const row = generationFinalizationRetryRows().find((retry) => retry.generation_id === jobId)
       return row?.status === 'pending' ? row : undefined
     })
+    const cleanupDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(listGenerationOccupancyPins(cleanupDb, 'chat-1')).not.toContainEqual({
+        id: jobId,
+        kind: 'generation_finalization',
+      })
+    } finally {
+      cleanupDb.close()
+    }
     expect(commandEventTypeCount('generation.persisted')).toBe(1)
     const failedBoot = await bootstrap()
     expect(failedBoot.database.characters[0].chats[0].scriptstate).toEqual({ $mood: 'happy' })
@@ -3696,6 +4541,74 @@ describe('Durable generation', () => {
     } finally {
       db.close()
       rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('quarantines one malformed journal and continues the same batch to persist valid finalization work', async () => {
+    await resetHarness({ finalizationRetry: false })
+    const malformedGenerationId = 'malformed-finalization'
+    const validGenerationId = 'valid-finalization'
+    const journal = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      for (const generationId of [malformedGenerationId, validGenerationId]) {
+        enqueueGenerationFinalizationRetry(journal, {
+          generationId,
+          chatId: 'chat-1',
+          mode: 'send',
+          message: {
+            role: 'char',
+            data: `reply ${generationId}`,
+            chatId: generationId,
+            generationInfo: { generationId },
+          },
+          chatVarMutations: [],
+          targetSnapshot: { mode: 'send', kind: 'tail', transcriptLength: 0 },
+        })
+      }
+      journal
+        .prepare(
+          `UPDATE generation_finalization_retries
+           SET message_json = 'null', created_at = ?, updated_at = ?
+           WHERE generation_id = ?`,
+        )
+        .run('2020-01-01T00:00:00.000Z', '2020-01-01T00:00:00.000Z', malformedGenerationId)
+      journal
+        .prepare(
+          `UPDATE generation_finalization_retries SET created_at = ?, updated_at = ?
+           WHERE generation_id = ?`,
+        )
+        .run('2020-01-01T00:00:01.000Z', '2020-01-01T00:00:01.000Z', validGenerationId)
+      expect(listGenerationOccupancyPins(journal, 'chat-1')).toEqual(
+        expect.arrayContaining([
+          { id: malformedGenerationId, kind: 'generation_finalization' },
+          { id: validGenerationId, kind: 'generation_finalization' },
+        ]),
+      )
+    } finally {
+      journal.close()
+    }
+
+    expect(retryQueuedFinalizationsOnce()).toEqual({
+      attempted: 2,
+      persisted: 1,
+      terminal: 1,
+      retryable: 0,
+    })
+    expect(generationFinalizationRetryRows()).toEqual([
+      expect.objectContaining({
+        generation_id: malformedGenerationId,
+        status: 'terminal',
+        terminal_error: expect.stringContaining('Invalid generation finalization message'),
+      }),
+    ])
+    expect((await chatMessages(await bootstrap())).filter((message) => message.role === 'char')).toEqual([
+      expect.objectContaining({ data: `reply ${validGenerationId}`, chatId: validGenerationId }),
+    ])
+    const verify = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(listGenerationOccupancyPins(verify, 'chat-1')).toEqual([])
+    } finally {
+      verify.close()
     }
   })
 
@@ -5171,11 +6084,16 @@ describe('Durable generation', () => {
       await cancelPersistenceGate
     }
 
-    const local = await startHarness()
+    // Use the per-test harness that beforeEach already created. Starting a
+    // second full app here doubles the workers, timers, sockets, and SQLite
+    // handles precisely while the server suite is at peak parallel load. More
+    // importantly, fully consume the cancellation acknowledgement before
+    // beginning shutdown so the DELETE request is no longer an active HTTP
+    // lifecycle competing with the SSE viewer that preClose must drain.
+    const local = harness
     let localClosed = false
     try {
-      const { assertion: localAssertion } = await setupAuthedClient(local.app)
-      await seedDatabaseForHarness(local, localAssertion, fixtureDatabase)
+      const localAssertion = assertion
       const controller = newController()
       const response = await fetch(`${local.baseUrl}/api/v1/generate/chat`, {
         method: 'POST',
@@ -5198,6 +6116,7 @@ describe('Durable generation', () => {
         headers: { 'risu-auth': localAssertion },
       })
       expect(cancellation.status).toBe(202)
+      await expect(cancellation.json()).resolves.toMatchObject({ disposition: 'cancelling', jobId })
       await cancelPersistenceStarted
 
       const close = local.app.close()
@@ -5225,7 +6144,6 @@ describe('Durable generation', () => {
     } finally {
       releaseCancelPersistence?.()
       if (!localClosed) await local.app.close()
-      rmSync(local.dataDir, { recursive: true, force: true })
     }
   })
 

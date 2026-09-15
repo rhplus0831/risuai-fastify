@@ -180,17 +180,26 @@ import {
 import {
   GENERATION_EFFECT_CLAIM_LEASE_MS,
   claimGenerationEffect,
+  clearDeferredGenerationInlayFinalization,
+  commitDeferredGenerationInlayFinalizationInTransaction,
+  completeClaimedGeneratedTranslationEffectInTransaction,
+  deferredGenerationInlayFinalizationDisposition,
   ensureGenerationEffectLedgerInTransaction,
+  generationEffectHasExactAcceptedOperationBinding,
+  generationEffectHasDeferredInlayFinalization,
   generationEffectLedgerRef,
   listGenerationEffects,
   listPendingServerGenerationEffects,
   renewGenerationEffectClaim,
+  settleStaleDeferredGenerationInlayFinalization,
   settleGenerationEffect,
   type GenerationEffectLedgerRef,
 } from '../generationEffects.js'
 import {
   GenerationAdmissionError,
+  admitAcceptedCompatibilityGenerationInTransaction,
   admitGenerationInTransaction,
+  assertAcceptedCompatibilityGenerationAuthorityInTransaction,
   assertPersistedGenerationScopeInTransaction,
   generationScopeIsChatOnly,
   scopeSqlValues,
@@ -1104,6 +1113,7 @@ function loadDatabaseDeps(
   }
   const resolveStoredAsset = createRequestScopedStoredAssetResolver(db, dataDir)
   const resources = createGenerationAssemblyResources(db, dataDir, target)
+  const compatibilityAuthority = compatibilityAuthorityFromInput(target)
   return {
     signal,
     assetDataDir: dataDir,
@@ -1120,7 +1130,7 @@ function loadDatabaseDeps(
       return database
     },
     loadMemoryDatabase: () => db,
-    ...(target.generationScope || (target.compatibilityWriterSessionId && target.compatibilityDatabaseLineage)
+    ...(target.generationScope || compatibilityAuthority
       ? {
           assertPromptMemoryMutationAuthorityInTransaction: () =>
             assertAssembleInputWriteAuthorityInTransaction(db, target),
@@ -1840,14 +1850,36 @@ function assertAssembleInputWriteAuthorityInTransaction(db: DatabaseSync, input:
     })
     return
   }
-  if (input.compatibilityWriterSessionId && input.compatibilityDatabaseLineage) {
-    admitGenerationInTransaction(db, {
-      databaseLineage: input.compatibilityDatabaseLineage,
+  const compatibilityAuthority = compatibilityAuthorityFromInput(input)
+  if (compatibilityAuthority) {
+    assertAcceptedCompatibilityGenerationAuthorityInTransaction(db, {
+      databaseLineage: compatibilityAuthority.databaseLineage,
       chatId: input.chatId,
-      sessionId: input.compatibilityWriterSessionId,
-      interaction: finalizationModeFromInput(input),
-      chatOnlyEnabled: false,
+      sessionId: compatibilityAuthority.sessionId,
+      occupancyEpoch: compatibilityAuthority.occupancyEpoch,
     })
+  }
+}
+
+function compatibilityAuthorityFromInput(
+  input: AssembleInput,
+): { databaseLineage: string; sessionId: string; occupancyEpoch: number } | undefined {
+  const hasSessionId = input.compatibilityWriterSessionId !== undefined
+  const hasDatabaseLineage = input.compatibilityDatabaseLineage !== undefined
+  const hasOccupancyEpoch = input.compatibilityOccupancyEpoch !== undefined
+  if (!hasSessionId && !hasDatabaseLineage && !hasOccupancyEpoch) return undefined
+  if (
+    !input.compatibilityWriterSessionId ||
+    !input.compatibilityDatabaseLineage ||
+    !Number.isSafeInteger(input.compatibilityOccupancyEpoch) ||
+    input.compatibilityOccupancyEpoch! < 0
+  ) {
+    throw new GenerationAdmissionError(409, 'generation_scope_invalid')
+  }
+  return {
+    databaseLineage: input.compatibilityDatabaseLineage,
+    sessionId: input.compatibilityWriterSessionId,
+    occupancyEpoch: input.compatibilityOccupancyEpoch!,
   }
 }
 
@@ -2608,6 +2640,7 @@ function handlePersistedGenerationCompletion(args: {
   compatibilityAuthority?: {
     databaseLineage: string
     sessionId: string
+    occupancyEpoch: number
     interaction: GenerationFinalizationMode
   }
 }): Promise<{ translation?: PostGenerationFrame['translation']; revision?: number; translationStarted?: boolean }> {
@@ -2623,12 +2656,11 @@ function handlePersistedGenerationCompletion(args: {
           if (target.databaseLineage !== compatibilityAuthority.databaseLineage || target.chatId !== args.chatId) {
             throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
           }
-          admitGenerationInTransaction(targetDb, {
+          assertAcceptedCompatibilityGenerationAuthorityInTransaction(targetDb, {
             databaseLineage: compatibilityAuthority.databaseLineage,
             chatId: target.chatId,
             sessionId: compatibilityAuthority.sessionId,
-            interaction: compatibilityAuthority.interaction,
-            chatOnlyEnabled: false,
+            occupancyEpoch: compatibilityAuthority.occupancyEpoch,
           })
         }
       : undefined
@@ -2637,6 +2669,21 @@ function handlePersistedGenerationCompletion(args: {
   let translationClaimId: string | undefined
   const acceptedTranslationConfiguration = (): AcceptedEffectiveGenerationConfiguration | undefined => {
     if (!translationEffect) return args.acceptedEffectiveConfiguration
+    if (
+      translationEffect.generationScope &&
+      translationEffect.generationScope.admissionKind !== 'legacy_owner' &&
+      !generationEffectHasExactAcceptedOperationBinding(args.db, translationEffect)
+    ) {
+      throw new Error('Generated translation effect operation binding is invalid')
+    }
+    if (translationEffect.generationScope) {
+      assertPersistedGenerationScopeInTransaction(args.db, {
+        ...translationEffect.generationScope,
+        databaseLineage: translationEffect.databaseLineage,
+        chatId: translationEffect.chatId,
+        sessionId: translationEffect.generationScope.occupancySessionId ?? '',
+      })
+    }
     if (!translationEffect.operationId) {
       throw new Error('Generated translation effect is missing its accepted operation attempt')
     }
@@ -2680,6 +2727,29 @@ function handlePersistedGenerationCompletion(args: {
       pushNotifications: args.pushNotifications,
       runMessageTranslation: args.runMessageTranslation,
       ...(translationWriteGuard ? { assertWriteAllowed: translationWriteGuard } : {}),
+      ...(translationClaimId
+        ? {
+            onTranslationCommittedInTransaction: (targetDb: DatabaseSync) => {
+              if (
+                !completeClaimedGeneratedTranslationEffectInTransaction(targetDb, {
+                  databaseLineage: getDatabaseLineage(targetDb),
+                  generationId: generationId!,
+                  claimId: translationClaimId!,
+                })
+              ) {
+                throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+              }
+              if (
+                commitDeferredGenerationInlayFinalizationInTransaction(targetDb, {
+                  databaseLineage: getDatabaseLineage(targetDb),
+                  generationId: generationId!,
+                }) === 'invalid'
+              ) {
+                throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+              }
+            },
+          }
+        : {}),
       onTranslationStarted: ({ jobId }) =>
         args.emit?.({
           type: 'post_generation_progress',
@@ -2726,14 +2796,6 @@ function handlePersistedGenerationCompletion(args: {
   )
   const guardedTranslationEffect = translationEffect
   if (guardedTranslationEffect && (guardedTranslationEffect.generationScope || historicalTranslationAuthority)) {
-    if (guardedTranslationEffect.generationScope) {
-      assertPersistedGenerationScopeInTransaction(args.db, {
-        ...guardedTranslationEffect.generationScope,
-        databaseLineage,
-        chatId: guardedTranslationEffect.chatId,
-        sessionId: guardedTranslationEffect.generationScope.occupancySessionId ?? '',
-      })
-    }
     translationWriteGuard = (targetDb, target) => {
       const storedEffect = listGenerationEffects(targetDb, generationId, target.databaseLineage).find(
         (effect) => effect.kind === 'generated_translation',
@@ -2752,6 +2814,12 @@ function handlePersistedGenerationCompletion(args: {
         throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
       }
       if (guardedTranslationEffect.generationScope) {
+        if (
+          guardedTranslationEffect.generationScope.admissionKind !== 'legacy_owner' &&
+          !generationEffectHasExactAcceptedOperationBinding(targetDb, storedEffect)
+        ) {
+          throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+        }
         assertPersistedGenerationScopeInTransaction(targetDb, {
           ...guardedTranslationEffect.generationScope,
           databaseLineage: target.databaseLineage,
@@ -2775,6 +2843,11 @@ function handlePersistedGenerationCompletion(args: {
       }
     }
   }
+  const deferredInlayBeforeClaim = deferredGenerationInlayFinalizationDisposition(args.db, {
+    databaseLineage,
+    generationId,
+  })
+  if (deferredInlayBeforeClaim === 'invalid') return Promise.resolve({})
   const claim = claimGenerationEffect(args.db, {
     databaseLineage,
     generationId,
@@ -2784,6 +2857,16 @@ function handlePersistedGenerationCompletion(args: {
   })
   if (claim.status !== 'claimed') return Promise.resolve({})
   translationClaimId = claim.claimId
+  if (deferredInlayBeforeClaim === 'stale') {
+    settleStaleDeferredGenerationInlayFinalization(args.db, {
+      databaseLineage,
+      generationId,
+      claimId: claim.claimId,
+      status: 'failed',
+      lastError: 'Deferred generation inlay target changed before translation recovery',
+    })
+    return Promise.resolve({})
+  }
 
   let renewalTimer: ReturnType<typeof setInterval> | undefined
   const stopRenewal = (): void => {
@@ -2818,21 +2901,84 @@ function handlePersistedGenerationCompletion(args: {
       (followup) => {
         const settle = (status: 'completed' | 'failed' | 'skipped', lastError?: string) => {
           stopRenewal()
-          return settleGenerationEffect(args.db, {
+          const settlement = {
             databaseLineage,
             generationId,
-            kind: 'generated_translation',
+            kind: 'generated_translation' as const,
             claimId: claim.claimId,
             status,
             reason: status === 'skipped' ? 'not_applicable' : null,
             ...(lastError ? { lastError } : {}),
+          }
+          if (!generationEffectHasDeferredInlayFinalization(args.db, databaseLineage, generationId)) {
+            return settleGenerationEffect(args.db, settlement)
+          }
+          const deferredInlay = deferredGenerationInlayFinalizationDisposition(args.db, {
+            databaseLineage,
+            generationId,
           })
+          if (deferredInlay === 'stale') {
+            return settleStaleDeferredGenerationInlayFinalization(args.db, {
+              databaseLineage,
+              generationId,
+              claimId: claim.claimId,
+              status: status === 'skipped' ? 'skipped' : 'failed',
+              lastError:
+                lastError ??
+                (status === 'skipped'
+                  ? 'Deferred generation inlay target changed before translation became applicable'
+                  : 'Deferred generation inlay target changed before translation could be saved'),
+            })
+          }
+          if (deferredInlay !== 'ready') return undefined
+          applyTargetedCommandMutation({
+            db: args.db,
+            dataDir: args.dataDir,
+            baseRevision: getSchemaState(args.db).revision,
+            eventSink: args.eventSink,
+            mutationPath: 'targeted-message',
+            chatScopedRead: { messageId, exactChatRow: true },
+            mutate(_database, targetDb) {
+              translationWriteGuard?.(targetDb, {
+                databaseLineage,
+                chatId: args.chatId,
+                messageId,
+              })
+              const settled = settleGenerationEffect(targetDb, settlement)
+              if (!settled) throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+              const inlayDrain = commitDeferredGenerationInlayFinalizationInTransaction(targetDb, {
+                databaseLineage,
+                generationId,
+              })
+              if (inlayDrain !== 'committed' && inlayDrain !== 'stale') {
+                throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
+              }
+              return {
+                event: {
+                  ...COMMAND_EVENT_CATALOG.messageUpdated,
+                  id: messageId,
+                  parentId: args.chatId,
+                },
+              }
+            },
+          })
+          return listGenerationEffects(args.db, generationId, databaseLineage).find(
+            (effect) => effect.kind === 'generated_translation',
+          )
         }
         if (followup.translationStarted && followup.translation && followup.frame?.status === 'running') {
-          void followup.translation.then(
-            () => settle('completed'),
-            (error) => settle('failed', errorMessage(error, 'generated-message translation failed')),
-          )
+          void args.messageTranslationJobs
+            .track(
+              followup.translation.then(
+                () => settle('completed'),
+                (error) => settle('failed', errorMessage(error, 'generated-message translation failed')),
+              ),
+            )
+            .catch(() => {
+              // The effect settlement owns its terminal diagnostic. The
+              // tracked continuation exists so shutdown cannot close SQLite
+              // between provider settlement and the durable receipt.
+            })
         } else if (followup.frame?.status === 'failed') {
           settle('failed', followup.frame.error)
         } else {
@@ -2951,11 +3097,14 @@ async function buildPostGenerationFrame(args: {
       targetSnapshot,
       alternateMessages,
       automaticConfirmationEligible: finalizationModeFromInput(args.input) === 'send',
-      ...(args.input.compatibilityWriterSessionId && args.input.compatibilityDatabaseLineage
+      ...(args.input.compatibilityWriterSessionId &&
+      args.input.compatibilityDatabaseLineage &&
+      args.input.compatibilityOccupancyEpoch !== undefined
         ? {
             compatibilityAuthority: {
               databaseLineage: args.input.compatibilityDatabaseLineage,
               sessionId: args.input.compatibilityWriterSessionId,
+              occupancyEpoch: args.input.compatibilityOccupancyEpoch,
             },
           }
         : {}),
@@ -3005,11 +3154,14 @@ async function buildPostGenerationFrame(args: {
     emit: args.emit,
     pushNotifications: args.pushNotifications,
     runMessageTranslation: args.runMessageTranslation,
-    ...(args.input.compatibilityWriterSessionId && args.input.compatibilityDatabaseLineage
+    ...(args.input.compatibilityWriterSessionId &&
+    args.input.compatibilityDatabaseLineage &&
+    args.input.compatibilityOccupancyEpoch !== undefined
       ? {
           compatibilityAuthority: {
             databaseLineage: args.input.compatibilityDatabaseLineage,
             sessionId: args.input.compatibilityWriterSessionId,
+            occupancyEpoch: args.input.compatibilityOccupancyEpoch,
             interaction: finalizationModeFromInput(args.input),
           },
         }
@@ -3358,6 +3510,21 @@ function assertGenerationJobCancellationControl(args: {
   if (operation) {
     const originatingSession = operation.creatorWriterSessionId === args.sessionId
     const scope = operation.generationScope
+    if (
+      operation.state === 'completed' ||
+      operation.state === 'cancelled' ||
+      operation.state === 'terminal_failed' ||
+      operation.state === 'invalidated'
+    ) {
+      if (
+        !originatingSession &&
+        ((scope && scope.admissionKind !== 'legacy_owner') ||
+          getDatabaseWriterMetadata(args.db).sessionId !== args.sessionId)
+      ) {
+        throw new GenerationAdmissionError(423, 'generation_operation_foreign_session')
+      }
+      return
+    }
     if (scope && scope.admissionKind !== 'legacy_owner') {
       if (!originatingSession) {
         throw new GenerationAdmissionError(423, 'generation_operation_foreign_session')
@@ -3389,6 +3556,7 @@ function assertGenerationJobCancellationControl(args: {
       sessionId: args.sessionId,
       interaction: operation.mode ?? 'send',
       chatOnlyEnabled: args.chatOccupancyEnabled,
+      allowedRecoveryOperationId: operation.operationId,
     })
     return
   }
@@ -4208,7 +4376,7 @@ function persistServerGenerationResult(args: {
   mode?: GenerationFinalizationMode
   automaticConfirmationEligible?: boolean
   targetSnapshot?: GenerationFinalizationTargetSnapshot
-  compatibilityAuthority?: { databaseLineage: string; sessionId: string }
+  compatibilityAuthority?: { databaseLineage: string; sessionId: string; occupancyEpoch: number }
   operationLineage?: {
     databaseLineage: string
     operationId: string
@@ -4337,12 +4505,11 @@ function persistServerGenerationResult(args: {
             })
           }
         } else if (args.compatibilityAuthority) {
-          admitGenerationInTransaction(targetDb, {
+          assertAcceptedCompatibilityGenerationAuthorityInTransaction(targetDb, {
             databaseLineage: args.compatibilityAuthority.databaseLineage,
             chatId: args.chatId,
             sessionId: args.compatibilityAuthority.sessionId,
-            interaction: args.mode ?? 'send',
-            chatOnlyEnabled: false,
+            occupancyEpoch: args.compatibilityAuthority.occupancyEpoch,
           })
         }
         if (args.targetSnapshot) {
@@ -4629,7 +4796,8 @@ function isTerminalGenerationFinalizationError(err: unknown, attempt?: Generatio
   return (
     err instanceof EntityNotFoundError ||
     err instanceof ValidationError ||
-    (attempt?.compatibilityAuthority !== undefined && err instanceof GenerationAdmissionError)
+    ((attempt?.compatibilityAuthority !== undefined || attempt?.generationScope !== undefined) &&
+      err instanceof GenerationAdmissionError)
   )
 }
 
@@ -5022,6 +5190,90 @@ export function retryQueuedGenerationFinalizations(args: {
   let terminal = 0
   let retryable = 0
   for (const retry of retries) {
+    if ('parseError' in retry) {
+      const malformedError = errorMessage(retry.parseError, 'malformed generation finalization journal')
+      let bookkeepingError: unknown
+      try {
+        const boundOperations = args.db
+          .prepare(
+            `SELECT o.database_lineage AS databaseLineage, o.operation_id AS operationId,
+                    o.state_version AS stateVersion
+             FROM generation_operations AS o
+             JOIN generation_operation_attempts AS a
+               ON a.database_lineage = o.database_lineage
+              AND a.operation_id = o.operation_id
+              AND a.attempt_no = o.current_attempt_no
+             WHERE o.state = 'finalizing' AND o.chat_id = ?
+               AND (a.finalization_generation_id = ?
+                 OR (a.finalization_generation_id IS NULL AND a.job_id = ? AND o.pre_occupancy_authority = 1))`,
+          )
+          .all(retry.chatId, retry.generationId, retry.generationId) as unknown as Array<{
+          databaseLineage: string
+          operationId: string
+          stateVersion: number
+        }>
+        if (boundOperations.length === 1) {
+          const [operation] = boundOperations
+          const transitioned = transitionGenerationOperation(args.db, {
+            databaseLineage: operation.databaseLineage,
+            operationId: operation.operationId,
+            expectedState: 'finalizing',
+            expectedStateVersion: operation.stateVersion,
+            nextState: 'terminal_failed',
+            failureCode: 'malformed_finalization_journal',
+            failurePhase: 'finalization',
+            lastError: malformedError,
+            providerMayHaveRun: true,
+          })
+          if (transitioned.status !== 'applied') {
+            throw new Error('Generation operation changed while quarantining its malformed finalization journal')
+          }
+        }
+        markGenerationFinalizationRetryFailure(args.db, retry.generationId, malformedError, true)
+        terminal += 1
+      } catch (err) {
+        bookkeepingError = err
+        retryable += 1
+      }
+      recordDiagnosticEvent({
+        category: 'persistence',
+        level: bookkeepingError ? 'warn' : 'error',
+        phase: bookkeepingError ? 'bookkeeping' : 'replay_fence',
+        disposition: bookkeepingError ? 'retryable' : 'terminal',
+        durationMs: 0,
+        journalConfirmed: true,
+        authoritativeCommitted: false,
+        cleanupComplete: false,
+        retryCount: retry.failureCount,
+      })
+      const diagnostic = {
+        generationId: retry.generationId,
+        chatId: retry.chatId,
+        mode: retry.mode,
+        err: retry.parseError,
+        ...(bookkeepingError ? { bookkeepingError } : {}),
+      }
+      if (bookkeepingError) {
+        args.logger?.error(diagnostic, 'failed to quarantine a malformed generation finalization retry')
+      } else {
+        args.logger?.warn(diagnostic, 'malformed generation finalization retry quarantined without replay')
+      }
+      emitProtocolMetric('generation_persistence_retry', {
+        status: bookkeepingError ? 'bookkeeping_error' : 'malformed_journal',
+        generationId: retry.generationId,
+        chatId: retry.chatId,
+        mode: retry.mode,
+        phase: bookkeepingError ? 'bookkeeping' : 'replay_fence',
+        journalConfirmed: true,
+        authoritativeCommitted: false,
+        durationMs: 0,
+        error: malformedError,
+        ...(bookkeepingError
+          ? { bookkeepingError: errorMessage(bookkeepingError, 'failed to quarantine malformed finalization journal') }
+          : {}),
+      })
+      continue
+    }
     const { attempt } = retry
     withGenerationRecoveryDiagnostics(
       args.db,
@@ -5274,16 +5526,16 @@ function terminallySkipUnavailableGeneratedTranslation(
     messageId: effect.messageId,
   })
   if (claim.status !== 'claimed') return false
-  return Boolean(
-    settleGenerationEffect(db, {
-      databaseLineage: effect.databaseLineage,
-      generationId: effect.generationId,
-      kind: 'generated_translation',
-      claimId: claim.claimId,
-      status: 'skipped',
-      reason,
-    }),
-  )
+  const settled = settleGenerationEffect(db, {
+    databaseLineage: effect.databaseLineage,
+    generationId: effect.generationId,
+    kind: 'generated_translation',
+    claimId: claim.claimId,
+    status: 'skipped',
+    reason,
+  })
+  if (settled) clearDeferredGenerationInlayFinalization(db, effect.databaseLineage, effect.generationId)
+  return Boolean(settled)
 }
 
 /** Resume server-owned translation effects that were pending at process loss. */
@@ -5294,9 +5546,11 @@ export async function retryPendingGenerationCompletionEffects(args: {
   messageTranslationJobs: MessageTranslationJobRegistry
   runMessageTranslation?: ServerMessageTranslationRunner
 }): Promise<number> {
+  if (args.messageTranslationJobs.isStopping() || !args.db.isOpen) return 0
   const pending = listPendingServerGenerationEffects(args.db)
   let settled = 0
   for (const effect of pending) {
+    if (args.messageTranslationJobs.isStopping() || !args.db.isOpen) break
     const message = getChatMessages(args.db, effect.chatId).find(
       (candidate) => candidate.chatId === effect.messageId,
     ) as unknown as Message | undefined
@@ -5810,11 +6064,15 @@ async function persistFailedPartialResult(args: {
       ...(args.job
         ? generationFinalizationLineageForJob(args.db, args.job, undefined, args.input.generationScope)
         : {}),
-      ...(!args.job && args.input.compatibilityWriterSessionId && args.input.compatibilityDatabaseLineage
+      ...(!args.job &&
+      args.input.compatibilityWriterSessionId &&
+      args.input.compatibilityDatabaseLineage &&
+      args.input.compatibilityOccupancyEpoch !== undefined
         ? {
             compatibilityAuthority: {
               databaseLineage: args.input.compatibilityDatabaseLineage,
               sessionId: args.input.compatibilityWriterSessionId,
+              occupancyEpoch: args.input.compatibilityOccupancyEpoch,
             },
           }
         : {}),
@@ -6704,8 +6962,8 @@ export function launchGenerationOperation(args: LaunchGenerationOperationArgs): 
         operationId: job.operationId!,
         expectedState: current.state,
         expectedStateVersion: current.stateVersion,
-        nextState: 'retryable',
-        failureCode: 'generation_job_start_failed',
+        nextState: 'terminal_failed',
+        failureCode: 'startup_failed',
         failurePhase: 'launch',
         lastError: errorMessage(error, 'generation job startup failed'),
       })
@@ -6913,13 +7171,14 @@ export function registerGenerationChatRoutes(
       const compatibilityWriterSessionId = readWriterSessionHeader(req) ?? 'legacy'
       const compatibilityDatabaseLineage = getDatabaseLineage(db)
       try {
-        admitGenerationInTransaction(db, {
+        const compatibilityAuthority = admitAcceptedCompatibilityGenerationInTransaction(db, {
           databaseLineage: compatibilityDatabaseLineage,
           chatId: input.chatId,
           sessionId: compatibilityWriterSessionId,
           interaction: finalizationModeFromInput(input),
           chatOnlyEnabled: false,
         })
+        input.compatibilityOccupancyEpoch = compatibilityAuthority.occupancyEpoch
       } catch (error) {
         if (error instanceof GenerationAdmissionError) {
           return reply.code(error.statusCode).send({ error: error.code, ...error.details })

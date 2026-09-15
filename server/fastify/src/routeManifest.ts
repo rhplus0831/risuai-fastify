@@ -1209,6 +1209,61 @@ export const PROTOCOL_ROUTE_POLICIES = [
     },
   },
   {
+    id: 'generation-effect-igp-commit',
+    auth: {
+      decision: 'required',
+      reason: 'IGP commit atomically edits the exact generated message and completes its claimed effect.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The immutable accepted operation scope and originating session authorize this one message edit.',
+    },
+  },
+  {
+    id: 'generation-effect-inlay-preparation',
+    auth: {
+      decision: 'required',
+      reason: 'Inlay preparation reserves private accepted-generation completion work.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The immutable accepted operation scope and originating session authorize the exact reservation.',
+    },
+  },
+  {
+    id: 'generation-effect-inlay-finalization',
+    auth: {
+      decision: 'required',
+      reason: 'Inlay finalization writes the exact accepted generated message.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The immutable accepted operation scope and preparation receipt authorize the exact message write.',
+    },
+  },
+  {
+    id: 'generation-effect-inlay-abandonment',
+    auth: {
+      decision: 'required',
+      reason: 'Inlay abandonment retires private accepted-generation completion work.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The immutable accepted operation scope and originating session authorize exact marker retirement.',
+    },
+  },
+  {
+    id: 'generation-effect-igp-completion',
+    auth: {
+      decision: 'required',
+      reason: 'IGP provider execution can use credentials retained by the accepted operation snapshot.',
+    },
+    activeWriter: {
+      decision: 'auth-session',
+      reason: 'The exact claimed effect and immutable accepted operation scope authorize provider execution.',
+    },
+  },
+  {
     id: 'generation-chat',
     auth: {
       decision: 'required',

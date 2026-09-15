@@ -1519,13 +1519,14 @@ describe('sendChat fixtures (/chat adapter replay)', () => {
         args: [{ chaId: 'char-tess', name: 'Tess' }, 'derived alternate'],
       },
     ])
-    expect(getSideEffectCalls().filter((call) => call.fn === 'runInlayScreen')).toEqual([
+    expect(getSideEffectCalls().filter((call) => call.fn === 'runInlayScreen')).toEqual([])
+    expect(getSideEffectCalls().filter((call) => call.fn === 'renderInlayScreenTextWithoutProviders')).toEqual([
       {
-        fn: 'runInlayScreen',
+        fn: 'renderInlayScreenTextWithoutProviders',
         args: [{ chaId: 'char-tess', name: 'Tess' }, 'derived primary'],
       },
       {
-        fn: 'runInlayScreen',
+        fn: 'renderInlayScreenTextWithoutProviders',
         args: [{ chaId: 'char-tess', name: 'Tess' }, 'derived alternate'],
       },
     ])

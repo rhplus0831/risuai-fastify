@@ -1,98 +1,84 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const commandMocks = vi.hoisted(() => ({
-  baseRevisions: [17, 18],
-  calls: [] as Array<Record<string, unknown>>,
-  results: [] as Array<Record<string, unknown>>,
+const ledger = vi.hoisted(() => ({
+  begin: vi.fn<() => Promise<'accepted' | 'ambiguous'>>(async () => 'accepted'),
+  finalize: vi.fn<() => Promise<'accepted' | 'ambiguous'>>(async () => 'accepted'),
+  abandon: vi.fn<() => Promise<'accepted' | 'ambiguous'>>(async () => 'accepted'),
 }))
 
-vi.mock('../server/resourceState.svelte', () => ({
-  captureChatBodyProjectionEpoch: () => 23,
+vi.mock('./generationEffectLedger', () => ({
+  beginPreparedGenerationInlay: ledger.begin,
+  finalizePreparedGenerationInlay: ledger.finalize,
+  abandonPreparedGenerationInlay: ledger.abandon,
 }))
 
-vi.mock('../server/chatTranscriptOwner', () => ({
-  getChatTranscriptOwnerState: () => ({
-    characterId: 'character-a',
-    chatId: 'chat-a',
-    messages: [
-      {
-        role: 'char',
-        data: 'authoritative model text',
-        chatId: 'message-a',
-        generationInfo: { generationId: 'generation-a' },
-      },
-    ],
-    projectionEpoch: 23,
-    resourceLoaded: true,
-  }),
-}))
+import {
+  abandonServerBackedInlayMessage,
+  finalizeServerBackedInlayMessage,
+  prepareServerBackedInlayMessage,
+} from './inlayFinalization'
 
-vi.mock('../server/commands', () => ({
-  runServerCommand: async (input: { command: (baseRevision: number) => Promise<unknown> }) => {
-    const revision = commandMocks.baseRevisions.shift() ?? 99
-    return input.command(revision)
-  },
-  updateMessageCommand: async (input: Record<string, unknown>) => {
-    commandMocks.calls.push(input)
-    return commandMocks.results.shift() ?? { status: 'ok', revision: 18, event: {} }
-  },
-}))
-
-import { finalizeServerBackedInlayMessage } from './inlayFinalization'
+const effectLedger = {
+  version: 1 as const,
+  databaseLineage: 'lineage-a',
+  keyType: 'operation' as const,
+  keyId: 'operation-a',
+  generationId: 'generation-a',
+  characterId: 'character-a',
+  chatId: 'chat-a',
+  messageId: 'message-a',
+}
+const chatOccupancyAuthority = {
+  version: 1 as const,
+  databaseLineage: 'lineage-a',
+  chatId: 'chat-a',
+  sessionId: 'session-a',
+  sessionGeneration: 3,
+  occupancyEpoch: 7,
+  claimClass: 'owner' as const,
+}
+const preparation = {
+  effectLedger,
+  chatOccupancyAuthority,
+  operationId: 'operation-a',
+  preparationId: 'preparation-a',
+  expectedData: '<ImgGen="cat">',
+}
 
 beforeEach(() => {
-  commandMocks.baseRevisions = [17, 18]
-  commandMocks.calls = []
-  commandMocks.results = []
+  ledger.begin.mockReset().mockResolvedValue('accepted')
+  ledger.finalize.mockReset().mockResolvedValue('accepted')
+  ledger.abandon.mockReset().mockResolvedValue('accepted')
 })
 
-describe('finalizeServerBackedInlayMessage', () => {
-  it('sends an owner- and generation-scoped compare-and-set message patch', async () => {
-    await expect(
-      finalizeServerBackedInlayMessage({
-        chatId: 'chat-a',
-        messageId: 'message-a',
-        generationId: 'generation-a',
-        expectedData: '<ImgGen="cat">',
-        finalData: '{{inlay::asset-a}}',
-      }),
-    ).resolves.toBe(true)
-
-    expect(commandMocks.calls).toEqual([
-      {
-        baseRevision: 17,
-        messageId: 'message-a',
-        patch: { data: '{{inlay::asset-a}}' },
-        expectedData: '<ImgGen="cat">',
-        expectedChatId: 'chat-a',
-        expectedGenerationId: 'generation-a',
-        optimisticChatId: 'chat-a',
-        optimisticChatBodyProjectionEpoch: 23,
-      },
-    ])
+describe('server-backed accepted-operation inlay transport', () => {
+  it('begins through the lineage-bearing effect transport before provider work', async () => {
+    await expect(prepareServerBackedInlayMessage(preparation)).resolves.toBe(true)
+    expect(ledger.begin).toHaveBeenCalledWith(effectLedger, chatOccupancyAuthority, {
+      operationId: 'operation-a',
+      preparationId: 'preparation-a',
+      expectedData: '<ImgGen="cat">',
+    })
   })
 
-  it('retries one unrelated global revision conflict while retaining the same compare-and-set conditions', async () => {
-    commandMocks.results = [
-      { status: 'conflict', currentRevision: 17 },
-      { status: 'ok', revision: 18, event: {} },
-    ]
+  it('finalizes through the same exact preparation and accepted operation', async () => {
+    await expect(finalizeServerBackedInlayMessage({ ...preparation, finalData: '{{inlay::asset-a}}' })).resolves.toBe(
+      true,
+    )
+    expect(ledger.finalize).toHaveBeenCalledWith(effectLedger, chatOccupancyAuthority, {
+      operationId: 'operation-a',
+      preparationId: 'preparation-a',
+      expectedData: '<ImgGen="cat">',
+      finalData: '{{inlay::asset-a}}',
+    })
+  })
 
-    await expect(
-      finalizeServerBackedInlayMessage({
-        chatId: 'chat-a',
-        messageId: 'message-a',
-        generationId: 'generation-a',
-        expectedData: 'authoritative model text',
-        finalData: '{{emotion::happy}}',
-      }),
-    ).resolves.toBe(true)
-
-    expect(commandMocks.calls.map(({ baseRevision }) => baseRevision)).toEqual([17, 18])
-    expect(commandMocks.calls[1]).toMatchObject({
-      expectedData: 'authoritative model text',
-      expectedChatId: 'chat-a',
-      expectedGenerationId: 'generation-a',
+  it('abandons only the exact preparation and reports ambiguous transport as unaccepted', async () => {
+    ledger.abandon.mockResolvedValueOnce('ambiguous')
+    await expect(abandonServerBackedInlayMessage(preparation)).resolves.toBe(false)
+    expect(ledger.abandon).toHaveBeenCalledWith(effectLedger, chatOccupancyAuthority, {
+      operationId: 'operation-a',
+      preparationId: 'preparation-a',
     })
   })
 })

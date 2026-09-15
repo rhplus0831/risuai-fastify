@@ -30,6 +30,8 @@ import {
   reserveGenerationOperationAttempt,
   transitionGenerationOperation,
 } from '../src/generationOperations.js'
+import { ensureGenerationEffectLedger } from '../src/generationEffects.js'
+import { CHAT_ONLY_GENERATION_ALLOWLIST, listGenerationOccupancyPins } from '../src/generationScope.js'
 import {
   EXPECTED_CANONICAL_OWNER_PERSISTENCE_SNAPSHOT,
   canonicalOwnerPersistenceDatabase,
@@ -1090,7 +1092,15 @@ describe('backups', () => {
           WHERE uid = 'operation-result'
         `,
         )
-        .run(JSON.stringify({ databaseLineage: originalLineage, operationId: 'operation-round-trip' }))
+        .run(
+          JSON.stringify({
+            databaseLineage: originalLineage,
+            operationId: 'operation-round-trip',
+            attemptNo: 1,
+            jobId: 'job-round-trip',
+            generationId: 'job-round-trip',
+          }),
+        )
       insertFinalizationRetry(seed, 'job-round-trip', 'operation-chat')
       seed
         .prepare(
@@ -1181,6 +1191,26 @@ describe('backups', () => {
       expect(
         verify
           .prepare(
+            `SELECT COUNT(*) AS count,
+                    MIN(database_lineage) AS database_lineage,
+                    MIN(operation_id) AS operation_id,
+                    MIN(operation_attempt_no) AS operation_attempt_no,
+                    MIN(status) AS status,
+                    MIN(reason) AS reason
+             FROM generation_effects WHERE generation_id = 'job-round-trip'`,
+          )
+          .get(),
+      ).toEqual({
+        count: 7,
+        database_lineage: restoredLineage,
+        operation_id: 'operation-round-trip',
+        operation_attempt_no: 1,
+        status: 'skipped',
+        reason: 'pre_ledger_terminal',
+      })
+      expect(
+        verify
+          .prepare(
             `SELECT database_lineage, operation_id, operation_attempt_no, terminal_outcome
              FROM generation_finalization_retries WHERE generation_id = 'job-round-trip'`,
           )
@@ -1213,6 +1243,314 @@ describe('backups', () => {
           operationId: 'operation-round-trip',
         },
       })
+    } finally {
+      verify.close()
+    }
+  })
+
+  it('quarantines restored occupancy-scoped recovery instead of transferring old authority to the new lineage', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    await importDb(harness.app, assertion, {
+      characters: [
+        {
+          chaId: 'scoped-character',
+          name: 'Scoped Character',
+          chats: [
+            {
+              id: 'scoped-chat',
+              name: 'Scoped Chat',
+              message: [
+                { role: 'user', data: 'accepted', chatId: 'scoped-user' },
+                { role: 'char', data: 'candidate', chatId: 'scoped-result' },
+              ],
+            },
+            {
+              id: 'legacy-chat',
+              name: 'Legacy Chat',
+              message: [{ role: 'user', data: 'legacy accepted', chatId: 'legacy-user' }],
+            },
+          ],
+        },
+      ],
+    })
+    const liveDbPath = path.join(harness.dataDir, 'risu.db')
+    const seed = new DatabaseSync(liveDbPath)
+    let oldLineage: string
+    try {
+      seed.exec('PRAGMA foreign_keys = ON')
+      oldLineage = getDatabaseLineage(seed)
+      const scope = {
+        admissionKind: 'chat_only' as const,
+        occupancyDatabaseLineage: oldLineage,
+        occupancySessionId: 'reader-before-restore',
+        occupancyEpoch: 7,
+        occupancyClaimClass: 'chat_only' as const,
+        permissionScopeVersion: 1 as const,
+        permissionScope: [...CHAT_ONLY_GENERATION_ALLOWLIST],
+      }
+      createGenerationOperation(seed, {
+        databaseLineage: oldLineage,
+        operationId: 'scoped-operation',
+        protocolVersion: 1,
+        requestOrigin: 'accepted_send',
+        creatorWriterSessionId: 'reader-before-restore',
+        creatorWriterEpoch: 0,
+        generationScope: scope,
+        bindingServerInstanceId: 'server-before-restore',
+        characterId: 'scoped-character',
+        chatId: 'scoped-chat',
+        mode: 'send',
+        acceptedMessageId: 'scoped-user',
+        requestFingerprint: 'f'.repeat(64),
+        intent: { mode: 'send' },
+        acceptedRevision: 1,
+        state: 'accepted',
+      })
+      reserveGenerationOperationAttempt(seed, {
+        databaseLineage: oldLineage,
+        operationId: 'scoped-operation',
+        expectedState: 'accepted',
+        expectedStateVersion: 1,
+        retryRequestId: 'scoped-retry',
+        jobId: 'scoped-generation',
+        serverInstanceId: 'server-before-restore',
+        actorWriterSessionId: 'reader-before-restore',
+        actorWriterEpoch: 0,
+        launchRevision: 1,
+      })
+      transitionGenerationOperation(seed, {
+        databaseLineage: oldLineage,
+        operationId: 'scoped-operation',
+        expectedState: 'launching',
+        expectedStateVersion: 2,
+        nextState: 'owned_by_job',
+      })
+      ensureGenerationEffectLedger(seed, {
+        databaseLineage: oldLineage,
+        operationId: 'scoped-operation',
+        operationAttemptNo: 1,
+        operationProtocolVersion: 1,
+        generationId: 'scoped-generation',
+        characterId: 'scoped-character',
+        chatId: 'scoped-chat',
+        messageId: 'scoped-result',
+        generationScope: scope,
+      })
+      insertFinalizationRetry(seed, 'scoped-generation', 'scoped-chat')
+      seed
+        .prepare(
+          `UPDATE generation_finalization_retries
+           SET database_lineage = ?, operation_id = 'scoped-operation', operation_attempt_no = 1,
+               actor_writer_session_id = 'reader-before-restore', actor_writer_epoch = 0,
+               accepted_message_id = 'scoped-user', terminal_outcome = 'completed',
+               admission_kind = 'chat_only', occupancy_database_lineage = ?,
+               occupancy_session_id = 'reader-before-restore', occupancy_epoch = 7,
+               occupancy_claim_class = 'chat_only', permission_scope_version = 1,
+               permission_scope_json = ?, status = 'pending', last_error = NULL, terminal_error = NULL
+           WHERE generation_id = 'scoped-generation'`,
+        )
+        .run(oldLineage, oldLineage, JSON.stringify(CHAT_ONLY_GENERATION_ALLOWLIST))
+      seed
+        .prepare(
+          `INSERT INTO memory_jobs (
+             id, instance_id, chat_id, kind, status, payload_json, operation_id, operation_attempt_no,
+             admission_kind, occupancy_database_lineage, occupancy_session_id, occupancy_epoch,
+             occupancy_claim_class, permission_scope_version, permission_scope_json
+           ) VALUES (?, ?, ?, 'summarize', 'pending', '{}', ?, 1, 'chat_only', ?, ?, 7, 'chat_only', 1, ?)`,
+        )
+        .run(
+          'scoped-memory',
+          'memory-instance',
+          'scoped-chat',
+          'scoped-operation',
+          oldLineage,
+          'reader-before-restore',
+          JSON.stringify(CHAT_ONLY_GENERATION_ALLOWLIST),
+        )
+      seed
+        .prepare(
+          `INSERT INTO bardwiki_turn_receipts (
+             id, chat_id, user_message_id, user_content_hash, assistant_message_id,
+             assistant_content_hash, confirmation_mode, state, change_set_id, job_id
+           ) VALUES (?, ?, ?, ?, ?, ?, 'automatic', 'queued', ?, ?)`,
+        )
+        .run(
+          'scoped-receipt',
+          'scoped-chat',
+          'scoped-user',
+          'u'.repeat(64),
+          'scoped-result',
+          'a'.repeat(64),
+          'scoped-change-set',
+          'scoped-bardwiki',
+        )
+      seed
+        .prepare(
+          `INSERT INTO bardwiki_jobs (
+             id, instance_id, chat_id, receipt_id, kind, status, payload_json, operation_id, operation_attempt_no,
+             admission_kind, occupancy_database_lineage, occupancy_session_id, occupancy_epoch,
+             occupancy_claim_class, permission_scope_version, permission_scope_json
+           ) VALUES (?, ?, ?, ?, 'apply_turn', 'pending', '{}', ?, 1, 'chat_only', ?, ?, 7, 'chat_only', 1, ?)`,
+        )
+        .run(
+          'scoped-bardwiki',
+          'bardwiki-instance',
+          'scoped-chat',
+          'scoped-receipt',
+          'scoped-operation',
+          oldLineage,
+          'reader-before-restore',
+          JSON.stringify(CHAT_ONLY_GENERATION_ALLOWLIST),
+        )
+      createGenerationOperation(seed, {
+        databaseLineage: oldLineage,
+        operationId: 'legacy-operation',
+        protocolVersion: 1,
+        requestOrigin: 'accepted_send',
+        creatorWriterSessionId: 'owner-before-restore',
+        creatorWriterEpoch: 1,
+        generationScope: { admissionKind: 'legacy_owner' },
+        bindingServerInstanceId: 'server-before-restore',
+        characterId: 'scoped-character',
+        chatId: 'legacy-chat',
+        mode: 'send',
+        acceptedMessageId: 'legacy-user',
+        requestFingerprint: 'e'.repeat(64),
+        intent: { mode: 'send' },
+        acceptedRevision: 1,
+        state: 'accepted',
+      })
+      insertFinalizationRetry(seed, 'legacy-generation', 'legacy-chat')
+      seed
+        .prepare(
+          `UPDATE generation_finalization_retries
+           SET database_lineage = ?, operation_id = 'legacy-operation', operation_attempt_no = 1,
+               actor_writer_session_id = 'owner-before-restore', actor_writer_epoch = 1,
+               accepted_message_id = 'legacy-user', terminal_outcome = 'completed',
+               admission_kind = 'legacy_owner', status = 'pending', last_error = NULL, terminal_error = NULL
+           WHERE generation_id = 'legacy-generation'`,
+        )
+        .run(oldLineage)
+    } finally {
+      seed.close()
+    }
+
+    const backup = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/backups',
+      headers: { 'risu-auth': assertion },
+      payload: { label: 'scoped recovery quarantine' },
+    })
+    expect(backup.statusCode).toBe(201)
+
+    const clearLive = new DatabaseSync(liveDbPath)
+    try {
+      clearLive.exec(`
+        DELETE FROM generation_effects;
+        DELETE FROM generation_finalization_retries;
+        DELETE FROM memory_jobs;
+        DELETE FROM bardwiki_jobs;
+        DELETE FROM bardwiki_turn_receipts;
+        DELETE FROM generation_operation_attempts;
+        DELETE FROM generation_operations;
+      `)
+    } finally {
+      clearLive.close()
+    }
+    const restored = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/backups/${backup.json().id}/restore`,
+      headers: { 'risu-auth': assertion },
+    })
+    expect(restored.statusCode).toBe(200)
+    const restoredLineage = restored.json().databaseLineage as string
+    expect(restoredLineage).not.toBe(oldLineage)
+
+    const verify = new DatabaseSync(liveDbPath, { readOnly: true })
+    try {
+      expect(
+        verify
+          .prepare(
+            `SELECT database_lineage, state, failure_code, occupancy_database_lineage
+             FROM generation_operations WHERE operation_id = 'scoped-operation'`,
+          )
+          .get(),
+      ).toEqual({
+        database_lineage: restoredLineage,
+        state: 'invalidated',
+        failure_code: 'database_lineage_replaced',
+        occupancy_database_lineage: oldLineage,
+      })
+      expect(
+        verify
+          .prepare(
+            `SELECT database_lineage, status, failure_code
+             FROM generation_operation_attempts WHERE operation_id = 'scoped-operation'`,
+          )
+          .get(),
+      ).toEqual({
+        database_lineage: restoredLineage,
+        status: 'terminal_failed',
+        failure_code: 'database_lineage_replaced',
+      })
+      expect(
+        verify
+          .prepare(
+            `SELECT database_lineage, status, terminal_error, occupancy_database_lineage
+             FROM generation_finalization_retries WHERE generation_id = 'scoped-generation'`,
+          )
+          .get(),
+      ).toEqual({
+        database_lineage: restoredLineage,
+        status: 'terminal',
+        terminal_error: 'database_lineage_replaced',
+        occupancy_database_lineage: oldLineage,
+      })
+      expect(
+        verify
+          .prepare(
+            `SELECT COUNT(*) AS count FROM generation_effects
+             WHERE generation_id = 'scoped-generation' AND status IN ('pending', 'claimed')`,
+          )
+          .get(),
+      ).toEqual({ count: 0 })
+      expect(verify.prepare("SELECT status, error FROM memory_jobs WHERE id = 'scoped-memory'").get()).toEqual({
+        status: 'cancelled',
+        error: 'database_lineage_replaced',
+      })
+      expect(verify.prepare("SELECT status, error_code FROM bardwiki_jobs WHERE id = 'scoped-bardwiki'").get()).toEqual(
+        { status: 'cancelled', error_code: 'database_lineage_replaced' },
+      )
+      expect(
+        verify.prepare("SELECT state, error_code FROM bardwiki_turn_receipts WHERE id = 'scoped-receipt'").get(),
+      ).toEqual({ state: 'failed', error_code: 'database_lineage_replaced' })
+      expect(
+        verify
+          .prepare(
+            `SELECT database_lineage, state, failure_code
+             FROM generation_operations WHERE operation_id = 'legacy-operation'`,
+          )
+          .get(),
+      ).toEqual({
+        database_lineage: restoredLineage,
+        state: 'invalidated',
+        failure_code: 'database_lineage_replaced',
+      })
+      expect(
+        verify
+          .prepare(
+            `SELECT database_lineage, status, terminal_error, admission_kind
+             FROM generation_finalization_retries WHERE generation_id = 'legacy-generation'`,
+          )
+          .get(),
+      ).toEqual({
+        database_lineage: restoredLineage,
+        status: 'terminal',
+        terminal_error: 'database_lineage_replaced',
+        admission_kind: 'legacy_owner',
+      })
+      expect(listGenerationOccupancyPins(verify, 'scoped-chat')).toEqual([])
+      expect(verify.prepare('SELECT COUNT(*) AS count FROM chat_occupancies').get()).toEqual({ count: 0 })
     } finally {
       verify.close()
     }

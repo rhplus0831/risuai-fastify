@@ -1,4 +1,10 @@
-import { resetClientSessionForTests } from '../../clientSession'
+import {
+  beginClientSession,
+  resetClientSessionForTests,
+  setClientConnectionState,
+  setClientProjectionReady,
+  settleClientReader,
+} from '../../clientSession'
 import { setManagedWriterForTest, demoteAndRepromoteForTest } from '../../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -21,12 +27,34 @@ vi.mock('../../storage/fastifyStorage', () => ({
   getNodeServerProxyAuth: async () => 'igp-test-token',
 }))
 
-import { applyServerResourceDatabase, setDatabase, type Database, type character } from '../../storage/database.svelte'
+import {
+  applyServerResourceDatabase,
+  setDatabase,
+  type Database,
+  type MessageGenerationInfo,
+  type character,
+} from '../../storage/database.svelte'
 import { selectedCharID } from '../../stores.svelte'
 import { replaceResourceDatabase } from '../../server/resourceState.svelte'
 import { evaluateIgp } from '../postGeneration/igp'
-import { clearCachedServerCommandRevision } from '../../server/commands'
+import { captureContinueExtendIgpAuthority } from '../postGeneration/igpTargetAuthority'
+import { clearCachedServerCommandRevision, setCachedServerCommandRevision } from '../../server/commands'
 import { getResourceDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
+import {
+  captureClientChatOccupancyAuthority,
+  configureClientChatOccupancy,
+  isClientChatOccupancyAuthorityCurrent,
+  resetClientChatOccupancyForTests,
+  setClientChatOccupancyIdentity,
+} from '../../server/chatOccupancy'
+import {
+  applyGenerationOperationProjection,
+  generationOperationProjections,
+  resetGenerationOperationClientForTests,
+} from '../../server/generationOperations'
+import type { ChatOccupancyProjection } from '@risuai/protocol/chat-occupancy'
+import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
+import { get } from 'svelte/store'
 
 const testDatabaseState = {
   get db() {
@@ -138,9 +166,57 @@ const baseOpts = {
   },
 }
 
+function occupiedProjection(claimClass: 'owner' | 'chat_only', updatedAtMs: number): ChatOccupancyProjection {
+  return {
+    databaseLineage: 'lineage-a',
+    chatId: 'chat-1',
+    occupantSessionId: 'occupant-a',
+    occupancyEpoch: 7,
+    claimClass,
+    state: 'occupied',
+    claimedAtMs: updatedAtMs - 1,
+    leaseExpiresAtMs: Date.now() + 90_000,
+    updatedAtMs,
+    releasedAtMs: null,
+  }
+}
+
+function normalizeOwnerOccupancyToChatOnly() {
+  const operation = beginClientSession('occupant-a')
+  setClientChatOccupancyIdentity(
+    { sessionId: 'occupant-a', exclusive: true, previousSessionId: null },
+    operation.generation,
+  )
+  settleClientReader(operation, {
+    databaseLineage: 'lineage-a',
+    writer: { sessionId: 'other-writer', epoch: 2 },
+  })
+  setClientProjectionReady(true)
+  setClientConnectionState('live')
+  const capability = { version: 1 as const, enabled: true, leaseMs: 90_000 as const, renewAfterMs: 30_000 as const }
+  const admittedAt = Date.now()
+  configureClientChatOccupancy(capability, {
+    version: 1,
+    databaseLineage: 'lineage-a',
+    occupancies: [occupiedProjection('owner', admittedAt)],
+  })
+  const admittedAuthority = captureClientChatOccupancyAuthority('chat-1')
+  configureClientChatOccupancy(capability, {
+    version: 1,
+    databaseLineage: 'lineage-a',
+    occupancies: [occupiedProjection('chat_only', admittedAt + 1)],
+  })
+  const currentAuthority = captureClientChatOccupancyAuthority('chat-1')
+  if (!admittedAuthority || !currentAuthority)
+    throw new Error('Failed to establish normalized occupancy test authority')
+  return { admittedAuthority, currentAuthority }
+}
+
 describe('evaluateIgp', () => {
   beforeEach(() => {
     resetClientSessionForTests()
+    resetClientChatOccupancyForTests()
+    resetGenerationOperationClientForTests()
     clearCachedServerCommandRevision()
     vi.unstubAllGlobals()
     requestChatDataSpy.mockReset()
@@ -148,6 +224,9 @@ describe('evaluateIgp', () => {
   })
 
   afterEach(() => {
+    resetGenerationOperationClientForTests()
+    resetClientChatOccupancyForTests()
+    resetClientSessionForTests()
     vi.unstubAllGlobals()
   })
 
@@ -331,6 +410,413 @@ describe('evaluateIgp', () => {
       expectedGenerationId: 'generation-1',
       igpEffect: { generationId: 'generation-1', claimId: 'claim-1' },
     })
+  })
+
+  it('commits recovered IGP after owner-to-chat-only normalization preserves the accepted tuple', async () => {
+    const { admittedAuthority, currentAuthority } = normalizeOwnerOccupancyToChatOnly()
+    const char = makeChar()
+    char.chats[0].message = [
+      {
+        role: 'char',
+        data: 'derived final text',
+        time: 0,
+        chatId: 'message-1',
+        generationInfo: {
+          generationId: 'generation-1',
+          databaseLineage: admittedAuthority.databaseLineage,
+          operationId: 'operation-1',
+          attemptNo: 1,
+          jobId: 'generation-1',
+          effectLedgerKeyType: 'operation',
+          effectLedgerKeyId: 'operation-1',
+          effectLedgerCharacterId: 'cha-1',
+          effectLedgerChatId: admittedAuthority.chatId,
+        },
+      },
+    ]
+    seed(char)
+    const effectRef: ServerGenerationEffectLedgerRef = {
+      version: 1,
+      databaseLineage: admittedAuthority.databaseLineage,
+      keyType: 'operation',
+      keyId: 'operation-1',
+      generationId: 'generation-1',
+      characterId: 'cha-1',
+      chatId: admittedAuthority.chatId,
+      messageId: 'message-1',
+    }
+    applyGenerationOperationProjection({
+      operationId: effectRef.keyId,
+      protocolVersion: 1,
+      requestOrigin: 'accepted_send',
+      state: 'completed',
+      stateVersion: 3,
+      projectionEpoch: 4,
+      creatorWriterSessionId: admittedAuthority.sessionId,
+      creatorWriterEpoch: 1,
+      generationScope: {
+        admissionKind: 'owner_occupancy',
+        occupancyDatabaseLineage: admittedAuthority.databaseLineage,
+        occupancySessionId: admittedAuthority.sessionId,
+        occupancyEpoch: admittedAuthority.occupancyEpoch,
+        occupancyClaimClass: 'owner',
+        permissionScopeVersion: 1,
+        permissionScope: [],
+      },
+      characterId: effectRef.characterId,
+      chatId: effectRef.chatId,
+      mode: 'send',
+      acceptedMessageId: 'user-1',
+      acceptedRevision: 9,
+      resultMessageId: effectRef.messageId,
+      providerMayHaveRun: true,
+    })
+    setCachedServerCommandRevision(10)
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input)
+      if (url.endsWith('/igp/completion')) return jsonResponse({ type: 'success', result: 'IGP-SNAPSHOT' })
+      return jsonResponse({
+        revision: 11,
+        chatId: effectRef.chatId,
+        messageId: effectRef.messageId,
+        event: {
+          type: 'message.updated',
+          revision: 11,
+          resource: 'message',
+          id: effectRef.messageId,
+          parentId: effectRef.chatId,
+        },
+        effect: { status: 'completed', claimId: 'claim-1' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    expect(isClientChatOccupancyAuthorityCurrent(currentAuthority)).toBe(true)
+    expect(get(generationOperationProjections)).toEqual([
+      expect.objectContaining({
+        operationId: effectRef.keyId,
+        requestOrigin: 'accepted_send',
+        creatorWriterSessionId: admittedAuthority.sessionId,
+        characterId: effectRef.characterId,
+        chatId: effectRef.chatId,
+        resultMessageId: effectRef.messageId,
+        generationScope: expect.objectContaining({ occupancyClaimClass: 'owner' }),
+      }),
+    ])
+    expect(get(generationOperationProjections)[0]?.currentAttempt).toBeUndefined()
+
+    const result = await evaluateIgp({
+      ...baseOpts,
+      // The current prompt is intentionally absent: occupied IGP execution
+      // resolves the accepted prompt and provider snapshot on the server.
+      promptTemplate: '',
+      igpEffect: { generationId: effectRef.generationId, claimId: 'claim-1' },
+      effectLedgerRef: effectRef,
+      chatOccupancyAuthority: currentAuthority,
+      isCurrent: () => isClientChatOccupancyAuthorityCurrent(currentAuthority),
+      target: {
+        characterId: effectRef.characterId,
+        chatId: effectRef.chatId,
+        messageId: effectRef.messageId,
+        expectedData: 'derived final text',
+        expectedGenerationId: effectRef.generationId,
+      },
+    })
+
+    expect(admittedAuthority.claimClass).toBe('owner')
+    expect(currentAuthority).toMatchObject({
+      claimClass: 'chat_only',
+      occupancyEpoch: admittedAuthority.occupancyEpoch,
+    })
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(result).toBe(true)
+    expect(requestChatDataSpy).not.toHaveBeenCalled()
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('derived final textIGP-SNAPSHOT')
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      `/api/v1/generation-effects/${effectRef.generationId}/igp/completion`,
+      expect.objectContaining({ method: 'POST' }),
+    )
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      `/api/v1/generation-effects/${effectRef.generationId}/igp/commit`,
+      expect.objectContaining({ method: 'PUT' }),
+    )
+  })
+
+  it.each([
+    { lifecycle: 'live', disposition: 'extend', retainsAttempt: true },
+    { lifecycle: 'live', disposition: 'append', retainsAttempt: true },
+    { lifecycle: 'recovered', disposition: 'extend', retainsAttempt: false },
+    { lifecycle: 'recovered', disposition: 'append', retainsAttempt: false },
+  ] as const)(
+    'executes and atomically commits occupied Continue-$disposition IGP for a $lifecycle projection',
+    async ({ disposition, retainsAttempt }) => {
+      const { admittedAuthority, currentAuthority } = normalizeOwnerOccupancyToChatOnly()
+      const effectRef: ServerGenerationEffectLedgerRef = {
+        version: 1,
+        databaseLineage: admittedAuthority.databaseLineage,
+        keyType: 'operation',
+        keyId: 'continue-operation',
+        generationId: 'continue-job',
+        characterId: 'cha-1',
+        chatId: admittedAuthority.chatId,
+        messageId: disposition === 'extend' ? 'continued-assistant' : 'appended-assistant',
+      }
+      const retainedGenerationInfo: MessageGenerationInfo = {
+        generationId: 'prior-generation',
+        databaseLineage: 'prior-lineage',
+        operationId: 'prior-operation',
+        attemptNo: 4,
+        jobId: 'prior-job',
+        effectLedgerKeyType: 'operation',
+        effectLedgerKeyId: 'prior-operation',
+        effectLedgerCharacterId: 'cha-1',
+        effectLedgerChatId: admittedAuthority.chatId,
+      }
+      const generatedInfo: MessageGenerationInfo = {
+        generationId: effectRef.generationId,
+        databaseLineage: effectRef.databaseLineage,
+        operationId: effectRef.keyId,
+        attemptNo: 2,
+        jobId: effectRef.generationId,
+        effectLedgerKeyType: effectRef.keyType,
+        effectLedgerKeyId: effectRef.keyId,
+        effectLedgerCharacterId: effectRef.characterId,
+        effectLedgerChatId: effectRef.chatId,
+      }
+      const char = makeChar()
+      char.chats[0].message =
+        disposition === 'extend'
+          ? [
+              {
+                role: 'char',
+                data: 'prior reply plus continuation',
+                time: 0,
+                chatId: effectRef.messageId,
+                generationInfo: structuredClone(retainedGenerationInfo),
+              },
+            ]
+          : [
+              {
+                role: 'char',
+                data: 'prior reply',
+                time: 0,
+                chatId: 'continued-assistant',
+                generationInfo: structuredClone(retainedGenerationInfo),
+              },
+              {
+                role: 'char',
+                data: 'separate continuation',
+                time: 1,
+                chatId: effectRef.messageId,
+                generationInfo: generatedInfo,
+              },
+            ]
+      seed(char)
+      applyGenerationOperationProjection({
+        operationId: effectRef.keyId,
+        protocolVersion: 1,
+        requestOrigin: 'continue',
+        state: 'completed',
+        stateVersion: 8,
+        projectionEpoch: 9,
+        creatorWriterSessionId: admittedAuthority.sessionId,
+        creatorWriterEpoch: 1,
+        generationScope: {
+          admissionKind: 'owner_occupancy',
+          occupancyDatabaseLineage: admittedAuthority.databaseLineage,
+          occupancySessionId: admittedAuthority.sessionId,
+          occupancyEpoch: admittedAuthority.occupancyEpoch,
+          occupancyClaimClass: 'owner',
+          permissionScopeVersion: 1,
+          permissionScope: [],
+        },
+        characterId: effectRef.characterId,
+        chatId: effectRef.chatId,
+        mode: 'continue',
+        targetMessageId: 'continued-assistant',
+        resultMessageId: effectRef.messageId,
+        providerMayHaveRun: true,
+        ...(retainsAttempt
+          ? {
+              currentAttempt: {
+                attemptNo: 2,
+                retryRequestId: 'continue-retry',
+                jobId: effectRef.generationId,
+                status: 'finalizing' as const,
+                serverInstanceId: 'server-a',
+                actorWriterSessionId: admittedAuthority.sessionId,
+                actorWriterEpoch: 1,
+                launchRevision: 7,
+                finalizationGenerationId: effectRef.generationId,
+              },
+            }
+          : {}),
+      })
+      setCachedServerCommandRevision(10)
+      const responses: Array<{ url: string; body: Record<string, unknown> }> = []
+      const fetchMock = vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        const url = String(input)
+        responses.push({
+          url,
+          body: typeof init.body === 'string' ? (JSON.parse(init.body) as Record<string, unknown>) : {},
+        })
+        if (url.endsWith('/igp/completion')) {
+          return jsonResponse({ type: 'success', result: `::${disposition.toUpperCase()}-IGP` })
+        }
+        return jsonResponse({
+          revision: 11,
+          chatId: effectRef.chatId,
+          messageId: effectRef.messageId,
+          event: {
+            type: 'message.updated',
+            revision: 11,
+            resource: 'message',
+            id: effectRef.messageId,
+            parentId: effectRef.chatId,
+          },
+          effect: { status: 'completed', claimId: 'continue-claim' },
+        })
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const terminalMessage = char.chats[0].message.at(-1)!
+      const continueExtendAuthority =
+        disposition === 'extend'
+          ? captureContinueExtendIgpAuthority({
+              ref: effectRef,
+              operationAttemptNo: 2,
+              message: terminalMessage,
+              operation: get(generationOperationProjections)[0],
+            })
+          : undefined
+      if (disposition === 'extend') expect(continueExtendAuthority).toBeDefined()
+
+      const result = await evaluateIgp({
+        ...baseOpts,
+        promptTemplate: '',
+        igpEffect: { generationId: effectRef.generationId, claimId: 'continue-claim' },
+        effectLedgerRef: effectRef,
+        chatOccupancyAuthority: currentAuthority,
+        isCurrent: () => isClientChatOccupancyAuthorityCurrent(currentAuthority),
+        target: {
+          characterId: effectRef.characterId,
+          chatId: effectRef.chatId,
+          messageId: effectRef.messageId,
+          expectedData: terminalMessage.data,
+          ...(disposition === 'append' ? { expectedGenerationId: effectRef.generationId } : {}),
+          ...(continueExtendAuthority ? { continueExtendAuthority } : {}),
+        },
+      })
+
+      expect(result).toBe(true)
+      expect(requestChatDataSpy).not.toHaveBeenCalled()
+      expect(responses.map((response) => response.url)).toEqual([
+        `/api/v1/generation-effects/${effectRef.generationId}/igp/completion`,
+        `/api/v1/generation-effects/${effectRef.generationId}/igp/commit`,
+      ])
+      expect(responses[1].body).toMatchObject({
+        claimId: 'continue-claim',
+        expectedData: disposition === 'extend' ? 'prior reply plus continuation' : 'separate continuation',
+        expectedGenerationId: effectRef.generationId,
+      })
+      const committedTerminal = testDatabaseState.db.characters[0].chats[0].message.at(-1)!
+      expect(committedTerminal.data).toBe(
+        disposition === 'extend' ? 'prior reply plus continuation::EXTEND-IGP' : 'separate continuation::APPEND-IGP',
+      )
+      expect(testDatabaseState.db.characters[0].chats[0].message[0].generationInfo).toEqual(retainedGenerationInfo)
+      if (retainsAttempt) {
+        expect(get(generationOperationProjections)[0]?.currentAttempt).toMatchObject({
+          attemptNo: 2,
+          jobId: effectRef.generationId,
+        })
+      } else {
+        expect(get(generationOperationProjections)[0]?.currentAttempt).toBeUndefined()
+      }
+    },
+  )
+
+  it('rejects retained-row Continue IGP for chat-only admission before provider execution', async () => {
+    const { currentAuthority } = normalizeOwnerOccupancyToChatOnly()
+    const effectRef: ServerGenerationEffectLedgerRef = {
+      version: 1,
+      databaseLineage: currentAuthority.databaseLineage,
+      keyType: 'operation',
+      keyId: 'chat-only-continue',
+      generationId: 'chat-only-job',
+      characterId: 'cha-1',
+      chatId: currentAuthority.chatId,
+      messageId: 'message-1',
+    }
+    const retainedGenerationInfo: MessageGenerationInfo = { generationId: 'prior-generation' }
+    const char = makeChar()
+    char.chats[0].message[0].data = 'continued text'
+    char.chats[0].message[0].generationInfo = retainedGenerationInfo
+    seed(char)
+    applyGenerationOperationProjection({
+      operationId: effectRef.keyId,
+      protocolVersion: 1,
+      requestOrigin: 'continue',
+      state: 'completed',
+      stateVersion: 3,
+      projectionEpoch: 4,
+      creatorWriterSessionId: currentAuthority.sessionId,
+      creatorWriterEpoch: 1,
+      generationScope: {
+        admissionKind: 'chat_only',
+        occupancyDatabaseLineage: currentAuthority.databaseLineage,
+        occupancySessionId: currentAuthority.sessionId,
+        occupancyEpoch: currentAuthority.occupancyEpoch,
+        occupancyClaimClass: 'chat_only',
+        permissionScopeVersion: 1,
+        permissionScope: [],
+      },
+      characterId: effectRef.characterId,
+      chatId: effectRef.chatId,
+      mode: 'continue',
+      targetMessageId: effectRef.messageId,
+      resultMessageId: effectRef.messageId,
+      providerMayHaveRun: true,
+    })
+    const forgedRetainedAuthority = {
+      kind: 'continue_extend' as const,
+      operationId: effectRef.keyId,
+      operationAttemptNo: 1,
+      jobId: effectRef.generationId,
+      targetMessageId: effectRef.messageId,
+      resultMessageId: effectRef.messageId,
+      retainedGenerationInfo,
+    }
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      evaluateIgp({
+        ...baseOpts,
+        promptTemplate: '',
+        igpEffect: { generationId: effectRef.generationId, claimId: 'claim-chat-only' },
+        effectLedgerRef: effectRef,
+        chatOccupancyAuthority: currentAuthority,
+        isCurrent: () => isClientChatOccupancyAuthorityCurrent(currentAuthority),
+        target: {
+          characterId: effectRef.characterId,
+          chatId: effectRef.chatId,
+          messageId: effectRef.messageId,
+          expectedData: 'continued text',
+          continueExtendAuthority: forgedRetainedAuthority,
+        },
+      }),
+    ).resolves.toBe(false)
+    expect(
+      captureContinueExtendIgpAuthority({
+        ref: effectRef,
+        operationAttemptNo: 1,
+        message: testDatabaseState.db.characters[0].chats[0].message[0],
+        operation: get(generationOperationProjections)[0],
+      }),
+    ).toBeUndefined()
+    expect(fetchMock).not.toHaveBeenCalled()
   })
 
   it('does not overwrite a newer edit made while terminal-targeted IGP is evaluating', async () => {

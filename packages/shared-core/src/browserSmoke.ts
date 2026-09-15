@@ -84,10 +84,12 @@ export interface FastifyBrowserSmokeHook<
   StartupMilestone extends string,
 > {
   activeWriterHeaders: () => Promise<Record<string, string>>
+  clearAppliedServerResourceRevision: () => void
   clearResourceCache: () => Promise<void>
   getAppliedServerResourceRevision: () => number | null
   getPendingResourceCacheWriteCount: () => number
   getDatabaseSnapshot: () => BrowserSmokeDatabaseSnapshot
+  isCharacterLorebookHydrated: (characterId: string) => boolean
   getCurrentRoute: () => AppRoute
   getClientSessionSnapshot: () => BrowserSmokeClientSessionSnapshot
   getLifecycleSnapshot: () => Promise<FastifyBrowserSmokeLifecycleSnapshot>

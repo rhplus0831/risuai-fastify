@@ -33,7 +33,12 @@ import {
   type CommandMutationReceiptKey,
 } from '../commandMutationReceipts.js'
 import { DATABASE_LINEAGE_HEADER, DatabaseLineageConflictError } from '../databaseLineage.js'
-import { completeClaimedIgpEffectInTransaction } from '../generationEffects.js'
+import {
+  automaticMessageTranslationIsServerOwned,
+  commitAuthorizedGenerationInlayFinalizationInTransaction,
+  completeClaimedIgpEffectInTransaction,
+  GENERATED_TRANSLATION_SERVER_OWNED_ERROR,
+} from '../generationEffects.js'
 import { InitializeConflictError } from '../databaseInitialization.js'
 import { MAX_REQUEST_HISTORY_LIMIT, pruneRequestHistory } from '../requestHistory.js'
 import { maskProviderSecrets, resolveMaskedProviderSecretPlaceholders } from '../providerSecrets.js'
@@ -1608,7 +1613,9 @@ interface MessageCommandBody {
   expectedChatId?: unknown
   expectedGenerationId?: unknown
   igpEffect?: unknown
+  generationInlayFinalization?: unknown
   jobId?: unknown
+  automatic?: unknown
 }
 
 function readIgpMessageEffect(value: unknown): { generationId: string; claimId: string } | undefined {
@@ -1620,6 +1627,18 @@ function readIgpMessageEffect(value: unknown): { generationId: string; claimId: 
   return {
     generationId: readMessageId(effect.generationId, 'igpEffect.generationId'),
     claimId: readMessageId(effect.claimId, 'igpEffect.claimId'),
+  }
+}
+
+function readGenerationInlayFinalization(value: unknown): { generationId: string; operationId: string } | undefined {
+  if (value === undefined) return undefined
+  const finalization = readJsonObject(value, 'generationInlayFinalization')
+  if (Object.keys(finalization).some((key) => key !== 'generationId' && key !== 'operationId')) {
+    throw new ValidationError('generationInlayFinalization supports only generationId and operationId')
+  }
+  return {
+    generationId: readMessageId(finalization.generationId, 'generationInlayFinalization.generationId'),
+    operationId: readMessageId(finalization.operationId, 'generationInlayFinalization.operationId'),
   }
 }
 
@@ -7476,17 +7495,29 @@ export function registerCommandRoutes(
       const expectedChatId = readOptionalMessageCondition(body.expectedChatId, 'expectedChatId')
       const expectedGenerationId = readOptionalMessageCondition(body.expectedGenerationId, 'expectedGenerationId')
       const igpEffect = readIgpMessageEffect(body.igpEffect)
-      const igpLineage = igpEffect
-        ? readDatabaseLineage(req.headers[DATABASE_LINEAGE_HEADER], DATABASE_LINEAGE_HEADER)
-        : undefined
+      const generationInlayFinalization = readGenerationInlayFinalization(body.generationInlayFinalization)
+      const effectLineage =
+        igpEffect || generationInlayFinalization
+          ? readDatabaseLineage(req.headers[DATABASE_LINEAGE_HEADER], DATABASE_LINEAGE_HEADER)
+          : undefined
+      if (igpEffect && generationInlayFinalization) {
+        throw new ValidationError('IGP and generation inlay finalization bindings are mutually exclusive')
+      }
       if (
-        igpEffect &&
+        (igpEffect || generationInlayFinalization) &&
         (Object.keys(patch).length !== 1 ||
           typeof patch.data !== 'string' ||
           expectedData === undefined ||
           expectedChatId === undefined)
       ) {
-        throw new ValidationError('IGP commits require a data-only patch, expectedData and expectedChatId')
+        throw new ValidationError('Generation effect commits require a data-only patch and exact target preconditions')
+      }
+      if (
+        generationInlayFinalization &&
+        expectedGenerationId !== undefined &&
+        generationInlayFinalization.generationId !== expectedGenerationId
+      ) {
+        throw new ValidationError('generationInlayFinalization.generationId must match expectedGenerationId')
       }
       const result = applyTargetedCommandMutation<{ chatId: string; messageId: string }>({
         db,
@@ -7525,7 +7556,7 @@ export function registerCommandRoutes(
             igpEffect &&
             !completeClaimedIgpEffectInTransaction(targetDb, {
               ...igpEffect,
-              databaseLineage: igpLineage!,
+              databaseLineage: effectLineage!,
               characterId: character.chaId,
               chatId: location.chatId,
               messageId,
@@ -7535,20 +7566,39 @@ export function registerCommandRoutes(
           ) {
             throw new ValidationError('IGP effect claim or message identity no longer matches')
           }
-          const updated = updateActiveMessageById(targetDb, messageId, patch)
-          if (updated.ok === false) {
+          const authorizedInlayFinalization = generationInlayFinalization
+            ? commitAuthorizedGenerationInlayFinalizationInTransaction(targetDb, {
+                ...generationInlayFinalization,
+                databaseLineage: effectLineage!,
+                characterId: character.chaId,
+                chatId: location.chatId,
+                messageId,
+                expectedData: expectedData!,
+                finalData: patch.data as string,
+              })
+            : undefined
+          if (generationInlayFinalization && !authorizedInlayFinalization) {
+            throw new ValidationError('Generation inlay finalization is not authorized for the current transcript')
+          }
+          const updated = generationInlayFinalization ? undefined : updateActiveMessageById(targetDb, messageId, patch)
+          if (updated?.ok === false) {
             if (updated.reason === 'ambiguous') {
               throw new ValidationError(`Ambiguous message id: ${messageId}`)
             }
             throw new EntityNotFoundError(`Message not found: ${messageId}`)
           }
+          const updatedChatId = updated?.ok === true ? updated.chatId : location.chatId
           return {
             event: {
               ...COMMAND_EVENT_CATALOG.messageUpdated,
               id: messageId,
-              parentId: updated.chatId,
+              parentId: updatedChatId,
             },
-            extra: { chatId: updated.chatId, messageId },
+            extra: {
+              chatId: updatedChatId,
+              messageId,
+              ...(authorizedInlayFinalization ? { inlayFinalization: authorizedInlayFinalization } : {}),
+            },
           }
         },
       })
@@ -7575,6 +7625,13 @@ export function registerCommandRoutes(
       // unrelated edit made while translation is running.
       readBaseRevision(body)
       const requestedJobId = readOptionalMessageTranslationJobId(body.jobId)
+      if (body.automatic !== undefined && typeof body.automatic !== 'boolean') {
+        throw new ValidationError('automatic must be a boolean')
+      }
+      if (body.automatic === true && automaticMessageTranslationIsServerOwned(db, messageId)) {
+        reply.code(409)
+        return { error: GENERATED_TRANSLATION_SERVER_OWNED_ERROR }
+      }
       return await runServerMessageTranslation({
         db,
         dataDir,

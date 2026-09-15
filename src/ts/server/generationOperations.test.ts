@@ -20,6 +20,7 @@ const operationMocks = vi.hoisted(() => ({
   isWriterAccessLost: vi.fn(),
   listPending: vi.fn(),
   listChatOccupancyPending: vi.fn(),
+  listOccupancyAuthorities: vi.fn(() => []),
   peekRevision: vi.fn(),
   reconcileDirectEvent: vi.fn(),
   setRevision: vi.fn(),
@@ -27,6 +28,7 @@ const operationMocks = vi.hoisted(() => ({
   stageChatOccupancy: vi.fn(),
   chatOccupancyCurrent: vi.fn(),
   canApplyActiveJobs: vi.fn(() => true),
+  captureOccupancy: vi.fn(),
   setActiveJobs: vi.fn(() => true),
   withDirectReconciliation: vi.fn(),
 }))
@@ -84,11 +86,15 @@ vi.mock('./pendingMutationOutbox', () => ({
     intent.kind === 'generation-operation-retry',
   listPendingMutations: operationMocks.listPending,
   listChatOccupancyGenerationMutations: operationMocks.listChatOccupancyPending,
+  listOriginatingChatOccupancyGenerationMutations: operationMocks.listChatOccupancyPending,
   stagePendingMutation: operationMocks.stage,
   stageChatOccupancyGenerationMutation: operationMocks.stageChatOccupancy,
 }))
 vi.mock('./chatOccupancy', () => ({
+  captureClientChatOccupancyAuthority: operationMocks.captureOccupancy,
   isClientChatOccupancyAuthorityCurrent: operationMocks.chatOccupancyCurrent,
+  listClientChatOccupancyAuthorities: operationMocks.listOccupancyAuthorities,
+  registerClientChatOccupancyRecoveryHandler: vi.fn(),
 }))
 vi.mock('./bootstrap', () => ({
   parseGenerationOperations: (values: unknown[]) =>
@@ -105,12 +111,16 @@ import {
   applyGenerationOperationBootstrap,
   applyGenerationOperationProjection,
   applyGenerationOperationSseEvent,
+  chatOccupancyGenerationRecoveryProjections,
   captureGenerationOperationViewerFence,
   configureGenerationOperationProtocol,
   dispatchGenerationOperationPendingReplay,
+  discardChatOccupancyRequiresResubmission,
   generationOperationCancellations,
   generationOperationProjections,
   readGenerationOperationStatus,
+  recoverCurrentChatOccupancyGenerationMutations,
+  replayChatOccupancyGenerationMutations,
   reconcileGenerationOperationErrorBody,
   reconcileGenerationOperationTranscriptHydration,
   registerGenerationOperationViewer,
@@ -211,6 +221,69 @@ function responseBody(state: GenerationOperationProjection['state'] = 'owned_by_
   }
 }
 
+function occupiedResponseBody(
+  authority: ReturnType<typeof occupancyAuthority>,
+  state: GenerationOperationProjection['state'] = 'owned_by_job',
+) {
+  const response = responseBody(state)
+  response.operation.creatorWriterSessionId = authority.sessionId
+  response.operation.generationScope = {
+    admissionKind: authority.claimClass === 'chat_only' ? 'chat_only' : 'owner_occupancy',
+    occupancyDatabaseLineage: authority.databaseLineage,
+    occupancySessionId: authority.sessionId,
+    occupancyEpoch: authority.occupancyEpoch,
+    occupancyClaimClass: authority.claimClass,
+    permissionScopeVersion: 1,
+    permissionScope: [],
+  }
+  return response
+}
+
+function occupiedStopPending(
+  authority: ReturnType<typeof occupancyAuthority>,
+  options: {
+    interaction?: 'send' | 'reroll' | 'continue' | 'regenerate'
+    occupancyEpoch?: number
+    epochDisposition?: 'current' | 'stale'
+  } = {},
+) {
+  const interaction = options.interaction ?? 'send'
+  const occupancyEpoch = options.occupancyEpoch ?? authority.occupancyEpoch
+  const handle = {
+    key: `generation-operation-cancel:${operationId}`,
+    mutationId: 'chat-stop-mutation',
+    sequence: 3,
+    ownerWriterSessionId: authority.sessionId,
+    writerEpoch: occupancyEpoch,
+    databaseLineage: authority.databaseLineage,
+    authorityKind: 'chat-occupancy' as const,
+    phase: 'staged' as const,
+    ready: Promise.resolve<'persisted'>('persisted'),
+  }
+  const intent = {
+    version: 1 as const,
+    kind: 'generation-operation-cancel' as const,
+    requests: [
+      {
+        method: 'PUT' as const,
+        path: `/generation-operations/${operationId}/cancellation`,
+        body: {
+          reason: 'user_stop',
+          chatId: 'chat-a',
+          chatOccupancy: { version: 1 as const, interaction },
+        },
+      },
+    ],
+  }
+  return {
+    handle,
+    intent,
+    chatId: 'chat-a',
+    occupancyEpoch,
+    epochDisposition: options.epochDisposition ?? ('current' as const),
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   resetClientSessionForTests()
@@ -238,6 +311,7 @@ beforeEach(() => {
   operationMocks.listPending.mockResolvedValue([])
   operationMocks.listChatOccupancyPending.mockResolvedValue([])
   operationMocks.chatOccupancyCurrent.mockReturnValue(true)
+  operationMocks.captureOccupancy.mockReturnValue(null)
   operationMocks.getBaseRevision.mockResolvedValue(7)
   operationMocks.beginDispatch.mockResolvedValue('persisted')
   operationMocks.discard.mockResolvedValue('deleted')
@@ -1386,6 +1460,90 @@ describe('occupied-chat generation operation client', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
+  it('stages and submits owner Continue under the exact occupied-chat tuple', async () => {
+    setReadyManagedWriter()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority('owner')
+    const staged = await stageTargetedGenerationOperation({
+      target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
+      mode: 'continue',
+      targetMessageId: 'reply-a',
+      chatOccupancy: { authority, interaction: 'continue' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const accepted = occupiedResponseBody(authority)
+    accepted.operation.requestOrigin = 'continue'
+    accepted.operation.mode = 'continue'
+    accepted.operation.targetMessageId = 'reply-a'
+    accepted.operation.resultMessageId = 'reply-a'
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify(accepted), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(submitStagedTargetedGenerationOperation(staged)).resolves.toMatchObject({ status: 'accepted' })
+
+    expect(operationMocks.stage).not.toHaveBeenCalled()
+    expect(operationMocks.stageChatOccupancy).toHaveBeenCalledWith(
+      `generation-operation-submit:${operationId}`,
+      expect.objectContaining({ kind: 'generation-operation-submit' }),
+      authority,
+      { requireEnabled: true },
+    )
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock.mock.calls[0]![1]).toEqual(
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
+        }),
+      }),
+    )
+    expect(JSON.parse(String(fetchMock.mock.calls[0]![1].body))).toMatchObject({
+      chatId: 'chat-a',
+      mode: 'continue',
+      targetMessageId: 'reply-a',
+      chatOccupancy: { version: 1, interaction: 'continue' },
+    })
+  })
+
+  it.each([
+    { label: 'Continue', mode: 'continue' as const, interaction: 'continue' as const },
+    { label: 'Regenerate', mode: 'regenerate' as const, interaction: 'regenerate' as const },
+  ])('rejects fresh chat-only $label before staging or transport', async (scenario) => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority('chat_only')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      stageTargetedGenerationOperation({
+        target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+        mode: scenario.mode,
+        targetMessageId: 'reply-a',
+        chatOccupancy: { authority, interaction: scenario.interaction },
+        generation: {
+          syntheticSayNothing: false,
+          resetMessages: false,
+          inlayAssetRefs: [],
+          clientContext: {},
+          clientCapabilities: {},
+        },
+      }),
+    ).resolves.toMatchObject({ status: 'error', error: 'This interaction is unavailable in chat-only mode.' })
+    expect(operationMocks.stageChatOccupancy).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
   it('reads an admitted operation for settlement after rollout disables', async () => {
     setManagedReaderForTest()
     const authority = occupancyAuthority()
@@ -1455,7 +1613,17 @@ describe('occupied-chat generation operation client', () => {
     expect(operationMocks.stage).not.toHaveBeenCalled()
     expect(operationMocks.stageChatOccupancy).toHaveBeenLastCalledWith(
       `generation-operation-cancel:${operationId}`,
-      expect.objectContaining({ kind: 'generation-operation-cancel' }),
+      expect.objectContaining({
+        kind: 'generation-operation-cancel',
+        requests: [
+          expect.objectContaining({
+            body: expect.objectContaining({
+              chatId: 'chat-a',
+              chatOccupancy: { version: 1, interaction: 'reroll' },
+            }),
+          }),
+        ],
+      }),
       authority,
       { requireEnabled: false },
     )
@@ -1466,6 +1634,126 @@ describe('occupied-chat generation operation client', () => {
           'risu-writer-session': authority.sessionId,
           'risu-database-lineage': authority.databaseLineage,
           'risu-chat-occupancy-epoch': '7',
+        }),
+      }),
+    )
+  })
+
+  it('restores occupied-chat Stop after owner-to-chat-only normalization preserves the tuple', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const admittedAuthority = occupancyAuthority('owner')
+    const authority = { ...admittedAuthority, claimClass: 'chat_only' as const }
+    const operation = {
+      ...occupiedResponseBody(admittedAuthority, 'owned_by_job').operation,
+      currentAttempt: {
+        ...occupiedResponseBody(admittedAuthority).operation.currentAttempt!,
+        actorWriterSessionId: authority.sessionId,
+      },
+    }
+    // Reload can project the accepted owner operation before the demoted reader
+    // finishes normalizing its retained claim, so no current authority exists
+    // when the projection is first applied.
+    operationMocks.captureOccupancy.mockReturnValue(null)
+    applyGenerationOperationProjection(operation)
+    operationMocks.captureOccupancy.mockReturnValue(authority)
+    const cancelled = { ...operation, state: 'cancelled' as const, stateVersion: 3, projectionEpoch: 4 }
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ operation: cancelled, disposition: 'cancelled', knownAttemptMatched: true }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      stopChatOccupancyGeneration({
+        selectedCharID: -1,
+        chatPage: -1,
+        characterId: 'character-a',
+        chatId: 'chat-a',
+      }),
+    ).resolves.toMatchObject({ status: 'acknowledged', disposition: 'cancelled' })
+
+    expect(operationMocks.stageChatOccupancy).toHaveBeenCalledWith(
+      `generation-operation-cancel:${operationId}`,
+      expect.objectContaining({
+        requests: [
+          expect.objectContaining({
+            body: expect.objectContaining({
+              chatId: authority.chatId,
+              chatOccupancy: { version: 1, interaction: 'send' },
+            }),
+          }),
+        ],
+      }),
+      authority,
+      { requireEnabled: false },
+    )
+    expect(fetchMock).toHaveBeenCalledOnce()
+  })
+
+  it('stages an exact target-scoped Stop before the occupied-chat submit reaches the server', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'cancel before submit',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const tombstone = {
+      operation: {
+        ...occupiedResponseBody(authority, 'cancel_requested').operation,
+        requestOrigin: 'unbound' as const,
+        acceptedRevision: undefined,
+      },
+      disposition: 'cancelled_before_acceptance',
+      knownAttemptMatched: false,
+    }
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(tombstone), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(
+      stopChatOccupancyGeneration({
+        selectedCharID: -1,
+        chatPage: -1,
+        characterId: 'character-a',
+        chatId: 'chat-a',
+      }),
+    ).resolves.toMatchObject({ status: 'acknowledged', disposition: 'cancelled_before_acceptance' })
+
+    expect(operationMocks.stageChatOccupancy).toHaveBeenLastCalledWith(
+      `generation-operation-cancel:${operationId}`,
+      expect.objectContaining({
+        requests: [
+          expect.objectContaining({
+            body: {
+              reason: 'user_stop',
+              chatId: authority.chatId,
+              chatOccupancy: { version: 1, interaction: 'send' },
+            },
+          }),
+        ],
+      }),
+      authority,
+      { requireEnabled: false },
+    )
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-operations/${operationId}/cancellation`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'risu-writer-session': authority.sessionId,
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-chat-occupancy-epoch': String(authority.occupancyEpoch),
         }),
       }),
     )
@@ -1491,6 +1779,813 @@ describe('occupied-chat generation operation client', () => {
       }),
     ).resolves.toMatchObject({ status: 'failed' })
     expect(operationMocks.stageChatOccupancy).not.toHaveBeenCalled()
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('reconciles a lost occupied-chat Send response by operation identity before replay', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'response was lost',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staged.handle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const accepted = occupiedResponseBody(authority)
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(accepted), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'succeeded', result: expect.objectContaining({ status: 'accepted' }) }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-operations/${operationId}`,
+      expect.any(Object),
+    )
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([])
+  })
+
+  it.each([
+    { label: 'Send', mode: 'send' as const, interaction: 'send' as const, resultMessageId: messageId },
+    {
+      label: 'Continue extend',
+      mode: 'continue' as const,
+      interaction: 'continue' as const,
+      resultMessageId: 'reply-a',
+    },
+    {
+      label: 'Continue append',
+      mode: 'continue' as const,
+      interaction: 'continue' as const,
+      resultMessageId: '33333333-3333-4333-8333-333333333333',
+    },
+    {
+      label: 'Regenerate',
+      mode: 'regenerate' as const,
+      interaction: 'regenerate' as const,
+      resultMessageId: '33333333-3333-4333-8333-333333333333',
+    },
+  ])('settles a lost owner $label response after same-tuple chat-only normalization', async (scenario) => {
+    setReadyManagedWriter()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const admittedAuthority = occupancyAuthority('owner')
+    const stagedResult =
+      scenario.mode === 'send'
+        ? await stageAcceptedSendGenerationOperation({
+            target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
+            message: 'accepted before normalization',
+            chatOccupancy: { authority: admittedAuthority, interaction: 'send' },
+            generation: {
+              syntheticSayNothing: false,
+              resetMessages: false,
+              inlayAssetRefs: [],
+              clientContext: {},
+              clientCapabilities: {},
+            },
+          })
+        : await stageTargetedGenerationOperation({
+            target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
+            mode: scenario.mode,
+            targetMessageId: 'reply-a',
+            chatOccupancy: { authority: admittedAuthority, interaction: scenario.interaction },
+            generation: {
+              syntheticSayNothing: scenario.label === 'Continue append',
+              resetMessages: false,
+              inlayAssetRefs: [],
+              clientContext: {},
+              clientCapabilities: {},
+            },
+          })
+    if ('status' in stagedResult) throw new Error(stagedResult.error)
+
+    setManagedReaderForTest()
+    const normalizedAuthority = {
+      ...admittedAuthority,
+      sessionGeneration: getClientSessionSnapshot().generation,
+      claimClass: 'chat_only' as const,
+    }
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: stagedResult.handle,
+        intent: stagedResult.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: admittedAuthority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const accepted = occupiedResponseBody(admittedAuthority)
+    accepted.operation.requestOrigin =
+      scenario.mode === 'send' ? 'accepted_send' : scenario.mode === 'continue' ? 'continue' : 'regenerate'
+    accepted.operation.mode = scenario.mode
+    if (scenario.mode !== 'send') accepted.operation.targetMessageId = 'reply-a'
+    accepted.operation.resultMessageId = scenario.resultMessageId
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(accepted), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(normalizedAuthority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'succeeded', result: expect.objectContaining({ status: 'accepted' }) }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-operations/${operationId}`,
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          'risu-writer-session': normalizedAuthority.sessionId,
+          'risu-chat-occupancy-epoch': String(normalizedAuthority.occupancyEpoch),
+        }),
+      }),
+    )
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).toHaveBeenCalledWith(stagedResult.handle)
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([])
+  })
+
+  it.each([
+    { label: 'Continue', mode: 'continue' as const, interaction: 'continue' as const, draftSequence: 31 },
+    { label: 'Regenerate', mode: 'regenerate' as const, interaction: 'regenerate' as const, draftSequence: 32 },
+  ])('keeps a proven-unaccepted owner $label dormant after same-tuple chat-only normalization', async (scenario) => {
+    setReadyManagedWriter()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const admittedAuthority = occupancyAuthority('owner')
+    const draftGeneration = { sequence: scenario.draftSequence, source: 'owner-before-normalization' }
+    const stagedResult = await stageTargetedGenerationOperation({
+      target: { selectedCharID: 0, chatPage: 0, characterId: 'character-a', chatId: 'chat-a' },
+      mode: scenario.mode,
+      targetMessageId: 'reply-a',
+      draftGeneration,
+      chatOccupancy: { authority: admittedAuthority, interaction: scenario.interaction },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in stagedResult) throw new Error(stagedResult.error)
+
+    setManagedReaderForTest()
+    const normalizedAuthority = {
+      ...admittedAuthority,
+      sessionGeneration: getClientSessionSnapshot().generation,
+      claimClass: 'chat_only' as const,
+    }
+    operationMocks.listChatOccupancyPending.mockResolvedValue([
+      {
+        handle: stagedResult.handle,
+        intent: stagedResult.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: admittedAuthority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const fetchMock = vi.fn(
+      async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Response(JSON.stringify({ error: 'generation_operation_not_found' }), {
+          status: 404,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      await expect(replayChatOccupancyGenerationMutations(normalizedAuthority)).resolves.toEqual([
+        expect.objectContaining({
+          disposition: 'retained',
+          result: expect.objectContaining({ status: 'rejected', code: 'generation_operation_not_found' }),
+        }),
+      ])
+    }
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    for (const [url, init] of fetchMock.mock.calls) {
+      expect(url).toBe(`/api/v1/generation-operations/${operationId}`)
+      expect(init).toEqual(
+        expect.objectContaining({
+          headers: expect.objectContaining({
+            'risu-writer-session': normalizedAuthority.sessionId,
+            'risu-chat-occupancy-epoch': String(normalizedAuthority.occupancyEpoch),
+          }),
+        }),
+      )
+    }
+    expect(
+      fetchMock.mock.calls.filter(
+        ([url, init]) =>
+          url === '/api/v1/generation-operations' && (init as RequestInit | undefined)?.method === 'POST',
+      ),
+    ).toEqual([])
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+    expect(stagedResult.intent.requests[0]?.body?.draftGeneration).toEqual(draftGeneration)
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([
+      expect.objectContaining({
+        mutationId: stagedResult.handle.mutationId,
+        chatId: 'chat-a',
+        operationId,
+        kind: scenario.interaction,
+        occupancyEpoch: admittedAuthority.occupancyEpoch,
+        disposition: 'requires_resubmission',
+        error: 'This interaction is unavailable in chat-only mode.',
+      }),
+    ])
+  })
+
+  it.each([
+    { admissionKind: 'owner_occupancy' as const, occupancyClaimClass: 'chat_only' as const },
+    { admissionKind: 'chat_only' as const, occupancyClaimClass: 'owner' as const },
+  ])('rejects malformed immutable recovery provenance %#', async (malformed) => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'malformed provenance must remain fenced',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staged.handle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const accepted = occupiedResponseBody(authority)
+    accepted.operation.generationScope = { ...accepted.operation.generationScope!, ...malformed }
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(accepted), { status: 200 })),
+    )
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({
+        disposition: 'retained',
+        result: expect.objectContaining({ status: 'rejected', code: 'generation_recovery_origin_mismatch' }),
+      }),
+    ])
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+  })
+
+  it('does not redispatch when the operation id exists with a different accepted intent', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'must remain fenced',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staged.handle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const conflicting = occupiedResponseBody(authority)
+    conflicting.operation.acceptedMessageId = '33333333-3333-4333-8333-333333333333'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(conflicting), { status: 200 })),
+    )
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'retained', result: expect.objectContaining({ status: 'accepted' }) }),
+    ])
+
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([
+      expect.objectContaining({ disposition: 'retained', operationId }),
+    ])
+  })
+
+  it('retains a pending Send when status resolves to a reroll admitted under the same tuple', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'origin must match',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staged.handle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const wrongOrigin = occupiedResponseBody(authority)
+    wrongOrigin.operation.requestOrigin = 'regenerate'
+    wrongOrigin.operation.mode = 'regenerate'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => new Response(JSON.stringify(wrongOrigin), { status: 200 })),
+    )
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({
+        disposition: 'retained',
+        result: expect.objectContaining({ status: 'rejected', code: 'generation_recovery_origin_mismatch' }),
+      }),
+    ])
+
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+  })
+
+  it('keeps a proven-unaccepted expired-epoch Send dormant until a fresh explicit Send succeeds', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'expired pending send',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const staleHandle = { ...staged.handle, writerEpoch: authority.occupancyEpoch - 1 }
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staleHandle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch - 1,
+        epochDisposition: 'stale',
+      },
+    ])
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ error: 'generation_operation_not_found' }), {
+          status: 404,
+        }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'retained' }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([
+      expect.objectContaining({
+        chatId: 'chat-a',
+        operationId,
+        kind: 'send',
+        occupancyEpoch: authority.occupancyEpoch - 1,
+        disposition: 'requires_resubmission',
+      }),
+    ])
+
+    await discardChatOccupancyRequiresResubmission('chat-a', 'send')
+    expect(operationMocks.discard).toHaveBeenCalledWith(staleHandle)
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([])
+  })
+
+  it('reconciles a lost exact-scope reroll Stop tombstone without dispatching the cancellation twice', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const handle = {
+      key: `generation-operation-cancel:${operationId}`,
+      mutationId: 'chat-stop-mutation',
+      sequence: 3,
+      ownerWriterSessionId: authority.sessionId,
+      writerEpoch: authority.occupancyEpoch,
+      databaseLineage: authority.databaseLineage,
+      authorityKind: 'chat-occupancy' as const,
+      phase: 'staged' as const,
+      ready: Promise.resolve<'persisted'>('persisted'),
+    }
+    const intent = {
+      version: 1 as const,
+      kind: 'generation-operation-cancel' as const,
+      requests: [
+        {
+          method: 'PUT' as const,
+          path: `/generation-operations/${operationId}/cancellation`,
+          body: {
+            reason: 'user_stop',
+            chatId: 'chat-a',
+            chatOccupancy: { version: 1, interaction: 'reroll' },
+          },
+        },
+      ],
+    }
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle,
+        intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const completedStop = occupiedResponseBody(authority, 'cancelled')
+    completedStop.operation.requestOrigin = 'unbound'
+    completedStop.operation.mode = 'regenerate'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(completedStop), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'succeeded' }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledExactlyOnceWith(
+      `/api/v1/generation-operations/${operationId}`,
+      expect.any(Object),
+    )
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).toHaveBeenCalledWith(handle)
+  })
+
+  it('settles both exact sibling Send and Stop rows from a pre-acceptance cancellation tombstone', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'must never reach the provider',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const stop = occupiedStopPending(authority)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staged.handle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+      stop,
+    ])
+    const tombstone = {
+      ...occupiedResponseBody(authority, 'cancel_requested').operation,
+      requestOrigin: 'unbound' as const,
+      acceptedMessageId: undefined,
+      acceptedRevision: undefined,
+      currentAttempt: undefined,
+    }
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(new Response(JSON.stringify({ operation: tombstone }), { status: 200 })),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'succeeded', result: expect.objectContaining({ status: 'accepted' }) }),
+      expect.objectContaining({ disposition: 'succeeded', result: expect.objectContaining({ status: 'accepted' }) }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+      `/api/v1/generation-operations/${operationId}`,
+      `/api/v1/generation-operations/${operationId}`,
+    ])
+    expect(fetchMock.mock.calls.every(([, init]) => !(init as RequestInit).method)).toBe(true)
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).toHaveBeenCalledTimes(2)
+    expect(operationMocks.discard).toHaveBeenCalledWith(staged.handle)
+    expect(operationMocks.discard).toHaveBeenCalledWith(stop.handle)
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([])
+  })
+
+  it.each(['stale epoch', 'mismatched scope'] as const)(
+    'keeps a sibling Send dormant for a %s cancellation tombstone',
+    async (scenario) => {
+      setManagedReaderForTest()
+      configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+      const authority = occupancyAuthority()
+      const staged = await stageAcceptedSendGenerationOperation({
+        target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+        message: 'must remain dormant',
+        chatOccupancy: { authority, interaction: 'send' },
+        generation: {
+          syntheticSayNothing: false,
+          resetMessages: false,
+          inlayAssetRefs: [],
+          clientContext: {},
+          clientCapabilities: {},
+        },
+      })
+      if ('status' in staged) throw new Error(staged.error)
+      const stale = scenario === 'stale epoch'
+      const handle = stale ? { ...staged.handle, writerEpoch: authority.occupancyEpoch - 1 } : staged.handle
+      operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+        {
+          handle,
+          intent: staged.intent,
+          chatId: 'chat-a',
+          occupancyEpoch: stale ? authority.occupancyEpoch - 1 : authority.occupancyEpoch,
+          epochDisposition: stale ? 'stale' : 'current',
+        },
+      ])
+      const responseAuthority = {
+        ...authority,
+        occupancyEpoch: stale ? authority.occupancyEpoch - 1 : authority.occupancyEpoch + 1,
+      }
+      const tombstone = {
+        ...occupiedResponseBody(responseAuthority, 'cancel_requested').operation,
+        requestOrigin: 'unbound' as const,
+        acceptedMessageId: undefined,
+        acceptedRevision: undefined,
+        currentAttempt: undefined,
+      }
+      const fetchMock = vi.fn(async () => new Response(JSON.stringify({ operation: tombstone }), { status: 200 }))
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+        expect.objectContaining({ disposition: 'retained' }),
+      ])
+
+      expect(fetchMock).toHaveBeenCalledOnce()
+      expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+      expect(operationMocks.discard).not.toHaveBeenCalled()
+      expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([
+        expect.objectContaining({
+          mutationId: handle.mutationId,
+          kind: 'send',
+          disposition: 'retained',
+        }),
+      ])
+    },
+  )
+
+  it('replays an exact current-authority staged Stop when status still shows the provider running', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const pending = occupiedStopPending(authority)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([pending])
+    const running = occupiedResponseBody(authority, 'owned_by_job')
+    const cancelled = occupiedResponseBody(authority, 'cancelled').operation
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(running), { status: 200 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ operation: cancelled, disposition: 'cancelled', knownAttemptMatched: true }), {
+          status: 200,
+        }),
+      )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({
+        disposition: 'succeeded',
+        result: expect.objectContaining({ status: 'acknowledged', disposition: 'cancelled' }),
+      }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0]![0]).toBe(`/api/v1/generation-operations/${operationId}`)
+    expect(fetchMock.mock.calls[1]![0]).toBe(`/api/v1/generation-operations/${operationId}/cancellation`)
+    expect(operationMocks.beginDispatch).toHaveBeenCalledWith(pending.handle)
+    expect(operationMocks.discard).toHaveBeenCalledWith(pending.handle)
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([])
+  })
+
+  it.each(['send', 'continue', 'regenerate'] as const)(
+    'replays one lost %s Stop after owner-to-chat-only normalization without generation redispatch',
+    async (interaction) => {
+      setManagedReaderForTest()
+      configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+      const normalizedAuthority = occupancyAuthority('chat_only')
+      const admittedAuthority = { ...normalizedAuthority, claimClass: 'owner' as const }
+      const pending = occupiedStopPending(normalizedAuthority, { interaction })
+      operationMocks.listChatOccupancyPending.mockResolvedValueOnce([pending])
+      const running = occupiedResponseBody(admittedAuthority, 'owned_by_job')
+      running.operation.requestOrigin =
+        interaction === 'send' ? 'accepted_send' : interaction === 'continue' ? 'continue' : 'regenerate'
+      running.operation.mode = interaction === 'send' ? 'send' : interaction === 'continue' ? 'continue' : 'regenerate'
+      if (interaction !== 'send') running.operation.targetMessageId = 'reply-a'
+      const cancelled = {
+        ...running.operation,
+        state: 'cancelled' as const,
+        stateVersion: running.operation.stateVersion + 1,
+      }
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce(new Response(JSON.stringify(running), { status: 200 }))
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ operation: cancelled, disposition: 'cancelled', knownAttemptMatched: true }), {
+            status: 200,
+          }),
+        )
+      vi.stubGlobal('fetch', fetchMock)
+
+      await expect(replayChatOccupancyGenerationMutations(normalizedAuthority)).resolves.toEqual([
+        expect.objectContaining({
+          disposition: 'succeeded',
+          result: expect.objectContaining({ status: 'acknowledged', disposition: 'cancelled' }),
+        }),
+      ])
+
+      expect(fetchMock.mock.calls.map(([url]) => url)).toEqual([
+        `/api/v1/generation-operations/${operationId}`,
+        `/api/v1/generation-operations/${operationId}/cancellation`,
+      ])
+      expect(
+        fetchMock.mock.calls.filter(
+          ([url, init]) =>
+            url === '/api/v1/generation-operations' && (init as RequestInit | undefined)?.method === 'POST',
+        ),
+      ).toEqual([])
+      expect(operationMocks.beginDispatch).toHaveBeenCalledOnce()
+      expect(operationMocks.discard).toHaveBeenCalledWith(pending.handle)
+    },
+  )
+
+  it('retains an exact staged Stop when its replay transport fails before the server receives it', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const pending = occupiedStopPending(authority)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([pending])
+    const running = occupiedResponseBody(authority, 'owned_by_job')
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(running), { status: 200 }))
+      .mockRejectedValueOnce(new Error('connection failed before request receipt'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({
+        disposition: 'retained',
+        result: expect.objectContaining({
+          status: 'failed',
+          error: 'Network error: connection failed before request receipt',
+        }),
+      }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[1]![0]).toBe(`/api/v1/generation-operations/${operationId}/cancellation`)
+    expect(operationMocks.beginDispatch).toHaveBeenCalledWith(pending.handle)
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([
+      expect.objectContaining({
+        mutationId: pending.handle.mutationId,
+        kind: 'stop',
+        disposition: 'retained',
+      }),
+    ])
+  })
+
+  it.each(['stale epoch', 'mismatched origin'] as const)('keeps a %s staged Stop dormant', async (scenario) => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const stale = scenario === 'stale epoch'
+    const pending = occupiedStopPending(authority, {
+      occupancyEpoch: stale ? authority.occupancyEpoch - 1 : authority.occupancyEpoch,
+      epochDisposition: stale ? 'stale' : 'current',
+    })
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([pending])
+    const responseAuthority = {
+      ...authority,
+      occupancyEpoch: stale ? authority.occupancyEpoch - 1 : authority.occupancyEpoch,
+    }
+    const running = occupiedResponseBody(responseAuthority, 'owned_by_job')
+    if (!stale) running.operation.mode = 'regenerate'
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify(running), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'retained' }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+    expect(get(chatOccupancyGenerationRecoveryProjections)).toEqual([
+      expect.objectContaining({
+        mutationId: pending.handle.mutationId,
+        kind: 'stop',
+        disposition: 'retained',
+      }),
+    ])
+  })
+
+  it('replays an exact occupied-chat intent only after status proves the operation is absent', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'safe exact replay',
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    operationMocks.listChatOccupancyPending.mockResolvedValueOnce([
+      {
+        handle: staged.handle,
+        intent: staged.intent,
+        chatId: 'chat-a',
+        occupancyEpoch: authority.occupancyEpoch,
+        epochDisposition: 'current',
+      },
+    ])
+    const accepted = occupiedResponseBody(authority)
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({ error: 'generation_operation_not_found' }), { status: 404 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(accepted), { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(replayChatOccupancyGenerationMutations(authority)).resolves.toEqual([
+      expect.objectContaining({ disposition: 'succeeded', result: expect.objectContaining({ status: 'accepted' }) }),
+    ])
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(fetchMock.mock.calls[0]![0]).toBe(`/api/v1/generation-operations/${operationId}`)
+    expect(fetchMock.mock.calls[1]![0]).toBe('/api/v1/generation-operations')
+    expect(operationMocks.beginDispatch).toHaveBeenCalledWith(staged.handle)
+  })
+
+  it('grants an observer no recovery authority and does not inspect the scoped outbox', async () => {
+    setManagedReaderForTest()
+    operationMocks.listOccupancyAuthorities.mockReturnValueOnce([])
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(recoverCurrentChatOccupancyGenerationMutations()).resolves.toEqual([])
+
+    expect(operationMocks.listChatOccupancyPending).not.toHaveBeenCalled()
+    expect(operationMocks.beginDispatch).not.toHaveBeenCalled()
     expect(fetchMock).not.toHaveBeenCalled()
   })
 })

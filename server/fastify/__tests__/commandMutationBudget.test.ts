@@ -173,8 +173,8 @@ describe('command mutation-range budgets', () => {
     expect(emitted).toEqual([...GATE_KEYS].sort())
   })
 
-  it('every targeted-* gate fixes dbJsonWriteMs: 0 and declares a written-table budget', () => {
-    const targeted = GATE_ENTRIES.filter(([key]) => key.startsWith('targeted-'))
+  it('every narrow mutation gate fixes dbJsonWriteMs: 0 and declares a written-table budget', () => {
+    const targeted = GATE_ENTRIES.filter(([key]) => key.startsWith('targeted-') || key.startsWith('generation-effect-'))
     // There is at least one targeted path per Tier write family.
     expect(targeted.length).toBeGreaterThanOrEqual(5)
     for (const [key, gate] of targeted) {
@@ -195,7 +195,10 @@ describe('command mutation-range budgets', () => {
       ...BARDWIKI_WRITE_TABLES,
       ...BROAD_WRITE_TABLES,
       'chat_hypa_v3',
+      'generation_effects',
       'inlay_catalog',
+      'memory_chunks',
+      'memory_jobs',
       'messages',
     ])
     for (const [key, gate] of GATE_ENTRIES) {
@@ -216,6 +219,24 @@ describe('command mutation-range budgets', () => {
   it('accepts writtenTables that satisfy the configured table budget', () => {
     expect(assertCommandMetricGate(pluginStorageMetric(['plugin_custom_storage']))).toBe(
       COMMAND_METRIC_REVIEW_GATES['targeted-plugin-storage'],
+    )
+  })
+
+  it('classifies atomic IGP completion as an exact-message/effect mutation with bounded derived invalidation', () => {
+    const metric: CommandMutationMetric = {
+      type: 'message.updated',
+      mutationPath: 'generation-effect-igp-commit',
+      loadMs: 0,
+      cloneMutateMs: 0,
+      sqliteSyncMs: 0,
+      dbJsonWriteMs: 0,
+      totalMs: 0,
+      writtenTables: ['generation_effects', 'messages'],
+    }
+    expect(assertCommandMetricGate(metric)).toBe(COMMAND_METRIC_REVIEW_GATES['generation-effect-igp-commit'])
+
+    expect(() => assertCommandMetricGate({ ...metric, writtenTables: ['chats', ...metric.writtenTables!] })).toThrow(
+      'generation-effect-igp-commit wrote tables outside maxTables',
     )
   })
 })

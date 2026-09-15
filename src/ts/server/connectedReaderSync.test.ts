@@ -29,6 +29,7 @@ const api = vi.hoisted(() => ({
   stopLifecycle: vi.fn(),
   configureOccupancy: vi.fn(),
   applyOccupancy: vi.fn(),
+  recoverOccupancy: vi.fn(),
   known: null as number | null,
   applied: null as number | null,
 }))
@@ -73,6 +74,7 @@ vi.mock('./lifecycleRecovery', () => ({ subscribeBrowserLifecycleRecovery: api.l
 vi.mock('./chatOccupancy', () => ({
   configureClientChatOccupancy: api.configureOccupancy,
   applyClientChatOccupancyEvent: api.applyOccupancy,
+  requestClientChatOccupancyRecovery: api.recoverOccupancy,
 }))
 
 import {
@@ -361,6 +363,7 @@ describe('connected reader synchronization', () => {
     const session = getClientSessionSnapshot()
 
     expect(api.configureOccupancy).toHaveBeenCalledWith(capability, snapshot, session.generation)
+    expect(api.recoverOccupancy).toHaveBeenCalledOnce()
     const event = { type: 'occupancy.snapshot' as const, ...snapshot }
     streams[0].input.onOccupancyEvent?.(event)
     expect(api.applyOccupancy).toHaveBeenCalledWith(event, {
@@ -407,6 +410,24 @@ describe('connected reader synchronization', () => {
     streams[0].input.onCommandEvent(command(7))
     await flush()
     expect(api.targeted).toHaveBeenCalledTimes(2)
+  })
+
+  it('wakes occupied-chat effect recovery after an authoritative message update is applied', async () => {
+    const { sync } = start()
+    await sync.ready
+    api.recoverOccupancy.mockClear()
+
+    streams[0].input.onCommandEvent({
+      type: 'message.updated',
+      resource: 'message',
+      id: 'message-a',
+      parentId: 'chat-a',
+      revision: 6,
+    })
+    await flush()
+
+    expect(api.applied).toBe(6)
+    expect(api.recoverOccupancy).toHaveBeenCalledExactlyOnceWith({ refresh: true })
   })
 
   it('replaces a replay gap through read-only resources and forgets hydrated body identities', async () => {

@@ -63,6 +63,7 @@ import {
   applyClientChatOccupancyEvent,
   clearClientChatOccupancyIdentity,
   configureClientChatOccupancy,
+  requestClientChatOccupancyRecovery,
 } from './server/chatOccupancy'
 import {
   countBlockingPendingMutationRecords,
@@ -2087,6 +2088,7 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     recordServerResourceEventFrame(eventEpoch)
     recordStartupMilestone('writer-ready')
     if (isClientSessionManaged()) setClientConnectionState('live')
+    requestClientChatOccupancyRecovery({ refresh: true })
     setReaderWorkspaceLifecycleMode('promoted')
     if (options.replayPendingMutations !== false) triggerReconnectPendingMutationReplay()
     if (hasPendingReplacementDatabaseRefresh()) {
@@ -2399,12 +2401,17 @@ async function processServerCommandEvents(
 
   const sortedEvents = [...events].sort((left, right) => left.revision - right.revision)
   let pendingAuthoritativeEvents: CommandEvent[] = []
+  let appliedMessageUpdate = false
 
   const flushPendingAuthoritativeEvents = async (): Promise<boolean> => {
     if (pendingAuthoritativeEvents.length === 0) return true
     const pending = pendingAuthoritativeEvents
     pendingAuthoritativeEvents = []
-    return processAuthoritativeServerCommandEvents(pending)
+    const completed = await processAuthoritativeServerCommandEvents(pending)
+    if (completed && pending.some((event) => event.type === 'message.updated' && event.resource === 'message')) {
+      appliedMessageUpdate = true
+    }
+    return completed
   }
 
   for (const event of sortedEvents) {
@@ -2428,6 +2435,7 @@ async function processServerCommandEvents(
       notifyServerCommandLocalEffectApplied(event, localEffect)
       advanceKnownServerCommandRevision(event.revision)
       setAppliedServerResourceRevision(event.revision)
+      if (event.type === 'message.updated' && event.resource === 'message') appliedMessageUpdate = true
       continue
     }
 
@@ -2435,9 +2443,16 @@ async function processServerCommandEvents(
     // an effect whose target disappeared must retain the ordinary authoritative
     // invalidation path.
     if (!(await processAuthoritativeServerCommandEvents([event]))) return
+    if (event.type === 'message.updated' && event.resource === 'message') appliedMessageUpdate = true
   }
 
-  await flushPendingAuthoritativeEvents()
+  const completed = await flushPendingAuthoritativeEvents()
+  if (completed && isCurrent() && appliedMessageUpdate) {
+    // A server-owned generated translation atomically settles its durable
+    // predecessor receipt with this message update. Re-read pending effects so
+    // the same page can resume IGP after the live translation defer cap.
+    requestClientChatOccupancyRecovery({ refresh: true })
+  }
 }
 
 function applyLegacyPresetPatchAcknowledgement(
@@ -3522,6 +3537,15 @@ async function processAuthoritativeServerCommandEvents(events: readonly CommandE
       resetChatHydration()
       resetLorebookHydration()
       recordHydratedCharacterLorebooks(charactersResourceState.characters)
+      // Start the fresh character-row read before revoking readiness. The
+      // readiness evaluation will subscribe to this exact request; starting a
+      // superseding read afterward can otherwise abort the evaluation and
+      // leave `chat-dependencies` false until another target change.
+      void hydrateSelectedCharacterShell({
+        supersede: true,
+        rebindSupersededSubscribers: true,
+        minimumRevision: result.revision,
+      })
       requestActiveChatReadinessRefresh()
       void hydrateActiveChat({ force: true })
     } else {
@@ -3544,7 +3568,13 @@ async function processAuthoritativeServerCommandEvents(events: readonly CommandE
 
     advanceKnownServerCommandRevision(result.revision)
     setAppliedServerResourceRevision(result.revision)
-    void hydrateSelectedCharacterShell({ supersede: true })
+    if (result.scope !== 'full') {
+      void hydrateSelectedCharacterShell({
+        supersede: true,
+        rebindSupersededSubscribers: true,
+        minimumRevision: result.revision,
+      })
+    }
     return true
   } finally {
     selectionTracker.stop()

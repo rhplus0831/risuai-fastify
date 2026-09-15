@@ -40,6 +40,11 @@ export interface RunServerMessageTranslationInput {
     db: DatabaseSync,
     target: { databaseLineage: string; chatId: string; messageId: string },
   ) => void
+  /** Complete a generation-owned translation receipt in the message transaction. */
+  onTranslationCommittedInTransaction?: (
+    db: DatabaseSync,
+    target: { databaseLineage: string; chatId: string; messageId: string },
+  ) => void
 }
 
 interface LiveMessageSource {
@@ -111,7 +116,7 @@ function readLiveMessageSource(db: DatabaseSync, messageId: string): LiveMessage
  * source text, prior translation, and last-registered job handle.
  */
 export async function runServerMessageTranslation(input: RunServerMessageTranslationInput) {
-  const { signal, cleanup } = createDetachedAbort()
+  const { signal, abort, cleanup } = createDetachedAbort()
   let translationJob: MessageTranslationJobHandle | undefined
   try {
     const databaseLineage = getDatabaseLineage(input.db)
@@ -120,6 +125,7 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
       chatId: source.chatId,
       messageId: input.messageId,
       ...(input.jobId ? { jobId: input.jobId } : {}),
+      abort,
     })
     const { settings, character, chat } = resolveTranslationConfiguration(input, source)
     const greeting = selectedGreeting(character, chat)
@@ -215,6 +221,11 @@ export async function runServerMessageTranslation(input: RunServerMessageTransla
           }
           throw new EntityNotFoundError(`Message not found: ${input.messageId}`)
         }
+        input.onTranslationCommittedInTransaction?.(targetDb, {
+          databaseLineage,
+          chatId: updated.chatId,
+          messageId: input.messageId,
+        })
         return {
           event: {
             ...COMMAND_EVENT_CATALOG.messageUpdated,

@@ -171,6 +171,16 @@ export interface GenerationOperationAttemptProjection {
   updatedAt?: string
 }
 
+export interface GenerationScopeProjection {
+  admissionKind: 'legacy_owner' | 'owner_occupancy' | 'chat_only'
+  occupancyDatabaseLineage?: string
+  occupancySessionId?: string
+  occupancyEpoch?: number
+  occupancyClaimClass?: 'owner' | 'chat_only'
+  permissionScopeVersion?: 1
+  permissionScope?: readonly string[]
+}
+
 export interface GenerationOperationProjection {
   operationId: string
   protocolVersion: number
@@ -180,6 +190,7 @@ export interface GenerationOperationProjection {
   projectionEpoch: number
   creatorWriterSessionId: string
   creatorWriterEpoch: number
+  generationScope?: GenerationScopeProjection
   bindingServerInstanceId?: string
   characterId?: string
   chatId?: string
@@ -220,16 +231,46 @@ export interface PendingGenerationEffect {
   kind: GenerationEffectKind
   effectClass: 'durable' | 'ephemeral' | 'recomputed'
   operationId?: string
+  operationAttemptNo?: number
   generationId: string
   characterId: string
   chatId: string
   messageId: string
+  generationScope?: GenerationScopeProjection
+  inlayPreparationId?: string
   status: 'pending' | 'claimed'
   claimId?: string
   claimedAt?: string
   leaseExpiresAt?: string
   createdAt: string
   updatedAt: string
+}
+
+function parseGenerationScope(value: unknown): GenerationScopeProjection | undefined {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  const scope = value as Record<string, unknown>
+  if (
+    scope.admissionKind !== 'legacy_owner' &&
+    scope.admissionKind !== 'owner_occupancy' &&
+    scope.admissionKind !== 'chat_only'
+  ) {
+    return undefined
+  }
+  return {
+    admissionKind: scope.admissionKind,
+    ...(typeof scope.occupancyDatabaseLineage === 'string'
+      ? { occupancyDatabaseLineage: scope.occupancyDatabaseLineage }
+      : {}),
+    ...(typeof scope.occupancySessionId === 'string' ? { occupancySessionId: scope.occupancySessionId } : {}),
+    ...(isNonNegativeSafeInteger(scope.occupancyEpoch) ? { occupancyEpoch: scope.occupancyEpoch as number } : {}),
+    ...(scope.occupancyClaimClass === 'owner' || scope.occupancyClaimClass === 'chat_only'
+      ? { occupancyClaimClass: scope.occupancyClaimClass }
+      : {}),
+    ...(scope.permissionScopeVersion === 1 ? { permissionScopeVersion: 1 as const } : {}),
+    ...(Array.isArray(scope.permissionScope) && scope.permissionScope.every((entry) => typeof entry === 'string')
+      ? { permissionScope: Object.freeze([...scope.permissionScope]) as readonly string[] }
+      : {}),
+  }
 }
 
 export type GenerationFinalizationState =
@@ -637,6 +678,7 @@ function parsePendingGenerationEffects(value: unknown): PendingGenerationEffect[
     ) {
       continue
     }
+    const generationScope = parseGenerationScope(record.generationScope)
     effects.push({
       ledgerVersion: 1,
       databaseLineage: record.databaseLineage,
@@ -645,10 +687,18 @@ function parsePendingGenerationEffects(value: unknown): PendingGenerationEffect[
       kind,
       effectClass,
       ...(typeof record.operationId === 'string' ? { operationId: record.operationId } : {}),
+      ...(isPositiveSafeInteger(record.operationAttemptNo)
+        ? { operationAttemptNo: record.operationAttemptNo as number }
+        : {}),
       generationId: record.generationId,
       characterId: record.characterId,
       chatId: record.chatId,
       messageId: record.messageId,
+      ...(generationScope ? { generationScope } : {}),
+      ...(typeof record.inlayPreparationId === 'string' &&
+      /^[A-Za-z0-9][A-Za-z0-9._:-]{0,47}$/.test(record.inlayPreparationId)
+        ? { inlayPreparationId: record.inlayPreparationId }
+        : {}),
       status: record.status,
       ...(typeof record.claimId === 'string' ? { claimId: record.claimId } : {}),
       ...(typeof record.claimedAt === 'string' ? { claimedAt: record.claimedAt } : {}),
@@ -696,6 +746,8 @@ export function parseGenerationOperations(value: unknown): GenerationOperationPr
       creatorWriterEpoch: record.creatorWriterEpoch as number,
       providerMayHaveRun: record.providerMayHaveRun,
     }
+    const generationScope = parseGenerationScope(record.generationScope)
+    if (generationScope) operation.generationScope = generationScope
     for (const field of [
       'bindingServerInstanceId',
       'characterId',

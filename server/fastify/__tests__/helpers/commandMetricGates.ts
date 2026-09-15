@@ -91,6 +91,46 @@ export const COMMAND_METRIC_REVIEW_GATES = {
     dbJsonWriteMs: 0,
     maxTables: ['chats', ...MESSAGE_STORE_TABLES].sort(),
   },
+  'generation-effect-igp-commit': {
+    reviewGate:
+      'atomic IGP completion writes only its exact assistant message and effect receipt, plus derived memory/wiki invalidation rows for that changed transcript',
+    sections: COMMAND_METRIC_SECTIONS,
+    dbJsonWriteMs: 0,
+    maxTables: [
+      'bardwiki_jobs',
+      'bardwiki_turn_receipts',
+      'generation_effects',
+      'memory_chunks',
+      'memory_jobs',
+      'messages',
+    ],
+  },
+  'generation-effect-inlay-prepare': {
+    reviewGate: 'inlay preparation writes only the exact generation-effect obligation marker',
+    sections: COMMAND_METRIC_SECTIONS,
+    dbJsonWriteMs: 0,
+    expectedTables: ['generation_effects'],
+  },
+  'generation-effect-inlay-finalize': {
+    reviewGate:
+      'inlay finalization writes only its exact assistant message and generation-effect state, plus derived memory/wiki invalidation rows for that changed transcript',
+    sections: COMMAND_METRIC_SECTIONS,
+    dbJsonWriteMs: 0,
+    maxTables: [
+      'bardwiki_jobs',
+      'bardwiki_turn_receipts',
+      'generation_effects',
+      'memory_chunks',
+      'memory_jobs',
+      'messages',
+    ],
+  },
+  'generation-effect-inlay-abandon': {
+    reviewGate: 'inlay abandonment writes only the exact generation-effect obligation marker',
+    sections: COMMAND_METRIC_SECTIONS,
+    dbJsonWriteMs: 0,
+    expectedTables: ['generation_effects'],
+  },
   'targeted-assembly': {
     reviewGate:
       'prompt-assembly persistence writes only the active chat row and message store, including when a chat-var write rides along',

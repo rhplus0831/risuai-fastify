@@ -1,5 +1,6 @@
 import type { DatabaseSync } from 'node:sqlite'
 import { getDatabaseOwnershipSnapshot } from './databaseLineage.js'
+import { listUncommittedGenerationFinalizationIdsForChat } from './generationFinalizationCommit.js'
 
 export const CHAT_ONLY_GENERATION_SCOPE_VERSION = 1 as const
 
@@ -69,7 +70,42 @@ export interface AdmitGenerationInput {
   occupancyEpoch?: number
   interaction: 'send' | 'reroll' | 'continue' | 'regenerate'
   chatOnlyEnabled: boolean
+  allowDisabledOccupancyControl?: boolean
+  allowedRecoveryPin?: { id: string; kind: string }
+  allowedRecoveryOperationId?: string
   nowMs?: number
+}
+
+export interface AcceptedCompatibilityGenerationAuthority {
+  databaseLineage: string
+  chatId: string
+  sessionId: string
+  occupancyEpoch: number
+  nowMs?: number
+}
+
+/**
+ * Admit protocol-less generation and capture the chat's current occupancy
+ * epoch as an immutable publication fence. A missing occupancy row is epoch
+ * zero. Any later claim/release cycle advances the durable row and therefore
+ * remains detectable even after the row becomes an unoccupied tombstone.
+ */
+export function admitAcceptedCompatibilityGenerationInTransaction(
+  db: DatabaseSync,
+  input: AdmitGenerationInput,
+): AcceptedCompatibilityGenerationAuthority {
+  const scope = admitGenerationInTransaction(db, input)
+  if (scope.admissionKind !== 'legacy_owner') {
+    throw new GenerationAdmissionError(409, 'generation_scope_invalid')
+  }
+  const occupancy = readOccupancy(db, input.chatId, input.databaseLineage)
+  return {
+    databaseLineage: input.databaseLineage,
+    chatId: input.chatId,
+    sessionId: input.sessionId,
+    occupancyEpoch: occupancy?.occupancy_epoch ?? 0,
+    ...(input.nowMs !== undefined ? { nowMs: input.nowMs } : {}),
+  }
 }
 
 /**
@@ -95,11 +131,22 @@ export function admitGenerationInTransaction(db: DatabaseSync, input: AdmitGener
         reason: 'Compatibility generation requires the active general owner.',
       })
     }
-    assertNoForeignOccupancyOrPins(db, input.chatId, input.sessionId, occupancy, now)
+    retireExpiredOccupancyOrRequireProtocol(
+      db,
+      input.chatId,
+      input.sessionId,
+      occupancy,
+      now,
+      input.allowedRecoveryPin,
+      input.allowedRecoveryOperationId,
+    )
     return { admissionKind: 'legacy_owner' }
   }
 
-  if (input.occupancyProtocolVersion !== 1 || !input.chatOnlyEnabled) {
+  if (
+    input.occupancyProtocolVersion !== 1 ||
+    (!input.chatOnlyEnabled && input.allowDisabledOccupancyControl !== true)
+  ) {
     throw new GenerationAdmissionError(426, 'chat_occupancy_protocol_required', {
       supportedVersion: 1,
       enabled: input.chatOnlyEnabled,
@@ -153,6 +200,77 @@ export function admitGenerationInTransaction(db: DatabaseSync, input: AdmitGener
     permissionScopeVersion: CHAT_ONLY_GENERATION_SCOPE_VERSION,
     permissionScope: [...CHAT_ONLY_GENERATION_ALLOWLIST],
   }
+}
+
+/**
+ * Revalidate an already-accepted protocol-less generation immediately before
+ * one of its writes. Fresh admission checks recovery pins; an accepted write
+ * must not reject itself merely because its own finalization or memory work is
+ * now the pin. It still cannot cross an owner change or any intervening
+ * occupancy tuple, including an expired tuple that proves another authority
+ * existed after acceptance.
+ */
+export function assertAcceptedCompatibilityGenerationAuthorityInTransaction(
+  db: DatabaseSync,
+  input: AcceptedCompatibilityGenerationAuthority,
+): void {
+  if (!Number.isSafeInteger(input.occupancyEpoch) || input.occupancyEpoch < 0) {
+    throw new GenerationAdmissionError(409, 'generation_scope_invalid')
+  }
+  const ownership = getDatabaseOwnershipSnapshot(db)
+  if (ownership.databaseLineage !== input.databaseLineage) {
+    throw new GenerationAdmissionError(409, 'database_lineage_conflict', {
+      databaseLineage: ownership.databaseLineage,
+    })
+  }
+  if (ownership.writer.sessionId !== null && ownership.writer.sessionId !== input.sessionId) {
+    throw new GenerationAdmissionError(423, 'active_writer_stale', {
+      reason: 'Accepted compatibility generation belongs to a different general owner.',
+    })
+  }
+  const occupancy = readOccupancy(db, input.chatId, ownership.databaseLineage)
+  const now = input.nowMs ?? Date.now()
+  if ((occupancy?.occupancy_epoch ?? 0) !== input.occupancyEpoch) {
+    if (
+      occupancy?.occupant_session_id &&
+      occupancy.lease_expires_at_ms !== null &&
+      occupancy.lease_expires_at_ms > now &&
+      occupancy.occupant_session_id !== input.sessionId
+    ) {
+      throw new GenerationAdmissionError(423, 'chat_occupied', {
+        chatId: input.chatId,
+        safeRelease:
+          'Use the current occupant session and exact lineage/chat/epoch tuple to release this chat; stale or foreign release is not permitted.',
+      })
+    }
+    throw new GenerationAdmissionError(409, 'chat_occupancy_stale', {
+      chatId: input.chatId,
+      currentOccupancyEpoch: occupancy?.occupancy_epoch ?? 0,
+      acceptedOccupancyEpoch: input.occupancyEpoch,
+      reason: 'Accepted compatibility generation cannot cross an intervening occupancy epoch.',
+    })
+  }
+  if (!occupancy?.occupant_session_id) return
+
+  if (occupancy.lease_expires_at_ms !== null && occupancy.lease_expires_at_ms > now) {
+    if (occupancy.occupant_session_id !== input.sessionId) {
+      throw new GenerationAdmissionError(423, 'chat_occupied', {
+        chatId: input.chatId,
+        safeRelease:
+          'Use the current occupant session and exact lineage/chat/epoch tuple to release this chat; stale or foreign release is not permitted.',
+      })
+    }
+    throw new GenerationAdmissionError(426, 'chat_occupancy_protocol_required', {
+      chatId: input.chatId,
+      supportedVersion: 1,
+      reason: 'Accepted compatibility generation cannot cross a later occupancy claim.',
+    })
+  }
+  throw new GenerationAdmissionError(409, 'chat_occupancy_stale', {
+    chatId: input.chatId,
+    currentOccupancyEpoch: occupancy.occupancy_epoch,
+    reason: 'Accepted compatibility generation cannot cross an intervening occupancy epoch.',
+  })
 }
 
 /** Revalidate persisted authority immediately before an asynchronous write. */
@@ -241,16 +359,13 @@ export function listGenerationOccupancyPins(db: DatabaseSync, chatId: string): A
   collect(
     `SELECT operation_id AS id FROM generation_operations
      WHERE chat_id = ? AND database_lineage = ?
-       AND state NOT IN ('completed', 'cancelled', 'terminal_failed', 'invalidated')`,
+       AND state NOT IN ('cancel_requested', 'completed', 'cancelled', 'terminal_failed', 'invalidated')`,
     [chatId, databaseLineage],
     'generation_operation',
   )
-  collect(
-    `SELECT generation_id AS id FROM generation_finalization_retries
-     WHERE chat_id = ? AND (database_lineage = ? OR database_lineage IS NULL) AND status = 'pending'`,
-    [chatId, databaseLineage],
-    'generation_finalization',
-  )
+  for (const id of listUncommittedGenerationFinalizationIdsForChat(db, chatId, databaseLineage)) {
+    pins.push({ id, kind: 'generation_finalization' })
+  }
   collect(
     `SELECT generation_id || ':' || effect_kind AS id FROM generation_effects
      WHERE chat_id = ? AND database_lineage = ?
@@ -309,25 +424,85 @@ function normalizationRequired(chatId: string): GenerationAdmissionError {
   })
 }
 
-function assertNoForeignOccupancyOrPins(
+function retireExpiredOccupancyOrRequireProtocol(
   db: DatabaseSync,
   chatId: string,
   sessionId: string,
   occupancy: OccupancyRow | undefined,
   now: number,
+  allowedRecoveryPin: { id: string; kind: string } | undefined,
+  allowedRecoveryOperationId: string | undefined,
 ): void {
-  if (!occupancy?.occupant_session_id || occupancy.occupant_session_id === sessionId) return
-  if (occupancy.lease_expires_at_ms !== null && occupancy.lease_expires_at_ms > now) {
-    throw new GenerationAdmissionError(423, 'chat_occupied', {
+  if (occupancy?.occupant_session_id && occupancy.lease_expires_at_ms !== null && occupancy.lease_expires_at_ms > now) {
+    if (occupancy.occupant_session_id !== sessionId) {
+      throw new GenerationAdmissionError(423, 'chat_occupied', {
+        chatId,
+        safeRelease:
+          'Use the current occupant session and exact lineage/chat/epoch tuple to release this chat; stale or foreign release is not permitted.',
+      })
+    }
+    throw new GenerationAdmissionError(426, 'chat_occupancy_protocol_required', {
       chatId,
-      safeRelease:
-        'Use the current occupant session and exact lineage/chat/epoch tuple to release this chat; stale or foreign release is not permitted.',
+      supportedVersion: 1,
+      reason: 'Compatibility generation is allowed only when the target chat has no active occupancy.',
     })
   }
-  const pins = listGenerationOccupancyPins(db, chatId)
+  const pins = listGenerationOccupancyPins(db, chatId).filter(
+    (pin) =>
+      (pin.id !== allowedRecoveryPin?.id || pin.kind !== allowedRecoveryPin.kind) &&
+      (allowedRecoveryOperationId === undefined || !recoveryPinBelongsToOperation(db, pin, allowedRecoveryOperationId)),
+  )
   if (pins.length > 0) {
     throw new GenerationAdmissionError(409, 'chat_occupancy_recovery_blocked', { chatId, blocking: pins })
   }
+  if (!occupancy?.occupant_session_id) return
+  const retiredAt = Math.max(now, occupancy.lease_expires_at_ms ?? now)
+  const result = db
+    .prepare(
+      `UPDATE chat_occupancies
+       SET occupant_session_id = NULL, occupancy_epoch = occupancy_epoch + 1, claim_class = NULL,
+           claimed_at_ms = NULL, lease_expires_at_ms = NULL, updated_at_ms = ?, released_at_ms = ?
+       WHERE chat_id = ? AND database_lineage = ? AND occupant_session_id = ?
+         AND occupancy_epoch = ? AND lease_expires_at_ms IS NOT NULL AND lease_expires_at_ms <= ?`,
+    )
+    .run(
+      retiredAt,
+      retiredAt,
+      chatId,
+      occupancy.database_lineage,
+      occupancy.occupant_session_id,
+      occupancy.occupancy_epoch,
+      now,
+    )
+  if (result.changes !== 1) {
+    throw new GenerationAdmissionError(409, 'chat_occupancy_stale', { chatId })
+  }
+}
+
+function recoveryPinBelongsToOperation(
+  db: DatabaseSync,
+  pin: { id: string; kind: string },
+  operationId: string,
+): boolean {
+  if (pin.kind === 'generation_operation') return pin.id === operationId
+  const tableAndIdExpression =
+    pin.kind === 'generation_finalization'
+      ? { table: 'generation_finalization_retries', idExpression: 'generation_id' }
+      : pin.kind === 'generation_effect'
+        ? { table: 'generation_effects', idExpression: "generation_id || ':' || effect_kind" }
+        : pin.kind === 'memory_job'
+          ? { table: 'memory_jobs', idExpression: 'id' }
+          : pin.kind === 'bardwiki_job'
+            ? { table: 'bardwiki_jobs', idExpression: 'id' }
+            : undefined
+  if (!tableAndIdExpression) return false
+  return !!db
+    .prepare(
+      `SELECT 1 AS found FROM ${tableAndIdExpression.table}
+       WHERE ${tableAndIdExpression.idExpression} = ? AND operation_id = ?
+       LIMIT 1`,
+    )
+    .get(pin.id, operationId)
 }
 
 function parsePermissionScope(value: string): readonly ChatOnlyGenerationPermission[] | undefined {

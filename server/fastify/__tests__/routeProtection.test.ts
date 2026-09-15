@@ -171,6 +171,11 @@ describe('route protection (table-wide auth enforcement)', () => {
       'generation-effect-claim:auth-session',
       'generation-effect-lease:auth-session',
       'generation-effect-receipt:auth-session',
+      'generation-effect-igp-commit:auth-session',
+      'generation-effect-inlay-preparation:auth-session',
+      'generation-effect-inlay-finalization:auth-session',
+      'generation-effect-inlay-abandonment:auth-session',
+      'generation-effect-igp-completion:auth-session',
       'generation-chat-cancel:auth-session',
     ]
     const actualExceptions = PROTOCOL_ROUTE_MANIFEST.filter(

@@ -6,7 +6,7 @@ import { settingsResourceState } from '../server/resourceState.svelte'
 import { reportSendChatError } from './sendChatErrors'
 import { setupSendChatContext } from './sendChatContext'
 import { orchestrateResponse } from './postGeneration/orchestrateResponse'
-import { evaluateIgp } from './postGeneration/igp'
+import { evaluateIgpOutcome } from './postGeneration/igp'
 import { runStage4 } from './postGeneration/runStage4'
 import { dispatchRequest } from './dispatch/dispatchRequest'
 import type { DispatchSuccessReq } from './dispatch/dispatchRequest'
@@ -244,10 +244,15 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
 
   const generationTarget = arg.expectedTarget === undefined ? captureActiveChatTarget() : arg.expectedTarget
   if (!generationTarget) return false
-  if (!chatOccupancy && arg.regenerateMessageId && generationTarget.chatId && canUseGenerationOperationProtocol()) {
+  const requestedMode = arg.regenerateMessageId ? 'regenerate' : arg.continue ? 'continue' : 'send'
+  if (!chatOccupancy && requestedMode !== 'send' && generationTarget.chatId && canUseGenerationOperationProtocol()) {
     const authority = captureClientChatOccupancyAuthority(generationTarget.chatId)
-    if (authority) {
-      chatOccupancy = { authority, interaction: 'reroll' }
+    // Continue and the writer's arbitrary-message Regenerate are intentionally
+    // unavailable to chat-only occupants. The ordinary writer UI does not pass
+    // an authority explicitly, so capture its exact owner tuple here before the
+    // durable operation is staged.
+    if (authority?.claimClass === 'owner') {
+      chatOccupancy = { authority, interaction: requestedMode }
       sourceGeneration = authority.sessionGeneration
     }
   }
@@ -261,9 +266,11 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
     (!arg.expectedTarget ||
       !generationTarget.chatId ||
       generationTarget.chatId !== chatOccupancy.authority.chatId ||
-      (chatOccupancy.interaction === 'send' && !!arg.regenerateMessageId) ||
-      (chatOccupancy.interaction === 'reroll' && !arg.regenerateMessageId) ||
-      arg.continue ||
+      (requestedMode === 'send' && chatOccupancy.interaction !== 'send') ||
+      (requestedMode === 'continue' && chatOccupancy.interaction !== 'continue') ||
+      (requestedMode === 'regenerate' &&
+        chatOccupancy.interaction !== 'reroll' &&
+        chatOccupancy.interaction !== 'regenerate') ||
       arg.preview ||
       arg.previewPrompt)
   ) {
@@ -717,26 +724,35 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
       // text after the terminal frame is reconciled. Append IGP to that exact
       // stable row; if the terminal cannot identify it safely, do not fall back
       // to whichever chat happens to be selected now.
-      if (!chatOnly) {
-        await runLedgeredGenerationEffect(effectLedger, 'igp', 'live_terminal', async (effectContext) => {
-          if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
-          const promptTemplate =
-            settingsResourceState.status === 'ready' ? String(settingsResourceState.value.igpPrompt ?? '') : ''
-          if (!terminalResult.igpTarget || !promptTemplate.trim()) {
-            return skippedGenerationEffect('not_configured')
-          }
-          errorTargetMessageId = terminalResult.igpTarget.messageId
-          const updated = await evaluateIgp({
-            promptTemplate,
-            database: generationSettingsState.db,
-            igpEffect: effectContext.igpEffect,
-            isCurrent: effectContext.isCurrent,
-            abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
-            waitForPersistence: !!effectLedger,
-            target: terminalResult.igpTarget,
-          })
-          return updated ? completedGenerationEffect(undefined) : skippedGenerationEffect('target_changed')
-        })
+      {
+        await runLedgeredGenerationEffect(
+          effectLedger,
+          'igp',
+          'live_terminal',
+          async (effectContext) => {
+            if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
+            const promptTemplate =
+              settingsResourceState.status === 'ready' ? String(settingsResourceState.value.igpPrompt ?? '') : ''
+            const exactOccupiedIgp = !!effectContext.igpEffect && !!effectLedger && !!chatOccupancy
+            if (!terminalResult.igpTarget || (!exactOccupiedIgp && !promptTemplate.trim())) {
+              return skippedGenerationEffect('not_configured')
+            }
+            errorTargetMessageId = terminalResult.igpTarget.messageId
+            const outcome = await evaluateIgpOutcome({
+              promptTemplate,
+              database: generationSettingsState.db,
+              igpEffect: effectContext.igpEffect,
+              effectLedgerRef: effectLedger,
+              ...(chatOccupancy ? { chatOccupancyAuthority: chatOccupancy.authority } : {}),
+              isCurrent: effectContext.isCurrent,
+              abortSignal: AbortSignal.any([abortSignal, effectContext.signal]),
+              waitForPersistence: !!effectLedger,
+              target: terminalResult.igpTarget,
+            })
+            return outcome === 'updated' ? completedGenerationEffect(undefined) : skippedGenerationEffect(outcome)
+          },
+          chatOccupancy ? { chatOccupancyAuthority: chatOccupancy.authority } : undefined,
+        )
       }
       if (!isCurrent()) return false
       if (terminalResult.resendChat) {

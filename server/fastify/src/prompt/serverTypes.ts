@@ -119,6 +119,7 @@ export type GenerationSettings = {
   hypaV3?: boolean
   hypaV3Key?: string
   hypaV3Presets?: Array<{ id: string; name: string; settings: Partial<HypaV3Settings> }>
+  igpPrompt?: string
   ImagenAspectRatio?: string
   ImagenImageSize?: string
   ImagenModel?: string

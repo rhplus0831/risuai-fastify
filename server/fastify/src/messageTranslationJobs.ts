@@ -14,6 +14,7 @@ export interface MessageTranslationJob {
 interface ActiveMessageTranslationEntry extends MessageTranslationJob {
   status: 'running'
   token: string
+  abort?: () => void
 }
 
 export interface MessageTranslationJobHandle {
@@ -31,8 +32,11 @@ const MAX_ERROR_LENGTH = 500
 export class MessageTranslationJobRegistry {
   private readonly activeByMessage = new Map<string, ActiveMessageTranslationEntry>()
   private readonly terminalByMessage = new Map<string, MessageTranslationJob>()
+  private readonly activeTasks = new Set<Promise<unknown>>()
+  private readonly idleWaiters = new Set<() => void>()
 
   private lineage: string | undefined
+  private stopping = false
 
   constructor(private readonly readLineage?: () => string) {
     this.lineage = readLineage?.()
@@ -47,8 +51,12 @@ export class MessageTranslationJobRegistry {
   }
 
   register(
-    input: Pick<MessageTranslationJob, 'chatId' | 'messageId'> & { jobId?: string },
+    input: Pick<MessageTranslationJob, 'chatId' | 'messageId'> & { jobId?: string; abort?: () => void },
   ): MessageTranslationJobHandle {
+    if (this.stopping) {
+      input.abort?.()
+      throw new Error('Message translation registry is shutting down')
+    }
     this.retireReplacedLineage()
     const token = randomUUID()
     const jobId = input.jobId ?? randomUUID()
@@ -59,6 +67,7 @@ export class MessageTranslationJobRegistry {
       jobId,
       status: 'running',
       token,
+      ...(input.abort ? { abort: input.abort } : {}),
     })
     return {
       jobId,
@@ -75,9 +84,35 @@ export class MessageTranslationJobRegistry {
     this.retireReplacedLineage()
     this.pruneTerminalJobs()
     return [
-      ...[...this.activeByMessage.values()].map(({ token: _token, ...job }) => job),
+      ...[...this.activeByMessage.values()].map(({ token: _token, abort: _abort, ...job }) => job),
       ...this.terminalByMessage.values(),
     ]
+  }
+
+  /** Track provider/persistence continuations, including injected runners that
+   * do not register their own abort handle. Shutdown waits for every tracked
+   * continuation before the SQLite handle is closed. */
+  track<T>(task: Promise<T>): Promise<T> {
+    const tracked = Promise.resolve(task).finally(() => {
+      this.activeTasks.delete(tracked)
+      this.resolveIdleWaiters()
+    })
+    this.activeTasks.add(tracked)
+    return tracked
+  }
+
+  isStopping(): boolean {
+    return this.stopping
+  }
+
+  /** Reject new translations, abort cooperative providers, and drain all
+   * registered/tracked continuations before application shutdown proceeds. */
+  async stop(): Promise<void> {
+    this.stopping = true
+    for (const active of this.activeByMessage.values()) active.abort?.()
+    while (this.activeByMessage.size > 0 || this.activeTasks.size > 0) {
+      await new Promise<void>((resolve) => this.idleWaiters.add(resolve))
+    }
   }
 
   private complete(
@@ -97,6 +132,13 @@ export class MessageTranslationJobRegistry {
       completedAt: Date.now(),
     })
     this.pruneTerminalJobs()
+    this.resolveIdleWaiters()
+  }
+
+  private resolveIdleWaiters(): void {
+    if (this.activeByMessage.size > 0 || this.activeTasks.size > 0) return
+    for (const resolve of this.idleWaiters) resolve()
+    this.idleWaiters.clear()
   }
 
   private pruneTerminalJobs(): void {

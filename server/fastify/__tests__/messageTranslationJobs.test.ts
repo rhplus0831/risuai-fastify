@@ -83,4 +83,35 @@ describe('MessageTranslationJobRegistry', () => {
       vi.useRealTimers()
     }
   })
+
+  it('aborts cooperative work and drains every tracked continuation before stopping', async () => {
+    const registry = new MessageTranslationJobRegistry()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    const abort = vi.fn()
+    const job = registry.register({ chatId: 'chat-a', messageId: 'message-a', abort })
+    const task = registry.track(
+      gate.then(() => {
+        job.succeed()
+      }),
+    )
+
+    let stopped = false
+    const stop = registry.stop().then(() => {
+      stopped = true
+    })
+    await Promise.resolve()
+    expect(abort).toHaveBeenCalledOnce()
+    expect(stopped).toBe(false)
+    expect(() => registry.register({ chatId: 'chat-b', messageId: 'message-b' })).toThrow(
+      'Message translation registry is shutting down',
+    )
+
+    release()
+    await task
+    await stop
+    expect(stopped).toBe(true)
+  })
 })

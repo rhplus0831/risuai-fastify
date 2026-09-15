@@ -241,7 +241,8 @@ describe('bootstrap runtime metadata', () => {
       headers: { 'risu-auth': assertion, 'risu-writer-observer-session': 'different-writer' },
     })
     expect(observer.statusCode).toBe(200)
-    expect(observer.json().generationFinalizations).toBeUndefined()
+    expect(observer.json().generationFinalizations).toEqual([])
+    expect(observer.json().pendingGenerationEffects).toEqual([])
   })
 
   it('migrates the pre-Agent settings owner before generation-settings commands run', async () => {

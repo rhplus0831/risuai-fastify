@@ -243,6 +243,7 @@ export interface AssembleInput {
   /** Compatibility-only identity rechecked at each inline persistence boundary. */
   compatibilityWriterSessionId?: string
   compatibilityDatabaseLineage?: string
+  compatibilityOccupancyEpoch?: number
   /** Retry-only: the accepted row's submit-time input hooks already committed. */
   reuseAcceptedSubmitTransforms?: boolean
   /** Original-compatible send from an assistant tail without appending a user row. */

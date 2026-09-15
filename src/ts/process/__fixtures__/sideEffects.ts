@@ -1,5 +1,5 @@
 export interface SideEffectCall {
-  fn: 'runInlayScreen' | 'sayTTS' | 'stableDiff' | 'addRerolls'
+  fn: 'runInlayScreen' | 'renderInlayScreenTextWithoutProviders' | 'sayTTS' | 'stableDiff' | 'addRerolls'
   args: unknown[]
 }
 

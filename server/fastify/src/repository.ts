@@ -4950,6 +4950,22 @@ function copyGenerationFinalizationRetriesFromBackup(db: DatabaseSync): void {
   const actorWriterEpoch = backupColumns.has('actor_writer_epoch') ? 'actor_writer_epoch' : 'NULL'
   const acceptedMessageId = backupColumns.has('accepted_message_id') ? 'accepted_message_id' : 'NULL'
   const terminalOutcome = backupColumns.has('terminal_outcome') ? 'terminal_outcome' : 'NULL'
+  const compatibilityDatabaseLineage = backupColumns.has('compatibility_database_lineage')
+    ? 'compatibility_database_lineage'
+    : 'NULL'
+  const compatibilitySessionId = backupColumns.has('compatibility_session_id') ? 'compatibility_session_id' : 'NULL'
+  const compatibilityOccupancyEpoch = backupColumns.has('compatibility_occupancy_epoch')
+    ? 'compatibility_occupancy_epoch'
+    : 'NULL'
+  const admissionKind = backupColumns.has('admission_kind') ? 'admission_kind' : 'NULL'
+  const occupancyDatabaseLineage = backupColumns.has('occupancy_database_lineage')
+    ? 'occupancy_database_lineage'
+    : 'NULL'
+  const occupancySessionId = backupColumns.has('occupancy_session_id') ? 'occupancy_session_id' : 'NULL'
+  const occupancyEpoch = backupColumns.has('occupancy_epoch') ? 'occupancy_epoch' : 'NULL'
+  const occupancyClaimClass = backupColumns.has('occupancy_claim_class') ? 'occupancy_claim_class' : 'NULL'
+  const permissionScopeVersion = backupColumns.has('permission_scope_version') ? 'permission_scope_version' : 'NULL'
+  const permissionScopeJson = backupColumns.has('permission_scope_json') ? 'permission_scope_json' : 'NULL'
 
   // Historical queue tables predate target snapshots (schema v18) and
   // alternate messages (v20). Keep the current destination order explicit so
@@ -4964,6 +4980,16 @@ function copyGenerationFinalizationRetriesFromBackup(db: DatabaseSync): void {
       actor_writer_epoch,
       accepted_message_id,
       terminal_outcome,
+      compatibility_database_lineage,
+      compatibility_session_id,
+      compatibility_occupancy_epoch,
+      admission_kind,
+      occupancy_database_lineage,
+      occupancy_session_id,
+      occupancy_epoch,
+      occupancy_claim_class,
+      permission_scope_version,
+      permission_scope_json,
       chat_id,
       mode,
       target_message_id,
@@ -4987,6 +5013,16 @@ function copyGenerationFinalizationRetriesFromBackup(db: DatabaseSync): void {
       ${actorWriterEpoch},
       ${acceptedMessageId},
       ${terminalOutcome},
+      ${compatibilityDatabaseLineage},
+      ${compatibilitySessionId},
+      ${compatibilityOccupancyEpoch},
+      ${admissionKind},
+      ${occupancyDatabaseLineage},
+      ${occupancySessionId},
+      ${occupancyEpoch},
+      ${occupancyClaimClass},
+      ${permissionScopeVersion},
+      ${permissionScopeJson},
       chat_id,
       mode,
       target_message_id,
@@ -5065,6 +5101,171 @@ function rewriteRestoredGenerationOperationLineage(db: DatabaseSync, databaseLin
         )
     `,
   ).run(databaseLineage, databaseLineage)
+  quarantineRestoredGenerationRecovery(db, databaseLineage, projectionEpoch)
+}
+
+function quarantineRestoredGenerationRecovery(
+  db: DatabaseSync,
+  databaseLineage: string,
+  projectionEpoch: number,
+): void {
+  const restoredAt = new Date().toISOString()
+  const exactRestoredResultUid = (operationAlias: string): string => `(
+    SELECT result.uid
+    FROM generation_operation_attempts AS result_attempt
+    JOIN messages AS result
+      ON result.chat_id = ${operationAlias}.chat_id
+     AND result.alternate = 0
+     AND result.role = 'char'
+     AND json_valid(result.json)
+     AND json_extract(result.json, '$.generationInfo.databaseLineage') = ${operationAlias}.database_lineage
+     AND json_extract(result.json, '$.generationInfo.operationId') = ${operationAlias}.operation_id
+     AND COALESCE(
+       json_extract(result.json, '$.generationInfo.operationAttemptNo'),
+       json_extract(result.json, '$.generationInfo.attemptNo')
+     ) = result_attempt.attempt_no
+     AND (
+       json_extract(result.json, '$.generationInfo.jobId') = result_attempt.job_id
+       OR (
+         ${operationAlias}.pre_occupancy_authority = 1
+         AND json_type(result.json, '$.generationInfo.jobId') IS NULL
+       )
+     )
+     AND json_extract(result.json, '$.generationInfo.generationId') =
+       COALESCE(result_attempt.finalization_generation_id, result_attempt.job_id)
+    WHERE result_attempt.database_lineage = ${operationAlias}.database_lineage
+      AND result_attempt.operation_id = ${operationAlias}.operation_id
+      AND result_attempt.attempt_no = ${operationAlias}.current_attempt_no
+    ORDER BY result.seq DESC
+    LIMIT 1
+  )`
+  const restoredOperation = `
+    SELECT 1 FROM generation_operations AS operation
+    WHERE operation.database_lineage = ?
+      AND operation.operation_id = scoped.operation_id
+  `
+  db.prepare(
+    `UPDATE generation_operation_attempts AS attempt
+     SET status = COALESCE(
+           (
+             SELECT CASE
+               WHEN operation.desired_terminal_outcome = 'cancelled' THEN 'cancelled'
+               ELSE 'completed'
+             END
+             FROM generation_operations AS operation
+             WHERE operation.database_lineage = attempt.database_lineage
+               AND operation.operation_id = attempt.operation_id
+               AND operation.current_attempt_no = attempt.attempt_no
+               AND ${exactRestoredResultUid('operation')} IS NOT NULL
+           ),
+           status
+         ),
+         runner_settled_at = COALESCE(runner_settled_at, ?),
+         failure_code = NULL, last_error = NULL, updated_at = ?
+     WHERE database_lineage = ?
+       AND EXISTS (
+         SELECT 1 FROM generation_operations AS operation
+         WHERE operation.database_lineage = attempt.database_lineage
+           AND operation.operation_id = attempt.operation_id
+           AND operation.current_attempt_no = attempt.attempt_no
+           AND ${exactRestoredResultUid('operation')} IS NOT NULL
+       )`,
+  ).run(restoredAt, restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE generation_operations AS operation
+     SET state = CASE WHEN desired_terminal_outcome = 'cancelled' THEN 'cancelled' ELSE 'completed' END,
+         state_version = state_version + 1, projection_epoch = ?, current_attempt_no = NULL,
+         desired_terminal_outcome = NULL, result_message_id = ${exactRestoredResultUid('operation')},
+         failure_code = NULL, failure_phase = NULL, last_error = NULL,
+         runner_settled_at = COALESCE(runner_settled_at, ?), terminal_at = ?, updated_at = ?
+     WHERE database_lineage = ?
+       AND state NOT IN ('completed', 'cancelled', 'terminal_failed', 'invalidated')
+       AND ${exactRestoredResultUid('operation')} IS NOT NULL`,
+  ).run(projectionEpoch, restoredAt, restoredAt, restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE generation_operation_attempts AS attempt
+     SET status = 'terminal_failed', runner_settled_at = COALESCE(runner_settled_at, ?),
+         failure_code = 'database_lineage_replaced', last_error = NULL, updated_at = ?
+     WHERE database_lineage = ?
+       AND status NOT IN ('completed', 'cancelled', 'terminal_failed')
+       AND EXISTS (
+         SELECT 1 FROM generation_operations AS operation
+         WHERE operation.database_lineage = attempt.database_lineage
+           AND operation.operation_id = attempt.operation_id
+       )`,
+  ).run(restoredAt, restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE generation_operations
+     SET state = 'invalidated', state_version = state_version + 1, projection_epoch = ?,
+         current_attempt_no = NULL, desired_terminal_outcome = NULL,
+         failure_code = 'database_lineage_replaced', failure_phase = 'restore', last_error = NULL,
+         runner_settled_at = COALESCE(runner_settled_at, ?), terminal_at = ?, updated_at = ?
+     WHERE database_lineage = ?
+       AND state NOT IN ('completed', 'cancelled', 'terminal_failed', 'invalidated')`,
+  ).run(projectionEpoch, restoredAt, restoredAt, restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE generation_finalization_retries AS scoped
+     SET status = 'terminal', terminal_error = 'database_lineage_replaced',
+         last_error = NULL, updated_at = ?
+     WHERE status = 'pending'
+       AND (
+         admission_kind IS NOT NULL
+         OR EXISTS (${restoredOperation})
+       )`,
+  ).run(restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE generation_effects AS scoped
+     SET status = 'skipped',
+         claim_id = COALESCE(claim_id, 'restore-lineage:' || generation_id || ':' || effect_kind),
+         delivery = COALESCE(
+           delivery,
+           CASE WHEN effect_kind IN ('igp', 'generated_translation') THEN 'server' ELSE 'late_recovery' END
+         ),
+         reason = 'database_lineage_replaced', last_error = NULL,
+         claimed_at = COALESCE(claimed_at, ?), lease_expires_at = NULL,
+         settled_at = ?, updated_at = ?
+     WHERE database_lineage = ? AND status IN ('pending', 'claimed')
+    `,
+  ).run(restoredAt, restoredAt, restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE memory_jobs AS scoped
+     SET status = 'cancelled', error = 'database_lineage_replaced', updated_at = ?
+     WHERE status IN ('pending', 'running')
+       AND (
+         admission_kind IS NOT NULL
+         OR EXISTS (${restoredOperation})
+       )`,
+  ).run(restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE bardwiki_turn_receipts AS receipt
+     SET state = 'failed', error_code = 'database_lineage_replaced',
+         error_summary = 'Restored generation authority does not cross database lineage replacement.',
+         updated_at = ?
+     WHERE state IN ('queued', 'processing')
+       AND EXISTS (
+         SELECT 1 FROM bardwiki_jobs AS job
+         WHERE (job.id = receipt.job_id OR job.receipt_id = receipt.id)
+           AND (
+             job.admission_kind IS NOT NULL
+             OR EXISTS (
+               SELECT 1 FROM generation_operations AS operation
+               WHERE operation.database_lineage = ?
+                 AND operation.operation_id = job.operation_id
+             )
+           )
+       )`,
+  ).run(restoredAt, databaseLineage)
+  db.prepare(
+    `UPDATE bardwiki_jobs AS scoped
+     SET status = 'cancelled', error_code = 'database_lineage_replaced',
+         error_summary = 'Restored generation authority does not cross database lineage replacement.',
+         updated_at = ?
+     WHERE status IN ('pending', 'running')
+       AND (
+         admission_kind IS NOT NULL
+         OR EXISTS (${restoredOperation})
+       )`,
+  ).run(restoredAt, databaseLineage)
 }
 
 function restoreSqliteFromBackup(

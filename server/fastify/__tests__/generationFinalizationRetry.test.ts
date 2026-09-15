@@ -65,7 +65,9 @@ describe('generation finalization retry scheduling', () => {
       targetSnapshot: { mode: 'send', kind: 'tail', transcriptLength: 0 },
     })
 
-    expect(listPendingGenerationFinalizationRetries(db)[0]?.attempt.characterFieldMutations).toEqual([
+    const [candidate] = listPendingGenerationFinalizationRetries(db)
+    if (!candidate || !('attempt' in candidate)) throw new Error('expected a replayable finalization')
+    expect(candidate.attempt.characterFieldMutations).toEqual([
       { key: 'desc', before: 'old description', after: 'new description' },
     ])
   })
@@ -73,7 +75,7 @@ describe('generation finalization retry scheduling', () => {
   it('round-trips legacy compatibility authority for queued publication recovery', () => {
     enqueueGenerationFinalizationRetry(db, {
       generationId: 'generation-compatibility',
-      compatibilityAuthority: { databaseLineage: 'lineage-a', sessionId: 'owner-a' },
+      compatibilityAuthority: { databaseLineage: 'lineage-a', sessionId: 'owner-a', occupancyEpoch: 4 },
       chatId: 'chat-a',
       mode: 'send',
       message: { role: 'char', data: 'compatibility partial', chatId: 'generation-compatibility' },
@@ -81,34 +83,64 @@ describe('generation finalization retry scheduling', () => {
       targetSnapshot: { mode: 'send', kind: 'tail', transcriptLength: 0 },
     })
 
-    expect(listPendingGenerationFinalizationRetries(db)[0]?.attempt.compatibilityAuthority).toEqual({
+    const [candidate] = listPendingGenerationFinalizationRetries(db)
+    if (!candidate || !('attempt' in candidate)) throw new Error('expected a replayable finalization')
+    expect(candidate.attempt.compatibilityAuthority).toEqual({
       databaseLineage: 'lineage-a',
       sessionId: 'owner-a',
+      occupancyEpoch: 4,
     })
   })
 
-  it('fails closed when a retained compatibility authority pair is incomplete or mixed', () => {
+  it('returns an isolated malformed candidate when retained compatibility authority is incomplete or mixed', () => {
     enqueueSend('generation-incomplete-compatibility')
     db.prepare(
       `UPDATE generation_finalization_retries
        SET compatibility_database_lineage = 'lineage-a'
        WHERE generation_id = 'generation-incomplete-compatibility'`,
     ).run()
-    expect(() => listPendingGenerationFinalizationRetries(db)).toThrow('incomplete compatibility authority')
+    expect(listPendingGenerationFinalizationRetries(db)).toEqual([
+      expect.objectContaining({
+        generationId: 'generation-incomplete-compatibility',
+        parseError: expect.objectContaining({ message: expect.stringContaining('incomplete compatibility authority') }),
+      }),
+    ])
 
     db.prepare(
       `UPDATE generation_finalization_retries
-       SET compatibility_session_id = 'owner-a', database_lineage = 'operation-lineage'
+       SET compatibility_session_id = 'owner-a'
        WHERE generation_id = 'generation-incomplete-compatibility'`,
     ).run()
-    expect(() => listPendingGenerationFinalizationRetries(db)).toThrow('mixes compatibility and operation authority')
+    expect(listPendingGenerationFinalizationRetries(db)).toEqual([
+      expect.objectContaining({
+        generationId: 'generation-incomplete-compatibility',
+        parseError: expect.objectContaining({ message: expect.stringContaining('incomplete compatibility authority') }),
+      }),
+    ])
+
+    db.prepare(
+      `UPDATE generation_finalization_retries
+       SET compatibility_occupancy_epoch = 0, database_lineage = 'operation-lineage'
+       WHERE generation_id = 'generation-incomplete-compatibility'`,
+    ).run()
+    expect(listPendingGenerationFinalizationRetries(db)).toEqual([
+      expect.objectContaining({
+        generationId: 'generation-incomplete-compatibility',
+        parseError: expect.objectContaining({ message: expect.stringContaining('mixes compatibility') }),
+      }),
+    ])
 
     db.prepare(
       `UPDATE generation_finalization_retries
        SET database_lineage = NULL, admission_kind = 'legacy_owner'
        WHERE generation_id = 'generation-incomplete-compatibility'`,
     ).run()
-    expect(() => listPendingGenerationFinalizationRetries(db)).toThrow('mixes compatibility and operation authority')
+    expect(listPendingGenerationFinalizationRetries(db)).toEqual([
+      expect.objectContaining({
+        generationId: 'generation-incomplete-compatibility',
+        parseError: expect.objectContaining({ message: expect.stringContaining('mixes compatibility') }),
+      }),
+    ])
   })
 
   it('keeps a failed row out of replay selection until its calculated due time', () => {

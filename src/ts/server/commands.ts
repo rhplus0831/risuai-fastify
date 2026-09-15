@@ -550,6 +550,8 @@ export type ServerCommandErrorReason =
   | 'stale-writer'
   | 'unrecognized-rejection'
 
+export const GENERATED_TRANSLATION_SERVER_OWNED_ERROR = 'generated_translation_server_owned'
+
 export type ServerCommandResult<T extends Record<string, unknown> = {}> =
   | ({ status: 'ok'; revision: number; event: CommandEvent } & T)
   | { status: 'conflict'; currentRevision: number }
@@ -1855,6 +1857,11 @@ export interface IgpEffectMessageClaim {
   claimId: string
 }
 
+export interface GenerationInlayFinalizationBinding {
+  generationId: string
+  operationId: string
+}
+
 export interface UpdateMessageCommandInput extends ChatCommandInput {
   messageId: string
   patch: MessageSnapshot
@@ -1862,6 +1869,7 @@ export interface UpdateMessageCommandInput extends ChatCommandInput {
   expectedChatId?: string
   expectedGenerationId?: string
   igpEffect?: IgpEffectMessageClaim
+  generationInlayFinalization?: GenerationInlayFinalizationBinding
   optimisticChatId?: string
   optimisticChatBodyProjectionEpoch?: number
 }
@@ -1869,6 +1877,8 @@ export interface UpdateMessageCommandInput extends ChatCommandInput {
 export interface TranslateMessageCommandInput extends ChatCommandInput {
   messageId: string
   jobId: string
+  /** This request may yield to the durable generated-message translation owner. */
+  automatic?: boolean
 }
 
 export interface DeleteMessageCommandInput extends ChatCommandInput {
@@ -5731,6 +5741,7 @@ export async function updateMessageCommand(
       ...(input.expectedChatId !== undefined ? { expectedChatId: input.expectedChatId } : {}),
       ...(input.expectedGenerationId !== undefined ? { expectedGenerationId: input.expectedGenerationId } : {}),
       ...(input.igpEffect ? { igpEffect: input.igpEffect } : {}),
+      ...(input.generationInlayFinalization ? { generationInlayFinalization: input.generationInlayFinalization } : {}),
     },
     signal,
     readLocalEffect: (body, event) =>
@@ -5752,6 +5763,7 @@ export async function translateMessageCommand(
     body: {
       baseRevision: input.baseRevision,
       jobId: input.jobId,
+      ...(input.automatic === true ? { automatic: true } : {}),
     },
     signal,
     // Raw translation deliberately runs outside the global mutation queue;

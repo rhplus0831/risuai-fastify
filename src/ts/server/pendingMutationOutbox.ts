@@ -87,6 +87,18 @@ export interface PendingMutationOutboxEntry {
   intent: DurableMutationIntent
 }
 
+/**
+ * A generation intent recovered for its originating page session. `current`
+ * is the only disposition that may be dispatched automatically. A stale epoch
+ * remains encrypted until reconciliation proves acceptance or the user makes
+ * a fresh explicit request.
+ */
+export interface ChatOccupancyGenerationMutationEntry extends PendingMutationOutboxEntry {
+  readonly chatId: string
+  readonly occupancyEpoch: number
+  readonly epochDisposition: 'current' | 'stale'
+}
+
 export type PendingMutationPredecessorResult =
   | { status: 'ok'; entries: PendingMutationOutboxEntry[]; semanticKeys: string[] }
   | { status: 'superseded' | 'unavailable' }
@@ -716,7 +728,11 @@ export function stageChatOccupancyGenerationMutation(
       `${CHAT_GENERATION_TARGET_DEPENDENCY_PREFIX}${encodeURIComponent(authority.chatId)}`,
     ],
   })
-  assertChatOccupancyGenerationIntent(normalizedIntent, authority.chatId)
+  assertChatOccupancyGenerationIntent(
+    normalizedIntent,
+    authority,
+    normalizedIntent.kind === 'generation-operation-submit' ? 'fresh-admission' : 'recovery-control',
+  )
   const scope = normalizeScope(authority.sessionId, authority.occupancyEpoch, authority.databaseLineage)
   const generation = authority.sessionGeneration
   const mutationId = createMutationId()
@@ -771,7 +787,12 @@ function chatGenerationTarget(intent: DurableMutationIntent): string | null {
   }
 }
 
-function assertChatOccupancyGenerationIntent(intent: DurableMutationIntent, chatId: string): void {
+function assertChatOccupancyGenerationIntent(
+  intent: DurableMutationIntent,
+  authority: ClientChatOccupancyAuthority,
+  purpose: 'fresh-admission' | 'recovery-control',
+): void {
+  const chatId = authority.chatId
   if (!intent.kind || intent.requests.length !== 1 || chatGenerationTarget(intent) !== chatId) {
     throw new TypeError('Occupied-chat outbox accepts only an exact generation target')
   }
@@ -792,14 +813,31 @@ function assertChatOccupancyGenerationIntent(intent: DurableMutationIntent, chat
       typeof occupancy !== 'object' ||
       Array.isArray(occupancy) ||
       (occupancy as Record<string, unknown>).version !== 1 ||
-      (mode === 'send' ? interaction !== 'send' : mode === 'regenerate' ? interaction !== 'reroll' : true)
+      (mode === 'send'
+        ? interaction !== 'send'
+        : mode === 'continue'
+          ? interaction !== 'continue' || (purpose === 'fresh-admission' && authority.claimClass !== 'owner')
+          : mode === 'regenerate'
+            ? interaction !== 'reroll' &&
+              (interaction !== 'regenerate' || (purpose === 'fresh-admission' && authority.claimClass !== 'owner'))
+            : true)
     ) {
       throw new TypeError('Occupied-chat generation submit is not scoped to its authority')
     }
     return
   }
   if (intent.kind === 'generation-operation-cancel') {
-    if (request.method !== 'PUT' || !/^\/generation-operations\/[^/?#]+\/cancellation$/u.test(request.path)) {
+    const occupancy = request.body.chatOccupancy
+    if (
+      request.method !== 'PUT' ||
+      !/^\/generation-operations\/[^/?#]+\/cancellation$/u.test(request.path) ||
+      request.body.chatId !== chatId ||
+      !occupancy ||
+      typeof occupancy !== 'object' ||
+      Array.isArray(occupancy) ||
+      (occupancy as Record<string, unknown>).version !== 1 ||
+      !['send', 'reroll', 'continue', 'regenerate'].includes(String((occupancy as Record<string, unknown>).interaction))
+    ) {
       throw new TypeError('Occupied-chat Stop intent is invalid')
     }
     return
@@ -1143,7 +1181,7 @@ export async function listChatOccupancyGenerationMutations(
     try {
       const intent = await decryptIntent(record)
       if (!authorityIsCurrent()) return []
-      assertChatOccupancyGenerationIntent(intent, authority.chatId)
+      assertChatOccupancyGenerationIntent(intent, authority, 'recovery-control')
       const mutationRequiresEnabled = intent.kind !== 'generation-operation-cancel'
       if (mutationRequiresEnabled && !chatOccupancyMutationAccessIsCurrent(authority, true)) {
         continue
@@ -1169,6 +1207,81 @@ export async function listChatOccupancyGenerationMutations(
       entries.push({ handle, intent })
     } catch (error) {
       reportPersistenceWarning(`Unable to decrypt occupied-chat mutation ${record.semanticKey}`, error)
+    }
+  }
+  return authorityIsCurrent() ? entries : []
+}
+
+/**
+ * Read this page session's occupied-chat generation rows for one currently
+ * occupied chat, including rows from an expired epoch. This deliberately does
+ * not adopt or rewrite an old tuple: callers may reconcile a stale row by its
+ * stable operation id, but only `current` rows receive dispatch authority.
+ */
+export async function listOriginatingChatOccupancyGenerationMutations(
+  authority: ClientChatOccupancyAuthority,
+): Promise<ChatOccupancyGenerationMutationEntry[]> {
+  const authorityIsCurrent = () => chatOccupancyMutationAccessIsCurrent(authority, false)
+  if (!authorityIsCurrent()) return []
+  const database = await openOutboxDatabase()
+  if (!database) return []
+  let stored: StoredPendingMutation[]
+  try {
+    const transaction = database.transaction(OUTBOX_MUTATION_STORE, 'readonly')
+    stored = await requestResult<StoredPendingMutation[]>(transaction.objectStore(OUTBOX_MUTATION_STORE).getAll())
+    await transactionDone(transaction)
+  } catch (error) {
+    reportPersistenceWarning('Unable to read originating occupied-chat generation mutations', error)
+    return []
+  }
+  if (!authorityIsCurrent()) return []
+  const entries: ChatOccupancyGenerationMutationEntry[] = []
+  for (const record of stored
+    .filter(
+      (candidate) =>
+        candidate.authorityKind === 'chat-occupancy' &&
+        candidate.ownerWriterSessionId === authority.sessionId &&
+        candidate.databaseLineage === authority.databaseLineage,
+    )
+    .sort((left, right) => left.order - right.order)) {
+    try {
+      const intent = await decryptIntent(record)
+      if (!authorityIsCurrent()) return []
+      if (chatGenerationTarget(intent) !== authority.chatId) continue
+      assertChatOccupancyGenerationIntent(intent, authority, 'recovery-control')
+      const epochDisposition = record.writerEpoch === authority.occupancyEpoch ? 'current' : 'stale'
+      const handle = stampPendingHandle(
+        {
+          key: record.semanticKey,
+          mutationId: record.mutationId,
+          sequence: record.sequence,
+          ownerWriterSessionId: record.ownerWriterSessionId,
+          writerEpoch: record.writerEpoch,
+          databaseLineage: record.databaseLineage,
+          authorityKind: 'chat-occupancy',
+          phase: 'staged',
+          ready: Promise.resolve('persisted'),
+        },
+        authority.sessionGeneration,
+      )
+      if (epochDisposition === 'current') {
+        stampChatOccupancyHandle(handle, authority, intent.kind !== 'generation-operation-cancel')
+      } else {
+        stampChatOccupancyHandle(
+          handle,
+          { ...authority, occupancyEpoch: record.writerEpoch },
+          intent.kind !== 'generation-operation-cancel',
+        )
+      }
+      entries.push({
+        handle,
+        intent,
+        chatId: authority.chatId,
+        occupancyEpoch: record.writerEpoch,
+        epochDisposition,
+      })
+    } catch (error) {
+      reportPersistenceWarning(`Unable to decrypt originating occupied-chat mutation ${record.semanticKey}`, error)
     }
   }
   return authorityIsCurrent() ? entries : []

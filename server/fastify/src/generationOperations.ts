@@ -159,6 +159,8 @@ interface GenerationOperationRow extends GenerationScopeColumns {
 interface StartupOperationRow {
   database_lineage: string
   operation_id: string
+  chat_id: string | null
+  pre_occupancy_authority: 0 | 1
   state: GenerationOperationState
   state_version: number
   current_attempt_no: number | null
@@ -189,6 +191,16 @@ interface StartupJournalRow {
   accepted_message_id: string | null
   terminal_outcome: GenerationOperationTerminalOutcome | null
   generation_id: string
+}
+
+interface RecoveredResultRow {
+  chat_id: string
+  uid: string
+  operation_id: string
+  operation_attempt_no: number | null
+  attempt_no: number | null
+  job_id: string | null
+  generation_id: string | null
 }
 
 export interface GenerationOperationAttemptProjection {
@@ -1319,16 +1331,19 @@ export function generationOperationForRetryRequest(
   db: DatabaseSync,
   databaseLineage: string,
   retryRequestId: string,
-): { operationId: string; attemptNo: number; jobId: string } | undefined {
+): { operationId: string; attemptNo: number; jobId: string; actorWriterSessionId: string } | undefined {
   return db
     .prepare(
       `
-        SELECT operation_id AS operationId, attempt_no AS attemptNo, job_id AS jobId
+        SELECT operation_id AS operationId, attempt_no AS attemptNo, job_id AS jobId,
+               actor_writer_session_id AS actorWriterSessionId
         FROM generation_operation_attempts
         WHERE database_lineage = ? AND retry_request_id = ?
       `,
     )
-    .get(databaseLineage, retryRequestId) as { operationId: string; attemptNo: number; jobId: string } | undefined
+    .get(databaseLineage, retryRequestId) as
+    | { operationId: string; attemptNo: number; jobId: string; actorWriterSessionId: string }
+    | undefined
 }
 
 /**
@@ -1581,17 +1596,48 @@ export function reconcileExpiredGenerationOccupancyInTransaction(
       .get(input.databaseLineage, operation.operation_id)
     if (pendingJournal) continue
 
-    const result = db
+    const attempt = db
       .prepare(
-        `SELECT uid
-         FROM messages
-         WHERE chat_id = ? AND alternate = 0 AND json_valid(json)
-           AND json_extract(json, '$.generationInfo.databaseLineage') = ?
-           AND json_extract(json, '$.generationInfo.operationId') = ?
-         ORDER BY seq DESC
+        `SELECT attempt_no, job_id, finalization_generation_id
+         FROM generation_operation_attempts
+         WHERE database_lineage = ? AND operation_id = ?
+         ORDER BY attempt_no DESC
          LIMIT 1`,
       )
-      .get(input.chatId, input.databaseLineage, operation.operation_id) as { uid: string } | undefined
+      .get(input.databaseLineage, operation.operation_id) as
+      | { attempt_no: number; job_id: string; finalization_generation_id: string | null }
+      | undefined
+    const result = attempt
+      ? (db
+          .prepare(
+            `SELECT chat_id, uid,
+                    json_extract(json, '$.generationInfo.operationId') AS operation_id,
+                    json_extract(json, '$.generationInfo.operationAttemptNo') AS operation_attempt_no,
+                    json_extract(json, '$.generationInfo.attemptNo') AS attempt_no,
+                    json_extract(json, '$.generationInfo.jobId') AS job_id,
+                    json_extract(json, '$.generationInfo.generationId') AS generation_id
+         FROM messages
+         WHERE chat_id = ? AND alternate = 0 AND role = 'char' AND json_valid(json)
+           AND json_extract(json, '$.generationInfo.databaseLineage') = ?
+           AND json_extract(json, '$.generationInfo.operationId') = ?
+           AND COALESCE(
+             json_extract(json, '$.generationInfo.operationAttemptNo'),
+             json_extract(json, '$.generationInfo.attemptNo')
+           ) = ?
+           AND json_extract(json, '$.generationInfo.jobId') = ?
+           AND json_extract(json, '$.generationInfo.generationId') = ?
+         ORDER BY seq DESC
+         LIMIT 1`,
+          )
+          .get(
+            input.chatId,
+            input.databaseLineage,
+            operation.operation_id,
+            attempt.attempt_no,
+            attempt.job_id,
+            attempt.finalization_generation_id ?? attempt.job_id,
+          ) as unknown as RecoveredResultRow | undefined)
+      : undefined
     projectionEpoch ??= bumpGenerationOperationProjectionEpoch(db)
     const nextState = result ? 'completed' : 'terminal_failed'
     const failureCode = result ? null : 'occupancy_recovery_expired'
@@ -1703,6 +1749,23 @@ function emptyExpiredOccupancyRecoveryResult(): ExpiredGenerationOccupancyRecove
   }
 }
 
+function startupResultKey(operationId: string, chatId: string): string {
+  return `${operationId.length}:${operationId}${chatId}`
+}
+
+function recoveredResultMatchesAttempt(
+  result: RecoveredResultRow,
+  attempt: Pick<StartupAttemptRow, 'attempt_no' | 'job_id' | 'finalization_generation_id'>,
+  allowMissingHistoricalJobId: boolean,
+): boolean {
+  const resultAttemptNo = result.operation_attempt_no ?? result.attempt_no
+  return (
+    resultAttemptNo === attempt.attempt_no &&
+    (result.job_id === attempt.job_id || (allowMissingHistoricalJobId && result.job_id === null)) &&
+    result.generation_id === (attempt.finalization_generation_id ?? attempt.job_id)
+  )
+}
+
 export function reconcileGenerationOperationsAtStartup(
   db: DatabaseSync,
   serverInstanceId: string,
@@ -1732,7 +1795,8 @@ function reconcileGenerationOperationsLocked(
   const operations = db
     .prepare(
       `
-        SELECT database_lineage, operation_id, state, state_version, current_attempt_no,
+        SELECT database_lineage, operation_id, chat_id, pre_occupancy_authority,
+               state, state_version, current_attempt_no,
                accepted_message_id, desired_terminal_outcome, provider_may_have_run
         FROM generation_operations
         WHERE database_lineage = ?
@@ -1769,21 +1833,26 @@ function reconcileGenerationOperationsLocked(
   const results = db
     .prepare(
       `
-        SELECT uid,
-               json_extract(json, '$.generationInfo.operationId') AS operation_id
+        SELECT chat_id, uid,
+               json_extract(json, '$.generationInfo.operationId') AS operation_id,
+               json_extract(json, '$.generationInfo.operationAttemptNo') AS operation_attempt_no,
+               json_extract(json, '$.generationInfo.attemptNo') AS attempt_no,
+               json_extract(json, '$.generationInfo.jobId') AS job_id,
+               json_extract(json, '$.generationInfo.generationId') AS generation_id
         FROM messages
-        WHERE json_valid(json)
+        WHERE alternate = 0 AND role = 'char' AND json_valid(json)
           AND json_extract(json, '$.generationInfo.databaseLineage') = ?
           AND json_type(json, '$.generationInfo.operationId') = 'text'
         ORDER BY chat_id ASC, seq ASC
       `,
     )
-    .all(databaseLineage) as unknown as Array<{ uid: string; operation_id: string }>
-  const resultMessageByOperation = new Map<string, string>()
+    .all(databaseLineage) as unknown as RecoveredResultRow[]
+  const resultMessagesByOperationAndChat = new Map<string, RecoveredResultRow[]>()
   for (const persisted of results) {
-    if (!resultMessageByOperation.has(persisted.operation_id)) {
-      resultMessageByOperation.set(persisted.operation_id, persisted.uid)
-    }
+    const key = startupResultKey(persisted.operation_id, persisted.chat_id)
+    const candidates = resultMessagesByOperationAndChat.get(key) ?? []
+    candidates.push(persisted)
+    resultMessagesByOperationAndChat.set(key, candidates)
   }
 
   type Decision = {
@@ -1809,7 +1878,14 @@ function reconcileGenerationOperationsLocked(
       operation.current_attempt_no === null
         ? undefined
         : attemptsByKey.get(attemptKey(operation.operation_id, operation.current_attempt_no))
-    const persistedResult = resultMessageByOperation.get(operation.operation_id)
+    const persistedResult =
+      operation.chat_id === null || attempt === undefined
+        ? undefined
+        : resultMessagesByOperationAndChat
+            .get(startupResultKey(operation.operation_id, operation.chat_id))
+            ?.find((candidate) =>
+              recoveredResultMatchesAttempt(candidate, attempt, operation.pre_occupancy_authority === 1),
+            )
     if (persistedResult && STARTUP_RESULT_STATES.has(operation.state)) {
       const cancelled = operation.desired_terminal_outcome === 'cancelled'
       decisions.push({
@@ -1817,7 +1893,7 @@ function reconcileGenerationOperationsLocked(
         state: cancelled ? 'cancelled' : 'completed',
         ...(attempt ? { attemptStatus: cancelled ? 'cancelled' : 'completed' } : {}),
         desiredTerminalOutcome: null,
-        resultMessageId: persistedResult,
+        resultMessageId: persistedResult.uid,
         failureCode: null,
         terminal: true,
       })

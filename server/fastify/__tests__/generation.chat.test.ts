@@ -8254,6 +8254,85 @@ describe('POST /api/v1/generate/chat', () => {
     await releaseReaderChatClaim(assertion, databaseLineage, occupancyEpoch)
   })
 
+  it('rejects delayed inline Continue publication after an intervening foreign claim was released', async () => {
+    let markProviderHeld!: () => void
+    const providerHeld = new Promise<void>((resolve) => {
+      markProviderHeld = resolve
+    })
+    let releaseProvider!: () => void
+    const providerCanFail = new Promise<void>((resolve) => {
+      releaseProvider = resolve
+    })
+    const dispatchProvider = vi.fn(() =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'stale released partial' }
+        markProviderHeld()
+        await providerCanFail
+        throw new Error('provider exploded after released claim')
+      })(),
+    )
+    await restartHarness({ dispatchProvider, finalizationRetry: { intervalMs: 60_000 } }, undefined, true)
+    const { assertion } = await setupAuthedClient(harness.app)
+    await seedChatWithMessages(
+      assertion,
+      [
+        { role: 'user', data: 'tell me a story', chatId: 'msg-user-1' },
+        { role: 'char', data: 'Once upon a time', chatId: 'msg-char-1', saying: 'char-1' },
+      ],
+      'unused echo',
+    )
+    const databaseLineage = await establishCompatibilityOwner(assertion)
+
+    const responsePromise = harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/generate/chat',
+      headers: { 'risu-auth': assertion, 'risu-writer-session': 'owner-a' },
+      payload: { chatId: 'chat-1', characterId: 'char-1', mode: 'continue' },
+    })
+    await providerHeld
+    const { occupancyEpoch } = await claimChatAsReader(assertion, databaseLineage)
+    await releaseReaderChatClaim(assertion, databaseLineage, occupancyEpoch)
+    releaseProvider()
+
+    const response = await responsePromise
+    expect(response.statusCode, response.body).toBe(200)
+    expect(dispatchProvider).toHaveBeenCalledTimes(1)
+    expect(parseEvents(response.body).find((event) => event.type === 'error')?.data).toMatchObject({
+      error: 'provider exploded after released claim',
+      persistenceDisposition: 'rejected',
+    })
+    expect(await readPersistedMessages(assertion)).toEqual([
+      expect.objectContaining({ role: 'user', data: 'tell me a story', chatId: 'msg-user-1' }),
+      expect.objectContaining({ role: 'char', data: 'Once upon a time', chatId: 'msg-char-1' }),
+    ])
+
+    const db = openDatabase(harness.dataDir)
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT retry.status, retry.terminal_error,
+                    retry.compatibility_database_lineage, retry.compatibility_session_id,
+                    retry.compatibility_occupancy_epoch,
+                    occupancy.occupant_session_id, occupancy.occupancy_epoch
+             FROM generation_finalization_retries AS retry
+             JOIN chat_occupancies AS occupancy ON occupancy.chat_id = retry.chat_id`,
+          )
+          .get(),
+      ).toEqual({
+        status: 'terminal',
+        terminal_error: 'chat_occupancy_stale',
+        compatibility_database_lineage: databaseLineage,
+        compatibility_session_id: 'owner-a',
+        compatibility_occupancy_epoch: 0,
+        occupant_session_id: null,
+        occupancy_epoch: 2,
+      })
+    } finally {
+      db.close()
+    }
+  })
+
   it('recovers a queued inline failed partial with its original compatibility authority and no redispatch', async () => {
     let markProviderHeld!: () => void
     const providerHeld = new Promise<void>((resolve) => {

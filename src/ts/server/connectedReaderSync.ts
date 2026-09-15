@@ -39,7 +39,11 @@ import {
 import { charactersResourceState } from './resourceState.svelte'
 import { applyServerMemoryJobEvent, applyServerMemoryJobSnapshot } from './memoryJobProjection.svelte'
 import { publishServerBardWikiJobEvent, publishServerBardWikiJobSnapshot } from './bardWikiJobEvents'
-import { applyClientChatOccupancyEvent, configureClientChatOccupancy } from './chatOccupancy'
+import {
+  applyClientChatOccupancyEvent,
+  configureClientChatOccupancy,
+  requestClientChatOccupancyRecovery,
+} from './chatOccupancy'
 
 export interface ConnectedReaderSyncOptions {
   /** Cancels setup owned by a higher-level operation such as explicit promotion. */
@@ -319,13 +323,19 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       await refreshFull(sourceEpoch, signal, event.revision)
       return
     }
-    await finishRefresh(
+    const refreshed = await finishRefresh(
       sourceEpoch,
       await refreshInvalidatedServerResources(event, {
         ...refreshOptions(sourceEpoch, signal),
         appliedRevision,
       }),
     )
+    if (refreshed && event.type === 'message.updated' && event.resource === 'message') {
+      // Generated translation completes its effect receipt in the same command
+      // transaction. Once that authoritative row is visible, wake any exact
+      // IGP predecessor fence without polling or granting broader authority.
+      requestClientChatOccupancyRecovery({ refresh: true })
+    }
   }
 
   function acceptMemoryVersion(sourceEpoch: number, streamId: string, version: number, snapshot = false): boolean {
@@ -450,6 +460,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
         attempt = 0
         frame(sourceEpoch)
         setClientConnectionState('live', generation)
+        requestClientChatOccupancyRecovery({ refresh: true })
       } else if (result.status === 'error' && result.httpStatus === 401) {
         notifyAuthLoss()
       } else if (result.status === 'replay-unavailable') {

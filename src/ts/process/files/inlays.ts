@@ -121,7 +121,9 @@ async function rememberServerInlayAsset(
   img: InlayAsset & { serverAssetId: string },
   aliases: readonly string[] = [],
   operation = captureClientWriteOperation(),
+  signal?: AbortSignal,
 ): Promise<void> {
+  signal?.throwIfAborted()
   assertClientWriteOperation(operation)
   const allAliases = Array.from(new Set([...(id !== img.serverAssetId ? [id] : []), ...aliases])).filter(
     (alias) => alias !== img.serverAssetId,
@@ -136,7 +138,9 @@ async function rememberServerInlayAsset(
         ...(typeof img.width === 'number' && img.width > 0 ? { width: img.width } : {}),
         ...(typeof img.height === 'number' && img.height > 0 ? { height: img.height } : {}),
       }),
+    signal,
   })
+  signal?.throwIfAborted()
   if (result.status !== 'ok') {
     if (result.status === 'error' && result.reason === 'not-found') {
       throw new MissingServerInlayAssetError(img.serverAssetId)
@@ -301,14 +305,16 @@ export async function postInlayAsset(img: { name: string; data: Uint8Array }) {
 
 export async function writeInlayImage(
   imgObj: HTMLImageElement,
-  arg: { name?: string; ext?: string; id?: string } = {},
+  arg: { name?: string; ext?: string; id?: string; signal?: AbortSignal } = {},
 ) {
+  arg.signal?.throwIfAborted()
   const operation = captureClientWriteOperation()
   let drawHeight = 0
   let drawWidth = 0
   const canvas = document.createElement('canvas')
   const ctx = canvas.getContext('2d')
   await waitForInlayImageLoad(imgObj)
+  arg.signal?.throwIfAborted()
   assertClientWriteOperation(operation)
   ;({ height: drawHeight, width: drawWidth } = getLoadedImageDimensions(imgObj))
   assertInlayImageDecodeBudget(drawWidth, drawHeight)
@@ -329,8 +335,10 @@ export async function writeInlayImage(
   const imageBlob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'))
 
   const bytes = await blobToBytes(imageBlob as Blob)
+  arg.signal?.throwIfAborted()
   assertClientWriteOperation(operation)
-  const assetId = await uploadServerAssetBytes(bytes, 'image/png')
+  const assetId = await uploadServerAssetBytes(bytes, 'image/png', { signal: arg.signal })
+  arg.signal?.throwIfAborted()
   assertClientWriteOperation(operation)
   await rememberServerInlayAsset(
     assetId,
@@ -344,7 +352,9 @@ export async function writeInlayImage(
     },
     arg.id && arg.id !== assetId ? [arg.id] : [],
     operation,
+    arg.signal,
   )
+  arg.signal?.throwIfAborted()
   return assetId
 }
 

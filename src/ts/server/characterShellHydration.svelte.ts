@@ -21,6 +21,8 @@ export interface CharacterShellHydrationRowState {
 export interface CharacterShellHydrationOptions {
   signal?: AbortSignal | null
   supersede?: boolean
+  /** Keep existing callers attached when this request replaces the same logical hydration requirement. */
+  rebindSupersededSubscribers?: boolean
   timeoutMs?: number
   minimumRevision?: number
 }
@@ -31,6 +33,7 @@ interface InFlightCharacterHydration {
   subscribers: Set<{ selectionFence?: SelectedCharacterHydrationFence }>
   minimumRevision: number
   settled: boolean
+  successor: InFlightCharacterHydration | null
   target: unknown
 }
 
@@ -92,7 +95,11 @@ export async function hydrateCharacterShell(
   if (options.signal?.aborted) return false
 
   const current = inFlight.get(characterId)
-  const baselineRevision = Math.max(peekCachedServerCommandRevision() ?? 0, options.minimumRevision ?? 0)
+  const baselineRevision = Math.max(
+    peekCachedServerCommandRevision() ?? 0,
+    options.minimumRevision ?? 0,
+    options.rebindSupersededSubscribers ? (current?.minimumRevision ?? 0) : 0,
+  )
   if (
     current &&
     current.target === existing &&
@@ -102,11 +109,6 @@ export async function hydrateCharacterShell(
   ) {
     return subscribeToCharacterHydration(characterId, current, options.signal, selectionFence)
   }
-  if (current) {
-    current.controller.abort()
-    inFlight.delete(characterId)
-  }
-
   const generation = shellHydrationGeneration
   const writerGeneration = canUseClientWriteAccess() ? captureClientSessionGeneration() : null
   const targetShell = existing
@@ -117,6 +119,7 @@ export async function hydrateCharacterShell(
     subscribers: new Set(),
     minimumRevision: baselineRevision,
     settled: false,
+    successor: null,
     target: existing,
   }
   const targetHasSubscriber = () =>
@@ -201,6 +204,10 @@ export async function hydrateCharacterShell(
   })
 
   shared.promise = request
+  if (current) {
+    if (options.rebindSupersededSubscribers) current.successor = shared
+    current.controller.abort()
+  }
   inFlight.set(characterId, shared)
   return subscribeToCharacterHydration(characterId, shared, options.signal, selectionFence)
 }
@@ -212,28 +219,48 @@ function subscribeToCharacterHydration(
   selectionFence?: SelectedCharacterHydrationFence,
 ): Promise<boolean> {
   const subscriber = { selectionFence }
-  shared.subscribers.add(subscriber)
   return new Promise((resolve, reject) => {
     let finished = false
+    let active = shared
+    const detach = (request: InFlightCharacterHydration) => {
+      request.subscribers.delete(subscriber)
+      if (!request.settled && request.subscribers.size === 0) {
+        if (inFlight.get(characterId) === request) inFlight.delete(characterId)
+        request.controller.abort()
+      }
+    }
     const finish = (complete: () => void) => {
       if (finished) return
       finished = true
       signal?.removeEventListener('abort', abort)
-      shared.subscribers.delete(subscriber)
-      if (!shared.settled && shared.subscribers.size === 0) {
-        if (inFlight.get(characterId) === shared) inFlight.delete(characterId)
-        shared.controller.abort()
-      }
+      detach(active)
       complete()
     }
     const abort = () => finish(() => resolve(false))
+    const subscribe = (request: InFlightCharacterHydration) => {
+      if (finished) return
+      active = request
+      request.subscribers.add(subscriber)
+      request.promise.then(
+        (result) => {
+          if (finished || active !== request) return
+          const successor = request.successor
+          if (!result && successor && !signal?.aborted) {
+            detach(request)
+            subscribe(successor)
+            return
+          }
+          finish(() => resolve(result && (!selectionFence || selectedTargetStillMatches(characterId, selectionFence))))
+        },
+        (error) => finish(() => reject(error)),
+      )
+    }
     signal?.addEventListener('abort', abort, { once: true })
-    if (signal?.aborted) abort()
-    shared.promise.then(
-      (result) =>
-        finish(() => resolve(result && (!selectionFence || selectedTargetStillMatches(characterId, selectionFence)))),
-      (error) => finish(() => reject(error)),
-    )
+    if (signal?.aborted) {
+      abort()
+      return
+    }
+    subscribe(shared)
   })
 }
 

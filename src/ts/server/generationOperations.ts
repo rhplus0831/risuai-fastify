@@ -62,9 +62,10 @@ import {
   discardPendingMutation,
   isGenerationOperationPendingIntent,
   listPendingMutations,
-  listChatOccupancyGenerationMutations,
+  listOriginatingChatOccupancyGenerationMutations,
   stagePendingMutation,
   stageChatOccupancyGenerationMutation,
+  type ChatOccupancyGenerationMutationEntry,
   type DurableMutationIntent,
   type PendingMutationHandle,
 } from './pendingMutationOutbox'
@@ -78,7 +79,13 @@ import { recordGenerationRecoveryEvent } from './protocolDiagnostics'
 import { registerGenerationOperationsRuntime } from '../process/generationRuntimeBridge'
 import { language } from '../../lang'
 import { canGenerate, getGenerationReadinessDiagnostic } from '../startupReadiness'
-import { isClientChatOccupancyAuthorityCurrent, type ClientChatOccupancyAuthority } from './chatOccupancy'
+import {
+  captureClientChatOccupancyAuthority,
+  isClientChatOccupancyAuthorityCurrent,
+  listClientChatOccupancyAuthorities,
+  registerClientChatOccupancyRecoveryHandler,
+  type ClientChatOccupancyAuthority,
+} from './chatOccupancy'
 import { markChatMessageMutationIntent } from './chatMessageMutationIntent'
 import { getChatTranscriptOwnerState } from './chatTranscriptOwner'
 
@@ -92,7 +99,7 @@ type GenerationOperationAccess = 'ordinary' | 'pending-replay' | 'chat-occupancy
 
 export interface GenerationOperationChatOccupancy {
   readonly authority: ClientChatOccupancyAuthority
-  readonly interaction: 'send' | 'reroll'
+  readonly interaction: 'send' | 'reroll' | 'continue' | 'regenerate'
 }
 
 function canUseGenerationOperationAccess(
@@ -282,8 +289,20 @@ export type GenerationOperationPendingReplayOutcome = {
   result?: GenerationOperationDispatchResult | GenerationOperationCancellationResult
 }
 
+export interface ChatOccupancyGenerationRecoveryProjection {
+  readonly mutationId: string
+  readonly chatId: string
+  readonly operationId: string
+  readonly kind: 'send' | 'reroll' | 'continue' | 'regenerate' | 'stop'
+  readonly acceptedMessageId?: string
+  readonly occupancyEpoch: number
+  readonly disposition: 'retained' | 'requires_resubmission'
+  readonly error?: string
+}
+
 export const generationOperationProjections = writable<GenerationOperationProjection[]>([])
 export const generationOperationCancellations = writable<GenerationOperationCancellation[]>([])
+export const chatOccupancyGenerationRecoveryProjections = writable<ChatOccupancyGenerationRecoveryProjection[]>([])
 
 interface GenerationOperationCancellationRuntime {
   handle?: PendingMutationHandle
@@ -309,6 +328,9 @@ let cancellationWakeListenersInstalled = false
 let generationOperationProtocolVersion = 0
 let generationOperationProjectionEpoch = 0
 let generationOperationDatabaseLineage: string | null = null
+let currentChatOccupancyRecovery: Promise<GenerationOperationPendingReplayOutcome[]> | null = null
+let chatOccupancyRecoveryRequestedAgain = false
+const chatOccupancyRecoveryHandles = new Map<string, PendingMutationHandle>()
 
 export function configureGenerationOperationProtocol(
   protocol: { version: number } | undefined,
@@ -324,6 +346,8 @@ export function configureGenerationOperationProtocol(
     }
     cancellationRuntimeByOperationId.clear()
     generationOperationCancellations.set([])
+    chatOccupancyGenerationRecoveryProjections.set([])
+    chatOccupancyRecoveryHandles.clear()
     clearAcceptedSendRecoveryProjection()
     clearActiveGenerationJobProjection()
   }
@@ -344,6 +368,10 @@ export function resetGenerationOperationClientForTests(): void {
   cancellationRuntimeByOperationId.clear()
   generationOperationViewerRegistrationId = 0
   generationOperationCancellations.set([])
+  chatOccupancyGenerationRecoveryProjections.set([])
+  chatOccupancyRecoveryHandles.clear()
+  currentChatOccupancyRecovery = null
+  chatOccupancyRecoveryRequestedAgain = false
   clearAcceptedSendRecoveryProjection()
   clearActiveGenerationJobProjection()
 }
@@ -653,6 +681,7 @@ function operationIntentForRetry(
 function operationIntentForCancellation(
   operationId: string,
   advisory: Pick<GenerationOperationCancellation, 'stateVersion' | 'attemptNo' | 'jobId'> = {},
+  chatOccupancy?: GenerationOperationChatOccupancy,
 ): DurableMutationIntent & { kind: 'generation-operation-cancel' } {
   return {
     version: 1,
@@ -663,6 +692,12 @@ function operationIntentForCancellation(
         path: `/generation-operations/${encodeURIComponent(operationId)}/cancellation`,
         body: {
           reason: 'user_stop',
+          ...(chatOccupancy
+            ? {
+                chatId: chatOccupancy.authority.chatId,
+                chatOccupancy: { version: 1, interaction: chatOccupancy.interaction },
+              }
+            : {}),
           ...(advisory.stateVersion !== undefined ? { knownStateVersion: advisory.stateVersion } : {}),
           ...(advisory.attemptNo !== undefined ? { knownAttemptNo: advisory.attemptNo } : {}),
           ...(advisory.jobId ? { knownJobId: advisory.jobId } : {}),
@@ -1068,6 +1103,46 @@ function cancellationTargetForOperationId(
   return operation ? cancellationTargetFromOperation(operation, previous) : undefined
 }
 
+function restoreGenerationOperationChatOccupancyControl(operation: GenerationOperationProjection): void {
+  if (
+    !operation.chatId ||
+    (operation.requestOrigin !== 'accepted_send' &&
+      operation.requestOrigin !== 'continue' &&
+      operation.requestOrigin !== 'regenerate') ||
+    !['cancel_requested', 'accepted', 'launching', 'owned_by_job', 'stopping', 'finalizing'].includes(operation.state)
+  ) {
+    return
+  }
+  const scope = operation.generationScope
+  const authority = captureClientChatOccupancyAuthority(operation.chatId)
+  if (
+    !scope ||
+    scope.admissionKind === 'legacy_owner' ||
+    !authority ||
+    operation.creatorWriterSessionId !== authority.sessionId ||
+    scope.occupancyDatabaseLineage !== authority.databaseLineage ||
+    scope.occupancySessionId !== authority.sessionId ||
+    scope.occupancyEpoch !== authority.occupancyEpoch ||
+    (scope.admissionKind === 'owner_occupancy' && scope.occupancyClaimClass !== 'owner') ||
+    (scope.admissionKind === 'chat_only' && scope.occupancyClaimClass !== 'chat_only') ||
+    scope.permissionScopeVersion !== 1
+  ) {
+    return
+  }
+  const runtime = cancellationRuntime(operation.operationId)
+  runtime.chatOccupancy = {
+    authority,
+    interaction:
+      operation.requestOrigin === 'continue'
+        ? 'continue'
+        : operation.requestOrigin === 'regenerate'
+          ? scope.admissionKind === 'chat_only'
+            ? 'reroll'
+            : 'regenerate'
+          : 'send',
+  }
+}
+
 function syncGenerationOperationCancellationProjection(operation: GenerationOperationProjection): void {
   const previous = cancellationByOperationId(operation.operationId)
   if (!previous) return
@@ -1158,6 +1233,7 @@ function applyGenerationOperationProjectionState(
   if (!accepted) return false
   applyGenerationRecoveryOperation(operation)
   applyAcceptedSendOperationProjection(operation, capturedTarget)
+  restoreGenerationOperationChatOccupancyControl(operation)
   syncGenerationOperationCancellationProjection(operation)
   return true
 }
@@ -1205,6 +1281,7 @@ function applyGenerationOperationBootstrapState(
   applyAcceptedSendBootstrapProjection(operations, runtime.activeGenerationJobs ?? [], epoch)
   for (const operation of operations) {
     applyGenerationRecoveryOperation(operation)
+    restoreGenerationOperationChatOccupancyControl(operation)
     syncGenerationOperationCancellationProjection(operation)
   }
   return true
@@ -1714,7 +1791,7 @@ async function sendGenerationOperationCancellation(
     let handle = existing?.handle ?? runtime.handle
     let intent = existing?.intent ?? runtime.intent
     if (!handle || !intent) {
-      intent = operationIntentForCancellation(operationId, cancellationAdvisory(operationId))
+      intent = operationIntentForCancellation(operationId, cancellationAdvisory(operationId), chatOccupancy)
       updateGenerationOperationCancellation(operationId, (previous) => ({
         operationId,
         target: cancellationTargetForOperationId(operationId, previous),
@@ -1764,9 +1841,9 @@ async function sendGenerationOperationCancellation(
         }))
         return failed
       }
-      runtime.handle = handle
-      runtime.intent = intent
     }
+    runtime.handle = handle
+    runtime.intent = intent
     if (!generationAccessIsCurrent(effectiveAccess, sourceGeneration, chatOccupancy?.authority))
       return { status: 'failed', error: generationNotReadyError() }
     updateGenerationOperationCancellation(operationId, (previous) => ({
@@ -1835,16 +1912,27 @@ export function stopChatOccupancyGeneration(target: ActiveChatTarget): Promise<G
     return Promise.resolve({ status: 'failed', error: 'No owned generation is active for this chat.' })
   }
   const operation = get(generationOperationProjections).find((candidate) => candidate.operationId === operationId)
+  // The operation may have been projected while an owner claim was awaiting
+  // reader normalization, when no usable current occupancy authority existed.
+  // Rebind its immutable accepted scope to the now-current four-part tuple at
+  // the explicit Stop boundary.
+  if (operation) restoreGenerationOperationChatOccupancyControl(operation)
   const session = getClientSessionSnapshot()
-  if (!operation || operation.chatId !== target.chatId || operation.creatorWriterSessionId !== session.sessionId) {
+  const runtime = cancellationRuntimeByOperationId.get(operationId)
+  if (
+    operation
+      ? operation.chatId !== target.chatId || operation.creatorWriterSessionId !== session.sessionId
+      : !runtime || !targetMatches(cancellationByOperationId(operationId)?.target, target)
+  ) {
     return Promise.resolve({ status: 'failed', error: 'No owned generation is active for this chat.' })
   }
-  const admittedOccupancy = cancellationRuntimeByOperationId.get(operationId)?.chatOccupancy
+  const admittedOccupancy = runtime?.chatOccupancy
   const authority = admittedOccupancy?.authority
   if (
     !authority ||
     authority.chatId !== target.chatId ||
-    authority.sessionId !== operation.creatorWriterSessionId ||
+    authority.sessionId !== session.sessionId ||
+    (operation !== undefined && authority.sessionId !== operation.creatorWriterSessionId) ||
     !isClientChatOccupancyAuthorityCurrent(authority)
   ) {
     return Promise.resolve({ status: 'failed', error: 'The chat occupancy changed before Stop could start.' })
@@ -2025,10 +2113,12 @@ function generationDispatchRecoveryIdentity(intent: DurableMutationIntent): Gene
   if (intent.kind === 'generation-operation-cancel') {
     const operationId = operationIdFromPendingPath(request.path, 'cancellation')
     const knownStateVersion = request.body?.knownStateVersion
-    if (!operationId) return null
+    const chatId = request.body?.chatId
+    if (!operationId || (chatId !== undefined && (typeof chatId !== 'string' || !chatId))) return null
     return {
       kind: 'cancel',
       operationId,
+      ...(typeof chatId === 'string' ? { chatId } : {}),
       ...(Number.isSafeInteger(knownStateVersion) && (knownStateVersion as number) >= 0
         ? { minimumStateVersion: knownStateVersion as number }
         : {}),
@@ -2310,6 +2400,15 @@ export async function readGenerationOperationStatus(
   operationId: string,
   signal?: AbortSignal,
   chatOccupancy?: GenerationOperationChatOccupancy,
+  expectedRecoveryOrigin?: {
+    readonly operationId: string
+    readonly chatId: string
+    readonly databaseLineage: string
+    readonly sessionId: string
+    readonly occupancyEpoch: number
+    readonly interaction: GenerationOperationChatOccupancy['interaction']
+    readonly intentKind: ChatOccupancyGenerationRecoveryProjection['kind']
+  },
 ): Promise<GenerationOperationDispatchResult> {
   const sourceGeneration = chatOccupancy?.authority.sessionGeneration ?? captureClientSessionGeneration()
   const isCurrent = () =>
@@ -2359,8 +2458,69 @@ export async function readGenerationOperationStatus(
   }
   const parsed = responseFromBody(body)
   if (!parsed) return { status: 'retained', error: 'Invalid generation operation status response.' }
+  if (
+    expectedRecoveryOrigin &&
+    !operationMatchesChatOccupancyRecoveryOrigin(parsed.operation, expectedRecoveryOrigin)
+  ) {
+    return {
+      status: 'rejected',
+      error: 'The generation operation does not match the originating occupied-chat intent.',
+      code: 'generation_recovery_origin_mismatch',
+    }
+  }
   if (isCurrent()) applyGenerationOperationProjection(parsed.operation)
   return { status: 'accepted', response: parsed, stream: generationOperationStreamDescriptor(parsed) }
+}
+
+function generationScopeHasImmutableOccupancyProvenance(
+  scope: NonNullable<GenerationOperationProjection['generationScope']>,
+): boolean {
+  return (
+    (scope.admissionKind === 'owner_occupancy' && scope.occupancyClaimClass === 'owner') ||
+    (scope.admissionKind === 'chat_only' && scope.occupancyClaimClass === 'chat_only')
+  )
+}
+
+function operationMatchesChatOccupancyRecoveryOrigin(
+  operation: GenerationOperationProjection,
+  expected: {
+    readonly operationId: string
+    readonly chatId: string
+    readonly databaseLineage: string
+    readonly sessionId: string
+    readonly occupancyEpoch: number
+    readonly interaction: GenerationOperationChatOccupancy['interaction']
+    readonly intentKind: ChatOccupancyGenerationRecoveryProjection['kind']
+  },
+): boolean {
+  if (operation.creatorWriterSessionId !== expected.sessionId) return false
+  const scope = operation.generationScope
+  const intendedMode =
+    expected.interaction === 'send' ? 'send' : expected.interaction === 'continue' ? 'continue' : 'regenerate'
+  const intendedOrigin =
+    intendedMode === 'send' ? 'accepted_send' : intendedMode === 'continue' ? 'continue' : 'regenerate'
+  const exactCancellationTombstone =
+    expected.intentKind !== 'stop' &&
+    operation.state === 'cancel_requested' &&
+    operation.requestOrigin === 'unbound' &&
+    operation.mode === intendedMode
+  const originMatches =
+    expected.intentKind === 'stop'
+      ? operation.mode === intendedMode &&
+        (operation.requestOrigin === intendedOrigin || operation.requestOrigin === 'unbound')
+      : operation.requestOrigin === intendedOrigin || exactCancellationTombstone
+  return (
+    operation.operationId === expected.operationId &&
+    operation.chatId === expected.chatId &&
+    originMatches &&
+    scope !== undefined &&
+    scope.admissionKind !== 'legacy_owner' &&
+    scope.occupancyDatabaseLineage === expected.databaseLineage &&
+    scope.occupancySessionId === expected.sessionId &&
+    scope.occupancyEpoch === expected.occupancyEpoch &&
+    generationScopeHasImmutableOccupancyProvenance(scope) &&
+    scope.permissionScopeVersion === 1
+  )
 }
 
 export async function retryGenerationOperation(
@@ -2545,49 +2705,282 @@ export async function dispatchGenerationOperationPendingReplay(
   return { disposition: 'retained', result }
 }
 
+function chatOccupancyRecoveryIdentity(entry: ChatOccupancyGenerationMutationEntry): {
+  operationId: string
+  kind: ChatOccupancyGenerationRecoveryProjection['kind']
+  interaction: GenerationOperationChatOccupancy['interaction']
+  acceptedMessageId?: string
+} | null {
+  const identity = generationDispatchRecoveryIdentity(entry.intent)
+  if (!identity) return null
+  if (identity.kind === 'cancel') {
+    const chatOccupancy = entry.intent.requests[0]?.body?.chatOccupancy
+    if (!chatOccupancy || typeof chatOccupancy !== 'object' || Array.isArray(chatOccupancy)) return null
+    const interaction = (chatOccupancy as Record<string, unknown>).interaction
+    if (
+      interaction !== 'send' &&
+      interaction !== 'reroll' &&
+      interaction !== 'continue' &&
+      interaction !== 'regenerate'
+    ) {
+      return null
+    }
+    return { operationId: identity.operationId, kind: 'stop', interaction }
+  }
+  if (identity.kind !== 'submit') return null
+  const body = entry.intent.requests[0]?.body
+  const occupancy = body?.chatOccupancy
+  const interaction =
+    occupancy && typeof occupancy === 'object' && !Array.isArray(occupancy)
+      ? (occupancy as Record<string, unknown>).interaction
+      : undefined
+  const kind =
+    body?.mode === 'send' && interaction === 'send'
+      ? 'send'
+      : body?.mode === 'continue' && interaction === 'continue'
+        ? 'continue'
+        : body?.mode === 'regenerate' && interaction === 'reroll'
+          ? 'reroll'
+          : body?.mode === 'regenerate' && interaction === 'regenerate'
+            ? 'regenerate'
+            : null
+  if (
+    !kind ||
+    (interaction !== 'send' && interaction !== 'reroll' && interaction !== 'continue' && interaction !== 'regenerate')
+  ) {
+    return null
+  }
+  return {
+    operationId: identity.operationId,
+    kind,
+    interaction,
+    ...(typeof body.acceptedMessageId === 'string' ? { acceptedMessageId: body.acceptedMessageId } : {}),
+  }
+}
+
+function publishChatOccupancyRecoveryProjection(
+  projection: ChatOccupancyGenerationRecoveryProjection | null,
+  mutationId: string,
+): void {
+  chatOccupancyGenerationRecoveryProjections.update((current) => {
+    const retained = current.filter((candidate) => candidate.mutationId !== mutationId)
+    return projection ? [...retained, projection] : retained
+  })
+  if (!projection) chatOccupancyRecoveryHandles.delete(mutationId)
+}
+
+function retainedChatOccupancyRecoveryProjection(
+  entry: ChatOccupancyGenerationMutationEntry,
+  identity: NonNullable<ReturnType<typeof chatOccupancyRecoveryIdentity>>,
+  disposition: ChatOccupancyGenerationRecoveryProjection['disposition'],
+  error?: string,
+): ChatOccupancyGenerationRecoveryProjection {
+  chatOccupancyRecoveryHandles.set(entry.handle.mutationId, entry.handle)
+  return {
+    mutationId: entry.handle.mutationId,
+    chatId: entry.chatId,
+    operationId: identity.operationId,
+    kind: identity.kind,
+    ...(identity.acceptedMessageId ? { acceptedMessageId: identity.acceptedMessageId } : {}),
+    occupancyEpoch: entry.occupancyEpoch,
+    disposition,
+    ...(error ? { error } : {}),
+  }
+}
+
+/** Retire a proven-unaccepted dormant intent only after the user completes a fresh explicit interaction. */
+export async function discardChatOccupancyRequiresResubmission(
+  chatId: string,
+  kind: Exclude<ChatOccupancyGenerationRecoveryProjection['kind'], 'stop'>,
+): Promise<void> {
+  const selected = get(chatOccupancyGenerationRecoveryProjections).filter(
+    (candidate) =>
+      candidate.chatId === chatId && candidate.kind === kind && candidate.disposition === 'requires_resubmission',
+  )
+  for (const candidate of selected) {
+    const handle = chatOccupancyRecoveryHandles.get(candidate.mutationId)
+    if (!handle) continue
+    const result = await discardPendingMutation(handle)
+    if (result === 'deleted' || result === 'superseded') {
+      publishChatOccupancyRecoveryProjection(null, candidate.mutationId)
+    }
+  }
+}
+
+function operationStatusProvesMissing(result: GenerationOperationDispatchResult): boolean {
+  return result.status === 'rejected' && result.code === 'generation_operation_not_found'
+}
+
+function currentChatOccupancyPolicyRequiresResubmission(
+  authority: ClientChatOccupancyAuthority,
+  identity: NonNullable<ReturnType<typeof chatOccupancyRecoveryIdentity>>,
+): boolean {
+  return authority.claimClass === 'chat_only' && (identity.kind === 'continue' || identity.kind === 'regenerate')
+}
+
+function operationIsUnacceptedCancellationTombstone(
+  operation: GenerationOperationProjection,
+  identity: NonNullable<ReturnType<typeof chatOccupancyRecoveryIdentity>>,
+): boolean {
+  return (
+    identity.kind !== 'stop' &&
+    operation.operationId === identity.operationId &&
+    operation.state === 'cancel_requested' &&
+    operation.requestOrigin === 'unbound'
+  )
+}
+
 /**
- * Explicitly replay only this page's exact occupied-chat generation rows.
- * General startup replay never calls this function or sees these rows.
+ * Reconcile before dispatching this page's occupied-chat generation rows.
+ * Stable operation identity is checked under the originating session, chat,
+ * lineage, and stored epoch. A row from an expired epoch is never transplanted
+ * to the current tuple. A proven-unaccepted submit that is stale or no longer
+ * allowed by the current claim class instead becomes an explicit
+ * `requires_resubmission` projection while its encrypted intent stays dormant.
  */
 export async function replayChatOccupancyGenerationMutations(
   authority: ClientChatOccupancyAuthority,
 ): Promise<GenerationOperationPendingReplayOutcome[]> {
   if (!isClientChatOccupancyAuthorityCurrent(authority)) return []
-  const entries = await listChatOccupancyGenerationMutations(authority, { requireEnabled: false })
+  const entries = await listOriginatingChatOccupancyGenerationMutations(authority)
   const outcomes: GenerationOperationPendingReplayOutcome[] = []
+  const seenMutationIds = new Set(entries.map((entry) => entry.handle.mutationId))
+  chatOccupancyGenerationRecoveryProjections.update((current) =>
+    current.filter((candidate) => candidate.chatId !== authority.chatId || seenMutationIds.has(candidate.mutationId)),
+  )
   for (const entry of entries) {
     if (!isClientChatOccupancyAuthorityCurrent(authority)) break
-    if (entry.intent.kind === 'generation-operation-cancel') {
-      const operationId = operationIdFromPendingPath(entry.intent.requests[0]?.path ?? '', 'cancellation')
-      if (!operationId) {
-        await discardPendingMutation(entry.handle)
-        outcomes.push({ disposition: 'discarded' })
-        continue
-      }
+    const identity = chatOccupancyRecoveryIdentity(entry)
+    if (!identity) {
+      await discardPendingMutation(entry.handle)
+      publishChatOccupancyRecoveryProjection(null, entry.handle.mutationId)
+      outcomes.push({ disposition: 'discarded' })
+      continue
+    }
+    const interaction = identity.interaction
+    const status = await readGenerationOperationStatus(
+      identity.operationId,
+      undefined,
+      { authority, interaction },
+      {
+        operationId: identity.operationId,
+        chatId: entry.chatId,
+        databaseLineage: authority.databaseLineage,
+        sessionId: authority.sessionId,
+        occupancyEpoch: entry.occupancyEpoch,
+        interaction,
+        intentKind: identity.kind,
+      },
+    )
+    if (!isClientChatOccupancyAuthorityCurrent(authority)) break
+    const dispatchIdentity = generationDispatchRecoveryIdentity(entry.intent)
+    if (!dispatchIdentity) continue
+    if (
+      status.status === 'accepted' &&
+      operationConcludesPendingIntent(status.response.operation, entry.intent, dispatchIdentity)
+    ) {
+      await discardPendingMutation(entry.handle)
+      publishChatOccupancyRecoveryProjection(null, entry.handle.mutationId)
+      outcomes.push({ disposition: 'succeeded', result: status })
+      continue
+    }
+    if (entry.epochDisposition === 'stale') {
+      const requiresResubmission = identity.kind !== 'stop' && operationStatusProvesMissing(status)
+      publishChatOccupancyRecoveryProjection(
+        retainedChatOccupancyRecoveryProjection(
+          entry,
+          identity,
+          requiresResubmission ? 'requires_resubmission' : 'retained',
+          status.status === 'accepted' ? 'The stored operation does not conclude this pending intent.' : status.error,
+        ),
+        entry.handle.mutationId,
+      )
+      outcomes.push({ disposition: 'retained', result: status })
+      continue
+    }
+    if (
+      status.status === 'accepted' &&
+      operationIsUnacceptedCancellationTombstone(status.response.operation, identity)
+    ) {
+      await discardPendingMutation(entry.handle)
+      publishChatOccupancyRecoveryProjection(null, entry.handle.mutationId)
+      outcomes.push({ disposition: 'succeeded', result: status })
+      continue
+    }
+    if (
+      identity.kind === 'stop' &&
+      (operationStatusProvesMissing(status) ||
+        (status.status === 'accepted' &&
+          ['accepted', 'launching', 'owned_by_job', 'retryable', 'abandoned'].includes(
+            status.response.operation.state,
+          )))
+    ) {
       const result = await sendGenerationOperationCancellation(
-        operationId,
+        identity.operationId,
         {
           handle: entry.handle,
           intent: entry.intent as DurableMutationIntent & { kind: 'generation-operation-cancel' },
         },
         'chat-occupancy-control',
         undefined,
-        { authority, interaction: 'send' },
+        { authority, interaction },
       )
-      outcomes.push({
-        disposition:
-          result.status === 'acknowledged' && cancellationDispositionIsTerminal(result.disposition)
-            ? 'succeeded'
-            : 'retained',
-        result,
-      })
+      const succeeded = result.status === 'acknowledged' && cancellationDispositionIsTerminal(result.disposition)
+      if (succeeded) publishChatOccupancyRecoveryProjection(null, entry.handle.mutationId)
+      else
+        publishChatOccupancyRecoveryProjection(
+          retainedChatOccupancyRecoveryProjection(
+            entry,
+            identity,
+            'retained',
+            result.status === 'failed' ? result.error : undefined,
+          ),
+          entry.handle.mutationId,
+        )
+      outcomes.push({ disposition: succeeded ? 'succeeded' : 'retained', result })
+      continue
+    }
+    if (status.status === 'accepted') {
+      publishChatOccupancyRecoveryProjection(
+        retainedChatOccupancyRecoveryProjection(
+          entry,
+          identity,
+          'retained',
+          'The stored operation does not conclude this pending intent.',
+        ),
+        entry.handle.mutationId,
+      )
+      outcomes.push({ disposition: 'retained', result: status })
+      continue
+    }
+    if (!operationStatusProvesMissing(status)) {
+      publishChatOccupancyRecoveryProjection(
+        retainedChatOccupancyRecoveryProjection(entry, identity, 'retained', status.error),
+        entry.handle.mutationId,
+      )
+      outcomes.push({ disposition: 'retained', result: status })
+      continue
+    }
+    if (currentChatOccupancyPolicyRequiresResubmission(authority, identity)) {
+      publishChatOccupancyRecoveryProjection(
+        retainedChatOccupancyRecoveryProjection(
+          entry,
+          identity,
+          'requires_resubmission',
+          'This interaction is unavailable in chat-only mode.',
+        ),
+        entry.handle.mutationId,
+      )
+      outcomes.push({ disposition: 'retained', result: status })
       continue
     }
     if (!isClientChatOccupancyAuthorityCurrent(authority, { requireEnabled: true })) {
-      outcomes.push({
-        disposition: 'retained',
-        result: { status: 'retained', error: 'Occupied-chat generation is disabled.' },
-      })
+      const result = { status: 'retained' as const, error: 'Occupied-chat generation is disabled.' }
+      publishChatOccupancyRecoveryProjection(
+        retainedChatOccupancyRecoveryProjection(entry, identity, 'retained', result.error),
+        entry.handle.mutationId,
+      )
+      outcomes.push({ disposition: 'retained', result })
       continue
     }
     const result = await dispatchPendingGenerationOperation(
@@ -2599,12 +2992,58 @@ export async function replayChatOccupancyGenerationMutations(
       undefined,
       authority,
     )
+    if (result.status !== 'retained') publishChatOccupancyRecoveryProjection(null, entry.handle.mutationId)
+    else
+      publishChatOccupancyRecoveryProjection(
+        retainedChatOccupancyRecoveryProjection(entry, identity, 'retained', result.error),
+        entry.handle.mutationId,
+      )
     outcomes.push({
       disposition: result.status === 'accepted' ? 'succeeded' : result.status === 'rejected' ? 'discarded' : 'retained',
       result,
     })
   }
   return outcomes
+}
+
+/**
+ * Recovery entrypoint for bootstrap, reconnect, and a newly confirmed claim.
+ * It is intentionally independent of general-owner outbox readiness and is a
+ * no-op for observers because only current exact occupancy authorities are
+ * enumerated.
+ */
+export function recoverCurrentChatOccupancyGenerationMutations(): Promise<GenerationOperationPendingReplayOutcome[]> {
+  if (currentChatOccupancyRecovery) {
+    chatOccupancyRecoveryRequestedAgain = true
+    return currentChatOccupancyRecovery
+  }
+  const session = getClientSessionSnapshot()
+  const authorities = listClientChatOccupancyAuthorities()
+  if (!session.authenticated || session.connection !== 'live' || authorities.length === 0) {
+    chatOccupancyGenerationRecoveryProjections.set([])
+    chatOccupancyRecoveryHandles.clear()
+    return Promise.resolve([])
+  }
+  const sessionGeneration = session.generation
+  const run = (async () => {
+    const outcomes: GenerationOperationPendingReplayOutcome[] = []
+    for (const authority of authorities) {
+      if (!isClientSessionGenerationCurrent(sessionGeneration) || !isClientChatOccupancyAuthorityCurrent(authority)) {
+        break
+      }
+      outcomes.push(...(await replayChatOccupancyGenerationMutations(authority)))
+    }
+    return outcomes
+  })()
+  const wrapped = run.finally(() => {
+    if (currentChatOccupancyRecovery === wrapped) currentChatOccupancyRecovery = null
+    if (chatOccupancyRecoveryRequestedAgain) {
+      chatOccupancyRecoveryRequestedAgain = false
+      void recoverCurrentChatOccupancyGenerationMutations()
+    }
+  })
+  currentChatOccupancyRecovery = wrapped
+  return wrapped
 }
 
 registerGenerationOperationsRuntime({
@@ -2618,4 +3057,8 @@ registerGenerationOperationsRuntime({
   replayGenerationRecoveryObligations,
   retryGenerationOperation,
   stopGenerationOperation,
+})
+
+registerClientChatOccupancyRecoveryHandler(async () => {
+  await recoverCurrentChatOccupancyGenerationMutations()
 })

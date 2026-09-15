@@ -19,6 +19,7 @@ vi.mock('../server/chatOccupancy', () => ({
   captureClientChatOccupancyAuthority: occupancy.capture,
   getClientChatOccupancySnapshot: () => ({ support: occupancy.enabled ? 'enabled' : 'disabled' }),
   isClientChatOccupancyAuthorityCurrent: occupancy.isCurrent,
+  registerClientChatOccupancyRecoveryHandler: vi.fn(() => () => undefined),
 }))
 
 const commandSpies = vi.hoisted(() => ({

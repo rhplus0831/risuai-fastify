@@ -149,7 +149,13 @@ function seedInterruptedGeneration(withResult: boolean): {
       chatId: 'message-result',
       role: 'char',
       data: 'recoverable result',
-      generationInfo: { databaseLineage, operationId: accepted.operationId },
+      generationInfo: {
+        databaseLineage,
+        operationId: accepted.operationId,
+        attemptNo: running.operation.currentAttempt.attemptNo,
+        jobId: running.operation.currentAttempt.jobId,
+        generationId: running.operation.currentAttempt.jobId,
+      },
     }
     db.prepare(
       `INSERT INTO messages (chat_id, seq, uid, role, data, disabled, json, alternate)
@@ -180,6 +186,188 @@ function recoveringService(db: DatabaseSync, nowMs: number): ChatOccupancyServic
 }
 
 describe('expired chat occupancy generation recovery', () => {
+  it.each([
+    { forgedTarget: 'wrong_chat', role: 'char', attemptNo: 1, jobId: 'generation-a', generationId: 'generation-a' },
+    {
+      forgedTarget: 'same_chat_user',
+      role: 'user',
+      attemptNo: 1,
+      jobId: 'generation-a',
+      generationId: 'generation-a',
+    },
+    {
+      forgedTarget: 'same_chat_alternate',
+      role: 'char',
+      attemptNo: 1,
+      jobId: 'generation-a',
+      generationId: 'generation-a',
+    },
+    {
+      forgedTarget: 'same_chat_wrong_attempt',
+      role: 'char',
+      attemptNo: 2,
+      jobId: 'generation-a',
+      generationId: 'generation-a',
+    },
+    {
+      forgedTarget: 'same_chat_wrong_job',
+      role: 'char',
+      attemptNo: 1,
+      jobId: 'generation-b',
+      generationId: 'generation-a',
+    },
+    {
+      forgedTarget: 'same_chat_wrong_generation',
+      role: 'char',
+      attemptNo: 1,
+      jobId: 'generation-a',
+      generationId: 'generation-b',
+    },
+  ] as const)(
+    'does not recover a $forgedTarget message as the accepted operation result during startup',
+    ({ forgedTarget, role, attemptNo, jobId, generationId }) => {
+      const seeded = seedInterruptedGeneration(false)
+      const db = openDatabase(seeded.dataDir)
+      try {
+        const chatId = forgedTarget === 'wrong_chat' ? 'chat-b' : 'chat-a'
+        if (chatId === 'chat-b') {
+          db.prepare('INSERT INTO chats (id, character_id, position, data_json) VALUES (?, ?, 1, ?)').run(
+            chatId,
+            'character-a',
+            JSON.stringify({ id: chatId }),
+          )
+        }
+        const forged = {
+          chatId: 'forged-result',
+          role,
+          data: 'must not become the recovered result',
+          generationInfo: {
+            databaseLineage: seeded.databaseLineage,
+            operationId: 'operation-a',
+            attemptNo,
+            jobId,
+            generationId,
+          },
+        }
+        db.prepare(
+          `INSERT INTO messages (chat_id, seq, uid, role, data, disabled, json, alternate)
+           VALUES (?, 50, ?, ?, ?, NULL, ?, ?)`,
+        ).run(
+          chatId,
+          'forged-result',
+          role,
+          forged.data,
+          JSON.stringify(forged),
+          forgedTarget === 'same_chat_alternate' ? 1 : 0,
+        )
+
+        expect(reconcileGenerationOperationsAtStartup(db, 'server-after-restart')).toMatchObject({
+          completedFromResultCount: 0,
+          abandonedOperationCount: 1,
+        })
+        expect(getGenerationOperationProjection(db, seeded.databaseLineage, 'operation-a')).toMatchObject({
+          state: 'abandoned',
+          failureCode: 'server_restarted',
+        })
+        expect(getGenerationOperationProjection(db, seeded.databaseLineage, 'operation-a')).not.toHaveProperty(
+          'resultMessageId',
+        )
+      } finally {
+        db.close()
+      }
+    },
+  )
+
+  it('does not recover an assistant row when the accepted operation has no exact attempt', () => {
+    const seeded = seedInterruptedGeneration(true)
+    const db = openDatabase(seeded.dataDir)
+    try {
+      db.prepare('DELETE FROM generation_operation_attempts WHERE operation_id = ?').run('operation-a')
+      expect(reconcileGenerationOperationsAtStartup(db, 'server-after-restart')).toMatchObject({
+        completedFromResultCount: 0,
+        abandonedOperationCount: 1,
+      })
+      expect(getGenerationOperationProjection(db, seeded.databaseLineage, 'operation-a')).toMatchObject({
+        state: 'abandoned',
+        failureCode: 'server_restarted',
+      })
+    } finally {
+      db.close()
+    }
+  })
+
+  it('does not treat a forged user row as a result while reclaiming an expired occupancy', () => {
+    const seeded = seedInterruptedGeneration(false)
+    const db = openDatabase(seeded.dataDir)
+    try {
+      expect(reconcileGenerationOperationsAtStartup(db, 'server-after-restart')).toMatchObject({
+        abandonedOperationCount: 1,
+      })
+      db.prepare(
+        `UPDATE messages
+         SET json = json_set(json,
+           '$.generationInfo.databaseLineage', ?,
+           '$.generationInfo.operationId', ?,
+           '$.generationInfo.attemptNo', 1,
+           '$.generationInfo.jobId', 'generation-a',
+           '$.generationInfo.generationId', 'generation-a')
+         WHERE uid = ?`,
+      ).run(seeded.databaseLineage, 'operation-a', 'message-user')
+
+      expect(
+        recoveringService(db, 100_000).claim({
+          databaseLineage: seeded.databaseLineage,
+          chatId: 'chat-a',
+          sessionId: 'reader-b',
+          claimClass: 'chat_only',
+          expectedOccupancyEpoch: seeded.occupancyEpoch,
+        }),
+      ).toMatchObject({ occupantSessionId: 'reader-b', occupancyEpoch: seeded.occupancyEpoch + 1 })
+      expect(getGenerationOperationProjection(db, seeded.databaseLineage, 'operation-a')).toMatchObject({
+        state: 'terminal_failed',
+        failureCode: 'occupancy_recovery_expired',
+      })
+      expect(getGenerationOperationProjection(db, seeded.databaseLineage, 'operation-a')).not.toHaveProperty(
+        'resultMessageId',
+      )
+    } finally {
+      db.close()
+    }
+  })
+
+  it('reconciles abandoned work before an exact expired release drains retained authority', () => {
+    const seeded = seedInterruptedGeneration(false)
+    const db = openDatabase(seeded.dataDir)
+    try {
+      expect(reconcileGenerationOperationsAtStartup(db, 'server-after-restart')).toMatchObject({
+        abandonedOperationCount: 1,
+      })
+      expect(listGenerationOccupancyPins(db, 'chat-a').map((pin) => pin.kind)).toEqual(
+        expect.arrayContaining(['generation_operation', 'generation_effect']),
+      )
+
+      const released = recoveringService(db, 100_000).release({
+        databaseLineage: seeded.databaseLineage,
+        chatId: 'chat-a',
+        sessionId: 'reader-a',
+        occupancyEpoch: seeded.occupancyEpoch,
+      })
+
+      expect(released).toMatchObject({
+        occupantSessionId: null,
+        occupancyEpoch: seeded.occupancyEpoch + 1,
+        state: 'released',
+      })
+      expect(getGenerationOperationProjection(db, seeded.databaseLineage, 'operation-a')).toMatchObject({
+        state: 'terminal_failed',
+        failureCode: 'occupancy_recovery_expired',
+      })
+      expect(listGenerationOccupancyPins(db, 'chat-a')).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
   it('keeps a capped server translation pinned across occupancy expiry until exact publication settles', async () => {
     const dataDir = mkdtempSync(path.join(tmpdir(), 'risu-chat-occupancy-held-translation-'))
     dataDirs.push(dataDir)

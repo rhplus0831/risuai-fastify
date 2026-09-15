@@ -14,6 +14,7 @@ import {
   restoreBackup,
 } from '../repository.js'
 import { reconcileGenerationOperationsAtStartup } from '../generationOperations.js'
+import { reconcileGenerationEffectsAtStartup } from '../generationEffects.js'
 import { MaintenanceBusyError } from '../maintenanceCoordinator.js'
 import { attachMaintenanceAbort } from '../maintenanceRequest.js'
 import { assertDatabaseReplacementAllowedInTransaction, ChatOccupancyError } from '../chatOccupancy.js'
@@ -85,6 +86,7 @@ export function registerBackupRoutes(
           if (options.serverInstanceId) {
             reconcileGenerationOperationsAtStartup(db, options.serverInstanceId, req.log)
           }
+          reconcileGenerationEffectsAtStartup(db)
           eventSink.emit(event)
         },
       })

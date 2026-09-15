@@ -427,6 +427,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
         }, assetGcOptions.intervalMs ?? ASSET_GC_INTERVAL_MS)
   assetGcTimer?.unref()
   let generationFinalizationRetryTimer: ReturnType<typeof setInterval> | null = null
+  let generationCompletionEffectRetrySweep: Promise<void> | null = null
+  let generationCompletionEffectsClosing = false
 
   // preClose precedes Fastify's HTTP drain: active backup requests must receive
   // shutdown cancellation while they still own their copy leases.
@@ -440,6 +442,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   })
 
   app.addHook('onClose', async () => {
+    generationCompletionEffectsClosing = true
+    if (generationFinalizationRetryTimer) clearInterval(generationFinalizationRetryTimer)
     // Abort cooperative copies/staging, reject admission, and drain every
     // started filesystem operation before any continuation can use closed DB.
     await closeMaintenance(config.dataDir)
@@ -447,7 +451,6 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     await memoryWorker?.stop()
     clearInterval(gcTimer)
     if (assetGcTimer) clearInterval(assetGcTimer)
-    if (generationFinalizationRetryTimer) clearInterval(generationFinalizationRetryTimer)
     for (const job of streamJobRegistry.list()) {
       streamJobRegistry.deleteJob(job.id)
     }
@@ -475,6 +478,9 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     // state until the runner commits its partial (or a replayable journal)
     // before the database closes.
     await generationJobRegistry.settleRunners()
+    const activeCompletionEffectSweep = generationCompletionEffectRetrySweep
+    await messageTranslationJobRegistry.stop()
+    await activeCompletionEffectSweep
     generationJobRegistry.registry.dispose()
     await diagnosticsRuntime.close()
     db.close()
@@ -617,17 +623,24 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     generationTrace: config.generationTrace,
     chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
   })
-  registerGenerationEffectRoutes(app, db, authState)
+  registerGenerationEffectRoutes(app, db, authState, config.dataDir, commandEventSink)
   const finalizationRetryRaw = opts.generationChat?.finalizationRetry
   const finalizationRetryOptions = finalizationRetryRaw === false ? false : (finalizationRetryRaw ?? {})
   const runGenerationCompletionEffectRetrySweep = (): void => {
-    void retryPendingGenerationCompletionEffects({
+    if (generationCompletionEffectsClosing || generationCompletionEffectRetrySweep) return
+    const sweep = retryPendingGenerationCompletionEffects({
       db,
       dataDir: config.dataDir,
       eventSink: commandEventSink,
       messageTranslationJobs: messageTranslationJobRegistry,
       runMessageTranslation: opts.generationChat?.runMessageTranslation,
-    }).catch((err) => app.log.error({ err }, 'generation completion effect retry sweep failed'))
+    })
+      .then(() => undefined)
+      .catch((err) => app.log.error({ err }, 'generation completion effect retry sweep failed'))
+      .finally(() => {
+        if (generationCompletionEffectRetrySweep === sweep) generationCompletionEffectRetrySweep = null
+      })
+    generationCompletionEffectRetrySweep = sweep
   }
   const runGenerationFinalizationRetrySweep = (): void => {
     try {

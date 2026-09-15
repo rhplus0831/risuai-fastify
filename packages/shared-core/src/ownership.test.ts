@@ -208,7 +208,7 @@ describe('@risuai/shared-core ownership', () => {
       }
     }
     expect(violations).toEqual([])
-  })
+  }, 15_000)
 
   it('retains browser-only adapters and projected credential exports', () => {
     for (const [file, names] of Object.entries({

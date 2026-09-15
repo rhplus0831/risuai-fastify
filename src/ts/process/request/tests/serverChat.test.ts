@@ -27,6 +27,7 @@ vi.mock('../../../server/activeWriterSession', () => ({
 }))
 vi.mock('../../../server/chatOccupancy', () => ({
   isClientChatOccupancyAuthorityCurrent: chatOccupancyMocks.current,
+  registerClientChatOccupancyRecoveryHandler: vi.fn(() => () => undefined),
 }))
 
 vi.mock('../../../alert', () => alertMocks)

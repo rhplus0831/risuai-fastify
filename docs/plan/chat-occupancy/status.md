@@ -1,23 +1,25 @@
 # Chat Occupancy Status
 
-Updated: 2026-09-14.
+Updated: 2026-09-15.
 
 ## Execution Cursor
 
-- State: Phases 0 and 1 are accepted and committed. Phase 2 chat-only
-  interaction is accepted and ready for its required commit. Phase 3 recovery
-  and completion is next. The feature remains disabled until Phase 4.
+- State: Phases 0 through 2 are accepted and committed. Phase 3 recovery and
+  completion is accepted and awaiting its completion commit. The feature
+  remains disabled until Phase 4.
 - Planning source: `3c8f5aee1a48fcf35d1611323929f8197c142b6b`.
 - Phase 0 baseline: `ec5765f4f`; the only drift from the planning source is the
   planning package itself. Runtime source remains the inspected baseline.
-- Current work: Phase 3 closes scoped recovery, lifecycle, and completion-effect
-  behavior on top of the accepted server and chat-only interaction foundations.
-  New chat-only claims remain disabled in production until the Phase 4 release
-  boundary.
+- Current work: Phase 3 has closed scoped recovery, lifecycle, and completion-
+  effect behavior on top of the accepted server and chat-only interaction
+  foundations. New chat-only claims remain disabled in production until the
+  Phase 4 release boundary.
 - Phase 0 commit: `d03288053` (`docs: freeze chat occupancy contract`).
 - Phase 1 commit: `8a11e00e2` (`feat: enforce server chat occupancy`).
-- Next action: commit accepted Phase 2, then implement and prove the Phase 3
-  recovery, lifecycle, and completion-effect matrix.
+- Phase 2 commit: `bf32c875f` (`feat: add chat-only occupancy interaction`).
+- Next action: commit the accepted Phase 3 boundary, record its revision, then
+  begin Phase 4 integrated verification, coherent rollout, current
+  documentation, and archival.
 
 ## Read Routing
 
@@ -33,10 +35,11 @@ Updated: 2026-09-14.
 - **1 — Server occupancy and enforcement:** accepted and committed in
   `8a11e00e2` after the 7m33.3s full gate and clean eighth independent closure
   review.
-- **2 — Chat-only interaction:** accepted at baseline `8a11e00e2`; required
-  phase commit pending.
-- **3 — Recovery and completion:** next after the Phase 2 commit.
-- **4 — Integrated verification and release:** pending Phase 3 acceptance/commit.
+- **2 — Chat-only interaction:** accepted and committed in `bf32c875f`.
+- **3 — Recovery and completion:** accepted at baseline `bf32c875f`; completion
+  commit pending.
+- **4 — Integrated verification and release:** pending the Phase 3 completion
+  commit.
 
 ## Decisions and Open Work
 
@@ -815,7 +818,7 @@ diff --check` passed. A new full suite and fresh closure review remain
   occupancy authority remain retained; editing establishes an explicit fresh
   intent rather than reusing the old identity. Coordinator, rendered-reader,
   and composer suites passed 81 tests; `pnpm check`, Prettier, and `git
-  diff --check` passed. Phase 3 retains responsibility for full
+diff --check` passed. Phase 3 retains responsibility for full
   lost-response/reload/expiry reconciliation.
 - Post-review-repair Phase 2 `pnpm test:all`: passed all 14 lanes in 7m35.3s,
   including frontend 9,434 passed/3 skipped, server 4,518 passed/3 skipped,
@@ -852,6 +855,1404 @@ diff --check` passed. A new full suite and fresh closure review remain
   observer UI, accepted-work compatibility, and browser evidence. Phase 3 still
   owns role-change/reload Stop recovery, uncertain-intent reconciliation, and
   configured IGP completion; production rollout remains disabled.
+- Phase 3 scoped client recovery: chat-occupancy staging now reconciles stored
+  Send, Reroll, and Stop identity against server operation truth before any
+  replay and remains independent of general-owner readiness. Startup,
+  reconnect, and occupancy changes validate lineage, chat, originating session,
+  epoch, and interaction; accepted work and exact Stop tombstones settle,
+  ambiguous or mismatched work stays dormant, and expired proven-unaccepted
+  intent becomes `requires_resubmission` without transplanting its token or
+  overwriting a newer draft/projection. Reload restores exact accepted Stop
+  control, observers gain no authority, and browser effects recover through the
+  stored operation scope rather than general plugin/write access. Eleven client
+  suites passed 770 tests; `pnpm check` reports zero errors and warnings.
+- Phase 3 lifecycle/restart recovery: compatibility admission now rejects every
+  live occupancy and reconciles then atomically retires an expired row before
+  unoccupied legacy admission. Expiry, same-session reacquisition, cross-chat
+  normalization, delayed controls, and release/claim serialization preserve
+  monotonically fenced epochs. Stop-before-submit carries the exact target and
+  Send/Reroll scope, persists a scoped cancellation tombstone, and prevents a
+  delayed old submit from appending after release or handoff. Restart recovery
+  verifies result role, chat, alternate, attempt, job, and generation identity;
+  database replacement terminally quarantines old-lineage operations,
+  finalizations, effects, and memory/BardWiki jobs while preserving only exact
+  committed data. Malformed journals are isolated and terminalized without
+  blocking valid rows. Ten server lifecycle/recovery suites passed 231 tests;
+  both client and server checks pass.
+- Phase 3 completion ownership: a dedicated exact-scope atomic IGP commit route
+  binds the authenticated originating session and claimed effect to its stored
+  operation, attempt, chat, assistant message, accepted authority, and expected
+  message generation. Transcript mutation, receipt, revision, and event commit
+  together; a lost identical response replays its original result, while the
+  generic receipt route cannot falsely complete a claimed IGP. Startup and
+  restore reconciliation classify all seven effect dispositions, including
+  partial pre-ledger state. Generated translation drains through downstream
+  settlement and immutable accepted configuration; unsupported plugin/emotion
+  work and invalid targets settle terminally without later owner replay.
+  Focused IGP, effect, completion, durable-generation, translation,
+  finalization, bootstrap, backup, migration, memory, BardWiki, protection, and
+  server-backed Send suites pass, including durable generation 96/96 and IGP
+  commit 37/37.
+- Phase 3 real-session fault proof: the opt-in Chromium/Fastify/SQLite suite now
+  passes 7/7 journeys covering T05-T08/T10. It exercises duplicate-tab
+  isolation; deterministic freeze/offline expiry; same-session new-epoch
+  reacquisition; stale renew/release; simultaneous release/claim; auth loss;
+  lost Send and Stop responses across reload; no provider redispatch; newer
+  draft preservation; role transfer; pinned handoff; destructive-import
+  rejection; accepted result persistence after the sender disappears;
+  configured IGP lost-receipt replay and duplicate-receipt idempotency; terminal
+  unsupported effects; actual same-port Fastify restart; abandoned-attempt
+  recovery; and lineage rotation. The evidence uses Chromium lifecycle
+  emulation, graceful restart, and deterministic local providers rather than
+  physical process eviction, kill-9, or external providers.
+- First Phase 3 `pnpm test:all`: completed all 14 lanes in 7m43.3s. Eleven lanes
+  passed, including typechecks, documentation, compatibility, build, UI
+  coverage, formatting, scale, and performance. Frontend passed 9,346 tests/3
+  skipped but two complete module mocks omitted the new recovery-handler export.
+  Server passed 4,541 tests/3 skipped with seven failures: the new IGP mutation
+  path was absent from the exact command-budget registry, five compatibility
+  failed-partial/stale-assembly cases exposed recovery/admission integration
+  regressions, and startup misclassified a persisted exact result as abandoned.
+  Browser smoke passed 155/156; the original containment journey still treated
+  all effect traffic as forbidden even though Phase 3 now deliberately recovers
+  exact scoped effects. These are gate failures, not accepted evidence. Repairs
+  must preserve the new recovery contract, update exact inventories/audits, and
+  pass focused regressions before a complete rerun.
+- Phase 3 full-gate repairs: the two complete client mocks now register the
+  recovery callback and their 103 tests pass. Accepted compatibility writes use
+  a dedicated transaction boundary that ignores only their own accepted-work
+  pins while still fencing lineage, owner changes, and every intervening live or
+  expired occupancy; assembly, failed-partial/finalization recovery, and
+  generated translation use it. The persisted-result startup fixture now carries
+  the exact modern attempt/job/generation identity required by production
+  reconciliation. Twelve server suites pass 430 tests, including the full
+  197-test generation-chat/startup slice. The IGP commit path has an explicit
+  mutation-budget gate limited to its effect/message and optional
+  transcript-derived invalidation tables, with an integration assertion for the
+  exact emitted event and writes; its three owner suites pass 62 tests. Finally,
+  the browser containment audit now accepts only effect calls whose route,
+  method, body, claim, operation/chat/result identity, originating
+  session/lineage, response status, and terminal ledger disposition all match;
+  unknown effect routes and general/shared mutations remain failures. The full
+  seven-journey browser file passes in 33.0s. Both typechecks, Prettier, and diff
+  checks pass; a new complete gate remains required.
+- Second Phase 3 `pnpm test:all`: completed all 14 lanes in 7m41.3s. Thirteen
+  lanes passed, including frontend 9,449 tests/3 skipped and server 4,550
+  tests/3 skipped. Browser smoke passed 155/156, including all seven Phase 3
+  fault journeys. The sole failure was an existing hidden-mobile writer
+  recovery journey that observed one character-lorebook resource request where
+  an unchanged reconnect must only revalidate ownership and restart SSE. This
+  may indicate a scoped-recovery startup integration regression; the gate
+  remains failed pending root-cause repair, focused repetition, and a complete
+  rerun.
+- Hidden-mobile recovery investigation: the request was an auth-only,
+  unchanged-revision cache-negotiated read from initial fire-and-forget lorebook
+  hydration, not occupancy recovery or a mutation. Under full-gate load it could
+  reach the network after the test began measuring replacement-recovery traffic.
+  A smoke-only read signal now lets the journey prove the initial character
+  shell and lorebook ownership mark have settled before measurement; the strict
+  no-refresh reconnect assertion remains unchanged. The hidden-replacement case
+  passed 12/12 with four workers, the full mobile recovery file passed 3/3, and
+  368 relevant client tests plus both typechecks, smoke build, Prettier, and diff
+  checks pass. Production startup/hydration behavior is unchanged. A complete
+  gate rerun remains required.
+- Final Phase 3 `pnpm test:all`: passed all 14 lanes in 7m46.4s, including
+  frontend 9,449 tests/3 skipped, server 4,550 tests/3 skipped, browser smoke
+  156/156, client and server typechecks, documentation, compatibility, smoke
+  build, UI coverage, formatting, Realm scale, and performance gates. The exact
+  passing source is frozen pending a fresh independent GPT 6 Astra High closure
+  review; Phase 3 is not accepted until that review is clean.
+- First Phase 3 closure review: GPT 6 Astra High independently matched baseline
+  `bf32c875f`, all 59 tracked diffs at SHA-256
+  `ff65c3ad5b398cd681a2b8f8130fb1604bd97dae38a36446c6332bdd7e69dbb9`,
+  and the one-file untracked manifest SHA-256
+  `6306cb93ed9a796af4d6ad96173c12beaf038d4cc52c003ce7316e53c1cb1fa5`.
+  It inspected every change and rejected the phase with five P2 findings that
+  the passing gate did not cover: configured IGP still traversed the general
+  writer-only provider request gate; Stop lost before server receipt remained
+  staged when its operation was running; owner-to-chat-only normalization
+  invalidated recovery by comparing claim class rather than the unchanged
+  four-part tuple; live and recovered IGP consumed mutable current settings
+  instead of the accepted snapshot; and accepted compatibility publication
+  became authorized again after an intervening foreign claim was released.
+  Read-only source probes confirmed the first three findings, and an in-memory
+  SQLite probe confirmed the compatibility fence hole. Production rollout
+  remains disabled while all five are repaired and revalidated.
+- First-review Phase 3 repairs: exact occupied Stop replay now redispatches a
+  current staged cancellation when status still reports cancellable accepted
+  work, while stale epochs and mismatched origins remain dormant. Accepted
+  occupancy recovery compares the authoritative lineage/chat/session/epoch
+  tuple across owner-to-chat-only normalization and keeps claim class solely as
+  immutable admission provenance. Compatibility admission now captures the
+  current occupancy epoch; assembly, finalization, failed-partial recovery, and
+  generated translation revalidate it, queued journals persist it through
+  migration and backup, and older incomplete rows fail closed. Configured IGP
+  now executes through an exact claimed-effect provider endpoint that reads the
+  accepted operation prompt, profile, credentials, and generation settings,
+  grants no general write authority, and leaves the exact-message mutation to
+  the atomic commit endpoint. Live and recovered client paths no longer use
+  mutable current IGP configuration for occupied work. Completed projections
+  that intentionally omit `currentAttempt` validate IGP against the persisted
+  terminal message's exact lineage, operation, positive attempt,
+  job/generation, result, and ledger identities. Focused client suites pass
+  generation operations 59/59, recovered effects 19/19, IGP 12/12, and effect
+  ledger 26/26; focused server suites pass generation chat 197/197, occupancy
+  scope 11/11, generation effects 16/16, finalization retry 8/8, migration 6/6,
+  and backups 56/56. Client and server checks and the reviewed cross-runtime
+  inventory pass.
+- Strengthened first-review browser proof: the real Chromium/Fastify/SQLite
+  interaction file passes 8/8. A new pre-server Stop fault proves that the
+  aborted first transport leaves the provider running and one encrypted exact
+  outbox row; reload sends exactly one successful cancellation, drains the
+  outbox, aborts the provider once, and preserves the newer draft and persisted
+  transcript. The configured IGP journey now uses the production claim,
+  accepted-snapshot provider execution, atomic commit, and receipt paths rather
+  than fabricated output. It holds the claim while the owner clears the current
+  provider output setting, loses commit and receipt responses after persistence,
+  reloads, and proves one exact operation/claim/generation/message execution,
+  accepted output, no draft loss, and no unrelated shared write. Existing
+  post-server lost-Stop evidence remains. Browser evidence still uses Chromium
+  emulation and deterministic local providers; `igpPrompt` itself is read-only
+  in targeted settings, so mutable snapshot proof changes the provider output
+  setting instead.
+- Post-review Phase 3 `pnpm test:all`: completed all 14 lanes in 7m56.9s.
+  Twelve lanes passed, including frontend 9,456 tests/3 skipped, browser smoke
+  157/157, both typechecks, documentation, compatibility, build, UI coverage,
+  Realm scale, and performance. The server lane passed 4,552 tests/3 skipped
+  but its closed SQLite schema inventory rejected the newly reviewed
+  `generation_finalization_retries.compatibility_occupancy_epoch` column because
+  the pinned digest was not advanced. The format lane found two unformatted
+  files from the repair. The schema digest now records the exact new column,
+  its focused seven-test ownership suite passes, and both files were formatted;
+  the complete format check passes. The gate remains failed and cannot support
+  acceptance until a full rerun succeeds.
+- Final post-review Phase 3 `pnpm test:all`: passed all 14 lanes in 7m46.7s,
+  including frontend 9,456 passed/3 skipped, server 4,553 passed/3 skipped,
+  browser smoke 157/157, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. The exact repaired source is frozen pending a fresh
+  independent GPT 6 Astra High closure review; Phase 3 remains unaccepted until
+  that review is clean.
+- Second Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 69 tracked diffs at SHA-256
+  `1ee72bdcbda0ee018677abfba9278486da9af0ee543755b8b168fcb4a28d58fc`,
+  and the one-file untracked manifest SHA-256
+  `dfb196157de0393ff0dea218b6591f95991c1f4c534b1214f63e77c5b2ed8c7a`.
+  It confirmed the prior five repairs and found no assertion masking, but
+  rejected the phase with one P2: the claimed IGP provider endpoint expanded
+  `{{lastmessage}}`, `{{lastcharmessage}}`, and history against the accepted
+  pre-generation database snapshot, so a post-generation hook could consume the
+  user input or previous assistant instead of the exact assistant result it was
+  extending. A production-parser probe confirmed the difference. Accepted
+  settings, definition, profile, and provider configuration must remain frozen,
+  while prompt expansion receives an operation-bound terminal transcript with
+  correct Reroll treatment. Live and recovered provider-input assertions are
+  required before a complete gate rerun and fresh closure review. Production
+  rollout remains disabled.
+- Second-review IGP repair: claimed provider execution now overlays only an
+  exact operation-bound terminal transcript onto the immutable accepted
+  configuration before prompt expansion. Send proves the accepted transcript
+  plus one exact terminal assistant; Reroll proves the same accepted identities
+  with its exact assistant target replaced. Both retain lineage, attempt, job,
+  generation, ledger, result-message, and occupancy fences. Server provider-input
+  regressions cover live Send and recovered Reroll and pass 17/17. The production
+  Chromium journey now sends a dynamic `{{lastmessage}}`/
+  `{{lastcharmessage}}` prompt through a deterministic OpenAI-compatible
+  provider, proves both resolve to the generated assistant while the accepted
+  model/profile/credential survive owner clearing, excludes the accepted user
+  and prior assistant from the body, and retains the lost commit/receipt reload
+  and exactly-once evidence. Its focused journey passes 1/1; server typechecks,
+  smoke build, Prettier, and diff checks pass. A complete gate rerun remains
+  required before another closure review.
+- Final second-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  7m57.4s, including frontend 9,456 passed/3 skipped, server 4,554 passed/3
+  skipped, browser smoke 157/157, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. The exact source is frozen pending a third fresh
+  independent GPT 6 Astra High closure review; Phase 3 remains unaccepted until
+  that review is clean.
+- Third Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 69 tracked diffs at SHA-256
+  `f2730e84a66dc55878db37699499f73fd615e383c40739c0455c81b1a3b12b0e`,
+  and the unchanged one-file untracked manifest SHA-256
+  `dfb196157de0393ff0dea218b6591f95991c1f4c534b1214f63e77c5b2ed8c7a`.
+  It confirmed all earlier repairs and found no additional assertion masking,
+  but rejected the phase with one P2 interaction: terminal IGP binding required
+  the accepted pre-assembly IDs plus exactly one assistant, while permitted
+  server `onInput`/`addChat` transforms can insert scoped transcript rows after
+  acceptance and before the terminal result. Production assembly and extracted
+  binding probes proved that otherwise exact configured IGP was then rejected
+  as `generation_effect_target_stale`. Binding must use the operation's
+  authorized post-assembly transcript rather than arbitrary current history,
+  while retaining immutable accepted configuration and exact terminal,
+  occupancy, attempt, job, generation, ledger, and result fences. Combined live
+  and recovered trigger-plus-IGP provider-input regressions are required before
+  a complete gate rerun and fresh closure review. Production rollout remains
+  disabled.
+- Third-review IGP repair: effect creation now atomically persists a SHA-256
+  fingerprint of the exact authorized post-assembly terminal active transcript.
+  Claimed IGP provider execution overlays a terminal transcript only when it
+  matches that fingerprint and the existing occupancy, operation, attempt, job,
+  generation, ledger, result-message, and Send/Reroll target fences; it no
+  longer assumes that the accepted snapshot IDs remain an unchanged prefix.
+  Legitimate trigger-injected rows therefore survive while later unrelated
+  transcript mutation fails before provider dispatch. Server provider-input
+  regressions cover live transformed Send, recovered Reroll, immutable accepted
+  configuration, and stale-transcript rejection; effect 18/18, database 33/33,
+  and backup 56/56 suites pass. The real Chromium IGP journey now runs an
+  accepted `onInput` Lua `addChat` transform, proves the exact four-row SQLite
+  transcript and generated-assistant macro/index provider input, excludes the
+  accepted user, prior assistant, and inserted row from that provider input,
+  and retains owner-setting clearing plus lost commit/receipt reload and
+  exactly-once evidence. Its focused journey passes 1/1; server typechecks,
+  smoke build, Prettier, and diff checks pass. A complete gate rerun remains
+  required before another closure review.
+- First third-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m00.0s. Thirteen lanes passed, including frontend 9,456 passed/3 skipped,
+  browser smoke 157/157, both typechecks, documentation, compatibility, smoke
+  build, UI coverage, formatting, Realm scale, and performance. The server lane
+  passed 4,554 functional tests/3 skipped but its closed SQLite schema inventory
+  rejected the new `generation_effects.terminal_transcript_fingerprint` column
+  because the pinned digest still named the pre-column shape. The digest now
+  records the exact emitted schema. This gate remains failed; focused schema
+  verification and a complete rerun are required.
+- Second third-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  7m51.8s after the schema digest's focused 7/7 pass. Thirteen lanes passed,
+  including frontend 9,456 passed/3 skipped, browser smoke 157/157, both
+  typechecks, documentation, compatibility, smoke build, UI coverage,
+  formatting, Realm scale, and performance. The server lane passed 4,554
+  tests/3 skipped but the existing durable-generation case that waits for an
+  acknowledged stopping runner to persist its partial before graceful shutdown
+  reached its 15-second timeout under full-suite load. This is a gate failure;
+  the exact case must pass focused repetition and any real regression must be
+  repaired before another complete rerun.
+- Graceful-stop timeout follow-up: the exact timed-out case passed five
+  consecutive isolated executions, then the complete durable-generation file
+  passed 96/96 in 13.64s. The IGP fingerprint path is not exercised by that
+  shutdown case, and no reproducible source defect was found. The failed gate
+  remains recorded; a complete rerun is still required.
+- Final third-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  7m54.9s, including frontend 9,456 passed/3 skipped, server 4,555 passed/3
+  skipped, browser smoke 157/157, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. The exact source is frozen pending a fourth fresh
+  independent GPT 6 Astra High closure review; Phase 3 remains unaccepted until
+  that review is clean.
+- Fourth Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 69 tracked diffs at SHA-256
+  `968033f9de8ab84906c5a4bf34d28299fb205b145e7d825486f4fa416029e096`,
+  and the unchanged one-file untracked manifest SHA-256
+  `dfb196157de0393ff0dea218b6591f95991c1f4c534b1214f63e77c5b2ed8c7a`.
+  It confirmed all earlier repairs and found no additional assertion masking,
+  but rejected the phase with one P2 composition defect: the exact
+  post-assembly fingerprint hashed the full terminal message JSON, while the
+  authorized server-generated translation path can persist only the
+  `translation` metadata after ledger creation and before live or recovered IGP
+  execution. A production-helper probe proved that this valid update changed
+  the binding from true to false and caused `generation_effect_target_stale`.
+  The canonical binding must permit only explicitly authorized generated
+  translation metadata while retaining rejection of text, order, role,
+  identity, alternate, disabled, generation, operation, attempt, job, ledger,
+  occupancy, and unrelated JSON changes. Combined live Send and recovered
+  Reroll translation-plus-IGP provider, result, and receipt regressions are
+  required before a complete gate rerun and fresh closure review. Production
+  rollout remains disabled.
+- Fourth-review IGP repair: the canonical transcript fingerprint retains exact
+  active order/full JSON and durable Reroll alternates, but permits the terminal
+  target's translation only when its SHA-256 exactly matches the same
+  operation/attempt/scope's `generated_translation` ledger row settled as
+  `completed/server`. Changed, removed, other-message, unreceipted translation
+  and every unrelated transcript/identity/alternate change remain stale.
+  Server regressions cover live Send and recovered Reroll through translation
+  receipt, IGP provider input, atomic commit, and completed acknowledgement, plus
+  the negative mutation matrix; effect 19/19, database 33/33, and backup 56/56
+  suites pass. The real Chromium journey now runs accepted generated translation
+  before the transformed configured IGP, proves exact SQLite translation metadata
+  and exact server ledger identity, preserves raw generated-assistant macros,
+  excludes translated/user/prior/trigger-row text, proves atomic IGP clears the
+  stale translation, and retains lost commit/receipt reload exactly-once
+  evidence. It passed twice; latest 1/1. Server typechecks, smoke build, Prettier,
+  and diff checks pass. A complete gate rerun remains required before another
+  closure review.
+- First fourth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  7m56.1s. Thirteen lanes passed, including frontend 9,456 passed/3 skipped,
+  browser smoke 157/157, both typechecks, documentation, compatibility, smoke
+  build, UI coverage, formatting, Realm scale, and performance. The server lane
+  passed 4,555 functional tests/3 skipped but its closed SQLite schema inventory
+  rejected the new generated-translation receipt metadata column because the
+  pinned digest still named the earlier fingerprint schema. The digest now
+  records the exact emitted schema. This gate remains failed; focused schema
+  verification and a complete rerun are required.
+- Final fourth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  7m58.5s, including frontend 9,456 passed/3 skipped, server 4,556 passed/3
+  skipped, browser smoke 157/157, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. The exact repaired source is frozen pending a fifth fresh
+  independent GPT 6 Astra High closure review; Phase 3 remains unaccepted until
+  that review is clean.
+- Fifth Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 69 tracked diffs at SHA-256
+  `2cdabe654d051216f9bb15e9c97efa7aa8d1086cb7d110880182f8762b2095ee`,
+  and the sole untracked file at SHA-256
+  `b0b3ccb2fbdabc06583f3e595fa7ca39f72ec198499950e6c2159ab3ce45219e`
+  with sorted content-manifest SHA-256
+  `6306cb93ed9a796af4d6ad96173c12beaf038d4cc52c003ce7316e53c1cb1fa5`.
+  It rejected the phase with two P2 findings proven through read-only production
+  Fastify/SQLite probes. First, terminal IGP binding incorrectly equated a
+  Reroll's displaced accepted assistant/`targetMessageId` with the distinct new
+  generation result/effect message ID; the existing recovered fixture reused
+  one ID and masked the real lifecycle. Second, the binding admitted only Send
+  and Reroll, so exact `owner_occupancy` Continue effects were rejected as stale
+  with zero provider dispatch. Binding must independently fence Reroll's old
+  target and new result, and must cover both supported owner Continue result
+  dispositions without enabling chat-only Continue. Live and recovered
+  production-lifecycle provider-input, result, commit, and receipt regressions
+  are required before a complete gate rerun and fresh closure review. Production
+  rollout remains disabled.
+- Fifth-review IGP repair: Reroll now binds the immutable accepted displaced
+  assistant to `operation.targetMessageId`, requires that old target to differ
+  from the new result/effect message ID, and independently verifies the terminal
+  result. Exact `owner_occupancy` Continue is now supported without admitting
+  chat-only Continue: extend requires operation target/result/effect identity to
+  be the preserved assistant and self-verifies accepted-operation authority
+  before allowing its retained metadata, while append requires the accepted
+  assistant exactly once before the fresh terminal result. The masked unit
+  Reroll fixture now uses the production message replacement helper with
+  distinct IDs. Four real-listener cases exercise live and restart-recovered
+  Reroll plus both Continue dispositions through actual acceptance/finalization,
+  server-generated translation where applicable, accepted IGP profile/key/model
+  and dynamic terminal input, atomic message commit, translation clearing, and
+  idempotent receipt. The complete effect and durable-generation files pass
+  119/119; server typechecks, focused Prettier, and diff checks pass. A complete
+  gate rerun remains required before another closure review. One attempted
+  direct root Vitest invocation selected only the frontend project and exited
+  because both server paths were excluded; the repository focused-test wrapper
+  then selected the server project correctly and independently passed 19/19 and
+  100/100.
+- Final fifth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  7m47.5s, including frontend 9,456 passed/3 skipped, server 4,560 passed/3
+  skipped, browser smoke 157/157, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. The exact repaired source is frozen pending a sixth fresh
+  independent GPT 6 Astra High closure review; Phase 3 remains unaccepted until
+  that review is clean.
+- Sixth Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 69 tracked diffs at SHA-256
+  `bc31803ad26628eefe2f974a8aeed7f36d2b1e4bd8737abd388975cab2aef368`,
+  and the unchanged sole untracked file/content-manifest identities. It
+  confirmed the fifth-review server repairs and every earlier repair, but
+  rejected the phase with one P2: the live and recovered browser IGP paths still
+  required a Continue-extend assistant's `generationInfo` to name the current
+  effect generation, although production correctly preserves the accepted
+  assistant ID and its prior generation metadata. A read-only production-function
+  probe made live origin validation false and recovered generation resolution
+  undefined; the current client IGP suite still passed 12/12, demonstrating its
+  coverage gap. The browser must carry exact Continue-extend
+  operation/result/effect authority through resolution, evaluation, and commit
+  without weakening its other fences. Live and reload/recovered client
+  regressions for both Continue dispositions are required. Production rollout
+  remains disabled.
+- Sixth-review client IGP repair: the browser now carries a fail-closed typed
+  Continue-extend authority across live terminal target construction, reload
+  recovery resolution, IGP evaluation, atomic commit, and local application.
+  It binds protocol v1, exact completed operation, operation attempt, job,
+  preserved target/result/effect message identity, `owner_occupancy` scope, and
+  an exact snapshot of the assistant's retained prior `generationInfo`.
+  Continue append, Send, and Reroll retain their normal fresh-generation fence;
+  forged chat-only Continue remains rejected before transport. Bootstrap now
+  preserves pending-effect `operationAttemptNo`. Real production-function
+  regressions cover live/recovered Continue extend and append, completed
+  projections with and without `currentAttempt`, provider result, atomic commit,
+  receipt acknowledgement, local data application, and retained metadata.
+  Focused suites pass 17/17 IGP, 21/21 recovered effects, 36/36 terminal target,
+  47/47 bootstrap, and 27/27 route-backed Send. Client and server checks,
+  Prettier, and diff checks pass. One initial invalid focused-test alias and one
+  test-reference/mock-environment error were corrected before these passes. A
+  complete gate rerun remains required before another closure review.
+- First sixth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m16.1s. Thirteen lanes passed, including frontend 9,456 passed/3 skipped,
+  browser smoke 157/157, both typechecks, documentation, compatibility, smoke
+  build, UI coverage, formatting, Realm scale, and performance. The server lane
+  passed 4,559 tests/3 skipped, but the existing durable-generation case waiting
+  for an acknowledged stopping runner to persist its partial before graceful
+  shutdown again reached its 15-second timeout under full-suite load. This is a
+  gate failure; the exact case and complete file must pass focused repetition,
+  and any reproducible defect must be repaired before a full rerun.
+- Graceful-stop timeout follow-up: the exact case passed five consecutive
+  isolated executions in 3.66–4.02s, then the complete durable-generation file
+  passed 100/100 in 14.09s. The repaired browser Continue authority is not
+  exercised by this shutdown timing case, and no reproducible source defect was
+  found. The failed gate remains recorded; a complete rerun is still required.
+- Second sixth-review-repair Phase 3 `pnpm test:all`: the graceful-stop case
+  cleared, but the server lane reported a native backup-copy cancellation as
+  system error `-122`; the following Realm scale lane returned 500 and the
+  browser suite then failed broadly as its disposable servers could not start or
+  complete. The already-failed run was stopped. Read-only inspection found
+  `/tmp` at 19 GiB/81%, almost entirely 677 stale Codex-owned Vite `ssr` cache
+  directories accumulated across repeated gates. Removing only those disposable
+  caches reduced `/tmp` to 467 MiB/2%. The complete backup-copy file then passed
+  20/20 and the exact 7,001-asset Realm scale case passed 1/1. No product-source
+  defect was reproduced. This gate remains failed; a complete clean-environment
+  rerun is required.
+- Third sixth-review-repair Phase 3 `pnpm test:all`: with the disposable cache
+  pressure removed, Realm scale passed, but the frontend durable-mutation case
+  that verifies a shared failure waits for an earlier same-key lock flickered
+  once and the server graceful-stop case again exhausted the shared 15-second
+  default. The already-failed run was stopped while browser smoke was still in
+  progress, so it provides no complete-gate evidence. This gate remains failed.
+- Graceful-stop full-load stabilization: the single integration case now has a
+  30-second per-test scheduling budget while retaining every provider,
+  cancellation, shutdown, SQLite, partial-result, and terminal-operation
+  assertion. It had passed five isolated executions before the budget change;
+  afterward it passed another five consecutive executions in 3.80–4.69s and
+  the complete durable-generation file passed 100/100 in 16.26s. The wider
+  budget addresses full-suite scheduling contention rather than weakening the
+  behavior under proof. Independent focused repetition of the lock-ordering
+  case and file is still being checked before the complete gate rerun.
+- Lock-ordering stabilization: an independent read-only audit found no
+  production race or leaked queue state after 200 repetitions of the exact
+  case, 50 repetitions of the complete 19-test file, and another 200 complete
+  file repetitions. Same-key staging, predecessor persistence, dispatch-lock
+  cleanup, local claim cleanup, IndexedDB reset, Vitest file isolation, and
+  invalidation of fire-and-forget refresh work all remain bounded. The fragile
+  one-second polling assertion was replaced by a deferred signal emitted by the
+  mocked first request itself, retaining the ordering assertions without a
+  scheduler-dependent deadline. The complete file passes 19/19.
+- Fourth sixth-review-repair Phase 3 `pnpm test:all`: server/browser typecheck,
+  topology, documentation, compatibility-register validation, frontend
+  typecheck, and the smoke build passed. The frontend lane passed 9,464 tests/3
+  skipped except for the existing shared-core Fastify-import ownership scan,
+  whose synchronous recursive parse took about 5.5 seconds under full load and
+  exceeded the generic 5-second test timeout. The already-failed run was
+  stopped before the remaining lanes completed. The ownership scan now has a
+  15-second per-test budget without changing its exhaustive import assertions;
+  its complete 94-test file passes in 5.19s. This gate remains failed and a
+  complete rerun is required.
+- Final sixth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  7m58.0s, including frontend 9,465 passed/3 skipped, server 4,560 passed/3
+  skipped, browser smoke 157/157, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. This exact passing tree is ready to be frozen for a fresh
+  independent GPT 6 Astra High closure review; Phase 3 remains unaccepted until
+  that review is clean.
+- Seventh Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 73 tracked diffs at SHA-256
+  `8e90ab3a0404276e70b72cdfd70bacf92c43cc93f5c83f3a7e959556391e1647`,
+  the two untracked file hashes, and sorted content-manifest SHA-256
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`.
+  It rechecked every earlier rejection repair and cleared a suspected second
+  chat-only IGP path through a real two-send Chromium/Fastify/SQLite probe, but
+  rejected the phase with two P2 findings. First, the actual owner UI Continue
+  entry omitted its exact live occupancy tuple and the client rejected one if
+  supplied, so the legitimate compatibility fence returned 426 before a second
+  provider dispatch even though downstream Continue/IGP helpers were correct.
+  Second, cancellation arriving before Send acceptance created an exact
+  `unbound`/`cancel_requested` server tombstone that Stop recovery recognized,
+  but the sibling staged Send treated as an origin mismatch and retained
+  forever after reload. Both were reproduced with production client/server paths
+  and disposable Chromium/Fastify/SQLite state. Owner Continue needs real
+  entry-to-admission append/extend completion and recovery proof while chat-only
+  Continue stays unavailable. Exact cancellation-first tombstones must settle
+  the sibling Send without dispatch, tuple transplantation, or overwriting a
+  newer draft, while stale/mismatched tombstones remain fail-closed. Production
+  rollout remains disabled.
+- Seventh-review repair: the live `sendChat` entry now captures the exact current
+  owner occupancy tuple for Continue and owner Regenerate, and preserves exact
+  mode/interaction identity through staging, scoped outbox recovery, and
+  cancellation. Chat-only Continue/Regenerate remain rejected. A real
+  DefaultChatScreen/Fastify/SQLite browser journey claims as owner and invokes
+  the actual Continue menu twice: extend retains the assistant ID and prior
+  `generationInfo`, then reload plus append creates a distinct result; both
+  requests carry the exact owner session/epoch and reach the provider. The
+  browser journey passes 1/1, client generation-operation tests pass 64/64,
+  pending-outbox tests pass 254/254, related client tests pass 7,104/3 skipped,
+  and the configured IGP matrix passes 4/4. Exact current scoped
+  `unbound`/`cancel_requested` tombstones now also settle the sibling Send and
+  Stop rows without POST/PUT; identity mismatches and stale tuples remain
+  retained. A separate real IndexedDB/Fastify reload journey proves the aborted
+  submit never reaches the server, cancellation creates the tombstone, reload
+  drains the outbox, provider calls/aborts stay at zero, only the seed transcript
+  remains, and a newer draft survives. Client/server checks, smoke build,
+  focused Prettier, and diff checks pass. A complete gate rerun and fresh
+  closure review remain required.
+- Final seventh-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m17.7s, including frontend 9,471 passed/3 skipped, server 4,560 passed/3
+  skipped, browser smoke 158/158, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. This exact passing tree is ready to be frozen for an
+  eighth fresh independent GPT 6 Astra High closure review; Phase 3 remains
+  unaccepted until that review is clean.
+- Eighth Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 73 tracked diffs at SHA-256
+  `cd1553ecf348ae4d0f9bc82607b2239e01b6a53ad9ff2ca4cd328fc68ab90287`,
+  both untracked file hashes, and sorted content-manifest SHA-256
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`.
+  It confirmed the seventh-review repairs for unchanged-role paths but rejected
+  their composition with owner-to-chat-only normalization in two P2 findings.
+  Accepted Send/Stop status reconciliation still compared immutable accepted
+  `occupancyClaimClass` with the normalized current class, despite an unchanged
+  four-part tuple, stranding lost-acceptance Send and pre-server-lost Stop.
+  Separately, fresh-admission validation filtered queued accepted owner
+  Continue/Regenerate and their Stop rows before status lookup after
+  normalization, so neither recovery nor newly requested control could reach
+  the server. Accepted recovery/control must bind the four-part tuple and retain
+  immutable admission provenance separately, while new chat-only
+  Continue/Regenerate stays prohibited. Required regressions cover actual
+  normalization plus reload/outbox settlement, exactly-once cancellation, no
+  generation redispatch, newer-draft preservation, Continue/Regenerate lost
+  responses and Stop, and malformed/stale/tombstone mismatches. Production
+  rollout remains disabled.
+- Eighth-review repair: accepted recovery now compares the stable database
+  lineage/chat/session/epoch tuple while validating `admissionKind` and
+  `occupancyClaimClass` separately as immutable server provenance. Outbox
+  validation distinguishes fresh admission from recovery/control: a normalized
+  page can enumerate and reconcile accepted owner Send, Continue, Regenerate,
+  and their exact Stops, while fresh chat-only Continue/Regenerate remain
+  prohibited. An explicit Stop also lazily rebinds accepted work projected
+  before normalization to the now-current same tuple; it cannot transplant a
+  stale tuple or redispatch the operation/provider. Client operation tests pass
+  73/73 and outbox tests pass 257/257, including Continue extend/append,
+  Regenerate, malformed provenance, stale epochs, lost acceptance, and exactly
+  one cancellation. Real Chromium/Fastify/SQLite normalization journeys pass
+  2/2 and 4/4 repeated: accepted owner Send settles after reload with one
+  provider call, and actual owner UI Continue reaches a partial before
+  demotion/normalization, loses Stop before server receipt, then reloads to one
+  successful cancellation/provider abort with no generation redispatch and the
+  newer draft intact. Client/server checks, smoke build, focused Prettier, and
+  the full diff check pass. A complete gate rerun and fresh closure review are
+  still required; production rollout remains disabled.
+- First eighth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m32.5s. Thirteen lanes passed, including frontend tests, all 159 browser
+  journeys, both typechecks, documentation, compatibility, smoke build, UI
+  coverage, formatting, Realm scale, and performance. The server lane passed
+  4,559 tests/3 skipped, but the graceful-shutdown integration that holds
+  acknowledged user-cancel persistence reached its 30-second ceiling under
+  full-suite load for the second time despite repeated isolated completion in
+  roughly four seconds. This is a gate failure. The recurring stall must be
+  located and repaired without weakening its partial-persistence, terminal
+  operation, and pre-SQLite-close assertions before another complete rerun.
+- Graceful-shutdown lifecycle repair: the failing case now uses the Fastify
+  harness already created for that test instead of starting a second complete
+  app with duplicate workers, timers, sockets, and SQLite handles at peak suite
+  load. It also consumes and verifies the complete 202 cancellation
+  acknowledgement before beginning shutdown, so the DELETE lifecycle cannot
+  compete with the SSE viewer that `preClose` must drain. The test has returned
+  to the normal 15-second deadline while retaining exact cancelled-partial,
+  terminal-operation, and pre-database-close assertions. It passes 20/20
+  repeated executions, and the complete durable-generation file passes 100/100
+  in 15.37s. Server checks, Prettier, and the full diff check pass. A complete
+  gate rerun is still required.
+- Second eighth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m25.0s. The graceful-shutdown repair held under the same load and the server
+  lane passed 4,560 tests/3 skipped in 50.9s. Twelve other lanes also passed,
+  but browser smoke reported 158/159 because the repeated-restart queued
+  finalization journey did not observe its rendered
+  `data-generation-persistence-state="queued"` marker within 15 seconds after a
+  restart. The captured accessibility tree subsequently contained the exact
+  visible queued-warning text, so the failure boundary is being checked for a
+  client projection/render synchronization race rather than treated as a pass.
+  Its authoritative queued row, retry behavior, and terminal exactly-once
+  assertions must remain intact before another complete rerun.
+- Repeated-restart finalization-state repair: the failed trace proved the fourth
+  check, after the second server restart, had truthfully advanced the retry row
+  from `queued` to `stalled` at the documented three-failure threshold. It was
+  still pending/retryable and the captured DOM carried the exact stalled
+  attribute and warning. The browser helper now accepts only `queued` or
+  `stalled` while retryable, requires exact state agreement among the rendered
+  reply-row attribute, browser lifecycle projection, and authenticated server
+  bootstrap, and explicitly requires `stalled` after the repeated-restart loop
+  before clearing the injected write failure. Transcript authority, one
+  provider call, finalizing operation, zero active jobs/outbox rows, one journal
+  row, eventual terminal settlement, effect ledger, and repeated settled-state
+  restart assertions remain unchanged. The exact journey passes 3/3 serially
+  plus a final 1/1 run; browser-smoke typecheck, Prettier, and the full diff
+  check pass. A complete gate rerun is still required.
+- Final eighth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m35.0s, including frontend 9,483 passed/3 skipped, server 4,560 passed/3
+  skipped, browser smoke 159/159, client and server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance gates. The repaired graceful-shutdown and repeated-restart
+  finalization journeys both passed under the complete-suite load. This exact
+  passing tree is ready to be frozen for a ninth fresh independent GPT 6 Astra
+  High closure review; Phase 3 remains unaccepted until that review is clean.
+- Ninth Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 74 tracked diffs at SHA-256
+  `50dc5abe9e4634b452422e98568397f05eb6de501959917400bfd0bd4cda80e5`,
+  both untracked file hashes, and sorted content-manifest SHA-256
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`.
+  It cleared its initial authority-transition recovery hypothesis through the
+  existing reattach/bootstrap paths, but rejected the phase with one P2 owner
+  behavior composition defect. The supported owner completion path persists
+  `runInlayScreen` output before IGP; converting an emotion marker changed the
+  terminal transcript fingerprint even though the exact accepted-operation
+  binding remained valid. A read-only production-store/API probe then claimed
+  the IGP effect but received 409 `generation_effect_target_stale` on
+  completion. The binding must compose with exactly authorized owner inlay
+  finalization without permitting arbitrary transcript edits, and combined live
+  plus recovered owner inlay/IGP coverage must prove provider input, atomic
+  append/commit, and receipt idempotency. Production rollout remains disabled.
+- Ninth-review repair: modern owner inlay finalization now carries exact
+  generation and operation identity into the existing message compare-and-set.
+  In the same transaction, the server validates the immutable accepted
+  `owner_occupancy` scope, accepted character inlay mode, unchanged terminal
+  transcript, and the exact supported emotion or image-inlay transformation;
+  image replacements must reference existing server-owned image assets. It then
+  persists the message and advances every matching effect-ledger terminal
+  fingerprint atomically. Arbitrary text, missing assets, legacy or chat-only
+  scopes, and stale authority cannot use this path. Legacy owner commands retain
+  their previous shape. The complete durable-generation file passes 100/100; a
+  live/restart-recovered Reroll and Continue lifecycle matrix passes 4/4 with
+  exact provider input, translation composition, atomic IGP commit replay, and
+  receipt idempotency. Server effect tests pass 21/21, atomic IGP tests 37/37,
+  browser terminal handling 36/36, and inlay serialization 3/3. Client/server
+  checks, Prettier, and the full diff check pass. A complete gate rerun and fresh
+  closure review remain required; production rollout remains disabled.
+- First ninth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m39.8s. Thirteen lanes passed, including frontend 9,484 passed/3 skipped,
+  server 4,562 passed/3 skipped, client/server typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance. Browser smoke passed 158/159; the large
+  T01/T03/T04/T08/T11 multi-session journey timed out waiting for the second
+  completed operation in one chat and observed one. Every other occupancy,
+  normalization, Stop, recovery, configured-IGP, restart, and finalization
+  browser journey passed. The trace must establish whether the second operation
+  was rejected, retained, or only missed by the current synchronization before
+  another complete gate rerun; this failed run is not acceptance evidence.
+- Owner Continue browser synchronization repair: the failing trace and an exact
+  unchanged reproduction proved both concurrent initial operations completed;
+  the missing row was the later owner Continue, whose menu click landed about
+  90 ms after the terminal operation read while the browser still reconciled a
+  stale-attempt response and effect claims/receipts. The intentional
+  `currentChatOwnsGeneration` re-entry guard returned before staging, so there
+  was no Continue POST or server disposition to lose. The helper now waits for
+  the visible, enabled owner Send control as the real local send-ready signal,
+  then requires the exact successful Continue admission before polling SQLite.
+  The fixed journey passes 1/1 and 4/4 serial repeats; the other normalized-owner
+  Continue consumer passes 1/1. Server/browser-smoke typechecks, Prettier, and
+  the full diff check pass. A complete gate rerun remains required.
+- Second ninth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m32.7s. Thirteen lanes passed, including frontend 9,484 passed/3 skipped,
+  server 4,562 passed/3 skipped, both typechecks, documentation, compatibility,
+  smoke build, UI coverage, formatting, Realm scale, and performance. Browser
+  smoke passed 157/159. The main T01/T03/T04/T08/T11 journey clicked owner
+  Continue but did not observe a successful Continue admission, and the new
+  configured chat-only IGP journey found no persisted translation metadata on
+  the terminal result before IGP. Both exact traces are under independent
+  diagnosis; this failed run is not acceptance evidence and production rollout
+  remains disabled.
+- Final owner Continue synchronization repair: database completion and the
+  enabled Send control can precede the prior operation's sequential recovered
+  effect pass, during which the global generation-readiness fence remains
+  transiently closed. The browser journey now waits for the exact prior
+  generation's final, already-receipted `emotion_image_state` recovery claim
+  before one Continue click; it does not retry the user action. The repaired
+  main journey and the configured-IGP journey pass 8/8 together with two
+  workers. Browser typechecking, Prettier, and the full diff check pass.
+- Automatic generated-translation ownership repair: parallel stress proved a
+  real cross-client race in which the visible observer's automatic translation
+  could replace the server-owned generated translation's registry token,
+  leaving the durable effect failed with `Message translation is no longer
+current`. Automatic browser requests are now explicitly marked. Fastify
+  rejects only a marked request with 409
+  `generated_translation_server_owned` when the exact accepted operation,
+  terminal transcript, and pending/claimed/completed server-owned translation
+  binding still match; the UI treats that expected yield silently. Explicit
+  manual translation retains last-writer-wins behavior. The route regression
+  proves no provider, registry, or message mutation occurs on the yield, the
+  browser proof asserts one marked 409 and one durable provider call, and
+  focused generation-effect 22/22 plus command-adapter 161/161 suites pass.
+  Both typechecks, smoke build, Prettier, and the full diff check pass. A fresh
+  complete gate rerun and closure review remain required; rollout is disabled.
+- Third ninth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m35.1s. Twelve lanes passed, including server 4,563 passed/3 skipped, both
+  typechecks, documentation, compatibility, smoke build, UI coverage,
+  formatting, Realm scale, and performance. Frontend tests found one stale
+  mock export/expectation for the new silent automatic-translation yield.
+  Browser smoke passed 158/159; the main occupancy journey crossed the exact
+  recovered-effect barrier and entered the real Continue `preparing` state,
+  but its generic five-second successful-admission poll expired under
+  full-suite load before prompt preparation produced the POST. The trace showed
+  no rejection or repeated click. This failed run is not acceptance evidence.
+- Final gate-load synchronization repair: the Continue helper retains the
+  exact prior-generation recovery barrier and single user click, while using
+  the same bounded 30-second budget as the other prompt preparation/admission
+  waits. The repaired main journey passes 8/8 with two workers. The frontend
+  mock now exports the shared server-owned error constant, the ordinary
+  automatic provider-failure test still proves one visible failure and no
+  retry, and a separate regression proves the exact server-owned yield is
+  silent and sent with `automatic: true`; the complete file passes 87/87.
+  Prettier and the full diff check pass. A complete gate rerun and fresh closure
+  review remain required; production rollout remains disabled.
+- Final ninth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m23.2s. Frontend passed 9,485 tests/3 skipped, server passed 4,563 tests/3
+  skipped, and browser smoke passed all 159 journeys, including the main
+  owner/chat-only matrix and configured translation-to-IGP recovery journey
+  under complete-suite load. Both typechecks, documentation, compatibility,
+  smoke build, UI coverage, formatting, Realm scale, and performance gates also
+  passed. This exact tree is ready for a tenth fresh independent GPT 6 Astra
+  High closure review. Phase 3 remains unaccepted and rollout remains disabled
+  until that review is clean.
+- Tenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer independently
+  matched baseline `bf32c875f`, all 81 tracked diffs at SHA-256
+  `fc9e260e0744b37586192c2225b6ffd06df2b822908567dc8cfb521f70f562d9`,
+  both untracked file hashes, and combined changed-content manifest SHA-256
+  `fb48a934b5c27d9caac97c3279a7d4afb6d1890e2625672cb4ec073eac4228c4`.
+  It revisited the nine preceding closure findings and found no regression in
+  their repairs, but rejected Phase 3 with one new P2 composition gap. A
+  deterministic production Fastify/SQLite probe held an accepted generated
+  translation provider after its effect was claimed; authenticated bootstrap
+  exposed pending IGP, whose late-recovery claim, provider completion, and
+  atomic commit all succeeded before translation settled. Releasing the
+  provider then left IGP completed but generated translation permanently failed
+  because IGP had changed its exact source. The server must preserve IGP as
+  pending/recoverable while its exact generated-translation prerequisite is
+  pending or claimed, and deterministic reload/recovery plus live
+  post-deferral-cap coverage must prove eventual ordered completion. The
+  reviewer accepted the final one-click Continue synchronization and found no
+  other blocker. Production rollout remains disabled.
+- Tenth-review translation-to-IGP ordering repair: modern exact-sibling IGP
+  claims now remain pending while generated translation is pending or claimed,
+  including an expired claim that startup recovery can reclaim. Production
+  translation persistence completes its durable receipt inside the same
+  targeted message transaction, so the resulting `message.updated` event cannot
+  wake IGP against a still-unreceipted translation. A successfully applied
+  message-update event requests one scoped occupancy recovery; failed
+  translation remains recoverable through the existing occupancy-renewal path,
+  with no new polling loop. A deterministic real Fastify/SQLite regression
+  holds the accepted chat-only translation provider beyond its one-second
+  notification defer cap, reloads bootstrap, expires the translation lease,
+  proves late-recovery IGP remains unclaimed with
+  `generated_translation_prerequisite_pending`, then releases translation and
+  completes both effects once with two total provider calls. Focused generation
+  effects pass 23/23, connected-reader sync 30/30, bootstrap 246/246, and the
+  related frontend run 7,119 passed/3 skipped. Server and client typechecks,
+  Prettier, and the full diff check pass. A complete gate rerun and eleventh
+  fresh independent closure review remain required; production rollout remains
+  disabled.
+- First tenth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes in
+  8m22.5s. Thirteen lanes passed, including frontend 9,486 passed/3 skipped,
+  server 4,564 passed/3 skipped, both typechecks, documentation,
+  compatibility, smoke build, UI coverage, formatting, Realm scale, and
+  performance. Browser smoke passed 158/159. The main
+  T01/T03/T04/T08/T11 journey completed and receipted the prior owner
+  generation, accepted and acknowledged the Continue action's
+  `lastInteraction` persistence, but did not issue a Continue operation before
+  the 30-second bound. This failed run is not acceptance evidence; rollout
+  remains disabled.
+- Post-translation Continue/readiness repair: parallel browser reproduction
+  established that the durable character command and receipt ACK settled, the
+  occupancy lineage/session/epoch and live lease remained exact, and the
+  generation operation intentionally rejected admission because
+  `chat-dependencies` was false. The full-resource invalidation path revoked
+  readiness before starting a forced selected-character hydration at its end;
+  under load that forced request aborted the exact in-flight hydration awaited
+  by readiness, which then recorded
+  `selected-character-hydration-failed` with no target change to retry it. Full
+  invalidation now starts one minimum-revision selected-character hydration
+  before requesting readiness reevaluation, so the evaluation subscribes to
+  that request instead of being superseded. The browser barrier now also
+  requires every exact prior-generation effect to be terminal and the existing
+  generation-readiness diagnostic to be ready before its single Continue
+  click. The focused bootstrap suite passes 246/246, client typecheck has zero
+  errors/warnings, smoke build passes, and the exact browser journey passes
+  10/10 concurrently where the pre-fix tree failed 4/10 and 2/4 with confirmed
+  `chat-dependencies`/`selected-character-hydration-failed` diagnostics. A
+  complete gate rerun and eleventh fresh independent closure review remain
+  required; production rollout remains disabled.
+- Final tenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m32.3s. Frontend passed 9,486 tests/3 skipped, server passed 4,564 tests/3
+  skipped, and browser smoke passed all 159 journeys, including the repaired
+  one-click owner Continue path under complete-suite load. Both typechecks,
+  documentation, compatibility, smoke build, UI coverage, formatting, Realm
+  scale, and performance gates also passed. This exact tree is ready for an
+  eleventh fresh independent GPT 6 Astra High closure review. Phase 3 remains
+  unaccepted and rollout remains disabled until that review is clean.
+- Eleventh Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 81 tracked diffs at SHA-256
+  `3245b077e2f14eb275ef8dd4f71436abcbb065c467088f3a8bb035457afea568`,
+  both untracked file hashes, the two-file manifest
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`,
+  and combined changed-content manifest
+  `00f658998e6cc167e93c40e56494b046418546d2ce18a07737d37d173bca37a8`.
+  It rejected Phase 3 with two P2 recovery compositions. First, a targeted
+  invalidation immediately following a full invalidation can supersede the
+  selected-character hydration awaited by readiness; the replacement read can
+  succeed while the unchanged target remains permanently not ready with
+  `selected-character-hydration-failed`. Second, after same-tuple owner to
+  chat-only normalization, a proven-unaccepted staged Continue or Regenerate
+  whose 404 response was lost is retried as a fresh unsupported submit; the
+  `chat_only_interaction_unsupported` result remains retained and replayable.
+  Required repairs are a deterministic held-read full-to-targeted readiness
+  regression with stale-response rejection and eventual one-click Continue,
+  plus Continue/Regenerate 404-after-normalization recovery that reconciles
+  accepted work first but keeps proven-unaccepted owner-only work dormant with
+  an explicit disposition, zero submit, and preserved drafts. The reviewer
+  found no other concrete blocker, made no edits, and did not rerun the supplied
+  full gate. Production rollout remains disabled.
+- Eleventh-review normalized-recovery repair: recovery still reconciles the
+  authoritative operation identity before considering any resubmission. When a
+  same-tuple owner Continue or Regenerate was never accepted and the retained
+  occupancy has normalized to `chat_only`, the 404 proof now produces an
+  explicit dormant `requires_resubmission` projection before dispatch. The
+  encrypted intent and originating `draftGeneration` remain intact; two
+  repeated recovery passes issue only their status reads, with zero operation
+  submissions, dispatch starts, or outbox deletion. The matrix covers both
+  deferred interactions, accepted owner Continue/Regenerate still reconcile,
+  and fresh chat-only Continue/Regenerate remain rejected before staging or
+  transport. The focused generation-operation suite passes 76/76, client
+  typechecking reports zero errors or warnings, and Prettier plus the full diff
+  check pass.
+- Eleventh-review hydration-overlap repair: character hydration has an opt-in
+  successor chain that transfers existing subscribers to a superseding request
+  while retaining the highest minimum revision and the original abort,
+  selection, and target fences. Full and targeted invalidations opt in with the
+  exact refresh revision, so a revision-13 targeted refresh can replace a held
+  revision-12 read without resolving the readiness subscriber as failed. A
+  focused real-browser Fastify/SQLite journey first completes one owner Send,
+  clears only the browser's applied-resource cursor through the smoke-only
+  diagnostics hook, drives a real full invalidation, holds and poisons its
+  native character response, then drives the next targeted invalidation at the
+  exact following revision. It proves the first request is aborted and cannot
+  publish when released, the second applies, readiness moves from
+  `chat-dependencies` blocked to ready, and one Continue click yields exactly
+  one 201 submission and one completed owner-occupancy operation. The journey
+  passes 1/1 and then 5/5 serially. Character hydration passes 18/18, bootstrap
+  247/247, hydration overlap 2/2, and resource refresh 15/15; both typecheck
+  gates, smoke build, Prettier, and the full diff check pass. The complete Phase
+  3 gate and fresh closure review remain required; rollout remains disabled.
+- Final eleventh-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m19.9s. Frontend passed 9,491 tests/3 skipped, server passed 4,564 tests/3
+  skipped, and browser smoke passed all 160 journeys, including the exact
+  full-to-targeted hydration supersession and one-click Continue proof under
+  complete-suite load. Server/browser and client typechecks, test topology,
+  current documentation, compatibility registers and harness, smoke build, UI
+  coverage, Realm scale, formatting, and performance gates all passed. This
+  exact tree is ready for a twelfth fresh independent GPT 6 Astra High closure
+  review. Phase 3 remains unaccepted and rollout remains disabled until that
+  review is clean.
+- Twelfth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 83 tracked diffs at SHA-256
+  `8eff60a4e8cbc806aba233ae26d5a31794fabe6b8dde7d64e735ec85532778f9`,
+  both untracked source hashes, the two-file manifest
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`,
+  and combined changed-content manifest
+  `7f31786115b10b02e1bd90048a965fbd88fecdd6ed68f222c44db2237cb7263f`.
+  It accepted the eleventh-review hydration and normalized-recovery fixes, but
+  rejected Phase 3 with one P2 completion-order defect. A disposable real
+  Fastify/SQLite probe held an accepted owner generated-translation provider
+  past the one-second defer cap, then successfully applied the exact authorized
+  emotion-inlay message transformation while translation remained claimed.
+  Releasing the provider caused translation to fail permanently with
+  `Message changed before translation could be saved`, leaving the inlay text
+  without generated translation. Owner inlay finalization must remain
+  recoverable behind unfinished generated translation, then compose in order
+  with IGP, including deterministic held-provider and reload proof. The reviewer
+  made no source edits; rollout remains disabled.
+- Twelfth-review translation-to-inlay ordering repair: exact validated owner
+  inlay intent is now persisted on the generated-translation effect while that
+  prerequisite is pending or claimed, without publishing the transformed
+  transcript. Translation success completes its durable receipt and drains the
+  deferred inlay in the same targeted message transaction; failed or skipped
+  translation likewise settles and drains through one targeted transaction
+  before IGP can become claimable. The drain revalidates the immutable accepted
+  operation, exact terminal transcript, owner scope, supported transformation,
+  and image assets, then rebases the generated translation source fingerprint
+  across the display-only inlay transform. A deterministic real
+  Fastify/SQLite regression holds the translation provider beyond the defer
+  cap, accepts the inlay as deferred, reloads recovery state, proves IGP remains
+  pending, then completes translation, inlay, and IGP in order with exactly two
+  provider calls and terminal receipts. A separate failed-translation case
+  proves the same atomic drain before IGP. Generation effects pass 25/25,
+  client inlay finalization passes 4/4, server and browser typechecks plus the
+  architecture inventory pass, and Prettier and the full diff check are clean.
+  A complete gate rerun and thirteenth fresh independent closure review remain
+  required; production rollout remains disabled.
+- First twelfth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes
+  in 8m5.4s. Thirteen lanes passed, including both typechecks, frontend,
+  documentation, compatibility and architecture checks, smoke build, all 160
+  browser journeys, UI coverage, Realm scale, formatting, and performance.
+  Server tests passed 4,565 assertions/3 skipped but correctly failed the one
+  reviewed-persistence-owner schema pin because the two new deferred-inlay
+  ledger columns changed its digest. This failed run is not acceptance evidence;
+  rollout remains disabled.
+- Reviewed persistence-schema repair: the Phase 3 compatibility structure now
+  pins the exact schema digest that includes
+  `deferred_inlay_expected_data` and `deferred_inlay_final_data` on
+  `generation_effects`. The preceding failure printed the complete schema and
+  exact received digest, so the update changes only that closed-world review
+  pin. A complete clean gate rerun remains required.
+- Final twelfth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m14.9s. Frontend passed 9,492 tests/3 skipped, server passed 4,566 tests/3
+  skipped, and browser smoke passed all 160 journeys. Server/browser and client
+  typechecks, test topology, current documentation, compatibility registers and
+  harness, smoke build, UI coverage, Realm scale, formatting, and performance
+  gates also passed. This exact source tree is ready for a thirteenth fresh
+  independent GPT 6 Astra High closure review. Phase 3 remains unaccepted and
+  production rollout remains disabled until that review is clean.
+- Thirteenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 83 tracked diffs at SHA-256
+  `3caa0522347b668496e0a0e8ac61d996fc78a58131a71faf07fe88ed51fd3d76`,
+  both untracked source hashes, the two-file manifest
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`,
+  and combined changed-content manifest
+  `e10754d245084ff441c1c049134d83c3710087fe97b5b31dc35f78f00df8ba5d`.
+  It rejected Phase 3 with one P2 stale-intent recovery defect. A disposable
+  production Fastify/SQLite probe deferred exact owner emotion inlay behind a
+  held generated translation, then applied an ordinary same-owner transcript
+  edit. Translation settlement rolled back because the deferred inlay no longer
+  matched; two expired-lease recovery passes and a real app reopen each
+  redispatched the provider and retained the claimed translation, deferred
+  payload, pending IGP, and occupancy release pin. The repair must terminally
+  dispose of provably stale deferred intent without overwriting the newer
+  transcript or rolling back translation's failure/skipped receipt, prevent
+  redispatch across expiry/reopen, terminalize dependent work, and allow
+  release. The reviewer found no other actionable blocker, made no source edits,
+  and independently passed generation effects 25/25 plus the diff check.
+  Production rollout remains disabled.
+- Thirteenth-review stale deferred-inlay repair: persisted deferred intent now
+  has a typed `none`/`ready`/`stale`/`invalid` classifier. `stale` requires
+  complete validated transform data, exact accepted owner operation and scope,
+  exact translation-to-IGP sibling binding, and one unambiguous assistant
+  target; any terminal-transcript drift then retires the obsolete chain without
+  writing the transcript. Partial payloads, corrupt scope/binding, and
+  missing/ambiguous targets remain invalid and fail closed. Live translation
+  failure atomically preserves its failed receipt, clears the stale intent, and
+  skips IGP with `deferred_generation_inlay_target_stale`; a successful
+  translation followed by unrelated transcript drift likewise retains its
+  translation metadata/receipt while retiring inlay and IGP. Recovery performs
+  the same classification before provider dispatch. Deterministic coverage
+  proves a held provider plus target edit calls the provider once and allows
+  release, an expired claim plus real `buildApp` reopen performs zero
+  redispatches and allows release, another-row drift is safely stale, and a
+  corrupted sibling epoch remains invalid and untouched. Generation effects
+  pass 28/28, completion translation 8/8, occupancy 14/14, both typecheck
+  surfaces and architecture inventory pass, client diagnostics report zero
+  errors/warnings, and Prettier plus the diff check pass. A complete gate rerun
+  and fourteenth fresh independent closure review remain required; rollout is
+  disabled.
+- Final thirteenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m15.9s. Frontend passed 9,492 tests/3 skipped, server passed 4,569 tests/3
+  skipped, and browser smoke passed all 160 journeys. Server/browser and client
+  typechecks, topology, current documentation, compatibility registers and
+  harness, smoke build, UI coverage, Realm scale, formatting, and performance
+  gates all passed. This exact source tree is ready for a fourteenth fresh
+  independent GPT 6 Astra High closure review. Phase 3 remains unaccepted and
+  production rollout remains disabled until that review is clean.
+- Fourteenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 83 tracked diffs at SHA-256
+  `21604cfee0efa9941a240fbbe7b6d0a7e10f910661b68896c33db9fed7544a40`,
+  both untracked source hashes, the two-file manifest
+  `1d6f6d7808c6b15eafcf471074d9c95a48f6a955975858f20f076475c913178c`,
+  and combined changed-content manifest
+  `0b0bd6fdb40c3ea969b01ffa360587e35ac85165d14e4408d713f4556a45e2ac`.
+  It rejected Phase 3 with two P2 owner-inlay integration defects. First, real
+  synchronous emotion finalization uses a plain command without the accepted
+  database-lineage context; Chromium sent the writer header but no lineage, so
+  Fastify returned 400 and no inlay intent or transform was persisted. Second,
+  slow image generation has no durable pre-provider intent. A real
+  Chromium/Fastify/SQLite probe held image and translation providers, released
+  translation, observed recovered IGP claim/completion/commit/receipt succeed
+  against the raw `<ImgGen>` transcript, then released image; asset upload and
+  catalog registration succeeded but no finalization PATCH was sent, leaving
+  the raw tag plus IGP suffix. Counts were one each for main, generated
+  translation, IGP, and image providers. The repair must use stable durable
+  lineage authority for finalization and persist an exact pre-async inlay
+  obligation that fences live/recovered IGP until terminal settlement, with
+  real browser proof. The reviewer found no additional confirmed blocker, made
+  no source edits, and independently passed generation effects 28/28 plus the
+  diff check. Production rollout remains disabled.
+- Fourteenth-review durable owner-inlay repair: accepted-operation owner inlay
+  now begins with an exact, operation-bound SQLite preparation on the dependent
+  IGP effect before either a synchronous emotion transform or asynchronous
+  image provider may run. Dedicated preparation, finalization, and abandonment
+  commands carry the stable database lineage and originating writer session,
+  use deterministic receipt identities with bounded revision retry, and
+  revalidate the accepted operation, scope, target, source text, supported
+  transform, and server-owned image assets in the targeted mutation. IGP claims
+  fail closed while an exact preparation is pending or malformed. Translation
+  hydration in the same page retains a registered live provider; a reload
+  abandons only an inactive exact marker before IGP recovery. Provider,
+  configuration, upload, or unresolved-image failures abandon the marker and
+  retain the raw retryable source tag. Image settings no longer require the
+  unrelated account group except for the Kei provider. The server transform
+  validator additionally requires every source ImgGen obligation to become a
+  verified image asset and rejects tag deletion. Real Chromium/Fastify/SQLite
+  proofs pass for lineage-correct synchronous emotion finalization and a held
+  image plus translation race with exactly one main, translation, IGP, and
+  image provider call and IGP fenced until asset settlement. Generation effects
+  and the closed-world schema suite pass 37/37; focused client coverage passes
+  115 tests; both typechecks, the smoke build, Prettier, and the diff check pass.
+  The reviewed schema digest is now
+  `83034f56531769e59514f97af639c862e47afd87ad95dc1de6ba6a890d715217`
+  for the two preparation columns. A complete clean gate and fifteenth fresh
+  independent closure review remain required; production rollout is disabled.
+- First fourteenth-review-repair Phase 3 `pnpm test:all`: intentionally stopped
+  after the frontend lane reported 42 failures. The two root causes were
+  closed-world expectations omitted by the new boundary: the route-operation
+  catalog still pinned 119 entries and its durable list omitted the three inlay
+  commands, while the shared server-backed send fixture exported only
+  `runInlayScreen` and not the new pure preflight. Typechecks, current docs,
+  compatibility registers, smoke build, formatting, and the focused server
+  proofs had passed before the stop. This interrupted run is not acceptance
+  evidence; rollout remains disabled.
+- Fourteenth-review full-gate fixture repair: the protocol test now pins all 122
+  reviewed operations and the three inlay command durability classes. The
+  shared inlay fixture implements the same pure emotion/image preflight shape,
+  so existing send and preview fixtures exercise the new call without gaining
+  provider behavior. The affected protocol, route-backed send, and preview
+  suites pass 70/70. A new complete clean Phase 3 gate remains required.
+- Second fourteenth-review-repair Phase 3 `pnpm test:all`: the repaired frontend
+  lane passed, then the server lane reported two closed-world inventory
+  failures. The runtime mutation-path collector found the three new inlay
+  paths absent from the metric budget registry, and route protection found the
+  three auth-session commands absent from its reviewed active-writer exception
+  list. The remaining browser lane was stopped; this run is not acceptance
+  evidence.
+- Fourteenth-review command-inventory repair: preparation and abandonment now
+  have exact `generation_effects`-only write budgets; finalization permits only
+  the exact message/effect tables and bounded derived memory/wiki invalidation
+  tables. All three narrow paths require zero db.json rewrite time. Route
+  protection explicitly pins the three accepted-session commands, and the
+  narrow-gate meta-test covers every generation-effect command. Mutation
+  budgets, route protection, and generation-effects suites pass 57/57. A new
+  complete clean Phase 3 gate remains required; rollout is disabled.
+- Third fourteenth-review-repair Phase 3 `pnpm test:all`: 13 of 14 lanes passed
+  in 8m8.2s. Frontend passed 9,503 tests/3 skipped, server passed 4,571 tests/3
+  skipped, and 161 of 162 browser journeys passed. The sole failure was an
+  over-specific browser assertion that required one incidental automatic
+  translation request to race the durable generated-translation owner and be
+  rejected with 409. Under suite load, the completed server translation
+  hydrated first, so the browser correctly made no redundant request; durable
+  translation metadata, effect state, and all preceding/following provider
+  counts remained correct. This failed run is not acceptance evidence.
+- Browser generated-translation race-proof repair: the configured IGP journey
+  now permits the two valid schedules after durable translation completion:
+  zero redundant automatic requests when hydration wins, or at most one
+  automatic request rejected with 409 when a client observes the raw row first.
+  The audit is taken only after IGP settlement, transport-loss recovery, and a
+  real reload, so the zero-request branch is not an early vacuous snapshot. The
+  deterministic Fastify test still forces the latter schedule and proves
+  `generated_translation_server_owned` before any provider dispatch or
+  transcript mutation. The exact browser journey passed five unchanged
+  standalone repetitions and then eight parallel repetitions with the initial
+  schedule-neutral assertion. An independent read-only source review confirmed
+  both schedules from the done-frame eligibility fence and the existing unit
+  proofs; its focused generated-translation/client suites passed 92/92. A fourth
+  complete gate was intentionally stopped after about one minute because this
+  late terminal audit strengthened the browser proof while it was running. That
+  mixed-source run is not acceptance evidence. A new complete clean Phase 3 gate
+  remains required; rollout is disabled.
+- Fifth fourteenth-review-repair Phase 3 `pnpm test:all`: completed all 14 lanes
+  in 8m9.9s, with 13 lanes passing. Frontend passed 9,503 tests/3 skipped,
+  server passed 4,571 tests/3 skipped, and 161 of 162 browser journeys passed.
+  The sole failure was the new synchronous emotion-inlay Chromium proof: under
+  suite load its request-only barrier released the held provider after an
+  expected stale-epoch stream GET returned 409, before the redirected GET could
+  attach. Completion therefore won the test-created race and correctly entered
+  late recovery without running the live inlay transport. This failed run is
+  not acceptance evidence.
+- Live-stream proof synchronization repair: both synchronous emotion and held
+  image journeys now retain the provider gate until an operation-stream response
+  is actually 200. The failed trace showed the accepted operation at projection
+  epoch 3, a normal provider-dispatch bump to epoch 4, a typed 409 redirect from
+  the epoch-3 GET, and correct client retry; the test had released on the first
+  request rather than the successful response. An independent read-only review
+  matched that sequence to the three-redirect product path and existing unit
+  proof, found no product retry gap, and identified the same latent barrier in
+  the held-image test. The unchanged exact lineage, route/body, effect,
+  provider-count, and persisted-output assertions then passed 8/8 for emotion
+  alone and 16/16 for both journeys together. A new complete clean Phase 3 gate
+  remains required; rollout is disabled.
+- Final fourteenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m21.7s. Frontend passed 9,503 tests/3 skipped, server passed 4,571 tests/3
+  skipped, and browser smoke passed all 162 journeys, including both successful
+  live-stream attachment barriers and the terminal generated-translation race
+  audit under complete-suite load. Server/browser and client typechecks,
+  topology, current documentation, compatibility registers and harness, smoke
+  build, UI coverage, Realm scale, formatting, and performance gates all passed.
+  This exact runtime/test tree is ready for a fifteenth fresh independent GPT 6
+  Astra High closure review. Phase 3 remains unaccepted and production rollout
+  remains disabled until that review is clean.
+- Fifteenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 87 tracked diffs at SHA-256
+  `695339dc0ba97bb568d794391260b86d1e8b78b4e79bc5a8309cbc5439ff60a5`,
+  all three untracked source hashes, the three-file manifest
+  `30165902d28e4656bdfbb38d5ac558faddbc099e1cac5a6c2295ab961714acec`,
+  and combined changed-content manifest
+  `12e96604c0d6cd49ed7cff89137a27d5e20a0a4b9436a7f8e76dd3344f0740c3`.
+  It rejected Phase 3 with three P2 owner-inlay lifecycle defects reproduced
+  through real Chromium, Fastify, and disposable SQLite. First, production-
+  default rollout-disabled owner Send admits `legacy_owner`, but the new
+  occupancy-only preparation guard removed its compatibility inlay path: one
+  provider call and terminal effects left `Reply <Emotion="happy">` raw with
+  zero inlay requests; image inlay is excluded by the same guard. Second, TTS
+  alternate text still called the provider-capable inlay renderer. A plain
+  primary plus alternate `<ImgGen="alternate cat">` started a real held image
+  request without a durable marker while every effect, including TTS, became
+  terminal. Third, a role transfer while TTS settlement was held exited after
+  successful emotion preparation without retiring the page-local active marker.
+  Same-session/same-epoch normalization and a fresh bootstrap then skipped
+  recovery forever and explicit release returned 409 until a reload abandoned
+  the marker. The repair must restore exactly fenced legacy-owner behavior, make
+  alternate TTS processing provider-free, and retire or settle every active
+  preparation on supersession without prematurely abandoning genuine provider
+  work. The reviewer independently passed generation effects 30/30, found the
+  latest SSE/test scheduling repairs sound, made no source edits, and found no
+  additional cross-epoch or expiry pin. Rollout remains disabled.
+- Fifteenth-review owner-inlay lifecycle repair: rollout-disabled compatibility
+  owners again finalize emotion and image inlays through the lineage-bearing,
+  scoped durable message dispatcher with exact chat, message, source-data, and
+  generation preconditions. Occupancy-scoped preparations settle before TTS;
+  every accepted preparation retires its page-local active registration, while
+  a genuinely running image provider remains alive through transient role loss.
+  After provider settlement, current authority may finalize, otherwise only the
+  captured accepted owner session may abandon its exact preparation marker. The
+  abandonment route does not mutate the transcript or grant stale finalization
+  authority. Alternate TTS text now uses a pure renderer and cannot start image
+  provider work. Focused client coverage passes 182 tests across the core,
+  server-backed fixture, and adjacent send/preview suites; generation effects
+  pass 31/31. Four real Chromium/Fastify/SQLite regressions pass for modern
+  emotion lineage, disabled-rollout legacy emotion, disabled-rollout held image,
+  and ordered translation/held-image/IGP settlement. Both typechecks, Prettier,
+  and the diff check pass. The complete Phase 3 gate and a sixteenth fresh
+  independent closure review remain required; rollout is disabled.
+- Final fifteenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m3.8s. Frontend passed 9,511 tests/3 skipped, server passed 4,572 tests/3
+  skipped, and browser smoke passed all 164 journeys. Server/browser and client
+  typechecks, topology, current documentation, compatibility registers and
+  harness, Realm scale, the production smoke build, UI coverage, formatting,
+  and performance gates all passed. This exact runtime/test tree is ready for a
+  sixteenth fresh independent GPT 6 Astra High closure review. Phase 3 remains
+  unaccepted and production rollout remains disabled until that review is clean.
+- Sixteenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 89 tracked diffs at SHA-256
+  `6fa43b49cfe30a6641d1bb2efaca7932591ca0d6969d11e882b89f3d081afc5f`,
+  all three untracked hashes, the untracked manifest
+  `a72ca01ea4f7b9147a039dcbe4307889777b49e53d2a955d277ac5fa1e875230`,
+  and combined changed-content manifest
+  `e9d2a0626419fa525d93fea0d6ebf8922d03c578de67d867ae3f0f7c13362700`.
+  It rejected Phase 3 with one P2 compatibility projection defect. In a repeated
+  real Chromium/Fastify/SQLite probe, rollout-disabled legacy owner Send started
+  a held image provider, then a same-owner authenticated message PATCH persisted
+  and hydrated newer text. With later chat/character refresh reads faulted, an
+  image-provider HTTP 500 correctly sent no stale finalization PATCH and SQLite
+  retained the newer edit, but unconditional legacy settlement repainted the
+  browser with the obsolete raw ImgGen source for the full five-second
+  assertion. The repair must capture the mutation-intent epoch and verify exact
+  live text before applying success or failure projection settlement, including
+  edit-away-and-back coverage, without depending on later hydration. The
+  reviewer independently passed generation effects 31/31; three parallel
+  broader cross-checks found no other demonstrated P1/P2. It made no source
+  edits and matched the frozen identity again at the end. Rollout remains
+  disabled.
+- Sixteenth-review legacy projection repair: compatibility inlay state now
+  captures the chat mutation-intent epoch. Both pre-dispatch and post-settlement
+  paths require current owner authority, the same message identity and role,
+  the unchanged intent epoch, and exact ownership of the placeholder, raw
+  source, or resolved final text. A newer hydrated/editor projection and an
+  edit-away-and-back race are therefore left untouched; failed or refused
+  persistence cannot repaint unrelated text. Focused client suites pass 109/109,
+  including provider success/failure after a newer edit, edit-away-and-back, and
+  immediate emotion refusal. The reviewer-equivalent rollout-disabled real
+  Chromium/Fastify/SQLite fault probe passes with the newer edit retained in the
+  browser and SQLite, failed refresh reads, an image-provider HTTP 500, terminal
+  effects, and zero stale finalization PATCHes. A combined four-journey browser
+  run also preserves the preceding legacy and modern inlay cases. Both
+  typechecks, Prettier, and the diff check pass. The complete Phase 3 gate and a
+  seventeenth fresh independent closure review remain required; rollout is
+  disabled.
+- First sixteenth-review-repair Phase 3 `pnpm test:all`: 13 of 14 lanes passed in
+  8m2.7s. Frontend passed 9,515 tests/3 skipped, server passed 4,572 tests/3
+  skipped, and 164 of 165 browser journeys passed. The new real legacy held-image
+  failure/faulted-refresh regression passed, as did the adjacent legacy image
+  and modern ordered-inlay cases. The sole failure was the rollout-disabled
+  legacy emotion journey: its recorded message PATCH had the exact source body,
+  lineage header, and writer-session header, but the assertion observed that
+  request record before its response status was attached. The trace and server
+  truth require diagnosis before classifying this as product behavior or test
+  synchronization. This failed run is not acceptance evidence; rollout remains
+  disabled.
+- Legacy compatibility proof synchronization repair: the failed trace contained
+  the exact expected message PATCH and SQLite had already committed the emotion
+  transform, but the test read its request record before Playwright's response
+  event attached status 200 and then closed the context. Twelve parallel focused
+  repetitions independently confirmed that every iteration reaching the final
+  assertion eventually observed 200; three earlier failures exposed the same
+  request-only stream barrier previously repaired in modern inlay tests, where
+  an epoch-3 stream returned 409 before the redirected epoch-4 attachment. Both
+  legacy emotion and image journeys now wait for a successful 200 stream before
+  releasing the provider and poll the exact PATCH response to 200 before keeping
+  all existing path, body, header, persisted-output, and no-modern-inlay-route
+  assertions. No UI action or mutation is retried. Sixteen parallel focused
+  repetitions pass, as do server/browser typechecking, Prettier, and the diff
+  check. A new complete gate remains required; rollout is disabled.
+- Final sixteenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  7m55.5s. Frontend passed 9,515 tests/3 skipped, server passed 4,572 tests/3
+  skipped, and browser smoke passed all 165 journeys. Server/browser and client
+  typechecks, topology, current documentation, compatibility registers and
+  harness, Realm scale, the production smoke build, UI coverage, formatting,
+  and performance gates all passed. This exact runtime/test tree is ready for a
+  seventeenth fresh independent GPT 6 Astra High closure review. Phase 3 remains
+  unaccepted and production rollout remains disabled until that review is clean.
+- Seventeenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 89 tracked diffs at SHA-256
+  `379df2ed1811769e0c2dcccb488c95ecf0f00c4fd2139e132429269de98e8960`,
+  all three untracked source hashes, the untracked manifest
+  `a72ca01ea4f7b9147a039dcbe4307889777b49e53d2a955d277ac5fa1e875230`,
+  and combined changed-content manifest
+  `2773c293cafed809ddf894eef9bf01da16d1a5091bb6045bc4d9300d5dfc0a0b`
+  at both start and end. It rejected Phase 3 with one P2 ordering defect,
+  reproduced twice through real Chromium, Fastify, and disposable SQLite. If
+  generated translation settles while the live owner's inlay-preparation PUT is
+  awaiting its server acknowledgement, scoped recovery cannot see a durable
+  preparation marker and may claim and commit IGP against the raw inlay source.
+  The later preparation then becomes stale, leaving the raw emotion marker plus
+  the IGP result permanently committed. Recovery must respect a page-local
+  preparation throughout its acknowledgement window and preserve translation →
+  inlay → IGP ordering. The review's cumulative cross-check found no other
+  confirmed P1/P2, 157 focused tests passed, no repository files were edited,
+  and rollout remains disabled.
+- Seventeenth-review live-preparation ordering repair: the page-local active
+  preparation registry is keyed by the full accepted ledger reference and now
+  fences recovered IGP even before the server exposes a durable preparation ID.
+  Recovery checks that gate both before hydrating the group and immediately
+  before the IGP claim. Registration retirement is idempotent and schedules one
+  refreshed scoped pass after success, refusal, transport failure, or
+  supersession, so a retained group does not require reload while unrelated
+  operations and durable restart recovery remain unaffected. Focused client
+  suites pass 107/107. Four real Chromium/Fastify/SQLite journeys pass, including
+  the exact held-preparation/held-translation race: no early IGP claim occurs;
+  the stable preparation retry settles inlay before IGP; the final transcript is
+  `Reply {{emotion::happy}} [accepted IGP snapshot]`; each provider runs once;
+  every effect terminalizes; and occupancy releases successfully. Both
+  typechecks, the smoke build, targeted Prettier, and the diff check pass. A new
+  complete Phase 3 gate and fresh independent closure review remain required;
+  rollout is disabled.
+- Final seventeenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m3.7s. Frontend passed 9,519 tests/3 skipped, server passed 4,572 tests/3
+  skipped, and browser smoke passed all 166 journeys. Server/browser and client
+  typechecks, topology, current documentation, compatibility registers and
+  harness, Realm scale, the production smoke build, UI coverage, formatting,
+  and performance gates all passed. This exact runtime/test tree is ready for an
+  eighteenth fresh independent GPT 6 Astra High closure review. Phase 3 remains
+  unaccepted and production rollout remains disabled until that review is clean.
+- Eighteenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 89 tracked diffs at SHA-256
+  `15ac178bd428c3f43f055e3803bf297c02eb64c3d668f6ce457cac1aad7f6d22`,
+  all three untracked source hashes, the untracked manifest
+  `a72ca01ea4f7b9147a039dcbe4307889777b49e53d2a955d277ac5fa1e875230`,
+  and combined changed-content manifest
+  `d250e1464887cb8ad15718b956d5d513469efdff9426b9bcc9d7ff286b0583e3`
+  at both start and end. It rejected Phase 3 with one P2 lifecycle defect,
+  reproduced twice through real Chromium, Fastify, and disposable SQLite. After
+  the image provider completed, a held native asset upload survived general-
+  owner transfer and exact-session normalization; the live terminal awaited the
+  unbounded post-provider transport before checking lost authority or retiring
+  its active preparation. Fresh recovery therefore kept the preparation and IGP
+  pending, performed no abandonment or claim, and release returned
+  `chat_occupancy_recovery_blocked`. The preparation request's own 30-second
+  timeout was separately proven to retire correctly, but the later asset upload
+  has no application deadline or cancellation signal. The repair must bound or
+  cancel post-provider settlement on supersession, retire the exact preparation,
+  and fence late callbacks. The review passed 161 focused tests, found no other
+  confirmed P1/P2, made no repository edits, and left rollout disabled. Its
+  controlled transport hold does not establish how long every browser/network
+  stack would wait naturally; the source nevertheless makes recovery depend on
+  that response or reload.
+- Eighteenth-review post-provider settlement repair: modern accepted-operation
+  image inlays now give only their post-provider asset upload and catalog work a
+  scoped cancellation signal and 30-second deadline. Running providers retain
+  the preceding transient-normalization behavior. After a provider returns, the
+  exact accepted owner occupancy row defers cancellation during general-owner
+  transfer; owner-to-chat-only normalization then aborts settlement immediately.
+  Every late upload boundary checks cancellation before advancing cached
+  revisions, catalog state, projection, or durable finalization. The continuation
+  is consumed, the exact server preparation is abandoned, the local registration
+  retires, and refreshed recovery terminalizes the remaining authorized effects.
+  General and rollout-disabled legacy asset uploads remain unchanged. Eight
+  focused files pass 188 tests. Five real Chromium/Fastify/SQLite journeys pass:
+  the held-upload race dispatches each provider/upload once, performs no early
+  IGP or stale inlay finalization, terminalizes every effect, and releases
+  directly without reload; three ordering races and both legacy inlay paths also
+  remain green. Both typechecks, the smoke build, Prettier, and the diff check
+  pass. Cancellation cannot undo asset bytes already committed before a lost
+  response, but later catalog/transcript callbacks remain fenced. A new complete
+  Phase 3 gate and fresh independent closure review remain required; rollout is
+  disabled.
+- Final eighteenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m16.2s. Frontend passed 9,524 tests/3 skipped, server passed 4,572 tests/3
+  skipped, and browser smoke passed all 167 journeys. Server/browser and client
+  typechecks, topology, current documentation, compatibility registers and
+  harness, Realm scale, the production smoke build, UI coverage, formatting,
+  and performance gates all passed. This exact runtime/test tree is ready for a
+  nineteenth fresh independent GPT 6 Astra High closure review. Phase 3 remains
+  unaccepted and production rollout remains disabled until that review is clean.
+- Nineteenth Phase 3 closure review: a fresh GPT 6 Astra High reviewer matched
+  baseline `bf32c875f`, all 92 tracked diffs at SHA-256
+  `e5f850019b6296f75e69634e9c05f9773d9c6537dea2ff26b5653a6294aee630`,
+  all three untracked source hashes, the untracked manifest
+  `19e11b5e41c8bd3f1f33f3c9009e97d2f2df5a6f04158b0c1e955ff71dd64b71`,
+  and combined changed-content manifest
+  `d100e98481b85ee12cd62f77f6074174bf97f0bfb46bc173c7abad7b4a850264`
+  at both start and end. It rejected Phase 3 with one P2 multi-image composition
+  defect. A single settlement deadline begins after the first ImgGen provider
+  returns, while its shared signal is also passed into later provider calls.
+  With unchanged authority, a fast first image can therefore exhaust that
+  30-second deadline while a second provider is legitimately running, abort the
+  second provider, and abandon the whole preparation with raw source tags. The
+  production-function probe used a real localhost WebUI-style provider/native
+  fetch plus deterministic timer advancement and observed two provider requests,
+  one completed upload, and the second fetch aborted by the settlement timeout.
+  Post-provider work needs an independent bound for each image, separate from
+  sibling provider lifetime, while preserving supersession cancellation and late-
+  write fences. The reviewer passed 186 focused tests, reconciled two read-only
+  cross-checks without another confirmed Phase 3 blocker, made no repository
+  edits, and left rollout disabled. The defect was not reproduced through a full
+  Chromium journey; its production functions and native transport were exercised
+  directly.
+- Nineteenth-review per-image settlement repair: provider lifetime is now
+  governed only by exact-operation supersession, while every returned image
+  receives an independent 30-second encode, asset-upload, and catalog
+  continuation deadline. Completing or timing out one image therefore cannot
+  abort a later sibling provider. Terminal failure still fences active and
+  future persistence callbacks, consumes late resolutions, abandons the exact
+  durable preparation, and releases scoped recovery without weakening
+  definitive supersession or the transient owner-normalization exception. Eight
+  focused files pass 191 tests. A real Chromium/Fastify/SQLite mixed-syntax
+  journey held the second provider across the first image's former 30-second
+  deadline, observed no early abandonment or finalization, then persisted both
+  distinct inlays and terminalized every effect after release. The prior held-
+  upload, held-preparation, translation/inlay/IGP ordering, and rollout-disabled
+  legacy journeys also pass. Both typechecks, the smoke build, Prettier, and the
+  diff check pass. A new complete Phase 3 gate and twentieth fresh independent
+  closure review remain required; rollout is disabled.
+- Final nineteenth-review-repair Phase 3 `pnpm test:all`: passed all 14 lanes in
+  8m21.3s. Frontend tests, server/browser and client typechecks, topology,
+  current documentation, compatibility registers and harness, Realm scale, the
+  production smoke build, UI coverage, formatting, and performance gates all
+  passed. Server tests passed 4,572 tests/3 skipped, and browser smoke passed all
+  168 journeys, including the 31-second mixed-image regression inside the full
+  parallel run. This exact runtime/test tree is ready for a twentieth fresh
+  independent GPT 6 Astra High closure review. Phase 3 remains unaccepted and
+  production rollout remains disabled until that review is clean.
+- Twentieth Phase 3 closure review and acceptance: a fresh independent GPT 6
+  Astra High reviewer inspected the complete cumulative Phase 3 tree read-only
+  against baseline `bf32c875f`. It matched all 92 tracked paths at binary-diff
+  SHA-256
+  `4f0c81f9d3320a4d936e3c5f4103d5e00e9b381ab94a1b3b9bf85f1777c1cfb4`,
+  the three supplied untracked file hashes, and untracked manifest
+  `d299a02165a48ef238b16b8435ae3377e39d657acbcd655d28afdeca2674a746`
+  at both start and end. It accepted Phase 3 with no actionable P1/P2 findings.
+  The review independently passed 155 focused tests, `git diff --check`, and the
+  real Chromium/Fastify/SQLite mixed-image journey across its 31-second hold;
+  both images persisted, every effect terminalized, and occupancy released.
+  The reviewer confirmed the repaired independent per-image settlement bounds
+  preserve provider lifetime, supersession fencing, compatibility, and
+  recovery. It relied on the supplied 14-lane full-suite result rather than
+  rerunning that complete gate. Browser providers were deterministic and local;
+  external-provider behavior and physical-device eviction remain explicit Phase
+  4 evidence limits. Phase 3 is accepted for commit. Production rollout remains
+  disabled until Phase 4.
 
 ## Status Update Contract
 

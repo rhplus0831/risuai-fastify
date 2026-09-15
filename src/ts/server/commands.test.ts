@@ -6832,6 +6832,7 @@ describe('server command API adapter', () => {
         baseRevision: 1,
         messageId: 'msg-a',
         jobId: 'translation-job-a',
+        automatic: true,
       }),
     ).resolves.toMatchObject({ status: 'ok', revision: 2, messageId: 'msg-a', translation })
 
@@ -6851,6 +6852,7 @@ describe('server command API adapter', () => {
         body: {
           baseRevision: 1,
           jobId: 'translation-job-a',
+          automatic: true,
         },
       },
     ])

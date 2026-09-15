@@ -71,9 +71,21 @@ async function advanceServerAssetRevision(revision: unknown): Promise<void> {
   }
 }
 
-export async function uploadServerAssetBytes(data: Uint8Array, contentType: string): Promise<string> {
+export interface UploadServerAssetOptions {
+  /** Optional caller-owned lifecycle. General asset uploads retain their
+   * historical unbounded behavior when omitted. */
+  signal?: AbortSignal
+}
+
+export async function uploadServerAssetBytes(
+  data: Uint8Array,
+  contentType: string,
+  options: UploadServerAssetOptions = {},
+): Promise<string> {
+  options.signal?.throwIfAborted()
   const operation = captureClientWriteOperation()
   const auth = await resolveServerAssetAuth(undefined)
+  options.signal?.throwIfAborted()
   assertClientWriteOperation(operation)
   const uploadBody = data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer
   const response = await fetch('/api/v1/assets', {
@@ -85,7 +97,9 @@ export async function uploadServerAssetBytes(data: Uint8Array, contentType: stri
       ...activeWriterSessionHeader(),
     },
     body: uploadBody,
+    ...(options.signal ? { signal: options.signal } : {}),
   })
+  options.signal?.throwIfAborted()
   if (!response.ok) {
     const activeWriterBody = await response
       .clone()
@@ -96,6 +110,7 @@ export async function uploadServerAssetBytes(data: Uint8Array, contentType: stri
     throw new Error(body || `Failed to upload server asset: ${response.status}`)
   }
   const responseBody = (await response.json()) as { assetId?: unknown; revision?: unknown }
+  options.signal?.throwIfAborted()
   if (typeof responseBody.assetId !== 'string') {
     throw new Error('Server asset upload response missing assetId')
   }

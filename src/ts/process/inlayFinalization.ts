@@ -1,40 +1,52 @@
-import { runServerCommand, updateMessageCommand } from '../server/commands'
-import { getChatTranscriptOwnerState } from '../server/chatTranscriptOwner'
+import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generation-sse'
+import type { ClientChatOccupancyAuthority } from '../server/chatOccupancy'
+import {
+  abandonPreparedGenerationInlay,
+  beginPreparedGenerationInlay,
+  finalizePreparedGenerationInlay,
+} from './generationEffectLedger'
 
-export interface ServerBackedInlayFinalization {
-  chatId: string
-  messageId: string
-  generationId: string
+export interface ServerBackedInlayPreparation {
+  effectLedger: ServerGenerationEffectLedgerRef
+  chatOccupancyAuthority: ClientChatOccupancyAuthority
+  operationId: string
+  preparationId: string
   expectedData: string
+}
+
+export interface ServerBackedInlayFinalization extends ServerBackedInlayPreparation {
   finalData: string
 }
 
-export async function finalizeServerBackedInlayMessage(input: ServerBackedInlayFinalization): Promise<boolean> {
-  const dispatch = () => {
-    const owner = getChatTranscriptOwnerState(input.chatId)
-    const matches = owner?.messages.filter((message) => message.chatId === input.messageId) ?? []
-    const message = matches.length === 1 ? matches[0] : undefined
-    if (!owner || !message || message.generationInfo?.generationId !== input.generationId) {
-      return null
-    }
-    return runServerCommand({
-      command: (baseRevision) =>
-        updateMessageCommand({
-          baseRevision,
-          messageId: input.messageId,
-          patch: { data: input.finalData },
-          expectedData: input.expectedData,
-          expectedChatId: input.chatId,
-          expectedGenerationId: input.generationId,
-          optimisticChatId: input.chatId,
-          optimisticChatBodyProjectionEpoch: owner.projectionEpoch,
-        }),
-    })
-  }
+/** The accepted-operation effect route carries database lineage and uses the
+ * preparation id as a stable server receipt identity. Provider work must not
+ * start until this returns true. */
+export async function prepareServerBackedInlayMessage(input: ServerBackedInlayPreparation): Promise<boolean> {
+  return (
+    (await beginPreparedGenerationInlay(input.effectLedger, input.chatOccupancyAuthority, {
+      operationId: input.operationId,
+      preparationId: input.preparationId,
+      expectedData: input.expectedData,
+    })) === 'accepted'
+  )
+}
 
-  let result = await dispatch()
-  if (result?.status === 'conflict') {
-    result = await dispatch()
-  }
-  return result?.status === 'ok'
+export async function finalizeServerBackedInlayMessage(input: ServerBackedInlayFinalization): Promise<boolean> {
+  return (
+    (await finalizePreparedGenerationInlay(input.effectLedger, input.chatOccupancyAuthority, {
+      operationId: input.operationId,
+      preparationId: input.preparationId,
+      expectedData: input.expectedData,
+      finalData: input.finalData,
+    })) === 'accepted'
+  )
+}
+
+export async function abandonServerBackedInlayMessage(input: ServerBackedInlayPreparation): Promise<boolean> {
+  return (
+    (await abandonPreparedGenerationInlay(input.effectLedger, input.chatOccupancyAuthority, {
+      operationId: input.operationId,
+      preparationId: input.preparationId,
+    })) === 'accepted'
+  )
 }

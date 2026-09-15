@@ -143,6 +143,7 @@
   import { reportWriterAccessLostMutation } from 'src/ts/server/activeWriterSession'
   import {
     canUseServerCommands,
+    GENERATED_TRANSLATION_SERVER_OWNED_ERROR,
     getServerCommandBaseRevision,
     translateGreetingCommand,
     translateMessageCommand,
@@ -1374,6 +1375,7 @@
   async function requestServerRawTranslation(
     target: RawTranslationTarget | null = captureRawTranslationTarget(),
     reserved?: () => void,
+    automatic = false,
   ) {
     if (!target || !isChatWriteCurrent(target.sessionGeneration)) {
       reserved?.()
@@ -1440,7 +1442,12 @@
         if (target.kind === 'message') {
           const result = await awaitChatWrite(
             target.sessionGeneration,
-            translateMessageCommand({ baseRevision, messageId: target.messageId, jobId }),
+            translateMessageCommand({
+              baseRevision,
+              messageId: target.messageId,
+              jobId,
+              ...(automatic ? { automatic: true } : {}),
+            }),
           )
           if (!isCurrentMessageTranslationJob(target.messageId, jobId)) return
           if (result.status === 'ok') {
@@ -1458,7 +1465,7 @@
             setStatusMessage(`Translation conflict (${result.currentRevision}).`, 3000)
           } else if (result.status === 'unavailable') {
             setStatusMessage('Server commands are unavailable.', 3000)
-          } else {
+          } else if (!automatic || result.error !== GENERATED_TRANSLATION_SERVER_OWNED_ERROR) {
             setStatusMessage(result.error, 3000)
           }
           return
@@ -2151,7 +2158,7 @@
     const release = untrack(() => interactions.acquire(false))
     if (!release) return
     consumeAutomaticTranslationEligibility()
-    void requestServerRawTranslation(undefined, release)
+    void requestServerRawTranslation(undefined, release, true)
   })
 
   $effect(() => {

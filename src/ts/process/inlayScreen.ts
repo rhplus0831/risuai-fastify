@@ -4,14 +4,47 @@ import { generateAIImage } from './stableDiff'
 
 const imggenRegex = [/<ImgGen="(.+?)">/gi, /{{ImgGen="(.+?)"}}/gi] as const
 
-export function runInlayScreen(char: character, data: string): { text: string; promise?: Promise<string> } {
+/** Pure preflight used to reserve the accepted-operation effect before an
+ * image provider promise can start. */
+export function inlayScreenRequiresFinalization(char: character, data: string): boolean {
+  if (!char.inlayViewScreen) return false
+  if (char.viewScreen === 'emotion') return /<Emotion="(.+?)">/i.test(data)
+  if (char.viewScreen === 'imggen') return /<ImgGen="(.+?)">|{{ImgGen="(.+?)"}}/i.test(data)
+  return false
+}
+
+/** Render the immediate inlay placeholder without starting an image provider.
+ * TTS-only projections must use this path because they have no durable
+ * preparation/settlement authority of their own. */
+export function renderInlayScreenTextWithoutProviders(char: character, data: string): string {
+  if (!char.inlayViewScreen) return data
+  if (char.viewScreen === 'emotion') return data.replace(/<Emotion="(.+?)">/gi, '{{emotion::$1}}')
+  if (char.viewScreen === 'imggen') {
+    return data.replace(imggenRegex[0], '[Generating...]').replace(imggenRegex[1], '[Generating...]')
+  }
+  return data
+}
+
+export interface RunInlayScreenOptions {
+  /** Provider lifetime is fenced only by exact operation supersession. */
+  signal?: AbortSignal
+  /** Gives each returned image an independent bounded encode/upload/catalog
+   * continuation without sharing that deadline with sibling providers. */
+  settlePostProvider?: <T>(settle: (signal?: AbortSignal) => Promise<T>) => Promise<T>
+}
+
+export function runInlayScreen(
+  char: character,
+  data: string,
+  options: RunInlayScreenOptions = {},
+): { text: string; promise?: Promise<string> } {
   if (char.inlayViewScreen) {
     if (char.viewScreen === 'emotion') {
-      return { text: data.replace(/<Emotion="(.+?)">/gi, '{{emotion::$1}}') }
+      return { text: renderInlayScreenTextWithoutProviders(char, data) }
     }
     if (char.viewScreen === 'imggen') {
       return {
-        text: data.replace(imggenRegex[0], '[Generating...]').replace(imggenRegex[1], '[Generating...]'),
+        text: renderInlayScreenTextWithoutProviders(char, data),
         promise: (async () => {
           for (const regex of imggenRegex) {
             const promises: Promise<string | false>[] = []
@@ -20,23 +53,35 @@ export function runInlayScreen(char: character, data: string): { text: string; p
               const prompt = char.newGenData.prompt.replaceAll('{{slot}}', p1)
               promises.push(
                 (async () => {
-                  const v = await generateAIImage(prompt, char, neg, 'inlay')
+                  const v = await generateAIImage(prompt, char, neg, 'inlay', { signal: options.signal })
                   if (!v) {
-                    return ''
+                    return false
                   }
-                  const imgHTML = new Image()
-                  imgHTML.src = v
-                  const inlay = await writeInlayImage(imgHTML)
+                  const persistImage = async (signal = options.signal) => {
+                    signal?.throwIfAborted()
+                    const imgHTML = new Image()
+                    imgHTML.src = v
+                    const inlay = await writeInlayImage(imgHTML, { signal })
+                    signal?.throwIfAborted()
+                    return inlay
+                  }
+                  const inlay = options.settlePostProvider
+                    ? await options.settlePostProvider(persistImage)
+                    : await persistImage()
                   return `{{inlay::${inlay}}}`
                 })(),
               )
               return match
             })
             const d = await Promise.all(promises)
-            data = data.replace(regex, () => {
+            data = data.replace(regex, (match) => {
               const result = d.shift()
               if (result === false) {
-                return ''
+                // Preserve the source obligation so the durable accepted-
+                // operation path can abandon it instead of committing a
+                // silently deleted tag. Legacy callers likewise keep a
+                // retryable transcript when the provider is unavailable.
+                return match
               }
               return result
             })

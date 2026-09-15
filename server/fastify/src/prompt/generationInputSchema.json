@@ -560,6 +560,9 @@
             "$ref": "#/$defs/record23"
           }
         },
+        "igpPrompt": {
+          "type": "string"
+        },
         "ImagenAspectRatio": {
           "type": "string"
         },
@@ -10701,6 +10704,9 @@
           "items": {
             "$ref": "#/$defs/record256"
           }
+        },
+        "igpPrompt": {
+          "type": "string"
         },
         "ImagenAspectRatio": {
           "type": "string"
@@ -21931,6 +21937,9 @@
             "$ref": "#/$defs/record256"
           }
         },
+        "igpPrompt": {
+          "type": "string"
+        },
         "ImagenAspectRatio": {
           "type": "string"
         },
@@ -23288,6 +23297,9 @@
             "$ref": "#/$defs/record256"
           }
         },
+        "igpPrompt": {
+          "type": "string"
+        },
         "ImagenAspectRatio": {
           "type": "string"
         },
@@ -24597,6 +24609,9 @@
           "items": {
             "$ref": "#/$defs/record256"
           }
+        },
+        "igpPrompt": {
+          "type": "string"
         },
         "ImagenAspectRatio": {
           "type": "string"

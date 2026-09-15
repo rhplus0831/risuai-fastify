@@ -66,6 +66,48 @@ const hydration = vi.hoisted(() => ({
 const effectResources = vi.hoisted(() => ({ ensure: vi.fn() }))
 vi.mock('../server/routeResourceLoader', () => ({ ensureResourceSurfaces: effectResources.ensure }))
 vi.mock('../server/chatMessageHydration.svelte', () => hydration)
+const occupancy = vi.hoisted(() => ({
+  authorities: [] as Array<{
+    version: 1
+    databaseLineage: string
+    chatId: string
+    sessionId: string
+    sessionGeneration: number
+    occupancyEpoch: number
+    claimClass: 'owner' | 'chat_only'
+  }>,
+}))
+const generationRuntime = vi.hoisted(() => ({ operations: [] as Array<Record<string, any>> }))
+vi.mock('./generationRuntimeBridge', () => ({
+  getGenerationOperationsRuntime: () => ({
+    generationOperationProjections: {
+      subscribe(run: (value: Array<Record<string, any>>) => void) {
+        run(generationRuntime.operations)
+        return () => {}
+      },
+    },
+    applyGenerationOperationBootstrap: vi.fn(() => true),
+  }),
+  registerRecoveredEffectsRuntime: vi.fn(),
+}))
+vi.mock('../server/chatOccupancy', () => ({
+  clientChatOccupancyStore: { subscribe: (subscriber: () => void) => (subscriber(), () => {}) },
+  captureClientChatOccupancyAuthority: (chatId: string) =>
+    occupancy.authorities.find((authority) => authority.chatId === chatId) ?? null,
+  isClientChatOccupancyAuthorityCurrent: (authority: (typeof occupancy.authorities)[number]) =>
+    occupancy.authorities.some(
+      (current) =>
+        current.version === authority.version &&
+        current.databaseLineage === authority.databaseLineage &&
+        current.chatId === authority.chatId &&
+        current.sessionId === authority.sessionId &&
+        current.sessionGeneration === authority.sessionGeneration &&
+        current.occupancyEpoch === authority.occupancyEpoch &&
+        current.claimClass === authority.claimClass,
+    ),
+  listClientChatOccupancyAuthorities: () => occupancy.authorities,
+  registerClientChatOccupancyRecoveryHandler: vi.fn(),
+}))
 const lateAlerts = vi.hoisted(() => ({
   grantRecent: false,
   notify: vi.fn(async () => undefined),
@@ -83,9 +125,9 @@ vi.mock('./chatUnread.svelte', () => ({
   markChatUnread: lateAlerts.markChatUnread,
 }))
 vi.mock('./postGeneration/igp', () => ({
-  evaluateIgp: vi.fn(async () => {
+  evaluateIgpOutcome: vi.fn(async () => {
     state.order.push('igp')
-    return true
+    return 'updated'
   }),
 }))
 vi.mock('./postGeneration/charEmotionStore', () => ({
@@ -104,11 +146,18 @@ const ledger = vi.hoisted(() => ({
   calls: [] as string[],
   receipts: new Set<string>(),
   unavailableKinds: new Set<string>(),
+  activePreparations: new Set<string>(),
+  abandon: vi.fn<() => Promise<'accepted' | 'ambiguous'>>(async () => 'accepted'),
 }))
 vi.mock('./generationEffectLedger', async (importOriginal) => {
   const original = await importOriginal<typeof import('./generationEffectLedger')>()
   return {
     ...original,
+    hasActiveGenerationInlayPreparation: (ref: ServerGenerationEffectLedgerRef) =>
+      [...ledger.activePreparations].some((entry) => entry.startsWith(`${ref.generationId}:`)),
+    isGenerationInlayPreparationActive: (ref: ServerGenerationEffectLedgerRef, preparationId: string) =>
+      ledger.activePreparations.has(`${ref.generationId}:${preparationId}`),
+    abandonPreparedGenerationInlay: ledger.abandon,
     runLedgeredGenerationEffect: vi.fn(async (_ref, kind, delivery, effect, options) => {
       ledger.calls.push(`${delivery}:${kind}`)
       const key = `${_ref.generationId}:${kind}`
@@ -137,15 +186,20 @@ vi.mock('./generationEffectLedger', async (importOriginal) => {
 
 import {
   discardPendingRecoveredGenerationEffects,
+  recoverCurrentChatOccupancyGenerationEffects,
   reconcilePendingRecoveredGenerationEffects,
   reconcileAcceptedSendGenerationEffects,
   reconcileRecoveredGenerationEffects,
   setPendingRecoveredGenerationEffects,
 } from './recoveredGenerationEffects'
 import { charactersResourceState, settingsResourceState } from '../server/resourceState.svelte'
-import { resetClientSessionForTests } from '../clientSession'
-import { demoteAndRepromoteForTest, setManagedWriterForTest } from '../__tests__/managedClientSession'
-import { evaluateIgp } from './postGeneration/igp'
+import { getClientSessionSnapshot, resetClientSessionForTests } from '../clientSession'
+import {
+  demoteAndRepromoteForTest,
+  setManagedReaderForTest,
+  setManagedWriterForTest,
+} from '../__tests__/managedClientSession'
+import { evaluateIgpOutcome } from './postGeneration/igp'
 
 const ref: ServerGenerationEffectLedgerRef = {
   version: 1,
@@ -158,8 +212,42 @@ const ref: ServerGenerationEffectLedgerRef = {
   messageId: 'message-a',
 }
 
+function pendingOwnerIgp(
+  authority: (typeof occupancy.authorities)[number],
+  inlayPreparationId?: string,
+): PendingGenerationEffect {
+  return {
+    ledgerVersion: 1,
+    databaseLineage: ref.databaseLineage,
+    keyType: ref.keyType,
+    keyId: ref.keyId,
+    kind: 'igp',
+    effectClass: 'durable',
+    operationId: ref.keyId,
+    operationAttemptNo: 1,
+    generationId: ref.generationId,
+    characterId: ref.characterId,
+    chatId: ref.chatId,
+    messageId: ref.messageId,
+    generationScope: {
+      admissionKind: 'owner_occupancy',
+      occupancyDatabaseLineage: ref.databaseLineage,
+      occupancySessionId: authority.sessionId,
+      occupancyEpoch: authority.occupancyEpoch,
+      occupancyClaimClass: 'owner',
+      permissionScopeVersion: 1,
+      permissionScope: [],
+    },
+    ...(inlayPreparationId ? { inlayPreparationId } : {}),
+    status: 'pending',
+    createdAt: '2026-09-15T00:00:00.000Z',
+    updatedAt: '2026-09-15T00:00:00.000Z',
+  }
+}
+
 beforeEach(() => {
   resetClientSessionForTests()
+  generationRuntime.operations = []
   effectResources.ensure.mockReset().mockResolvedValue(undefined)
   state.db.characters = [
     {
@@ -186,6 +274,9 @@ beforeEach(() => {
   ledger.calls = []
   ledger.receipts.clear()
   ledger.unavailableKinds.clear()
+  ledger.activePreparations.clear()
+  ledger.abandon.mockReset().mockResolvedValue('accepted')
+  occupancy.authorities = []
   lateAlerts.grantRecent = false
   lateAlerts.notify.mockClear()
   lateAlerts.sound.mockClear()
@@ -193,6 +284,7 @@ beforeEach(() => {
   lateAlerts.markChatUnread.mockClear()
   hydration.hydrateChatMessages.mockReset()
   hydration.hydrateChatMessages.mockResolvedValue(undefined)
+  vi.mocked(evaluateIgpOutcome).mockClear()
   charactersResourceState.characters = state.ownerCharacters as never
   charactersResourceState.status = 'ready'
   settingsResourceState.value = {
@@ -204,6 +296,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  generationRuntime.operations = []
   resetClientSessionForTests()
   charactersResourceState.characters = []
   charactersResourceState.status = 'idle'
@@ -235,7 +328,7 @@ describe('late recovered generation effects', () => {
     release()
     await expect(pending).resolves.toMatchObject({ durableEffectsReconciled: true })
     expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
-    expect(vi.mocked(evaluateIgp)).toHaveBeenLastCalledWith(
+    expect(vi.mocked(evaluateIgpOutcome)).toHaveBeenLastCalledWith(
       expect.objectContaining({
         promptTemplate: state.db.igpPrompt,
         database: expect.objectContaining({ characters: state.ownerCharacters }),
@@ -297,6 +390,295 @@ describe('late recovered generation effects', () => {
     })
     expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
   })
+
+  it('recovers owner-admitted effects after reload under a normalized chat-only claim', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const currentAuthority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    occupancy.authorities = [currentAuthority]
+    settingsResourceState.value = { ...settingsResourceState.value, igpPrompt: '' } as never
+    setPendingRecoveredGenerationEffects([
+      {
+        ledgerVersion: 1,
+        databaseLineage: ref.databaseLineage,
+        keyType: ref.keyType,
+        keyId: ref.keyId,
+        kind: 'plugin_output',
+        effectClass: 'durable',
+        operationId: ref.keyId,
+        operationAttemptNo: 1,
+        generationId: ref.generationId,
+        characterId: ref.characterId,
+        chatId: ref.chatId,
+        messageId: ref.messageId,
+        generationScope: {
+          admissionKind: 'owner_occupancy',
+          occupancyDatabaseLineage: ref.databaseLineage,
+          occupancySessionId: currentAuthority.sessionId,
+          occupancyEpoch: currentAuthority.occupancyEpoch,
+          occupancyClaimClass: 'owner',
+          permissionScopeVersion: 1,
+          permissionScope: [],
+        },
+        status: 'pending',
+        createdAt: '2026-09-12T00:00:00.000Z',
+        updatedAt: '2026-09-12T00:00:00.000Z',
+      },
+    ])
+
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+
+    expect(state.order).toEqual(['plugin_output', 'igp', 'emotion_image_state'])
+    expect(vi.mocked(evaluateIgpOutcome)).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        chatOccupancyAuthority: currentAuthority,
+        promptTemplate: '',
+      }),
+    )
+    expect(vi.mocked(evaluateIgpOutcome).mock.calls.at(-1)?.[0]).not.toHaveProperty('database')
+  })
+
+  it('retains a same-page active image preparation but abandons that exact obligation after reload', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const currentAuthority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    const preparationId = 'inlay-preparation-a'
+    occupancy.authorities = [currentAuthority]
+    settingsResourceState.value = { ...settingsResourceState.value, igpPrompt: '' } as never
+    setPendingRecoveredGenerationEffects([pendingOwnerIgp(currentAuthority, preparationId)])
+    ledger.activePreparations.add(`${ref.generationId}:${preparationId}`)
+
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+
+    expect(ledger.abandon).not.toHaveBeenCalled()
+    expect(hydration.hydrateChatMessages).not.toHaveBeenCalled()
+    expect(evaluateIgpOutcome).not.toHaveBeenCalled()
+
+    // A page reload has no surviving provider promise/active registration. The
+    // retained bootstrap row must then clear the exact durable preparation
+    // before recovered IGP is allowed to claim the translated message.
+    ledger.activePreparations.clear()
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+
+    expect(ledger.abandon).toHaveBeenCalledWith(ref, currentAuthority, {
+      operationId: ref.keyId,
+      preparationId,
+    })
+    expect(hydration.hydrateChatMessages).toHaveBeenCalledWith(ref.chatId, { force: true, strict: true })
+    expect(evaluateIgpOutcome).toHaveBeenCalledOnce()
+  })
+
+  it('retains pre-acknowledgement IGP without a durable marker and releases it after local retirement', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const currentAuthority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'owner' as const,
+    }
+    occupancy.authorities = [currentAuthority]
+    settingsResourceState.value = { ...settingsResourceState.value, igpPrompt: '' } as never
+    setPendingRecoveredGenerationEffects([pendingOwnerIgp(currentAuthority)])
+    ledger.activePreparations.add(`${ref.generationId}:preparation-awaiting-ack`)
+
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+
+    expect(ledger.abandon).not.toHaveBeenCalled()
+    expect(hydration.hydrateChatMessages).not.toHaveBeenCalled()
+    expect(evaluateIgpOutcome).not.toHaveBeenCalled()
+    expect(ledger.calls).toEqual([])
+
+    ledger.activePreparations.clear()
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+
+    expect(hydration.hydrateChatMessages).toHaveBeenCalledWith(ref.chatId, { force: true, strict: true })
+    expect(evaluateIgpOutcome).toHaveBeenCalledOnce()
+    expect(ledger.calls).toContain('late_recovery:igp')
+  })
+
+  it('retains a reload preparation when exact abandonment has an ambiguous result', async () => {
+    setManagedReaderForTest()
+    const session = getClientSessionSnapshot()
+    const currentAuthority = {
+      version: 1 as const,
+      databaseLineage: ref.databaseLineage,
+      chatId: ref.chatId,
+      sessionId: session.sessionId!,
+      sessionGeneration: session.generation,
+      occupancyEpoch: 7,
+      claimClass: 'chat_only' as const,
+    }
+    const preparationId = 'inlay-preparation-a'
+    occupancy.authorities = [currentAuthority]
+    setPendingRecoveredGenerationEffects([pendingOwnerIgp(currentAuthority, preparationId)])
+    ledger.abandon.mockResolvedValueOnce('ambiguous')
+
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).rejects.toThrow(
+      'Generation inlay preparation remains ambiguous',
+    )
+    expect(evaluateIgpOutcome).not.toHaveBeenCalled()
+
+    await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+    expect(ledger.abandon).toHaveBeenCalledTimes(2)
+    expect(evaluateIgpOutcome).toHaveBeenCalledOnce()
+  })
+
+  it.each(['extend', 'append'] as const)(
+    'reload resolves completed Continue-%s IGP from effect attempt authority without currentAttempt',
+    async (disposition) => {
+      setManagedReaderForTest()
+      const session = getClientSessionSnapshot()
+      const currentAuthority = {
+        version: 1 as const,
+        databaseLineage: ref.databaseLineage,
+        chatId: ref.chatId,
+        sessionId: session.sessionId!,
+        sessionGeneration: session.generation,
+        occupancyEpoch: 7,
+        claimClass: 'chat_only' as const,
+      }
+      const scope = {
+        admissionKind: 'owner_occupancy' as const,
+        occupancyDatabaseLineage: ref.databaseLineage,
+        occupancySessionId: currentAuthority.sessionId,
+        occupancyEpoch: currentAuthority.occupancyEpoch,
+        occupancyClaimClass: 'owner' as const,
+        permissionScopeVersion: 1 as const,
+        permissionScope: [] as string[],
+      }
+      const retainedGenerationInfo = {
+        generationId: 'prior-generation',
+        databaseLineage: 'prior-lineage',
+        operationId: 'prior-operation',
+        attemptNo: 4,
+        jobId: 'prior-job',
+        effectLedgerKeyType: 'operation' as const,
+        effectLedgerKeyId: 'prior-operation',
+        effectLedgerCharacterId: ref.characterId,
+        effectLedgerChatId: ref.chatId,
+      }
+      const retainedAssistant = {
+        role: 'char',
+        data: disposition === 'extend' ? 'prior reply plus recovered continuation' : 'prior reply',
+        chatId: disposition === 'extend' ? ref.messageId : 'accepted-assistant',
+        generationInfo: retainedGenerationInfo,
+      }
+      const appendedAssistant = {
+        role: 'char',
+        data: 'separate recovered continuation',
+        chatId: ref.messageId,
+        generationInfo: {
+          generationId: ref.generationId,
+          databaseLineage: ref.databaseLineage,
+          operationId: ref.keyId,
+          attemptNo: 2,
+          jobId: ref.generationId,
+          effectLedgerKeyType: ref.keyType,
+          effectLedgerKeyId: ref.keyId,
+          effectLedgerCharacterId: ref.characterId,
+          effectLedgerChatId: ref.chatId,
+        },
+      }
+      state.ownerCharacters[0].chats[0].message = [
+        { role: 'user', data: 'hello', chatId: 'user-a' },
+        retainedAssistant,
+        ...(disposition === 'append' ? [appendedAssistant] : []),
+      ]
+      charactersResourceState.characters = state.ownerCharacters as never
+      occupancy.authorities = [currentAuthority]
+      generationRuntime.operations = [
+        {
+          operationId: ref.keyId,
+          protocolVersion: 1,
+          requestOrigin: 'continue',
+          state: 'completed',
+          stateVersion: 8,
+          projectionEpoch: 9,
+          creatorWriterSessionId: currentAuthority.sessionId,
+          creatorWriterEpoch: 1,
+          generationScope: scope,
+          characterId: ref.characterId,
+          chatId: ref.chatId,
+          mode: 'continue',
+          targetMessageId: retainedAssistant.chatId,
+          resultMessageId: ref.messageId,
+          providerMayHaveRun: true,
+        },
+      ]
+      setPendingRecoveredGenerationEffects([
+        {
+          ledgerVersion: 1,
+          databaseLineage: ref.databaseLineage,
+          keyType: ref.keyType,
+          keyId: ref.keyId,
+          kind: 'igp',
+          effectClass: 'durable',
+          operationId: ref.keyId,
+          operationAttemptNo: 2,
+          generationId: ref.generationId,
+          characterId: ref.characterId,
+          chatId: ref.chatId,
+          messageId: ref.messageId,
+          generationScope: scope,
+          status: 'pending',
+          createdAt: '2026-09-14T00:00:00.000Z',
+          updatedAt: '2026-09-14T00:00:00.000Z',
+        },
+      ])
+
+      await expect(recoverCurrentChatOccupancyGenerationEffects({ refresh: false })).resolves.toBeUndefined()
+
+      const evaluated = vi.mocked(evaluateIgpOutcome).mock.calls.at(-1)?.[0]
+      expect(evaluated).toMatchObject({
+        effectLedgerRef: ref,
+        chatOccupancyAuthority: currentAuthority,
+        igpEffect: { generationId: ref.generationId, claimId: 'recovered-igp-claim' },
+        target: {
+          characterId: ref.characterId,
+          chatId: ref.chatId,
+          messageId: ref.messageId,
+          expectedData:
+            disposition === 'extend' ? 'prior reply plus recovered continuation' : 'separate recovered continuation',
+        },
+      })
+      if (disposition === 'extend') {
+        expect(evaluated?.target).not.toHaveProperty('expectedGenerationId')
+        expect(evaluated?.target.continueExtendAuthority).toEqual({
+          kind: 'continue_extend',
+          operationId: ref.keyId,
+          operationAttemptNo: 2,
+          jobId: ref.generationId,
+          targetMessageId: ref.messageId,
+          resultMessageId: ref.messageId,
+          retainedGenerationInfo,
+        })
+      } else {
+        expect(evaluated?.target).toMatchObject({ expectedGenerationId: ref.generationId })
+        expect(evaluated?.target).not.toHaveProperty('continueExtendAuthority')
+      }
+      expect(ledger.receipts.has(`${ref.generationId}:igp`)).toBe(true)
+    },
+  )
 
   it('delivers recent recovered notification and sound once and marks a background chat unread', async () => {
     lateAlerts.grantRecent = true

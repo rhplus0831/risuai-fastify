@@ -74,29 +74,31 @@ const customHtmlMocks = vi.hoisted(() => {
         }
       },
     ),
-    translateMessageCommand: vi.fn(async (input: { baseRevision: number; messageId: string; jobId: string }) => ({
-      status: 'ok',
-      revision: 2,
-      event: {
-        type: 'message.updated',
+    translateMessageCommand: vi.fn(
+      async (input: { baseRevision: number; messageId: string; jobId: string; automatic?: boolean }) => ({
+        status: 'ok',
         revision: 2,
-        resource: 'message',
-        id: 'message-0',
-      },
-      chatId: 'custom-html-chat',
-      messageId: 'message-0',
-      jobId: input.jobId,
-      translation: {
-        source: 'raw',
-        text: 'translated raw',
-        sourceHash: 'a'.repeat(64),
-        targetLanguage: 'ko',
-        inputLanguage: 'en',
-        translatorType: 'llm',
-        settingsHash: 'b'.repeat(64),
-        updatedAt: 123,
-      },
-    })),
+        event: {
+          type: 'message.updated',
+          revision: 2,
+          resource: 'message',
+          id: 'message-0',
+        },
+        chatId: 'custom-html-chat',
+        messageId: 'message-0',
+        jobId: input.jobId,
+        translation: {
+          source: 'raw',
+          text: 'translated raw',
+          sourceHash: 'a'.repeat(64),
+          targetLanguage: 'ko',
+          inputLanguage: 'en',
+          translatorType: 'llm',
+          settingsHash: 'b'.repeat(64),
+          updatedAt: 123,
+        },
+      }),
+    ),
     translateGreetingCommand: vi.fn(
       async (input: {
         baseRevision: number
@@ -330,6 +332,7 @@ vi.mock('src/ts/chatCommands', () => ({
 }))
 
 vi.mock('src/ts/server/commands', () => ({
+  GENERATED_TRANSLATION_SERVER_OWNED_ERROR: 'generated_translation_server_owned',
   canUseServerCommands: customHtmlMocks.canUseServerCommands,
   getServerCommandBaseRevision: customHtmlMocks.getServerCommandBaseRevision,
   runServerCommand: customHtmlMocks.runServerCommand,
@@ -2248,6 +2251,29 @@ describe('server raw translation controls', () => {
 
     expect(customHtmlMocks.translateMessageCommand).toHaveBeenCalledOnce()
     expect(target.textContent).toContain('automatic provider failure')
+    expect(target.textContent).toContain('visible message 0')
+    await settle()
+    expect(customHtmlMocks.translateMessageCommand).toHaveBeenCalledOnce()
+  })
+
+  it('silently yields an automatic attempt to the server-owned generated translation', async () => {
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    customHtmlMocks.translateMessageCommand.mockResolvedValueOnce({
+      status: 'error',
+      error: 'generated_translation_server_owned',
+    } as never)
+    seedDatabase(1, null as unknown as string)
+    const chat = testDatabaseState.db.characters[0].chats[0]
+    testDatabaseState.db.translator = 'configured'
+    testDatabaseState.db.translatorType = 'google'
+    chat.autoTranslate = true
+    mountCustomHtmlRows(1, 'char', { autoTranslateOnReady: true })
+    await settle()
+
+    expect(customHtmlMocks.translateMessageCommand).toHaveBeenCalledWith(
+      expect.objectContaining({ messageId: 'message-0', automatic: true }),
+    )
+    expect(target.textContent).not.toContain('generated_translation_server_owned')
     expect(target.textContent).toContain('visible message 0')
     await settle()
     expect(customHtmlMocks.translateMessageCommand).toHaveBeenCalledOnce()

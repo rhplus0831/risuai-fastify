@@ -167,7 +167,11 @@ describe('durable mutation dispatch', () => {
     const firstHandle = stagePendingMutation('settings:locked-batch', intent)
     const laterHandle = stagePendingMutation('settings:locked-batch', intent)
     const firstResponse = deferred<ReturnType<typeof acceptedResult>>()
-    const firstRequest = vi.fn(async () => firstResponse.promise)
+    const firstRequestStarted = deferred<void>()
+    const firstRequest = vi.fn(async () => {
+      firstRequestStarted.resolve()
+      return firstResponse.promise
+    })
     const laterRequest = vi.fn(async () => acceptedResult())
     const sharedFailure = { status: 'error' as const, error: 'batch stopped' }
     const beforeExecuteResult = vi.fn(() => sharedFailure)
@@ -177,7 +181,8 @@ describe('durable mutation dispatch', () => {
       beforeExecuteResult,
     })
 
-    await vi.waitFor(() => expect(firstRequest).toHaveBeenCalledOnce())
+    await firstRequestStarted.promise
+    expect(firstRequest).toHaveBeenCalledOnce()
     expect(beforeExecuteResult).not.toHaveBeenCalled()
     expect(laterRequest).not.toHaveBeenCalled()
 

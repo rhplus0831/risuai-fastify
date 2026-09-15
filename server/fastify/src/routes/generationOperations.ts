@@ -137,6 +137,20 @@ interface GenerationOperationIntent {
   generation: AtomicGenerationOperationRequest['generation']
 }
 
+interface GenerationOperationCancellationOccupancy {
+  chatId: string
+  version: 1
+  interaction: 'send' | 'reroll' | 'continue' | 'regenerate'
+}
+
+function modeForOccupancyInteraction(
+  interaction: GenerationOperationCancellationOccupancy['interaction'],
+): GenerationOperationMode {
+  if (interaction === 'send') return 'send'
+  if (interaction === 'continue') return 'continue'
+  return 'regenerate'
+}
+
 interface AcceptedAppendProjection {
   disposition: 'accepted' | 'not_appended'
   messageId: string
@@ -210,7 +224,7 @@ function readOptionalOccupancyEpoch(req: FastifyRequest): number | undefined {
   return Number(value)
 }
 
-function normalizeChatOccupancy(value: unknown): AtomicGenerationOperationRequest['chatOccupancy'] {
+function normalizeChatOccupancy(value: unknown): NonNullable<AtomicGenerationOperationRequest['chatOccupancy']> {
   if (!isRecord(value) || value.version !== 1) {
     throw new ValidationError('chatOccupancy.version must be 1')
   }
@@ -223,6 +237,20 @@ function normalizeChatOccupancy(value: unknown): AtomicGenerationOperationReques
     throw new ValidationError('chatOccupancy.interaction is invalid')
   }
   return { version: 1, interaction: value.interaction }
+}
+
+function parseCancellationOccupancy(
+  body: Record<string, unknown>,
+): GenerationOperationCancellationOccupancy | undefined {
+  const hasChatId = body.chatId !== undefined
+  const hasChatOccupancy = body.chatOccupancy !== undefined
+  if (!hasChatId && !hasChatOccupancy) return undefined
+  if (!hasChatId || !hasChatOccupancy) {
+    throw new ValidationError('chatId and chatOccupancy must be provided together for occupied-chat Stop')
+  }
+  const chatId = requiredString(body.chatId, 'chatId')
+  const chatOccupancy = normalizeChatOccupancy(body.chatOccupancy)
+  return { chatId, version: 1, interaction: chatOccupancy.interaction }
 }
 
 function normalizeGenerationOptions(value: unknown): AtomicGenerationOperationRequest['generation'] {
@@ -416,7 +444,59 @@ function assertOperationControlInTransaction(
     sessionId,
     interaction: operation.mode ?? 'send',
     chatOnlyEnabled: chatOccupancyEnabled,
+    ...(control === 'cancel'
+      ? { allowedRecoveryOperationId: operation.operationId }
+      : { allowedRecoveryPin: { id: operation.operationId, kind: 'generation_operation' } }),
   })
+}
+
+function assertOperationReceiptAccessInTransaction(
+  db: DatabaseSync,
+  operation: GenerationOperationProjection,
+  sessionId: string,
+): void {
+  if (operation.creatorWriterSessionId === sessionId) return
+  const scope = operation.generationScope
+  if (scope && scope.admissionKind !== 'legacy_owner') {
+    throw new OperationHttpError(423, 'generation_operation_foreign_session')
+  }
+  if (getDatabaseWriterMetadata(db).sessionId !== sessionId) {
+    throw new OperationHttpError(423, 'generation_operation_foreign_session')
+  }
+}
+
+function assertOperationReplayAccessInTransaction(sessionId: string, retryActorWriterSessionId: string): void {
+  if (retryActorWriterSessionId !== sessionId) {
+    throw new OperationHttpError(423, 'generation_operation_foreign_session')
+  }
+}
+
+function assertScopedCancellationBinding(
+  operation: GenerationOperationProjection,
+  request: AtomicGenerationOperationRequest,
+  databaseLineage: string,
+  sessionId: string,
+  occupancyEpoch: number | undefined,
+): PersistedGenerationScope {
+  const scope = operation.generationScope
+  if (!scope || scope.admissionKind === 'legacy_owner') {
+    throw new OperationHttpError(409, 'generation_scope_invalid')
+  }
+  if (operation.creatorWriterSessionId !== sessionId) {
+    throw new OperationHttpError(423, 'generation_operation_foreign_session')
+  }
+  if (operation.chatId !== request.chatId || operation.mode !== request.mode) {
+    throw new OperationHttpError(409, 'operation_id_conflict')
+  }
+  if (
+    request.chatOccupancy?.version !== 1 ||
+    scope.occupancyDatabaseLineage !== databaseLineage ||
+    scope.occupancySessionId !== sessionId ||
+    scope.occupancyEpoch !== occupancyEpoch
+  ) {
+    throw new GenerationAdmissionError(409, 'chat_occupancy_stale', { chatId: operation.chatId })
+  }
+  return scope
 }
 
 function acceptSubmitTransaction(args: {
@@ -441,15 +521,24 @@ function acceptSubmitTransaction(args: {
     if (existing) {
       const stored = getGenerationOperationStoredRequest(db, args.databaseLineage, request.operationId)
       if (existing.requestOrigin === 'unbound' && existing.state === 'cancel_requested') {
-        const generationScope = admitGenerationInTransaction(db, {
-          databaseLineage: args.databaseLineage,
-          chatId: request.chatId,
-          sessionId: args.writerSessionId,
-          occupancyProtocolVersion: request.chatOccupancy?.version,
-          occupancyEpoch: args.occupancyEpoch,
-          interaction: request.chatOccupancy?.interaction ?? request.mode,
-          chatOnlyEnabled: args.chatOccupancyEnabled,
-        })
+        const generationScope =
+          existing.generationScope && existing.generationScope.admissionKind !== 'legacy_owner'
+            ? assertScopedCancellationBinding(
+                existing,
+                request,
+                args.databaseLineage,
+                args.writerSessionId,
+                args.occupancyEpoch,
+              )
+            : admitGenerationInTransaction(db, {
+                databaseLineage: args.databaseLineage,
+                chatId: request.chatId,
+                sessionId: args.writerSessionId,
+                occupancyProtocolVersion: request.chatOccupancy?.version,
+                occupancyEpoch: args.occupancyEpoch,
+                interaction: request.chatOccupancy?.interaction ?? request.mode,
+                chatOnlyEnabled: args.chatOccupancyEnabled,
+              })
         const bound = bindCancelledGenerationOperationInTransaction(db, {
           databaseLineage: args.databaseLineage,
           operationId: request.operationId,
@@ -894,8 +983,10 @@ export function registerGenerationOperationRoutes(
         if (body.reason !== undefined && body.reason !== 'user_stop') {
           throw new ValidationError('reason must be user_stop')
         }
+        const cancellationOccupancy = parseCancellationOccupancy(body)
         const writerSessionId = readRequiredWriterSessionId(req)
         const writerEpoch = getDatabaseWriterMetadata(db).epoch
+        const occupancyEpoch = readOptionalOccupancyEpoch(req)
         let operation: GenerationOperationProjection
         let knownAttemptMatched = false
         let disposition = 'terminal_nonrunning'
@@ -909,12 +1000,15 @@ export function registerGenerationOperationRoutes(
           assertDatabaseLineage(db, databaseLineage)
           const current = getGenerationOperationProjection(db, databaseLineage, operationId)
           if (!current) {
-            admitGenerationInTransaction(db, {
+            const generationScope = admitGenerationInTransaction(db, {
               databaseLineage,
-              chatId: '__unbound__',
+              chatId: cancellationOccupancy?.chatId ?? '__unbound__',
               sessionId: writerSessionId,
-              interaction: 'send',
+              occupancyProtocolVersion: cancellationOccupancy?.version,
+              occupancyEpoch,
+              interaction: cancellationOccupancy?.interaction ?? 'send',
               chatOnlyEnabled: dependencies.chatOccupancyEnabled === true,
+              allowDisabledOccupancyControl: cancellationOccupancy !== undefined,
             })
             operation = insertGenerationOperationInTransaction(db, {
               databaseLineage,
@@ -923,18 +1017,42 @@ export function registerGenerationOperationRoutes(
               requestOrigin: 'unbound',
               creatorWriterSessionId: writerSessionId,
               creatorWriterEpoch: writerEpoch,
+              ...(cancellationOccupancy
+                ? {
+                    generationScope,
+                    chatId: cancellationOccupancy.chatId,
+                    mode: modeForOccupancyInteraction(cancellationOccupancy.interaction),
+                  }
+                : {}),
               state: 'cancel_requested',
             })
             disposition = 'cancelled_before_acceptance'
           } else {
+            if (
+              cancellationOccupancy &&
+              (current.chatId !== cancellationOccupancy.chatId ||
+                current.mode !== modeForOccupancyInteraction(cancellationOccupancy.interaction))
+            ) {
+              throw new OperationHttpError(409, 'operation_id_conflict')
+            }
             operation = current
-            assertOperationControlInTransaction(
-              db,
-              current,
-              writerSessionId,
-              dependencies.chatOccupancyEnabled === true,
-              'cancel',
-            )
+            if (
+              current.state === 'cancel_requested' ||
+              current.state === 'completed' ||
+              current.state === 'cancelled' ||
+              current.state === 'terminal_failed' ||
+              current.state === 'invalidated'
+            ) {
+              assertOperationReceiptAccessInTransaction(db, current, writerSessionId)
+            } else {
+              assertOperationControlInTransaction(
+                db,
+                current,
+                writerSessionId,
+                dependencies.chatOccupancyEnabled === true,
+                'cancel',
+              )
+            }
             knownAttemptMatched =
               (body.knownStateVersion === undefined || body.knownStateVersion === current.stateVersion) &&
               (body.knownAttemptNo === undefined || body.knownAttemptNo === current.currentAttempt?.attemptNo) &&
@@ -1061,13 +1179,20 @@ export function registerGenerationOperationRoutes(
           }
           const current = getGenerationOperationProjection(db, databaseLineage, operationId)
           if (!current) throw new OperationHttpError(404, 'generation_operation_not_found')
-          assertOperationControlInTransaction(
-            db,
-            current,
-            writerSessionId,
-            dependencies.chatOccupancyEnabled === true,
-            'retry',
-          )
+          if (replay) {
+            // This request ID already owns a durable attempt receipt. Returning
+            // its projection is read-only and must not be blocked by recovery
+            // work created by that attempt, but it remains session-authorized.
+            assertOperationReplayAccessInTransaction(writerSessionId, replay.actorWriterSessionId)
+          } else {
+            assertOperationControlInTransaction(
+              db,
+              current,
+              writerSessionId,
+              dependencies.chatOccupancyEnabled === true,
+              'retry',
+            )
+          }
           const stored = getGenerationOperationStoredRequest(db, databaseLineage, operationId)
           if (!stored?.intent || !isRecord(stored.intent)) {
             throw new OperationHttpError(409, 'operation_intent_missing')

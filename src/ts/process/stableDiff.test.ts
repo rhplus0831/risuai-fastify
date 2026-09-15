@@ -174,6 +174,43 @@ describe('stableDiff image-generation hygiene', () => {
     expect(state.requestImageGeneration).not.toHaveBeenCalled()
   })
 
+  it('does not require the lazily loaded account group for a non-account image provider', async () => {
+    const char = makeCharacter()
+    state.settingsResourceState.status = 'ready'
+    state.settingsResourceState.groupStatuses = { media: 'ready', providers: 'ready' }
+    state.settingsResourceState.value = {
+      sdProvider: 'openai-compat',
+      openaiCompatImage: {
+        url: 'https://images.example.test/v1/images/generations',
+        key: '__RISU_SECRET_MASKED__',
+      },
+    }
+    state.requestImageGeneration.mockResolvedValueOnce('data:image/png;base64,owner')
+
+    await expect(generateAIImage('prompt', char, '', 'inlay')).resolves.toBe('data:image/png;base64,owner')
+    expect(state.requestImageGeneration).toHaveBeenCalledWith(
+      {
+        provider: 'openai-compat',
+        credential: { source: 'stored' },
+        prompt: 'prompt',
+      },
+      expect.any(AbortSignal),
+    )
+  })
+
+  it('still fails closed when the account-backed image provider has no account group', async () => {
+    const char = makeCharacter()
+    state.settingsResourceState.status = 'ready'
+    state.settingsResourceState.groupStatuses = { media: 'ready', providers: 'ready' }
+    state.settingsResourceState.value = {
+      sdProvider: 'kei',
+      account: { token: '__RISU_SECRET_MASKED__' },
+    }
+
+    await expect(generateAIImage('prompt', char, '', 'inlay')).resolves.toBe(false)
+    expect(state.requestImageGeneration).not.toHaveBeenCalled()
+  })
+
   it('resolves a saved NovelAI I2I asset only when constructing the provider request', async () => {
     const char = makeCharacter()
     seedNovelAiDb({

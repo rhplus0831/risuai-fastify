@@ -20,6 +20,7 @@ import {
   serverAssetIdFromReference,
   serverAssetUrl,
   uploadServerAsset,
+  uploadServerAssetBytes,
 } from './assets'
 import { clearCachedServerCommandRevision, peekCachedServerCommandRevision } from './commands'
 import { getProtocolDiagnosticsSnapshot } from './protocolDiagnostics'
@@ -137,6 +138,30 @@ describe('Fastify server asset helpers', () => {
     await expect(uploadServerAsset(new Uint8Array([1]), 'png')).rejects.toThrow(
       'Server asset upload response missing assetId',
     )
+    expect(peekCachedServerCommandRevision()).toBeNull()
+  })
+
+  it('forwards scoped cancellation and rejects an ignored late upload response without applying its revision', async () => {
+    let release!: (response: Response) => void
+    let request: RequestInit | undefined
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((_input: RequestInfo | URL, init?: RequestInit) => {
+        request = init
+        return new Promise<Response>((resolve) => {
+          release = resolve
+        })
+      }),
+    )
+    const controller = new AbortController()
+    const pending = uploadServerAssetBytes(new Uint8Array([1]), 'image/png', { signal: controller.signal })
+    await vi.waitFor(() => expect(request).toBeDefined())
+
+    expect(request?.signal).toBe(controller.signal)
+    controller.abort(new Error('inlay settlement expired'))
+    release(Response.json({ assetId: 'a'.repeat(64), revision: 55 }))
+
+    await expect(pending).rejects.toThrow('inlay settlement expired')
     expect(peekCachedServerCommandRevision()).toBeNull()
   })
 })

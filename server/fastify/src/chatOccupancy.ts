@@ -493,6 +493,8 @@ export class ChatOccupancyService {
       const now = this.#readNow()
       const ownership = this.#assertLineage(input.databaseLineage)
       this.#purgeStaleLineageRows(ownership.databaseLineage)
+      const row = this.#assertExactTuple(input, now)
+      this.#reconcileExpiredRows([row], now)
       this.#assertExactTuple(input, now)
       this.#assertUnpinned([input.chatId])
       this.#writeTombstone(input.chatId, input.databaseLineage, now)
@@ -581,7 +583,11 @@ export class ChatOccupancyService {
       }
       const selected = this.#assertExactTuple(input, now)
       if (!isUnexpired(selected, now)) throw this.#stale(input.chatId, input.databaseLineage, now)
-      const nonselected = this.#sessionRows(input.sessionId, input.databaseLineage).filter(
+      let nonselected = this.#sessionRows(input.sessionId, input.databaseLineage).filter(
+        (row) => row.chat_id !== input.chatId,
+      )
+      this.#reconcileExpiredRows(nonselected, now)
+      nonselected = this.#sessionRows(input.sessionId, input.databaseLineage).filter(
         (row) => row.chat_id !== input.chatId,
       )
       this.#assertUnpinned(nonselected.map((row) => row.chat_id))
@@ -639,13 +645,28 @@ export class ChatOccupancyService {
   }
 
   #prepareChatOnlyAdmission(sessionId: string, targetChatId: string, databaseLineage: string, now: number): void {
-    const rows = this.#sessionRows(sessionId, databaseLineage).filter((row) => row.chat_id !== targetChatId)
+    let rows = this.#sessionRows(sessionId, databaseLineage).filter((row) => row.chat_id !== targetChatId)
     if (rows.length === 0) return
+    this.#reconcileExpiredRows(rows, now)
+    rows = this.#sessionRows(sessionId, databaseLineage).filter((row) => row.chat_id !== targetChatId)
     const pinnedExpired = rows.filter((row) => !isUnexpired(row, now)).flatMap((row) => this.#blockingPins(row.chat_id))
     if (pinnedExpired.length > 0) throw recoveryBlocked(pinnedExpired, targetChatId)
     const retained = rows.filter((row) => isUnexpired(row, now))
     if (retained.length > 0) throw this.#switchRequired(retained, targetChatId, now)
     for (const row of rows) this.#writeTombstone(row.chat_id, databaseLineage, now)
+  }
+
+  #reconcileExpiredRows(rows: readonly OccupancyRow[], now: number): void {
+    for (const row of rows) {
+      if (isUnexpired(row, now) || row.occupant_session_id === null) continue
+      this.#reconcileExpiredOccupancy(this.db, {
+        databaseLineage: row.database_lineage,
+        chatId: row.chat_id,
+        occupantSessionId: row.occupant_session_id,
+        occupancyEpoch: row.occupancy_epoch,
+        nowMs: now,
+      })
+    }
   }
 
   #assertTargetAvailable(chatId: string, row: OccupancyRow | undefined, sessionId: string, now: number): void {

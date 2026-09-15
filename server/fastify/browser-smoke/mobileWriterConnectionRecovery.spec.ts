@@ -9,6 +9,8 @@ import {
 } from './fastBootstrapHarness.js'
 
 const CHAT_PATH = '/character/fast-bootstrap-small-character/fast-bootstrap-small-chat'
+const ACTIVE_CHARACTER_PATH = '/api/v1/characters/fast-bootstrap-small-character'
+const ACTIVE_CHARACTER_LOREBOOK_PATH = '/api/v1/characters/fast-bootstrap-small-character/lorebook'
 const DRAFT = 'retained mobile draft'
 
 type FaultMode = 'event-stream-close' | 'offline' | 'retired-bootstrap'
@@ -175,6 +177,9 @@ async function runRecoveryJourney(browser: Browser, faultMode: FaultMode, testIn
   const documentRequests: string[] = []
   const eventResponses: EventResponseRecord[] = []
   const evidence: Record<string, unknown> = { faultMode, pageErrors, recoveryRequests, documentRequests }
+  const initialCharacterShellReleased = deferred<void>()
+  let initialCharacterShellRequests = 0
+  let initialLorebookRequests = 0
   const onServerRequest = (request: IncomingMessage, response: ServerResponse) => {
     if (new URL(request.url ?? '/', harness.baseUrl).pathname !== '/api/v1/events') return
     if (!request.headers['risu-writer-session']) return
@@ -182,6 +187,15 @@ async function runRecoveryJourney(browser: Browser, faultMode: FaultMode, testIn
   }
   harness.app.server.on('request', onServerRequest)
   page.on('pageerror', (error) => pageErrors.push(error.message))
+  await page.route(`**${ACTIVE_CHARACTER_PATH}`, async (route) => {
+    initialCharacterShellRequests += 1
+    if (initialCharacterShellRequests === 1) await initialCharacterShellReleased.promise
+    await route.continue().catch(() => undefined)
+  })
+  await page.route(`**${ACTIVE_CHARACTER_LOREBOOK_PATH}`, async (route) => {
+    initialLorebookRequests += 1
+    await route.continue().catch(() => undefined)
+  })
 
   let recoveryTrafficStarted = false
   page.on('request', (request) => {
@@ -192,11 +206,41 @@ async function runRecoveryJourney(browser: Browser, faultMode: FaultMode, testIn
   let releaseRecovery: (() => void) | undefined
 
   try {
+    const initialLorebookResponsePromise = page.waitForResponse(
+      (response) =>
+        response.request().method() === 'POST' && new URL(response.url()).pathname === ACTIVE_CHARACTER_LOREBOOK_PATH,
+    )
     await page.goto(`${harness.baseUrl}${CHAT_PATH}`)
+    // Character-shell and lorebook reads normally race. Hold the exact shell
+    // read so the initial cache-negotiated lorebook can apply against its
+    // original projection fence, then let startup finish. This proves the
+    // lazy owner is settled before reconnect traffic starts being measured.
+    await expect.poll(() => initialCharacterShellRequests).toBe(1)
+    await expect.poll(() => initialLorebookRequests).toBe(1)
+    const initialLorebookResponse = await initialLorebookResponsePromise
+    expect(initialLorebookResponse.status()).toBe(200)
+    await initialLorebookResponse.finished()
+    const initialLorebookBody = (await initialLorebookResponse.json()) as { revision?: unknown }
+    await expect
+      .poll(() =>
+        page.evaluate(() =>
+          window.__RISU_FASTIFY_BROWSER_SMOKE__!.isCharacterLorebookHydrated('fast-bootstrap-small-character'),
+        ),
+      )
+      .toBe(true)
+    initialCharacterShellReleased.resolve()
     await waitForWriter(page)
     await page.evaluate(() =>
       window.__RISU_FASTIFY_BROWSER_SMOKE__!.waitForStartupMilestone('background-ready', 30_000),
     )
+    expect(
+      await page.evaluate(() =>
+        window.__RISU_FASTIFY_BROWSER_SMOKE__!.isCharacterLorebookHydrated('fast-bootstrap-small-character'),
+      ),
+    ).toBe(true)
+    await page.unroute(`**${ACTIVE_CHARACTER_PATH}`)
+    await page.unroute(`**${ACTIVE_CHARACTER_LOREBOOK_PATH}`)
+    expect(initialLorebookRequests).toBe(1)
     await page.getByTestId('default-chat-composer').fill(DRAFT)
     await page.evaluate(() => {
       const composer = document.querySelector('[data-testid="default-chat-composer"]')
@@ -206,6 +250,13 @@ async function runRecoveryJourney(browser: Browser, faultMode: FaultMode, testIn
 
     const before = await pageSnapshot(page)
     const durableBefore = durableSnapshot(harness.dataDir)
+    expect(initialLorebookBody.revision).toBe(before.appliedRevision)
+    expect(initialLorebookBody.revision).toBe(durableBefore.revision)
+    evidence.initialLorebook = {
+      requests: initialLorebookRequests,
+      responseStatus: initialLorebookResponse.status(),
+      revision: initialLorebookBody.revision,
+    }
     evidence.before = before
     evidence.durableBefore = durableBefore
     recoveryTrafficStarted = true
@@ -327,6 +378,7 @@ async function runRecoveryJourney(browser: Browser, faultMode: FaultMode, testIn
     expect(eventResponses.length).toBeGreaterThanOrEqual(2)
     expect(pageErrors).toEqual([])
   } finally {
+    initialCharacterShellReleased.resolve()
     releaseRecovery?.()
     if (faultMode === 'offline') await context.setOffline(false).catch(() => undefined)
     await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => undefined)

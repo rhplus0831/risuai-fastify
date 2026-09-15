@@ -122,6 +122,7 @@ const memoryApi = vi.hoisted(() => ({ publish: vi.fn(), applyEvent: vi.fn(() => 
 const occupancyApi = vi.hoisted(() => ({
   configure: vi.fn(),
   applyEvent: vi.fn(),
+  recover: vi.fn(),
   setIdentity: vi.fn(),
   clearIdentity: vi.fn(),
 }))
@@ -318,6 +319,7 @@ vi.mock('./server/chatOccupancy', () => ({
   applyClientChatOccupancyEvent: occupancyApi.applyEvent,
   setClientChatOccupancyIdentity: occupancyApi.setIdentity,
   clearClientChatOccupancyIdentity: occupancyApi.clearIdentity,
+  requestClientChatOccupancyRecovery: occupancyApi.recover,
 }))
 
 vi.mock('./server/commands', async (importActual) => {
@@ -5276,6 +5278,7 @@ describe('API-backed client bootstrap', () => {
 
   it('applies a contiguous canonical message translation without fetching the transcript', async () => {
     await loadWebInitialDatabase()
+    occupancyApi.recover.mockClear()
     const translation = {
       source: 'raw',
       text: 'translated',
@@ -5313,6 +5316,7 @@ describe('API-backed client bootstrap', () => {
     expect(resourceApi.refreshInvalidated).not.toHaveBeenCalled()
     expect(hydrationApi.applyMessageTranslationLocalEffect).toHaveBeenCalledWith('chat-a', 'message-a', translation)
     expect(peekAppliedServerResourceRevision()).toBe(6)
+    expect(occupancyApi.recover).toHaveBeenCalledExactlyOnceWith({ refresh: true })
   })
 
   it('acknowledges a contiguous optimistic message append without fetching the transcript', async () => {
@@ -5971,6 +5975,8 @@ describe('API-backed client bootstrap', () => {
 
   it('uses a full resource result revision and invalidates chat hydration after a gap', async () => {
     await loadWebInitialDatabase()
+    characterHydrationApi.hydrateSelected.mockClear()
+    hydrationApi.requestReadinessRefresh.mockClear()
     resourceApi.refreshInvalidated.mockResolvedValueOnce({ status: 'ok', revision: 12, scope: 'full' })
     eventApi.subscriptions[0].onCommandEvent({ type: 'state.changed', revision: 9, resource: 'state' })
 
@@ -5978,8 +5984,41 @@ describe('API-backed client bootstrap', () => {
     expect(hydrationApi.resetChatHydration).toHaveBeenCalledTimes(2)
     expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledWith({ force: true })
     expect(hydrationApi.requestReadinessRefresh).toHaveBeenCalledOnce()
+    expect(characterHydrationApi.hydrateSelected).toHaveBeenCalledWith({
+      supersede: true,
+      rebindSupersededSubscribers: true,
+      minimumRevision: 12,
+    })
+    expect(characterHydrationApi.hydrateSelected.mock.invocationCallOrder[0]).toBeLessThan(
+      hydrationApi.requestReadinessRefresh.mock.invocationCallOrder[0]!,
+    )
     expect(promptTemplateApi.ensure).toHaveBeenLastCalledWith({ force: true, minimumRevision: 12 })
     expect(runtimeApi.triggerOpenChatGenerationReattach).toHaveBeenCalledTimes(1)
+  })
+
+  it('preserves the selected-character readiness subscriber across full-to-targeted refresh supersession', async () => {
+    await loadWebInitialDatabase()
+    characterHydrationApi.hydrateSelected.mockClear()
+    resourceApi.refreshInvalidated
+      .mockResolvedValueOnce({ status: 'ok', revision: 12, scope: 'full' })
+      .mockResolvedValueOnce({ status: 'ok', revision: 13, scope: 'targeted' })
+
+    eventApi.subscriptions[0].onCommandEvent({ type: 'state.changed', revision: 9, resource: 'state' })
+    await vi.waitFor(() => expect(peekAppliedServerResourceRevision()).toBe(12))
+
+    eventApi.subscriptions[0].onCommandEvent({ type: 'settings.updated', revision: 13, resource: 'settings' })
+    await vi.waitFor(() => expect(peekAppliedServerResourceRevision()).toBe(13))
+
+    expect(characterHydrationApi.hydrateSelected).toHaveBeenNthCalledWith(1, {
+      supersede: true,
+      rebindSupersededSubscribers: true,
+      minimumRevision: 12,
+    })
+    expect(characterHydrationApi.hydrateSelected).toHaveBeenNthCalledWith(2, {
+      supersede: true,
+      rebindSupersededSubscribers: true,
+      minimumRevision: 13,
+    })
   })
 
   it('invalidates body hydration without advancing the cursor when full-refresh prompt hydration fails', async () => {
@@ -6102,6 +6141,7 @@ describe('API-backed client bootstrap', () => {
       chatOccupancies,
       getClientSessionSnapshot().generation,
     )
+    expect(occupancyApi.recover).toHaveBeenCalledOnce()
     eventApi.subscriptions[0].onOccupancyEvent?.(event)
     expect(occupancyApi.applyEvent).toHaveBeenCalledWith(event, {
       generation: getClientSessionSnapshot().generation,

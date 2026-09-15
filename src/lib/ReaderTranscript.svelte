@@ -59,6 +59,10 @@
     type ClientChatOccupancyAuthority,
   } from '../ts/server/chatOccupancy'
   import { coordinateAcceptedChatSend } from '../ts/process/acceptedSendCoordinator.svelte'
+  import {
+    chatOccupancyGenerationRecoveryProjections,
+    discardChatOccupancyRequiresResubmission,
+  } from '../ts/server/generationOperations'
   import { rerollChatOnlyTarget } from '../ts/process/rerollNavigation.svelte'
   import { abortChatOccupancyGeneration } from '../ts/process/generationStop.svelte'
   import type { ActiveChatTarget } from '../ts/types/activeChatTarget'
@@ -138,6 +142,7 @@
     acceptedMessageId: string
     authority: ClientChatOccupancyAuthority
   } | null>(null)
+  let recoveryNoticeMutationId = $state<string | null>(null)
   let generationObserver: ReturnType<typeof startReaderGenerationObservation> | null = null
   const incarnation = $derived(getReaderChatIncarnation(characterId, chatId))
   // Scalar scope prevents connection/page updates from recreating an observer; it owns those lifecycles.
@@ -285,6 +290,23 @@
       projection.occupancy.occupancyEpoch === retainedIntent.authority.occupancyEpoch &&
       projection.occupancy.claimClass === retainedIntent.authority.claimClass,
     )
+  })
+  const requiresResubmission = $derived(
+    $chatOccupancyGenerationRecoveryProjections.find(
+      (candidate) => candidate.chatId === chatId && candidate.disposition === 'requires_resubmission',
+    ) ?? null,
+  )
+  $effect(() => {
+    const recovery = requiresResubmission
+    if (!recovery || recoveryNoticeMutationId === recovery.mutationId) return
+    recoveryNoticeMutationId = recovery.mutationId
+    occupancyFeedback = {
+      chatId: recovery.chatId,
+      message:
+        recovery.kind === 'reroll'
+          ? language.connectedReaders.chatOccupancy.rerollFailed
+          : language.connectedReaders.chatOccupancy.sendFailed,
+    }
   })
   $effect(() => {
     const scope = chatOnlyDraftScope
@@ -634,6 +656,7 @@
           appendAccepted = true
           retainedSend = null
           clearAcceptedDraft(scope, message)
+          void discardChatOccupancyRequiresResubmission(targetChatId, 'send')
           accepted()
           updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.sendAccepted)
           refreshGenerationObserverFor(targetChatId)
@@ -668,6 +691,7 @@
     try {
       const result = await rerollChatOnlyTarget(target)
       if (result.status === 'accepted') {
+        void discardChatOccupancyRequiresResubmission(targetChatId, 'reroll')
         updateInteractionFeedback(targetChatId, language.connectedReaders.chatOccupancy.rerollAccepted)
         refreshGenerationObserverFor(targetChatId)
       } else if (result.status === 'retained') {

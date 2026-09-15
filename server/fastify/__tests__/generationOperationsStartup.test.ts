@@ -179,7 +179,13 @@ describe('generation operation startup reconciliation', () => {
           role: 'char',
           data: 'already saved',
           chatId: 'assistant-persisted-result',
-          generationInfo: { databaseLineage: lineage, operationId: 'persisted-result' },
+          generationInfo: {
+            databaseLineage: lineage,
+            operationId: 'persisted-result',
+            operationAttemptNo: 1,
+            jobId: 'job-persisted-result',
+            generationId: 'job-persisted-result',
+          },
         }),
       )
 

@@ -303,6 +303,66 @@ describe('server runtime bootstrap helper', () => {
     expect(result.bootstrap).not.toHaveProperty('writer')
   })
 
+  it('retains immutable generation scope on pending effects for exact-session recovery', async () => {
+    stubBootstrapFetch({
+      initialized: true,
+      revision: 4,
+      databaseLineage: 'database-a',
+      writer: { sessionId: 'writer-a', epoch: 2 },
+      pendingGenerationEffects: [
+        {
+          ledgerVersion: 1,
+          databaseLineage: 'database-a',
+          keyType: 'operation',
+          keyId: 'operation-a',
+          kind: 'igp',
+          effectClass: 'durable',
+          operationId: 'operation-a',
+          operationAttemptNo: 3,
+          generationId: 'generation-a',
+          characterId: 'character-a',
+          chatId: 'chat-a',
+          messageId: 'message-a',
+          generationScope: {
+            admissionKind: 'chat_only',
+            occupancyDatabaseLineage: 'database-a',
+            occupancySessionId: 'session-a',
+            occupancyEpoch: 7,
+            occupancyClaimClass: 'chat_only',
+            permissionScopeVersion: 1,
+            permissionScope: ['chat_transcript'],
+          },
+          status: 'pending',
+          createdAt: '2026-09-14T00:00:00.000Z',
+          updatedAt: '2026-09-14T00:00:00.000Z',
+        },
+      ],
+    })
+
+    const result = await fetchServerBootstrapReadOnly()
+
+    expect(result).toMatchObject({
+      status: 'ok',
+      bootstrap: {
+        pendingGenerationEffects: [
+          {
+            generationId: 'generation-a',
+            operationAttemptNo: 3,
+            generationScope: {
+              admissionKind: 'chat_only',
+              occupancyDatabaseLineage: 'database-a',
+              occupancySessionId: 'session-a',
+              occupancyEpoch: 7,
+              occupancyClaimClass: 'chat_only',
+              permissionScopeVersion: 1,
+              permissionScope: ['chat_transcript'],
+            },
+          },
+        ],
+      },
+    })
+  })
+
   it('sends both conditional acquisition headers and retains the explicit disconnect handshake', async () => {
     const calls = stubBootstrapFetch({
       initialized: true,

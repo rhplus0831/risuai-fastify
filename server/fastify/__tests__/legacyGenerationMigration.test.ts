@@ -716,6 +716,19 @@ describe('legacy generation migration finalization', () => {
     memoryDb.close()
     await startApp()
 
+    const foreignReplay = await app.inject({
+      method: 'POST',
+      url: `/api/v1/generation-operations/${operationId}/retries`,
+      headers: {
+        'risu-auth': assertion,
+        'risu-database-lineage': authority.databaseLineage,
+        'risu-writer-session': 'reader-foreign',
+      },
+      payload: { retryRequestId, expectedStateVersion: abandoned.stateVersion },
+    })
+    expect(foreignReplay.statusCode).toBe(423)
+    expect(foreignReplay.json()).toEqual({ error: 'generation_operation_foreign_session' })
+
     const replay = await app.inject({
       method: 'POST',
       url: `/api/v1/generation-operations/${operationId}/retries`,

@@ -126,9 +126,33 @@ let actionController: AbortController | null = null
 let renewalTimer: ReturnType<typeof setTimeout> | null = null
 let renewalRunning = false
 let renewalController: AbortController | null = null
+type ClientChatOccupancyRecoveryHandler = (options: { readonly refresh: boolean }) => void | Promise<void>
+const recoveryHandlers = new Set<ClientChatOccupancyRecoveryHandler>()
 const stateStore = writable(state)
 
 export const clientChatOccupancyStore = { subscribe: stateStore.subscribe }
+
+/** Install an exact-scope recovery coordinator without coupling it to general-owner recovery. */
+export function registerClientChatOccupancyRecoveryHandler(handler: ClientChatOccupancyRecoveryHandler): () => void {
+  recoveryHandlers.add(handler)
+  return () => recoveryHandlers.delete(handler)
+}
+
+/** Request recovery after connection/readiness changes that do not themselves publish occupancy state. */
+export function requestClientChatOccupancyRecovery(options: { readonly refresh?: boolean } = {}): void {
+  if (recoveryHandlers.size === 0) return
+  queueMicrotask(() => {
+    for (const handler of recoveryHandlers) {
+      try {
+        void Promise.resolve(handler({ refresh: options.refresh === true })).catch((error) => {
+          console.warn('Occupied-chat generation recovery failed:', error)
+        })
+      } catch (error) {
+        console.warn('Occupied-chat generation recovery failed:', error)
+      }
+    }
+  })
+}
 
 export function getClientChatOccupancySnapshot(): ClientChatOccupancySnapshot {
   return state
@@ -680,6 +704,9 @@ function publish(next: ClientChatOccupancySnapshot): void {
   state = Object.freeze(next)
   stateStore.set(state)
   scheduleRenewal()
+  // Also notify after authority disappears so recovery-only UI derived from a
+  // previous claim is cleared for observers and signed-out sessions.
+  requestClientChatOccupancyRecovery()
 }
 
 function scheduleRenewal(): void {

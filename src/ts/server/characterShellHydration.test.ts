@@ -278,6 +278,43 @@ describe('character shell hydration', () => {
     expect(testDatabaseState.db.characters[0].name).toBe('Fresh detail')
   })
 
+  it('rebinds selected readiness to a newer-revision supersession without publishing the stale response', async () => {
+    const revisionTwelve = deferred<{ status: 'ok'; revision: number; character: Record<string, unknown> }>()
+    const revisionThirteen = deferred<{ status: 'ok'; revision: number; character: Record<string, unknown> }>()
+    projectionState.fetchResource
+      .mockReturnValueOnce(revisionTwelve.promise)
+      .mockReturnValueOnce(revisionThirteen.promise)
+
+    const readiness = hydrateSelectedCharacterShell({ minimumRevision: 12 })
+    const replacement = hydrateSelectedCharacterShell({
+      supersede: true,
+      rebindSupersededSubscribers: true,
+      minimumRevision: 13,
+    })
+
+    expect(projectionState.fetchResource).toHaveBeenCalledTimes(2)
+    expect((projectionState.fetchResource.mock.calls[0]?.[1] as AbortSignal).aborted).toBe(true)
+
+    revisionTwelve.resolve({
+      status: 'ok',
+      revision: 12,
+      character: hydratedCharacter('Stale revision twelve'),
+    })
+    await Promise.resolve()
+    expect(isServerCharacterShell(testDatabaseState.db.characters[0])).toBe(true)
+    expect(testDatabaseState.db.characters[0].name).toBe('Shell')
+
+    revisionThirteen.resolve({
+      status: 'ok',
+      revision: 13,
+      character: hydratedCharacter('Fresh revision thirteen'),
+    })
+
+    await expect(Promise.all([readiness, replacement])).resolves.toEqual([true, true])
+    expect(testDatabaseState.db.characters[0].name).toBe('Fresh revision thirteen')
+    expect(characterShellHydrationState.rows['char-1']).toEqual({ status: 'ready', error: null })
+  })
+
   it('rejects a character row response older than the request-start revision', async () => {
     setCachedServerCommandRevision(6)
     projectionState.fetchResource.mockResolvedValue({

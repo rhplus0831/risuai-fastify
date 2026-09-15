@@ -8,7 +8,7 @@ import { activeChatGenerations } from '../process/generationActivity.svelte'
 import { generationFinalizationPersistences } from '../process/generationPersistenceState'
 import { activeGenerationJobs, generationJobLifecycles } from '../process/reattach'
 import { activeWriterSessionHeader } from './activeWriterSession'
-import { peekAppliedServerResourceRevision } from './commands'
+import { clearAppliedServerResourceRevision, peekAppliedServerResourceRevision } from './commands'
 import { dispatchDurableServerBackedSettingsPatch } from './settingsOwner.svelte'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { alertNormal } from '../alert'
@@ -17,6 +17,7 @@ import { CustomGUISettingMenuStore, QuickSettings, VariableReloadGUIPointer } fr
 import { generationOperationCancellations, generationOperationProjections } from './generationOperations'
 import { listPendingMutationReceiptAcknowledgements, listPendingMutations } from './pendingMutationOutbox'
 import { clearResourceCache, getPendingResourceCacheWriteCount } from './resourceCache'
+import { isCharacterLorebookHydrated } from './lorebookOwner.svelte'
 import { currentRouteResourceLoadState } from './routeResourceLoader'
 import {
   backgroundReady,
@@ -49,12 +50,14 @@ export function installFastifyBrowserSmokeHook() {
       'risu-auth': await getNodeServerProxyAuth(),
       ...activeWriterSessionHeader(),
     }),
+    clearAppliedServerResourceRevision,
     clearResourceCache,
     getPendingResourceCacheWriteCount,
     getAppliedServerResourceRevision: peekAppliedServerResourceRevision,
     getCurrentRoute: () => structuredClone(get(currentRoute)),
     getClientSessionSnapshot: () => structuredClone(getClientSessionSnapshot()),
     getDatabaseSnapshot: composeResourceDatabaseSnapshot,
+    isCharacterLorebookHydrated,
     getLifecycleSnapshot: async () => ({
       acceptedSendRecoveries: structuredClone(get(acceptedSendRecoveries)),
       activeGenerationJobs: structuredClone(get(activeGenerationJobs)),

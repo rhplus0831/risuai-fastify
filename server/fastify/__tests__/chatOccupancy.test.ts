@@ -256,6 +256,77 @@ describe('chat occupancy service', () => {
     expect(released.occupancyEpoch).toBe(second.occupancyEpoch + 1)
   })
 
+  it('fences delayed controls when the same session reacquires after an intervening occupant', () => {
+    const first = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-a',
+      sessionId: 'reader-a',
+      claimClass: 'chat_only',
+      expectedOccupancyEpoch: 0,
+    })
+    now = first.leaseExpiresAtMs!
+
+    const intervening = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-a',
+      sessionId: 'reader-b',
+      claimClass: 'chat_only',
+      expectedOccupancyEpoch: first.occupancyEpoch,
+    })
+    const tombstone = service.release({
+      databaseLineage: lineage(),
+      chatId: 'chat-a',
+      sessionId: 'reader-b',
+      occupancyEpoch: intervening.occupancyEpoch,
+    })
+    const reacquired = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-a',
+      sessionId: 'reader-a',
+      claimClass: 'chat_only',
+      expectedOccupancyEpoch: tombstone.occupancyEpoch,
+    })
+    expect(reacquired).toMatchObject({
+      occupantSessionId: 'reader-a',
+      occupancyEpoch: tombstone.occupancyEpoch + 1,
+      state: 'occupied',
+    })
+
+    expectCode(
+      () =>
+        service.renew({
+          databaseLineage: lineage(),
+          chatId: 'chat-a',
+          sessionId: 'reader-a',
+          occupancyEpoch: first.occupancyEpoch,
+        }),
+      'chat_occupancy_stale',
+    )
+    expectCode(
+      () =>
+        service.release({
+          databaseLineage: lineage(),
+          chatId: 'chat-a',
+          sessionId: 'reader-a',
+          occupancyEpoch: first.occupancyEpoch,
+        }),
+      'chat_occupancy_stale',
+    )
+    expectCode(
+      () =>
+        service.switch({
+          databaseLineage: lineage(),
+          chatId: 'chat-a',
+          sessionId: 'reader-a',
+          occupancyEpoch: first.occupancyEpoch,
+          targetChatId: 'chat-b',
+        }),
+      'chat_occupancy_stale',
+    )
+    expect(service.snapshot().occupancies.find((row) => row.chatId === 'chat-a')).toEqual(reacquired)
+    expect(service.snapshot().occupancies.find((row) => row.chatId === 'chat-b')).toBeUndefined()
+  })
+
   it('keeps expired pinned rows fenced for foreign direct, broad, and indirect writes', () => {
     const occupied = service.claim({
       databaseLineage: lineage(),
@@ -364,6 +435,93 @@ describe('chat occupancy service', () => {
       blocking: [{ chatId: 'chat-d', id: 'legacy-memory-job', kind: 'legacy_memory' }],
     })
     expect(service.snapshot().occupancies.find((row) => row.chatId === 'chat-d')).toBeUndefined()
+  })
+
+  it('reconciles an expired nonselected row before an atomic cross-chat claim', () => {
+    const reconciled: string[] = []
+    service = new ChatOccupancyService(db, {
+      now: () => now,
+      pinQuery: (_db, chatId) => pins.get(chatId) ?? [],
+      reconcileExpiredOccupancy: (_db, input) => {
+        reconciled.push(input.chatId)
+        pins.delete(input.chatId)
+      },
+    })
+    const expired = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-a',
+      sessionId: 'reader-a',
+      claimClass: 'chat_only',
+      expectedOccupancyEpoch: 0,
+    })
+    pins.set('chat-a', [{ id: 'abandoned-a', kind: 'generation_operation' }])
+    now = expired.leaseExpiresAtMs!
+
+    const claimed = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-b',
+      sessionId: 'reader-a',
+      claimClass: 'chat_only',
+      expectedOccupancyEpoch: 0,
+    })
+
+    expect(reconciled).toEqual(['chat-a'])
+    expect(claimed).toMatchObject({ chatId: 'chat-b', occupantSessionId: 'reader-a', occupancyEpoch: 1 })
+    expect(service.snapshot().occupancies.find((row) => row.chatId === 'chat-a')).toMatchObject({
+      occupantSessionId: null,
+      occupancyEpoch: expired.occupancyEpoch + 1,
+      state: 'released',
+    })
+  })
+
+  it('reconciles expired nonselected rows before demotion normalization', () => {
+    const reconciled: string[] = []
+    service = new ChatOccupancyService(db, {
+      now: () => now,
+      pinQuery: (_db, chatId) => pins.get(chatId) ?? [],
+      reconcileExpiredOccupancy: (_db, input) => {
+        reconciled.push(input.chatId)
+        pins.delete(input.chatId)
+      },
+    })
+    registerDatabaseWriterSession(db, 'session-a')
+    const expired = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-a',
+      sessionId: 'session-a',
+      claimClass: 'owner',
+      expectedOccupancyEpoch: 0,
+    })
+    now += 1_000
+    const selected = service.claim({
+      databaseLineage: lineage(),
+      chatId: 'chat-b',
+      sessionId: 'session-a',
+      claimClass: 'owner',
+      expectedOccupancyEpoch: 0,
+    })
+    registerDatabaseWriterSession(db, 'owner-b')
+    pins.set('chat-a', [{ id: 'abandoned-a', kind: 'generation_operation' }])
+    now = expired.leaseExpiresAtMs!
+
+    const normalized = service.normalize({
+      databaseLineage: lineage(),
+      chatId: 'chat-b',
+      sessionId: 'session-a',
+      occupancyEpoch: selected.occupancyEpoch,
+    })
+
+    expect(reconciled).toEqual(['chat-a'])
+    expect(normalized).toMatchObject({
+      chatId: 'chat-b',
+      occupantSessionId: 'session-a',
+      occupancyEpoch: selected.occupancyEpoch,
+      claimClass: 'chat_only',
+    })
+    expect(service.snapshot().occupancies.find((row) => row.chatId === 'chat-a')).toMatchObject({
+      occupantSessionId: null,
+      occupancyEpoch: expired.occupancyEpoch + 1,
+    })
   })
 
   it('reports a live foreign occupancy before recovery pins on the same target', () => {

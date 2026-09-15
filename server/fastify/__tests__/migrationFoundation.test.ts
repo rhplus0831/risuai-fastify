@@ -130,7 +130,11 @@ describe('migration and recovery foundation', () => {
     ]) {
       expectColumns(table, scopeColumns)
     }
-    expectColumns('generation_finalization_retries', ['compatibility_database_lineage', 'compatibility_session_id'])
+    expectColumns('generation_finalization_retries', [
+      'compatibility_database_lineage',
+      'compatibility_session_id',
+      'compatibility_occupancy_epoch',
+    ])
     expectColumns('generation_operation_attempts', [
       'accepted_admission_kind',
       'accepted_occupancy_database_lineage',

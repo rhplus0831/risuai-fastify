@@ -1299,11 +1299,11 @@ test('queued finalization survives repeated restart and keeps one settled result
     await bootChat(page, chatId)
     await sendMessage(page, userText)
     const operation = await waitForOperation(page, chatId)
-    await expectQueuedFinalizationTruth(page, chatId, userText, reply, operation.operationId)
+    await expectRetryableFinalizationTruth(page, chatId, userText, reply, operation.operationId)
 
     await page.reload()
     await waitForBrowserLoaded(page)
-    await expectQueuedFinalizationTruth(page, chatId, userText, reply, operation.operationId)
+    await expectRetryableFinalizationTruth(page, chatId, userText, reply, operation.operationId)
     for (let restart = 0; restart < 2; restart += 1) {
       await page.context().setOffline(true)
       try {
@@ -1313,9 +1313,10 @@ test('queued finalization survives repeated restart and keeps one settled result
       }
       await page.reload()
       await waitForBrowserLoaded(page)
-      await expectQueuedFinalizationTruth(page, chatId, userText, reply, operation.operationId)
+      await expectRetryableFinalizationTruth(page, chatId, userText, reply, operation.operationId)
       expect(harness.provider.calls(chatId)).toBe(1)
     }
+    await expectRetryableFinalizationTruth(page, chatId, userText, reply, operation.operationId, 'stalled')
   } finally {
     harness.clearAssistantInsertFailure()
   }
@@ -1999,15 +2000,19 @@ async function expectAbandonedTruth(page: Page, chatId: string, userText: string
   expect(bootstrap.activeGenerationJobs?.filter((job) => job.chatId === chatId)).toHaveLength(0)
 }
 
-async function expectQueuedFinalizationTruth(
+async function expectRetryableFinalizationTruth(
   page: Page,
   chatId: string,
   userText: string,
   reply: string,
   operationId: string,
+  expectedPersistenceState?: 'queued' | 'stalled',
 ): Promise<void> {
   await expectVisibleTranscript(page, userText, reply)
-  await expect(page.locator('[data-generation-persistence-state="queued"]')).toBeVisible({ timeout: 15_000 })
+  const persistenceIndicator = page.locator(
+    '.default-chat-screen .risu-chat[data-chat-index="1"] [data-generation-persistence-state]',
+  )
+  await expect(persistenceIndicator).toBeVisible({ timeout: 15_000 })
   await expect
     .poll(async () => summarizeMessages(await residentMessages(page, chatId)))
     .toEqual([
@@ -2018,23 +2023,54 @@ async function expectQueuedFinalizationTruth(
     .poll(async () => summarizeMessages(await authoritativeMessages(page, chatId)))
     .toEqual([{ role: 'user', data: userText }])
   await expect
-    // The live wire disposition records the row with `state` unset; the
-    // periodic finalization refresh (5s cadence) replaces it with the
-    // projected `queued` state, so this poll must outlast one full cycle.
     .poll(
       async () => {
-        const snapshot = await lifecycleSnapshot(page)
+        const browser = await page.evaluate(async () => {
+          const snapshot = (await window.__RISU_FASTIFY_BROWSER_SMOKE__!.getLifecycleSnapshot()) as LifecycleSnapshot
+          const indicator = document.querySelector(
+            '.default-chat-screen .risu-chat[data-chat-index="1"] [data-generation-persistence-state]',
+          )
+          return {
+            snapshot,
+            indicatorState: indicator?.getAttribute('data-generation-persistence-state'),
+          }
+        })
+        const bootstrap = await authoritativeBootstrap(page)
+        const clientFinalization = browser.snapshot.generationFinalizations.find((entry) => entry.chatId === chatId)
+        const serverFinalization = bootstrap.generationFinalizations?.find((entry) => entry.chatId === chatId)
+        const clientPersistenceState = clientFinalization?.state
+        const serverPersistenceState = serverFinalization?.state
+        const persistenceState =
+          clientPersistenceState &&
+          clientPersistenceState === browser.indicatorState &&
+          clientPersistenceState === serverPersistenceState
+            ? clientPersistenceState
+            : [
+                browser.indicatorState ?? 'missing',
+                clientPersistenceState ?? 'missing',
+                serverPersistenceState ?? 'missing',
+              ].join('/')
         return {
-          state: snapshot.generationOperations.find((candidate) => candidate.operationId === operationId)?.state,
-          jobs: snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
-          finalizations: snapshot.generationFinalizations.filter((entry) => entry.chatId === chatId).length,
-          finalizationState: snapshot.generationFinalizations.find((entry) => entry.chatId === chatId)?.state,
-          outbox: generationOutboxCount(snapshot),
+          state: browser.snapshot.generationOperations.find((candidate) => candidate.operationId === operationId)
+            ?.state,
+          jobs: browser.snapshot.activeGenerationJobs.filter((job) => job.chatId === chatId).length,
+          finalizations: browser.snapshot.generationFinalizations.filter((entry) => entry.chatId === chatId).length,
+          serverFinalizations:
+            bootstrap.generationFinalizations?.filter((entry) => entry.chatId === chatId).length ?? 0,
+          persistenceState,
+          outbox: generationOutboxCount(browser.snapshot),
         }
       },
       { timeout: 15_000 },
     )
-    .toEqual({ state: 'finalizing', jobs: 0, finalizations: 1, finalizationState: 'queued', outbox: 0 })
+    .toEqual({
+      state: 'finalizing',
+      jobs: 0,
+      finalizations: 1,
+      serverFinalizations: 1,
+      persistenceState: expectedPersistenceState ?? expect.stringMatching(/^(?:queued|stalled)$/u),
+      outbox: 0,
+    })
   const bootstrap = await authoritativeBootstrap(page)
   expect(bootstrap.generationOperations?.find((candidate) => candidate.operationId === operationId)?.state).toBe(
     'finalizing',

@@ -133,6 +133,7 @@ export function registerBootstrapRoutes(
       activeWriterState !== undefined &&
       writerScopedSessionId !== null &&
       writerScopedSessionId === activeWriterState.sessionId
+    const hasRecoverySession = writerScopedSessionId !== null
     const { version, revision } = getSchemaState(db)
     const generationOperationProjectionEpoch = getGenerationOperationProjectionEpoch(db)
     const generationOperations = listGenerationOperationProjections(db)
@@ -173,10 +174,21 @@ export function registerBootstrapRoutes(
       // Transient running generations so a returning client, even after a full
       // reload, can discover and reattach. Server-memory only.
       activeGenerationJobs: generationJobs?.activeJobs() ?? [],
-      // SQLite-backed finalization work is projected only to the active writer.
-      // Unlike process-local jobs, these rows survive browser and server restarts.
-      ...(ownsWriterScope ? { generationFinalizations: listGenerationFinalizationRetryProjections(db) } : {}),
-      ...(ownsWriterScope ? { pendingGenerationEffects: listPendingClientGenerationEffects(db) } : {}),
+      // SQLite-backed completion work survives browser and server restarts.
+      // Modern rows return only to their immutable originating session; the
+      // active general owner additionally receives pre-occupancy/legacy rows.
+      ...(hasRecoverySession
+        ? {
+            generationFinalizations: listGenerationFinalizationRetryProjections(db, {
+              sessionId: writerScopedSessionId,
+              includeLegacyOwner: ownsWriterScope,
+            }),
+            pendingGenerationEffects: listPendingClientGenerationEffects(db, ownership.databaseLineage, new Date(), {
+              sessionId: writerScopedSessionId,
+              includeLegacyOwner: ownsWriterScope,
+            }),
+          }
+        : {}),
       // Detached message translations and their short-lived terminal outcomes.
       // This lets a returning browser preserve busy controls, report failures,
       // and rehydrate successful translations after reload.

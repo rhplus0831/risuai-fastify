@@ -68,6 +68,7 @@ import * as chatOccupancyClient from '../ts/server/chatOccupancy'
 import * as acceptedSendCoordinator from '../ts/process/acceptedSendCoordinator.svelte'
 import * as rerollNavigation from '../ts/process/rerollNavigation.svelte'
 import * as generationStop from '../ts/process/generationStop.svelte'
+import { chatOccupancyGenerationRecoveryProjections } from '../ts/server/generationOperations'
 
 vi.mock('../ts/server/readerGenerationObservation', () => ({ startReaderGenerationObservation: vi.fn() }))
 
@@ -233,6 +234,7 @@ beforeEach(() => {
   resetGenerationDisplayProjectionsForTests()
   resetHalfStreamingProgressForTests()
   replaceAutomaticTranslationMessageIds([])
+  chatOccupancyGenerationRecoveryProjections.set([])
   clearChatBodyParseMemo()
   sessionStorage.clear()
   target = document.createElement('div')
@@ -256,6 +258,7 @@ afterEach(async () => {
   resetGenerationDisplayProjectionsForTests()
   resetHalfStreamingProgressForTests()
   replaceAutomaticTranslationMessageIds([])
+  chatOccupancyGenerationRecoveryProjections.set([])
   clearChatBodyParseMemo()
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
@@ -651,6 +654,54 @@ describe('connected reader transcript', () => {
     await tick()
     expect(sendButton.disabled).toBe(false)
     expect(sendButton.hasAttribute('data-reader-send-retained')).toBe(false)
+  })
+
+  it('reports an expired unaccepted recovery without replacing its originating draft or granting observer authority', async () => {
+    seedReaderChat(2)
+    startReader()
+    configureReaderOccupancy([occupancy('reader-chat', 'reader', 8)])
+    component = mount(ReaderTranscript, {
+      target,
+      props: { characterId: 'reader-character', chatId: 'reader-chat' },
+    })
+    await settle()
+    const input = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
+    input.value = 'newer local draft'
+    input.dispatchEvent(new InputEvent('input', { bubbles: true, data: 'newer local draft' }))
+    await tick()
+
+    chatOccupancyGenerationRecoveryProjections.set([
+      {
+        mutationId: 'expired-mutation',
+        chatId: 'reader-chat',
+        operationId: 'expired-operation',
+        kind: 'send',
+        acceptedMessageId: 'expired-message',
+        occupancyEpoch: 7,
+        disposition: 'requires_resubmission',
+      },
+    ])
+    await settle()
+
+    expect(input.value).toBe('newer local draft')
+    expect(target.querySelector('[data-reader-occupancy-feedback]')?.textContent).toContain(
+      language.connectedReaders.chatOccupancy.sendFailed,
+    )
+    expect(target.querySelector<HTMLButtonElement>('[data-reader-composer-send]')?.disabled).toBe(false)
+
+    const generation = getClientSessionSnapshot().generation
+    applyClientChatOccupancyEvent(
+      {
+        type: 'occupancy.snapshot',
+        version: 1,
+        databaseLineage: 'reader-tests',
+        occupancies: [occupancy('reader-chat', 'other-reader', 9)],
+      },
+      { generation, sessionId: 'reader' },
+    )
+    await settle()
+    expect(input.value).toBe('newer local draft')
+    expect(target.querySelector<HTMLButtonElement>('[data-reader-composer-send]')?.disabled).toBe(true)
   })
 
   it('uses confirmed transcript appearance without opening a writer controller', async () => {

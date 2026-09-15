@@ -224,6 +224,61 @@ describe('chat occupancy routes', () => {
     })
   })
 
+  it('does not renew or release retained authority after authentication is lost', async () => {
+    const { app, assertion } = await start(true)
+    await seedChats(app, assertion)
+    const bootstrap = await app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: { 'risu-auth': assertion } })
+    const databaseLineage = bootstrap.json().databaseLineage
+    const claimed = await app.inject({
+      method: 'POST',
+      url: '/api/v1/chat-occupancies/chat-a/claim',
+      headers: {
+        'risu-auth': assertion,
+        'risu-writer-session': 'reader-a',
+        'risu-database-lineage': databaseLineage,
+        'risu-chat-occupancy-epoch': '0',
+      },
+      payload: { version: 1, claimClass: 'chat_only' },
+    })
+    expect(claimed.statusCode).toBe(200)
+    const occupancyEpoch = claimed.json().occupancyEpoch
+    const unauthenticatedHeaders = {
+      'risu-writer-session': 'reader-a',
+      'risu-database-lineage': databaseLineage,
+      'risu-chat-occupancy-epoch': String(occupancyEpoch),
+    }
+
+    const [renewed, released] = await Promise.all([
+      app.inject({
+        method: 'PUT',
+        url: '/api/v1/chat-occupancies/chat-a/lease',
+        headers: unauthenticatedHeaders,
+        payload: { version: 1 },
+      }),
+      app.inject({
+        method: 'DELETE',
+        url: '/api/v1/chat-occupancies/chat-a',
+        headers: unauthenticatedHeaders,
+        payload: { version: 1 },
+      }),
+    ])
+    expect([renewed.statusCode, released.statusCode]).toEqual([401, 401])
+
+    const snapshot = await app.inject({
+      method: 'GET',
+      url: '/api/v1/chat-occupancies',
+      headers: { 'risu-auth': assertion },
+    })
+    expect(snapshot.json().occupancies).toContainEqual(
+      expect.objectContaining({
+        chatId: 'chat-a',
+        occupantSessionId: 'reader-a',
+        occupancyEpoch,
+        state: 'occupied',
+      }),
+    )
+  })
+
   it('serializes simultaneous claims to one winner without changing domain revision', async () => {
     const { app, assertion } = await start(true)
     await seedChats(app, assertion)
@@ -253,6 +308,80 @@ describe('chat occupancy routes', () => {
       version: 1,
       databaseLineage,
       occupancies: [{ chatId: 'chat-a', state: 'occupied', occupancyEpoch: 1 }],
+    })
+    const after = await app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: { 'risu-auth': assertion } })
+    expect(after.json().revision).toBe(revision)
+  })
+
+  it('serializes a release racing a foreign claim and requires the loser to refresh the tombstone epoch', async () => {
+    const { app, assertion } = await start(true)
+    await seedChats(app, assertion)
+    const bootstrap = await app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: { 'risu-auth': assertion } })
+    const { databaseLineage, revision } = bootstrap.json()
+    const baseHeaders = { 'risu-auth': assertion, 'risu-database-lineage': databaseLineage }
+    const first = await app.inject({
+      method: 'POST',
+      url: '/api/v1/chat-occupancies/chat-a/claim',
+      headers: {
+        ...baseHeaders,
+        'risu-writer-session': 'reader-a',
+        'risu-chat-occupancy-epoch': '0',
+      },
+      payload: { version: 1, claimClass: 'chat_only' },
+    })
+    const firstEpoch = first.json().occupancyEpoch
+
+    const [released, racedClaim] = await Promise.all([
+      app.inject({
+        method: 'DELETE',
+        url: '/api/v1/chat-occupancies/chat-a',
+        headers: {
+          ...baseHeaders,
+          'risu-writer-session': 'reader-a',
+          'risu-chat-occupancy-epoch': String(firstEpoch),
+        },
+        payload: { version: 1 },
+      }),
+      app.inject({
+        method: 'POST',
+        url: '/api/v1/chat-occupancies/chat-a/claim',
+        headers: {
+          ...baseHeaders,
+          'risu-writer-session': 'reader-b',
+          'risu-chat-occupancy-epoch': String(firstEpoch),
+        },
+        payload: { version: 1, claimClass: 'chat_only' },
+      }),
+    ])
+    expect(released.statusCode).toBe(200)
+    expect([409, 423]).toContain(racedClaim.statusCode)
+
+    const snapshot = await app.inject({
+      method: 'GET',
+      url: '/api/v1/chat-occupancies',
+      headers: { 'risu-auth': assertion },
+    })
+    const tombstone = snapshot.json().occupancies.find((row: { chatId: string }) => row.chatId === 'chat-a')
+    expect(tombstone).toMatchObject({
+      occupantSessionId: null,
+      occupancyEpoch: firstEpoch + 1,
+      state: 'released',
+    })
+
+    const retried = await app.inject({
+      method: 'POST',
+      url: '/api/v1/chat-occupancies/chat-a/claim',
+      headers: {
+        ...baseHeaders,
+        'risu-writer-session': 'reader-b',
+        'risu-chat-occupancy-epoch': String(tombstone.occupancyEpoch),
+      },
+      payload: { version: 1, claimClass: 'chat_only' },
+    })
+    expect(retried.statusCode).toBe(200)
+    expect(retried.json()).toMatchObject({
+      occupantSessionId: 'reader-b',
+      occupancyEpoch: firstEpoch + 2,
     })
     const after = await app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: { 'risu-auth': assertion } })
     expect(after.json().revision).toBe(revision)

@@ -36,6 +36,7 @@ export interface GeneratedChatCompletionInput {
   runMessageTranslation?: ServerMessageTranslationRunner
   onTranslationStarted?: (input: { chatId: string; messageId: string; jobId: string }) => void
   assertWriteAllowed?: RunServerMessageTranslationInput['assertWriteAllowed']
+  onTranslationCommittedInTransaction?: RunServerMessageTranslationInput['onTranslationCommittedInTransaction']
 }
 
 export interface GeneratedChatCompletionFollowup {
@@ -93,6 +94,9 @@ function generatedMessageIsEligible(input: GeneratedChatCompletionInput, setting
 export async function handleGeneratedChatCompletion(
   input: GeneratedChatCompletionInput,
 ): Promise<GeneratedChatCompletionFollowup> {
+  if (input.messageTranslationJobs.isStopping()) {
+    throw new Error('Message translation registry is shutting down')
+  }
   const context = { characterId: input.characterId, chatId: input.chatId }
   const notificationsEnabled = !!input.pushNotifications && chatCompletionNotificationSettingEnabled(input.db)
   let settings: Record<string, unknown> | null = null
@@ -123,18 +127,23 @@ export async function handleGeneratedChatCompletion(
   const runTranslation = input.runMessageTranslation ?? runServerMessageTranslation
   let translation: ReturnType<ServerMessageTranslationRunner>
   try {
-    translation = runTranslation({
-      db: input.db,
-      dataDir: input.dataDir,
-      eventSink: input.eventSink,
-      messageTranslationJobs: input.messageTranslationJobs,
-      messageId: input.messageId,
-      jobId,
-      ...(input.acceptedEffectiveConfiguration
-        ? { acceptedEffectiveConfiguration: input.acceptedEffectiveConfiguration }
-        : {}),
-      ...(input.assertWriteAllowed ? { assertWriteAllowed: input.assertWriteAllowed } : {}),
-    })
+    translation = input.messageTranslationJobs.track(
+      runTranslation({
+        db: input.db,
+        dataDir: input.dataDir,
+        eventSink: input.eventSink,
+        messageTranslationJobs: input.messageTranslationJobs,
+        messageId: input.messageId,
+        jobId,
+        ...(input.acceptedEffectiveConfiguration
+          ? { acceptedEffectiveConfiguration: input.acceptedEffectiveConfiguration }
+          : {}),
+        ...(input.assertWriteAllowed ? { assertWriteAllowed: input.assertWriteAllowed } : {}),
+        ...(input.onTranslationCommittedInTransaction
+          ? { onTranslationCommittedInTransaction: input.onTranslationCommittedInTransaction }
+          : {}),
+      }),
+    )
   } catch (error) {
     if (notificationsEnabled) notifyChatCompletion(input.pushNotifications, context)
     return {

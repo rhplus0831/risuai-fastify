@@ -19,17 +19,21 @@ interface ImageGenerationOptions {
   database?: Database
 }
 
-const IMAGE_GENERATION_SETTINGS_GROUPS = ['account', 'media', 'providers'] as const
+const IMAGE_GENERATION_SETTINGS_GROUPS = ['media', 'providers'] as const
 
 function imageGenerationSettingsOwner(explicit?: Database): Database | null {
   if (explicit) return explicit
   if (settingsResourceState.status === 'error') return null
-  if (IMAGE_GENERATION_SETTINGS_GROUPS.some((group) => settingsResourceState.groupStatuses[group] === 'error')) {
+  const value = settingsResourceState.value as unknown as Database
+  const requiredGroups =
+    value.sdProvider === 'kei'
+      ? ([...IMAGE_GENERATION_SETTINGS_GROUPS, 'account'] as const)
+      : IMAGE_GENERATION_SETTINGS_GROUPS
+  if (requiredGroups.some((group) => settingsResourceState.groupStatuses[group] === 'error')) {
     return null
   }
-  if (IMAGE_GENERATION_SETTINGS_GROUPS.some((group) => settingsResourceState.groupStatuses[group] !== 'ready'))
-    return null
-  return settingsResourceState.value as unknown as Database
+  if (requiredGroups.some((group) => settingsResourceState.groupStatuses[group] !== 'ready')) return null
+  return value
 }
 
 const REFERENCE_IMAGE_LOAD_TIMEOUT_MS = 10_000

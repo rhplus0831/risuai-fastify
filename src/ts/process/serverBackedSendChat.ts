@@ -1,4 +1,4 @@
-import { captureClientSessionGeneration } from '../clientSession'
+import { captureClientSessionGeneration, clientSessionStore } from '../clientSession'
 import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { get } from 'svelte/store'
 import {
@@ -12,7 +12,7 @@ import {
 import { selectedCharID } from '../stores.svelte'
 import { safeStructuredClone } from '../polyfill'
 import { getInlayAssetMetadata, getServerInlayAssetId } from './files/inlays'
-import { runInlayScreen } from './inlayScreen'
+import { inlayScreenRequiresFinalization, renderInlayScreenTextWithoutProviders, runInlayScreen } from './inlayScreen'
 import { applyServerChatRestoration, applyServerMessagePatch } from './request/serverMessagePatch'
 import {
   requestServerChat,
@@ -38,21 +38,33 @@ import {
   settingsResourceState,
 } from '../server/resourceState.svelte'
 import { captureChatMessageMutationIntentEpoch } from '../server/chatMessageMutationIntent'
-import { finalizeServerBackedInlayMessage } from './inlayFinalization'
+import {
+  abandonServerBackedInlayMessage,
+  finalizeServerBackedInlayMessage,
+  prepareServerBackedInlayMessage,
+} from './inlayFinalization'
 import { hydrateChatMessages } from '../server/chatMessageHydration.svelte'
 import type { StreamMessageProjection } from './postGeneration/streamResponse'
 import type { IgpMessageTarget } from './postGeneration/igp'
+import { captureContinueExtendIgpAuthority } from './postGeneration/igpTargetAuthority'
 import { clearGenerationPersistence, markGenerationPersistenceQueued } from './generationPersistenceState'
 import { yieldBeforeCompletionEffect } from './completionEffectScheduling'
 import { chatOutputListeners, runChatOutputListeners } from '../plugins/chatOutputListeners'
 import { alertConfirm } from '../alert'
 import { language } from '../../lang'
-import { currentChatScopedSnapshot, dispatchUpdateChatScopedWithOutcome } from '../chatCommands'
+import {
+  currentChatScopedSnapshot,
+  dispatchUpdateChatScopedWithOutcome,
+  dispatchUpdateMessageScoped,
+  type ChatMutationOutcome,
+  type ChatScopedSnapshot,
+} from '../chatCommands'
 import { HYPA_CONTEXT_TRUNCATION_CONFIRMATION_REQUIRED } from './request/hypaContextTruncation'
 import { sendChatFailureFromServerCode, type SendChatFailure } from './sendChatFailure'
 import type { GenerationReattachOutcomeStatus } from './generationReattachOutcome'
 import {
   completedGenerationEffect,
+  registerActiveGenerationInlayPreparation,
   runLedgeredGenerationEffect,
   skippedGenerationEffect,
 } from './generationEffectLedger'
@@ -60,6 +72,7 @@ import type { ServerGenerationEffectLedgerRef } from '@risuai/protocol/generatio
 import { readBrowserClientContext } from './request/clientContext'
 import {
   canUseGenerationOperationProtocol,
+  generationOperationProjections,
   stageTargetedGenerationOperation,
   submitStagedTargetedGenerationOperation,
 } from '../server/generationOperations'
@@ -71,8 +84,14 @@ import {
 } from './generationDisplayProjection.svelte'
 import { updateChatGenerationActivityMetadata } from './generationActivity.svelte'
 import { waitForPendingCharacterScriptDefinitionSave } from '../server/scriptDefinitionOwner.svelte'
-import { isClientChatOccupancyAuthorityCurrent } from '../server/chatOccupancy'
+import {
+  clientChatOccupancyStore,
+  getClientChatOccupancySnapshot,
+  isClientChatOccupancyAuthorityCurrent,
+  requestClientChatOccupancyRecovery,
+} from '../server/chatOccupancy'
 import type { GenerationOperationChatOccupancy } from '../server/generationOperations'
+import { createNonSecurityUuid } from '../nonSecurityUuid'
 
 export interface ServerBackedStageTimings {
   stage1Start: number
@@ -95,6 +114,123 @@ export interface ServerBackedRestorationGuard {
   chatId: string
   mutationIntentEpoch: number
   projectionEpoch: number
+}
+
+const SERVER_BACKED_INLAY_POST_PROVIDER_TIMEOUT_MS = 30_000
+
+function createServerBackedInlaySettlementScope(
+  isCurrent: () => boolean,
+  acceptedOccupancyStillProjected: () => boolean,
+): {
+  signal: AbortSignal
+  settlePostProvider: <T>(settle: (signal: AbortSignal) => Promise<T>) => Promise<T>
+  wait: (pending: Promise<string>) => Promise<string>
+  finish: () => void
+} {
+  const supersessionController = new AbortController()
+  const continuationController = new AbortController()
+  const activeSettlementCleanups = new Set<() => void>()
+  let finished = false
+  let postProviderStarted = false
+  const abortIfStale = () => {
+    if (postProviderStarted && !finished && !isCurrent() && !acceptedOccupancyStillProjected()) {
+      supersessionController.abort(new Error('server_backed_inlay_superseded'))
+    }
+  }
+  const unsubscribeSession = clientSessionStore.subscribe(abortIfStale)
+  const unsubscribeOccupancy = clientChatOccupancyStore.subscribe(abortIfStale)
+
+  const waitForSignal = <T>(pending: Promise<T>, signal: AbortSignal): Promise<T> => {
+    let rejectAborted!: (reason: unknown) => void
+    const aborted = signal.aborted
+      ? Promise.reject<never>(signal.reason)
+      : new Promise<never>((_resolve, reject) => {
+          rejectAborted = reject
+        })
+    const onAbort = () => rejectAborted(signal.reason)
+    if (!signal.aborted) signal.addEventListener('abort', onAbort, { once: true })
+    // Promise.race installs handlers on the ignored transport/provider promise
+    // too, so a late rejection after cancellation cannot become unhandled.
+    return Promise.race([pending, aborted]).finally(() => signal.removeEventListener('abort', onAbort))
+  }
+
+  const settlePostProvider = async <T>(settle: (signal: AbortSignal) => Promise<T>): Promise<T> => {
+    postProviderStarted = true
+    abortIfStale()
+    const timeoutController = new AbortController()
+    const signal = AbortSignal.any([
+      supersessionController.signal,
+      continuationController.signal,
+      timeoutController.signal,
+    ])
+    let deadline: ReturnType<typeof setTimeout> | undefined
+    let settlementFinished = false
+    const cleanup = () => {
+      if (settlementFinished) return
+      settlementFinished = true
+      if (deadline !== undefined) clearTimeout(deadline)
+      activeSettlementCleanups.delete(cleanup)
+    }
+    activeSettlementCleanups.add(cleanup)
+    if (!signal.aborted) {
+      deadline = setTimeout(
+        () => timeoutController.abort(new Error('server_backed_inlay_settlement_timeout')),
+        SERVER_BACKED_INLAY_POST_PROVIDER_TIMEOUT_MS,
+      )
+    }
+    try {
+      signal.throwIfAborted()
+      return await waitForSignal(settle(signal), signal)
+    } finally {
+      cleanup()
+    }
+  }
+
+  const wait = (pending: Promise<string>): Promise<string> => waitForSignal(pending, supersessionController.signal)
+  const finish = () => {
+    if (finished) return
+    finished = true
+    // Ending one failed preparation fences sibling uploads which are already
+    // in persistence, but intentionally does not abort sibling providers.
+    // They retain their normal provider timeout; when they return, the already
+    // aborted continuation signal prevents a late upload/catalog mutation.
+    continuationController.abort(new Error('server_backed_inlay_settlement_finished'))
+    for (const cleanup of [...activeSettlementCleanups]) cleanup()
+    unsubscribeSession()
+    unsubscribeOccupancy()
+  }
+  abortIfStale()
+  return { signal: supersessionController.signal, settlePostProvider, wait, finish }
+}
+
+async function mutationWasAccepted(outcome: ChatMutationOutcome | null): Promise<boolean> {
+  if (!outcome) return false
+  if (outcome.status === 'accepted') return true
+  if (outcome.status === 'failed') return false
+  return (await outcome.settlement).status === 'accepted'
+}
+
+/** Compatibility owner path used only when chat-occupancy rollout is absent. */
+async function finalizeLegacyServerBackedInlayMessage(input: {
+  previous: ChatScopedSnapshot
+  messageId: string
+  generationId: string
+  expectedData: string
+  finalData: string
+}): Promise<boolean> {
+  if (!input.previous.characterId || !input.previous.chatId) return false
+  const matching = input.previous.chat?.message.filter((message) => message.chatId === input.messageId) ?? []
+  if (matching.length !== 1 || matching[0].role !== 'char' || matching[0].data !== input.expectedData) {
+    return false
+  }
+  return mutationWasAccepted(
+    await dispatchUpdateMessageScoped(input.messageId, { data: input.finalData }, input.previous, {
+      optimisticPatchAlreadyApplied: true,
+      expectedData: input.expectedData,
+      expectedChatId: input.previous.chatId,
+      expectedGenerationId: input.generationId,
+    }),
+  )
 }
 
 export function captureServerBackedRestorationGuard(
@@ -1256,9 +1392,28 @@ export async function applyServerBackedTerminal(args: {
     expectedProjectionData: string
     mutationIntentEpoch: number
     projectionEpoch: number
+    effectLedger: ServerGenerationEffectLedgerRef
+    chatOccupancyAuthority: NonNullable<GenerationOperationChatOccupancy['authority']>
+    operationId: string
+    preparationId: string
+    retireActivePreparation: () => void
+    requiresFinalization: (data: string) => boolean
   }
   let immediateInlay: InlayFinalizationState | undefined
-  let pendingInlay: (InlayFinalizationState & { promise: Promise<string> }) | undefined
+  let pendingInlay:
+    | (InlayFinalizationState & { promise: Promise<string>; finishSettlementScope: () => void })
+    | undefined
+  type LegacyInlayFinalizationState = {
+    messageId: string
+    generationId: string
+    expectedServerData: string
+    expectedProjectionData: string
+    mutationIntentEpoch: number
+    previous: ReturnType<typeof currentChatScopedSnapshot>
+    requiresFinalization: (data: string) => boolean
+  }
+  let immediateLegacyInlay: LegacyInlayFinalizationState | undefined
+  let pendingLegacyInlay: (LegacyInlayFinalizationState & { promise: Promise<string> }) | undefined
   let processedPrimaryTtsText: string | undefined
   if (terminalProjectionIsFresh) {
     const resolution = resolveServerBackedLiveChat({
@@ -1287,52 +1442,179 @@ export async function applyServerBackedTerminal(args: {
           if (JSON.stringify(assistant.translation) !== JSON.stringify(translation)) assistant.translation = translation
         }
         const baseText = typeof postGen?.finalText === 'string' ? postGen.finalText : assistant.data
-        const inlay = runInlayScreen(resolution.character, baseText)
-        if (assistant.data !== inlay.text) assistant.data = inlay.text
-        if (pendingTtsTexts[0] === baseText) {
-          processedPrimaryTtsText = inlay.text
-        }
         const messageId = assistant.chatId ?? args.targetMessageId ?? generationId
-        if (inlay.text !== baseText && messageId && generationId) {
-          const finalization = {
+        // The terminal text is already durable. Mirror that authoritative value
+        // before reserving an optional inlay transformation; the post-prepare
+        // identity check below then detects only changes that happened while the
+        // reservation request was in flight.
+        if (assistant.data !== baseText) assistant.data = baseText
+        const authority = args.chatOccupancy?.authority
+        const canPrepare =
+          inlayScreenRequiresFinalization(resolution.character, baseText) &&
+          !!messageId &&
+          !!generationId &&
+          effectLedger?.keyType === 'operation' &&
+          effectLedger.generationId === generationId &&
+          effectLedger.chatId === terminalTarget.chatId &&
+          effectLedger.messageId === messageId &&
+          authority?.claimClass === 'owner' &&
+          authority.databaseLineage === effectLedger.databaseLineage &&
+          authority.chatId === effectLedger.chatId
+        if (pendingTtsTexts[0] === baseText && inlayScreenRequiresFinalization(resolution.character, baseText)) {
+          // Never start an untracked image provider merely to derive TTS text.
+          // A successfully prepared main inlay replaces this with its display
+          // text below; otherwise speak the authoritative raw terminal text.
+          processedPrimaryTtsText = baseText
+        }
+        if (canPrepare && effectLedger && authority && messageId) {
+          const preparationId = createNonSecurityUuid()
+          const releaseActivePreparation = registerActiveGenerationInlayPreparation(effectLedger, preparationId)
+          let activePreparationRetired = false
+          const retireActivePreparation = () => {
+            if (activePreparationRetired) return
+            activePreparationRetired = true
+            releaseActivePreparation()
+            // A translation/message event may already have queued and retained
+            // this operation while preparation acknowledgement was in flight.
+            // Refresh after every terminal exit (success, refusal, error, or
+            // supersession) so that exact work is released without a reload.
+            requestClientChatOccupancyRecovery({ refresh: true })
+          }
+          const preparation = {
+            effectLedger,
+            chatOccupancyAuthority: authority,
+            operationId: effectLedger.keyId,
+            preparationId,
+            expectedData: baseText,
+          }
+          let prepared = false
+          try {
+            prepared = await prepareServerBackedInlayMessage(preparation)
+          } catch (error) {
+            retireActivePreparation()
+            throw error
+          }
+          if (!prepared) {
+            retireActivePreparation()
+          } else {
+            let settlementDeferred = false
+            try {
+              const currentResolution = resolveServerBackedLiveChat({
+                selectedChar: args.selectedChar,
+                selectedChat: args.selectedChat,
+                characterId: terminalTarget.characterId,
+                chatId: terminalTarget.chatId,
+              })
+              const currentAssistant = currentResolution?.chat.message.find(
+                (message) => message.chatId === messageId && message.role === 'char',
+              )
+              if (!isCurrent() || !currentAssistant || currentAssistant.data !== baseText || !currentResolution) {
+                await abandonServerBackedInlayMessage(preparation)
+                if (!isCurrent()) return superseded()
+              } else {
+                const settlementScope = createServerBackedInlaySettlementScope(isCurrent, () => {
+                  const occupancy = getClientChatOccupancySnapshot().occupancies.find(
+                    (candidate) =>
+                      candidate.databaseLineage === authority.databaseLineage &&
+                      candidate.chatId === authority.chatId &&
+                      candidate.occupantSessionId === authority.sessionId &&
+                      candidate.occupancyEpoch === authority.occupancyEpoch &&
+                      candidate.claimClass === authority.claimClass &&
+                      candidate.state === 'occupied',
+                  )
+                  // A role transfer first makes the accepted authority locally
+                  // unavailable, then normalizes this exact durable owner row.
+                  // Keep a completed provider's upload alive through that
+                  // transient window. The normalization projection changes the
+                  // tuple and aborts immediately; the deadline covers a missing
+                  // projection/normalization response.
+                  return occupancy !== undefined
+                })
+                let inlay: ReturnType<typeof runInlayScreen>
+                try {
+                  inlay = runInlayScreen(currentResolution.character, baseText, {
+                    signal: settlementScope.signal,
+                    settlePostProvider: settlementScope.settlePostProvider,
+                  })
+                } catch (error) {
+                  settlementScope.finish()
+                  throw error
+                }
+                if (currentAssistant.data !== inlay.text) currentAssistant.data = inlay.text
+                if (pendingTtsTexts[0] === baseText) processedPrimaryTtsText = inlay.text
+                if (inlay.text === baseText) {
+                  settlementScope.finish()
+                  await abandonServerBackedInlayMessage(preparation)
+                } else {
+                  const finalization: InlayFinalizationState = {
+                    messageId,
+                    expectedServerData: baseText,
+                    expectedProjectionData: inlay.text,
+                    mutationIntentEpoch: captureChatMessageMutationIntentEpoch(terminalTarget.chatId),
+                    projectionEpoch: captureChatBodyProjectionEpoch(terminalTarget.chatId),
+                    effectLedger,
+                    chatOccupancyAuthority: authority,
+                    operationId: effectLedger.keyId,
+                    preparationId,
+                    retireActivePreparation,
+                    requiresFinalization: (data) => inlayScreenRequiresFinalization(currentResolution.character, data),
+                  }
+                  if (inlay.promise) {
+                    pendingInlay = {
+                      ...finalization,
+                      promise: settlementScope.wait(inlay.promise),
+                      finishSettlementScope: settlementScope.finish,
+                    }
+                  } else {
+                    settlementScope.finish()
+                    immediateInlay = finalization
+                  }
+                  settlementDeferred = true
+                }
+              }
+            } catch (error) {
+              try {
+                await abandonServerBackedInlayMessage(preparation)
+              } catch {
+                // Reload recovery retains the exact durable marker when the
+                // settlement transport itself is unavailable.
+              }
+              throw error
+            } finally {
+              if (!settlementDeferred) retireActivePreparation()
+            }
+          }
+        } else if (
+          !args.chatOccupancy &&
+          messageId &&
+          generationId &&
+          inlayScreenRequiresFinalization(resolution.character, baseText)
+        ) {
+          const previous: ChatScopedSnapshot = {
+            selectedCharID: get(selectedCharID),
+            characterId: resolution.character.chaId,
+            chatId: resolution.chat.id,
+            chat: safeStructuredClone(resolution.chat),
+          }
+          const inlay = runInlayScreen(resolution.character, baseText)
+          if (assistant.data !== inlay.text) assistant.data = inlay.text
+          if (pendingTtsTexts[0] === baseText) processedPrimaryTtsText = inlay.text
+          const finalization: LegacyInlayFinalizationState = {
             messageId,
+            generationId,
             expectedServerData: baseText,
             expectedProjectionData: inlay.text,
             mutationIntentEpoch: captureChatMessageMutationIntentEpoch(terminalTarget.chatId),
-            projectionEpoch: captureChatBodyProjectionEpoch(terminalTarget.chatId),
+            previous,
+            requiresFinalization: (data) => inlayScreenRequiresFinalization(resolution.character, data),
           }
-          if (inlay.promise) {
-            pendingInlay = { ...finalization, promise: inlay.promise }
-          } else {
-            immediateInlay = finalization
-          }
+          if (inlay.promise) pendingLegacyInlay = { ...finalization, promise: inlay.promise }
+          else immediateLegacyInlay = finalization
         }
       }
     }
   }
 
-  // A fresh terminal patch is already durable on the server. Mirror it before
-  // waiting on best-effort client TTS; stale terminal projections are left to
-  // the newer local/server authority selected above.
-  await runLedgeredGenerationEffect(effectLedger, 'tts', 'live_terminal', async (effectContext) => {
-    if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
-    if (pendingTtsTexts.length === 0) return skippedGenerationEffect('not_requested')
-    for (let index = 0; index < pendingTtsTexts.length; index++) {
-      if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
-      const text = pendingTtsTexts[index]
-      // The server payload is post-editoutput; inlay remains browser-owned. Reuse
-      // the primary display pass when possible, then process each alternate in
-      // provider choice order before speaking it (baseline buffered semantics).
-      const processedText =
-        index === 0 && processedPrimaryTtsText !== undefined
-          ? processedPrimaryTtsText
-          : runInlayScreen(args.currentChar, text).text
-      await sayTTS(args.currentChar, processedText)
-    }
-    return completedGenerationEffect(undefined)
-  })
-
-  if (!isCurrent()) return superseded()
   const settleInlayProjection = (finalization: InlayFinalizationState, finalData: string, persisted: boolean): void => {
     if (!isCurrent()) return
     if (captureChatMessageMutationIntentEpoch(terminalTarget.chatId) !== finalization.mutationIntentEpoch) return
@@ -1346,61 +1628,203 @@ export async function applyServerBackedTerminal(args: {
       (message) => message.chatId === finalization.messageId && message.role === 'char',
     )
     if (!assistant) return
-    if (assistant.data !== finalization.expectedProjectionData && assistant.data !== finalData) return
+    // Server-authored metadata updates (most notably translation completion)
+    // can hydrate the still-authoritative raw terminal text while an image
+    // provider is pending. That exact value is not a user supersession; the
+    // mutation-intent epoch above still rejects edit-away-then-back races.
+    if (
+      assistant.data !== finalization.expectedProjectionData &&
+      assistant.data !== finalization.expectedServerData &&
+      assistant.data !== finalData
+    )
+      return
     assistant.data = persisted ? finalData : finalization.expectedServerData
   }
 
   if (immediateInlay) {
-    const persisted = await finalizeServerBackedInlayMessage({
-      chatId: terminalTarget.chatId,
-      messageId: immediateInlay.messageId,
-      generationId,
-      expectedData: immediateInlay.expectedServerData,
-      finalData: immediateInlay.expectedProjectionData,
-    })
+    let persisted = false
+    try {
+      if (isCurrent()) {
+        persisted = await finalizeServerBackedInlayMessage({
+          effectLedger: immediateInlay.effectLedger,
+          chatOccupancyAuthority: immediateInlay.chatOccupancyAuthority,
+          operationId: immediateInlay.operationId,
+          preparationId: immediateInlay.preparationId,
+          expectedData: immediateInlay.expectedServerData,
+          finalData: immediateInlay.expectedProjectionData,
+        })
+      } else {
+        await abandonServerBackedInlayMessage({
+          effectLedger: immediateInlay.effectLedger,
+          chatOccupancyAuthority: immediateInlay.chatOccupancyAuthority,
+          operationId: immediateInlay.operationId,
+          preparationId: immediateInlay.preparationId,
+          expectedData: immediateInlay.expectedServerData,
+        })
+      }
+    } catch {
+      try {
+        await abandonServerBackedInlayMessage({
+          effectLedger: immediateInlay.effectLedger,
+          chatOccupancyAuthority: immediateInlay.chatOccupancyAuthority,
+          operationId: immediateInlay.operationId,
+          preparationId: immediateInlay.preparationId,
+          expectedData: immediateInlay.expectedServerData,
+        })
+      } catch {
+        // A later bootstrap can replay the exact pending marker.
+      }
+    } finally {
+      immediateInlay.retireActivePreparation()
+    }
     settleInlayProjection(immediateInlay, immediateInlay.expectedProjectionData, persisted)
   }
 
   if (pendingInlay) {
     let resolved = ''
-    let promiseFailed = false
+    let persisted = false
     try {
-      resolved = await pendingInlay.promise
+      try {
+        resolved = await pendingInlay.promise
+      } catch {
+        resolved = pendingInlay.expectedServerData
+      } finally {
+        pendingInlay.finishSettlementScope()
+      }
+      if (!isCurrent() || pendingInlay.requiresFinalization(resolved)) {
+        await abandonServerBackedInlayMessage({
+          effectLedger: pendingInlay.effectLedger,
+          chatOccupancyAuthority: pendingInlay.chatOccupancyAuthority,
+          operationId: pendingInlay.operationId,
+          preparationId: pendingInlay.preparationId,
+          expectedData: pendingInlay.expectedServerData,
+        })
+      } else {
+        persisted = await finalizeServerBackedInlayMessage({
+          effectLedger: pendingInlay.effectLedger,
+          chatOccupancyAuthority: pendingInlay.chatOccupancyAuthority,
+          operationId: pendingInlay.operationId,
+          preparationId: pendingInlay.preparationId,
+          expectedData: pendingInlay.expectedServerData,
+          finalData: resolved,
+        })
+      }
     } catch {
-      settleInlayProjection(pendingInlay, pendingInlay.expectedServerData, false)
-      promiseFailed = true
+      persisted = false
+      try {
+        await abandonServerBackedInlayMessage({
+          effectLedger: pendingInlay.effectLedger,
+          chatOccupancyAuthority: pendingInlay.chatOccupancyAuthority,
+          operationId: pendingInlay.operationId,
+          preparationId: pendingInlay.preparationId,
+          expectedData: pendingInlay.expectedServerData,
+        })
+      } catch {
+        // A later bootstrap can replay the exact pending marker.
+      }
+    } finally {
+      pendingInlay.retireActivePreparation()
     }
-    if (!isCurrent()) return superseded()
-    let canFinalize = !promiseFailed
-    if (
-      captureChatMessageMutationIntentEpoch(terminalTarget.chatId) !== pendingInlay.mutationIntentEpoch ||
-      hasChatBodyProjectionEpochChanged(terminalTarget.chatId, pendingInlay.projectionEpoch)
-    ) {
-      canFinalize = false
-    } else {
-      const resolution = resolveServerBackedLiveChat({
-        selectedChar: args.selectedChar,
-        selectedChat: args.selectedChat,
-        characterId: terminalTarget.characterId,
-        chatId: terminalTarget.chatId,
-      })
-      const liveChat = resolution?.chat
-      const assistant = liveChat
-        ? liveChat.message.find((message) => message.chatId === pendingInlay.messageId && message.role === 'char')
-        : undefined
-      if (!assistant || assistant.data !== pendingInlay!.expectedProjectionData) canFinalize = false
-    }
-    if (canFinalize) {
-      const persisted = await finalizeServerBackedInlayMessage({
-        chatId: terminalTarget.chatId,
-        messageId: pendingInlay.messageId,
-        generationId,
-        expectedData: pendingInlay.expectedServerData,
-        finalData: resolved,
-      })
-      settleInlayProjection(pendingInlay, resolved, persisted)
-    }
+    settleInlayProjection(pendingInlay, resolved || pendingInlay.expectedServerData, persisted)
   }
+
+  const settleLegacyProjection = (
+    finalization: LegacyInlayFinalizationState,
+    finalData: string,
+    persisted: boolean,
+  ): void => {
+    if (!isCurrent()) return
+    if (captureChatMessageMutationIntentEpoch(terminalTarget.chatId) !== finalization.mutationIntentEpoch) return
+    const resolution = resolveServerBackedLiveChat({
+      selectedChar: args.selectedChar,
+      selectedChat: args.selectedChat,
+      characterId: terminalTarget.characterId,
+      chatId: terminalTarget.chatId,
+    })
+    const assistant = resolution?.chat.message.find(
+      (message) => message.chatId === finalization.messageId && message.role === 'char',
+    )
+    if (!assistant) return
+    if (
+      assistant.data !== finalization.expectedProjectionData &&
+      assistant.data !== finalization.expectedServerData &&
+      assistant.data !== finalData
+    )
+      return
+    if (!persisted && assistant.data === finalData && finalData !== finalization.expectedProjectionData) return
+    assistant.data = persisted ? finalData : finalization.expectedServerData
+  }
+
+  const legacyInlayProjectionIsOwned = (finalization: LegacyInlayFinalizationState, finalData: string): boolean => {
+    if (!isCurrent()) return false
+    if (captureChatMessageMutationIntentEpoch(terminalTarget.chatId) !== finalization.mutationIntentEpoch) return false
+    const resolution = resolveServerBackedLiveChat({
+      selectedChar: args.selectedChar,
+      selectedChat: args.selectedChat,
+      characterId: terminalTarget.characterId,
+      chatId: terminalTarget.chatId,
+    })
+    const assistant = resolution?.chat.message.find(
+      (message) => message.chatId === finalization.messageId && message.role === 'char',
+    )
+    return (
+      !!assistant &&
+      (assistant.data === finalization.expectedProjectionData ||
+        assistant.data === finalization.expectedServerData ||
+        assistant.data === finalData)
+    )
+  }
+
+  if (immediateLegacyInlay) {
+    const persisted =
+      legacyInlayProjectionIsOwned(immediateLegacyInlay, immediateLegacyInlay.expectedProjectionData) &&
+      (await finalizeLegacyServerBackedInlayMessage({
+        previous: immediateLegacyInlay.previous,
+        messageId: immediateLegacyInlay.messageId,
+        generationId: immediateLegacyInlay.generationId,
+        expectedData: immediateLegacyInlay.expectedServerData,
+        finalData: immediateLegacyInlay.expectedProjectionData,
+      }))
+    settleLegacyProjection(immediateLegacyInlay, immediateLegacyInlay.expectedProjectionData, persisted)
+  }
+
+  if (pendingLegacyInlay) {
+    let resolved = pendingLegacyInlay.expectedServerData
+    try {
+      resolved = await pendingLegacyInlay.promise
+    } catch {
+      // Keep the retryable source tag when the provider or asset upload fails.
+    }
+    const persisted =
+      !pendingLegacyInlay.requiresFinalization(resolved) &&
+      legacyInlayProjectionIsOwned(pendingLegacyInlay, resolved) &&
+      (await finalizeLegacyServerBackedInlayMessage({
+        previous: pendingLegacyInlay.previous,
+        messageId: pendingLegacyInlay.messageId,
+        generationId: pendingLegacyInlay.generationId,
+        expectedData: pendingLegacyInlay.expectedServerData,
+        finalData: resolved,
+      }))
+    settleLegacyProjection(pendingLegacyInlay, resolved, persisted)
+  }
+
+  // Inlay settlement precedes best-effort TTS so role loss or TTS failure can
+  // never strand a durable preparation. Alternate text uses the pure renderer:
+  // it has no independent authority to start an image provider.
+  await runLedgeredGenerationEffect(effectLedger, 'tts', 'live_terminal', async (effectContext) => {
+    if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
+    if (pendingTtsTexts.length === 0) return skippedGenerationEffect('not_requested')
+    for (let index = 0; index < pendingTtsTexts.length; index++) {
+      if (!isCurrent() || !effectContext.isCurrent()) return skippedGenerationEffect('writer_session_changed')
+      const text = pendingTtsTexts[index]
+      const processedText =
+        index === 0 && processedPrimaryTtsText !== undefined
+          ? processedPrimaryTtsText
+          : renderInlayScreenTextWithoutProviders(args.currentChar, text)
+      await sayTTS(args.currentChar, processedText)
+    }
+    return completedGenerationEffect(undefined)
+  })
 
   if (!isCurrent()) return superseded()
   const providerAlternates = args.terminal.done?.alternates
@@ -1489,6 +1913,24 @@ export async function applyServerBackedTerminal(args: {
   }
 
   const finalMessageId = finalAssistant?.chatId ?? args.targetMessageId
+  const continueOperationAttemptNo =
+    effectLedger &&
+    args.generationInfo.generationId === effectLedger.generationId &&
+    args.generationInfo.operationId === effectLedger.keyId &&
+    args.generationInfo.jobId === effectLedger.generationId
+      ? args.generationInfo.attemptNo
+      : undefined
+  const continueExtendAuthority =
+    finalAssistant && effectLedger && args.terminal.done?.continueDisposition === 'extend'
+      ? captureContinueExtendIgpAuthority({
+          ref: effectLedger,
+          operationAttemptNo: continueOperationAttemptNo,
+          message: finalAssistant,
+          operation: get(generationOperationProjections).find(
+            (operation) => operation.operationId === effectLedger.keyId,
+          ),
+        })
+      : undefined
   const igpTarget =
     finalResolution &&
     finalAssistant &&
@@ -1503,6 +1945,7 @@ export async function applyServerBackedTerminal(args: {
           ...(finalAssistant?.generationInfo?.generationId === generationId
             ? { expectedGenerationId: generationId }
             : {}),
+          ...(continueExtendAuthority ? { continueExtendAuthority } : {}),
         }
       : undefined
 

@@ -8,8 +8,8 @@ import {
 
 describe('route-operation catalog', () => {
   it('publishes unique reviewed operation identifiers and exact descriptors', () => {
-    expect(PROTOCOL_ROUTE_OPERATION_CATALOG).toHaveLength(117)
-    expect(new Set(PROTOCOL_ROUTE_OPERATION_CATALOG.map(({ id }) => id)).size).toBe(117)
+    expect(PROTOCOL_ROUTE_OPERATION_CATALOG).toHaveLength(122)
+    expect(new Set(PROTOCOL_ROUTE_OPERATION_CATALOG.map(({ id }) => id)).size).toBe(122)
 
     for (const operation of PROTOCOL_ROUTE_OPERATION_CATALOG) {
       expect(isProtocolRouteOperationDescriptor(operation), operation.id).toBe(true)
@@ -78,6 +78,7 @@ describe('route-operation catalog', () => {
       'image-generation:no-store',
       'generation-completion:no-store',
       'generation-operation-stream:no-cache',
+      'generation-effect-igp-completion:no-store',
       'generation-chat:no-cache',
       'generation-chat-reattach:no-cache',
       'generation-chat-terminal-snapshot:no-store',
@@ -106,6 +107,11 @@ describe('route-operation catalog', () => {
       'generation-effect-claim:durable-generation',
       'generation-effect-lease:durable-generation',
       'generation-effect-receipt:durable-generation',
+      'generation-effect-igp-commit:revisioned-command',
+      'generation-effect-inlay-preparation:revisioned-command',
+      'generation-effect-inlay-finalization:revisioned-command',
+      'generation-effect-inlay-abandonment:revisioned-command',
+      'generation-effect-igp-completion:durable-generation',
       'generation-chat:server-job',
       'generation-chat-reattach:server-job',
       'generation-chat-terminal-snapshot:server-job',
