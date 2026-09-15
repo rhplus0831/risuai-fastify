@@ -101,11 +101,14 @@ describe('chat occupancy transport', () => {
     })
     await renewChatOccupancy(current, occupied)
     await releaseChatOccupancy(current, occupied)
-    await switchChatOccupancy(current, {
-      sourceChatId: 'chat/a',
-      targetChatId: 'chat/a',
-      occupancyEpoch: 3,
-    })
+    vi.mocked(fetch).mockResolvedValueOnce(response(projection('chat/b', 4)))
+    await expect(
+      switchChatOccupancy(current, {
+        sourceChatId: 'chat/a',
+        targetChatId: 'chat/b',
+        occupancyEpoch: 3,
+      }),
+    ).resolves.toMatchObject({ status: 'ok', occupancy: projection('chat/b', 4) })
     await normalizeChatOccupancies(current, occupied)
 
     const requests = vi.mocked(fetch).mock.calls.map(([url, init]) => ({ url, init }))
@@ -125,11 +128,18 @@ describe('chat occupancy transport', () => {
         'content-type': 'application/json',
       })
     }
+    expect(requests.map(({ init }) => (init?.headers as Record<string, string>)['risu-chat-occupancy-epoch'])).toEqual([
+      '2',
+      '3',
+      '3',
+      '3',
+      '3',
+    ])
     expect(requests.map(({ init }) => JSON.parse(String(init?.body)))).toEqual([
       { version: 1, claimClass: 'chat_only' },
       { version: 1 },
       { version: 1 },
-      { version: 1, sourceChatId: 'chat/a', targetChatId: 'chat/a' },
+      { version: 1, sourceChatId: 'chat/a', targetChatId: 'chat/b' },
       { version: 1, selectedChatId: 'chat/a' },
     ])
   })

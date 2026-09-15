@@ -451,7 +451,7 @@ describe('client chat occupancy coordinator', () => {
     expect(getClientChatOccupancySnapshot()).toMatchObject({ databaseLineage: 'database-b', occupancies: [] })
   })
 
-  it('renews every advertised interval without releasing on interruption or visibility changes', async () => {
+  it('renews every advertised interval without releasing on connection interruption', async () => {
     const held = occupancy('chat-a', 'reader-a', 2)
     beginReader([held])
     const renewed = {

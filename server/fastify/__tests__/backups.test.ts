@@ -1188,26 +1188,30 @@ describe('backups', () => {
           )
           .get(),
       ).toEqual({ database_lineage: restoredLineage, status: 'completed' })
-      expect(
-        verify
-          .prepare(
-            `SELECT COUNT(*) AS count,
-                    MIN(database_lineage) AS database_lineage,
-                    MIN(operation_id) AS operation_id,
-                    MIN(operation_attempt_no) AS operation_attempt_no,
-                    MIN(status) AS status,
-                    MIN(reason) AS reason
-             FROM generation_effects WHERE generation_id = 'job-round-trip'`,
-          )
-          .get(),
-      ).toEqual({
-        count: 7,
-        database_lineage: restoredLineage,
-        operation_id: 'operation-round-trip',
-        operation_attempt_no: 1,
-        status: 'skipped',
-        reason: 'pre_ledger_terminal',
-      })
+      const effects = verify
+        .prepare(
+          `SELECT effect_kind, database_lineage, operation_id, operation_attempt_no, status, reason
+           FROM generation_effects WHERE generation_id = 'job-round-trip' ORDER BY effect_kind`,
+        )
+        .all()
+      expect(effects).toEqual(
+        [
+          'completion_sound',
+          'emotion_image_state',
+          'generated_translation',
+          'igp',
+          'notification',
+          'plugin_output',
+          'tts',
+        ].map((effect_kind) => ({
+          effect_kind,
+          database_lineage: restoredLineage,
+          operation_id: 'operation-round-trip',
+          operation_attempt_no: 1,
+          status: 'skipped',
+          reason: 'pre_ledger_terminal',
+        })),
+      )
       expect(
         verify
           .prepare(

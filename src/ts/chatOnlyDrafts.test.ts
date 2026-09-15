@@ -50,16 +50,24 @@ describe('chat-only drafts', () => {
     const storage = new MemoryStorage()
     const original = scope({ sessionId: 'original-tab' })
     const duplicate = scope({ sessionId: 'duplicate-tab' })
+    const staleLineage = scope({ databaseLineage: 'old-database', sessionId: duplicate.sessionId })
+    const otherChat = { ...duplicate, chatId: 'chat:two' }
     writeChatOnlyDraft(original, 'private original draft', storage)
+    writeChatOnlyDraft(staleLineage, 'stale database draft', storage)
+    writeChatOnlyDraft(duplicate, 'current draft', storage)
+    writeChatOnlyDraft(otherChat, 'other current chat draft', storage)
     storage.setItem('unrelated', 'preserved')
 
     pruneChatOnlyDraftsForScope(duplicate, storage)
 
     expect(storage.getItem(chatOnlyDraftStorageKey(original)!)).toBeNull()
+    expect(storage.getItem(chatOnlyDraftStorageKey(staleLineage)!)).toBeNull()
+    expect(storage.getItem(chatOnlyDraftStorageKey(duplicate)!)).toBe('current draft')
+    expect(storage.getItem(chatOnlyDraftStorageKey(otherChat)!)).toBe('other current chat draft')
     expect(storage.getItem('unrelated')).toBe('preserved')
   })
 
-  it('removes accepted drafts and fails closed for invalid scopes or unavailable storage', () => {
+  it('removes accepted drafts and fails closed for invalid scopes', () => {
     const storage = new MemoryStorage()
     writeChatOnlyDraft(scope(), 'accepted message', storage)
     expect(writeChatOnlyDraft(scope(), '', storage)).toBe(true)

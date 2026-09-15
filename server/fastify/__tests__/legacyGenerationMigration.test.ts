@@ -830,10 +830,17 @@ describe('legacy generation migration finalization', () => {
     })
     expect(retry.statusCode).toBe(202)
     await waitForOperationState(operationId, 'retryable')
+    // Provider policy may retry within one durable attempt. The operation must
+    // still reserve exactly one attempt for this explicit retry request.
     expect(providerCalls).toBeGreaterThan(0)
 
     await app.close()
     const memoryDb = openDatabase(dataDir)
+    expect(
+      memoryDb
+        .prepare('SELECT COUNT(*) AS count FROM generation_operation_attempts WHERE operation_id = ?')
+        .get(operationId),
+    ).toEqual({ count: 1 })
     const memoryJobs = listMemoryJobs(memoryDb, { chatId: 'chat-1', kind: 'summarize' })
     expect(memoryJobs).toHaveLength(1)
     const memoryJob = getMemoryJob(memoryDb, memoryJobs[0].id)

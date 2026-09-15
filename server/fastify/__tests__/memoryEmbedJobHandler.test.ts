@@ -1,14 +1,9 @@
+import { acceptedGenerationProvenance } from './helpers/acceptedMemoryGeneration.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { openDatabase } from '../src/db.js'
-import { getDatabaseLineage } from '../src/databaseLineage.js'
-import {
-  createGenerationOperation,
-  generationEffectiveConfigurationFingerprint,
-  reserveGenerationOperationAttempt,
-} from '../src/generationOperations.js'
 import { createEmbedMemoryJobBatchHandler, createEmbedMemoryJobHandler } from '../src/memoryEmbedJobHandler.js'
 import {
   MEMORY_EMBEDDING_APPROX_CHARS_PER_TOKEN,
@@ -136,58 +131,6 @@ function seedChunkAndJob(db: ReturnType<typeof openDatabase>, jobPayload = paylo
   })
 }
 
-function acceptedGenerationProvenance(db: ReturnType<typeof openDatabase>, acceptedDatabase: unknown) {
-  const databaseLineage = getDatabaseLineage(db)
-  const operationId = 'operation-memory-embed'
-  const generationScope = { admissionKind: 'legacy_owner' as const }
-  const effectiveConfiguration = {
-    version: 1,
-    database: acceptedDatabase,
-    promptInfo: {},
-    resolvedMainProfile: {},
-  }
-  const operation = createGenerationOperation(db, {
-    databaseLineage,
-    operationId,
-    protocolVersion: 1,
-    requestOrigin: 'accepted_send',
-    creatorWriterSessionId: 'writer-a',
-    creatorWriterEpoch: 1,
-    generationScope,
-    effectiveConfiguration,
-    effectiveConfigurationFingerprint: generationEffectiveConfigurationFingerprint(effectiveConfiguration),
-    bindingServerInstanceId: 'server-a',
-    characterId: 'character-a',
-    chatId: 'chat-1',
-    mode: 'send',
-    acceptedMessageId: 'message-a',
-    requestFingerprint: 'a'.repeat(64),
-    intent: { mode: 'send' },
-    acceptedRevision: 0,
-    state: 'accepted',
-  })
-  const reservation = reserveGenerationOperationAttempt(db, {
-    databaseLineage,
-    operationId,
-    expectedState: 'accepted',
-    expectedStateVersion: operation.stateVersion,
-    retryRequestId: 'retry-memory-embed',
-    jobId: 'generation-job-memory-embed',
-    serverInstanceId: 'server-a',
-    actorWriterSessionId: 'writer-a',
-    actorWriterEpoch: 1,
-    launchRevision: 0,
-  })
-  if (reservation.status !== 'applied' || !reservation.operation.currentAttempt) {
-    throw new Error('failed to reserve accepted embed generation attempt')
-  }
-  return {
-    operationId,
-    operationAttemptNo: reservation.operation.currentAttempt.attemptNo,
-    generationScope,
-  }
-}
-
 function seedBatchJob(
   db: ReturnType<typeof openDatabase>,
   input: { id: string; chunkId: string; text: string; model?: string },
@@ -235,7 +178,7 @@ describe('embed memory job handler', () => {
       const acceptedDatabase = database()
       acceptedDatabase.hypaCustomSettings.model = 'accepted-embed-model'
       acceptedDatabase.hypaCustomSettings.url = 'https://accepted.example/v1'
-      const provenance = acceptedGenerationProvenance(db, acceptedDatabase)
+      const provenance = acceptedGenerationProvenance(db, acceptedDatabase, 'memory-embed')
       createMemoryChunk(db, {
         id: 'chunk-1',
         chatId: 'chat-1',
@@ -1093,7 +1036,7 @@ describe('embed memory job handler', () => {
     const db = openDatabase(makeDataDir())
     try {
       const acceptedDatabase = database()
-      const provenance = acceptedGenerationProvenance(db, acceptedDatabase)
+      const provenance = acceptedGenerationProvenance(db, acceptedDatabase, 'memory-embed')
       createMemoryChunk(db, {
         id: 'chunk-a-valid',
         chatId: 'chat-1',

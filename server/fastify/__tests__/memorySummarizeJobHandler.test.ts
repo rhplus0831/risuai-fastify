@@ -1,3 +1,4 @@
+import { acceptedGenerationProvenance } from './helpers/acceptedMemoryGeneration.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -131,58 +132,6 @@ function seedChunkAndJob(db: ReturnType<typeof openDatabase>, jobPayload = paylo
   })
 }
 
-function acceptedGenerationProvenance(db: ReturnType<typeof openDatabase>, acceptedDatabase: unknown) {
-  const databaseLineage = getDatabaseLineage(db)
-  const operationId = 'operation-memory-summary'
-  const generationScope = { admissionKind: 'legacy_owner' as const }
-  const effectiveConfiguration = {
-    version: 1,
-    database: acceptedDatabase,
-    promptInfo: {},
-    resolvedMainProfile: {},
-  }
-  const operation = createGenerationOperation(db, {
-    databaseLineage,
-    operationId,
-    protocolVersion: 1,
-    requestOrigin: 'accepted_send',
-    creatorWriterSessionId: 'writer-a',
-    creatorWriterEpoch: 1,
-    generationScope,
-    effectiveConfiguration,
-    effectiveConfigurationFingerprint: generationEffectiveConfigurationFingerprint(effectiveConfiguration),
-    bindingServerInstanceId: 'server-a',
-    characterId: 'character-a',
-    chatId: 'chat-1',
-    mode: 'send',
-    acceptedMessageId: 'message-a',
-    requestFingerprint: 'a'.repeat(64),
-    intent: { mode: 'send' },
-    acceptedRevision: 0,
-    state: 'accepted',
-  })
-  const reservation = reserveGenerationOperationAttempt(db, {
-    databaseLineage,
-    operationId,
-    expectedState: 'accepted',
-    expectedStateVersion: operation.stateVersion,
-    retryRequestId: 'retry-memory-summary',
-    jobId: 'generation-job-memory-summary',
-    serverInstanceId: 'server-a',
-    actorWriterSessionId: 'writer-a',
-    actorWriterEpoch: 1,
-    launchRevision: 0,
-  })
-  if (reservation.status !== 'applied' || !reservation.operation.currentAttempt) {
-    throw new Error('failed to reserve accepted summary generation attempt')
-  }
-  return {
-    operationId,
-    operationAttemptNo: reservation.operation.currentAttempt.attemptNo,
-    generationScope,
-  }
-}
-
 function seedBatchJob(
   db: ReturnType<typeof openDatabase>,
   input: {
@@ -216,7 +165,7 @@ describe('summarize memory job handler', () => {
     const db = openDatabase(makeDataDir())
     try {
       const acceptedDatabase = database({ summarizationPrompt: 'Accepted prompt: {{slot}}' })
-      const provenance = acceptedGenerationProvenance(db, acceptedDatabase)
+      const provenance = acceptedGenerationProvenance(db, acceptedDatabase, 'memory-summary')
       const chats: PromptMessage[] = [
         { role: 'assistant', content: 'accepted source', memo: 'm0' },
         { role: 'assistant', content: 'accepted second', memo: 'm1' },

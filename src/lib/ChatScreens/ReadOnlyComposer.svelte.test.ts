@@ -29,7 +29,9 @@ describe('read-only composer presentation', () => {
   it('keeps every field and action natively unavailable', () => {
     const fields = target.querySelectorAll<HTMLTextAreaElement>('[data-reader-composer-field]')
     const actions = target.querySelectorAll<HTMLButtonElement>('[data-reader-composer] button')
-    expect(fields).toHaveLength(4)
+    expect([...fields].map((field) => field.dataset.readerComposerField)).toEqual(
+      expect.arrayContaining(['message', 'translated', 'draft', 'btw']),
+    )
     expect(actions.length).toBeGreaterThanOrEqual(3)
     expect([...fields].every((field) => field.disabled && field.readOnly)).toBe(true)
     expect([...actions].every((action) => action.disabled)).toBe(true)
@@ -38,7 +40,9 @@ describe('read-only composer presentation', () => {
     )
   })
 
-  it('lets synthetic input and send clicks bubble without opening writer UI', () => {
+  it('keeps synthetic events from sending or opening writer UI', async () => {
+    const onSend = vi.fn()
+    await render({ draftValue: 'retained draft', onSend })
     const input = target.querySelector<HTMLTextAreaElement>('[data-reader-composer-field="message"]')!
     const listener = vi.fn()
     target.addEventListener('input', listener)
@@ -49,6 +53,7 @@ describe('read-only composer presentation', () => {
       .dispatchEvent(new MouseEvent('click', { bubbles: true }))
 
     expect(listener).toHaveBeenCalledOnce()
+    expect(onSend).not.toHaveBeenCalled()
     expect(target.querySelector('[aria-busy="true"]')).toBeNull()
     expect(target.querySelector('[role="dialog"], [role="menu"]')).toBeNull()
   })
@@ -196,21 +201,19 @@ describe('read-only composer presentation', () => {
     expect(target.querySelector<HTMLButtonElement>('[data-reader-composer-send]')?.disabled).toBe(true)
   })
 
-  it('blocks attachment drops in every state and exposes mobile-sized controls', async () => {
-    const downstream = vi.fn()
-    document.body.addEventListener('drop', downstream, { once: true })
-    await render({ mode: 'self-owned' })
-    const composer = target.querySelector<HTMLElement>('[data-reader-composer]')!
-    const dropped = new Event('drop', { bubbles: true, cancelable: true })
-    composer.dispatchEvent(dropped)
+  it.each(['unsupported', 'available', 'self-owned', 'foreign-owned'] as const)(
+    'blocks attachment drops while %s',
+    async (mode) => {
+      const downstream = vi.fn()
+      document.body.addEventListener('drop', downstream, { once: true })
+      await render({ mode })
+      const composer = target.querySelector<HTMLElement>('[data-reader-composer]')!
+      const dropped = new Event('drop', { bubbles: true, cancelable: true })
+      composer.dispatchEvent(dropped)
 
-    expect(dropped.defaultPrevented).toBe(true)
-    expect(downstream).not.toHaveBeenCalled()
-    document.body.removeEventListener('drop', downstream)
-    for (const control of target.querySelectorAll<HTMLElement>(
-      '[data-read-only-composer-row] button, [data-read-only-composer-row] textarea, [data-reader-chat-only-controls] button',
-    )) {
-      expect(control.className).toMatch(/min-h-(11|12)/)
-    }
-  })
+      expect(dropped.defaultPrevented).toBe(true)
+      expect(downstream).not.toHaveBeenCalled()
+      document.body.removeEventListener('drop', downstream)
+    },
+  )
 })

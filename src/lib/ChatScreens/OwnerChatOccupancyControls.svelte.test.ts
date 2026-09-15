@@ -298,6 +298,7 @@ describe('owner chat occupancy controls', () => {
     await settle()
     expect(target.querySelector<HTMLButtonElement>('[data-owner-occupancy-release]')?.disabled).toBe(false)
 
+    const nextChatBefore = structuredClone(projectClientChatOccupancy('chat-b'))
     claimResult.resolve({ status: 'ok', occupancy: ownerClaim })
     await vi.waitFor(() =>
       expect(projectClientChatOccupancy('chat-a')).toMatchObject({
@@ -305,6 +306,7 @@ describe('owner chat occupancy controls', () => {
         occupancy: { occupancyEpoch: 5, claimClass: 'owner' },
       }),
     )
+    expect(projectClientChatOccupancy('chat-b')).toEqual(nextChatBefore)
     expect(target.querySelector('[data-owner-chat-occupancy-class="owner"]')).not.toBeNull()
     expect(target.querySelector<HTMLButtonElement>('[data-owner-occupancy-release]')?.disabled).toBe(false)
   })

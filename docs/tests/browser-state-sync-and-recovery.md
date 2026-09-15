@@ -114,13 +114,25 @@ the case does not assert a repair write to SQLite or repair before bootstrap.
 
 ### Chat Occupancy And Scoped Recovery
 
-`server/fastify/browser-smoke/chatOccupancyInteraction.spec.ts` is the primary
-integrated browser owner; together with the server enforcement suites below it
-completes T01-T11. Separate BrowserContexts exercise one general owner, two
+The occupancy browser journeys are split by behavior and share
+`server/fastify/browser-smoke/chatOccupancyHarness.ts`. Each test creates and
+closes its own Fastify server, database, and BrowserContexts, so independent
+files can run concurrently under the existing Playwright worker limit.
+
+| Browser spec | Protected behavior |
+| --- | --- |
+| `server/fastify/browser-smoke/chatOccupancyInteraction.spec.ts` | Parallel chat-only senders, same-chat contention, lease fencing, and mobile touch targets. |
+| `server/fastify/browser-smoke/chatOccupancyRecovery.spec.ts` | Response loss, role transfer, hydration, rollout drain, and real server restart. |
+| `server/fastify/browser-smoke/chatOccupancyCancellation.spec.ts` | Lost Stop responses, pre-server cancellation, and retained drafts across reload. |
+| `server/fastify/browser-smoke/chatOccupancyInlays.spec.ts` | Emotion/image persistence, per-image settlement, translation ordering, and role-loss cancellation. |
+| `server/fastify/browser-smoke/chatOccupancyIgp.spec.ts` | Configured IGP with lost commit responses and receipts. |
+
+Together with the server enforcement suites below, these journeys cover the
+occupancy contract. Separate BrowserContexts exercise one general owner, two
 chat-only senders, and observers across different-chat parallel generation,
 same-chat one-winner contention, retained occupancy while navigating, explicit
 cross-chat switch/normalization, Send/Reroll/Stop controls, and visibly disabled
-Continue/Regenerate. The suite combines response loss, same-base revision retry,
+Continue/Regenerate. The recovery journeys combine response loss, same-base revision retry,
 synthetic suspension, owner transfer, expiry/reacquisition, role
 normalization, and real Fastify/SQLite restart. It asserts rendered controls and
 draft/error state together with exact persisted user/result identities, provider
@@ -135,7 +147,7 @@ the resulting `stale_generation_attempt` must lead to exact status, strict
 transcript hydration, and scoped effect recovery without another submission or
 provider invocation.
 
-The same browser suite owns accepted-work drain proofs: lost Send/Stop responses,
+The recovery, cancellation, inlay, and IGP suites own accepted-work drain proofs: lost Send/Stop responses,
 pre-acceptance cancellation, finalization/effect pins, translated IGP/inlay
 ordering, and default-enabled versus disabled rollout behavior. An explicit
 `RISU_API_CHAT_OCCUPANCY_ENABLED=false` fixture permits exact renewal,
@@ -312,7 +324,7 @@ manually mirrored rather than generated from a shared command catalog.
   startup projections.
 - The destructive-refresh epoch cases ensure an old asynchronous rollback cannot overwrite a restore or
   complete refresh.
-- `chatOccupancyInteraction.spec.ts` plus the focused occupancy/service suites
+- The chat occupancy browser suites above plus the focused occupancy/service suites
   protect the boundary between one general owner and exact per-chat authority;
   a store-only or single-page generation test is not a substitute.
 

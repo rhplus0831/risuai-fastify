@@ -38,6 +38,11 @@ Browser-smoke support and real Chromium journeys remain under
 `docs/tests/README.md` rather than treating this Node/Vitest directory as their
 inventory.
 
+The embed and summarize handler suites share
+`helpers/acceptedMemoryGeneration.ts` for accepted configuration and attempt
+provenance. Their provider and job assertions remain with the individual worker
+suites.
+
 ## Cleanup Rule
 
 Prefer splitting a hotspot file before adding another large `describe` block.
