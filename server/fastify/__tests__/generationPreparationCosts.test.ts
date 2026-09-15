@@ -440,7 +440,9 @@ describe('generation preparation work counters', () => {
     for (const unrelated of unrelatedSizes) results.push(await probe(unrelated, 4))
     for (const result of results) {
       expect(result.prompt).toEqual(results[0].prompt)
-      expect(result.snapshotBytes).toBeLessThanOrEqual(2_790)
+      // Includes chat-owned preset fields projected before generation decoding.
+      expect(result.snapshotBytes).toBeLessThanOrEqual(2_821)
+      expect(result.snapshotBytes).toBe(results[0].snapshotBytes)
       expect(result.assetSnapshotBytes).toBe(2)
       expect(result.preflight.reads.messages?.rows ?? 0).toBe(0)
       expect(Object.values(result.preflight.reads).reduce((sum, read) => sum + read.rows, 0)).toBeLessThanOrEqual(6)

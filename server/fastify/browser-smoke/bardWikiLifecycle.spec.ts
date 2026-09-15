@@ -10,6 +10,7 @@ let harness: FastBootstrapHarness
 
 test.beforeAll(async () => {
   const database = smallFastBootstrapFixture()
+  database.useBardWiki = true
   database.bardWiki = {
     enabledByDefault: true,
     memoryMode: 'bardwiki',

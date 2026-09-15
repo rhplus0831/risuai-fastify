@@ -349,6 +349,7 @@ test('BardWiki real rebuild preserves terminal state across an older read and pr
   }
   const provider = await startProvider(JSON.stringify(draft))
   const database = fixture(provider.url)
+  database.useBardWiki = true
   database.bardWiki = {
     enabledByDefault: true,
     memoryMode: 'bardwiki',

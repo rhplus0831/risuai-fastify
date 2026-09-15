@@ -101,7 +101,7 @@ const inventory: readonly InventoryEntry[] = [
     reason: 'profile-backed Lua runtime projection',
   },
   {
-    path: 'server/fastify/src/prompt/effectiveGenerationConfig.ts',
+    path: 'server/fastify/src/prompt/profileGenerationFields.ts',
     marker: 'database.aiModel',
     classification: 'effective-projection',
     expectedCount: 1,

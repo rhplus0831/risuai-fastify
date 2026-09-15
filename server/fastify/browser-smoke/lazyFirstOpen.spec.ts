@@ -763,6 +763,7 @@ async function importDatabase(app: FastifyInstance, assertion: string, database:
 
 function lazyBoundaryDatabase(): Record<string, unknown> {
   return {
+    useBardWiki: true,
     version: 1,
     didFirstSetup: true,
     formatversion: 5,

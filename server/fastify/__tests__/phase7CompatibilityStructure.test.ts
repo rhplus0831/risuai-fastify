@@ -263,7 +263,7 @@ const RUNTIME_OPTION_OWNERS: Record<string, OptionOwner> = {
   enableCustomFlags: { owner: 'packages/shared-core/src/modelProfileResolver.ts', anchor: 'enableCustomFlags' },
   stripCoT: { owner: 'server/fastify/src/prompt/chatDispatch.ts', anchor: 'profile.runtimeOptions.stripCoT' },
   dynamicOutput: {
-    owner: 'server/fastify/src/prompt/effectiveGenerationConfig.ts',
+    owner: 'server/fastify/src/prompt/profileGenerationFields.ts',
     anchor: "assignIfDefined(database, 'dynamicOutput'",
     disposition: 'retained-inert',
   },
@@ -398,7 +398,7 @@ describe('Phase 7 compatibility structure', () => {
       interfacePropertyNames(recordsSource, 'ModelProfileRecordRuntimeOptions').sort(),
     )
 
-    const materializationSource = readRepoFile('server/fastify/src/prompt/effectiveGenerationConfig.ts')
+    const materializationSource = readRepoFile('server/fastify/src/prompt/profileGenerationFields.ts')
     for (const [option, owner] of Object.entries(RUNTIME_OPTION_OWNERS)) {
       if (option === 'stripCoT') {
         // Strip CoT deliberately stays on the resolved profile and is consumed

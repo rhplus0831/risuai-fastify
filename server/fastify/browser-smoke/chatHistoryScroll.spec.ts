@@ -22,30 +22,47 @@ const STATIC_IMAGE = `<style>
 <div class="image-container" style="background-image: linear-gradient(135deg, #183c69, #badaea);" tabindex="0"></div>`
 
 async function historyViewport(page: Page) {
-  return page.locator(TRANSCRIPT).evaluate((transcript) => {
-    const viewport = transcript.getBoundingClientRect()
-    const owner = transcript.querySelector('[data-transcript-window-rows]')!
-    const visible = Array.from(transcript.querySelectorAll<HTMLElement>('.risu-chat[data-risu-message-id]'))
-      .map((row) => ({
-        id: row.dataset.risuMessageId!,
-        index: Number(row.dataset.chatIndex),
-        top: row.getBoundingClientRect().top - viewport.top,
-        bottom: row.getBoundingClientRect().bottom - viewport.top,
-        readable: row.querySelector('.chat-message-body')?.textContent?.includes('History message') ?? false,
-      }))
-      .filter((row) => row.bottom > 0 && row.top < viewport.height)
-      .sort((left, right) => left.top - right.top)
-    return {
-      time: performance.now(),
-      scrollTop: transcript.scrollTop,
-      scrollHeight: transcript.scrollHeight,
-      clientHeight: transcript.clientHeight,
-      windowRows: Number(owner.getAttribute('data-transcript-window-rows')),
-      residentRows: Number(owner.getAttribute('data-transcript-resident-rows')),
-      busy: owner.getAttribute('aria-busy'),
-      visible,
-    }
-  })
+  return (await historyViewportFrames(page))[0]
+}
+
+async function historyViewportFrames(page: Page, minimumFrames = 1, minimumDurationMs = 0) {
+  return page.locator(TRANSCRIPT).evaluate(
+    async (transcript, { minimumFrames, minimumDurationMs }) => {
+      const snapshot = () => {
+        const viewport = transcript.getBoundingClientRect()
+        const owner = transcript.querySelector('[data-transcript-window-rows]')!
+        const visible = Array.from(transcript.querySelectorAll<HTMLElement>('.risu-chat[data-risu-message-id]'))
+          .map((row) => ({
+            id: row.dataset.risuMessageId!,
+            index: Number(row.dataset.chatIndex),
+            top: row.getBoundingClientRect().top - viewport.top,
+            bottom: row.getBoundingClientRect().bottom - viewport.top,
+            readable: row.querySelector('.chat-message-body')?.textContent?.includes('History message') ?? false,
+          }))
+          .filter((row) => row.bottom > 0 && row.top < viewport.height)
+          .sort((left, right) => left.top - right.top)
+        return {
+          time: performance.now(),
+          scrollTop: transcript.scrollTop,
+          scrollHeight: transcript.scrollHeight,
+          clientHeight: transcript.clientHeight,
+          windowRows: Number(owner.getAttribute('data-transcript-window-rows')),
+          residentRows: Number(owner.getAttribute('data-transcript-resident-rows')),
+          busy: owner.getAttribute('aria-busy'),
+          visible,
+        }
+      }
+      const samples: ReturnType<typeof snapshot>[] = []
+      do {
+        // Measure after the rendering turn's animation callbacks and layout
+        // corrections. CDP command completion alone is not a frame boundary.
+        await new Promise<void>((resolve) => requestAnimationFrame(() => setTimeout(resolve, 0)))
+        samples.push(snapshot())
+      } while (samples.length < minimumFrames || samples.at(-1)!.time - samples[0].time < minimumDurationMs)
+      return samples
+    },
+    { minimumFrames, minimumDurationMs },
+  )
 }
 
 for (const { pageDelay, assets, reverse, label } of [
@@ -182,10 +199,7 @@ for (const { pageDelay, assets, reverse, label } of [
             )
             .toBe(true)
           const remountAnchor = remountPause.samples[0].visible[0]
-          for (let frame = 1; frame < 30; frame++) {
-            await page.waitForTimeout(32)
-            remountPause.samples.push(await historyViewport(page))
-          }
+          remountPause.samples.push(...(await historyViewportFrames(page, 29, 928)))
           const remountPositions = remountPause.samples.map((sample) =>
             sample.visible.find((row) => row.id === remountAnchor.id),
           )
@@ -207,12 +221,10 @@ for (const { pageDelay, assets, reverse, label } of [
             speed: 100_000,
             gestureSourceType: 'mouse',
           })
-          const pause: Awaited<ReturnType<typeof historyViewport>>[] = []
-          for (let frame = 0; frame < 30; frame++) {
-            const sample = await historyViewport(page)
-            pause.push(sample)
-            await page.waitForTimeout(32)
-          }
+          // Keep collection in the browser so Node/IPC contention cannot choose
+          // the sample cadence. Slow frames extend observation rather than
+          // shortening it; never wait for stable geometry or replace sample zero.
+          const pause = await historyViewportFrames(page, 30, 960)
           pauses.push({ delta, samples: pause })
           const anchor = pause[0].visible[0]
           if (anchor?.readable) {

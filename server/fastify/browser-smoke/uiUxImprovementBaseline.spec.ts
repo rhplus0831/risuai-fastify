@@ -436,6 +436,7 @@ test('keyboard, reduced-motion, reflow, persistence, and modal contracts work to
 
 function uiUxImprovementFixture(): Record<string, unknown> {
   const database = smallFastBootstrapFixture()
+  database.useBardWiki = true
   const characters = database.characters as Array<{
     chaId: string
     name: string
