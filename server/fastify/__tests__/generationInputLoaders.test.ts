@@ -1,3 +1,4 @@
+import { decodeGenerationSettings, decodeGenerationPreflightInputs } from '../src/prompt/generationInputDecoder.js'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -161,6 +162,186 @@ function observed<T>(db: DatabaseSync, run: () => T) {
 }
 
 describe('selected generation repository inputs', () => {
+  it('validates chat preset overlays instead of shadowed global editor fields', () => {
+    const input = fixture()
+    // Deliberately invalid global mirrors; selected owners supply valid values.
+    input.temperature = 'invalid-global-temperature'
+    input.promptSettings = 'invalid-global-prompt-settings'
+    input.seperateParameters = { overrides: { 'unused-model': 'invalid' } }
+    records(input.modelPresets)[0].temperature = 70
+    records(input.modelPresets)[0].seperateParameters = { overrides: {} }
+    records(input.promptPresets)[0].promptSettings = { assistantPrefill: 'Selected' }
+    const { db, directory } = openFixture(input)
+    const before = db.prepare('SELECT data_json FROM settings WHERE id = 1').get()
+    const preflight = decodeGenerationPreflightInputs(
+      loadPersistedForGenerationPreflight(db, directory, target).preflightInputs,
+    )
+    const assembly = decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database)
+    for (const database of [preflight.database, assembly]) {
+      expect(database.temperature).toBe(70)
+      expect(database.promptSettings).toEqual({ assistantPrefill: 'Selected' })
+      expect(database.seperateParameters).toEqual({ overrides: {} })
+    }
+    expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual(before)
+  })
+
+  it('keeps prompt override precedence and rejects invalid selected values', () => {
+    const input = fixture()
+    input.temperature = 'invalid-global-temperature'
+    records(input.modelPresets)[0].temperature = 70
+    Object.assign(records(input.promptPresets)[0], { overrideModelParameters: true, temperature: 90 })
+    const { db, directory } = openFixture(input)
+    expect(
+      decodeGenerationPreflightInputs(loadPersistedForGenerationPreflight(db, directory, target).preflightInputs)
+        .database.temperature,
+    ).toBe(90)
+    db.prepare(
+      "UPDATE prompt_presets SET data_json = json_set(data_json, '$.temperature', ?) WHERE json_extract(data_json, '$.id') = ?",
+    ).run('invalid-selected-temperature', 'selected-prompt')
+    expect(() =>
+      decodeGenerationPreflightInputs(loadPersistedForGenerationPreflight(db, directory, target).preflightInputs),
+    ).toThrow('Invalid preflight generation input')
+  })
+
+  it.each(['selected', 'embedded-characters'] as const)(
+    'validates profile runtime and empty prompt regex before global mirrors (%s)',
+    (storage) => {
+      const input = fixture()
+      input.temperature = 'invalid-global-temperature'
+      input.presetRegex = 'invalid-global-regex'
+      Object.assign(records(input.modelPresets)[0], {
+        modelProfiles: [{ id: 'profile', name: 'Profile', modelId: 'echo_model', runtimeOptions: { temperature: 66 } }],
+        modelRoleProfiles: { chatMain: { mode: 'profile', profileId: 'profile' } },
+      })
+      const { db, directory } = openFixture(input)
+      if (storage === 'embedded-characters') {
+        db.exec('DELETE FROM characters')
+        db.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(input))
+      }
+      const before = db.prepare('SELECT data_json FROM settings WHERE id = 1').get()
+      const preflight = decodeGenerationPreflightInputs(
+        loadPersistedForGenerationPreflight(db, directory, target).preflightInputs,
+      )
+      const assembly = decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database)
+      for (const database of [preflight.database, assembly]) {
+        expect(database.temperature).toBe(66)
+        expect(database.presetRegex).toEqual([])
+      }
+      expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual(before)
+    },
+  )
+
+  it.each(['selected', 'embedded-characters'] as const)(
+    'clears unrelated global module integration before validation (%s)',
+    (storage) => {
+      const input = fixture()
+      input.moduleIntergration = 123
+      const { db, directory } = openFixture(input)
+      if (storage === 'embedded-characters') {
+        db.exec('DELETE FROM characters')
+        db.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(input))
+      }
+      const before = db.prepare('SELECT data_json FROM settings WHERE id = 1').get()
+      const preflight = decodeGenerationPreflightInputs(
+        loadPersistedForGenerationPreflight(db, directory, target).preflightInputs,
+      )
+      const assembly = decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database)
+      expect(preflight.database.moduleIntergration).toBe('')
+      expect(assembly.moduleIntergration).toBe('')
+      expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual(before)
+    },
+  )
+
+  it.each(['default', 'chat', 'disabled'] as const)(
+    'projects prompt and effective agent module integration (%s agent selection)',
+    (selection) => {
+      const input = fixture()
+      input.moduleIntergration = 123
+      records(input.promptPresets)[0].moduleIntergration = 'prompt-ns, shared-ns'
+      input.agentPresetDefaultId = 'default-agent'
+      input.agentPresets = [
+        {
+          id: 'default-agent',
+          name: 'Default',
+          enabled: true,
+          version: 1,
+          steps: [],
+          moduleIntergration: 'default-ns, shared-ns',
+          agentUses: [],
+        },
+        {
+          id: 'chat-agent',
+          name: 'Chat',
+          enabled: true,
+          version: 1,
+          steps: [],
+          moduleIntergration: 'chat-ns, shared-ns',
+          agentUses: [],
+        },
+      ]
+      if (selection !== 'default') {
+        records(records(input.characters)[0].chats)[0].generationSettings = {
+          ...settings,
+          agentPresetId: selection === 'chat' ? 'chat-agent' : '',
+        }
+      }
+      const { db, directory } = openFixture(input)
+      const preflight = decodeGenerationPreflightInputs(
+        loadPersistedForGenerationPreflight(db, directory, target).preflightInputs,
+      )
+      const assembly = decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database)
+      const expected = selection === 'disabled' ? 'prompt-ns, shared-ns' : `prompt-ns, shared-ns, ${selection}-ns`
+      expect(preflight.database.moduleIntergration).toBe(expected)
+      expect(assembly.moduleIntergration).toBe(expected)
+    },
+  )
+
+  it('keeps prompt parameter overrides above profile runtime during input validation', () => {
+    const input = fixture()
+    input.temperature = 'invalid-global-temperature'
+    Object.assign(records(input.modelPresets)[0], {
+      modelProfiles: [{ id: 'profile', name: 'Profile', modelId: 'echo_model', runtimeOptions: { temperature: 66 } }],
+      modelRoleProfiles: { chatMain: { mode: 'profile', profileId: 'profile' } },
+    })
+    Object.assign(records(input.promptPresets)[0], { overrideModelParameters: true, temperature: 90 })
+    const { db, directory } = openFixture(input)
+    expect(
+      decodeGenerationPreflightInputs(loadPersistedForGenerationPreflight(db, directory, target).preflightInputs)
+        .database.temperature,
+    ).toBe(90)
+    expect(
+      decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database).temperature,
+    ).toBe(90)
+  })
+
+  it.each(['profile', 'prompt-regex', 'prompt-integration', 'legacy-fallback'] as const)(
+    'still rejects invalid active configuration (%s)',
+    (invalidOwner) => {
+      const input = fixture()
+      if (invalidOwner === 'profile') {
+        Object.assign(records(input.modelPresets)[0], {
+          modelProfiles: [
+            { id: 'profile', name: 'Profile', modelId: 'echo_model', runtimeOptions: { temperature: 'bad' } },
+          ],
+          modelRoleProfiles: { chatMain: { mode: 'profile', profileId: 'profile' } },
+        })
+      } else if (invalidOwner === 'prompt-regex') {
+        records(input.promptPresets)[0].presetRegex = 'bad'
+      } else if (invalidOwner === 'prompt-integration') {
+        records(input.promptPresets)[0].moduleIntergration = 123
+      } else {
+        input.temperature = 'bad'
+      }
+      const { db, directory } = openFixture(input)
+      expect(() =>
+        decodeGenerationPreflightInputs(loadPersistedForGenerationPreflight(db, directory, target).preflightInputs),
+      ).toThrow('Invalid preflight generation input')
+      expect(() =>
+        decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database),
+      ).toThrow('Invalid settings generation input')
+    },
+  )
+
   it('reuses fixed query programs while reading later writes and other connections independently', () => {
     const { db, directory } = openFixture(fixture())
     loadPersistedForGenerationAssembly(db, directory, target)

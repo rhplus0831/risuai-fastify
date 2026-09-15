@@ -1,3 +1,4 @@
+import { repairLegacySeparateParameterOverrides } from '@risuai/shared-core/separate-parameter-compatibility'
 import { get } from 'svelte/store'
 import { checkNullish, decryptBuffer, encryptBuffer } from '../util'
 import { createNonSecurityUuid } from '../nonSecurityUuid'
@@ -287,7 +288,9 @@ function normalizeSeperateParameters(data: Partial<Pick<Database, 'seperateParam
     otherAx: normalizeSeperateParameterSlot(source.otherAx),
     scriptMain: normalizeSeperateParameterSlot(source.scriptMain),
     scriptAux: normalizeSeperateParameterSlot(source.scriptAux),
-    overrides: isPlainRecord(source.overrides) ? (source.overrides as Record<string, SeparateParameters>) : {},
+    overrides: isPlainRecord(source.overrides)
+      ? (repairLegacySeparateParameterOverrides(source.overrides) as Record<string, SeparateParameters>)
+      : {},
   }
 }
 

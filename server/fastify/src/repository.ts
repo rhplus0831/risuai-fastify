@@ -1,3 +1,11 @@
+import {
+  applyEffectivePresetComposition,
+  applyPromptPresetModelOverrides,
+  resolvePromptPresetRegexField,
+} from '@risuai/shared-core/preset-split'
+import { resolveModelProfile } from '@risuai/shared-core/model-profile-resolver'
+import { normalizeModelRoleProfiles } from '@risuai/shared-core/model-profile-records'
+import { applyProfileBoundGenerationFields } from './prompt/profileGenerationFields.js'
 import { createHash, randomBytes, randomUUID } from 'node:crypto'
 import { readDisplayModules } from './displayModuleCache.js'
 import fs from 'node:fs'
@@ -70,7 +78,11 @@ import {
 } from '@risuai/shared-core/hypa-v3-preset-selection-identity'
 import { normalizeAgentConfiguration, normalizeAgentPresetDefaultId } from '@risuai/shared-core/agent-preset-records'
 import { getCanonicalTranslatorPresets } from '@risuai/shared-core/translator-presets'
-import { parseModuleIntegration, resolveAgentPresetModuleIntegration } from '@risuai/shared-core/module-integration'
+import {
+  combineModuleIntegrations,
+  parseModuleIntegration,
+  resolveAgentPresetModuleIntegration,
+} from '@risuai/shared-core/module-integration'
 import { resolveEffectiveAgentPresetId } from '@risuai/shared-core/agent-preset-resolver'
 
 const PLUGIN_CUSTOM_STORAGE_EMPTY_SENTINEL_KEY = '__risu_internal_plugin_custom_storage_empty__'
@@ -2758,6 +2770,7 @@ function selectGenerationConfiguration(
     else if (Object.prototype.hasOwnProperty.call(settings, 'promptTemplate'))
       database.promptTemplate = settings.promptTemplate
   }
+  projectGenerationPresetFields(database, currentChat)
   projectSelectedPromptTemplate(database, database.promptPresetsId)
   database.selectedPersona = selectedPersonaIndexFromStableId(database)
   if (includeHistory) {
@@ -2765,6 +2778,47 @@ function selectGenerationConfiguration(
     projectSelectedHypaV3PresetCompatibilityIndex(database)
   }
   return database
+}
+
+/** Overlay the chat's owners before the prompt decoder validates flat settings.
+ * Those settings also mirror the preset selected in the editor, whose shadowed
+ * fields are not generation inputs. Keep absent-field legacy fallbacks intact.
+ * This request-local projection never writes settings or collection rows. */
+function projectGenerationPresetFields(database: JsonRecord, currentChat: JsonRecord): void {
+  const selection = normalizeStoredChatGenerationSettings(currentChat.generationSettings)
+  const modelPreset = generationRecords(database.modelPresets).find((preset) => preset.id === selection?.modelPresetId)
+  const promptPresets = generationRecords(database.promptPresets).filter(
+    (preset) => preset.id === selection?.promptPresetId,
+  )
+  const promptPreset = promptPresets.length === 1 ? promptPresets[0] : undefined
+  applyEffectivePresetComposition(database, { modelPreset, promptPreset, scope: 'full-generation' })
+  // The prompt and effective agent preset own integration, including an empty
+  // selection. The global editor mirror is never a fallback for this field.
+  if (promptPreset) {
+    const agentPresetId = resolveEffectiveAgentPresetId(
+      {
+        agentPresetDefaultId:
+          typeof database.agentPresetDefaultId === 'string' ? database.agentPresetDefaultId : undefined,
+      },
+      selection,
+    )
+    database.moduleIntergration = combineModuleIntegrations(
+      promptPreset.moduleIntergration,
+      resolveAgentPresetModuleIntegration(generationRecords(database.agentPresets), agentPresetId),
+    )
+  }
+  // A prompt without regex owns an empty list, not the editor's regex mirror.
+  // Keep a present malformed value intact for the selected-owner validator.
+  if (promptPreset && !resolvePromptPresetRegexField(promptPreset).present) database.presetRegex = []
+
+  if (modelPreset && normalizeModelRoleProfiles(database.modelRoleProfiles).chatMain.mode === 'profile') {
+    const profile = resolveModelProfile({ database })
+    // Missing/broken bindings are still reported by effective-config readiness.
+    if (profile.modelId) {
+      applyProfileBoundGenerationFields(database, profile)
+      applyPromptPresetModelOverrides(database, promptPreset)
+    }
+  }
 }
 
 function readGenerationCollectionSelection(
@@ -2894,6 +2948,7 @@ function loadLegacyGenerationSelectedRows(
   if (!currentChat) return { ...scope, rows: null, missingTarget: 'chat' }
   const settings = { ...database }
   delete settings.characters
+  projectGenerationPresetFields(settings, currentChat)
   if (includeHistory) {
     const speakerNames: Record<string, string> = {}
     for (const character of generationRecords(database.characters)) {

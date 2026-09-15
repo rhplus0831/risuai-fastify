@@ -55,3 +55,5 @@ export * from './presetSplit.js'
 export * from './providerCapability.js'
 export * from './providerCredentialRecords.js'
 export * from './providerSecretMask.js'
+
+export * from './separateParameterCompatibility.js'

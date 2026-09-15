@@ -9092,97 +9092,117 @@ describe('POST /api/v1/generate/preview-prompt', () => {
     expect(parseEvents(res.body).at(-1)?.data).toMatchObject({ result: 'compat ok' })
   })
 
-  it("dispatches with the active chat's preset overlay instead of request or global preset", async () => {
-    let providerBody: Record<string, unknown> | undefined
-    let authorization: string | undefined
-    vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
-      providerBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
-      const headers = init?.headers as Record<string, string> | undefined
-      authorization = headers?.authorization
-      return new Response(
-        JSON.stringify({
-          model: 'gpt-5.4',
-          choices: [{ message: { content: 'chat preset reply' }, finish_reason: 'stop' }],
-        }),
-        { status: 200, headers: { 'content-type': 'application/json' } },
-      )
-    })
-    const { assertion } = await setupAuthedClient(harness.app)
-    await seedDatabase(harness.app, assertion, {
-      ...fixtureDatabase,
-      aiModel: 'echo_model',
-      echoMessage: 'global echo reply',
-      openAIKey: 'sk-global',
-      temperature: 11,
-      maxContext: 1111,
-      maxResponse: 11,
-      modelPresets: [
-        {
-          id: 'model-global',
-          name: 'Global Model',
-          aiModel: 'echo_model',
-          echoMessage: 'global echo reply',
-          openAIKey: 'sk-global',
-          temperature: 11,
-          maxContext: 1111,
-          maxResponse: 11,
-        },
-        {
-          id: 'model-chat',
-          name: 'Chat Model',
-          aiModel: 'gpt-5.4',
-          openAIKey: 'sk-chat',
-          temperature: 73,
-          maxContext: 3737,
-          maxResponse: 37,
-        },
-      ],
-      promptPresets: [{ id: 'prompt-chat', name: 'Chat Prompt' }],
-      modelPresetsId: 0,
-      promptPresetsId: 0,
-      characters: [
-        {
-          ...fixtureDatabase.characters[0],
-          chats: [
-            {
-              ...fixtureDatabase.characters[0].chats[0],
-              generationSettings: {
-                configured: true,
-                personaId: DEFAULT_TEST_PERSONA_ID,
-                modelPresetId: 'model-chat',
-                promptPresetId: 'prompt-chat',
-                jailbreakToggle: false,
-                sidebarToggles: {},
+  it.each([false, true])(
+    "dispatches with the active chat's preset overlay (legacy corruption: %s)",
+    async (legacyCorruption) => {
+      let providerBody: Record<string, unknown> | undefined
+      let authorization: string | undefined
+      vi.stubGlobal('fetch', async (_url: string, init?: RequestInit) => {
+        providerBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
+        const headers = init?.headers as Record<string, string> | undefined
+        authorization = headers?.authorization
+        return new Response(
+          JSON.stringify({
+            model: 'gpt-5.4',
+            choices: [{ message: { content: 'chat preset reply' }, finish_reason: 'stop' }],
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        )
+      })
+      const { assertion } = await setupAuthedClient(harness.app)
+      await seedDatabase(harness.app, assertion, {
+        ...fixtureDatabase,
+        aiModel: 'echo_model',
+        echoMessage: 'global echo reply',
+        openAIKey: 'sk-global',
+        temperature: 11,
+        seperateParameters: { overrides: {} },
+        maxContext: 1111,
+        maxResponse: 11,
+        modelPresets: [
+          {
+            id: 'model-global',
+            name: 'Global Model',
+            aiModel: 'echo_model',
+            echoMessage: 'global echo reply',
+            openAIKey: 'sk-global',
+            temperature: 11,
+            maxContext: 1111,
+            maxResponse: 11,
+          },
+          {
+            id: 'model-chat',
+            name: 'Chat Model',
+            aiModel: 'gpt-5.4',
+            openAIKey: 'sk-chat',
+            temperature: 73,
+            seperateParameters: { overrides: {} },
+            maxContext: 3737,
+            maxResponse: 37,
+          },
+        ],
+        promptPresets: [{ id: 'prompt-chat', name: 'Chat Prompt' }],
+        modelPresetsId: 0,
+        promptPresetsId: 0,
+        characters: [
+          {
+            ...fixtureDatabase.characters[0],
+            chats: [
+              {
+                ...fixtureDatabase.characters[0].chats[0],
+                generationSettings: {
+                  configured: true,
+                  personaId: DEFAULT_TEST_PERSONA_ID,
+                  modelPresetId: 'model-chat',
+                  promptPresetId: 'prompt-chat',
+                  jailbreakToggle: false,
+                  sidebarToggles: {},
+                },
               },
-            },
-          ],
-        },
-      ],
-    })
+            ],
+          },
+        ],
+      })
 
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/generate/chat',
-      headers: { 'risu-auth': assertion },
-      payload: basePayload,
-    })
-    expect(res.statusCode).toBe(200)
+      if (legacyCorruption) {
+        // Bypass import repair to exercise presets persisted before this fix.
+        const db = openDatabase(harness.dataDir)
+        try {
+          db.prepare(
+            "UPDATE settings SET data_json = json_set(data_json, '$.temperature', ?, '$.seperateParameters', json(?)) WHERE id = 1",
+          ).run('invalid-global-temperature', JSON.stringify({ overrides: { 'unused-model': 'invalid' } }))
+          db.prepare(
+            "UPDATE model_presets SET data_json = json_set(data_json, '$.seperateParameters.overrides.thinking_type', ?) WHERE json_extract(data_json, '$.id') = ?",
+          ).run('off', 'model-chat')
+        } finally {
+          db.close()
+        }
+      }
 
-    const events = parseEvents(res.body)
-    const info = events.find((event) => event.type === 'info')
-    expect(info?.data.generationInfo).toMatchObject({
-      model: 'gpt-5.4',
-      outputTokens: 37,
-      maxContext: 3737,
-    })
-    expect(providerBody).toMatchObject({
-      model: 'gpt-5.4',
-      temperature: 0.73,
-      max_completion_tokens: 37,
-    })
-    expect(authorization).toBe('Bearer sk-chat')
-    expect(events.at(-1)?.data).toMatchObject({ result: 'chat preset reply' })
-  })
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/generate/chat',
+        headers: { 'risu-auth': assertion },
+        payload: basePayload,
+      })
+      expect(res.statusCode).toBe(200)
+
+      const events = parseEvents(res.body)
+      const info = events.find((event) => event.type === 'info')
+      expect(info?.data.generationInfo).toMatchObject({
+        model: 'gpt-5.4',
+        outputTokens: 37,
+        maxContext: 3737,
+      })
+      expect(providerBody).toMatchObject({
+        model: 'gpt-5.4',
+        temperature: 0.73,
+        max_completion_tokens: 37,
+      })
+      expect(authorization).toBe('Bearer sk-chat')
+      expect(events.at(-1)?.data).toMatchObject({ result: 'chat preset reply' })
+    },
+  )
 
   it('lets prompt presets override selected model preset parameters and Prompt Others fields', async () => {
     let providerBody: Record<string, unknown> | undefined
@@ -9267,7 +9287,7 @@ describe('POST /api/v1/generate/preview-prompt', () => {
     })
   })
 
-  it('applies profile-bound runtime fields from the active chat model preset before assembly dispatch', async () => {
+  it('applies profile-bound runtime fields from the active chat model preset despite invalid global editor mirrors', async () => {
     let dispatchedDatabase: Record<string, unknown> | undefined
     const dispatchProvider = vi.fn(({ database }) => {
       dispatchedDatabase = structuredClone(database) as Record<string, unknown>
@@ -9341,6 +9361,16 @@ describe('POST /api/v1/generate/preview-prompt', () => {
       ],
     })
 
+    // Simulate already-persisted editor corruption without import normalization.
+    const db = openDatabase(harness.dataDir)
+    try {
+      db.prepare(
+        "UPDATE settings SET data_json = json_set(data_json, '$.temperature', ?, '$.presetRegex', ?, '$.moduleIntergration', ?) WHERE id = 1",
+      ).run('invalid-global-temperature', 'invalid-global-regex', 123)
+    } finally {
+      db.close()
+    }
+
     const res = await harness.app.inject({
       method: 'POST',
       url: '/api/v1/generate/chat',
@@ -9355,6 +9385,8 @@ describe('POST /api/v1/generate/preview-prompt', () => {
       maxContext: 2222,
       maxResponse: 22,
       temperature: 66,
+      presetRegex: [],
+      moduleIntergration: '',
       top_p: 0.42,
       useStreaming: false,
       extractJson: 'json',

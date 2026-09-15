@@ -1,3 +1,7 @@
+import {
+  repairLegacySeparateParameterOverrides,
+  repairLegacySeparateParameters,
+} from '@risuai/shared-core/separate-parameter-compatibility'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { EntityNotFoundError, ValidationError } from '../repository.js'
@@ -174,6 +178,9 @@ export function ensurePresetCollection(database: JsonRecord): PresetRecord[] {
     const id = seen.has(rawId) ? randomUUID() : rawId
     seen.add(id)
     preset.id = id
+    if (Object.hasOwn(preset, 'seperateParameters')) {
+      preset.seperateParameters = repairLegacySeparateParameters(preset.seperateParameters)
+    }
     return preset as PresetRecord
   })
   database.botPresets = presets
@@ -299,6 +306,9 @@ function normalizePresetAppliedValue(
 }
 
 function normalizePresetProfileFields(record: JsonRecord): void {
+  if (Object.hasOwn(record, 'seperateParameters')) {
+    record.seperateParameters = repairLegacySeparateParameters(record.seperateParameters)
+  }
   if (Object.prototype.hasOwnProperty.call(record, 'modelProfiles')) {
     record.modelProfiles = normalizeModelProfiles(record.modelProfiles)
   }
@@ -364,7 +374,7 @@ function normalizeSeperateParametersValue(value: unknown): Record<string, unknow
     otherAx: recordOrBlank(source.otherAx),
     scriptMain: recordOrBlank(source.scriptMain),
     scriptAux: recordOrBlank(source.scriptAux),
-    overrides: recordOrBlank(source.overrides),
+    overrides: repairLegacySeparateParameterOverrides(recordOrBlank(source.overrides)),
   }
 }
 

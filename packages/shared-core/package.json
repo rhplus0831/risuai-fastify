@@ -31,6 +31,7 @@
     "./inlay-tokens": "./src/inlayTokens.ts",
     "./internal-reasoning": "./src/internalReasoning.ts",
     "./legacy-openai-model-aliases": "./src/legacyOpenAIModelAliases.ts",
+    "./separate-parameter-compatibility": "./src/separateParameterCompatibility.ts",
     "./local-stop-strings": "./src/localStopStrings.ts",
     "./lore-hash": "./src/loreHash.ts",
     "./model-roles": "./src/modelRoles.ts",

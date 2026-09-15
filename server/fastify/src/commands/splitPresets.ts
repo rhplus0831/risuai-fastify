@@ -1,3 +1,4 @@
+import { repairLegacySeparateParameterOverrides } from '@risuai/shared-core/separate-parameter-compatibility'
 import { randomUUID } from 'node:crypto'
 import {
   createExtractedModelPreset,
@@ -466,7 +467,7 @@ function normalizeSeperateParametersValue(value: unknown): Record<string, unknow
     otherAx: recordOrBlank(source.otherAx),
     scriptMain: recordOrBlank(source.scriptMain),
     scriptAux: recordOrBlank(source.scriptAux),
-    overrides: recordOrBlank(source.overrides),
+    overrides: repairLegacySeparateParameterOverrides(recordOrBlank(source.overrides)),
   }
 }
 

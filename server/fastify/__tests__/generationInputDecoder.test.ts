@@ -41,6 +41,33 @@ function selectedDatabaseWithMessage(message: unknown) {
 }
 
 describe('selected generation persistence decoder', () => {
+  it('repairs original editor artifacts in already persisted settings and selected presets', () => {
+    const model = { thinking_type: 'budget', thinking_tokens: 1000 }
+    const separate = { overrides: { thinking_type: 'off', 'model-id': model } }
+    const database = {
+      seperateParameters: separate,
+      modelPresets: [{ id: 'model', seperateParameters: separate }],
+      promptPresets: [{ id: 'prompt', seperateParameters: separate }],
+    }
+    const input = { database, currentChar: { chaId: 'character' }, currentChat: { id: 'chat' } }
+    const decoded = decodeGenerationPreflightInputs(input)
+    expect(decoded.database.seperateParameters?.overrides).toEqual({ 'model-id': model })
+    expect(decoded.database.promptPresets?.[0].seperateParameters).toEqual({ overrides: { 'model-id': model } })
+    expect(decoded.database.modelPresets?.[0].seperateParameters).toEqual({ overrides: { 'model-id': model } })
+    expect(database.seperateParameters.overrides.thinking_type).toBe('off')
+    expect(decoded.currentChat).toBe(input.currentChat)
+    expect(decodeGenerationPreflightInputs(decoded)).toBe(decoded)
+    expect(decodeGenerationSettings(database).seperateParameters?.overrides).toEqual({ 'model-id': model })
+  })
+
+  it('still rejects malformed actual model overrides after legacy repair', () => {
+    for (const overrides of [{ 'model-id': 'off' }, { 'model-id': { thinking_type: 'invalid' } }]) {
+      expect(() => decodeGenerationSettings({ seperateParameters: { overrides } })).toThrow(
+        GenerationInputValidationError,
+      )
+    }
+  })
+
   it('keeps its standalone code, declaration and schema synchronized with the finite contract', async () => {
     const artifacts = await generateGenerationInputArtifacts()
     expect(JSON.parse(fs.readFileSync(generationInputSchemaPath, 'utf8'))).toEqual(artifacts.schema)

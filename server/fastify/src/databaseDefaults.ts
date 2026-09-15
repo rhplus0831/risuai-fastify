@@ -1,3 +1,7 @@
+import {
+  repairLegacySeparateParameterOverrides,
+  repairLegacySeparateParameters,
+} from '@risuai/shared-core/separate-parameter-compatibility'
 import { createDefaultInputHooks, defaultAutoSuggestPrompt } from '@risuai/shared-core/default-prompt-settings'
 import { prebuiltNAIpresets, prebuiltPresets } from './legacyGenerationDefaults.js'
 import { defaultHotkeys, RETIRED_HOTKEY_ACTIONS } from '@risuai/shared-core/default-hotkeys'
@@ -1076,6 +1080,9 @@ function normalizeBotPresets(database: JsonRecord): void {
   for (const [index, rawPreset] of presets.entries()) {
     if (!isRecord(rawPreset)) continue
     repairLegacyLocalStopStrings(rawPreset)
+    if (Object.hasOwn(rawPreset, 'seperateParameters')) {
+      rawPreset.seperateParameters = repairLegacySeparateParameters(rawPreset.seperateParameters)
+    }
     const requestedId = typeof rawPreset.id === 'string' && rawPreset.id.trim() ? rawPreset.id : ''
     const fallbackId = index === 0 ? 'default-preset' : `preset-${index + 1}`
     const id = requestedId && !seen.has(requestedId) ? requestedId : fallbackId
@@ -1139,6 +1146,9 @@ function normalizePresetCollection(
   for (const [index, rawPreset] of presets.entries()) {
     if (!isRecord(rawPreset)) continue
     repairLegacyLocalStopStrings(rawPreset)
+    if (Object.hasOwn(rawPreset, 'seperateParameters')) {
+      rawPreset.seperateParameters = repairLegacySeparateParameters(rawPreset.seperateParameters)
+    }
     const requestedId = typeof rawPreset.id === 'string' && rawPreset.id.trim() ? rawPreset.id : ''
     const fallbackId = index === 0 ? `default-${fallbackPrefix}` : `${fallbackPrefix}-${index + 1}`
     const id = requestedId && !seen.has(requestedId) ? requestedId : fallbackId
@@ -1386,7 +1396,7 @@ function normalizeSeperateParameters(database: JsonRecord): void {
     otherAx: isRecord(source.otherAx) ? source.otherAx : {},
     scriptMain: isRecord(source.scriptMain) ? source.scriptMain : {},
     scriptAux: isRecord(source.scriptAux) ? source.scriptAux : {},
-    overrides: isRecord(source.overrides) ? source.overrides : {},
+    overrides: repairLegacySeparateParameterOverrides(isRecord(source.overrides) ? source.overrides : {}),
   }
 }
 

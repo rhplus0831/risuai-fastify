@@ -1,3 +1,4 @@
+import { normalizeRisuSaveSnapshotDatabase } from '../src/risuSave/importSnapshot.js'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -70,6 +71,45 @@ const normalizedModelRoleProfiles = (overrides: Record<string, Record<string, un
 })
 
 describe('split preset command normalization', () => {
+  it('repairs original editor overrides in preset writes and full-save imports', () => {
+    const model = { thinking_type: 'budget', thinking_tokens: 1000 }
+    const source = {
+      id: 'imported',
+      name: 'Imported',
+      seperateParameters: {
+        overrides: { thinking_type: 'off', 'real-model': model },
+      },
+    }
+    for (const normalize of [
+      createModelPresetRecord,
+      createPromptPresetRecord,
+      createPresetRecord,
+      readModelPresetPatch,
+      readPromptPresetPatch,
+      readPresetPatch,
+    ]) {
+      expect(normalize(source).seperateParameters).toMatchObject({ overrides: { 'real-model': model } })
+      expect((normalize(source).seperateParameters as { overrides: object }).overrides).not.toHaveProperty(
+        'thinking_type',
+      )
+    }
+    const imported = normalizeRisuSaveSnapshotDatabase({
+      seperateParameters: source.seperateParameters,
+      botPresets: [source],
+      modelPresets: [source],
+      promptPresets: [source],
+    })
+    for (const owner of [
+      imported,
+      ...(imported.botPresets as (typeof source)[]),
+      ...(imported.modelPresets as (typeof source)[]),
+      ...(imported.promptPresets as (typeof source)[]),
+    ]) {
+      expect((owner.seperateParameters as { overrides: object }).overrides).toEqual({ 'real-model': model })
+    }
+    expect(source.seperateParameters.overrides.thinking_type).toBe('off')
+  })
+
   it.each([
     { ext: 0, data: [0] },
     { type: 0, data: { type: 'Buffer', data: [0] } },

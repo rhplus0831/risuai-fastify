@@ -80,7 +80,14 @@ text by operation, attempt, target message, generation, and projection epoch.
 character/chat readiness metadata; it reads no transcript or Hypa body. Assembly
 separately reloads the selected owners and complete target history. Selected
 model/prompt/persona/Hypa IDs and module IDs/namespaces use indexed collection
-lookups. The route's `createGenerationAssemblyResources()` memoizes only within
+lookups. Before validating the flat generation settings, the repository projects
+chat-selected model/prompt fields over the global editor's preset mirrors using
+the shared preset composition order, including durable profile runtime fields and
+final prompt parameter overrides. A selected prompt without regex projects an
+empty regex list. Profile field materialization is shared with effective configuration
+in `server/fastify/src/prompt/profileGenerationFields.ts`. Shadowed editor fields cannot reject a
+chat's generation; absent-field legacy fallbacks remain intact. This projection
+is request-local and never persists settings. The route's `createGenerationAssemblyResources()` memoizes only within
 that preparation; accepted sends, operation retries, and subsequent preparations
 read current authoritative inputs again.
 
@@ -98,10 +105,17 @@ bodies, and asset metadata. Legacy embedded-character storage has an explicit
 `server/fastify/src/prompt/serverTypes.ts` owns finite generation, provider,
 memory, preflight, and nested record views. `generationInputDecoder.ts` validates
 unknown persisted inputs without validator coercion, defaults, field stripping,
-or graph cloning. One compatibility adapter preserves established Hypa selection
+or graph cloning. A compatibility adapter preserves established Hypa selection
 behavior: a present, non-null, non-string `selectedHypaV3PresetId` becomes `null`
 in a shallow root overlay (and a preflight envelope when needed). Nested objects
 and the caller's input remain unchanged; valid input retains identity.
+A second targeted adapter repairs original-Risu separate-parameter editor
+artifacts in settings and selected model/prompt records: recognized scalar
+parameter keys directly inside `seperateParameters.overrides` are removed.
+Real model-ID objects and unknown malformed entries remain subject to validation.
+The shared `separate-parameter-compatibility` helper also runs in preset writes,
+full-save normalization, and browser normalization. Already imported rows are
+repaired for generation without rewriting persisted data.
 Its checked-in schema and standalone validators are generated from those types
 by `util/generation-input-schema.ts`; the decoder regression checks schema,
 JavaScript and finite declaration synchronization plus runtime-Ajv parity.

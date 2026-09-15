@@ -1,3 +1,4 @@
+import { repairLegacySeparateParameters } from '@risuai/shared-core/separate-parameter-compatibility'
 import { createHash } from 'node:crypto'
 import {
   validateGenerationSettings as settings,
@@ -166,26 +167,52 @@ function normalizeLegacyHypaSelection(value: unknown): unknown {
   return value
 }
 
+/** Repair the known original-editor artifact without touching model entries or
+ * mutating persisted rows. Unchanged inputs retain their identity. */
+function normalizeLegacyGenerationSettings(value: unknown): unknown {
+  value = normalizeLegacyHypaSelection(value)
+  if (!isRecord(value)) return value
+  let result = normalizeSeparateParametersOwner(value)
+  for (const key of ['modelPresets', 'promptPresets']) {
+    const presets = result[key]
+    if (!Array.isArray(presets)) continue
+    const normalized = presets.map((preset: unknown) =>
+      isRecord(preset) ? normalizeSeparateParametersOwner(preset) : preset,
+    )
+    if (normalized.some((preset, index) => preset !== presets[index])) result = { ...result, [key]: normalized }
+  }
+  return result
+}
+
+function normalizeSeparateParametersOwner(value: Record<string, unknown>): Record<string, unknown> {
+  const seperateParameters = repairLegacySeparateParameters(value.seperateParameters)
+  return seperateParameters === value.seperateParameters ? value : { ...value, seperateParameters }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
 export function decodeGenerationSettings(value: unknown): GenerationSettings {
-  return checked(normalizeLegacyHypaSelection(value), settings, 'settings')
+  return checked(normalizeLegacyGenerationSettings(value), settings, 'settings')
 }
 export function decodeGenerationDatabase(value: unknown): FastifyDatabase {
-  return checked(normalizeLegacyHypaSelection(value), database, 'database')
+  return checked(normalizeLegacyGenerationSettings(value), database, 'database')
 }
 export function decodeDisplaySourceDatabase(value: unknown): DisplaySourceDatabase {
   return checked(normalizeLegacyHypaSelection(value), displaySourceDatabase, 'database')
 }
 export function decodeGenerationPreflightInputs(value: unknown): GenerationPreflightInputs {
   if (value && typeof value === 'object' && 'database' in value) {
-    const normalized = normalizeLegacyHypaSelection(value.database)
+    const normalized = normalizeLegacyGenerationSettings(value.database)
     if (normalized !== value.database) return checked({ ...value, database: normalized }, preflight, 'preflight')
   }
   return checked(value, preflight, 'preflight')
 }
 
 export function decodeProviderGenerationSettings(value: unknown): ProviderGenerationSettings {
-  return checked(normalizeLegacyHypaSelection(value), provider, 'provider')
+  return checked(normalizeLegacyGenerationSettings(value), provider, 'provider')
 }
 export function decodeMemoryGenerationSettings(value: unknown): MemoryGenerationSettings {
-  return checked(normalizeLegacyHypaSelection(value), memory, 'memory')
+  return checked(normalizeLegacyGenerationSettings(value), memory, 'memory')
 }
