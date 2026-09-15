@@ -694,8 +694,13 @@ html.risu-reduced-motion .risu-ongoing-pulse {
 }
 
 .default-chat-screen.fastify-chat-theme .risu-chat > div:first-child {
-  flex-direction: column;
-  gap: 15px;
+  /* Keep authored percentage heights intrinsic instead of resolving them
+     against the entire message through a column flex layout. */
+  display: block;
+}
+
+.default-chat-screen.fastify-chat-theme .risu-chat > div:first-child > * + * {
+  margin-top: 15px;
 }
 
 .x-risu-tool-call {
