@@ -2082,7 +2082,7 @@ describe('API-backed client bootstrap', () => {
     expect(resourceApi.loadInitial).not.toHaveBeenCalled()
   })
 
-  it('hydrates with a retained Stop control so its retry UI can remain available', async () => {
+  it('hydrates with a retained generation control so Stop and Retry recovery UI can remain available', async () => {
     pendingMutationApi.replay.mockResolvedValue({
       attempted: 1,
       controlRetained: 1,

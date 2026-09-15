@@ -144,6 +144,44 @@ describe('pending mutation replay', () => {
     })
   })
 
+  it('keeps successive Retry controls nonblocking while preserving blocking dependent edits', async () => {
+    const key = 'generation-operation-retry:operation-a'
+    const retries = ['retry-a', 'retry-b'].map((id) => {
+      const retry = entry(key, id)
+      return {
+        ...retry,
+        intent: {
+          version: 1,
+          kind: 'generation-operation-retry',
+          requests: [
+            {
+              method: 'POST',
+              path: '/generation-operations/operation-a/retries',
+              body: { retryRequestId: id, expectedStateVersion: 3 },
+            },
+          ],
+        },
+      }
+    })
+    const edit = entry('settings:runtime', 'edit-a')
+    edit.intent.dependencyKeys = [key]
+    outboxApi.list.mockResolvedValue([...retries, edit])
+    generationOperationApi.replay.mockResolvedValue({
+      disposition: 'retained',
+      result: { status: 'retained', code: 'generation_operation_foreign_session' },
+    })
+
+    await expect(replayPendingMutations()).resolves.toEqual({
+      attempted: 1,
+      controlRetained: 2,
+      discarded: 0,
+      retained: 1,
+      succeeded: 0,
+    })
+    expect(generationOperationApi.replay).toHaveBeenCalledOnce()
+    expect(durableApi.replay).not.toHaveBeenCalled()
+  })
+
   it('counts terminal mutation-id failures as discarded instead of retrying forever', async () => {
     outboxApi.list.mockResolvedValue([entry('settings:runtime', 'conflict-a')])
     durableApi.replay.mockResolvedValue({

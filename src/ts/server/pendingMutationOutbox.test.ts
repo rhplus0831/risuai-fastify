@@ -524,6 +524,7 @@ describe('pending mutation outbox', () => {
     expect(pendingMutationProjectionTargets(intent)).toEqual([
       'generation-operation:11111111-1111-4111-8111-111111111111',
     ])
+    await expect(countBlockingPendingMutationRecords()).resolves.toBe(1)
   })
 
   it('encrypts Stop controls without treating an acknowledged pending cancellation as startup-blocking', async () => {
@@ -552,6 +553,30 @@ describe('pending mutation outbox', () => {
     ])
     await expect(countPendingMutationRecords()).resolves.toBe(1)
     await expect(countBlockingPendingMutationRecords()).resolves.toBe(0)
+  })
+
+  it('retains encrypted Retry controls without blocking hydration, while ordinary edits still block', async () => {
+    const intent: DurableMutationIntent = {
+      version: 1,
+      kind: 'generation-operation-retry',
+      requests: [
+        {
+          method: 'POST',
+          path: '/generation-operations/11111111-1111-4111-8111-111111111111/retries',
+          body: { retryRequestId: '22222222-2222-4222-8222-222222222222', expectedStateVersion: 3 },
+        },
+      ],
+    }
+    const handle = stagePendingMutation('generation-operation-retry:operation-a', intent)
+    await expect(handle.ready).resolves.toBe('persisted')
+    expect((await listPendingMutations())[0]?.intent).toEqual(intent)
+    await expect(countPendingMutationRecords()).resolves.toBe(1)
+    await expect(countBlockingPendingMutationRecords()).resolves.toBe(0)
+
+    const edit = stagePendingMutation('settings:first', settingsIntent('first'))
+    await expect(edit.ready).resolves.toBe('persisted')
+    await expect(countPendingMutationRecords()).resolves.toBe(2)
+    await expect(countBlockingPendingMutationRecords()).resolves.toBe(1)
   })
 
   it('lazily advances an explicit committed-order counter and retains it when rows are cleared', async () => {
@@ -769,6 +794,7 @@ describe('pending mutation outbox', () => {
 
     await expect(listPendingMutations()).resolves.toEqual([])
     await expect(countPendingMutationRecords()).resolves.toBe(1)
+    await expect(countBlockingPendingMutationRecords()).resolves.toBeNull()
   })
 
   it('persists encrypted intents across runtime cache resets without plaintext secrets at rest', async () => {

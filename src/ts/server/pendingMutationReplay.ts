@@ -12,7 +12,7 @@ export interface PendingMutationReplaySummary {
   discarded: number
   retained: number
   succeeded: number
-  /** Durable Stop controls retained for UI/status reconciliation; never block resource hydration. */
+  /** Durable Stop/Retry controls retained for UI/status reconciliation; never block resource hydration. */
   controlRetained?: number
 }
 
@@ -44,7 +44,7 @@ export async function replayPendingMutations(): Promise<PendingMutationReplaySum
   })
   const blockedKeys = new Set<string>()
   const retain = (entry: (typeof entries)[number]) => {
-    if (entry.intent.kind === 'generation-operation-cancel')
+    if (entry.intent.kind === 'generation-operation-cancel' || entry.intent.kind === 'generation-operation-retry')
       summary.controlRetained = (summary.controlRetained ?? 0) + 1
     else summary.retained += 1
   }
@@ -62,7 +62,7 @@ export async function replayPendingMutations(): Promise<PendingMutationReplaySum
       // Propagate the dependency failure into this mutation's own lane so its
       // later successors cannot overtake the skipped correction.
       blockedKeys.add(entry.handle.key)
-      summary.retained += 1
+      retain(entry)
       continue
     }
     summary.attempted += 1
@@ -72,11 +72,7 @@ export async function replayPendingMutations(): Promise<PendingMutationReplaySum
     if (outcome.disposition === 'succeeded') {
       summary.succeeded += 1
     } else if (outcome.disposition === 'retained') {
-      if (entry.intent.kind === 'generation-operation-cancel') {
-        summary.controlRetained = (summary.controlRetained ?? 0) + 1
-      } else {
-        summary.retained += 1
-      }
+      retain(entry)
       blockedKeys.add(entry.handle.key)
       console.warn(`Pending server mutation replay failed for ${entry.handle.key}`, outcome.result)
     } else if (outcome.disposition === 'skipped' && !current()) {

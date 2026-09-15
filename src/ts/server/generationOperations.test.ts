@@ -1,4 +1,10 @@
-import { getClientSessionSnapshot, resetClientSessionForTests } from '../clientSession'
+import {
+  authorizeClientWriterRecovery,
+  beginClientSession,
+  canUseClientWriteAccess,
+  getClientSessionSnapshot,
+  resetClientSessionForTests,
+} from '../clientSession'
 import {
   setManagedWriterForTest,
   setManagedReaderForTest,
@@ -6,6 +12,7 @@ import {
 } from '../__tests__/managedClientSession'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
+import { replayPendingMutations } from './pendingMutationReplay'
 import type { GenerationOperationProjection } from './bootstrap'
 
 const operationMocks = vi.hoisted(() => ({
@@ -38,6 +45,7 @@ vi.mock('../chatCommands', () => ({
   toMessageSnapshot: (message: unknown) => structuredClone(message),
 }))
 vi.mock('../storage/fastifyStorage', () => ({ getNodeServerProxyAuth: vi.fn(async () => 'auth-a') }))
+vi.mock('./durableMutationDispatch', () => ({ dispatchDurableMutationReplay: vi.fn() }))
 vi.mock('../process/acceptedSendRecoveryState', () => ({
   acknowledgeHydratedAcceptedSendRecoveries: operationMocks.acknowledgeHydratedRecoveries,
   applyAcceptedSendActiveJobProjection: operationMocks.applyAcceptedJobs,
@@ -809,6 +817,41 @@ describe('generation operation client', () => {
       expect(captureGenerationRecoveryObligations()).toEqual([
         expect.objectContaining({ kind: 'submit', operationId, chatId: 'chat-a', phase: 'uncertain' }),
       ])
+    },
+  )
+
+  it.each(['generation_operation_foreign_session', 'chat_occupied'])(
+    'replays a retry rejected with 423 %s during writer recovery as a nonblocking control',
+    async (code) => {
+      vi.spyOn(console, 'warn').mockImplementation(() => {})
+      const fetch = vi.fn(async () => Response.json({ error: code }, { status: 423 }))
+      vi.stubGlobal('fetch', fetch)
+
+      await expect(retryGenerationOperation(operationId, 2)).resolves.toMatchObject({ status: 'retained', code })
+      const [key, intent] = operationMocks.stage.mock.calls[0]!
+      const handle = operationMocks.stage.mock.results[0]!.value
+      operationMocks.listPending.mockResolvedValue([{ handle, intent }])
+
+      // A reload replays saved controls before projection and UI write readiness.
+      resetStartupReadinessForTests()
+      const recovery = beginClientSession('writer-a')
+      authorizeClientWriterRecovery(recovery, {
+        databaseLineage: 'database-a',
+        writer: { sessionId: 'writer-a', epoch: 1 },
+      })
+      expect(canUseClientWriteAccess()).toBe(false)
+
+      await expect(replayPendingMutations()).resolves.toEqual({
+        attempted: 1,
+        controlRetained: 1,
+        discarded: 0,
+        retained: 0,
+        succeeded: 0,
+      })
+      expect(key).toBe(`generation-operation-retry:${operationId}`)
+      expect(fetch).toHaveBeenCalledTimes(2)
+      expect(fetch.mock.calls[1]).toEqual(fetch.mock.calls[0])
+      expect(operationMocks.discard).not.toHaveBeenCalled()
     },
   )
 

@@ -57,6 +57,14 @@ A late read or failed decryption cannot publish an old draft or remove a newer
 valid draft written to the same key. Admitted writes still retain their captured
 originating scope for recovery after writer loss.
 
+Pending generation Stop and Retry controls replay before hydration but do not
+block it when retained. Their encrypted intents and exact request identities
+remain available for operation reconciliation. A rejected retry (including an
+ownership-related 423) must not trap startup in writer recovery and hide the
+operation UI. Pending submissions, ordinary edits, and unreadable outbox rows
+retain their existing startup-blocking behavior; server ownership checks still
+apply to every control request.
+
 Durable helpers stage before network dispatch (and before a debounced control
 waits to send). Semantic owner keys and explicit dependency keys preserve
 predecessor order across commands; Web Locks coordinate tabs when available and

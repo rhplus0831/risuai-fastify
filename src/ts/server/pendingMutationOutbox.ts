@@ -1367,10 +1367,11 @@ function recordPendingQueueDiagnostic(
 }
 
 /**
- * Count startup-blocking rows after replay. A cancellation control is allowed
- * to remain encrypted while its acknowledged operation settles; replay has
- * already refreshed its visible controller state, and keeping it must not
- * prevent authoritative resource hydration. Unreadable rows still fail closed.
+ * Count startup-blocking rows after replay. Stop and Retry controls can remain
+ * encrypted for operation reconciliation without preventing authoritative
+ * resource hydration. In particular, a rejected retry must not hide the app
+ * behind writer recovery forever. Submissions, ordinary edits, and unreadable
+ * rows still fail closed.
  */
 export async function countBlockingPendingMutationRecords(): Promise<number | null> {
   const generation = captureClientSessionGeneration()
@@ -1397,7 +1398,7 @@ export async function countBlockingPendingMutationRecords(): Promise<number | nu
     )) {
       const intent = await decryptIntent(record)
       if (!outboxRecoveryIsCurrent(generation)) return null
-      if (intent.kind !== 'generation-operation-cancel') blocking += 1
+      if (intent.kind !== 'generation-operation-cancel' && intent.kind !== 'generation-operation-retry') blocking += 1
     }
     return blocking
   } catch (error) {
