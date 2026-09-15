@@ -168,6 +168,7 @@
   import { applySuccessfulSendChatEffects } from 'src/ts/process/sendChatCompletion'
   import { coldStorageHeader, preLoadChat } from 'src/ts/process/coldstorage.svelte'
   import Chats from './Chats.svelte'
+  import OwnerChatOccupancyControls from './OwnerChatOccupancyControls.svelte'
   import Button from '../UI/GUI/Button.svelte'
   import PluginDefinedIcon from '../Others/PluginDefinedIcon.svelte'
   import {
@@ -2829,6 +2830,9 @@
           data-floating-chat-input={!docked && floatingInputOpen ? 'true' : undefined}
           data-default-chat-composer-dock={docked ? '' : undefined}
           data-default-chat-composer-flow={docked ? undefined : ''}>
+          {#if currentChatId}
+            <OwnerChatOccupancyControls chatId={currentChatId} />
+          {/if}
           {#if composerDraftPersistenceError}
             <div
               class="chat-screen-content-width mb-2 rounded-md border border-draculared p-3 text-sm text-draculared"

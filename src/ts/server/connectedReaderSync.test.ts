@@ -109,7 +109,7 @@ import {
 } from './bardWikiJobEvents'
 import { getBardWikiChatResource, loadBardWikiChatResource, resetBardWikiResource } from './bardWikiResource'
 import { charactersResourceState } from './resourceState.svelte'
-import { recordReaderRouteIntent, resetReaderRouteIntentForTests } from '../readerRouteIntent'
+import { peekReaderRouteIntent, recordReaderRouteIntent, resetReaderRouteIntentForTests } from '../readerRouteIntent'
 
 const ownership = { databaseLineage: 'database-a', writer: { sessionId: 'writer-a', epoch: 1 } }
 const streams: { input: SubscribeServerCommandEventsInput; stop: ReturnType<typeof vi.fn> }[] = []
@@ -370,6 +370,63 @@ describe('connected reader synchronization', () => {
       generation: session.generation,
       sessionId: 'reader-a',
     })
+  })
+
+  it('routes an unrelated occupancy frame only to occupancy projection without broad reads or navigation changes', async () => {
+    const route = {
+      kind: 'character' as const,
+      path: '/character/char-local',
+      chaId: 'char-local',
+      chatId: 'chat-local',
+    }
+    recordReaderRouteIntent(route)
+    const { sync, callbacks } = start()
+    await sync.ready
+    const session = getClientSessionSnapshot()
+    api.bootstrap.mockClear()
+    api.ownership.mockClear()
+    api.targeted.mockClear()
+    api.full.mockClear()
+    api.applyOccupancy.mockClear()
+    callbacks.onProjectionRefreshed.mockClear()
+
+    const event = {
+      type: 'occupancy.snapshot' as const,
+      version: 1 as const,
+      databaseLineage: 'database-a',
+      occupancies: [
+        {
+          databaseLineage: 'database-a',
+          chatId: 'chat-unrelated',
+          occupantSessionId: 'reader-b',
+          occupancyEpoch: 4,
+          claimClass: 'chat_only' as const,
+          state: 'occupied' as const,
+          claimedAtMs: 1_000,
+          leaseExpiresAtMs: 91_000,
+          updatedAtMs: 1_000,
+          releasedAtMs: null,
+        },
+      ],
+    }
+    streams[0].input.onOccupancyEvent?.(event)
+
+    // The occupancy owner applies the full snapshot and publishes its scoped
+    // recovery notification. Connected-reader invalidation and route replay
+    // are deliberately not involved for this revision-free event.
+    expect(api.applyOccupancy).toHaveBeenCalledExactlyOnceWith(event, {
+      generation: session.generation,
+      sessionId: 'reader-a',
+    })
+    expect(api.bootstrap).not.toHaveBeenCalled()
+    expect(api.ownership).not.toHaveBeenCalled()
+    expect(api.targeted).not.toHaveBeenCalled()
+    expect(api.full).not.toHaveBeenCalled()
+    expect(callbacks.onProjectionRefreshed).not.toHaveBeenCalled()
+    expect(peekReaderRouteIntent()).toEqual({ route, sequence: 1 })
+    expect(api.applied).toBe(5)
+    expect(api.known).toBe(5)
+    expect(getClientSessionSnapshot()).toMatchObject({ lifecycle: 'reading', connection: 'live' })
   })
 
   it('hands an SSE ownership-lineage change directly to the coordinator', async () => {

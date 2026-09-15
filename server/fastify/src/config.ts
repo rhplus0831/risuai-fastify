@@ -56,6 +56,12 @@ export interface AppConfig {
     fullPrompt: boolean
     maxGzipBytes: number
   }
+  /**
+   * Server-advertised chat occupancy rollout state. Omitted injected configs
+   * use the production default so tests must opt out explicitly when they need
+   * the pre-occupancy compatibility path.
+   */
+  chatOccupancyEnabled?: boolean
 }
 
 export type RequestTraceMode = 'agent' | 'human'
@@ -143,6 +149,14 @@ function parseBoolean(raw: string | undefined): boolean {
   if (!raw) return false
   const normalized = raw.trim().toLowerCase()
   return normalized === '1' || normalized === 'true' || normalized === 'yes' || normalized === 'on'
+}
+
+function parseBooleanWithDefault(raw: string | undefined, fallback: boolean, envName: string): boolean {
+  if (raw === undefined) return fallback
+  const normalized = raw.trim().toLowerCase()
+  if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+  if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  throw new Error(`Invalid ${envName}: ${raw}`)
 }
 
 function parseRequestTraceMode(raw: string | undefined): RequestTraceMode | undefined {
@@ -266,6 +280,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
       fullPrompt: generationTraceFullPrompt,
       maxGzipBytes: generationTraceMaxGzipBytes,
     },
+    chatOccupancyEnabled: parseBooleanWithDefault(
+      env.RISU_API_CHAT_OCCUPANCY_ENABLED,
+      true,
+      'RISU_API_CHAT_OCCUPANCY_ENABLED',
+    ),
   }
   assertAgentDevAuthBypassHost(config)
   if (env.RISU_SUPPORT_DIAGNOSTICS !== undefined && !['0', '1'].includes(env.RISU_SUPPORT_DIAGNOSTICS))

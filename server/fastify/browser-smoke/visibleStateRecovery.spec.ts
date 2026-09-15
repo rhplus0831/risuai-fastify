@@ -255,6 +255,13 @@ test('the character sidebar survives an old-lineage response and in-place writer
           lifecycle: 'reading',
           databaseLineage: imported.databaseLineage,
         })
+      // The new generation can report "reading" before its settings request
+      // completes and the reader UI renders. Release the stale command only
+      // after the replacement reader is actually ready for the conflict.
+      await expect(page.locator('[data-reader-lifecycle-status]')).toHaveText(
+        'Read only. Updates from the writer appear here.',
+        { timeout: 30_000 },
+      )
       return imported
     } finally {
       heldCommand.release()

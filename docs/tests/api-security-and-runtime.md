@@ -3,7 +3,11 @@
 Last audited: 2026-08-30.
 Targeted source check: 2026-09-10 (v3 fact privacy and correlated helper pagination).
 
-This area covers the Fastify composition boundary: authentication, single-writer ownership, route policy, bootstrap and resource hydration, configuration and shutdown, agent data sandboxing, static serving, request tracing, Web Push, generic and permissioned egress, and local stream jobs.
+This area covers the Fastify composition boundary: authentication, exactly one
+general owner plus exclusive per-chat occupancy, route policy, bootstrap and
+resource hydration, configuration and shutdown, agent data sandboxing, static
+serving, request tracing, Web Push, generic and permissioned egress, and local
+stream jobs.
 
 ## Authentication, active writer, and route policy
 

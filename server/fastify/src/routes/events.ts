@@ -145,7 +145,11 @@ export function registerEventsRoutes(
     const queuedCommandEvents: CommandEvent[] = []
     const queuedMemoryEvents: MemoryEvent[] = []
     const queuedWriterEvents: WriterEvent[] = []
-    const queuedOccupancyEvents: ChatOccupancyEvent[] = []
+    // Occupancy frames are complete snapshots, so setup needs only the latest
+    // one. Keeping a single replacement slot prevents a busy claimant from
+    // growing this pre-live queue while preserving the final authoritative
+    // state observed after the subscribe-before-snapshot window.
+    let queuedOccupancyEvent: ChatOccupancyEvent | null = null
     let heartbeat: NodeJS.Timeout | null = null
     let unsubscribeCommand: (() => void) | null = null
     let unsubscribeMemory: (() => void) | null = null
@@ -226,7 +230,7 @@ export function registerEventsRoutes(
         }
         return
       }
-      queuedOccupancyEvents.push(event)
+      queuedOccupancyEvent = event
     })
     const initialOwnership = getDatabaseOwnershipSnapshot(db)
     const initialWriterEvent = {
@@ -317,12 +321,12 @@ export function registerEventsRoutes(
     }
     queuedWriterEvents.length = 0
     liveWriterDelivery = true
-    for (const event of queuedOccupancyEvents) {
+    if (queuedOccupancyEvent) {
       if (!reply.raw.writableEnded) {
-        sendFrame('occupancy', formatOccupancyEvent(event))
+        sendFrame('occupancy', formatOccupancyEvent(queuedOccupancyEvent))
       }
     }
-    queuedOccupancyEvents.length = 0
+    queuedOccupancyEvent = null
     liveOccupancyDelivery = true
     for (const event of replay.events) {
       if (!reply.raw.writableEnded) {

@@ -13,6 +13,11 @@ export const languageVietnamese = {
       foreignOwnedHelp: 'Chat này chỉ đọc tại đây cho đến khi thiết bị kia giải phóng.',
       selfOwned: 'Đang được dùng trên thiết bị này',
       selfOwnedHelp: 'Thiết bị này có thể gửi, tạo lại phản hồi mới nhất và dừng tạo trong chat này.',
+      ownerOccupied: 'Chat đang được dùng để soạn thảo',
+      ownerOccupiedHelp: 'Hãy giải phóng chat này trước khi đặt lại, xóa hoặc khôi phục dữ liệu có chứa chat.',
+      ownerUpgradeRequired: 'Hoàn tất chuyển chat sang quyền chủ sở hữu',
+      ownerUpgradeRequiredHelp:
+        'Thiết bị này vẫn giữ quyền chỉ dành cho chat khi trở thành thiết bị ghi. Hãy chuyển sang quyền chủ sở hữu để Tiếp tục và Tạo lại, hoặc giải phóng chat trước các thay đổi phá hủy dữ liệu.',
       switchRequired: 'Cần chuyển chat',
       switchRequiredHelp: 'Thiết bị này đang dùng chat khác. Hãy chuyển rõ ràng trước khi thay đổi chat này.',
       normalizationRequired: 'Chọn một chat để giữ',
@@ -23,6 +28,8 @@ export const languageVietnamese = {
         'Mở một chat đang được dùng trên thiết bị này, giữ chat đó, rồi chuyển rõ ràng sang đây.',
       claim: 'Dùng chat này',
       claiming: 'Đang nhận…',
+      useAsOwner: 'Dùng với quyền chủ sở hữu',
+      usingAsOwner: 'Đang chuyển sang quyền chủ sở hữu…',
       release: 'Giải phóng chat',
       releasing: 'Đang giải phóng…',
       switchToChat: 'Chuyển sang chat này',
@@ -38,6 +45,7 @@ export const languageVietnamese = {
       unsupportedActions:
         'Tệp đính kèm, tải lên, thả tệp, lệnh, hook đầu vào, Tiếp tục, tạo lại thông thường, sửa, xóa, dịch tin nhắn và thao tác plugin không có trong chế độ chỉ chat.',
       claimSucceeded: 'Chat này hiện đang được dùng trên thiết bị này.',
+      ownerUpgradeSucceeded: 'Chat này hiện dùng quyền chủ sở hữu trên thiết bị này.',
       releaseSucceeded: 'Chat đã được giải phóng. Bạn vẫn có thể đọc.',
       switchSucceeded: 'Đã chuyển quyền truy cập sang cuộc trò chuyện này.',
       normalizationSucceeded: 'Đây hiện là chat duy nhất được dùng trên thiết bị này.',

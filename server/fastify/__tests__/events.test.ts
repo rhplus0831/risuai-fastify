@@ -501,7 +501,7 @@ describe('command events stream', () => {
     }
   })
 
-  it('queues occupancy transitions during initial snapshot setup and streams later mutations without revisions', async () => {
+  it('coalesces setup-window occupancy transitions to the latest complete snapshot and streams later mutations', async () => {
     await stopHarness(harness)
     harness = await startHarness({ chatOccupancyEnabled: true })
     const { assertion } = await setupAuthedClient(harness.app)
@@ -527,12 +527,25 @@ describe('command events stream', () => {
       if (queuedSetupStarted) return originalEventSnapshot()
       const initial = originalEventSnapshot()
       queuedSetupStarted = true
-      queuedClaim = harness.chatOccupancy.claim({
+      const firstClaim = harness.chatOccupancy.claim({
         databaseLineage,
         chatId: 'chat-occupancy',
         sessionId: 'reader-occupancy',
         claimClass: 'chat_only',
         expectedOccupancyEpoch: 0,
+      })
+      const released = harness.chatOccupancy.release({
+        databaseLineage,
+        chatId: 'chat-occupancy',
+        sessionId: 'reader-occupancy',
+        occupancyEpoch: firstClaim.occupancyEpoch,
+      })
+      queuedClaim = harness.chatOccupancy.claim({
+        databaseLineage,
+        chatId: 'chat-occupancy',
+        sessionId: 'reader-occupancy',
+        claimClass: 'chat_only',
+        expectedOccupancyEpoch: released.occupancyEpoch,
       })
       return initial
     })
@@ -563,11 +576,12 @@ describe('command events stream', () => {
             databaseLineage,
             chatId: 'chat-occupancy',
             occupantSessionId: 'reader-occupancy',
-            occupancyEpoch: 1,
+            occupancyEpoch: 3,
             state: 'occupied',
           },
         ],
       })
+      expect(setupEvents[1]).toEqual(originalEventSnapshot())
       expect(setupText).not.toContain('id: ')
       expect(setupEvents.every((event) => !('revision' in event))).toBe(true)
 

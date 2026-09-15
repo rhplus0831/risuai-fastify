@@ -2,6 +2,7 @@
 
 Last audited: 2026-08-27.
 Targeted source checks: 2026-09-12 (reader-folder semantics and compact chat/folder actions).
+Targeted source check: 2026-09-15 (occupancy-preserving navigation and explicit switching).
 
 This guide owns the sidebar, navigation controls, character and chat selection,
 character configuration, and list organization.
@@ -121,6 +122,16 @@ reading action. Only valid reading routes become `readerRouteIntent.ts`
 promotion intent; blocked pages cannot reopen an old restricted surface. The
 writer chat list loads Toggles lazily behind current authority and session
 checks, keeping its Settings renderer dependencies out of reader startup.
+
+Reader navigation is observation only and never claims, releases, or switches a
+chat occupancy. A page may keep one chat occupied while browsing another; the
+current route does not inherit mutation authority from that retained row. To
+Send or Reroll in the newly viewed chat, the user must invoke the explicit
+occupancy switch (or demoted-owner normalization) exposed by the transcript
+composer. General-owner promotion and demotion remain independent of navigation
+and occupancy: role changes retain exact rows and accepted work, while a demoted
+page with owner-class or multiple rows must explicitly normalize to one selected
+chat before new chat-only admission.
 
 While an asynchronous writer route is loading, newer navigation takes precedence
 over a retained reader route with a different semantic route key. App consumes

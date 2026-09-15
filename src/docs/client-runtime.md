@@ -204,6 +204,14 @@ consumes the reader-only route intent and reconciles the URL to persisted writer
 state without invoking selection handlers; only a new writer-mode navigation
 may persist selection or `lastInteraction`.
 
+Promotion also preserves any chat-only occupancy already held by that page.
+When the writer later opens that chat, the composer exposes explicit release
+and **Use as owner** controls. Reacquisition is a server-authorized exact
+release followed by a fresh owner-class claim, never an in-place scope upgrade;
+active generation/effect pins can still block it. Release remains available in
+rollback mode so the owner can unblock destructive reset, import, and restore
+after durable work drains.
+
 A foreign writer event revokes write authority synchronously, captures local
 drafts, and stops authority-bearing work before the UI returns to reading.
 Reader reconnect performs discovery and resource reads rather than acquiring

@@ -1,9 +1,9 @@
 # Browser State Sync and Recovery
 
 Last audited: 2026-08-30.
-Targeted source check: 2026-09-12 (command/outbox recovery, resource hydration, native cache faults, and reader gaps).
+Targeted source check: 2026-09-15 (chat occupancy negotiation, multi-session recovery, and rollout drain).
 
-This area covers browser startup, active-writer ownership, encrypted durable mutation recovery, command
+This area covers browser startup, general-owner and per-chat occupancy authority, encrypted durable mutation recovery, command
 serialization, compact local acknowledgements, authoritative resource reads, hash-cache validation,
 event invalidation, complete refresh, and lazy body hydration. Domain-specific optimistic editing is
 assessed in [Domain Mutations and Editing Owners](domain-mutations-and-editing-bridges.md). Provider and
@@ -111,6 +111,56 @@ its declared routing/hydration contract. The legacy/null shell browser case
 supplies persisted malformed values after harness startup and observes normalized
 values during browser startup. The read path clones nonrepairing settings reads;
 the case does not assert a repair write to SQLite or repair before bootstrap.
+
+### Chat Occupancy And Scoped Recovery
+
+`server/fastify/browser-smoke/chatOccupancyInteraction.spec.ts` is the primary
+integrated browser owner; together with the server enforcement suites below it
+completes T01-T11. Separate BrowserContexts exercise one general owner, two
+chat-only senders, and observers across different-chat parallel generation,
+same-chat one-winner contention, retained occupancy while navigating, explicit
+cross-chat switch/normalization, Send/Reroll/Stop controls, and visibly disabled
+Continue/Regenerate. The suite combines response loss, same-base revision retry,
+synthetic suspension, owner transfer, expiry/reacquisition, role
+normalization, and real Fastify/SQLite restart. It asserts rendered controls and
+draft/error state together with exact persisted user/result identities, provider
+invocation counts, operation/effect rows, and absence of forbidden shared
+commands.
+
+The promotion regression reopens the occupied chat in writer mode, proves the
+retained `chat_only` tuple is manageable, releases and reacquires it as a fresh
+`owner` tuple, runs Continue, then releases it to unblock a previously rejected
+restore. It deliberately completes that Continue before the first stream GET;
+the resulting `stale_generation_attempt` must lead to exact status, strict
+transcript hydration, and scoped effect recovery without another submission or
+provider invocation.
+
+The same browser suite owns accepted-work drain proofs: lost Send/Stop responses,
+pre-acceptance cancellation, finalization/effect pins, translated IGP/inlay
+ordering, and default-enabled versus disabled rollout behavior. An explicit
+`RISU_API_CHAT_OCCUPANCY_ENABLED=false` fixture permits exact renewal,
+Stop/settlement, normalization, and release but no new claim/switch/chat-only
+submit. `src/ts/server/generationOperations.test.ts` supplies the focused
+encrypted-intent and three-conflict exhaustion schedules;
+`src/ts/server/connectedReaderSync.test.ts` proves an unrelated revision-free
+occupancy event updates only the occupancy projection with no bootstrap,
+resource read, navigation change, or command-cursor advance.
+
+Server owners are `server/fastify/__tests__/chatOccupancy.test.ts`,
+`chatOccupancyEnforcement.test.ts`,
+`generationMemoryOccupancyRecovery.test.ts`, `bootstrap.test.ts`,
+`events.test.ts`, and `config.test.ts`. They cover tuple/epoch/lineage fencing,
+one chat-only row versus multi-chat owner claims, post-commit snapshots, complete
+direct/indirect/destructive mutation rejection, database replacement rollback,
+startup/restart pins, deterministic Hypa/BardWiki terminalization, capability
+negotiation, and the default-true environment setting.
+
+These Playwright journeys use real Chromium, Fastify, SQLite, native fetch/SSE,
+and isolated browser storage, but provider responses and fault barriers are
+deterministic local fixtures. Mobile coverage is Chromium device emulation and
+synthetic lifecycle/network interruption. It does not claim a live external
+provider, physical-device process eviction, native browser-chrome behavior, or
+production deployment validation.
 
 ## Durable command interruption through visible settings
 
@@ -262,6 +312,9 @@ manually mirrored rather than generated from a shared command catalog.
   startup projections.
 - The destructive-refresh epoch cases ensure an old asynchronous rollback cannot overwrite a restore or
   complete refresh.
+- `chatOccupancyInteraction.spec.ts` plus the focused occupancy/service suites
+  protect the boundary between one general owner and exact per-chat authority;
+  a store-only or single-page generation test is not a substitute.
 
 ## Primary inventory
 
@@ -271,6 +324,7 @@ and UI files are discussed in their focused documents.
 | Protected area | Primary files |
 | --- | --- |
 | Startup and writer ownership | `src/ts/bootstrap.test.ts`; `src/ts/startupReadiness.test.ts`; `src/ts/readerRouteIntent.test.ts`; `src/ts/readerProjectionLifecycle.test.ts`; `src/lib/Workspace.svelte.test.ts`; `src/ts/server/activeWriterSession.test.ts`; `bootstrap.test.ts` |
+| Chat occupancy and selective recovery  | `src/ts/server/chatOccupancy.test.ts`; `src/ts/server/generationOperations.test.ts`; `src/ts/process/targetedGenerationRecovery.test.ts`; `server/fastify/__tests__/chatOccupancy.test.ts`; `chatOccupancyEnforcement.test.ts`; `generationMemoryOccupancyRecovery.test.ts`; `events.test.ts`; `config.test.ts`; `server/fastify/browser-smoke/chatOccupancyInteraction.spec.ts`                                                                                                                                       |
 | Connected reader and role guards | `src/ts/clientSession.test.ts`; `src/ts/connectedClientStartup.test.ts`; `src/ts/server/connectedTabIdentity.test.ts`; `connectedReaderSync.test.ts`; `commands.clientSession.test.ts`; `readerReadAuth.svelte-node.test.ts`; `lifecycleRecovery.test.ts`; `writerDraftRecovery.test.ts`; `writerDraftFields.test.ts` |
 | Durable dispatch and recovery | `src/ts/server/durableMutationDispatch.test.ts`; `durableMutationTerminalRejection.test.ts`; `pendingMutationOutbox.test.ts`; `pendingMutationReplay.test.ts` |
 | Command and event transport | `src/ts/server/commands.test.ts`; `events.test.ts`; `settingsDraftAcknowledgement.test.ts` |

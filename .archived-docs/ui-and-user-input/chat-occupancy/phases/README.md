@@ -35,8 +35,9 @@ package. Run `pnpm check:docs` plus this explicit check from the repository root
 pnpm exec tsx -e '
 import { readdirSync } from "node:fs";
 import { validateCurrentDocumentation } from "./util/current-documentation-validator.ts";
-const root = "docs/plan/chat-occupancy";
-const documents = ["docs/plan/README.md", ...[root, `${root}/phases`].flatMap(dir =>
+const root = ".archived-docs/ui-and-user-input/chat-occupancy";
+const documents = [".archived-docs/README.md", ".archived-docs/ui-and-user-input/README.md",
+  "docs/plan/README.md", ...[root, `${root}/phases`].flatMap(dir =>
   readdirSync(dir).filter(name => name.endsWith(".md")).map(name => `${dir}/${name}`))];
 const result = validateCurrentDocumentation({
   documentPaths: documents,
@@ -49,7 +50,7 @@ const result = validateCurrentDocumentation({
 console.log(JSON.stringify(result, null, 2));
 if (!result.ok) process.exitCode = 1;
 '
-pnpm exec prettier --ignore-path /dev/null --check docs/plan/README.md 'docs/plan/chat-occupancy/**/*.md'
+pnpm exec prettier --ignore-path /dev/null --check docs/plan/README.md '.archived-docs/ui-and-user-input/chat-occupancy/**/*.md'
 git diff --check
 ```
 

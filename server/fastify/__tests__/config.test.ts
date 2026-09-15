@@ -36,6 +36,29 @@ describe('loadConfig missing database override', () => {
   })
 })
 
+describe('loadConfig chat occupancy rollout', () => {
+  it('enables the coherent chat occupancy protocol by default', () => {
+    expect(loadConfig({ ...BASE_ENV }).chatOccupancyEnabled).toBe(true)
+  })
+
+  it('accepts explicit enabled and rollback values', () => {
+    for (const raw of ['1', 'true', 'yes', 'on', ' TRUE ']) {
+      expect(loadConfig({ ...BASE_ENV, RISU_API_CHAT_OCCUPANCY_ENABLED: raw }).chatOccupancyEnabled).toBe(true)
+    }
+    for (const raw of ['0', 'false', 'no', 'off', ' OFF ']) {
+      expect(loadConfig({ ...BASE_ENV, RISU_API_CHAT_OCCUPANCY_ENABLED: raw }).chatOccupancyEnabled).toBe(false)
+    }
+  })
+
+  it('rejects invalid explicit values instead of silently disabling the protocol', () => {
+    for (const raw of ['', 'enabled', 'disable', 'tru']) {
+      expect(() => loadConfig({ ...BASE_ENV, RISU_API_CHAT_OCCUPANCY_ENABLED: raw })).toThrow(
+        /Invalid RISU_API_CHAT_OCCUPANCY_ENABLED/,
+      )
+    }
+  })
+})
+
 describe('loadConfig importMaxBytes', () => {
   it('defaults to unlimited so large backups import without per-deployment tuning', () => {
     expect(loadConfig({ ...BASE_ENV }).importMaxBytes).toBe(Number.POSITIVE_INFINITY)

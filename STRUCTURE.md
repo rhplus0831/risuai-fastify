@@ -42,9 +42,11 @@ Toolchain: Node.js >=24 and pnpm; root `package.json` owns both runtimes.
   drafts and do not report success merely because dispatch began.
 - Put new user-visible frontend strings in `src/lang`; `src/lang/en.ts` is the
   source language pack.
-- The single-writer rule is an intentional architecture constraint. Unless a
-  change explicitly redesigns that boundary, new features do not need to support
-  multi-writer mutation.
+- The single-writer rule means exactly one general owner for ordinary application
+  mutation. Per-chat occupancy is a separate, exclusive authority: it can admit
+  the narrow chat-only generation contract for one chat without granting generic
+  command, settings, character, module, or plugin writes. Unless a change
+  explicitly redesigns either boundary, new features must preserve both.
 
 ## Choose By Task
 

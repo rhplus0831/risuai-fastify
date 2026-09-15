@@ -1,7 +1,7 @@
 # Generation Client
 
 Last audited: 2026-08-29.
-Targeted source checks: 2026-09-12 (reader viewing, IGP recovery, durable Stop, and abandoned-send recovery).
+Targeted source checks: 2026-09-15 (occupied-chat authority, selective replay, effects, and rollout drain).
 
 This guide owns the browser side of durable chat generation: operation
 acceptance, streaming, cancellation, reattach, terminal reconciliation,
@@ -12,10 +12,10 @@ in [Backend Map](../../docs/structure/backend.md#generation-and-background-work)
 
 ## Coordinator And Key Files
 
-`sendChat` in `src/ts/process/index.svelte.ts` is the writer coordinator for
-chat generation UI. In Fastify mode it uses server prompt assembly and server
-provider dispatch. Connected readers use a separate observation coordinator
-and never call `sendChat` to watch a generation.
+`sendChat` in `src/ts/process/index.svelte.ts` coordinates general-owner and
+exact occupied-chat generation UI. In Fastify mode it uses server prompt
+assembly and server provider dispatch. Passive connected readers use a separate
+observation coordinator and never call `sendChat` merely to watch a generation.
 
 Important files:
 
@@ -35,6 +35,9 @@ Important files:
   typed optimistic-message effect only while its chat-body projection epoch is
   still current. Invalid or stale event/effect data falls back to authoritative
   resource reconciliation instead of replacing the optimistic transcript.
+- `src/ts/server/chatOccupancy.ts` owns the independently negotiated per-chat
+  authority used by occupied-chat Send, Reroll, and Stop. It never grants the
+  ordinary command transport or general-owner readiness.
 - `packages/shared-core/src/providerCapability.ts` and
   `src/ts/process/request/serverPromptAssembly.ts` decide whether the selected
   request can run on the server.
@@ -107,20 +110,74 @@ Important files:
 
 ## Preflight Persistence Gates
 
-Before prompt assembly or provider fetch, `sendChat` awaits the character-owned
-maintenance batch from `sendChatContext.ts`, the pending chat
+Before prompt assembly or provider fetch, a general-owner `sendChat` awaits the
+character-owned maintenance batch from `sendChatContext.ts`, the pending chat
 generation-settings save, the pending selected-persona update, and a flush of
 the selected character's debounced script-definition draft. A queued or failed
-script save blocks generation just like another rejected/retained persistence
-gate. For “send never reached fetch,” inspect `setupSendChatContext`,
+script save blocks owner generation like another rejected/retained persistence
+gate. Chat-only admission instead runs only the narrow chat-local message-ID
+preparation and reads the server-derived effective configuration; it neither
+writes `lastInteraction` nor flushes character/settings/persona/script owners.
+For “send never reached fetch,” inspect `setupSendChatContext`,
 `waitForPendingChatGenerationSettingsSave`,
 `flushPendingSelectedPersonaUpdate`, and
 `waitForPendingCharacterScriptDefinitionSave` before debugging the provider
 adapter.
 
+### Occupied-Chat Operation Authority
+
+When bootstrap advertises enabled chat-occupancy protocol v1, both the general
+owner and a chat-only page must supply the exact
+`(databaseLineage, chatId, sessionId, occupancyEpoch)` tuple for new occupied
+work. The owner may Send, Continue, Regenerate, Reroll, and Stop under an
+`owner` claim. A `chat_only` claim admits plain Send, latest-response Reroll,
+and Stop only for the operation that page admitted; Continue and general
+Regenerate fail closed before staging with
+`chat_only_interaction_unsupported`. Attachments/uploads, input hooks, message
+editing/translation, and plugin-backed browser generation are not alternate
+entry points into this scope.
+
+General-owner promotion deliberately preserves an existing `chat_only` tuple;
+it does not silently broaden accepted authority. The writer composer therefore
+offers an explicit **Use as owner** recovery action for that chat. It releases
+the exact old epoch and then claims the released epoch as `owner`; pinned work
+can reject the release, and a claim failure remains visibly retryable. Either
+claim class also exposes explicit release in the owner UI, including while
+rollout is disabled, so destructive operations are not left behind an
+unmanageable retained lease.
+
+Operation acceptance, accepted user-row append, target validation, global
+revision check, and the stored occupancy permission scope commit atomically.
+The browser retries at most three revision conflicts by rereading the base
+revision while retaining the same frozen tuple and operation id. Exhaustion
+keeps the encrypted intent and visible recovery state; it does not blindly
+rebase or report acceptance. After a lost response, recovery reads operation
+authority before any idempotent replay. If the server proves the old operation
+was never accepted and its occupancy expired, the intent becomes
+`requires_resubmission`; a Send keeps its original draft available, but only a
+new explicit action after current transcript/configuration/occupancy reads can
+create another operation.
+
+Accepted authority survives disconnect, general-owner transfer, and rollout
+disablement for stream reattach, Stop, finalization, generated translation,
+scoped IGP, and automatic memory/BardWiki settlement. Recovery enumerates only
+the page's current exact occupancies and never adopts an observer's or another
+session's outbox. Transcript-mutating work pins release and handoff. Chat-only
+plugin output and emotion/image recomputation are terminally skipped; generated
+translation remains server-owned, and IGP can update only the exact generated
+assistant row with its effect claim. Originating-session TTS, notification, and
+completion sound remain ephemeral and do not pin handoff.
+
+`RISU_API_CHAT_OCCUPANCY_ENABLED=false` rejects new claims/switches and
+chat-only submissions. It deliberately preserves snapshot reads, renewal,
+status reconciliation, Stop, effect/finalization drain, normalization, and
+release for already accepted rows. A missing or malformed capability is
+unsupported and fails closed rather than falling back to chat-only generation.
+
 ## Operations, Streams, And Reattach
 
-The controls and recovery in this section require current writer authority.
+The controls and recovery in this section require current general-owner
+authority or the exact stored occupancy authority described above.
 Durable sends such as send, continue, and regenerate use operation-addressed
 streams when protocol v1 is advertised; job-ID-only attachment remains a
 compatibility fallback. Disconnect is an observation failure and does not imply
@@ -128,6 +185,11 @@ generation failure. Explicit Stop uses the exact operation (or the compatibility
 job when no operation exists). The live adapter performs one immediate,
 replay-aware reopen after an unrequested SSE EOF/read failure, rebuilding
 replayed token deltas from zero and deduplicating replayed non-token effects.
+If an occupied-chat Continue or Regenerate finishes between acceptance and its
+first stream GET, the stale-attempt response does not trigger another submit.
+The client status-probes the exact frozen operation/occupancy origin, requires
+the completed target and result identities to match, strictly hydrates the chat,
+and drains the existing scoped effect receipts before reporting success.
 Because that replay window may contain only a token suffix, a durable
 `done.result` replaces the accumulator as the last cumulative raw snapshot
 before stream closure. After an explicit replay gap, the canonical terminal can
@@ -188,10 +250,12 @@ preview. Once admitted, `ReaderTranscript.svelte` starts one
 `readerGenerationObservation.ts` owner for its selected character/chat
 incarnation and client-session generation. Status
 discovery, the operation/attempt/job stream, terminal-snapshot reads, and
-transcript hydration use authenticated GET requests. The reader does not seed
-writer operation/activity stores, consume writer reattach eligibility, claim
-completion effects, or run submission, Stop, generation retry, or persistence
-retry actions. `canGenerate` remains false while it watches.
+transcript hydration use authenticated GET requests. A passive or
+foreign-occupied reader does not seed writer operation/activity stores, consume
+writer reattach eligibility, claim completion effects, or run submission, Stop,
+generation retry, or persistence retry actions. A self-occupied reader uses the
+separate scoped path above for its own Send/Reroll/Stop; global `canGenerate`
+remains false while it watches.
 
 `readerGenerationStream.ts` validates lineage, operation, attempt, and job
 identity on durable frames and any supplied nested identity. Protected replay

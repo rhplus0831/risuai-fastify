@@ -1,7 +1,7 @@
 # Data And Events
 
 Last audited: 2026-08-30.
-Targeted source checks: 2026-09-12 (scoped chat-generation-settings mutation loading and ownership probe vocabulary).
+Targeted source checks: 2026-09-15 (chat occupancy authority, rollout, and revision-free discovery).
 
 Fastify owns authoritative application state. The browser reads authenticated
 REST resources and sends revision-checked commands or explicit server-owned
@@ -22,6 +22,7 @@ mutation requests; its durable outbox and recovery drafts are non-authoritative.
 | Resource cache | Browser IndexedDB `risu-resource-cache-v1` | Disposable authenticated-hash read cache; never offline or authoritative state. |
 | Mutation outbox | Browser IndexedDB `risu-pending-mutations-v1` | Crash-recovery journal with AES-GCM-encrypted intent payloads plus plaintext scope/order metadata and receipt-ACK rows; never server truth. |
 | Recovery drafts | Browser `sessionStorage` and IndexedDB `risu-recovery-drafts-v1` | Lineage/writer-scoped composer and module-editor drafts; editing recovery only, not mutation intent or proof of acceptance. |
+| Chat occupancy   | SQLite `chat_occupancies`                                                                          | Per-chat lease authority and released epoch tombstones, separate from the one general owner and the domain revision.                        |
 
 Primary boundaries: `server/fastify/src/db.ts` owns
 schema/migrations/revision, `server/fastify/src/repository.ts` owns domain
@@ -63,7 +64,9 @@ split collections; assets; command events and mutation receipts; the inlay
 catalog; push subscriptions; Hypa V3 memory state; generation finalization
 retries; greeting translations; durable LLM request history; lineage-scoped
 generation operations and attempts; the generation-effect ledger; and BardWiki
-state. Active stream viewers and job attachments remain process-local. Current
+state. Schema version 40 also includes `chat_occupancies`, keyed by chat id with
+database lineage, page session, monotonic occupancy epoch, claim class, lease
+timestamps, and released tombstones. Active stream viewers and job attachments remain process-local. Current
 browser state is rebuilt from concrete REST resources rather than a cached
 database projection.
 
@@ -403,6 +406,25 @@ confirmation handshake. Changing the writer advances the durable writer
 epoch; guarded routes reject stale sessions with `423 active_writer_stale`,
 including after restart.
 
+The active writer is the single general owner for ordinary application writes.
+Chat occupancy is an independent, exclusive row per chat, fenced by
+`(databaseLineage, chatId, sessionId, occupancyEpoch)`. The general owner uses
+`owner` claims and may occupy multiple chats; a non-owner page uses a
+`chat_only` claim and may hold only one. Claim, renewal, release, switch, and
+demotion normalization run under `BEGIN IMMEDIATE`. Navigation and observation
+do not claim, switch, or release. Owner promotion/demotion does not itself
+rewrite the rows: a demoted page must explicitly normalize all of its rows to
+one selected chat-only occupancy before admitting new work. Durable generation,
+finalization, transcript-mutating effects, and accepted Hypa/BardWiki work pin
+release or reassignment until they settle.
+
+Chat occupancy protocol v1 is enabled by default. Setting
+`RISU_API_CHAT_OCCUPANCY_ENABLED=false` is the rollback/drain switch: it rejects
+new claims, switches, and chat-only submissions, while snapshot discovery,
+exact renewal, Stop/settlement, normalization, and release continue for retained
+rows. Foreign-occupancy guards remain active until those rows and their pins
+drain; rollback does not downgrade the schema or reinstate an occupancy bypass.
+
 Authenticated `GET /api/v1/ownership` is the no-store recovery probe. It returns
 only the protocol version, database lineage, and durable writer tuple, and never
 registers the caller as a writer. The endpoint, bootstrap response, initial SSE
@@ -425,8 +447,10 @@ before mutation capabilities return. Cancellation or a current failed switch
 returns to reading while authentication and lineage remain valid; superseded
 work cannot change a newer role.
 
-Writer loss immediately revokes mutation and generation control, captures local
-drafts, stops writer runtimes, and establishes connected reading. Reader
+Writer loss immediately revokes general mutation and owner generation control,
+captures local drafts, stops writer runtimes, and establishes connected reading.
+An exact retained chat occupancy remains independently eligible for its scoped
+Send/Reroll/Stop and recovery contract after required normalization. Reader
 navigation and authenticated resource/event reads remain available; navigation
 does not persist another selection or replay pending writes. Unsent drafts and
 encrypted intents stay scoped to their originating local session and lineage.
@@ -470,11 +494,17 @@ cache-cap, shell/body, and stale-response workflow belongs to
 
 `GET /api/v1/events` sends a `writer` frame with the current
 `{ sessionId, epoch }` state (`sessionId` is null before the first writer is
-latched), a connected comment, and a `memory_snapshot` frame with the current
-Hypa and BardWiki stream/version/job projections. It then replays SQLite
-`command_events` for cursor reconnects and streams live command-sink, memory,
-BardWiki-job, and writer-change events. Writer and memory-snapshot frames have no
-revision semantics and are never replayed. Clients subscribe with
+latched), a complete `occupancy.snapshot` frame, a connected comment, and a
+`memory_snapshot` frame with the current Hypa and BardWiki stream/version/job
+projections. It then replays SQLite `command_events` for cursor reconnects and
+streams live command-sink, memory, BardWiki-job, writer-change, and occupancy
+events. Writer, occupancy, and memory-snapshot frames have no revision semantics
+and are never replayed. Occupancy snapshots carry their own top-level lineage
+and per-chat epochs; they update only the occupancy projection and do not
+advance known/applied command cursors or trigger a whole-resource refresh. The
+event route subscribes before taking the initial occupancy snapshot and
+coalesces a transition during that window, preventing a missed claim/release
+without inserting a command event. Clients subscribe with
 `sinceRevision` or `Last-Event-ID`; replay gaps return
 `409 event_replay_unavailable`, after which the browser performs a read-only
 complete resource refresh before resubscribing. SQLite replay keeps a

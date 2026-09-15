@@ -258,6 +258,75 @@ describe('chat occupancy command enforcement', () => {
     ).toEqual([{ name: 'Ada Updated' }])
   })
 
+  const chatNeutralReorderCases = [
+    {
+      name: 'character reorder',
+      expectedEventType: 'character.reordered',
+      prepare: async () => {
+        const created = await harness.app.inject({
+          method: 'POST',
+          url: '/api/v1/commands/characters',
+          headers: ownerHeaders(),
+          payload: {
+            baseRevision: harness.revision,
+            character: { chaId: 'character-b', name: 'Bea' },
+          },
+        })
+        expect(created.statusCode, created.body).toBe(200)
+        const revision = created.json().revision as number
+        return {
+          revision,
+          url: '/api/v1/commands/characters/reorder',
+          payload: { baseRevision: revision, characterOrder: ['character-b', 'character-a'] },
+        }
+      },
+    },
+    {
+      name: 'folder reorder',
+      expectedEventType: 'chatFolder.reordered',
+      prepare: async () => {
+        const created = await harness.app.inject({
+          method: 'POST',
+          url: '/api/v1/commands/characters/character-a/chat-folders',
+          headers: ownerHeaders(),
+          payload: {
+            baseRevision: harness.revision,
+            folder: { id: 'folder-b', name: 'Folder B', folded: false },
+          },
+        })
+        expect(created.statusCode, created.body).toBe(200)
+        const revision = created.json().revision as number
+        return {
+          revision,
+          url: '/api/v1/commands/characters/character-a/chat-folders/reorder',
+          payload: { baseRevision: revision, folderIds: ['folder-b', 'folder-a'] },
+        }
+      },
+    },
+  ]
+
+  it.each(chatNeutralReorderCases)('allows $name without rewriting occupied chat state', async (testCase) => {
+    const request = await testCase.prepare()
+    await claim('chat-a', 'reader-a')
+    const beforeChats = readRows('SELECT * FROM chats ORDER BY id')
+    const beforeOccupancy = readRows('SELECT * FROM chat_occupancies ORDER BY chat_id')
+
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: request.url,
+      headers: ownerHeaders(),
+      payload: request.payload,
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toMatchObject({
+      revision: request.revision + 1,
+      event: { type: testCase.expectedEventType },
+    })
+    expect(readRows('SELECT * FROM chats ORDER BY id')).toEqual(beforeChats)
+    expect(readRows('SELECT * FROM chat_occupancies ORDER BY chat_id')).toEqual(beforeOccupancy)
+  })
+
   it('creates, read-only forks, and deletes another chat without rewriting an occupied sibling row', async () => {
     await claim('chat-a', 'reader-a')
     const occupiedRow = readRows('SELECT * FROM chats WHERE id = ?', 'chat-a')
@@ -349,6 +418,7 @@ describe('chat occupancy command enforcement', () => {
       name: 'all-chat reset',
       method: 'PUT' as const,
       url: '/api/v1/commands/characters/character-a/chats',
+      additionalOccupiedChatIds: ['chat-b'] as const,
       payload: (revision: number) => ({
         baseRevision: revision,
         chat: { id: 'replacement-chat', name: 'Replacement', message: [], localLore: [] },
@@ -425,8 +495,14 @@ describe('chat occupancy command enforcement', () => {
       messages: readRows('SELECT * FROM messages ORDER BY chat_id, seq'),
       modules: readRows('SELECT * FROM modules ORDER BY position'),
       revision: readRows('SELECT revision FROM schema_version WHERE id = 1'),
+      lineage: readRows('SELECT * FROM database_metadata ORDER BY id'),
     }
     await claim('chat-a', 'reader-a')
+    const additionalOccupiedChatIds: readonly string[] =
+      ('additionalOccupiedChatIds' in testCase ? testCase.additionalOccupiedChatIds : undefined) ?? []
+    for (const [index, chatId] of additionalOccupiedChatIds.entries()) {
+      await claim(chatId, `reader-additional-${index}`)
+    }
 
     const response = await harness.app.inject({
       method: testCase.method,
@@ -438,7 +514,7 @@ describe('chat occupancy command enforcement', () => {
     expect(response.statusCode).toBe(423)
     expect(response.json()).toMatchObject({
       error: 'chat_occupied',
-      conflictingChatIds: ['chat-a'],
+      conflictingChatIds: ['chat-a', ...additionalOccupiedChatIds],
       safeRelease: expect.any(String),
     })
     expect({
@@ -447,6 +523,7 @@ describe('chat occupancy command enforcement', () => {
       messages: readRows('SELECT * FROM messages ORDER BY chat_id, seq'),
       modules: readRows('SELECT * FROM modules ORDER BY position'),
       revision: readRows('SELECT revision FROM schema_version WHERE id = 1'),
+      lineage: readRows('SELECT * FROM database_metadata ORDER BY id'),
     }).toEqual(before)
   })
 

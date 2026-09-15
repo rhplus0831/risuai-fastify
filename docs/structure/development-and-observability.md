@@ -1,7 +1,7 @@
 # Development And Observability
 
 Last audited: 2026-08-27.
-Targeted source checks: 2026-09-12 (diagnostics extraction, startup telemetry v2, and server shutdown).
+Targeted source checks: 2026-09-15 (chat occupancy rollout and drain configuration).
 
 Use this guide for local/full-stack servers, request and generation tracing,
 browser startup telemetry, startup and bundle verification,
@@ -313,6 +313,7 @@ Server:
 | `RISU_API_BODY_LIMIT` | `104857600` | JSON/body and multipart file limit. |
 | `RISU_API_IMPORT_MAX_BYTES` | unlimited | Streamed device-backup import limit; positive byte count caps, `0`/`unlimited`/`none`/`infinity` opts out. |
 | `RISU_API_AUTOMATIC_BACKUP_RETENTION` | `3` | Positive count of automatic pre-import/pre-restore safety snapshots to retain; manual backups are never pruned. |
+| `RISU_API_CHAT_OCCUPANCY_ENABLED`                  | `true`                          | Chat occupancy protocol rollout. Explicit `false` rejects new claims/switches and chat-only submissions while retained occupancy discovery, renewal, Stop/settlement, normalization, release, and foreign-occupancy enforcement continue until drain; no schema downgrade is required. |
 | `RISU_REALM_IMPORT_MAX_EXPANDED_BYTES` | `325058560` | Expanded payload cap for streamed Realm `charx` imports and Realm-fetched asset totals. |
 | `RISU_API_TRACE_MODE` | unset | Enables API request tracing when `agent` or `human`; `0`/`false`/`off`/`none` disable it. |
 | `RISU_GENERATION_TRACE_FULL_PROMPT` | unset | Set to `1` with protocol metrics enabled to write redacted prompt-emission and OpenAI/Gemini request sidecars. |

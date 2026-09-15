@@ -2234,6 +2234,11 @@ export const languageEnglish = {
       foreignOwnedHelp: 'This chat stays read only here until the other device releases it.',
       selfOwned: 'In use on this device',
       selfOwnedHelp: 'This device can send, reroll the latest response, and Stop generation in this chat.',
+      ownerOccupied: 'Chat occupied for authoring',
+      ownerOccupiedHelp: 'Release this chat before resetting, deleting, or restoring data that contains it.',
+      ownerUpgradeRequired: 'Finish switching this chat to owner access',
+      ownerUpgradeRequiredHelp:
+        'This device kept chat-only access when it became the writer. Switch to owner access for Continue and Regenerate, or release the chat before destructive changes.',
       switchRequired: 'Switch required',
       switchRequiredHelp: 'This device is using another chat. Switch explicitly before changing this one.',
       normalizationRequired: 'Choose one chat to keep',
@@ -2244,6 +2249,8 @@ export const languageEnglish = {
         'Open one of the chats already in use on this device, keep it, then switch here explicitly.',
       claim: 'Use this chat',
       claiming: 'Claiming…',
+      useAsOwner: 'Use as owner',
+      usingAsOwner: 'Switching to owner access…',
       release: 'Release chat',
       releasing: 'Releasing…',
       switchToChat: 'Switch to this chat',
@@ -2259,6 +2266,7 @@ export const languageEnglish = {
       unsupportedActions:
         'Attachments, uploads, dropped files, commands, input hooks, Continue, general Regenerate, message editing, deletion, translation, and plugin actions are unavailable in chat-only mode.',
       claimSucceeded: 'This chat is now in use on this device.',
+      ownerUpgradeSucceeded: 'This chat now uses owner access on this device.',
       releaseSucceeded: 'This chat was released. You can keep reading.',
       switchSucceeded: 'Switched chat access to this conversation.',
       normalizationSucceeded: 'This is now the one chat in use on this device.',

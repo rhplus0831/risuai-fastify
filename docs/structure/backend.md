@@ -1,7 +1,7 @@
 # Backend Map
 
 Last audited: 2026-08-30.
-Targeted source checks: 2026-09-12 (route owners, maintenance admission, diagnostics recovery, and generation cancellation).
+Targeted source checks: 2026-09-15 (chat occupancy routes, mutation enforcement, and rollout drain).
 
 The backend is the Fastify server under `server/fastify`. This guide owns its
 composition root, route policy, request-path boundaries, process-local jobs,
@@ -16,6 +16,7 @@ wired through those boundaries.
 | `server/fastify/src/app.ts` | Composition root for plugins, SQLite, auth, active writer, routes, workers, timers, optional static SPA. |
 | `server/fastify/src/config.ts` | Parses `RISU_API_*`, `TRUST_PROXY`, hub/Realm URLs, static root, trace mode, and agent auth bypass. |
 | `server/fastify/src/db.ts`, `databaseLineage.ts`, `commandMutationReceipts.ts` | SQLite migrations, `schema_version`, global revision, durable command-mutation receipts, database lineage, receipt acknowledgements, and durable writer ownership/epochs. |
+| `server/fastify/src/chatOccupancy.ts`, `routes/chatOccupancy.ts`                                               | Per-chat lease authority, snapshot/event source, exact claim/renew/release/switch/normalization, and occupied-chat mutation guards.                                                    |
 | `server/fastify/src/databaseInitialization.ts` | Fail-closed first-run classifier: valid settings mean initialized; character/chat/message rows or revision/event history without settings mean conflict, never a fresh reseed. |
 | `server/fastify/src/databaseDefaults.ts` | Canonical first-run and import-normalization defaults; keep persisted setting groups aligned with the browser ownership map and parity test. |
 | `server/fastify/src/repository.ts` | Broad/scoped/exact domain loaders, REST resource/hydration readers, targeted row/table writers, legacy `db.json` import, `applyImport`, assets, backups. |
@@ -58,7 +59,8 @@ heartbeat cadence, and finalization retry options; MCP OAuth refresh, OpenAI
 transcription, provider-operation, embedding, TTS, and image-generation
 execution; Realm import limits; memory worker behavior; command/memory event
 sinks; and asset-GC behavior. Config parsing also includes streamed
-device-backup import limits and generation trace sidecar controls.
+device-backup import limits, generation trace sidecar controls, and the
+default-enabled `RISU_API_CHAT_OCCUPANCY_ENABLED` rollout switch.
 
 ## App Wiring
 
@@ -129,6 +131,16 @@ the active writer still has an identified event stream open. Ownership and its
 monotonic epoch live in `database_metadata`, so a server restart does not make
 an older tab active.
 
+Occupancy control routes deliberately do not use the general active-writer
+guard. They authenticate, require the page session, lineage, protocol version,
+and exact occupancy epoch, then authorize only the requested per-chat action.
+The owner claim class additionally verifies the current general owner. This
+exception grants no access to `/commands/*`, provider/media mutations, or other
+writer-only routes. `RISU_API_CHAT_OCCUPANCY_ENABLED=false` rejects new claims,
+switches, and chat-only generation admission, but retains snapshot, renewal,
+normalization, Stop/settlement, and release so existing rows can drain while all
+foreign-occupancy checks stay enforced.
+
 Rate limits are opt-in per route. Current presets are setup `5/min`, login
 `10/min`, auth crypto `60/min`, provider and embedding operations `60/min`,
 OpenAI transcription `10/min`, image generation `10/min`, MCP OAuth refresh
@@ -146,6 +158,7 @@ this table groups entrypoints for navigation.
 | Family | Registrars | Notes |
 | --- | --- | --- |
 | Health/auth/bootstrap | `health.ts`, `auth.ts`, `bootstrap.ts`, `ownership.ts` | Health/status/setup/login, runtime bootstrap, and the authenticated no-store lineage/writer probe; writer-intent bootstrap latches the active writer, while the full response also carries revision, generation operation/job/finalization/effect recovery, and message/greeting translation state. |
+| Chat occupancy        | `chatOccupancy.ts`                                                                                                                | Authenticated no-store snapshot plus exact claim, renew, release, atomic switch, and demotion-normalization routes; authority is independent of general ownership and command revision.                                                                                                                                                                        |
 | Resources/events | `resourceReads.ts`, `events.ts`, `loreTokenCounts.ts` | Root and targeted REST resources, greeting translations, the inlay catalog, bounded lazy/bulk hydration, replayable command SSE, initial/live memory state, and read-only chat lore-token counts. |
 | Display processing | `displaySources.ts` | Revision-fenced, read-only intermediate display transforms; see [Intermediate Display](intermediate-display.md). |
 | Startup telemetry | `startupTelemetry.ts` | Authenticated metadata-only browser startup events; payload failures are isolated from readiness and application state. |
@@ -175,6 +188,18 @@ folders, selects page `0`, and emits the `COMMAND_EVENT_CATALOG.chatsReset`
 `characterRow` event. `server/fastify/__tests__/commands.test.ts` guards the
 atomic write and rollback contract; the browser recovery path is documented in
 [Durable Mutations And Recovery](durable-mutations-and-recovery.md#durable-mutation-recovery-command-queue-and-local-acknowledgements).
+
+Chat occupancy enforcement is performed inside each existing publication
+transaction, after target resolution. Direct chat/message commands derive the
+authoritative chat from SQLite rather than trusting a supplied chat or message
+pair, and allow only the actor's own occupancy. Broad owner commands capture
+foreign-occupied logical chat state and require it to remain byte-identical
+before revision/event publication. Indirect and destructive commands resolve
+their complete affected set and reject atomically if any chat is occupied or
+pinned; character deletion, all-chat reset, database import, and backup restore
+therefore return every conflict plus the exact-session safe release path without
+partial mutation. Folder/reorder and read-only fork paths remain usable only
+when they do not rewrite the protected source rows.
 
 Owner deletion is also a command transaction, not client cleanup.
 `server/fastify/src/commands/generationReferences.ts` rehomes or clears matching
@@ -277,6 +302,13 @@ The normal send/continue/regenerate protocol enters through
 `routes/generationOperations.ts`. It atomically records a lineage- and
 writer-scoped operation, accepts the user row when applicable, and reserves a
 numbered attempt before attaching that attempt to a process-local runner.
+A negotiated occupied-chat request instead records its exact lineage/chat/
+session/epoch tuple, claim class, permission-scope version, and interaction in
+that same acceptance transaction. Owner claims preserve normal modes;
+`chat_only_v1` permits Send and latest-response Reroll, while Continue and
+general Regenerate return `chat_only_interaction_unsupported`. Stop resolves the
+chat and original admission from the stored operation instead of trusting a
+caller-supplied target.
 A successful retry response also receipts `acceptedRetryRequestId` after the
 numbered attempt stops being live. This acknowledges an idempotent replay without
 redispatching provider work.

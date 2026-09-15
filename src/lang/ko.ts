@@ -2621,6 +2621,11 @@ export const languageKorean = {
       foreignOwnedHelp: '다른 기기에서 해제할 때까지 여기서는 이 채팅을 읽기만 할 수 있습니다.',
       selfOwned: '이 기기에서 사용 중입니다',
       selfOwnedHelp: '이 기기에서 메시지 전송, 최신 답변 다시 생성, 생성 중지를 사용할 수 있습니다.',
+      ownerOccupied: '작성용으로 채팅을 사용 중입니다',
+      ownerOccupiedHelp: '이 채팅이 포함된 초기화, 삭제 또는 복원을 실행하기 전에 채팅을 해제하세요.',
+      ownerUpgradeRequired: '이 채팅을 일반 쓰기 권한으로 전환하세요',
+      ownerUpgradeRequiredHelp:
+        '이 기기는 쓰기 기기가 된 뒤에도 채팅 전용 권한을 유지했습니다. 이어쓰기와 일반 다시 생성을 사용하려면 일반 쓰기 권한으로 전환하고, 데이터를 변경하려면 먼저 채팅을 해제하세요.',
       switchRequired: '전환이 필요합니다',
       switchRequiredHelp: '이 기기에서 다른 채팅을 사용 중입니다. 이 채팅을 변경하려면 명시적으로 전환하세요.',
       normalizationRequired: '유지할 채팅 하나를 선택하세요',
@@ -2631,6 +2636,8 @@ export const languageKorean = {
         '이 기기에서 이미 사용 중인 채팅을 열어 하나만 유지한 뒤 여기로 명시적으로 전환하세요.',
       claim: '이 채팅 사용하기',
       claiming: '사용 권한을 받는 중…',
+      useAsOwner: '쓰기 권한으로 사용',
+      usingAsOwner: '쓰기 권한으로 전환하는 중…',
       release: '채팅 해제',
       releasing: '해제하는 중…',
       switchToChat: '이 채팅으로 전환',
@@ -2646,6 +2653,7 @@ export const languageKorean = {
       unsupportedActions:
         '채팅 전용 모드에서는 첨부 파일, 업로드, 파일 끌어놓기, 명령어, 입력 훅, 이어쓰기, 일반 다시 생성, 메시지 편집·삭제·번역 및 플러그인 동작을 사용할 수 없습니다.',
       claimSucceeded: '이제 이 기기에서 이 채팅을 사용합니다.',
+      ownerUpgradeSucceeded: '이제 이 기기에서 일반 쓰기 권한으로 이 채팅을 사용합니다.',
       releaseSucceeded: '채팅을 해제했습니다. 계속 읽을 수 있습니다.',
       switchSucceeded: '이 대화로 채팅 사용 권한을 전환했습니다.',
       normalizationSucceeded: '이제 이 기기에서 이 채팅 하나만 사용합니다.',

@@ -13,6 +13,11 @@ export const languageChinese = {
       foreignOwnedHelp: '在另一台设备释放前，此聊天在这里保持只读。',
       selfOwned: '正在此设备上使用',
       selfOwnedHelp: '此设备可在本聊天中发送、重新生成最新回复和停止生成。',
+      ownerOccupied: '聊天已由写入设备占用',
+      ownerOccupiedHelp: '重置、删除或恢复包含此聊天的数据前，请先释放此聊天。',
+      ownerUpgradeRequired: '完成切换为所有者访问',
+      ownerUpgradeRequiredHelp:
+        '此设备成为写入设备后仍保留聊天专用访问。若要使用继续和常规重新生成，请切换为所有者访问；执行破坏性更改前请释放聊天。',
       switchRequired: '需要切换',
       switchRequiredHelp: '此设备正在使用另一个聊天。请明确切换后再修改此聊天。',
       normalizationRequired: '选择一个要保留的聊天',
@@ -21,6 +26,8 @@ export const languageChinese = {
       normalizationElsewhereHelp: '请打开此设备已在使用的聊天之一并保留它，然后明确切换到这里。',
       claim: '使用此聊天',
       claiming: '正在获取…',
+      useAsOwner: '以所有者身份使用',
+      usingAsOwner: '正在切换为所有者访问…',
       release: '释放聊天',
       releasing: '正在释放…',
       switchToChat: '切换到此聊天',
@@ -36,6 +43,7 @@ export const languageChinese = {
       unsupportedActions:
         '仅聊天模式不支持附件、上传、拖放文件、命令、输入钩子、继续、常规重新生成、消息编辑、删除、翻译和插件操作。',
       claimSucceeded: '此聊天现在正在此设备上使用。',
+      ownerUpgradeSucceeded: '此聊天现在使用此设备的所有者访问。',
       releaseSucceeded: '此聊天已释放。你仍可继续阅读。',
       switchSucceeded: '聊天访问权已切换到此对话。',
       normalizationSucceeded: '此聊天现在是此设备唯一正在使用的聊天。',

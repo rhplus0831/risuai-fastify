@@ -566,7 +566,7 @@ describe('chat occupancy service', () => {
       claimClass: 'owner',
       expectedOccupancyEpoch: 0,
     })
-    service.claim({
+    const ownerC = service.claim({
       databaseLineage: lineage(),
       chatId: 'chat-c',
       sessionId: 'session-a',
@@ -574,7 +574,7 @@ describe('chat occupancy service', () => {
       expectedOccupancyEpoch: 0,
     })
     registerDatabaseWriterSession(db, 'owner-b')
-    pins.set('chat-c', [{ id: 'finalize-c', kind: 'finalization' }])
+    pins.set('chat-a', [{ id: 'finalize-a', kind: 'finalization' }])
 
     expectCode(
       () =>
@@ -599,6 +599,7 @@ describe('chat occupancy service', () => {
       'chat_occupancy_switch_required',
     )
 
+    const beforeBlockedRows = db.prepare('SELECT * FROM chat_occupancies ORDER BY chat_id').all()
     const blocked = expectCode(
       () =>
         service.normalize({
@@ -609,8 +610,8 @@ describe('chat occupancy service', () => {
         }),
       'chat_occupancy_recovery_blocked',
     )
-    expect(blocked.details).toMatchObject({ chatId: 'chat-c', blockingChatIds: ['chat-c'] })
-    expect(service.snapshot().occupancies.filter((row) => row.occupantSessionId === 'session-a')).toHaveLength(3)
+    expect(blocked.details).toMatchObject({ chatId: 'chat-a', blockingChatIds: ['chat-a'] })
+    expect(db.prepare('SELECT * FROM chat_occupancies ORDER BY chat_id').all()).toEqual(beforeBlockedRows)
 
     pins.clear()
     // Accepted work on the selected chat is retained and must not prevent
@@ -625,9 +626,23 @@ describe('chat occupancy service', () => {
     expect(normalized.claimClass).toBe('chat_only')
     expect(normalized.occupancyEpoch).toBe(ownerB.occupancyEpoch)
     expect(service.snapshot().occupancies.filter((row) => row.occupantSessionId === 'session-a')).toEqual([normalized])
-    expect(service.snapshot().occupancies.find((row) => row.chatId === 'chat-a')?.occupancyEpoch).toBe(
-      selectedChatOnly.occupancyEpoch + 1,
-    )
+    expect(service.snapshot().occupancies).toEqual([
+      expect.objectContaining({
+        chatId: 'chat-a',
+        occupantSessionId: null,
+        occupancyEpoch: selectedChatOnly.occupancyEpoch + 1,
+        claimClass: null,
+        state: 'released',
+      }),
+      normalized,
+      expect.objectContaining({
+        chatId: 'chat-c',
+        occupantSessionId: null,
+        occupancyEpoch: ownerC.occupancyEpoch + 1,
+        claimClass: null,
+        state: 'released',
+      }),
+    ])
   })
 
   it('clears every occupancy on lineage rotation and rejects old tuples', () => {

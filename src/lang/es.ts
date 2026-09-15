@@ -13,6 +13,11 @@ export const languageSpanish = {
       foreignOwnedHelp: 'Este chat seguirá siendo de solo lectura aquí hasta que el otro dispositivo lo libere.',
       selfOwned: 'En uso en este dispositivo',
       selfOwnedHelp: 'Este dispositivo puede enviar, regenerar la última respuesta y detener la generación aquí.',
+      ownerOccupied: 'Chat ocupado para editar',
+      ownerOccupiedHelp: 'Libera este chat antes de restablecer, eliminar o restaurar datos que lo incluyan.',
+      ownerUpgradeRequired: 'Termina de cambiar este chat al acceso de propietario',
+      ownerUpgradeRequiredHelp:
+        'Este dispositivo conservó el acceso solo al chat al convertirse en el escritor. Cambia al acceso de propietario para Continuar y Regenerar, o libera el chat antes de cambios destructivos.',
       switchRequired: 'Se requiere cambiar',
       switchRequiredHelp: 'Este dispositivo está usando otro chat. Cámbialo explícitamente antes de modificar este.',
       normalizationRequired: 'Elige un chat para conservar',
@@ -23,6 +28,8 @@ export const languageSpanish = {
         'Abre uno de los chats ya usados en este dispositivo, consérvalo y luego cambia explícitamente a este.',
       claim: 'Usar este chat',
       claiming: 'Ocupando…',
+      useAsOwner: 'Usar como propietario',
+      usingAsOwner: 'Cambiando al acceso de propietario…',
       release: 'Liberar chat',
       releasing: 'Liberando…',
       switchToChat: 'Cambiar a este chat',
@@ -38,6 +45,7 @@ export const languageSpanish = {
       unsupportedActions:
         'Los archivos adjuntos, las cargas, los archivos soltados, los comandos, los hooks de entrada, Continuar, la regeneración general, la edición, la eliminación, la traducción y las acciones de plugins no están disponibles en el modo solo chat.',
       claimSucceeded: 'Este chat ahora está en uso en este dispositivo.',
+      ownerUpgradeSucceeded: 'Este chat ahora usa el acceso de propietario en este dispositivo.',
       releaseSucceeded: 'Este chat se liberó. Puedes seguir leyendo.',
       switchSucceeded: 'El acceso se cambió a esta conversación.',
       normalizationSucceeded: 'Este es ahora el único chat en uso en este dispositivo.',

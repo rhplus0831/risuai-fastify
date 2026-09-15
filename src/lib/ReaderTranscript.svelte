@@ -735,11 +735,14 @@
   })
 </script>
 
+<!-- The scoped occupancy controls add a second action row. Keep enough of
+     waifuMobile's bottom panel for that row and a usable transcript without
+     ever growing beyond the available layout height. -->
 <ChatScreenLayout
   settings={displaySettings}
   {backgroundStyle}
   stackPortraitOnSmallScreens
-  minimumContentHeight="min(100%, 22rem)"
+  minimumContentHeight="min(100%, 30rem)"
   showPortrait={!!displayCharacter && displayCharacter.viewScreen !== 'none' && !displaySettings.hideAllImages}>
   {#snippet background()}
     <ReaderChatBackground character={displayCharacter} chat={displayChat} userIcon={presentation.userIcon} />

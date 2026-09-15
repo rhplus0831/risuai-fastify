@@ -4,29 +4,46 @@ Updated: 2026-09-15.
 
 ## Execution Cursor
 
-- State: Phases 0 through 2 are accepted and committed. Phase 3 recovery and
-  completion is accepted and awaiting its completion commit. The feature
-  remains disabled until Phase 4.
+- State: Phases 0 through 3 are accepted and committed. Phase 4 implementation,
+  integrated proof, current documentation, and archival are complete. Its first
+  independent closure review found one recovery blocker; the owner-management
+  repair and a targeted fast-terminal follow-up are implemented. The first
+  repaired full gate exposed one browser-helper status-code mismatch; the
+  corrected exact scenario is green. A second repaired full gate exposed a
+  response-observation race in the new browser proof; its exact request and
+  server mutation succeeded, and the proof now waits for response annotation.
+  The final repaired full completion gate passed, but the second independent
+  closure review found one navigation-time owner-control blocker. A third
+  independent review then found ABA-navigation and destruction continuations in
+  that first repair. The consolidated lifecycle repair and focused validation
+  are complete, and the fourth independent focused closure review accepted the
+  exact tree. Per the user's revised closure order, the post-acceptance full gate
+  ran and exposed one pre-existing browser reader-readiness race. Astra diagnosed
+  the failure and recommended a narrow test-only readiness barrier, accepted
+  the amended tree, and the resulting full 14-lane gate passed. Phase 4 is
+  accepted and awaits its completion commit. The coherent feature is enabled by
+  default in source with an
+  explicit rollback/drain switch; this workstream does not perform or authorize
+  a production deployment.
 - Planning source: `3c8f5aee1a48fcf35d1611323929f8197c142b6b`.
 - Phase 0 baseline: `ec5765f4f`; the only drift from the planning source is the
   planning package itself. Runtime source remains the inspected baseline.
-- Current work: Phase 3 has closed scoped recovery, lifecycle, and completion-
-  effect behavior on top of the accepted server and chat-only interaction
-  foundations. New chat-only claims remain disabled in production until the
-  Phase 4 release boundary.
+- Current work: Phase 4 acceptance is complete; the final ledger, archive
+  validation, and conventional completion commit remain.
 - Phase 0 commit: `d03288053` (`docs: freeze chat occupancy contract`).
 - Phase 1 commit: `8a11e00e2` (`feat: enforce server chat occupancy`).
 - Phase 2 commit: `bf32c875f` (`feat: add chat-only occupancy interaction`).
-- Next action: commit the accepted Phase 3 boundary, record its revision, then
-  begin Phase 4 integrated verification, coherent rollout, current
-  documentation, and archival.
+- Phase 3 commit: `4314d7cce` (`feat: harden chat occupancy recovery`).
+- Next action: validate the final archived ledger and create the Phase 4
+  completion commit with the required co-author trailer; no production deployment.
 
 ## Read Routing
 
 - [PLAN.md](PLAN.md): objective, product contract, scope, decisions, and gates.
 - [Inventory](inventory.md): source boundaries and proof obligations.
 - [Phase index](phases/README.md): ordered work and document validation commands.
-- [Active plans](../README.md): project planning index.
+- [UI and user input archive](../README.md): related completed workstreams.
+- [Completed plan index](../../../docs/plan/README.md): current planning index.
 
 ## Phase Ledger
 
@@ -36,10 +53,12 @@ Updated: 2026-09-15.
   `8a11e00e2` after the 7m33.3s full gate and clean eighth independent closure
   review.
 - **2 — Chat-only interaction:** accepted and committed in `bf32c875f`.
-- **3 — Recovery and completion:** accepted at baseline `bf32c875f`; completion
-  commit pending.
-- **4 — Integrated verification and release:** pending the Phase 3 completion
-  commit.
+- **3 — Recovery and completion:** accepted and committed in `4314d7cce`.
+- **4 — Integrated verification and release:** accepted after four independent
+  closure reviews, focused acceptance of the final readiness proof amendment,
+  and a passing post-acceptance 14-lane full gate on baseline `4314d7cce`.
+  Archived at `.archived-docs/ui-and-user-input/chat-occupancy/`; the completion
+  commit is the only remaining closeout step.
 
 ## Decisions and Open Work
 
@@ -2253,6 +2272,332 @@ current`. Automatic browser requests are now explicitly marked. Fastify
   external-provider behavior and physical-device eviction remain explicit Phase
   4 evidence limits. Phase 3 is accepted for commit. Production rollout remains
   disabled until Phase 4.
+- Phase 4 coherent rollout implementation: `loadConfig()` now enables chat
+  occupancy protocol v1 by default and strictly parses
+  `RISU_API_CHAT_OCCUPANCY_ENABLED`; `0`, `false`, `no`, or `off` selects the
+  rollback/drain path, while malformed explicit values fail startup. `buildApp()`
+  resolves that setting exactly once and passes the same value to bootstrap,
+  occupancy routes, accepted generation admission, low-level generation, and
+  operation dependencies. The explicit `BuildAppOptions.chatOccupancy.enabled`
+  override remains available to compatibility harnesses and takes precedence.
+  Focused config/bootstrap/route tests pass 39/39, including the default-enabled
+  path and an injected disabled override. The existing enabled-to-disabled
+  restart proof continues to verify that new claims are rejected while exact
+  renewal, normalization, Stop/settlement, and release drain retained rows.
+- Phase 4 bounded discovery and retry proof: the pre-live SSE setup window now
+  keeps one replaceable complete occupancy snapshot rather than an unbounded
+  transition array. A claim/release/reclaim setup race emits the initial and
+  final authoritative snapshots without a fabricated command revision. A
+  connected-reader test proves an unrelated occupancy frame updates only the
+  occupancy projection: it performs no bootstrap, ownership, targeted-resource,
+  full-resource, route, revision, or shell refresh. The browser generation
+  client now has explicit exhaustion evidence for its initial submit plus three
+  revision retries: bases `7, 8, 9, 10` retain the exact operation, accepted
+  message, draft generation, staged intent, and uncertain recovery obligation,
+  with no discard, rollback, blind restage, or ordinary owner staging. The two
+  focused frontend files pass 108/108 and the server event file passes 27/27.
+- Phase 4 T07 memory-worker proof: a new production-handler integration test
+  binds completed accepted chat-only operation scope to Hypa summarization and
+  automatic BardWiki apply-turn work, holds both providers after their first
+  claim, and verifies release plus expired foreign claim remain blocked. Startup
+  recovery resets both running jobs to pending without changing their stored
+  operation/attempt/lineage/occupancy/allowlist scope; interrupted attempts
+  publish nothing. Replacement workers invoke each held provider exactly once
+  more, compile canonical BardWiki output once, commit the exact summary/chunk,
+  event and canonical documents, receipts, versions, sources, manifest, and one
+  revision, terminalize attempt two, clear both pins, and permit release plus a
+  new claimant. This focused test and server typecheck pass. Provider responses
+  and the startup boundary are deterministic local controls, not external
+  provider or operating-system process evidence.
+- Phase 4 T08/T09 matrix extensions: mixed chat-only A plus owner B/C
+  normalization now pins the nonselected chat-only row, proves the rejected
+  transaction leaves every raw occupancy row byte-identical, then releases A/C
+  and converts only selected B with exact epochs after settlement. Character and
+  folder reorder remain usable without rewriting an occupied chat or occupancy
+  row. All-chat reset with two occupied chats returns both conflict IDs and safe
+  release guidance while character, chat, message, module, revision, and database
+  lineage rows remain unchanged. The two focused server files pass 31/31.
+- Phase 4 integrated browser fault proof: a real Chromium/Fastify/SQLite journey
+  uses one general owner, two chat-only senders on distinct chats, and an
+  observer. Both sends enter at the same base revision; the first responses are
+  exactly one `201` and one `409`, the conflicting client retries the same
+  operation/message/occupancy identity once, and both providers start exactly
+  once. The accepted response of the other sender is lost, its Pixel 7 page
+  keeps a newer draft through navigation, CDP freeze/offline suspension, and
+  role transfer to the observer, and neither transfer nor observation changes
+  occupancy or shared settings/character/module state. Restart aborts both held
+  providers once and records `server_shutdown` abandonment without partial
+  assistant rows or resubmission. After lease expiry, two new sessions reclaim
+  the chats at epoch 2; recovery terminalizes both exact accepted operations as
+  `occupancy_recovery_expired`, keeps each accepted user row once, preserves the
+  promoted owner and shared-state boundary, and permits safe release at epoch 3.
+  The exact journey passes independently and writes an attached JSON evidence
+  artifact. Suspension is Chromium lifecycle/offline emulation; physical-device
+  eviction and external provider networks remain unverified.
+
+### Phase 4 Final-Source Proof Map
+
+- T01/T03/T04/T08/T11 use the established owner + two chat-only + observer
+  browser matrix, the same-session owner concurrent-chat regression, and the new
+  combined fault journey. They assert exact persisted message/operation identity,
+  overlapping providers, retained routes/drafts, absent shared writes, desktop
+  and Pixel 7 interaction, Reroll/Stop, switch guidance, and visible chat-only
+  Continue/Regenerate deferral without changing owner behavior.
+- T02 uses the real simultaneous same-chat-claim journey plus server transaction
+  tests for missing, forged, wrong-target, expired, stale, owner, operation,
+  message, and effect authority. Exactly one claimant wins and every foreign
+  path fails closed.
+- T05/T06 use the suspension/expiry/reacquisition and release/claim race journey,
+  lost acceptance/Stop and pre-acceptance variants, startup/restart recovery,
+  the combined fault journey, and the explicit four-conflict retry-exhaustion
+  test. Stale tuples cannot overwrite a later epoch, accepted work is not
+  duplicated, and proven-unaccepted expired work becomes a retained
+  `requires_resubmission` draft for a new explicit action.
+- T07 uses accepted-result persistence, finalization/effect receipt-loss and
+  reclaim coverage, configured IGP atomicity, translation/inlay/IGP ordering,
+  bounded image settlement, Stop outcomes, restart terminalization, and the new
+  Hypa/BardWiki pin-recovery integration. Every effect class has a terminal or
+  explicitly ephemeral disposition.
+- T08 uses automatic-owner acquisition enabled/disabled/connected/stale-response
+  coverage, owner promotion/demotion browser journeys, concurrent owner claims,
+  retained accepted work, and the expanded mixed-class atomic normalization
+  test.
+- T09 uses command-enforcement matrices for delete, all-chat reset, folder
+  deletion/reorder, character reorder, import, restore, alternate-greeting remap,
+  cold-storage recovery, module cleanup, and memory/background writers, including
+  the new two-chat atomic-conflict proof.
+- T10 uses protocol negotiation, older-client/legacy low-level admission guards,
+  auth loss, schema-v40 migration, lineage rotation, deleted/reused target
+  fencing, enabled-to-disabled restart drain, real Fastify restart, and the
+  combined browser recovery journey.
+- T11 additionally retains the full pre-existing owner UI/generation suite and
+  localized shared shell. Chat-only v1 supports Send, latest-response Reroll,
+  Stop, navigation, observation, drafts, and explicit occupancy switching;
+  unsupported editing, Continue/Regenerate, attachments, hooks, and general
+  settings/character/module/plugin mutations remain visibly unavailable.
+
+- First Phase 4 full gate: 13 of 14 `pnpm test:all` lanes passed in 8m16.9s,
+  including both typechecks, topology, 51 current-document checks, 9,529
+  frontend tests/3 skipped, 18/18 compatibility harness cases, 4,579 server
+  tests/3 skipped, Realm scale, the production smoke build, UI coverage,
+  formatting, and performance. Browser smoke passed 167/169 journeys. Its only
+  failures were the unchanged `waifuMobile` desktop/mobile reader-scroll
+  assertions: default-enabled occupancy added a second action row inside the
+  old 22rem content-height budget, leaving only 35px and 0px of transcript.
+  This failed run is diagnostic evidence, not acceptance.
+- Default-enabled reader-layout repair: the reader content cap is now 30rem, so
+  the occupancy controls and a usable transcript coexist without weakening the
+  existing scroll assertion. The exact four-case `readOnlyAppUx` browser file
+  passes on desktop and Pixel 7; the previously failing `waifuMobile` cases
+  retain 163px and 103px transcript heights respectively, fit their 976px and
+  412px viewports, and introduce no horizontal overflow. An independent
+  read-only browser-matrix review reproduced the cause and endorsed the repair.
+- Final repaired-tree Phase 4 `pnpm test:all`: passed all 14 lanes in 8m19.4s.
+  Server/browser-smoke typechecks, topology, 51 current-document checks, 9,529
+  frontend tests/3 skipped, compatibility registers and the 18/18 current
+  harness, 4,579 server tests/3 skipped, Realm scale, the production smoke
+  build, all 169 browser journeys, the Svelte check, UI coverage, formatting,
+  and six performance tests passed. This exact runtime/test tree is ready for a
+  fresh independent GPT 6 Astra High closure review.
+- First Phase 4 closure review: a fresh independent GPT 6 Astra High reviewer
+  matched baseline `4314d7cce`, 39 tracked paths at binary-diff SHA-256
+  `d0a4f4b1fa25b4d4bb591c4b902d8de4240d6e833261ed6b593430ac0326390f`,
+  the sole untracked memory-recovery test at SHA-256
+  `accef3784aa024d19db3387cf24394a5caab44ef3b7335781f72fc7cb0f7db5a`,
+  and untracked manifest
+  `f6f148cb06cc5dec5f68dd566437b09ee84e9cd2f2325d0c1f90c5581ef941ae`
+  at start and end. It rejected Phase 4 with one P2 recovery defect: after a
+  chat-only reader completed Send and became the general writer, the retained
+  `chat_only` tuple survived reload but the reader controls unmounted. The owner
+  UI exposed neither Release nor owner-class reacquisition, so Continue failed
+  closed with `chat_occupancy_protocol_required` and reset/restore remained
+  blocked by `chat_occupied`. The reviewer required rendered exact
+  release/reclaim, Continue, destructive-conflict, and safe-release proof. It
+  passed 199 focused tests, made no repository edits, and preserved the frozen
+  identity.
+- First-review owner-management repair: the writer composer now renders explicit
+  controls for its current self occupancy. A retained chat-only tuple offers
+  **Use as owner**, which releases its exact epoch before making a fresh
+  owner-class claim; it never rewrites accepted scope or bypasses generation and
+  effect pins. Both claim classes offer Release, including while rollout is
+  disabled. A failed release preserves the tuple; a failed post-release claim is
+  visibly retryable without issuing another release. Four focused component
+  cases pass, including pin rejection and rollback cleanup. The real Pixel 7
+  Chromium/Fastify/SQLite journey promotes the chat-only sender, reopens the
+  occupied chat under the same session, proves epochs `1 -> 2 -> 3`, completes
+  one owner-scoped Continue, observes reset fail atomically with 423, releases
+  to the cleared epoch-4 tombstone, and then restores successfully. The original
+  accepted chat-only operation and provider count remain unchanged.
+- Fast-terminal targeted recovery repair: validation of that rendered journey
+  exposed a separate deterministic race in which the detached Continue could
+  complete after its acceptance response was constructed but before the first
+  stream GET. The stream correctly returned
+  `409 stale_generation_attempt`, but unlike atomic Send the fresh targeted path
+  did not immediately status-probe, hydrate, or settle its six client-owned
+  effects, so the new owner tuple remained pinned. Continue/Regenerate now read
+  the exact admitted operation with frozen occupancy provenance, require matching
+  operation/character/chat/mode/target/result identities, strictly hydrate the
+  transcript, and run existing scoped effect recovery without resubmission or
+  live-effect replay. Four helper tests plus 57 server-backed and 86 request
+  tests pass. The browser regression forces completion before delivering the
+  acceptance response, observes the expected stale stream and exact status GET,
+  settles all effects, performs one provider call, and completes the same
+  release/restore sequence in 5.3 seconds. Svelte checking, the production smoke
+  build, browser-smoke typechecking, Prettier, and diff checks pass. A repaired
+  complete Phase 4 gate is required before another closure review.
+- First repaired Phase 4 full gate: 13 of 14 `pnpm test:all` lanes passed in
+  8m21.8s. Both typechecks, topology, 51 current-document checks, 9,537
+  frontend tests/3 skipped, 18/18 compatibility harness cases, 4,579 server
+  tests/3 skipped, Realm scale, the production smoke build, Svelte checking, UI
+  coverage, formatting, six performance tests, and 169 of 170 browser journeys
+  passed. The new owner-reacquisition and fast-terminal recovery journey passed.
+  The sole failure was an existing T03/T07 helper that required only `200` for
+  a successful effect claim even though a newly created claim correctly returns
+  `201`; the trace showed the claim, receipt, and all effect activity succeeded.
+  The helper now accepts both successful protocol responses, and the exact
+  failed browser scenario passes alone. This diagnostic run is not acceptance;
+  the complete gate is being repeated.
+- Second repaired Phase 4 full gate: 13 of 14 lanes passed in 8m17.2s, with the
+  same complete non-browser evidence and 169 of 170 browser journeys. The
+  corrected T03/T07 scenario and every pre-existing journey passed. The new
+  owner-management journey reached its released epoch-4 tombstone, and its
+  second DELETE record carried the exact promoted session and epoch-3 headers,
+  but the assertion inspected that request before Playwright's later response
+  event annotated its `200` status. The proof now polls for the two successful
+  DELETE response annotations before asserting their exact headers. No runtime
+  behavior changed; repeated focused browser validation and another complete
+  gate remain required.
+- Final repaired-tree Phase 4 `pnpm test:all`: passed all 14 lanes in 8m32.9s.
+  Server/browser-smoke typechecks, topology, 51 current-document checks, 9,537
+  frontend tests/3 skipped, compatibility registers and the 18/18 current
+  harness, 4,579 server tests/3 skipped, Realm scale, the production smoke
+  build, all 170 browser journeys, Svelte checking, UI coverage, formatting,
+  and six performance tests passed. Before this full run, the complete new
+  owner-management journey also passed five concurrent repetitions. Both the
+  new fast-terminal owner recovery and the pre-existing T03/T07 supersession
+  journey passed in the full matrix. This exact runtime/test tree is ready for
+  fresh independent GPT 6 Astra High closure review.
+- Second Phase 4 closure review: a fresh independent GPT 6 Astra High reviewer
+  matched baseline `4314d7cce`, 51 tracked paths at binary-diff SHA-256
+  `8317680e663eac65978de0dfd4c2f14b3c9d2fed7b34cd01b1a66b469a392e28`,
+  all five untracked file hashes, and corrected 64-character manifest
+  `0bf0cc6c00131232366883f6f93fac0fe5a6b777d3c7d62286d0d870cbc1fb1c`
+  at start and end. It rejected one P2: a delayed Release or Use-as-owner action
+  correctly fenced its stale response after navigation, but the reused writer
+  component did not retire its local busy flag, leaving the next chat's Release
+  control disabled until remount. The reviewer reproduced the defect with the
+  rendered production component and real occupancy coordinator, passed 207
+  focused frontend/server tests plus current/archive document checks, found no
+  additional blocker in fast-terminal recovery or the cumulative T01-T11
+  evidence, made no repository edits, and preserved the frozen identity.
+- Second-review navigation repair: owner-control actions now carry monotonic
+  local identities. A chat or owner-scope change immediately retires the old
+  displayed action, and an older completion clears state only when its action
+  identity is still current. Exact target/session/generation/lineage/writer
+  fencing still prevents stale feedback or a follow-up claim. Six rendered
+  component cases pass: the original release/reclaim, pin, retry, and disabled
+  rollout cases plus navigation while Release is delayed and navigation while
+  the follow-up owner claim is delayed. In both navigation cases the next
+  chat's owner-class Release remains enabled after the old exact action settles.
+  Svelte checking reports zero errors and warnings. A new complete Phase 4 gate
+  is required after another closure review accepts the repair.
+- Closure-order update: a post-repair full gate was started under the earlier
+  sequence and intentionally interrupted when the user directed that rejected
+  findings receive focused validation and Astra acceptance before another full
+  gate. The partial run is not acceptance evidence. Future Astra reviewers are
+  explicitly prohibited from running `test:all`; the final full gate runs only
+  after review acceptance, and any final-gate failure returns to Astra for cause
+  investigation.
+- Third Phase 4 closure review: a fresh independent GPT 6 Astra High reviewer
+  matched baseline `4314d7cce`, 51 tracked paths at binary-diff SHA-256
+  `531c10ab390b075b1428be60afd8bbdcd6129ebd63867d8ed55b1ae2065d5974`,
+  all five untracked file hashes, and manifest
+  `1245e90c8cff89e06b646ec7deb043bc583bb43b33d6f8cc99cd2316003bb590`
+  at start and end. It obeyed the no-full-suite instruction and rejected one
+  related P2: action identity fenced only `finally`, so A → B → A made the old
+  exact target appear current again and resumed the retired release-to-claim
+  continuation; destroying the component also left that continuation live. Two
+  temporary rendered probes reproduced one unintended epoch-2 owner claim each,
+  while the six permanent cases passed. The reviewer found no other blocker in
+  the cumulative feature and made no repository edits.
+- Consolidated owner-action lifecycle repair: every post-await continuation now
+  requires three conditions together—the component is still alive, the captured
+  monotonic action identity is still active, and the exact
+  chat/session/generation/lineage/writer target remains current. Chat and owner
+  scope changes retire the displayed action, destruction retires the component
+  lifetime, and an older `finally` cannot clear newer action state. Eight
+  permanent rendered cases pass, including one-way navigation during delayed
+  release and claim, A → B → A after delayed release, and destruction during
+  delayed release. The latter two prove no follow-up owner claim occurs after
+  retirement, while the exact successful release still projects its epoch
+  tombstone through the coordinator. Svelte checking reports zero errors and
+  warnings. A fresh focused Astra review is required before the final full gate.
+- Fourth Phase 4 closure review: a fresh independent GPT 6 Astra High reviewer
+  matched baseline `4314d7cce`, 51 tracked paths at binary-diff SHA-256
+  `e571269802bea46dce0d5ef3bcbe3ba9291bc8e7e02592e3ef28b27dbc8f623f`,
+  all five untracked file hashes, and manifest
+  `f67766a02e366f6881038cba94bfd865a4e1424653b2431324ecd55eb89bcaf8`
+  at start and end. It found no remaining P1/P2 blocker and **ACCEPTED** Phase 4.
+  It independently passed the eight owner-lifecycle cases, four fast-terminal
+  targeted-recovery cases, 51 current documents, 12 archived documents, and
+  diff checking; two read-only cross-checks agreed. It made no repository edits
+  and explicitly ran no `test:all`, full browser, full frontend/server, or
+  equivalent suite. The final full gate now follows this accepted review.
+- First post-acceptance Phase 4 full gate: 13 of 14 `pnpm test:all` lanes passed
+  in 8m26.2s. Server and browser type checking, 738 topology cases, 51 current
+  documents, 9541 frontend cases (three skipped), 18 compatibility checks,
+  4579 server cases (three skipped), Realm scale, build, Svelte checking,
+  coverage, formatting, and six performance tests passed. Browser smoke passed
+  169/170 journeys; the only failure was the existing
+  `visibleStateRecovery.spec.ts` character-sidebar old-lineage journey waiting
+  five seconds for the reader banner after releasing its intentionally held
+  conflict command. All new owner-control and occupancy journeys passed.
+  Per the user's closure order, this failure was handed to the accepting Astra
+  reviewer for diagnosis before any new full gate.
+- Astra's read-only failed-gate investigation found that the replacement session
+  had entered `reading` with the imported lineage before the reader settings
+  request completed (`connection: connecting`, `projectionReady: false`), so
+  the app correctly hid the banner while loading. The unchanged scenario passed
+  alone and in ten repeats with two workers; no runtime regression was
+  established. Astra recommended waiting for the rendered replacement reader
+  before releasing the stale command, as an adjacent browser journey already
+  does. The test-only barrier retains the original post-conflict banner,
+  unchanged document time origin, device promotion, and sidebar assertions.
+  Ten amended repetitions with two workers passed in 18.0s. Focused acceptance
+  of this amended tree and the final full gate followed.
+- Focused amended-tree acceptance: the same GPT 6 Astra High reviewer inspected
+  the seven-line test readiness barrier and status ledger against its prior
+  cumulative acceptance and the failed-gate diagnosis. It found no new P1/P2 or
+  weakened post-conflict oracle and explicitly **ACCEPTED** the amended tree.
+  It matched baseline `4314d7ccec8aedd95401396977db35f506da4bb0`, 52
+  tracked paths, unstaged binary-diff SHA-256
+  `18935c8d441f62ffe2027171c784b4eb79ffe185dc3b6493dd056f74a0b4f869`,
+  cumulative staged-plus-unstaged SHA-256
+  `e0cd5589c1078c25f8d8b9685ea2503da4b4c0ba9d1555a1b155b3565cf74031`,
+  and the unchanged five-file untracked manifest
+  `f67766a02e366f6881038cba94bfd865a4e1424653b2431324ecd55eb89bcaf8`
+  at start and end. It made no repository edits, ran no `test:all` or equivalent
+  full suite, and used the supplied ten focused repeats plus diff checking.
+- Final Phase 4 post-acceptance completion gate: `pnpm test:all` passed all 14
+  lanes in 8m25.2s on the accepted runtime/test tree. Type checking passed;
+  topology passed across 738 frontend and 240 server test files; current docs
+  passed 51/51; frontend passed 9541 (three skipped) across 732 files;
+  compatibility registers and 18 compatibility-harness cases passed; server
+  passed 4579 (three skipped) across 240 files; Realm import scale passed;
+  the browser-smoke build and all **170/170** browser journeys passed, including
+  the old-lineage/sidebar recovery scenario; Svelte checking reported zero
+  errors/warnings; UI coverage, formatting, and six performance cases passed.
+  Current and archived document validation, Prettier, and diff checking also
+  pass. This gate ran only after Astra ACCEPTED the amended tree; no further
+  runtime or test changes followed it. Physical devices and external providers
+  were not validated; browser/device proof uses Chromium, emulated mobile,
+  disposable SQLite, and controlled local providers. Production deployment is
+  out of scope.
+
+The Phase 4 implementation, current documentation, archive validation, focused
+evidence, original independent GPT 6 Astra High closure acceptance, focused
+amendment ACCEPT, and passing post-acceptance full gate are complete. Only the
+conventional completion commit and its resulting handoff reference remain.
 
 ## Status Update Contract
 

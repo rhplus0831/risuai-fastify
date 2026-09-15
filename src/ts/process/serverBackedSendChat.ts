@@ -76,6 +76,7 @@ import {
   stageTargetedGenerationOperation,
   submitStagedTargetedGenerationOperation,
 } from '../server/generationOperations'
+import { reconcileCompletedTargetedGenerationOperation } from './targetedGenerationRecovery'
 import {
   beginGenerationDisplayProjection,
   finishGenerationDisplayProjection,
@@ -253,6 +254,7 @@ function isServerBackedRestorationGuardFresh(guard: ServerBackedRestorationGuard
 
 export type ServerBackedAssemblyResult =
   | { status: 'aborted' }
+  | { status: 'reconciled' }
   | {
       status: 'failed'
       error: string
@@ -747,6 +749,24 @@ export async function assembleServerBackedSendChat(args: {
   let served: ServerChatAnyResult
   const targetMessageId = mode === 'regenerate' ? args.regenerateMessageId : lastMessage?.chatId
   let regenerateDisplayProjection: GenerationDisplayProjectionRef | undefined
+  const reconcileCompletedTargetedOperation = (operationId: string): Promise<boolean> => {
+    if (!args.chatOccupancy || (mode !== 'continue' && mode !== 'regenerate') || !targetMessageId) {
+      return Promise.resolve(false)
+    }
+    return reconcileCompletedTargetedGenerationOperation({
+      operationId,
+      target: {
+        selectedCharID: args.selectedChar,
+        chatPage: args.selectedChat,
+        characterId: args.currentChar.chaId,
+        chatId: args.currentChat.id,
+      },
+      mode,
+      targetMessageId,
+      chatOccupancy: args.chatOccupancy,
+      signal: args.abortSignal,
+    })
+  }
   if (
     wantsServerDispatch &&
     args.durable &&
@@ -779,12 +799,23 @@ export async function assembleServerBackedSendChat(args: {
     const submitted = await submitStagedTargetedGenerationOperation(staged)
     if (submitted.status === 'accepted') occupancyAdmitted = true
     if (!isCurrent()) return { status: 'aborted' }
-    if (submitted.status !== 'accepted' || !submitted.stream) {
+    if (submitted.status !== 'accepted') {
       return {
         status: 'failed',
-        error: submitted.status === 'accepted' ? 'Generation operation returned no live stream.' : submitted.error,
+        error: submitted.error,
         currentChat: args.currentChat,
       }
+    }
+    if (!submitted.stream) {
+      const reconciled = await reconcileCompletedTargetedOperation(submitted.response.operation.operationId)
+      if (!isCurrent()) return { status: 'aborted' }
+      return reconciled
+        ? { status: 'reconciled' }
+        : {
+            status: 'failed',
+            error: 'Generation operation returned no live stream.',
+            currentChat: args.currentChat,
+          }
     }
     if (mode === 'regenerate') {
       regenerateDisplayProjection = {
@@ -820,6 +851,20 @@ export async function assembleServerBackedSendChat(args: {
       submitted.stream,
       args.chatOccupancy?.authority,
     )
+    if (
+      args.chatOccupancy &&
+      served.status === 'error' &&
+      served.code === 'stale_generation_attempt' &&
+      'reattachOutcome' in served &&
+      served.reattachOutcome === 'authority_reconciliation_required'
+    ) {
+      const reconciled = await reconcileCompletedTargetedOperation(submitted.stream.operationId)
+      if (!isCurrent()) return { status: 'aborted' }
+      if (reconciled) {
+        if (regenerateDisplayProjection) finishGenerationDisplayProjection(regenerateDisplayProjection)
+        return { status: 'reconciled' }
+      }
+    }
   } else if (args.chatOccupancy) {
     return {
       status: 'failed',

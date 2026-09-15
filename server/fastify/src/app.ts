@@ -180,6 +180,7 @@ function isPathWithin(parent: string, child: string): boolean {
 
 export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   const config = opts.config ?? loadConfig()
+  const chatOccupancyEnabled = opts.chatOccupancy?.enabled ?? config.chatOccupancyEnabled ?? true
   assertAgentDevAuthBypassHost(config)
   assertSupportDiagnosticsConfig(config)
   const diagnostics = createClientDiagnostics(config.clientDiagnostics ?? Boolean(config.requestTrace))
@@ -500,12 +501,12 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     diagnostics.enabled,
     diagnosticsRuntime.browserEnabled,
     chatOccupancyService,
-    opts.chatOccupancy?.enabled === true,
+    chatOccupancyEnabled,
   )
   registerOwnershipRoutes(app, db, authState)
   registerActiveWriterGuard(app, activeWriterState)
   registerChatOccupancyRoutes(app, authState, chatOccupancyService, {
-    enabled: opts.chatOccupancy?.enabled === true,
+    enabled: chatOccupancyEnabled,
   })
   registerClientDiagnosticsRoutes(app, authState, diagnostics, diagnosticsRuntime.source, diagnosticIdentity)
   registerRemoteDiagnosticsRoutes(
@@ -588,7 +589,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     serverInstanceId,
     {
       ...opts.generationChat,
-      chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
+      chatOccupancyEnabled,
       pushNotifications: opts.generationChat?.pushNotifications ?? pushNotifications,
       onPromptMemoryJobEnqueued: (job) => {
         emitMemoryEvent(buildMemoryJobEvent(job))
@@ -608,7 +609,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     messageTranslationJobs: messageTranslationJobRegistry,
     generationChatOptions: {
       ...opts.generationChat,
-      chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
+      chatOccupancyEnabled,
       pushNotifications: opts.generationChat?.pushNotifications ?? pushNotifications,
       onPromptMemoryJobEnqueued: (job) => {
         emitMemoryEvent(buildMemoryJobEvent(job))
@@ -621,7 +622,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
       onBardWikiJobEnqueued,
     },
     generationTrace: config.generationTrace,
-    chatOccupancyEnabled: opts.chatOccupancy?.enabled === true,
+    chatOccupancyEnabled,
   })
   registerGenerationEffectRoutes(app, db, authState, config.dataDir, commandEventSink)
   const finalizationRetryRaw = opts.generationChat?.finalizationRetry

@@ -13,6 +13,11 @@ export const languageGerman = {
       foreignOwnedHelp: 'Dieser Chat bleibt hier schreibgeschützt, bis das andere Gerät ihn freigibt.',
       selfOwned: 'Auf diesem Gerät in Verwendung',
       selfOwnedHelp: 'Dieses Gerät kann hier senden, die letzte Antwort neu erzeugen und die Generierung stoppen.',
+      ownerOccupied: 'Chat zum Bearbeiten belegt',
+      ownerOccupiedHelp: 'Gib diesen Chat frei, bevor du enthaltene Daten zurücksetzt, löschst oder wiederherstellst.',
+      ownerUpgradeRequired: 'Chat auf Eigentümerzugriff umstellen',
+      ownerUpgradeRequiredHelp:
+        'Dieses Gerät behielt beim Wechsel zum Schreibgerät den reinen Chat-Zugriff. Wechsle für Fortsetzen und Neu erzeugen zum Eigentümerzugriff oder gib den Chat vor destruktiven Änderungen frei.',
       switchRequired: 'Wechsel erforderlich',
       switchRequiredHelp: 'Dieses Gerät verwendet einen anderen Chat. Wechsle ausdrücklich, bevor du diesen änderst.',
       normalizationRequired: 'Einen Chat zum Behalten auswählen',
@@ -23,6 +28,8 @@ export const languageGerman = {
         'Öffne einen bereits auf diesem Gerät verwendeten Chat, behalte ihn und wechsle dann ausdrücklich hierher.',
       claim: 'Diesen Chat verwenden',
       claiming: 'Wird übernommen…',
+      useAsOwner: 'Als Eigentümer verwenden',
+      usingAsOwner: 'Wechsel zum Eigentümerzugriff…',
       release: 'Chat freigeben',
       releasing: 'Wird freigegeben…',
       switchToChat: 'Zu diesem Chat wechseln',
@@ -38,6 +45,7 @@ export const languageGerman = {
       unsupportedActions:
         'Anhänge, Uploads, abgelegte Dateien, Befehle, Eingabe-Hooks, Fortsetzen, allgemeines Neuerzeugen, Nachrichtenbearbeitung, Löschen, Übersetzung und Plugin-Aktionen sind im Nur-Chat-Modus nicht verfügbar.',
       claimSucceeded: 'Dieser Chat wird jetzt auf diesem Gerät verwendet.',
+      ownerUpgradeSucceeded: 'Dieser Chat verwendet jetzt den Eigentümerzugriff auf diesem Gerät.',
       releaseSucceeded: 'Dieser Chat wurde freigegeben. Du kannst weiterlesen.',
       switchSucceeded: 'Der Chat-Zugriff wurde zu dieser Unterhaltung gewechselt.',
       normalizationSucceeded: 'Dies ist jetzt der einzige auf diesem Gerät verwendete Chat.',

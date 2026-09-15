@@ -498,7 +498,9 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         durable: serverDurable,
         ...(chatOccupancy ? { chatOccupancy } : {}),
       })
-      if (chatOccupancy && serverAssembly.status === 'assembled') occupancyAdmitted = true
+      if (chatOccupancy && (serverAssembly.status === 'assembled' || serverAssembly.status === 'reconciled')) {
+        occupancyAdmitted = true
+      }
       if (!isCurrent()) return false
       if (serverAssembly.status === 'aborted') {
         return false
@@ -521,6 +523,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
         if (serverAssembly.formated !== undefined) previewFormated = serverAssembly.formated
         return true
       }
+      if (serverAssembly.status === 'reconciled') return true
       if (serverAssembly.status === 'assembled') {
         currentChat = serverAssembly.currentChat
         formated = serverAssembly.formated

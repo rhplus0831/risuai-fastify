@@ -6,6 +6,7 @@ Targeted source check: 2026-09-08 (connected-reader recovery and IGP receipts).
 Targeted source check: 2026-09-10 (in-place no-change writer recovery).
 Targeted source check: 2026-09-12 (connected recovery-attempt ownership).
 Targeted source check: 2026-09-12 (bounded command transport, replay ordering, and draft cleanup).
+Targeted source check: 2026-09-15 (selective occupied-chat replay, pins, and rollout drain).
 
 This guide owns browser-to-Fastify mutation durability and reconciliation:
 encrypted outbox intent, the serialized command queue, compact optimistic
@@ -21,6 +22,8 @@ Important files:
 | `src/ts/server/pendingMutationOutbox.ts` | Encrypted intent rows, scope/order indexes, and durable receipt acknowledgements. |
 | `src/ts/server/durableMutationDispatch.ts` | Stages intent, classifies dispatch/replay outcomes, and settles accepted work. |
 | `src/ts/server/pendingMutationReplay.ts` | Replays current-scope work after bootstrap and before resource hydration. |
+| `src/ts/server/chatOccupancy.ts`                          | Exact per-chat authority, renewal, explicit switching/normalization, and recovery wakeups.            |
+| `src/ts/server/generationOperations.ts`                   | Separately scoped occupied-chat Send/Reroll/Stop intents and accepted-operation reconciliation.       |
 | `src/ts/server/commands.ts` | Global mutation queue, response decoding, local effects, and reconciliation batches. |
 | `src/ts/server/commandLocalEffectEvents.ts` | Publishes only local effects that passed event/projection fences; distinct from HTTP acknowledgement. |
 | `src/ts/server/events.ts` | Authenticated reader/writer SSE transport, replay cursor, and frame decoding. |
@@ -157,6 +160,40 @@ staged outbox work, then lingers for 500 ms to avoid flicker. Per-control status
 surfaces retain failures and action-specific busy/disabled semantics rather
 than duplicating generic saving/queued rows. The persisted `showSavingIcon`
 field defaults to `true` but remains an opt-out without a current settings UI.
+
+Occupied-chat generation intents use the same encrypted outbox storage but not
+the general-owner drain rule. Each row captures its originating lineage, page
+session, chat, occupancy epoch, claim class, operation id, and interaction.
+Recovery enumerates only currently exact self-occupancies; an observer does not
+inspect or adopt those rows, and a page never replays another session's work.
+Before redispatch it reads operation authority. A lost accepted response settles
+by the accepted operation/attempt identity without appending or submitting a
+second time. A proven-unaccepted intent whose occupancy expired remains dormant
+as `requires_resubmission`, retaining its recovery identity and diagnostics and,
+for Send, its local draft until the user discards it or makes a new explicit
+action with a new operation identity.
+Chat-only Continue or general Regenerate intent is likewise never replayed after
+demotion; those interactions remain unsupported instead of being widened by
+recovery.
+
+Acceptance freezes the exact occupancy tuple and permission scope into the
+generation operation. That stored authority, rather than current general-owner
+role, owns finalization, generated translation, scoped IGP, automatic memory,
+and BardWiki work. Nonterminal operation/finalization rows and transcript-
+mutating effects/jobs are occupancy pins: release, switch, expiry reclaim, and
+normalization either reconcile them first or reject atomically with the blocking
+identities. Stop is durably staged and can drain its admitted operation after
+role transfer or rollout disablement; it cannot cancel a same-chat operation
+that this page did not admit. Terminal failure rolls back only the optimistic
+row still owned by that attempt, while accepted or uncertain work remains
+recoverable.
+
+`RISU_API_CHAT_OCCUPANCY_ENABLED=false` disables new claim/switch and chat-only
+submission admission, not the drain path. Snapshot refresh, exact renewal,
+operation/status reconciliation, Stop, effect settlement, normalization, and
+release remain available, and ordinary owner writes continue to reject retained
+foreign occupancies until their durable pins finish. No rollback path replays a
+chat-only intent through the legacy general-owner transport.
 
 ## Event Invalidation And Recovery
 
@@ -363,7 +400,7 @@ keepalive flush boundary.
 
 ## Active Writer And Diagnostics
 
-Active writer is server-side. Connected startup discovers ownership before
+General-owner authority is server-side and singular. Connected startup discovers ownership before
 writer-intent bootstrap; conditional acquisition checks the discovered lineage
 and writer epoch. A disconnected foreign writer remains an owner until a
 conditional acquisition succeeds. `autoAcquireDisconnectedWriter` defaults to
@@ -371,11 +408,14 @@ true and enables this acquisition at startup and foreground return. Ordinary
 event reconnection stays read-only. A still-connected foreign
 writer also requires the explicit disconnect handshake. Stale guarded mutations
 receive `423 active_writer_stale`; local projection epochs are freshness fences,
-not writer authority.
+not writer authority. Per-chat occupancy remains a separate exclusive authority
+through general-owner promotion, demotion, reconnect, and navigation.
 
-The default connected-reader path revokes writes and generation control
-synchronously on writer loss while retaining authenticated reading and local
-navigation. Mounted drafts are captured before teardown, and delayed commands,
+The default connected-reader path revokes general writes and owner generation
+control synchronously on writer loss while retaining authenticated reading and
+local navigation. Exact occupied-chat recovery and Send/Reroll/Stop remain
+separately fenced; a demoted multi-row owner must normalize to one chat before
+new chat-only admission. Mounted drafts are captured before teardown, and delayed commands,
 callbacks, and effect receipts are fenced by the client-session generation.
 Owner lifecycle flushes do not dispatch while read-only. Drafts and encrypted
 outbox rows retain their originating session/lineage scope; promotion does not
@@ -396,14 +436,15 @@ Database replacement or lineage change clears reader intent, hydration,
 and cache identities while retaining the authenticated shell only until its
 authoritative replacement is ready.
 
-Reader generation observation is separate from writer `sendChat`/reattach and
-effect recovery. It keeps one selected attempt viewer, bounded status/retry
+Passive reader generation observation is separate from owner/occupied
+`sendChat`/reattach and effect recovery. It keeps one selected attempt viewer, bounded status/retry
 work, and transient output outside the canonical transcript. Terminal output
 hands off only after exact persisted identity is established by authoritative
 hydration; a terminal with no retained result drops its projection after read
 reconciliation. EOF is an observation failure. Detach never sends cancellation.
-Readers cannot submit/retry generation, retry finalization, claim/settle effects,
-or run mutation-bearing completion callbacks.
+Passive and foreign-occupied readers cannot submit/retry generation, retry
+finalization, claim/settle effects, or run mutation-bearing completion callbacks.
+A self-occupied reader uses only the exact scoped contract described above.
 
 Recovered IGP loads its generation resources before deciding whether the prompt
 is configured. Live and recovered IGP carry the exact claimed effect into the

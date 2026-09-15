@@ -13,6 +13,11 @@ export const languageChineseTraditional = {
       foreignOwnedHelp: '在另一部裝置釋放前，此聊天在這裡維持唯讀。',
       selfOwned: '正在此裝置上使用',
       selfOwnedHelp: '此裝置可在本聊天中傳送、重新生成最新回覆及停止生成。',
+      ownerOccupied: '聊天已由寫入裝置佔用',
+      ownerOccupiedHelp: '重設、刪除或還原包含此聊天的資料前，請先釋放此聊天。',
+      ownerUpgradeRequired: '完成切換為擁有者存取',
+      ownerUpgradeRequiredHelp:
+        '此裝置成為寫入裝置後仍保留聊天專用存取。若要使用繼續和一般重新生成，請切換為擁有者存取；執行破壞性變更前請釋放聊天。',
       switchRequired: '需要切換',
       switchRequiredHelp: '此裝置正在使用另一個聊天。請明確切換後再變更此聊天。',
       normalizationRequired: '選擇一個要保留的聊天',
@@ -21,6 +26,8 @@ export const languageChineseTraditional = {
       normalizationElsewhereHelp: '請開啟此裝置已在使用的聊天之一並保留它，然後明確切換到這裡。',
       claim: '使用此聊天',
       claiming: '正在取得…',
+      useAsOwner: '以擁有者身分使用',
+      usingAsOwner: '正在切換為擁有者存取…',
       release: '釋放聊天',
       releasing: '正在釋放…',
       switchToChat: '切換到此聊天',
@@ -36,6 +43,7 @@ export const languageChineseTraditional = {
       unsupportedActions:
         '僅聊天模式不支援附件、上傳、拖放檔案、指令、輸入掛鉤、繼續、一般重新生成、訊息編輯、刪除、翻譯及外掛操作。',
       claimSucceeded: '此聊天現在正在此裝置上使用。',
+      ownerUpgradeSucceeded: '此聊天現在使用此裝置的擁有者存取。',
       releaseSucceeded: '此聊天已釋放。你仍可繼續閱讀。',
       switchSucceeded: '聊天存取權已切換到此對話。',
       normalizationSucceeded: '此聊天現在是此裝置唯一正在使用的聊天。',

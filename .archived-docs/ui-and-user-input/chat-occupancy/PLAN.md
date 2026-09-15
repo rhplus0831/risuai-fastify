@@ -4,9 +4,9 @@ Date: 2026-09-14.
 
 Start at [status](status.md) for the execution cursor, then read the active
 [phase](phases/README.md). [Inventory](inventory.md) maps source boundaries and
-required behavioral evidence. This document defines intended behavior; current
-source and [architecture guides](../../structure/README.md) describe shipped
-behavior until implementation lands.
+required behavioral evidence. This document defines the completed workstream;
+current source and [architecture guides](../../../docs/structure/README.md)
+describe shipped behavior.
 
 ## Objective
 
@@ -257,7 +257,7 @@ suite is mandatory at phase completion.
    reviewed source while the review runs.
 4. Have Astra inspect implementation and tests against the user requirement,
    phase acceptance, surrounding architecture, and earlier accepted phases.
-   Use [TEST-GUIDELINE.md](../../TEST-GUIDELINE.md) as test-quality guidance.
+   Use [TEST-GUIDELINE.md](../../../docs/TEST-GUIDELINE.md) as test-quality guidance.
    Check substantive correctness, authority leaks, recovery/races, missing
    behaviors, and tests whose mocks/assertions cannot detect the claimed bug.
    For Phase 0, inspect the contract/inventory and proposed proof against source;

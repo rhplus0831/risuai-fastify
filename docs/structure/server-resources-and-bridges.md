@@ -6,6 +6,7 @@ Targeted source check: 2026-09-08 (connected-reader startup and generation reads
 Targeted source check: 2026-09-10 (role-first unified workspace).
 Targeted source check: 2026-09-10 (revision-identical writer reconnect reuse).
 Targeted source check: 2026-09-11 (ownership-first foreground recovery).
+Targeted source check: 2026-09-15 (chat occupancy bootstrap negotiation and snapshot delivery).
 
 This guide owns the Fastify-to-browser read boundary: bootstrap resources,
 root and targeted REST reads, hash-verified cache substitution, lazy body
@@ -33,13 +34,16 @@ capabilities consumed by the shell and protocol adapters:
   until the user confirms disconnection. Use this device is the explicit
   reader acquisition path. Pending-mutation ownership is considered only after
   the current page has acquired and authenticated writer recovery.
-- A successful writer bootstrap is deliberately runtime-only metadata:
+- A successful runtime bootstrap is deliberately runtime-only metadata:
   initialization state, revision/schema version, database lineage, durable
   writer epoch, the pre-takeover writer verdict, asset base URL, generation and
-  display-source protocol projections, running generation jobs, writer-scoped
+  display-source protocol projections, the chat-occupancy capability and complete
+  lineage-scoped occupancy snapshot, running generation jobs, session-scoped
   finalization/effect recovery, startup telemetry configuration, and running plus
   bounded recent terminal message/greeting translations. It does not carry
-  durable application data.
+  durable application data. Missing, malformed, or unsupported occupancy fields
+  fail closed as unsupported; `enabled: false` is a negotiated drain state, not
+  permission to infer an empty occupancy set.
 - An authorized writer with `initialized: false` attempts
   `POST /api/v1/commands/state/initialize`. A connected page that cannot establish
   exclusive identity requires the explicit setup action before acquisition;
@@ -83,7 +87,9 @@ capabilities consumed by the shell and protocol adapters:
   character/chat detail, and the selected prompt-template owner to be coherent
   at `chat-ready`. Read-only transcript display uses the bounded
   `runtime:chat-display` resource surface rather than enabling writer runtimes.
-  Background runtimes never become a global UI gate.
+  Background runtimes never become a global UI gate. Chat-only Send/Reroll/Stop
+  uses its own exact occupancy authority and scoped resource requirements; it
+  does not turn on global `canMutate` or `canGenerate`.
 - During initial automatic acquisition, the workspace remains behind the loading
   boundary; it does not install a provisional reader projection. Established
   Readers retain content through later promotion and recovery.
@@ -132,6 +138,9 @@ capabilities consumed by the shell and protocol adapters:
   gaps. Local navigation is restored by stable identity after replacement.
   Reconnect neither acquires a writer nor replays outbox work. Hypa/BardWiki
   operational snapshots and progress use their own stream/version fences.
+  Revision-free occupancy snapshots update only `chatOccupancy.ts`; an unrelated
+  occupancy transition requests no shell, collection, character, or chat-body
+  read and cannot move the reader's route or command cursor.
 - Complete resource snapshots must agree on one revision and meet the triggering
   event/replay revision before replacing any resident slice. Reader and writer
   gap recovery pass this minimum into the apply owner, so an older snapshot
@@ -166,12 +175,14 @@ capabilities consumed by the shell and protocol adapters:
   request identity and version so an older read cannot clear newer work.
   Automatic same-writer reconnection preserves obligations; authentication,
   writer ownership, or database-lineage loss revokes the old scope.
-- Writer generation recovery treats SQLite `generation_operations`,
+- Generation recovery treats SQLite `generation_operations`,
   `generation_operation_attempts`, and `generation_effects` as durable
   authority. Active jobs are live attachment hints and local activities are
-  reader-observation state. Effect claims are writer-owned, lease-fenced, and settled by
-  receipts; recovery retries durable/recomputed effects and permanently skips
-  late ephemeral effects. Runtime read-only bootstrap probes are epoch-fenced and
+  reader-observation state. General-owner recovery uses the writer scope;
+  occupied-chat recovery uses the operation's exact originating tuple and never
+  adopts another session's rows. Effect claims are session/authority-owned,
+  lease-fenced, and settled by receipts; recovery retries durable/recomputed
+  effects and permanently skips late ephemeral effects. Runtime read-only bootstrap probes are epoch-fenced and
   bounded; a foreground probe may supersede an older suspended request while
   preserving the last successfully applied projection on failure. While durable
   generation recovery remains unresolved, a failed or incomplete lifecycle probe receives three
@@ -209,6 +220,7 @@ capabilities consumed by the shell and protocol adapters:
 | `src/ts/server/bootstrap.ts` | Validates the small runtime bootstrap variants and the shared single-flight ownership probe. |
 | `src/ts/connectedClientStartup.ts` | Discovers ownership and conditionally enters connected reader or authorized writer recovery. |
 | `src/ts/server/connectedReaderSync.ts` | Reader event transport, revision reconciliation, ownership/lineage recovery, and operational snapshots. |
+| `src/ts/server/chatOccupancy.ts`, `chatOccupancyTransport.ts`               | Negotiated occupancy projection, exact tuple actions, lease renewal, and revision-free snapshot recovery.                                         |
 | `src/ts/server/readerTranscriptProjection.svelte.ts` | Certified reader navigation/display/transcript ownership and chat-incarnation fences. |
 | `src/ts/server/readerGenerationObservation.ts`, `readerGenerationStream.ts` | Selected generation observation and exact terminal transcript handoff without writer control. |
 | `src/ts/server/resourceReads.ts` | Browser wrappers and response validation for settings, collections, characters, and the inlay catalog. |
@@ -370,6 +382,9 @@ immediately, so a later refresh still reads the server.
 | Data | Endpoint | Browser owner |
 | --- | --- | --- |
 | Database lineage and durable writer tuple | `GET /api/v1/ownership` | Foreground reader/writer ownership validation |
+| Per-chat occupancy snapshot                           | `GET /api/v1/chat-occupancies`                                                                                                         | `chatOccupancy.ts`; authenticated no-store discovery independent of command revision |
+| Occupancy claim/renew/release                         | `POST /api/v1/chat-occupancies/:chatId/claim`, `PUT /api/v1/chat-occupancies/:chatId/lease`, `DELETE /api/v1/chat-occupancies/:chatId` | Exact lineage/session/epoch controls; claim requires enabled protocol                |
+| Atomic occupancy switch/normalization                 | `POST /api/v1/chat-occupancies/{switch,normalize}`                                                                                     | Explicit cross-chat mutation switch and demoted-owner one-chat normalization         |
 | Minimal coherent application shell | `GET /api/v1/resources/shell` | `shellHydration.ts`, root startup |
 | One standalone legacy settings value | `GET /api/v1/resources/settings/:setting` | `routeResourceLoader.ts`, standalone setting state |
 | Persisted settings fields | Cache `POST /api/v1/settings`; full `GET` fallback | `resourceReads.ts`, `settingsResourceState` |

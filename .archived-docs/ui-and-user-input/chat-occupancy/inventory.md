@@ -84,7 +84,7 @@ not assertions that proposed occupancy behavior already exists.
   [command routes](../../../server/fastify/src/routes/commands.ts),
   [repository.ts](../../../server/fastify/src/repository.ts),
   [maintenanceCoordinator.ts](../../../server/fastify/src/maintenanceCoordinator.ts),
-  and [assets/save guide](../../structure/assets-and-saves.md).
+  and [assets/save guide](../../../docs/structure/assets-and-saves.md).
   Character deletion/reset, chat/folder reorder, fork, recovery/import, restore,
   background writers, and broad row/table replacement can affect another chat.
   Do not treat `MaintenanceCoordinator` alone as proof that every ordinary
@@ -92,10 +92,10 @@ not assertions that proposed occupancy behavior already exists.
 - **B10 — Protocol, docs, and verification routing.**
   [protocol package](../../../packages/protocol/README.md),
   [generation client guide](../../../src/docs/generation-client.md),
-  [data/events guide](../../structure/data-and-events.md),
-  [mutation recovery guide](../../structure/durable-mutations-and-recovery.md),
-  [browser state test guide](../../tests/browser-state-sync-and-recovery.md), and
-  [test-quality guidance](../../TEST-GUIDELINE.md).
+  [data/events guide](../../../docs/structure/data-and-events.md),
+  [mutation recovery guide](../../../docs/structure/durable-mutations-and-recovery.md),
+  [browser state test guide](../../../docs/tests/browser-state-sync-and-recovery.md), and
+  [test-quality guidance](../../../docs/TEST-GUIDELINE.md).
   Add occupancy negotiation/contracts to their actual owners; update manifests,
   exports, bootstrap/event consumers, and documentation together.
 

@@ -21,7 +21,7 @@ interface Harness {
   dataDir: string
 }
 
-async function startHarness(): Promise<Harness> {
+async function startHarness(options: { configEnabled?: boolean; injectedEnabled?: boolean } = {}): Promise<Harness> {
   process.env.LOG_LEVEL = 'silent'
   const dataDir = mkdtempSync(path.join(tmpdir(), 'risu-fastify-'))
   const { app } = await buildApp({
@@ -33,7 +33,9 @@ async function startHarness(): Promise<Harness> {
       importMaxBytes: Infinity,
       trustProxy: false,
       hubUrl: 'https://sv.risuai.xyz',
+      ...(options.configEnabled === undefined ? {} : { chatOccupancyEnabled: options.configEnabled }),
     },
+    ...(options.injectedEnabled === undefined ? {} : { chatOccupancy: { enabled: options.injectedEnabled } }),
   })
   return { app, dataDir }
 }
@@ -97,7 +99,7 @@ describe('bootstrap runtime metadata', () => {
       assetBaseUrl: '/api/v1/assets',
       generationOperationProtocol: { version: 1 },
       displaySourceProtocol: { version: 1 },
-      chatOccupancyProtocol: { version: 1, enabled: false, leaseMs: 90_000, renewAfterMs: 30_000 },
+      chatOccupancyProtocol: { version: 1, enabled: true, leaseMs: 90_000, renewAfterMs: 30_000 },
       chatOccupancies: { version: 1, databaseLineage: expect.any(String), occupancies: [] },
       generationOperationProjectionEpoch: 0,
       generationOperations: [],
@@ -134,7 +136,7 @@ describe('bootstrap runtime metadata', () => {
       assetBaseUrl: '/api/v1/assets',
       generationOperationProtocol: { version: 1 },
       displaySourceProtocol: { version: 1 },
-      chatOccupancyProtocol: { version: 1, enabled: false, leaseMs: 90_000, renewAfterMs: 30_000 },
+      chatOccupancyProtocol: { version: 1, enabled: true, leaseMs: 90_000, renewAfterMs: 30_000 },
       chatOccupancies: { version: 1, databaseLineage: expect.any(String), occupancies: [] },
       generationOperationProjectionEpoch: 1,
       generationOperations: [],
@@ -143,6 +145,26 @@ describe('bootstrap runtime metadata', () => {
       activeGreetingTranslations: [],
     })
     expect(response.json()).not.toHaveProperty('database')
+  })
+
+  it('uses an explicit build option as the coherent rollback override', async () => {
+    await stopHarness(harness)
+    harness = await startHarness({ configEnabled: true, injectedEnabled: false })
+    const { assertion } = await setupAuthedClient(harness.app)
+
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/bootstrap',
+      headers: { 'risu-auth': assertion },
+    })
+
+    expect(response.statusCode).toBe(200)
+    expect(response.json().chatOccupancyProtocol).toEqual({
+      version: 1,
+      enabled: false,
+      leaseMs: 90_000,
+      renewAfterMs: 30_000,
+    })
   })
 
   it('reconstructs writer-scoped pending and terminal finalization state after an app restart', async () => {

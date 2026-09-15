@@ -14,7 +14,10 @@ This project is under active development for personal use and is not stable enou
 ## How this fork works
 
 - Server-owned data: SQLite stores chats, characters, settings, and memory; uploaded assets and backups live alongside it in the server's data directory. Browser caches are disposable, while local drafts and queued edits retain pending work.
-- Password-protected access: connect to your server from desktop or mobile browsers. One tab or device holds write access at a time; switching devices transfers that role.
+- Password-protected access: connect from desktop or mobile browsers. One device
+  remains the general owner for settings and ordinary app writes, while another
+  device can exclusively occupy one chat for scoped Send, latest-response
+  Reroll, and Stop without receiving general write access.
 - Server-side generation: prompt assembly, provider requests, and Lua scripting run on Fastify. Stored provider credentials are resolved on the server and masked in browser settings.
 - Recoverable work: chat generation continues through browser disconnections, and the client can reattach to active work. Interrupted operations expose recovery and retry controls.
 
@@ -79,6 +82,7 @@ Set environment variables on the server process as needed:
 | `RISU_API_PORT` | `6002` | Fastify HTTP port. |
 | `RISU_API_DATA_DIR` | `data/` in the repository | Persistent database, assets, backups, and authentication state. |
 | `RISU_API_STATIC_ROOT` | `dist/` in the repository | Built web client directory; `none` disables static serving. |
+| `RISU_API_CHAT_OCCUPANCY_ENABLED` | `true`                      | Set explicitly to `false` to stop new chat-only claims/submissions while retained work, Stop, release, and occupancy enforcement drain safely. |
 | `RISU_CLIENT_DIAGNOSTICS` | Off outside dev trace modes | Set to `1` to enable the diagnostics viewer in Settings → Advanced. |
 
 For additional options, see the [environment reference](docs/structure/development-and-observability.md#environment-variables).

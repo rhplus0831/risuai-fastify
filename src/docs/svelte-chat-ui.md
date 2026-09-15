@@ -2,6 +2,7 @@
 
 Last audited: 2026-08-29.
 Targeted source checks: 2026-09-12 (chat-menu opener, BardWiki workspace, and focused coverage map).
+Targeted source check: 2026-09-15 (chat-only occupancy controls, retained intent, and rollout drain).
 
 This guide owns the visible chat frame, transcript, message rows, composer
 variants, generation/loading feedback, and in-chat confirmations. Return to the
@@ -215,7 +216,7 @@ its independent read owners and static confirmed portraits.
 a writer controller. `ReaderTranscript.svelte` stores that draft only in
 `sessionStorage`, namespaced by database lineage, exclusive page session, and
 chat; it never enters the writer draft/outbox or server command paths. Unsupported,
-disabled, duplicate-tab, foreign-occupied, switch-required, and retained-owner
+duplicate-tab, foreign-occupied, switch-required, and retained-owner
 normalization states stay read-only. A self-occupied chat enables only plain
 Send, latest-response Reroll, and Stop; attachments, input hooks, Continue,
 message editing/deletion/translation, plugins, and the writer reroll/swipe menu
@@ -223,8 +224,22 @@ remain visibly unavailable. Claim, release, atomic switch, and normalization
 are explicit controls backed by the client occupancy coordinator. Navigation
 never invokes any of them, so the current occupancy is retained while another
 chat is observed. The separate top-right device action continues to own general
-writer promotion. Mobilechat bubbles expose the same
+writer promotion. If that promotion retains a `chat_only` tuple, the writer
+composer shows owner occupancy controls for the affected chat. **Use as owner**
+performs an exact release followed by a fresh `owner` claim; it does not rewrite
+the accepted tuple or bypass generation/effect pins. **Release chat** remains
+available for both claim classes, including during rollout disablement, so
+destructive reset, delete, import, and restore operations have an explicit safe
+recovery path. A rejected release leaves the original tuple intact, and a
+successful release followed by a failed owner claim exposes an explicit retry.
+Mobilechat bubbles expose the same
 reader-safe plain-text copy action as the other built-in layouts.
+When the server advertises occupancy disabled, no new Send/Reroll/claim/switch is
+enabled. An already self-occupied chat keeps its Release action and may expose
+Stop for its admitted operation so rollback can drain safely. Retained or
+`requires_resubmission` Send/Reroll intent appears as an independent accessible
+status. A retained Send preserves its scoped draft; either mode requires discard
+or a fresh explicit action rather than silently resubmitting after expiry.
 `readerPanelAppearance.ts` derives a local text palette from confirmed app colors
 and the translucent chat panel, and passes its tone through the explicit read
 owners. This keeps links, disclosures, headings and composer guidance readable

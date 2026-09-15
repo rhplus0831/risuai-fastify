@@ -1392,6 +1392,92 @@ describe('occupied-chat generation operation client', () => {
     expect(JSON.parse(second[1].body).baseRevision).toBe(8)
   })
 
+  it('retains the exact occupied-chat Send after exhausting bounded revision retries', async () => {
+    setManagedReaderForTest()
+    configureGenerationOperationProtocol({ version: 1 }, 'database-a')
+    const authority = occupancyAuthority()
+    const draftGeneration = { sequence: 12, source: 'occupied-chat-retry-exhaustion' }
+    const staged = await stageAcceptedSendGenerationOperation({
+      target: { selectedCharID: -1, chatPage: -1, characterId: 'character-a', chatId: 'chat-a' },
+      message: 'retain this exact send',
+      draftGeneration,
+      chatOccupancy: { authority, interaction: 'send' },
+      generation: {
+        syntheticSayNothing: false,
+        resetMessages: false,
+        inlayAssetRefs: [],
+        clientContext: {},
+        clientCapabilities: {},
+      },
+    })
+    if ('status' in staged) throw new Error(staged.error)
+    const rollback = vi.fn(staged.rollbackOptimisticAppend)
+    staged.rollbackOptimisticAppend = rollback
+    const stagedBody = structuredClone(staged.intent.requests[0]!.body)
+    const conflictRevisions = [8, 9, 10, 11]
+    const fetchMock = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => {
+      const currentRevision = conflictRevisions.shift()
+      return new Response(
+        JSON.stringify({
+          error: 'revision_conflict',
+          message: `The server revision advanced to ${currentRevision}.`,
+          currentRevision,
+        }),
+        { status: 409 },
+      )
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(submitStagedAcceptedSendOperation(staged)).resolves.toEqual({
+      status: 'retained',
+      error: 'The server revision advanced to 11.',
+      code: 'revision_conflict',
+    })
+
+    expect(fetchMock).toHaveBeenCalledTimes(4)
+    expect(
+      fetchMock.mock.calls.map(([, init]) => {
+        const body = JSON.parse(init!.body as string)
+        return {
+          baseRevision: body.baseRevision,
+          operationId: body.operationId,
+          acceptedMessageId: body.acceptedMessageId,
+          message: body.message,
+          draftGeneration: body.draftGeneration,
+        }
+      }),
+    ).toEqual(
+      [7, 8, 9, 10].map((baseRevision) => ({
+        baseRevision,
+        operationId,
+        acceptedMessageId: messageId,
+        message: expect.objectContaining({ chatId: messageId, data: 'retain this exact send' }),
+        draftGeneration,
+      })),
+    )
+    expect(operationMocks.setRevision.mock.calls).toEqual([[8], [9], [10]])
+    expect(staged.intent.requests[0]!.body).toEqual(stagedBody)
+    expect(staged.request).toMatchObject({
+      operationId,
+      acceptedMessageId: messageId,
+      baseRevision: 7,
+      draftGeneration,
+    })
+    expect(captureGenerationRecoveryObligations()).toEqual([
+      expect.objectContaining({
+        kind: 'submit',
+        operationId,
+        chatId: 'chat-a',
+        phase: 'uncertain',
+      }),
+    ])
+    expect(operationMocks.beginDispatch).toHaveBeenCalledExactlyOnceWith(staged.handle)
+    expect(operationMocks.stageChatOccupancy).toHaveBeenCalledTimes(1)
+    expect(operationMocks.stage).not.toHaveBeenCalled()
+    expect(operationMocks.discard).not.toHaveBeenCalled()
+    expect(rollback).not.toHaveBeenCalled()
+  })
+
   it('settles an exact accepted Send when rollout disables during its response', async () => {
     setManagedReaderForTest()
     configureGenerationOperationProtocol({ version: 1 }, 'database-a')

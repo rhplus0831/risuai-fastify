@@ -30,6 +30,17 @@ reports durable ownership without acquiring it. Focused schema coverage is in
 `packages/protocol/src/ownership.test.ts`; verify both browser recovery and
 Fastify route consumers when changing the contract.
 
+The public `@risuai/protocol/chat-occupancy` subpath is owned by
+`packages/protocol/src/chatOccupancy.ts`. Protocol version 1 defines the closed
+capability, projection, complete snapshot, and revision-free
+`occupancy.snapshot` event schemas; the page-session, database-lineage, and
+occupancy-epoch headers; and the snapshot, claim, renew, release, atomic switch,
+and demotion-normalization endpoints. Snapshot/event validation requires one
+coherent row per chat and matching top-level lineage. The protocol describes
+wire authority only: rollout admission and durable-drain policy remain Fastify
+and browser runtime responsibilities. Focused schema coverage is in
+`packages/protocol/src/chatOccupancy.test.ts`.
+
 Run the focused checks with:
 
 ```sh
