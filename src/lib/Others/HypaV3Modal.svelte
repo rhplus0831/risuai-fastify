@@ -1396,10 +1396,6 @@
 
       <!-- Scrollable Container -->
       <div class="flex flex-col gap-2 overflow-y-auto sm:gap-4" tabindex="-1">
-        {#if serverBackedMemoryMode}
-          <ServerMemoryJobs chatId={currentChatId} />
-        {/if}
-
         {#if serverBackedMemoryMode && serverMemoryLoading && hypaV3Data.summaries.length === 0}
           <div class="p-4 text-center sm:p-3 md:p-4 text-zinc-400">
             {language.loading}
@@ -1507,6 +1503,10 @@
 
         <!-- Footer -->
         <ModalFooter hypaV3Data={footerHypaV3Data} />
+
+        {#if serverBackedMemoryMode}
+          <ServerMemoryJobs chatId={currentChatId} />
+        {/if}
       </div>
 
       <!-- Bulk Resummary Result -->

@@ -203,9 +203,6 @@
                 attempt {job.attemptCount}/{job.maxAttempts}
               </span>
             </div>
-            <div class="mt-1 truncate text-xs text-zinc-500" title={job.id}>
-              {job.id}
-            </div>
             {#if job.status === 'failed' && job.error}
               <div class="mt-2 whitespace-pre-wrap break-words text-xs text-rose-300" data-memory-job-error>
                 {job.error}
