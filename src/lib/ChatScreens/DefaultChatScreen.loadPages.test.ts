@@ -1287,8 +1287,26 @@ describe('DefaultChatScreen accepted-send recovery projection', () => {
 })
 
 describe('DefaultChatScreen overflow menu accessibility', () => {
+  it('hides the BardWiki menu action until Use BardWiki is enabled', async () => {
+    seedDatabase([2])
+    mountScreen()
+    await waitFor(() => {
+      expect(target.querySelector('[data-testid="default-chat-menu-button"]')).toBeTruthy()
+    })
+    target.querySelector<HTMLButtonElement>('[data-testid="default-chat-menu-button"]')!.click()
+    await settle()
+    expect(target.querySelector('[data-testid="default-chat-open-bardwiki"]')).toBeNull()
+    settingsResourceState.value.useBardWiki = true
+    await settle()
+    expect(target.querySelector('[data-testid="default-chat-open-bardwiki"]')).toBeTruthy()
+    settingsResourceState.value.useBardWiki = false
+    await settle()
+    expect(target.querySelector('[data-testid="default-chat-open-bardwiki"]')).toBeNull()
+  })
+
   it('exposes a named menu of native buttons and focuses the first enabled item', async () => {
     seedDatabase([2])
+    settingsResourceState.value.useBardWiki = true
     mountScreen()
 
     await waitFor(() => {

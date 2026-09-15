@@ -158,6 +158,7 @@ describe('database defaults', () => {
     expect(database.customColorScheme).toEqual(database.colorScheme)
     expect(database.customColorScheme).not.toBe(database.colorScheme)
     expect(database.autoTranslate).toBeUndefined()
+    expect(database.useBardWiki).toBe(false)
     expect(database.showGlobalLorebookAndRegex).toBe(false)
     expect(database).not.toHaveProperty('moodLightMembership')
     expect(database.loreBook).toEqual([

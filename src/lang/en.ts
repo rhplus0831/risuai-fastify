@@ -3460,6 +3460,7 @@ export const languageEnglish = {
       'provider-capability-unsupported': 'provider capability unsupported',
     },
   },
+  useBardWiki: 'Use BardWiki',
   bardWiki: {
     title: 'BardWiki',
     description:

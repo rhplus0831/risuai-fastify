@@ -72,7 +72,7 @@ import { SUPPORTER_ENDPOINT } from './Pages/supporters'
 import Settings from './Settings.svelte'
 import { language } from 'src/lang'
 import { additionalSettingsMenu, MobileGUI, SettingsMenuIndex } from 'src/ts/stores.svelte'
-import { replaceResourceDatabase as setDatabaseLite } from 'src/ts/server/resourceState.svelte'
+import { replaceResourceDatabase as setDatabaseLite, settingsResourceState } from 'src/ts/server/resourceState.svelte'
 import { isLite } from 'src/ts/lite'
 import { applyRouteToStores, currentRoute, navigate } from 'src/ts/router'
 import { getResourceDatabase as getDatabase } from 'src/ts/__tests__/resourceDatabaseState'
@@ -124,6 +124,7 @@ describe('Settings supporter tab', () => {
     Object.defineProperty(window, 'innerHeight', { configurable: true, value: 800 })
     additionalSettingsMenu.splice(0)
     setDatabaseLite({
+      useBardWiki: true,
       enableRisuaiProTools: false,
       doNotWarnExternalServers: false,
       settingsCloseButtonSize: 24,
@@ -295,6 +296,21 @@ describe('Settings supporter tab', () => {
       section: 'memory',
       index: 2,
     })
+  })
+
+  it('hides BardWiki navigation and direct-page content when Use BardWiki is off', async () => {
+    await resizeViewport(800)
+    settingsResourceState.value.useBardWiki = false
+    await tick()
+    expect(settingsButton(language.bardWiki.title)).toBeUndefined()
+
+    SettingsMenuIndex.set(23)
+    await flushClick()
+    expect(target.querySelector('[data-risu-bardwiki-settings]')).toBeNull()
+
+    settingsResourceState.value.useBardWiki = true
+    await flushClick()
+    expect(settingsButton(language.bardWiki.title)).toBeTruthy()
   })
 
   it('opens the standalone BardWiki settings page from Tools & Extensions', async () => {

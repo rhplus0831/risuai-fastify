@@ -3536,6 +3536,7 @@ export function setDatabase(data: Database) {
   // If the user uses plugins, its probably better to enable RisuAI Pro Tools by default
   // Because its likely they are power users who would benefit from the features
   data.enableRisuaiProTools ??= data.plugins.length > 0
+  data.useBardWiki ??= false
   data.showGlobalLorebookAndRegex ??= false
   data.keepSessionAlive = normalizeKeepSessionAlive(data.keepSessionAlive)
   data.chatGenerationTogglePresets = normalizeChatGenerationTogglePresets(data.chatGenerationTogglePresets)
@@ -4423,6 +4424,7 @@ export interface Database {
   echoDelay?: number
   /** Enables `globalLore` stubs for non-open characters; hydrate before reading lore. */
   enableLorebookStubs?: boolean
+  useBardWiki?: boolean
   showGlobalLorebookAndRegex?: boolean
   createFolderOnBranch?: boolean
   hamburgerButtonBottom?: boolean

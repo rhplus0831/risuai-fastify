@@ -49,6 +49,13 @@ as appropriate.
 
 ## Settings And Workspace
 
+Settings > Advanced > Experimental contains **Use BardWiki** (`useBardWiki`,
+advanced settings group), off by default. It controls visibility of the BardWiki
+settings navigation/page and chat workspace entry/dialog. A disabled direct
+`/settings/bardwiki` visit offers a link to Advanced settings. This visibility
+preference preserves global defaults, per-chat overrides, and stored documents;
+it does not change server-side memory execution.
+
 The standalone BardWiki page under Settings > Tools & Extensions is available at
 `/settings/bardwiki`. It chooses default enablement, Hypa/BardWiki/Hybrid mode,
 model and prompt owners, automatic and canonical update policy, total/partition

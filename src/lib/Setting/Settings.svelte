@@ -67,6 +67,9 @@
     settingsResourceState.groupStatuses.advanced === 'ready' &&
       settingsResourceState.value.doNotWarnExternalServers === true,
   )
+  let useBardWiki = $derived(
+    settingsResourceState.groupStatuses.advanced === 'ready' && settingsResourceState.value.useBardWiki === true,
+  )
   let showGlobalLorebookAndRegex = $derived(
     settingsResourceState.groupStatuses.advanced === 'ready' &&
       settingsResourceState.value.showGlobalLorebookAndRegex === true,
@@ -223,15 +226,17 @@
               <BrainIcon size={20} />
               <span>{language.settingsNavMemory}</span>
             </button>
-            <button
-              class={navButtonClass($SettingsMenuIndex === 23)}
-              data-risu-route-intent="/settings/bardwiki"
-              onclick={() => {
-                navigate('/settings/bardwiki')
-              }}>
-              <BookOpen size={20} />
-              <span>{language.bardWiki.title}</span>
-            </button>
+            {#if useBardWiki}
+              <button
+                class={navButtonClass($SettingsMenuIndex === 23)}
+                data-risu-route-intent="/settings/bardwiki"
+                onclick={() => {
+                  navigate('/settings/bardwiki')
+                }}>
+                <BookOpen size={20} />
+                <span>{language.bardWiki.title}</span>
+              </button>
+            {/if}
             <button
               class={navButtonClass($SettingsMenuIndex === 14)}
               data-risu-route-intent="/settings/modules"
@@ -509,7 +514,13 @@
           {:else if $SettingsMenuIndex === 22}
             <LazyComponent loader={loadSourceCode} fill testId="settings-source-code" />
           {:else if $SettingsMenuIndex === 23}
-            <LazyComponent loader={loadBardWikiSettings} fill testId="settings-bardwiki" />
+            {#if useBardWiki}
+              <LazyComponent loader={loadBardWikiSettings} fill testId="settings-bardwiki" />
+            {:else}
+              <button class={navButtonClass(false)} onclick={() => navigate('/settings/advanced')}>
+                {language.advancedSettings}
+              </button>
+            {/if}
           {:else if $SettingsMenuIndex === 77}
             <LazyComponent loader={loadThanksPage} fill testId="settings-thanks" />
           {/if}

@@ -73,7 +73,8 @@ The Memory page owns four inner tabs for long-term memory, TTS, emotion images,
 and image generation. The long-term tab also owns legacy Hypa/lorebook behavior,
 the emotion tab owns its global prompt/server overrides, and the image tab owns
 the image-handling beta toggle. BardWiki is a separate Tools & Extensions item at
-`/settings/bardwiki`; its lazy page edits the global defaults for enablement,
+`/settings/bardwiki`, visible when **Use BardWiki** is checked in Advanced >
+Experimental (off by default). Its lazy page edits the global defaults for enablement,
 Hypa/BardWiki/Hybrid selection, confirmation policy, model/prompt owners,
 canonical updates, and token/query/link limits. The page explains that automatic
 confirmation and rebuild can make background provider calls and therefore incur

@@ -107,6 +107,14 @@ export const advancedSettingsItems: SettingItem[] = [
     classes: 'mt-4',
   },
 
+  {
+    id: 'adv.useBardWiki',
+    type: 'check',
+    labelKey: 'useBardWiki',
+    bindKey: 'useBardWiki',
+    keywords: ['BardWiki', 'wiki', 'memory'],
+  },
+
   // Lorebook stubs (EXPERIMENTAL, Fastify-only).
   {
     id: 'adv.lorebookStubsWarn',
@@ -446,7 +454,7 @@ export const advancedSettingsSections: SettingSection[] = [
     descriptionKey: 'settingsSectionExperimentalDescription',
     badgeKey: 'settingsBadgeExperimental',
     collapsible: true,
-    items: advancedItems(['adv.lorebookStubsWarn', 'adv.lorebookStubs', 'adv.exp.cachePoint']),
+    items: advancedItems(['adv.useBardWiki', 'adv.lorebookStubsWarn', 'adv.lorebookStubs', 'adv.exp.cachePoint']),
   },
   {
     id: 'legacy-compatibility',

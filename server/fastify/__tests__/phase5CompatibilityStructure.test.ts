@@ -185,6 +185,7 @@ const RETAINED_INITIAL_DEFAULTS: Record<string, unknown> = {
   paragraphBreakBySentences: false,
   paragraphBreakSentenceCount: 3,
   reducedMotion: false,
+  useBardWiki: false,
   showGlobalLorebookAndRegex: false,
   showSavingIcon: true,
   useMonacoEditorOnDesktop: false,

@@ -3361,6 +3361,7 @@ export const languageKorean = {
       'provider-capability-unsupported': '지원되지 않는 제공자 기능',
     },
   },
+  useBardWiki: 'BardWiki 사용',
   bardWiki: {
     title: 'BardWiki',
     description:

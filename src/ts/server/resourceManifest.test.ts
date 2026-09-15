@@ -299,7 +299,7 @@ describe('route resource manifest', () => {
     expect(advanced).toMatchObject({
       kind: 'settings-group',
       group: 'advanced',
-      keys: ['doNotWarnExternalServers', 'showGlobalLorebookAndRegex', 'globalscript'],
+      keys: ['doNotWarnExternalServers', 'showGlobalLorebookAndRegex', 'useBardWiki', 'globalscript'],
       purposes: ['render', 'interact', 'mutate'],
     })
   })

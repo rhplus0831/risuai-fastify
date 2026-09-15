@@ -183,7 +183,11 @@ export const RESOURCE_SURFACE_MANIFEST = {
     requirements: [
       group('display', ['render'], ['settingsCloseButtonSize']),
       group('sidebar', ['render'], ['enableRisuaiProTools']),
-      group('advanced', ['render', 'interact'], ['doNotWarnExternalServers', 'showGlobalLorebookAndRegex']),
+      group(
+        'advanced',
+        ['render', 'interact'],
+        ['doNotWarnExternalServers', 'showGlobalLorebookAndRegex', 'useBardWiki'],
+      ),
       collection('botPresets', ['render']),
     ],
     notes:

@@ -1008,6 +1008,7 @@ export function normalizeDatabaseDefaults(
   setDefault(database, 'dynamicModelRegistry', true)
   setDefault(database, 'saveSignatures', false)
   setDefault(database, 'enableRisuaiProTools', Array.isArray(database.plugins) && database.plugins.length > 0)
+  setDefault(database, 'useBardWiki', false)
   setDefault(database, 'showGlobalLorebookAndRegex', false)
   database.keepSessionAlive = normalizeKeepSessionAlive(database.keepSessionAlive)
   setDefault(database, 'chatGenerationTogglePresets', [])

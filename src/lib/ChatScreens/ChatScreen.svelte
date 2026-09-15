@@ -19,7 +19,11 @@
   } from '../../ts/characterState'
 
   import { isServerCharacterShell, type character } from 'src/ts/storage/database.svelte'
-  import { charactersResourceState, getChatMetadataOwnerState } from 'src/ts/server/resourceState.svelte'
+  import {
+    charactersResourceState,
+    getChatMetadataOwnerState,
+    settingsResourceState,
+  } from 'src/ts/server/resourceState.svelte'
   import { bardWikiWorkspaceOpenRequest, CharEmotion, selectedCharID } from '../../ts/stores.svelte'
   import ResizeBox from './ResizeBox.svelte'
   import DefaultChatScreen from './DefaultChatScreen.svelte'
@@ -42,6 +46,9 @@
   const loadBardWikiWorkspace = () => import('./BardWikiWorkspace.svelte')
   let openChatList = $state(false)
   let openModuleList = $state(false)
+  let useBardWiki = $derived(
+    settingsResourceState.groupStatuses.advanced === 'ready' && settingsResourceState.value.useBardWiki === true,
+  )
   let openBardWiki = $state(false)
   let bardWikiChatId = $state<string | null>(null)
   let selectedCharacter = $derived.by(() => {
@@ -96,7 +103,7 @@
       bardWikiChatId = null
       return
     }
-    if (!selectedChatId) {
+    if (!useBardWiki || !selectedChatId) {
       openBardWiki = false
       return
     }
@@ -111,7 +118,7 @@
     const request = $bardWikiWorkspaceOpenRequest
     if (!request || !selectedChatId || selectedCharacter?.chaId !== request.characterId) return
     if (request.chatId && request.chatId !== selectedChatId) return
-    openBardWiki = true
+    openBardWiki = useBardWiki
     bardWikiWorkspaceOpenRequest.set(null)
   })
 
@@ -172,7 +179,7 @@
     modal
     onDismiss={() => (openModuleList = false)}
     testId="module-chat-menu" />
-{:else if openBardWiki && bardWikiChatId}
+{:else if useBardWiki && openBardWiki && bardWikiChatId}
   <LazyComponent
     loader={loadBardWikiWorkspace}
     componentProps={{ chatId: bardWikiChatId, close: () => (openBardWiki = false) }}

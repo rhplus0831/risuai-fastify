@@ -348,6 +348,7 @@
     customStyle?: string
   }
 
+  let useBardWiki = $derived(groupedSetting('advanced', 'useBardWiki') === true)
   let inputHooks = $derived(groupedSetting('advanced', 'inputHooks') ?? [])
   let floatingChatInput = $derived(groupedSetting('sidebar', 'floatingChatInput') !== false)
   let fixedChatTextarea = $derived(groupedSetting('sidebar', 'fixedChatTextarea') === true)
@@ -3652,17 +3653,19 @@
             </button>
           {/if}
 
-          <button
-            type="button"
-            role="menuitem"
-            data-testid="default-chat-open-bardwiki"
-            data-default-chat-menu-item
-            disabled={!currentChatId}
-            class="flex w-full items-center cursor-pointer text-left hover:text-green-500 transition-colors disabled:cursor-not-allowed disabled:text-textcolor2"
-            onclick={() => openModalFromChatMenu(() => (openBardWiki = true))}>
-            <BookOpenIcon />
-            <span class="ml-2">{language.bardWiki.workspaceTitle}</span>
-          </button>
+          {#if useBardWiki}
+            <button
+              type="button"
+              role="menuitem"
+              data-testid="default-chat-open-bardwiki"
+              data-default-chat-menu-item
+              disabled={!currentChatId}
+              class="flex w-full items-center cursor-pointer text-left hover:text-green-500 transition-colors disabled:cursor-not-allowed disabled:text-textcolor2"
+              onclick={() => openModalFromChatMenu(() => (openBardWiki = true))}>
+              <BookOpenIcon />
+              <span class="ml-2">{language.bardWiki.workspaceTitle}</span>
+            </button>
+          {/if}
 
           {#if enableRisuaiProTools}
             <button
