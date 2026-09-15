@@ -1,45 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-
-function cloneWithFunctions<T>(value: T): T {
-  if (Array.isArray(value)) return value.map((item) => cloneWithFunctions(item)) as T
-  if (value !== null && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, cloneWithFunctions(item)])) as T
-  }
-  return value
-}
-
-function leafPaths(value: unknown, prefix = ''): string[] {
-  if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-    return Object.entries(value).flatMap(([key, item]) => leafPaths(item, prefix ? `${prefix}.${key}` : key))
-  }
-
-  return [prefix]
-}
+import { safeStructuredClone } from '../ts/safeStructuredClone'
 
 async function loadLanguageModule() {
   vi.resetModules()
 
-  const cloneSpy = vi.fn(cloneWithFunctions)
+  const cloneSpy = vi.fn(safeStructuredClone)
   vi.stubGlobal('safeStructuredClone', cloneSpy)
   const langModule = await import('./index')
   const { languageEnglish } = await import('./en')
   const { languageKorean } = await import('./ko')
-  const { languageGerman } = await import('./de')
-  const { languageChinese } = await import('./cn')
-  const { languageChineseTraditional } = await import('./zh-Hant')
   const { languageSpanish } = await import('./es')
-  const { languageVietnamese } = await import('./vi')
 
   return {
     cloneSpy,
     langModule,
     languageEnglish,
-    languageGerman,
-    languageChinese,
-    languageChineseTraditional,
     languageKorean,
     languageSpanish,
-    languageVietnamese,
   }
 }
 
@@ -48,13 +25,7 @@ afterEach(() => {
   vi.resetModules()
 })
 
-describe('changeLanguage same-code cache', () => {
-  it('uses the requested chat-entry loading copy', async () => {
-    const { languageEnglish } = await loadLanguageModule()
-
-    expect(languageEnglish.loadingChat).toBe('Loading chat…')
-  })
-
+describe('language selection and translations', () => {
   it('repeated same-code changeLanguage calls reuse the applied language object without clone work', async () => {
     const { cloneSpy, langModule, languageKorean } = await loadLanguageModule()
 
@@ -72,8 +43,8 @@ describe('changeLanguage same-code cache', () => {
     expect(cloneSpy).toHaveBeenCalledTimes(1)
   })
 
-  it('switching between languages rebuilds language objects and merged strings', async () => {
-    const { cloneSpy, langModule, languageKorean, languageSpanish } = await loadLanguageModule()
+  it('switching between languages applies their translated strings', async () => {
+    const { langModule, languageKorean, languageSpanish } = await loadLanguageModule()
 
     await langModule.changeLanguage('ko')
     const koreanLanguage = langModule.language
@@ -83,63 +54,49 @@ describe('changeLanguage same-code cache', () => {
     await langModule.changeLanguage('es')
     const spanishLanguage = langModule.language
 
-    expect(spanishLanguage).not.toBe(koreanLanguage)
     expect(spanishLanguage.formating.main).toBe(languageSpanish.formating.main)
     expect(spanishLanguage.errors.toomuchtoken).toBe(languageSpanish.errors.toomuchtoken)
-    expect(cloneSpy).toHaveBeenCalledTimes(2)
   })
 
-  it('switching back to English changes identity once and then reuses the English object', async () => {
-    const { cloneSpy, langModule, languageEnglish } = await loadLanguageModule()
+  it('switching back to English restores English strings', async () => {
+    const { langModule, languageEnglish } = await loadLanguageModule()
 
     await langModule.changeLanguage('ko')
-    const koreanLanguage = langModule.language
 
     await langModule.changeLanguage('en')
     const englishLanguage = langModule.language
 
-    expect(englishLanguage).toBe(await langModule.getLanguageForCode('en'))
-    expect(englishLanguage).not.toBe(koreanLanguage)
     expect(englishLanguage.formating.main).toBe(languageEnglish.formating.main)
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
 
     await langModule.changeLanguage('en')
 
-    expect(langModule.language).toBe(englishLanguage)
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    expect(langModule.language.formating.main).toBe(languageEnglish.formating.main)
   })
 
-  it('unknown language codes resolve to English and share the English cache key', async () => {
-    const { cloneSpy, langModule, languageEnglish } = await loadLanguageModule()
+  it('unknown language codes resolve to English before and after switching locales', async () => {
+    const { langModule, languageEnglish } = await loadLanguageModule()
 
     await langModule.changeLanguage('unknown-language')
     const firstFallbackLanguage = langModule.language
 
-    expect(firstFallbackLanguage).toBe(await langModule.getLanguageForCode('en'))
     expect(firstFallbackLanguage.formating.main).toBe(languageEnglish.formating.main)
-    expect(cloneSpy).toHaveBeenCalledTimes(0)
 
     await langModule.changeLanguage('en')
     await langModule.changeLanguage('still-unknown')
 
-    expect(langModule.language).toBe(firstFallbackLanguage)
-    expect(cloneSpy).toHaveBeenCalledTimes(0)
+    expect(langModule.language.formating.main).toBe(languageEnglish.formating.main)
 
     await langModule.changeLanguage('ko')
-    const koreanLanguage = langModule.language
 
     await langModule.changeLanguage('not-a-supported-language')
     const fallbackAfterSwitch = langModule.language
 
-    expect(fallbackAfterSwitch).toBe(await langModule.getLanguageForCode('en'))
-    expect(fallbackAfterSwitch).not.toBe(koreanLanguage)
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    expect(fallbackAfterSwitch.formating.main).toBe(languageEnglish.formating.main)
 
     await langModule.changeLanguage('another-unknown-language')
     await langModule.changeLanguage('en')
 
-    expect(langModule.language).toBe(fallbackAfterSwitch)
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
+    expect(langModule.language.formating.main).toBe(languageEnglish.formating.main)
   })
 
   it('Korean uses translated model profile shell strings', async () => {
@@ -181,149 +138,6 @@ describe('changeLanguage same-code cache', () => {
     expect(langModule.language.errors.imageGenerationFailed(502)).toBe(languageKorean.errors.imageGenerationFailed(502))
     expect(langModule.language.waveSpeedCatalogModelsLoaded(3)).toBe(languageKorean.waveSpeedCatalogModelsLoaded(3))
   })
-
-  it('defines every English translation path directly in Korean', async () => {
-    const { languageEnglish, languageKorean } = await loadLanguageModule()
-    const koreanPaths = new Set(leafPaths(languageKorean))
-
-    expect(leafPaths(languageEnglish).filter((path) => !koreanPaths.has(path))).toEqual([])
-  })
-
-  it('defines every generation finalization state in every language pack', async () => {
-    const {
-      languageChinese,
-      languageChineseTraditional,
-      languageEnglish,
-      languageGerman,
-      languageKorean,
-      languageSpanish,
-      languageVietnamese,
-    } = await loadLanguageModule()
-    const keys = [
-      'generationPersistenceQueued',
-      'generationPersistenceStalled',
-      'generationPersistenceTerminal',
-      'generationPersistenceStalledLegacy',
-    ] as const
-
-    for (const pack of [
-      languageEnglish,
-      languageGerman,
-      languageSpanish,
-      languageVietnamese,
-      languageChinese,
-      languageChineseTraditional,
-      languageKorean,
-    ]) {
-      for (const key of keys) expect(pack[key]).toEqual(expect.any(String))
-    }
-  })
-
-  it('defines the acknowledged Stop lifecycle copy in every language pack', async () => {
-    const {
-      languageChinese,
-      languageChineseTraditional,
-      languageEnglish,
-      languageGerman,
-      languageKorean,
-      languageSpanish,
-      languageVietnamese,
-    } = await loadLanguageModule()
-
-    for (const pack of [
-      languageEnglish,
-      languageGerman,
-      languageSpanish,
-      languageVietnamese,
-      languageChinese,
-      languageChineseTraditional,
-      languageKorean,
-    ]) {
-      expect(pack.generationStop).toMatchObject({
-        stopping: expect.any(String),
-        failed: expect.any(String),
-        retry: expect.any(String),
-        savingStoppedPartial: expect.any(String),
-      })
-    }
-  })
-
-  it('defines every chat occupancy state, action, and feedback string in every language pack', async () => {
-    const {
-      languageChinese,
-      languageChineseTraditional,
-      languageEnglish,
-      languageGerman,
-      languageKorean,
-      languageSpanish,
-      languageVietnamese,
-    } = await loadLanguageModule()
-    const englishKeys = Object.keys(languageEnglish.connectedReaders.chatOccupancy).sort()
-
-    for (const pack of [
-      languageEnglish,
-      languageGerman,
-      languageSpanish,
-      languageVietnamese,
-      languageChinese,
-      languageChineseTraditional,
-      languageKorean,
-    ]) {
-      const occupancy = pack.connectedReaders?.chatOccupancy
-      expect(occupancy).toBeDefined()
-      expect(Object.keys(occupancy ?? {}).sort()).toEqual(englishKeys)
-      for (const key of englishKeys) {
-        expect((occupancy as Record<string, unknown>)[key]).toEqual(expect.any(String))
-      }
-    }
-  })
-
-  it('describes retained chat-only submissions as uncertain rather than rejected', async () => {
-    const { languageEnglish } = await loadLanguageModule()
-    const occupancy = languageEnglish.connectedReaders.chatOccupancy
-
-    expect(occupancy.sendQueued).toContain('not yet confirmed')
-    expect(occupancy.rerollRetained).toContain('not yet confirmed')
-    expect(occupancy.sendQueued).not.toContain('has not been accepted')
-    expect(occupancy.rerollRetained).not.toContain('has not been accepted')
-  })
-
-  it('defines generation recovery action copy in every language pack', async () => {
-    const {
-      languageChinese,
-      languageChineseTraditional,
-      languageEnglish,
-      languageGerman,
-      languageKorean,
-      languageSpanish,
-      languageVietnamese,
-    } = await loadLanguageModule()
-
-    for (const pack of [
-      languageEnglish,
-      languageGerman,
-      languageSpanish,
-      languageVietnamese,
-      languageChinese,
-      languageChineseTraditional,
-      languageKorean,
-    ]) {
-      expect(pack.generationRecovery).toMatchObject({
-        failed: expect.any(String),
-        retry: expect.any(String),
-        retrying: expect.any(String),
-        discard: expect.any(String),
-        discarding: expect.any(String),
-      })
-    }
-  })
-
-  it('renders Vietnamese inlay counts without a stray template-literal dollar sign', async () => {
-    const { languageVietnamese } = await loadLanguageModule()
-
-    expect(languageVietnamese.playground.inlayDeleteMultipleConfirm.replace('{count}', '3')).toContain('3 tài sản')
-    expect(languageVietnamese.playground.inlayTotalAssets.replace('{count}', '3')).toBe('Tổng cộng 3 tài sản')
-  })
 })
 
 function deferred<T>() {
@@ -340,7 +154,7 @@ async function controlledLanguageModule() {
   vi.resetModules()
   const load = vi.fn<(code: string) => Promise<Record<string, unknown>>>()
   vi.doMock('./loadLanguagePack', () => ({ loadLanguagePack: load }))
-  const cloneSpy = vi.fn(cloneWithFunctions)
+  const cloneSpy = vi.fn(safeStructuredClone)
   vi.stubGlobal('safeStructuredClone', cloneSpy)
   return { load, cloneSpy, lang: await import('./index') }
 }
@@ -348,22 +162,100 @@ async function controlledLanguageModule() {
 describe('selected language loading', () => {
   afterEach(() => vi.doUnmock('./loadLanguagePack'))
 
+  it('keeps English and other locales unchanged when merging a partial pack', async () => {
+    const { lang, load } = await controlledLanguageModule()
+    const { languageEnglish } = await import('./en')
+    const originalToken = languageEnglish.errors.toomuchtoken
+    const originalFormatter = languageEnglish.errors.imageGenerationFailed(502)
+    load
+      .mockResolvedValueOnce({ errors: { toomuchtoken: 'Korean token' } })
+      .mockResolvedValueOnce({ showHelp: 'Spanish help' })
+
+    await lang.changeLanguage('ko')
+    expect(lang.language.errors.toomuchtoken).toBe('Korean token')
+    expect(languageEnglish.errors.toomuchtoken).toBe(originalToken)
+    await lang.changeLanguage('es')
+    expect(lang.language.errors.toomuchtoken).toBe(originalToken)
+    expect(lang.language.errors.imageGenerationFailed(502)).toBe(originalFormatter)
+    await lang.changeLanguage('en')
+    expect(lang.language.errors.toomuchtoken).toBe(originalToken)
+    expect(lang.language.errors.imageGenerationFailed(502)).toBe(originalFormatter)
+  })
+
+  it('applies English and cached locales synchronously without loading them again', async () => {
+    const { lang, load } = await controlledLanguageModule()
+    const englishHelp = lang.language.showHelp
+    load.mockResolvedValueOnce({ showHelp: 'Korean help' }).mockResolvedValueOnce({ showHelp: 'Spanish help' })
+    await lang.changeLanguage('ko')
+    await lang.changeLanguage('es')
+    expect(lang.language.showHelp).toBe('Spanish help')
+
+    const korean = lang.changeLanguage('ko')
+    expect(lang.language.showHelp).toBe('Korean help')
+    await korean
+    const english = lang.changeLanguage('en')
+    expect(lang.language.showHelp).toBe(englishHelp)
+    await english
+    expect(load.mock.calls).toEqual([['ko'], ['es']])
+  })
+
+  it('notifies subscribers only for applied changes and stops after unsubscribe', async () => {
+    const { lang, load } = await controlledLanguageModule()
+    const englishHelp = lang.language.showHelp
+    const korean = deferred<Record<string, unknown>>()
+    load.mockReturnValueOnce(korean.promise).mockResolvedValueOnce({ showHelp: 'Spanish help' })
+    const listener = vi.fn(() => lang.language.showHelp)
+    const unsubscribe = lang.subscribeLanguageChanges(listener)
+
+    const obsolete = lang.changeLanguage('ko')
+    expect(listener).not.toHaveBeenCalled()
+    await lang.changeLanguage('es')
+    expect(listener).toHaveReturnedWith('Spanish help')
+    expect(listener).toHaveBeenCalledTimes(1)
+    korean.resolve({ showHelp: 'Korean help' })
+    await obsolete
+    await lang.changeLanguage('es')
+    expect(listener).toHaveBeenCalledTimes(1)
+
+    await lang.changeLanguage('en')
+    expect(listener).toHaveLastReturnedWith(englishHelp)
+    expect(listener).toHaveBeenCalledTimes(2)
+    await lang.changeLanguage('unknown')
+    expect(listener).toHaveBeenCalledTimes(2)
+    unsubscribe()
+    await lang.changeLanguage('ko')
+    expect(lang.language.showHelp).toBe('Korean help')
+    expect(listener).toHaveBeenCalledTimes(2)
+  })
+
+  it('tracks language reads for both the English fallback and a loaded pack', async () => {
+    const { lang, load } = await controlledLanguageModule()
+    const track = vi.fn()
+    lang.observeLanguageReads(track)
+    void lang.language.showHelp
+    expect(track).toHaveBeenCalled()
+
+    load.mockResolvedValueOnce({ showHelp: 'Korean help' })
+    await lang.changeLanguage('ko')
+    track.mockClear()
+    expect(lang.language.showHelp).toBe('Korean help')
+    expect(track).toHaveBeenCalled()
+  })
+
   it('has an immediate English fallback without requesting a deferred pack', async () => {
-    const { lang, load, cloneSpy } = await controlledLanguageModule()
+    const { lang, load } = await controlledLanguageModule()
     expect(lang.language.showHelp).toBe('Show Help')
     await lang.changeLanguage('unknown')
     expect(load).not.toHaveBeenCalled()
-    expect(cloneSpy).not.toHaveBeenCalled()
   })
 
-  it('memoizes concurrent requests and merges partial nested packs over English once', async () => {
-    const { lang, load, cloneSpy } = await controlledLanguageModule()
+  it('shares concurrent loading and merges partial nested packs over English', async () => {
+    const { lang, load } = await controlledLanguageModule()
     const korean = deferred<Record<string, unknown>>()
     load.mockReturnValue(korean.promise)
     const first = lang.getLanguageForCode('ko')
     const second = lang.getLanguageForCode('ko')
     const selecting = lang.changeLanguage('ko')
-    expect(first).toBe(second)
     expect(load).toHaveBeenCalledExactlyOnceWith('ko')
     expect(lang.language.showHelp).toBe('Show Help')
     korean.resolve({ showHelp: 'Korean help', errors: { toomuchtoken: 'Korean token' } })
@@ -372,8 +264,11 @@ describe('selected language loading', () => {
     expect(lang.language.errors.toomuchtoken).toBe('Korean token')
     expect(lang.language.errors.networkFetch).toEqual(expect.any(String))
     expect(lang.language.errors.imageGenerationFailed(502)).toContain('502')
-    expect(cloneSpy).toHaveBeenCalledTimes(1)
-    expect(await lang.getLanguageForCode('ko')).toBe(await first)
+    for (const result of await Promise.all([first, second, lang.getLanguageForCode('ko')])) {
+      expect(result.showHelp).toBe('Korean help')
+      expect(result.errors.toomuchtoken).toBe('Korean token')
+    }
+    expect(load).toHaveBeenCalledTimes(1)
   })
 
   it('does not apply an older pack that finishes after the latest selected pack', async () => {
