@@ -60,7 +60,6 @@ const appRouteDomMocks = vi.hoisted(() => {
     exports: undefined as RouteMockExports | undefined,
     pendingRouteApplication: false,
     readResource: () => {},
-    resetSidebarTab: () => {},
     setSidebarViewMode: (_view: 'chat' | 'character') => {},
   }
 
@@ -87,14 +86,7 @@ async function createRouteMock() {
   if (!appRouteDomMocks.state.exports) {
     const { writable } = await import('svelte/store')
     appRouteDomMocks.state.exports = {
-      applyRouteToStores: vi.fn((route: AppRoute) => {
-        appRouteDomMocks.state.readResource()
-        appRouteDomMocks.state.applyRouteCalls += 1
-        if (appRouteDomMocks.state.applyRouteCalls > 1) {
-          appRouteDomMocks.state.resetSidebarTab()
-        }
-        return Promise.resolve(true)
-      }),
+      applyRouteToStores: vi.fn(),
       closeGridRoute: appRouteDomMocks.closeGridRoute,
       consumeStateDrivenRouteUpdate: () => false,
       currentRoute: writable(characterRoute),
@@ -292,7 +284,7 @@ vi.mock('src/ts/process/modules', () => ({
 }))
 
 vi.mock('./lib/ChatScreens/ChatScreen.svelte', async () => ({
-  default: (await import('./App.routeEffect.dom.AppMarker.svelte')).default,
+  default: (await import('./App.routeEffect.dom.ChatMarker.svelte')).default,
 }))
 vi.mock('./lib/Workspace.svelte', async () => ({
   default: (await import('./App.routeEffect.dom.WorkspaceMarker.svelte')).default,
@@ -513,20 +505,31 @@ async function mountApp() {
   await tick()
 }
 
-describe('App route/refreeze mounted DOM behavior', () => {
+describe('App shell mounted DOM behavior', () => {
   beforeEach(async () => {
+    // Clear queued one-shot results as well as call history before restoring defaults.
+    for (const mock of Object.values(appRouteDomMocks)) {
+      if (vi.isMockFunction(mock)) mock.mockReset()
+    }
+    const router = appRouteDomMocks.state.exports!
+    for (const mock of Object.values(router)) {
+      if (vi.isMockFunction(mock)) mock.mockReset()
+    }
+    vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>).mockImplementation(async () => {
+      appRouteDomMocks.state.readResource()
+      appRouteDomMocks.state.applyRouteCalls += 1
+      return true
+    })
+    vi.mocked(router.parseRoute as () => AppRoute).mockReturnValue(characterRoute)
+    appRouteDomMocks.getCharImage.mockReturnValue('')
+    appRouteDomMocks.retryConnectedAuthentication.mockResolvedValue()
     target = document.createElement('div')
     document.body.appendChild(target)
     window.history.replaceState(null, '', routePath)
     appRouteDomMocks.state.applyRouteCalls = 0
     appRouteDomMocks.state.applyingRoute = false
     appRouteDomMocks.state.pendingRouteApplication = false
-    appRouteDomMocks.state.readResource = () => {
-      void getResourceDatabase().characters?.[0]?.chatPage
-    }
-    appRouteDomMocks.state.resetSidebarTab = () => {
-      botMakerMode.set(false)
-    }
+    appRouteDomMocks.state.readResource = () => {}
     appRouteDomMocks.state.setSidebarViewMode = (view) => {
       botMakerMode.set(view === 'character')
     }
@@ -534,18 +537,18 @@ describe('App route/refreeze mounted DOM behavior', () => {
       appRouteDomMocks.state.exports.currentRoute.set(characterRoute)
     }
     routeResourceLoadState.set({ error: null, routeKey: routePath, status: 'ready' })
-    appRouteDomMocks.discardGenerationRecoveryStartup.mockReset().mockResolvedValue(true)
-    appRouteDomMocks.retryGenerationRecoveryStartup.mockReset().mockResolvedValue(true)
-    appRouteDomMocks.ensureResourceSurfaces.mockReset().mockResolvedValue()
+    appRouteDomMocks.discardGenerationRecoveryStartup.mockResolvedValue(true)
+    appRouteDomMocks.retryGenerationRecoveryStartup.mockResolvedValue(true)
+    appRouteDomMocks.ensureResourceSurfaces.mockResolvedValue()
     seedStores()
     setPushNotificationWarningDismissed(false)
     pushNotificationStateWriter.set(initialPushNotificationCoordinatorState())
     await mountApp()
   })
 
-  afterEach(() => {
+  afterEach(async () => {
     if (component) {
-      unmount(component)
+      await unmount(component)
       component = undefined
     }
     replaceResourceDatabase({} as Database)
@@ -623,7 +626,6 @@ describe('App route/refreeze mounted DOM behavior', () => {
   })
 
   it('keeps the Character sidebar tab visible across a server resource refresh', async () => {
-    expect(appRouteDomMocks.state.applyRouteCalls).toBe(1)
     expect(target.querySelector('[data-testid="side-chat-list"]')).not.toBeNull()
 
     const characterTab = target.querySelector<HTMLButtonElement>('[data-risu-sidebar-tab="character"]')
@@ -640,6 +642,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(target.querySelector('[data-risu-sidebar-panel="chat"]')).toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
 
+    const panel = target.querySelector('[data-testid="char-config"]')
     const database = getResourceDatabase({ snapshot: true })
     replaceResourceDatabase({
       ...database,
@@ -658,8 +661,26 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(getResourceDatabase().characters[0].chatPage).toBe(0)
     expect(getResourceDatabase().characters[0].chats[getResourceDatabase().characters[0].chatPage]?.id).toBe('chat-a')
     expect(get(selectedCharID)).toBe(0)
+    expect(target.querySelector('[data-testid="char-config"]')).toBe(panel)
     expect(window.location.pathname).toBe(routePath)
-    expect(appRouteDomMocks.state.applyRouteCalls).toBe(1)
+  })
+
+  it('does not subscribe route application to incidental resource reads', async () => {
+    // This is an effect-dependency contract, separate from sidebar presentation.
+    appRouteDomMocks.state.readResource = () => {
+      void getResourceDatabase().characters[0].chatPage
+    }
+    const router = appRouteDomMocks.state.exports!
+    router.currentRoute.set({ ...characterRoute })
+    await tick()
+    const applications = appRouteDomMocks.state.applyRouteCalls
+    expect(applications).toBeGreaterThan(1)
+
+    const database = getResourceDatabase({ snapshot: true })
+    replaceResourceDatabase({ ...database, characterOrder: [...database.characterOrder] })
+    await tick()
+
+    expect(appRouteDomMocks.state.applyRouteCalls).toBe(applications)
   })
 
   it('loads the Hypa V3 overlay resources before mounting a cold modal', async () => {
@@ -714,10 +735,12 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(target.querySelector('[data-plugin-runtime-status]')).not.toBeNull()
     expect(target.textContent).toContain('Plugins could not start')
     expect(target.querySelector('button')?.textContent).toContain('Retry plugins')
-    expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).not.toBeNull()
   })
 
   it('retries generation recovery from a localized status without unmounting the shell', async () => {
+    const chat = target.querySelector('[data-testid="chat-screen"]')
+    expect(chat).not.toBeNull()
     recordStartupMilestone('plugins-ready')
     settleStartupChatReadiness(true)
     const attemptId = beginStartupAttempt()
@@ -739,7 +762,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(status?.querySelector<HTMLButtonElement>('[data-generation-recovery-discard]')?.textContent).toContain(
       'Discard recovery',
     )
-    expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
 
     button?.click()
     await vi.waitFor(() => expect(appRouteDomMocks.retryGenerationRecoveryStartup).toHaveBeenCalledOnce())
@@ -750,7 +773,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     retry.resolve()
     await vi.waitFor(() => expect(target.querySelector('[data-generation-recovery-status]')).toBeNull())
-    expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
   })
 
   it('keeps the generation recovery status retryable after another failed attempt', async () => {
@@ -776,6 +799,8 @@ describe('App route/refreeze mounted DOM behavior', () => {
   })
 
   it('discards failed generation recovery and reopens generation without unmounting the shell', async () => {
+    const chat = target.querySelector('[data-testid="chat-screen"]')
+    expect(chat).not.toBeNull()
     recordStartupMilestone('plugins-ready')
     settleStartupChatReadiness(true)
     const attemptId = beginStartupAttempt()
@@ -799,17 +824,19 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(discardButton?.disabled).toBe(true)
     expect(discardButton?.textContent).toContain('Discarding recovery')
     expect(retryButton?.disabled).toBe(true)
-    expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
 
     discard.resolve()
     await vi.waitFor(() => expect(target.querySelector('[data-generation-recovery-status]')).toBeNull())
-    expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
   })
 
   it('keeps route content mounted and suppresses the pending indicator for warm transitions', async () => {
+    const chat = target.querySelector('[data-testid="chat-screen"]')
+    expect(chat).not.toBeNull()
     vi.useFakeTimers()
     try {
-      expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+      expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
 
       routeResourceLoadState.set({ error: null, routeKey: 'character:char-b:', status: 'loading' })
       await tick()
@@ -817,7 +844,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
       const content = target.querySelector<HTMLElement>('[data-risu-route-content]')
       expect(content).not.toBeNull()
       expect(content?.hasAttribute('inert')).toBe(true)
-      expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+      expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
       expect(target.querySelector('[data-testid="route-resource-loading"]')).toBeNull()
 
       routeResourceLoadState.set({ error: null, routeKey: 'character:char-b:', status: 'ready' })
@@ -826,7 +853,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
       expect(content?.hasAttribute('inert')).toBe(false)
       expect(target.querySelector('[data-testid="route-resource-loading"]')).toBeNull()
-      expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+      expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
     } finally {
       vi.useRealTimers()
     }
@@ -853,7 +880,75 @@ describe('App route/refreeze mounted DOM behavior', () => {
     await vi.waitFor(() => {
       expect(target.querySelector('[data-rendered-route="/character/char-a/chat-a"]')).toBeNull()
     })
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-risu-lazy-surface="settings"]')?.getAttribute('data-risu-lazy-state')).toBe(
+        'ready',
+      ),
+    )
     expect(applyRoute).toHaveBeenCalledWith(settingsRoute)
+  })
+
+  it('preserves committed content after a failed route application and exposes resource retry', async () => {
+    const router = appRouteDomMocks.state.exports!
+    const application = deferred<boolean>()
+    vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>).mockReturnValueOnce(
+      application.promise,
+    )
+    const chat = target.querySelector('[data-testid="chat-screen"]')
+    expect(chat).not.toBeNull()
+    router.currentRoute.set(parseAppRoute('/settings/language'))
+    await tick()
+    application.resolve(false)
+    await tick()
+    await tick()
+
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
+    expect(target.querySelector('[data-risu-lazy-surface="settings"]')).toBeNull()
+
+    // Resource failures are published by the loader, independently of the result.
+    routeResourceLoadState.set({
+      status: 'error',
+      routeKey: 'settings:language',
+      error: 'Settings could not be loaded',
+    })
+    await tick()
+    const error = target.querySelector('[data-testid="route-resource-error"]')
+    expect(error?.getAttribute('role')).toBe('alert')
+    expect(error?.textContent).toContain('Settings could not be loaded')
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
+    const retry = error?.querySelector('button')
+    expect(retry?.textContent).toContain('Retry')
+    retry!.click()
+    expect(router.retryCurrentRouteApplication).toHaveBeenCalledOnce()
+  })
+
+  it('ignores a route completion from before writer loss and promotion', async () => {
+    enterClientWriter()
+    await tick()
+    const router = appRouteDomMocks.state.exports!
+    const application = deferred<boolean>()
+    vi.mocked(router.applyRouteToStores as (route: AppRoute) => Promise<boolean>).mockReturnValueOnce(
+      application.promise,
+    )
+    router.currentRoute.set(parseAppRoute('/settings/language'))
+    await tick()
+
+    demoteClientSession()
+    await tick()
+    // Promotion must commit the current navigation, never the old completion.
+    router.currentRoute.set(parseAppRoute('/character/char-b/chat-b'))
+    repromoteClientWriter()
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-rendered-route="/character/char-b/chat-b"]')).not.toBeNull(),
+    )
+    const chat = target.querySelector('[data-testid="chat-screen"]')
+    application.resolve(true)
+    await tick()
+    await tick()
+
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
+    expect(chat?.getAttribute('data-rendered-route')).toBe('/character/char-b/chat-b')
+    expect(target.querySelector('[data-risu-lazy-surface="settings"]')).toBeNull()
   })
 
   it('makes a newer writer navigation the first persisted application after a retained reader route', async () => {
@@ -948,6 +1043,8 @@ describe('App route/refreeze mounted DOM behavior', () => {
   })
 
   it('shows a compact delayed pending status without unmounting route content', async () => {
+    const chat = target.querySelector('[data-testid="chat-screen"]')
+    expect(chat).not.toBeNull()
     vi.useFakeTimers()
     try {
       routeResourceLoadState.set({ error: null, routeKey: 'character:char-b:', status: 'loading' })
@@ -961,7 +1058,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
       await tick()
 
       expect(target.querySelector('[data-testid="route-resource-loading"]')?.textContent).toContain('Loading')
-      expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+      expect(target.querySelector('[data-testid="chat-screen"]')).toBe(chat)
     } finally {
       vi.useRealTimers()
     }
@@ -969,7 +1066,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
   it('keeps the coherent shell readable while persistence-capable route application is revoked', async () => {
     if (component) {
-      unmount(component)
+      await unmount(component)
       component = undefined
     }
     appRouteDomMocks.state.applyRouteCalls = 0
@@ -980,6 +1077,25 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(target.querySelector('[role="status"]')).toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).not.toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
+  })
+
+  it('removes an open preset surface on writer loss and does not restore it on promotion', async () => {
+    enterClientWriter()
+    await tick()
+    openPresetList.set(true)
+    await vi.waitFor(() =>
+      expect(target.querySelector('[data-risu-lazy-surface="preset-list"]')?.getAttribute('data-risu-lazy-state')).toBe(
+        'ready',
+      ),
+    )
+
+    demoteClientSession()
+    await tick()
+    expect(target.querySelector('[data-risu-lazy-surface="preset-list"]')).toBeNull()
+
+    repromoteClientWriter()
+    await tick()
+    expect(target.querySelector('[data-risu-lazy-surface="preset-list"]')).toBeNull()
   })
 
   it('keeps managed read-route capability out of writer handlers and authoring overlays', async () => {
@@ -996,7 +1112,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     await mountApp()
     expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
-    expect(target.querySelector('[data-testid="preset-list"]')).toBeNull()
+    expect(target.querySelector('[data-risu-lazy-surface="preset-list"]')).toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
   })
 
@@ -1019,7 +1135,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     expect(target.querySelector('[aria-busy="true"][role="status"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).toBeNull()
-    expect(target.querySelector('[data-testid="app-marker"]')).toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).toBeNull()
     expect(target.querySelector('[data-risu-conversation-shell]')).toBeNull()
   })
 
@@ -1098,7 +1214,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
   it('does not replay a reader display route through persistence-capable handlers after promotion', async () => {
     if (component) {
-      unmount(component)
+      await unmount(component)
       component = undefined
     }
     appRouteDomMocks.state.applyRouteCalls = 0
@@ -1124,7 +1240,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
     expect(target.querySelector('[data-testid="read-only-workspace-marker"]')).not.toBeNull()
     expect(target.querySelector('[data-testid="side-chat-list"]')).toBeNull()
-    expect(target.querySelector('[data-testid="preset-list"]')).toBeNull()
+    expect(target.querySelector('[data-risu-lazy-surface="preset-list"]')).toBeNull()
     expect(appRouteDomMocks.state.applyRouteCalls).toBe(0)
 
     const dropEvent = new Event('drop', { bubbles: true, cancelable: true })
@@ -1180,7 +1296,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
 
   it('keeps the workspace identity while switching to read-only after writer capability is revoked', async () => {
     if (component) {
-      unmount(component)
+      await unmount(component)
       component = undefined
     }
     resetStartupReadinessForTests()
@@ -1192,7 +1308,7 @@ describe('App route/refreeze mounted DOM behavior', () => {
     await mountApp()
 
     const workspace = target.querySelector('[data-risu-workspace]')
-    expect(target.querySelector('[data-testid="app-marker"]')).not.toBeNull()
+    expect(target.querySelector('[data-testid="chat-screen"]')).not.toBeNull()
     expect(getResourceDatabase().characters[0]?.chaId).toBe('char-a')
 
     revokeStartupWriterCapabilities()
@@ -1432,13 +1548,9 @@ describe('App route/refreeze mounted DOM behavior', () => {
     expect(appRouteDomMocks.alertError).not.toHaveBeenCalled()
   })
 
-  it('does not report a failed dropped preset import as successful', async () => {
-    let resolveImport!: (imported: 'failed') => void
-    const importResult = new Promise<'failed'>((resolve) => {
-      resolveImport = resolve
-    })
-    appRouteDomMocks.importPreset.mockReturnValueOnce(importResult)
-    appRouteDomMocks.alertNormal.mockClear()
+  it('reports a rejected dropped preset import as an error', async () => {
+    const importError = new Error('Corrupt preset archive')
+    appRouteDomMocks.importPreset.mockRejectedValueOnce(importError)
 
     const droppedFile = {
       name: 'broken.risup',
@@ -1462,12 +1574,53 @@ describe('App route/refreeze mounted DOM behavior', () => {
         data: new Uint8Array([1, 2, 3]),
       })
     })
-    resolveImport('failed')
-    await importResult
-    await tick()
-
-    expect(appRouteDomMocks.alertNormal).not.toHaveBeenCalled()
+    await vi.waitFor(() => expect(appRouteDomMocks.alertError).toHaveBeenCalledWith(importError))
+    expect(appRouteDomMocks.importCharacterFile).not.toHaveBeenCalled()
+    expect(appRouteDomMocks.checkCharOrder).not.toHaveBeenCalled()
   })
+
+  it.each([
+    { outcome: 'success', replaceWriter: false },
+    { outcome: 'failure', replaceWriter: false },
+    { outcome: 'success', replaceWriter: true },
+    { outcome: 'failure', replaceWriter: true },
+  ] as const)(
+    'settles character import $outcome only for its original writer (replaceWriter=$replaceWriter)',
+    async ({ outcome, replaceWriter }) => {
+      enterClientWriter()
+      await tick()
+      const completion = deferred<void>()
+      const error = new Error('Old import failed')
+      appRouteDomMocks.importCharacterFile.mockImplementationOnce(async () => {
+        await completion.promise
+        if (outcome === 'failure') throw error
+      })
+      const file = { name: 'held.charx' }
+      const drop = new Event('drop', { bubbles: true, cancelable: true })
+      Object.defineProperty(drop, 'dataTransfer', { value: { files: [file], types: ['Files'] } })
+      target.querySelector('main')!.dispatchEvent(drop)
+      await vi.waitFor(() => expect(appRouteDomMocks.importCharacterFile).toHaveBeenCalledWith(file, file.name))
+
+      if (replaceWriter) {
+        demoteClientSession()
+        repromoteClientWriter()
+      }
+      completion.resolve()
+      // Wait for the importer to settle before checking its continuation.
+      await Promise.allSettled(appRouteDomMocks.importCharacterFile.mock.results.map((result) => result.value))
+      await tick()
+      if (!replaceWriter && outcome === 'success') {
+        expect(appRouteDomMocks.checkCharOrder).toHaveBeenCalledOnce()
+      } else {
+        expect(appRouteDomMocks.checkCharOrder).not.toHaveBeenCalled()
+      }
+      if (!replaceWriter && outcome === 'failure') {
+        expect(appRouteDomMocks.alertError).toHaveBeenCalledExactlyOnceWith(error)
+      } else {
+        expect(appRouteDomMocks.alertError).not.toHaveBeenCalled()
+      }
+    },
+  )
 
   it('replaces a rejected dropped character import with an error', async () => {
     const importError = new Error('Corrupt character archive')
