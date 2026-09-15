@@ -73,8 +73,8 @@ Rows are sorted by path within each source area. The `Reviewed` column tracks re
 | [src/lang/index.test.ts](../../../../src/lang/index.test.ts) | frontend-node | 24 | 0 | 24 | O |
 | [src/lang/loadLanguagePack.test.ts](../../../../src/lang/loadLanguagePack.test.ts) | frontend-node | 2 | 0 | 2 | O |
 | [src/lang/triggerDescriptions.test.ts](../../../../src/lang/triggerDescriptions.test.ts) | frontend-node | 7 | 0 | 7 | O |
-| [src/lib/ChatScreens/AgentPresetProgress.svelte.test.ts](../../../../src/lib/ChatScreens/AgentPresetProgress.svelte.test.ts) | frontend-dom | 5 | 0 | 5 | X |
-| [src/lib/ChatScreens/AssetInput.svelte.test.ts](../../../../src/lib/ChatScreens/AssetInput.svelte.test.ts) | frontend-dom | 5 | 0 | 5 | X |
+| [src/lib/ChatScreens/AgentPresetProgress.svelte.test.ts](../../../../src/lib/ChatScreens/AgentPresetProgress.svelte.test.ts) | frontend-dom | 5 | 0 | 5 | O |
+| [src/lib/ChatScreens/AssetInput.svelte.test.ts](../../../../src/lib/ChatScreens/AssetInput.svelte.test.ts) | frontend-dom | 5 | 0 | 5 | O |
 | [src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts](../../../../src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts) | frontend-dom | 10 | 0 | 10 | X |
 | [src/lib/ChatScreens/BardWikiWorkspace.lazy.test.ts](../../../../src/lib/ChatScreens/BardWikiWorkspace.lazy.test.ts) | frontend-node | 1 | 0 | 1 | X |
 | [src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts](../../../../src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts) | frontend-dom | 21 | 0 | 21 | X |
