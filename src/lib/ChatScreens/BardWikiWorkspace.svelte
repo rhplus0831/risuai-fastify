@@ -424,7 +424,13 @@
       lifecycleStatus = language.bardWiki.queued
       rebuildPreview = null
       void outcome.settlement.then(async (final) => {
-        if (final.status === 'accepted') await loadChat(false)
+        if (final.status === 'accepted') {
+          lifecycleStatus = language.bardWiki.rebuildQueued
+          await loadChat(false)
+        } else {
+          lifecycleStatus = ''
+          lifecycleError = mutationFailureMessage(final.result)
+        }
       })
     } else {
       lifecycleError = mutationFailureMessage(outcome.result)
@@ -633,6 +639,7 @@
     sequence: number,
     final: BardWikiMutationFinalOutcome,
     preferredDocumentId: string | null,
+    submittedDraft?: DocumentDraft,
   ): Promise<void> {
     if (sequence !== documentMutationSequence) return
     if (final.status === 'failed') {
@@ -640,27 +647,48 @@
       documentMutationError = mutationFailureMessage(final.result)
       return
     }
+    const request = documentRequest
     const loaded = await loadChat(false)
-    if (sequence !== documentMutationSequence || !loaded) return
+    if (sequence !== documentMutationSequence || request !== documentRequest || !loaded) return
+    const savedDraft = submittedDraft ?? documentDraft
     const targetId =
       preferredDocumentId ??
       chatResource?.documents.find(
-        (document) => document.logicalPath === documentDraft.logicalPath || document.title === documentDraft.title,
+        (document) => document.logicalPath === savedDraft.logicalPath || document.title === savedDraft.title,
       )?.id ??
       null
-    if (targetId) await selectDocument(targetId, true)
+    if (targetId && submittedDraft) {
+      const result = await loadBardWikiDocumentResource(chatId, targetId)
+      if (sequence !== documentMutationSequence || request !== documentRequest) return
+      if (result.status !== 'ok') {
+        documentMutationState = 'failed'
+        documentMutationError = readFailure(result).error
+        return
+      }
+      selectedDocumentId = targetId
+      documentLoadState = 'ready'
+      // Acknowledging an older save advances the conflict baseline, not newer user typing.
+      if (JSON.stringify(documentDraft) === JSON.stringify(submittedDraft)) adoptDocumentDraft(result.document)
+      else {
+        documentBaseline = JSON.stringify(draftFromDocument(result.document))
+        editorMode = 'edit'
+      }
+    } else if (targetId) await selectDocument(targetId, true)
     else resetEditor()
-    if (sequence === documentMutationSequence) documentMutationState = 'accepted'
+    if (sequence === documentMutationSequence) documentMutationState = documentDirty ? 'idle' : 'accepted'
   }
 
   function trackQueuedDocumentMutation(
     sequence: number,
     outcome: Extract<BardWikiMutationOutcome, { status: 'queued' }>,
     preferredDocumentId: string | null,
+    submittedDraft?: DocumentDraft,
   ): void {
     documentMutationState = 'queued'
     documentMutationError = ''
-    void outcome.settlement.then((final) => settleDocumentMutation(sequence, final, preferredDocumentId))
+    void outcome.settlement.then((final) =>
+      settleDocumentMutation(sequence, final, preferredDocumentId, submittedDraft),
+    )
   }
 
   async function saveDocument(): Promise<void> {
@@ -671,6 +699,7 @@
       return
     }
     const sequence = ++documentMutationSequence
+    const submittedDraft = $state.snapshot(documentDraft)
     const payload = {
       kind: documentDraft.kind,
       title: documentDraft.title.trim(),
@@ -706,9 +735,9 @@
     }
     if (sequence !== documentMutationSequence) return
     if (outcome.status === 'accepted') {
-      await settleDocumentMutation(sequence, { status: 'accepted' }, outcome.result.document.id)
+      await settleDocumentMutation(sequence, { status: 'accepted' }, outcome.result.document.id, submittedDraft)
     } else if (outcome.status === 'queued') {
-      trackQueuedDocumentMutation(sequence, outcome, selectedDocumentId)
+      trackQueuedDocumentMutation(sequence, outcome, selectedDocumentId, submittedDraft)
     } else if (outcome.status === 'conflict') {
       documentMutationState = 'conflict'
       documentMutationError = language.bardWiki.conflictMessage

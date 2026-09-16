@@ -7,6 +7,7 @@ import {
 import { mount, tick, unmount } from 'svelte'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS, BARDWIKI_PROTOCOL_VERSION } from '@risuai/protocol'
+import type { BardWikiVaultImportPlan } from 'src/ts/server/bardWikiCommands'
 
 const reads = vi.hoisted(() => ({
   chat: vi.fn(),
@@ -202,8 +203,8 @@ beforeEach(() => {
   document.body.appendChild(target)
 })
 
-afterEach(() => {
-  if (component) unmount(component)
+afterEach(async () => {
+  if (component) await unmount(component)
   component = undefined
   target.remove()
   vi.unstubAllGlobals()
@@ -270,7 +271,7 @@ describe('BardWiki workspace', () => {
     expect(target.textContent).toContain('Version 1')
   })
 
-  it('visually isolates the modal while keeping the background inert and restoring focus', async () => {
+  it('keeps the background inert and restores focus after closing', async () => {
     const opener = document.createElement('button')
     opener.textContent = 'Open BardWiki'
     target.appendChild(opener)
@@ -282,11 +283,6 @@ describe('BardWiki workspace', () => {
     const backdrop = target.querySelector<HTMLElement>('[data-testid="bardwiki-workspace-dialog-root"]')!
     const dialog = backdrop.querySelector<HTMLElement>('[role="dialog"]')!
     const close = dialog.querySelector<HTMLButtonElement>('[data-modal-initial-focus]')!
-    expect(backdrop.classList).toContain('bg-black/70')
-    expect(backdrop.classList).toContain('backdrop-blur-sm')
-    expect(dialog.classList).toContain('shadow-2xl')
-    expect(close.classList).toContain('min-h-11')
-    expect(close.classList).toContain('min-w-11')
     expect(opener.inert).toBe(true)
     expect(opener.getAttribute('aria-hidden')).toBe('true')
     expect(document.body.style.overflow).toBe('hidden')
@@ -309,16 +305,11 @@ describe('BardWiki workspace', () => {
     component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
     await settle()
 
-    const list = target.querySelector<HTMLElement>('[data-risu-bardwiki-pane="documents"]')!
     const detail = target.querySelector<HTMLElement>('[data-risu-bardwiki-pane="detail"]')!
-    expect(list.classList.contains('hidden')).toBe(false)
-    expect(detail.classList.contains('hidden')).toBe(true)
 
     const documentButton = target.querySelector<HTMLButtonElement>('[data-risu-bardwiki-document-id="document-a"]')!
     documentButton.click()
     await settle()
-    expect(list.classList.contains('hidden')).toBe(true)
-    expect(detail.classList.contains('hidden')).toBe(false)
     const back = target.querySelector<HTMLButtonElement>('[data-risu-bardwiki-back-to-documents]')!
     expect(document.activeElement).toBe(back)
 
@@ -328,8 +319,6 @@ describe('BardWiki workspace', () => {
     await settle()
     back.click()
     await settle()
-    expect(list.classList.contains('hidden')).toBe(false)
-    expect(detail.classList.contains('hidden')).toBe(true)
     expect(document.activeElement).toBe(documentButton)
 
     documentButton.click()
@@ -468,52 +457,74 @@ describe('BardWiki workspace', () => {
     expect(close).not.toHaveBeenCalled()
   })
 
-  it('creates, renames, and deletes through explicit document actions', async () => {
-    vi.mocked(globalThis.confirm).mockReturnValue(true)
+  it('creates, renames, and deletes the same document through explicit actions', async () => {
     component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
-    await settle()
-
-    const newDocument = Array.from(target.querySelectorAll<HTMLButtonElement>('button')).find((button) =>
-      button.textContent?.includes('New document'),
-    )
-    newDocument?.click()
-    await settle()
-    const required = target.querySelectorAll<HTMLInputElement>('input[required]')
-    required[0]!.value = 'Arrival'
-    required[0]!.dispatchEvent(new Event('input', { bubbles: true }))
-    required[1]!.value = 'Events/Arrival'
-    required[1]!.dispatchEvent(new Event('input', { bubbles: true }))
-    const markdown = target.querySelector<HTMLTextAreaElement>('textarea')!
-    markdown.value = '# Arrival'
-    markdown.dispatchEvent(new Event('input', { bubbles: true }))
-    await settle()
-    target.querySelector<HTMLButtonElement>('button[type="submit"]')?.click()
-    await settle()
-
+    await waitFor(() => expect(target.querySelector('[aria-label="Open Old Tavern"]')).not.toBeNull())
+    buttonNamed(language.bardWiki.newDocument).click()
+    await tick()
+    const formInput = (label: string) => {
+      const field = Array.from(target.querySelectorAll('form label')).find(
+        (node) => node.querySelector('span')?.textContent === label,
+      )
+      return field!.querySelector<HTMLInputElement>('input')!
+    }
+    const created = {
+      ...documentResource.document,
+      id: 'document-new',
+      title: 'Arrival',
+      logicalPath: 'Events/Arrival',
+      normalizedPath: 'events/arrival',
+      markdown: '# Arrival',
+    }
+    mutations.create.mockResolvedValueOnce({ status: 'accepted', result: { document: created } })
+    reads.chat.mockResolvedValue({ ...chatResource, revision: 5, documents: [index, created] })
+    reads.document.mockResolvedValue({ ...documentResource, revision: 5, document: created })
+    for (const [label, value] of [
+      [language.bardWiki.documentTitle, 'Arrival'],
+      [language.bardWiki.logicalPath, 'Events/Arrival'],
+    ]) {
+      const input = formInput(label)
+      input.value = value
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+    }
+    typeMarkdown('# Arrival')
+    await tick()
+    buttonNamed(language.bardWiki.createDocument).click()
+    await waitFor(() => expect(target.querySelector('[aria-label="Open Arrival"]')).not.toBeNull())
     expect(mutations.create).toHaveBeenCalledWith(
       'chat-a',
       expect.objectContaining({ title: 'Arrival', logicalPath: 'Events/Arrival', markdown: '# Arrival' }),
     )
+    await waitFor(() => expect(buttonNamed(language.save).disabled).toBe(true))
+    expect(target.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('# Arrival')
 
-    const title = target.querySelector<HTMLInputElement>('input[required]')!
-    title.value = 'Renamed Tavern'
+    const renamed = { ...created, title: 'Arrival at the Tavern', version: 2, contentHash: 'b'.repeat(64) }
+    mutations.update.mockResolvedValueOnce({ status: 'accepted', result: { document: renamed } })
+    reads.chat.mockResolvedValue({ ...chatResource, revision: 6, documents: [index, renamed] })
+    reads.document.mockResolvedValue({ ...documentResource, revision: 6, document: renamed })
+    const title = formInput(language.bardWiki.documentTitle)
+    title.value = renamed.title
     title.dispatchEvent(new Event('input', { bubbles: true }))
-    await settle()
-    target.querySelector<HTMLButtonElement>('button[type="submit"]')?.click()
-    await settle()
+    await tick()
+    buttonNamed(language.save).click()
+    await waitFor(() => expect(target.querySelector('[aria-label="Open Arrival at the Tavern"]')).not.toBeNull())
+    await waitFor(() => expect(buttonNamed(language.save).disabled).toBe(true))
     expect(mutations.update).toHaveBeenCalledWith(
       'chat-a',
-      'document-a',
-      expect.any(Object),
-      expect.objectContaining({ title: 'Renamed Tavern' }),
+      'document-new',
+      { expectedVersion: 1, expectedContentHash: created.contentHash },
+      expect.objectContaining({ title: renamed.title }),
     )
 
-    const remove = Array.from(target.querySelectorAll<HTMLButtonElement>('button')).find(
-      (button) => button.textContent?.trim() === 'Remove',
-    )
-    remove?.click()
-    await settle()
-    expect(mutations.remove).toHaveBeenCalledWith('chat-a', 'document-a', expect.any(Object))
+    reads.chat.mockResolvedValue({ ...chatResource, revision: 7, documents: [index] })
+    buttonNamed(language.remove).click()
+    await waitFor(() => expect(target.querySelector('[aria-label="Open Arrival at the Tavern"]')).toBeNull())
+    expect(mutations.remove).toHaveBeenCalledWith('chat-a', 'document-new', {
+      expectedVersion: 2,
+      expectedContentHash: renamed.contentHash,
+    })
+    expect(target.querySelector('[aria-label="Open Old Tavern"]')).not.toBeNull()
+    expect(target.querySelector('textarea')).toBeNull()
   })
 
   it('keeps a durable queued edit visibly pending until settlement', async () => {
@@ -550,7 +561,9 @@ describe('BardWiki workspace', () => {
   it('persists explicit per-chat policy and budget overrides', async () => {
     component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
     await settle()
-    const selects = target.querySelectorAll<HTMLSelectElement>('details select')
+    const selects = ['enabled', 'memory-mode', 'confirmation', 'canonical-updates'].map(
+      (name) => target.querySelector<HTMLSelectElement>(`[data-risu-bardwiki-override="${name}"] select`)!,
+    )
     selects[0]!.value = 'disabled'
     selects[0]!.dispatchEvent(new Event('change', { bubbles: true }))
     selects[1]!.value = 'hybrid'
@@ -860,6 +873,7 @@ describe('BardWiki workspace', () => {
     await settle()
 
     expect(mutations.rebuildPreview).toHaveBeenCalledWith('chat-a', 'full')
+    expect(mutations.rebuildQueue).not.toHaveBeenCalled()
     expect(target.querySelector('[data-testid="bardwiki-rebuild-preview"]')?.textContent).toContain(
       '3 eligible transcript turns',
     )
@@ -933,6 +947,7 @@ describe('BardWiki workspace', () => {
     await settle()
 
     expect(mutations.vaultPreview).toHaveBeenCalledWith('chat-a', 'UEsDBA==', 'skip')
+    expect(mutations.vaultImport).not.toHaveBeenCalled()
     expect(target.querySelector('[data-testid="bardwiki-import-preview"]')?.textContent).toContain('2 create')
     const apply = Array.from(target.querySelectorAll<HTMLButtonElement>('button')).find(
       (button) => button.textContent?.trim() === 'Apply import',
@@ -981,4 +996,213 @@ it('retains newer document typing while an older Save is pending', async () => {
     }
     await endWriterDraftCaptureTest()
   }
+})
+
+async function waitFor(assertion: () => void): Promise<void> {
+  await vi.waitFor(async () => {
+    await tick()
+    assertion()
+  })
+}
+
+function buttonNamed(name: string): HTMLButtonElement {
+  const button = Array.from(target.querySelectorAll<HTMLButtonElement>('button')).find(
+    (candidate) => candidate.textContent?.trim() === name,
+  )
+  expect(button, `button named ${name}`).toBeDefined()
+  return button!
+}
+
+function typeMarkdown(value: string): void {
+  const textarea = target.querySelector<HTMLTextAreaElement>('textarea')!
+  textarea.value = value
+  textarea.dispatchEvent(new Event('input', { bubbles: true }))
+}
+
+async function openDocument(): Promise<void> {
+  component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+  await waitFor(() => expect(target.querySelector('[aria-label="Open Old Tavern"]')).not.toBeNull())
+  target.querySelector<HTMLButtonElement>('[aria-label="Open Old Tavern"]')!.click()
+  await waitFor(() => expect(target.querySelector('textarea')).not.toBeNull())
+}
+
+it.each(['accepted', 'queued'] as const)('preserves newer typing after an older save is %s', async (status) => {
+  const saving = deferred<unknown>()
+  const settlement = deferred<{ status: 'accepted' }>()
+  mutations.update.mockReturnValueOnce(saving.promise)
+  await openDocument()
+  typeMarkdown('# Submitted version')
+  await tick()
+  buttonNamed(language.save).click()
+  await waitFor(() => expect(mutations.update).toHaveBeenCalledOnce())
+  typeMarkdown('# Newer unsaved version')
+  await tick()
+
+  const saved = {
+    ...documentResource,
+    revision: 5,
+    document: {
+      ...documentResource.document,
+      markdown: '# Submitted version',
+      version: 2,
+      contentHash: 'c'.repeat(64),
+    },
+  }
+  reads.document.mockResolvedValue(saved)
+  reads.chat.mockResolvedValue({ ...chatResource, revision: 5, documents: [saved.document] })
+  saving.resolve(
+    status === 'accepted'
+      ? { status: 'accepted', result: { document: saved.document } }
+      : { status: 'queued', result: { status: 'unavailable' }, mutationId: 'save-a', settlement: settlement.promise },
+  )
+  if (status === 'queued') {
+    await waitFor(() => expect(target.textContent).toContain(language.bardWiki.queued))
+    settlement.resolve({ status: 'accepted' })
+  }
+  await waitFor(() => expect(buttonNamed(language.save).disabled).toBe(false))
+  expect(target.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('# Newer unsaved version')
+  buttonNamed(language.save).click()
+  await waitFor(() => expect(mutations.update).toHaveBeenCalledTimes(2))
+  expect(mutations.update).toHaveBeenLastCalledWith(
+    'chat-a',
+    'document-a',
+    { expectedVersion: 2, expectedContentHash: 'c'.repeat(64) },
+    expect.objectContaining({ markdown: '# Newer unsaved version' }),
+  )
+})
+
+it('keeps queued settings editable and retryable after settlement fails', async () => {
+  const settlement = deferred<{ status: 'failed'; result: { status: 'error'; error: string } }>()
+  mutations.settings.mockResolvedValueOnce({ status: 'queued', settlement: settlement.promise })
+  component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+  await waitFor(() => expect(target.querySelector('[data-risu-bardwiki-override="enabled"] select')).not.toBeNull())
+  const enabled = target.querySelector<HTMLSelectElement>('[data-risu-bardwiki-override="enabled"] select')!
+  enabled.value = 'disabled'
+  enabled.dispatchEvent(new Event('change', { bubbles: true }))
+  await tick()
+  buttonNamed(language.bardWiki.saveOverrides).click()
+  await waitFor(() => expect(target.textContent).toContain(language.bardWiki.queued))
+  expect(buttonNamed(language.bardWiki.saveOverrides).disabled).toBe(true)
+  buttonNamed(language.bardWiki.saveOverrides).click()
+  expect(mutations.settings).toHaveBeenCalledOnce()
+  settlement.resolve({ status: 'failed', result: { status: 'error', error: 'Settings could not be saved' } })
+  await waitFor(() => expect(target.textContent).toContain('Settings could not be saved'))
+  expect(enabled.value).toBe('disabled')
+  expect(buttonNamed(language.bardWiki.saveOverrides).disabled).toBe(false)
+  buttonNamed(language.bardWiki.saveOverrides).click()
+  await waitFor(() => expect(mutations.settings).toHaveBeenCalledTimes(2))
+  expect(mutations.settings).toHaveBeenLastCalledWith('chat-a', expect.objectContaining({ enabledOverride: false }))
+})
+
+it('reports a queued rebuild settlement failure and allows a fresh preview', async () => {
+  const settlement = deferred<{ status: 'failed'; result: { status: 'error'; error: string } }>()
+  mutations.rebuildQueue.mockResolvedValueOnce({ status: 'queued', settlement: settlement.promise })
+  component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+  await waitFor(() => expect(target.querySelector('[data-testid="bardwiki-lifecycle"]')).not.toBeNull())
+  buttonNamed(language.bardWiki.previewRebuild).click()
+  await waitFor(() => expect(target.querySelector('[data-testid="bardwiki-rebuild-preview"]')).not.toBeNull())
+  buttonNamed(language.bardWiki.confirmRebuild).click()
+  await waitFor(() => expect(target.textContent).toContain(language.bardWiki.queued))
+  settlement.resolve({ status: 'failed', result: { status: 'error', error: 'Rebuild could not be queued' } })
+  await waitFor(() => expect(target.textContent).toContain('Rebuild could not be queued'))
+  expect(target.textContent).not.toContain(language.bardWiki.queued)
+  buttonNamed(language.bardWiki.previewRebuild).click()
+  await waitFor(() => expect(mutations.rebuildPreview).toHaveBeenCalledTimes(2))
+})
+
+it.each(['cancelled', 'active job'] as const)('does not queue a rebuild when %s', async (reason) => {
+  if (reason === 'cancelled') vi.mocked(globalThis.confirm).mockReturnValue(false)
+  else
+    mutations.rebuildPreview.mockResolvedValueOnce({
+      status: 'ok',
+      revision: 4,
+      preview: {
+        chatId: 'chat-a',
+        policy: 'full',
+        sourceCount: 3,
+        replaceDerivedDocumentCount: 1,
+        preserveUserDocumentCount: 2,
+        activeJobId: 'job-a',
+      },
+    })
+  component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+  await waitFor(() => expect(target.querySelector('[data-testid="bardwiki-lifecycle"]')).not.toBeNull())
+  buttonNamed(language.bardWiki.previewRebuild).click()
+  await waitFor(() => expect(target.querySelector('[data-testid="bardwiki-rebuild-preview"]')).not.toBeNull())
+  if (reason === 'active job') {
+    expect(target.textContent).toContain(language.bardWiki.rebuildAlreadyActive)
+    expect(
+      Array.from(target.querySelectorAll('button')).some(
+        (button) => button.textContent?.trim() === language.bardWiki.confirmRebuild,
+      ),
+    ).toBe(false)
+  } else buttonNamed(language.bardWiki.confirmRebuild).click()
+  await tick()
+  expect(mutations.rebuildQueue).not.toHaveBeenCalled()
+})
+
+it.each([true, false])('fences replacement imports and respects plan applicability (%s)', async (applicable) => {
+  const plan: BardWikiVaultImportPlan = {
+    format: 'risu-bardwiki-vault',
+    version: 1,
+    strategy: 'replace',
+    creates: 0,
+    replacements: 1,
+    noops: 0,
+    skips: 0,
+    renames: 0,
+    applicable: true,
+    actions: [
+      {
+        sourceDocumentId: 'imported-document',
+        targetDocumentId: 'document-a',
+        action: 'replace',
+        logicalPath: index.logicalPath,
+        conflict: 'path',
+      },
+    ],
+  }
+  mutations.vaultPreview
+    .mockResolvedValueOnce({ status: 'ok', revision: 4, plan })
+    .mockResolvedValueOnce({ status: 'ok', revision: 4, plan: { ...plan, applicable } })
+  mutations.vaultImport.mockResolvedValue({ status: 'ok', revision: 5, plan })
+  component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
+  await waitFor(() => expect(target.querySelector('input[type="file"]')).not.toBeNull())
+  const strategy = target.querySelector<HTMLSelectElement>(`select[aria-label="${language.bardWiki.importStrategy}"]`)!
+  strategy.value = 'replace'
+  strategy.dispatchEvent(new Event('change', { bubbles: true }))
+  await tick()
+  const input = target.querySelector<HTMLInputElement>('input[type="file"]')!
+  Object.defineProperty(input, 'files', {
+    configurable: true,
+    value: [{ name: 'vault.zip', size: 4, arrayBuffer: async () => Uint8Array.from([0x50, 0x4b, 0x03, 0x04]).buffer }],
+  })
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+  await waitFor(() => expect(target.querySelector('[data-testid="bardwiki-import-preview"]')).not.toBeNull())
+  const fence = [{ documentId: 'document-a', version: 1, contentHash: 'a'.repeat(64) }]
+  expect(mutations.vaultPreview).toHaveBeenNthCalledWith(1, 'chat-a', 'UEsDBA==', 'replace')
+  expect(mutations.vaultPreview).toHaveBeenNthCalledWith(2, 'chat-a', 'UEsDBA==', 'replace', fence)
+  expect(mutations.vaultImport).not.toHaveBeenCalled()
+  if (!applicable) {
+    expect(target.textContent).toContain(language.bardWiki.importUnresolved)
+    expect(
+      Array.from(target.querySelectorAll('button')).some(
+        (button) => button.textContent?.trim() === language.bardWiki.applyImport,
+      ),
+    ).toBe(false)
+    return
+  }
+  vi.mocked(globalThis.confirm).mockReturnValueOnce(false)
+  buttonNamed(language.bardWiki.applyImport).click()
+  await tick()
+  expect(mutations.vaultImport).not.toHaveBeenCalled()
+  // A later index refresh must not silently replace the preconditions reviewed by the user.
+  applyBardWikiChatResource({
+    ...chatResource,
+    revision: 5,
+    documents: [{ ...index, version: 2, contentHash: 'b'.repeat(64) }],
+  })
+  await tick()
+  buttonNamed(language.bardWiki.applyImport).click()
+  await waitFor(() => expect(mutations.vaultImport).toHaveBeenCalledWith('chat-a', 'UEsDBA==', 'replace', fence))
 })

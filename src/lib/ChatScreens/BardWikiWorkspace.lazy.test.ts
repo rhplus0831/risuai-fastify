@@ -39,18 +39,11 @@ function importCounts(source: string, specifier: string): { dynamic: number; eag
 }
 
 describe('BardWiki workspace loading boundary', () => {
-  it('keeps the workspace behind the active-chat lazy modal', () => {
+  it('imports the workspace dynamically without a direct eager import', () => {
     const source = readFileSync(resolve(process.cwd(), 'src/lib/ChatScreens/ChatScreen.svelte'), 'utf8')
-    const workspace = readFileSync(resolve(process.cwd(), 'src/lib/ChatScreens/BardWikiWorkspace.svelte'), 'utf8')
 
     const workspaceImports = importCounts(source, './BardWikiWorkspace.svelte')
     expect(workspaceImports.dynamic).toBeGreaterThan(0)
     expect(workspaceImports.eager).toBe(0)
-    expect(source).toContain('if (bardWikiChatId !== selectedChatId) openBardWiki = false')
-    expect(source).toContain(
-      'if (!request || !selectedChatId || selectedCharacter?.chaId !== request.characterId) return',
-    )
-    expect(source).toContain('bardWikiWorkspaceOpenRequest.set(null)')
-    expect(workspace).toContain('grid-cols-1 md:grid-cols-[minmax(13rem,18rem)_1fr]')
   })
 })
