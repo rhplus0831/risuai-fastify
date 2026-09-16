@@ -911,15 +911,108 @@ describe('explicit Chat resource owners', () => {
     expect(dispatchDeleteMessageScoped).not.toHaveBeenCalled()
   })
 
-  it('fails closed when ready character or chat ids are duplicated', async () => {
+  it.each(['character', 'chat', 'message'] as const)('rejects duplicate %s IDs independently', async (kind) => {
     seedDatabase(1, null as unknown as string)
     const character = testDatabaseState.db.characters[0]
-    character.chats.push(JSON.parse(JSON.stringify(character.chats[0])) as (typeof character.chats)[number])
-    testDatabaseState.db.characters.push(JSON.parse(JSON.stringify(character)) as typeof character)
+    const chat = character.chats[0]
+    if (kind === 'character') {
+      // Keep chat IDs unique so only character ambiguity can reject this row.
+      const duplicate = JSON.parse(JSON.stringify(character)) as typeof character
+      duplicate.chats.forEach((chat) => {
+        chat.id = `duplicate-${chat.id}`
+      })
+      testDatabaseState.db.characters.push(duplicate)
+    } else if (kind === 'chat') {
+      character.chats.push(JSON.parse(JSON.stringify(chat)) as typeof chat)
+    } else {
+      chat.message.push({ ...chat.message[0], data: 'ambiguous message' })
+    }
     mountCustomHtmlRows(1)
     await settle()
 
     expect(target.querySelector<HTMLElement>('.risu-chat[data-chat-index="0"]')?.dataset.chatId).toBe('')
+  })
+
+  it.each(['idle', 'loading', 'error'] as const)(
+    'withholds message identity while characters are %s and recovers when ready',
+    async (status) => {
+      seedDatabase(1, null as unknown as string)
+      charactersResourceState.status = status
+      mountCustomHtmlRows(1)
+      await settle()
+
+      const row = target.querySelector<HTMLElement>('.risu-chat[data-chat-index="0"]')
+      expect(row?.dataset.chatId).toBe('')
+
+      charactersResourceState.status = 'ready'
+      await settle()
+      expect(row?.dataset.chatId).toBe('message-0')
+    },
+  )
+
+  it.each(['idle', 'loading', 'error'] as const)(
+    'withholds bookmarks while advanced settings are %s and restores them when ready',
+    async (status) => {
+      seedDatabase(1, null as unknown as string)
+      testDatabaseState.db.enableBookmark = true
+      settingsResourceState.groupStatuses.advanced = status
+      mountPopupList()
+      mountCustomHtmlRows(1)
+      await settle()
+      await openMessageActions()
+
+      expect(target.querySelector('[data-risu-message-action="bookmark"]')).toBeNull()
+
+      popupStore.openId = 0
+      settingsResourceState.groupStatuses.advanced = 'ready'
+      await settle()
+      await openMessageActions()
+      expect(requiredButton('[data-risu-message-action="bookmark"]').disabled).toBe(false)
+    },
+  )
+
+  it('uses scoped reader settings even when the global settings group is unavailable', async () => {
+    seedDatabase(1, null as unknown as string)
+    // The global owner hides request metadata; the reader explicitly enables it.
+    settingsResourceState.groupStatuses.sidebar = 'error'
+    const character = charactersResourceState.characters[0]
+    const chat = character.chats[0]
+    chat.message[0].generationInfo = { model: 'gpt35', generationId: 'scoped-generation' }
+    const owners = createChatReadOwners(
+      charactersResourceState,
+      (chatId) => getChatMessageOwnerState(chatId)?.messages,
+      () => ({ characterId: character.chaId, chatId: chat.id }),
+      () => ({ requestInfoInsideChat: true, translator: '', translatorType: 'none' }),
+    )
+    components.push(
+      mount(Chat, {
+        target,
+        context: new Map([[CHAT_READ_OWNERS_CONTEXT, owners]]),
+        props: {
+          message: 'reader message',
+          name: 'Scoped reader',
+          isLastMemory: false,
+          idx: 0,
+          role: 'char',
+          readOnly: true,
+          displayChatId: chat.id,
+          displayMessageId: chat.message[0].chatId,
+          messageGenerationInfo: chat.message[0].generationInfo,
+        },
+      }) as MountedComponent,
+    )
+    await settle()
+
+    const requestButton = buttonByText('Mock-model')
+    expect(requestButton).toBeDefined()
+    requestButton!.click()
+    await settle()
+    expect(customHtmlMocks.alertRequestData).toHaveBeenCalledWith(
+      expect.objectContaining({
+        chatId: chat.id,
+        genInfo: expect.objectContaining({ generationId: 'scoped-generation' }),
+      }),
+    )
   })
 
   it('does not revive character or display aggregates after an owner error', async () => {
