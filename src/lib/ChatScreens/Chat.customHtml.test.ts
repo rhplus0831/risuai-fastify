@@ -441,11 +441,7 @@ import { createChatReadOwners } from './chatReadOwners.svelte'
 import { CHAT_READ_OWNERS_CONTEXT } from './chatReadOwnersContext'
 import { getChatMessageOwnerState } from 'src/ts/server/chatMessageHydration.svelte'
 import PopupList from '../UI/PopupList.svelte'
-import {
-  clearCustomHtmlTemplateMemo,
-  getCustomHtmlTemplateMemoSize,
-  renderCustomHtmlTemplate,
-} from './ChatCustomHtmlTemplate'
+import { clearCustomHtmlTemplateMemo, renderCustomHtmlTemplate } from './ChatCustomHtmlTemplate'
 import {
   CurrentTriggerIdStore,
   HideIconStore,
@@ -494,8 +490,6 @@ const testDatabaseState = {
     replaceResourceDatabase(value)
   },
 }
-
-customHtmlMocks.getDatabase.mockImplementation(() => testDatabaseState.db)
 
 type MountedComponent = Parameters<typeof unmount>[0]
 
@@ -711,8 +705,18 @@ function buttonByText(text: string) {
   )
 }
 
+function requiredButton(selector: string) {
+  const button = target.querySelector<HTMLButtonElement>(selector)
+  expect(button, `Expected button: ${selector}`).not.toBeNull()
+  return button!
+}
+
+function customTemplateTexts() {
+  return Array.from(target.querySelectorAll('.custom-html-template'), (element) => element.textContent)
+}
+
 async function openMessageActions() {
-  target.querySelector<HTMLButtonElement>('.button-icon-menu')?.click()
+  requiredButton('.button-icon-menu').click()
   await settle()
 }
 
@@ -723,7 +727,10 @@ beforeEach(() => {
   parserCalls = []
   NativeDOMParser = globalThis.DOMParser
   vi.stubGlobal('DOMParser', CountingDOMParser)
-  vi.clearAllMocks()
+  // Reset implementations and queued one-shot results as well as call history.
+  // vi.fn(initialImplementation) restores that initial implementation on reset.
+  vi.resetAllMocks()
+  customHtmlMocks.getDatabase.mockImplementation(() => testDatabaseState.db)
   greetingProjectionMocks.reset()
   customHtmlMocks.changeChatTo.mockImplementation((idOrIndex: string | number) => {
     const character = testDatabaseState.db.characters[0]
@@ -818,9 +825,9 @@ beforeEach(() => {
   })
 })
 
-afterEach(() => {
+afterEach(async () => {
   for (const component of components) {
-    unmount(component)
+    await unmount(component)
   }
   components = []
   clearCustomHtmlTemplateMemo()
@@ -839,7 +846,6 @@ afterEach(() => {
   popupStore.mouseY = 0
   popUpEditorStore.open = false
   popUpEditorStore.value = ''
-  setActiveMessageTranslations([])
   target.remove()
   document.body.innerHTML = ''
   resetClientSessionForTests()
@@ -991,7 +997,7 @@ describe('customHTML template memo', () => {
     expect(templateCalls(customHtmlMocks.templates.base)).toHaveLength(1)
     expect(parserCalls).toHaveLength(1)
     expect(target.querySelectorAll('.custom-html-template')).toHaveLength(4)
-    expect(target.textContent).toContain('base-template|first=false|role=char')
+    expect(customTemplateTexts()).toEqual(Array(4).fill('base-template|first=false|role=char'))
 
     customHtmlMocks.risuChatParser.mockClear()
     parserCalls = []
@@ -1014,7 +1020,7 @@ describe('customHTML template memo', () => {
 
     expect(templateCalls(customHtmlMocks.templates.changed)).toHaveLength(1)
     expect(parserCalls).toHaveLength(1)
-    expect(target.textContent).toContain('changed-template|first=false|role=char')
+    expect(customTemplateTexts()).toEqual(Array(2).fill('changed-template|first=false|role=char'))
 
     customHtmlMocks.risuChatParser.mockClear()
     parserCalls = []
@@ -1023,21 +1029,36 @@ describe('customHTML template memo', () => {
 
     expect(templateCalls(customHtmlMocks.templates.changed)).toHaveLength(1)
     expect(parserCalls).toHaveLength(1)
-    expect(target.textContent).toContain('changed-template|first=false|role=user')
+    expect(customTemplateTexts()).toEqual([
+      'changed-template|first=false|role=char',
+      'changed-template|first=false|role=char',
+      'changed-template|first=false|role=user',
+    ])
   })
 
-  it('re-parses the customHTML template when variable or active-chat scope changes', async () => {
+  it('renders the current variable and chat scope while sharing a parse across rows', async () => {
     seedDatabase(2)
+    let variableValue = 'before'
+    const defaultParser = customHtmlMocks.risuChatParser.getMockImplementation()!
+    customHtmlMocks.risuChatParser.mockImplementation((message, options) => {
+      if (message !== customHtmlMocks.templates.base) return defaultParser(message, options)
+      const character = testDatabaseState.db.characters[0]
+      const chat = character.chats[character.chatPage]
+      return `<div class="custom-html-template">${chat.id}:${variableValue}</div>`
+    })
     mountCustomHtmlRows(2)
     await settle()
+    expect(customTemplateTexts()).toEqual(Array(2).fill('custom-html-chat:before'))
     customHtmlMocks.risuChatParser.mockClear()
     parserCalls = []
 
+    variableValue = 'after'
     VariableReloadGUIPointer.update((value) => value + 1)
     await settle()
 
     expect(templateCalls(customHtmlMocks.templates.base)).toHaveLength(1)
     expect(parserCalls).toHaveLength(1)
+    expect(customTemplateTexts()).toEqual(Array(2).fill('custom-html-chat:after'))
 
     customHtmlMocks.risuChatParser.mockClear()
     parserCalls = []
@@ -1046,6 +1067,19 @@ describe('customHTML template memo', () => {
 
     expect(templateCalls(customHtmlMocks.templates.base)).toHaveLength(1)
     expect(parserCalls).toHaveLength(1)
+    expect(customTemplateTexts()).toEqual(Array(2).fill('custom-html-other-chat:after'))
+  })
+
+  it('keeps greeting and ordinary-row template output distinct', () => {
+    const template = customHtmlMocks.templates.base
+    const ordinary = { firstmsg: false, chatRole: 'char' }
+    const greeting = { firstmsg: true, chatRole: 'char' }
+
+    expect(renderCustomHtmlTemplate(template, ordinary).textContent).toBe('base-template|first=false|role=char')
+    expect(renderCustomHtmlTemplate(template, greeting).textContent).toBe('base-template|first=true|role=char')
+    expect(renderCustomHtmlTemplate(template, ordinary).textContent).toBe('base-template|first=false|role=char')
+    expect(templateCalls(template)).toHaveLength(2)
+    expect(parserCalls).toHaveLength(2)
   })
 
   it('falls back to the standard message layout when customHTML has no template', async () => {
@@ -1058,15 +1092,18 @@ describe('customHTML template memo', () => {
     expect(target.textContent).toContain('parsed-message:visible message 0')
   })
 
-  it('parse failures return an empty placeholder without poisoning the memo', () => {
-    const body = renderCustomHtmlTemplate(customHtmlMocks.templates.throwing, {
-      firstmsg: false,
-      chatRole: 'char',
-    })
+  it('recovers after a transient parse failure for the same template and scope', () => {
+    const template = customHtmlMocks.templates.throwing
+    const conditions = { firstmsg: false, chatRole: 'char' }
+    const scope = 'same-chat-and-variables'
+    const failed = renderCustomHtmlTemplate(template, conditions, scope)
+    expect(failed.textContent).toBe('')
+    expect(failed.childNodes).toHaveLength(0)
 
-    expect(body.tagName).toBe('DIV')
-    expect(body.childNodes).toHaveLength(0)
-    expect(getCustomHtmlTemplateMemoSize()).toBe(0)
+    customHtmlMocks.risuChatParser.mockImplementationOnce(() => '<span>Recovered template</span>')
+    expect(renderCustomHtmlTemplate(template, conditions, scope).textContent).toBe('Recovered template')
+    expect(renderCustomHtmlTemplate(template, conditions, scope).textContent).toBe('Recovered template')
+    expect(templateCalls(template)).toHaveLength(2)
   })
 })
 
@@ -1117,6 +1154,55 @@ describe('customHTML rendered button trigger freshness', () => {
     expect(appliedMessages[0].data).toBe('trigger edit 0')
     expect(appliedMessages[1].data).toBe('trigger edit 1')
     expect(dispatchCompatibleChatUpdateScoped).toHaveBeenCalledTimes(1)
+  })
+
+  it.each([
+    ['manual trigger', customHtmlMocks.templates.triggerButton, '.manual-trigger-button'],
+    ['Lua button', customHtmlMocks.templates.luaButton, '.lua-trigger-button'],
+  ])('reports hydration failure without executing the %s', async (_label, template, selector) => {
+    seedDatabase(1, template)
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    customHtmlMocks.hydrateChatMessages.mockRejectedValueOnce(new Error('history unavailable'))
+    mountCustomHtmlRows(1)
+    await settle()
+
+    requiredButton(selector).click()
+    await vi.waitFor(() => expect(customHtmlMocks.alertError).toHaveBeenCalledWith('chatDataLoadFailed'))
+    expect(customHtmlMocks.hydrateChatMessages).toHaveBeenCalledExactlyOnceWith('custom-html-chat', { strict: true })
+    expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+    expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+    expect(dispatchCompatibleChatUpdateScoped).not.toHaveBeenCalled()
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('visible message 0')
+  })
+
+  it.each([
+    ['manual trigger', customHtmlMocks.templates.triggerButton, '.manual-trigger-button'],
+    ['Lua button', customHtmlMocks.templates.luaButton, '.lua-trigger-button'],
+  ])('does not start the %s if its chat changes during hydration', async (_label, template, selector) => {
+    seedDatabase(1, template)
+    customHtmlMocks.canUseServerCommands.mockReturnValue(true)
+    const hydration = deferred<void>()
+    customHtmlMocks.hydrateChatMessages.mockReturnValueOnce(hydration.promise)
+    mountCustomHtmlRows(1)
+    await settle()
+
+    requiredButton(selector).click()
+    await vi.waitFor(() =>
+      expect(customHtmlMocks.hydrateChatMessages).toHaveBeenCalledExactlyOnceWith('custom-html-chat', { strict: true }),
+    )
+    expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+    expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+    testDatabaseState.db.characters[0].chatPage = 1
+    hydration.resolve()
+    await hydration.promise
+    await settle()
+
+    expect(customHtmlMocks.runTrigger).not.toHaveBeenCalled()
+    expect(customHtmlMocks.runLuaButtonTrigger).not.toHaveBeenCalled()
+    expect(dispatchCompatibleChatUpdateScoped).not.toHaveBeenCalled()
+    expect(customHtmlMocks.alertError).not.toHaveBeenCalled()
+    expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('visible message 0')
+    expect(testDatabaseState.db.characters[0].chats[1].message[0].data).toBe('other chat message')
   })
 
   it('does not let an older trigger cleanup clear a newer manual trigger identity', async () => {
@@ -1177,11 +1263,13 @@ describe('customHTML rendered button trigger freshness', () => {
       }
     })
 
-    target.querySelector<HTMLButtonElement>('.manual-trigger-button')?.click()
-    await tick()
+    requiredButton('.manual-trigger-button').click()
+    await vi.waitFor(() => expect(customHtmlMocks.runTrigger).toHaveBeenCalledOnce())
+    expect(customHtmlMocks.runTrigger.mock.calls[0][2].chat.id).toBe('custom-html-chat')
 
     testDatabaseState.db.characters[0].chatPage = 1
     result.resolve()
+    await customHtmlMocks.runTrigger.mock.results[0].value
     await settle()
 
     expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('visible message 0')
@@ -1205,11 +1293,13 @@ describe('customHTML rendered button trigger freshness', () => {
       }
     })
 
-    target.querySelector<HTMLButtonElement>('.lua-trigger-button')?.click()
-    await tick()
+    requiredButton('.lua-trigger-button').click()
+    await vi.waitFor(() => expect(customHtmlMocks.runLuaButtonTrigger).toHaveBeenCalledOnce())
+    expect(customHtmlMocks.runLuaButtonTrigger.mock.calls[0][2].chat.id).toBe('custom-html-chat')
 
     testDatabaseState.db.characters[0].chatPage = 1
     result.resolve()
+    await customHtmlMocks.runLuaButtonTrigger.mock.results[0].value
     await settle()
 
     expect(testDatabaseState.db.characters[0].chats[0].message[0].data).toBe('visible message 0')
@@ -3356,17 +3446,22 @@ describe('connected reader message authority', () => {
             button.getAttribute('data-risu-message-action'),
           ),
         ).toEqual(['copy'])
-        expect(target.querySelector<HTMLButtonElement>('.reader-trigger')?.disabled).toBe(true)
-        expect(target.querySelector<HTMLButtonElement>('.reader-lua')?.disabled).toBe(true)
-        target.querySelector<HTMLButtonElement>('.reader-trigger')?.click()
-        target.querySelector<HTMLButtonElement>('.reader-lua')?.click()
-        target
-          .querySelector<HTMLButtonElement>('.reader-trigger')
-          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-        target
-          .querySelector<HTMLButtonElement>('.reader-lua')
-          ?.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }))
-        target.querySelector<HTMLButtonElement>('.button-icon-copy')?.click()
+        for (const selector of ['.reader-trigger', '.reader-lua']) {
+          const button = requiredButton(selector)
+          expect(button.disabled).toBe(true)
+          // Reader buttons discard script actions; re-enabling the native control must remain inert.
+          expect(button.hasAttribute('risu-trigger')).toBe(false)
+          expect(button.hasAttribute('risu-btn')).toBe(false)
+          button.disabled = false
+          for (const event of [
+            new MouseEvent('click', { bubbles: true, cancelable: true }),
+            new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }),
+            new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true }),
+          ]) {
+            button.dispatchEvent(event)
+          }
+        }
+        requiredButton('.button-icon-copy').click()
         await settle()
         expect(clipboard.writeText).toHaveBeenCalledWith('visible message 0')
         expect(clipboard.write).not.toHaveBeenCalled()
