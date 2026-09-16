@@ -211,13 +211,16 @@ export interface PromptMemoryChunkPlanningDiagnostics {
 
 /**
  * Fully resolved, server-owned generation configuration captured atomically
- * when a durable operation is accepted. The transcript in `database` is the
- * accepted transcript, so an attempt and every explicit retry see the same
- * prompt/configuration inputs even if settings are edited later.
+ * when a durable operation is accepted. Chat history and Hypa data are loaded
+ * from authoritative storage for each attempt; configuration stays frozen even
+ * if settings are edited later. Older snapshots may still contain history.
  */
 export interface AcceptedEffectiveGenerationConfiguration {
   version: 1
   database: Database
+  /** Target identity for post-generation validation, without retaining history.
+   * Undefined identifies older snapshots whose tail is still in database. */
+  acceptedTranscriptTail?: Pick<Message, 'role' | 'chatId'> | null
   /** Supplemental translator settings include the separately persisted preset
    * collection, which is not part of generation assembly's normal projection. */
   translationSettings?: Record<string, unknown>

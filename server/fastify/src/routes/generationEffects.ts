@@ -234,6 +234,7 @@ function claimedIgpAcceptedExecution(
   effect: GenerationEffectProjection,
 ): {
   database: ReturnType<typeof decodeGenerationDatabase>
+  acceptedTranscriptTail: unknown
   clientContext?: ReportedClientContext
 } {
   if (
@@ -271,6 +272,7 @@ function claimedIgpAcceptedExecution(
   const clientContext = generation && isRecord(generation.clientContext) ? generation.clientContext : undefined
   return {
     database: decodeGenerationDatabase(structuredClone(accepted.effectiveConfiguration.database)),
+    acceptedTranscriptTail: accepted.effectiveConfiguration.acceptedTranscriptTail,
     ...(clientContext ? { clientContext: clientContext as ReportedClientContext } : {}),
   }
 }
@@ -315,6 +317,7 @@ function bindClaimedIgpTerminalTranscript(
   acceptedDatabase: ReturnType<typeof decodeGenerationDatabase>,
   selectedCharID: number,
   chatPage: number,
+  acceptedTranscriptTail: unknown,
 ): void {
   const invalid = (): never => {
     throw new GenerationAdmissionError(409, 'generation_effect_target_stale')
@@ -348,9 +351,16 @@ function bindClaimedIgpTerminalTranscript(
     invalid()
   }
 
-  const acceptedMessages = currentChat.message
+  // New snapshots retain only the accepted identity. Keep existing persisted
+  // operations compatible without rewriting their fingerprinted configuration.
+  const acceptedTail =
+    acceptedTranscriptTail === undefined
+      ? currentChat.message.at(-1)
+      : isRecord(acceptedTranscriptTail)
+        ? acceptedTranscriptTail
+        : undefined
   if (operation.mode === 'send' && operation.requestOrigin === 'accepted_send') {
-    const acceptedUser = acceptedMessages.at(-1)
+    const acceptedUser = acceptedTail
     const terminalAcceptedUserIndexes = terminalMessages.flatMap((message, index) =>
       message.chatId === operation.acceptedMessageId ? [index] : [],
     )
@@ -367,7 +377,7 @@ function bindClaimedIgpTerminalTranscript(
       invalid()
     }
   } else if (operation.mode === 'regenerate' && operation.requestOrigin === 'regenerate') {
-    const acceptedTarget = acceptedMessages.at(-1)
+    const acceptedTarget = acceptedTail
     if (
       typeof operation.targetMessageId !== 'string' ||
       operation.targetMessageId === effect.messageId ||
@@ -377,7 +387,7 @@ function bindClaimedIgpTerminalTranscript(
       invalid()
     }
   } else if (operation.mode === 'continue' && operation.requestOrigin === 'continue') {
-    const acceptedTarget = acceptedMessages.at(-1)
+    const acceptedTarget = acceptedTail
     if (
       typeof operation.targetMessageId !== 'string' ||
       acceptedTarget?.role !== 'char' ||
@@ -983,7 +993,14 @@ export function registerGenerationEffectRoutes(
         if (selectedCharID < 0 || !currentChar || chatPage < 0) {
           throw new GenerationAdmissionError(409, 'operation_effective_configuration_invalid')
         }
-        bindClaimedIgpTerminalTranscript(db, effect, accepted.database, selectedCharID, chatPage)
+        bindClaimedIgpTerminalTranscript(
+          db,
+          effect,
+          accepted.database,
+          selectedCharID,
+          chatPage,
+          accepted.acceptedTranscriptTail,
+        )
         currentChar.chatPage = chatPage
         accepted.database.currentChar = selectedCharID
         const promptTemplate = typeof accepted.database.igpPrompt === 'string' ? accepted.database.igpPrompt : ''

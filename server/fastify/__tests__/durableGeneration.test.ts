@@ -17,6 +17,8 @@ import {
   markGenerationFinalizationRetryFailure,
 } from '../src/generationFinalizationRetry.js'
 import {
+  captureAcceptedEffectiveGenerationConfiguration,
+  createGenerationAssemblyResources,
   retryQueuedGenerationFinalizations,
   type ChatProviderDispatcher,
   type GenerationChatRouteOptions,
@@ -24,11 +26,14 @@ import {
 import { setupAuthedClient } from './helpers/auth.js'
 import { readResourceDatabaseFromFetch, type RuntimeBootstrap } from './helpers/resourceDatabase.js'
 import { createExtractedModelPreset, createExtractedPromptPreset } from '@risuai/shared-core/preset-split'
-import { GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES } from '../src/generationOperations.js'
+import {
+  GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES,
+  generationEffectiveConfigurationFingerprint,
+} from '../src/generationOperations.js'
 import { DEFAULT_BARDWIKI_GLOBAL_SETTINGS } from '@risuai/protocol'
 import { listGenerationOccupancyPins } from '../src/generationScope.js'
 import { generationEffectHasExactTerminalTranscriptBinding, listGenerationEffects } from '../src/generationEffects.js'
-import { getChatMessages } from '../src/messageStore.js'
+import { appendChatMessage, getChatMessages, setChatHypaV3 } from '../src/messageStore.js'
 
 // Durable generation lives on a detached job whose lifecycle is not tied to the
 // request connection, so these use a real listening server + `fetch`. `app.inject`
@@ -3262,6 +3267,107 @@ describe('Durable generation', () => {
         count: 0,
       })
       expect(getSchemaState(stored).revision).toBe(authority.revision)
+    } finally {
+      stored.close()
+    }
+  })
+
+  it.each(['message', 'hypaV3Data'] as const)(
+    'excludes oversized %s from the configuration budget while reloading it for attempts',
+    (field) => {
+      const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+      try {
+        const text = 'x'.repeat(GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES + 1)
+        const messages = [
+          { role: 'user', data: field === 'message' ? text : 'accepted input', chatId: 'accepted-user' },
+        ]
+        const hypa = {
+          summaries: [
+            { text: field === 'hypaV3Data' ? text : 'summary', chatMemos: ['accepted-user'], isImportant: false },
+          ],
+        }
+        appendChatMessage(db, 'chat-1', messages[0])
+        setChatHypaV3(db, 'chat-1', hypa)
+        db.prepare("UPDATE chats SET data_json = json_set(data_json, '$.scriptstate', json(?)) WHERE id = ?").run(
+          JSON.stringify({ $mood: 'accepted' }),
+          'chat-1',
+        )
+        const target = { characterId: 'char-1', chatId: 'chat-1' }
+        const configuration = captureAcceptedEffectiveGenerationConfiguration(db, harness.dataDir, target)
+        expect(() => generationEffectiveConfigurationFingerprint(configuration)).not.toThrow()
+        const chat = configuration.database.characters[0].chats[0]
+        expect(chat.message).toEqual([])
+        expect(chat.hypaV3Data).toBeUndefined()
+        expect(chat.scriptstate).toEqual({ $mood: 'accepted' })
+        expect(chat.generationSettings).toEqual(durableGenerationSettings())
+        expect(configuration.acceptedTranscriptTail).toEqual({ role: 'user', chatId: 'accepted-user' })
+
+        const resources = () =>
+          createGenerationAssemblyResources(db, harness.dataDir, {
+            ...target,
+            acceptedEffectiveConfiguration: configuration,
+          })
+        const restored = resources().loadDatabase()!.characters[0].chats[0]
+        expect(restored.message).toEqual(messages)
+        expect(restored.hypaV3Data).toEqual(hypa)
+
+        // A fresh retry observes committed runtime changes, without mutating
+        // the saved configuration or reintroducing history into its byte budget.
+        db.prepare('UPDATE messages SET json = ? WHERE chat_id = ?').run(
+          JSON.stringify({ ...messages[0], data: 'transformed input' }),
+          'chat-1',
+        )
+        setChatHypaV3(db, 'chat-1', { summaries: [] })
+        const retry = resources().loadDatabase()!.characters[0].chats[0]
+        expect(retry.message[0].data).toBe('transformed input')
+        expect(retry.hypaV3Data).toEqual({ summaries: [] })
+        expect(chat.message).toEqual([])
+      } finally {
+        db.close()
+      }
+    },
+  )
+
+  it('accepts and completes a send with Hypa history larger than the configuration limit', async () => {
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      setChatHypaV3(db, 'chat-1', {
+        summaries: [
+          { text: 'x'.repeat(GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES + 1), chatMemos: [], isImportant: false },
+        ],
+      })
+    } finally {
+      db.close()
+    }
+    let providerCalls = 0
+    providerImpl = () => {
+      providerCalls += 1
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'Accepted large chat' }
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+    const authority = await operationAuthority()
+    const operationId = randomUUID()
+    const response = await postAtomicOperation(
+      authority.databaseLineage,
+      atomicSendRequest({ operationId, acceptedMessageId: randomUUID(), baseRevision: authority.revision }),
+    )
+    expect(response.status).toBe(201)
+    await waitFor(async () => {
+      const status = await operationStatus(operationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+    expect(providerCalls).toBe(1)
+    const stored = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      const row = stored
+        .prepare(
+          'SELECT effective_configuration_json AS configuration FROM generation_operations WHERE operation_id = ?',
+        )
+        .get(operationId) as { configuration: string }
+      expect(Buffer.byteLength(row.configuration)).toBeLessThan(GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES)
+      expect(JSON.parse(row.configuration).database.characters[0].chats[0].hypaV3Data).toBeUndefined()
     } finally {
       stored.close()
     }

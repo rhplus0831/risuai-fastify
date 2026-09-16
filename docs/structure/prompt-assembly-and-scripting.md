@@ -91,6 +91,13 @@ is request-local and never persists settings. The route's `createGenerationAssem
 that preparation; accepted sends, operation retries, and subsequent preparations
 read current authoritative inputs again.
 
+Accepted operation configuration snapshots omit chat message bodies and
+`hypaV3Data`; their 8 MiB budget applies to configuration rather than accumulated
+history. Attempts reload these fields from SQLite. A compact accepted transcript
+tail (message ID and role) preserves IGP target validation, with a fallback to
+the embedded transcript for older snapshots. Chat settings, script variables,
+presets, and memory policy remain in the accepted configuration.
+
 Repository query preparation retains at most 16 fixed SQLite programs per
 database in a weakly keyed map; it never caches query results. Selectors exceeding
 4,096 bound bytes bypass retention because prepared statements retain their

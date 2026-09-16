@@ -1077,9 +1077,19 @@ export function captureAcceptedEffectiveGenerationConfiguration(
       .filter(([key, value]) => !isDeepStrictEqual(effectiveDatabase[key], value))
       .map(([key, value]) => [key, structuredClone(value)]),
   )
+  // Runtime history is reloaded by createGenerationAssemblyResources. Keeping
+  // it here duplicates the entire chat per operation and makes the configuration
+  // budget an accidental maximum chat length, before Hypa can trim the prompt.
+  // IGP only needs the accepted tail identity to validate its terminal target.
+  const acceptedChat = effective.currentChar.chats[chatPage]
+  const tail = acceptedChat.message.at(-1)
+  const acceptedTranscriptTail = tail ? { role: tail.role, chatId: tail.chatId } : null
+  acceptedChat.message = []
+  delete acceptedChat.hypaV3Data
   return {
     version: 1,
     database: effective.database,
+    acceptedTranscriptTail,
     translationSettings: acceptedTranslationOverrides,
     promptInfo: effective.promptInfo,
     resolvedMainProfile: effective.resolvedMainProfile,
