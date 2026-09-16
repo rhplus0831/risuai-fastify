@@ -6,6 +6,11 @@ Snapshot: 2026-09-16. Source commit: `981c8ddaf11d19f23404b20f43994ac848c800b6`.
 
 This is the starting inventory for reviewing tests one by one. Counts and runtime ownership are collected here; assertion quality, redundancy, and keep/remove/strengthen decisions remain unreviewed. No tests were removed or modified. Discovery success is not a passing test result.
 
+## Inventory Management Strategy
+- This file is not used as an authoritative test list; it is used as a work processing note to record whether each file has been processed.
+- Therefore, retain items and do not update totals even if files are split into multiple files, renamed, or removed.
+- The only exception is when an item that has not been Reviewed is **deleted** from the listed items during refactoring; in this case, check the target file as Reviewed as well.
+
 ## Counting rules
 
 - Count a test file once by repository-relative path. The tracked set contains 983 `*.test.ts`, 36 `*.spec.ts`, and three explicitly configured `*.runner.ts` files.
