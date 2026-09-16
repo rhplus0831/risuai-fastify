@@ -1,3 +1,5 @@
+import { storeGenerationConfiguration } from '../../src/generationConfiguration.js'
+import type { AcceptedEffectiveGenerationConfiguration } from '../../src/prompt/assemble.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { getDatabaseLineage } from '../../src/databaseLineage.js'
 import {
@@ -7,15 +9,33 @@ import {
 } from '../../src/generationOperations.js'
 
 // Both memory handlers must consume the accepted configuration and exact attempt.
-export function acceptedGenerationProvenance(db: DatabaseSync, acceptedDatabase: unknown, seedId: string) {
+export function acceptedGenerationProvenance(
+  db: DatabaseSync,
+  acceptedDatabase: unknown,
+  seedId: string,
+  storageVersion: 1 | 2 = 1,
+) {
   const databaseLineage = getDatabaseLineage(db)
   const operationId = `operation-${seedId}`
   const generationScope = { admissionKind: 'legacy_owner' as const }
-  const effectiveConfiguration = {
+  let effectiveConfiguration: unknown = {
     version: 1,
     database: acceptedDatabase,
     promptInfo: {},
     resolvedMainProfile: {},
+  }
+  if (storageVersion === 2) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      effectiveConfiguration = storeGenerationConfiguration(
+        db,
+        effectiveConfiguration as AcceptedEffectiveGenerationConfiguration,
+      )
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
   }
   const operation = createGenerationOperation(db, {
     databaseLineage,

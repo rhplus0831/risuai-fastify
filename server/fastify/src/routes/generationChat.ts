@@ -1,3 +1,9 @@
+import {
+  storeGenerationConfiguration,
+  resolveGenerationConfiguration,
+  projectGenerationConfiguration,
+  overlayGenerationChatRuntime,
+} from '../generationConfiguration.js'
 import fs from 'node:fs'
 import { isDeepStrictEqual } from 'node:util'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
@@ -75,6 +81,7 @@ import {
   countChatMessages,
   getActiveMessageLocationById,
   getChatMessages,
+  getChatHypaV3,
   replaceActiveChatMessages,
   updateActiveMessageById,
   writeGenerationChatMessage,
@@ -158,7 +165,6 @@ import { normalizeReportedClientContext } from '@risuai/protocol/client-context'
 import {
   GenerationOperationAttemptConflictError,
   GenerationEffectiveConfigurationTooLargeError,
-  assertGenerationEffectiveConfigurationFingerprint,
   generationEffectiveConfigurationFingerprint,
   assertGenerationOperationDispatchable,
   completeGenerationOperationFinalizationInTransaction,
@@ -1002,20 +1008,43 @@ export function createGenerationAssemblyResources(
         // The accepted snapshot freezes configuration, not operation-owned
         // transcript/runtime state. A retry must observe submit transforms and
         // partial bookkeeping already committed by its own earlier attempt.
-        const live = loadPersistedForGenerationAssembly(db, dataDir, target)
-        if (live.database !== null) {
+        const acceptedCharacter = database.characters.find((character) => character.chaId === target.characterId)
+        const acceptedChat = acceptedCharacter?.chats.find((chat) => chat.id === target.chatId)
+        if (!acceptedChat) throw new EntityNotFoundError('accepted generation chat is missing')
+        const runtimeRow = db.prepare('SELECT character_id FROM chats WHERE id = ?').get(target.chatId) as
+          | { character_id: string }
+          | undefined
+        if (runtimeRow) {
+          if (runtimeRow.character_id !== target.characterId)
+            throw new EntityNotFoundError('accepted generation chat moved')
+          overlayGenerationChatRuntime(db, acceptedChat as unknown as Record<string, unknown>)
+          acceptedChat.message = getChatMessages(db, target.chatId) as unknown as typeof acceptedChat.message
+          const hypa = getChatHypaV3(db, target.chatId)
+          if (hypa === undefined) delete acceptedChat.hypaV3Data
+          else acceptedChat.hypaV3Data = hypa as typeof acceptedChat.hypaV3Data
+          // Validate only accepted definitions plus current runtime. Invalid live
+          // editor configuration must not invalidate an accepted retry.
+          database = decodeGenerationDatabase(database)
+        } else {
+          // Retain the historical embedded-character fallback until imported
+          // databases have extracted their chat rows.
+          const live = loadPersistedForGenerationAssembly(db, dataDir, target)
+          if (!live.database) throw new EntityNotFoundError('accepted generation chat is missing')
           const liveDatabase = decodeGenerationDatabase(live.database)
-          const acceptedCharacter = database.characters.find((character) => character.chaId === target.characterId)
-          const acceptedChat = acceptedCharacter?.chats.find((chat) => chat.id === target.chatId)
-          const liveCharacter = liveDatabase.characters.find((character) => character.chaId === target.characterId)
-          const liveChat = liveCharacter?.chats.find((chat) => chat.id === target.chatId)
-          if (acceptedChat && liveChat) {
+          const liveChat = liveDatabase.characters
+            .find((character) => character.chaId === target.characterId)
+            ?.chats.find((chat) => chat.id === target.chatId)
+          if (!liveChat) throw new EntityNotFoundError('accepted generation chat is missing')
+          for (const field of [
+            'message',
+            'scriptstate',
+            'lastMemory',
+            'hypaV3Data',
+            'hypaContextTruncationAcknowledged',
+          ] as const) {
             const acceptedRecord = acceptedChat as unknown as Record<string, unknown>
-            const liveRecord = liveChat as unknown as Record<string, unknown>
-            for (const field of ['message', 'scriptstate', 'lastMemory', 'hypaV3Data'] as const) {
-              if (Object.hasOwn(liveRecord, field)) acceptedRecord[field] = structuredClone(liveRecord[field])
-              else delete acceptedRecord[field]
-            }
+            if (Object.hasOwn(liveChat, field)) acceptedRecord[field] = structuredClone(liveChat[field])
+            else delete acceptedRecord[field]
           }
         }
         for (const [id, name] of Object.entries(target.acceptedEffectiveConfiguration.speakerNames ?? {})) {
@@ -1086,7 +1115,7 @@ export function captureAcceptedEffectiveGenerationConfiguration(
   const acceptedTranscriptTail = tail ? { role: tail.role, chatId: tail.chatId } : null
   acceptedChat.message = []
   delete acceptedChat.hypaV3Data
-  return {
+  return projectGenerationConfiguration({
     version: 1,
     database: effective.database,
     acceptedTranscriptTail,
@@ -1095,7 +1124,7 @@ export function captureAcceptedEffectiveGenerationConfiguration(
     resolvedMainProfile: effective.resolvedMainProfile,
     acceptedBardWikiSettings,
     ...(persisted.speakerNames ? { speakerNames: persisted.speakerNames } : {}),
-  }
+  })
 }
 
 function generationTargetMissingMessage(
@@ -2708,19 +2737,15 @@ function handlePersistedGenerationCompletion(args: {
       translationEffect.operationAttemptNo,
     )
     if (!stored) throw new Error('Generated translation effect accepted configuration is missing')
-    assertGenerationEffectiveConfigurationFingerprint(
+    const configuration = resolveGenerationConfiguration(
+      args.db,
       stored.effectiveConfiguration,
       stored.effectiveConfigurationFingerprint,
     )
-    if (
-      !isRecord(stored.effectiveConfiguration) ||
-      stored.effectiveConfiguration.version !== 1 ||
-      !isRecord(stored.effectiveConfiguration.database) ||
-      !isRecord(stored.effectiveConfiguration.translationSettings)
-    ) {
+    if (!isRecord(configuration.translationSettings)) {
       throw new Error('Generated translation effect accepted configuration is invalid')
     }
-    return stored.effectiveConfiguration as unknown as AcceptedEffectiveGenerationConfiguration
+    return configuration
   }
   const run = () => {
     const acceptedEffectiveConfiguration = acceptedTranslationConfiguration()
@@ -4608,12 +4633,19 @@ function persistServerGenerationResult(args: {
         const effectiveFinalizationMode = args.mode ?? args.targetSnapshot?.mode ?? 'send'
         if (effectiveFinalizationMode === 'send' && args.automaticConfirmationEligible === true) {
           const acceptedUserMessageId = automaticConfirmationAcceptedUserMessageId(args)
-          const storedEffectiveConfiguration = args.operationLineage
+          const storedOperationConfiguration = args.operationLineage
             ? getGenerationOperationStoredRequest(
                 targetDb,
                 args.operationLineage.databaseLineage,
                 args.operationLineage.operationId,
-              )?.effectiveConfiguration
+              )
+            : undefined
+          const storedEffectiveConfiguration = storedOperationConfiguration?.effectiveConfiguration
+            ? resolveGenerationConfiguration(
+                targetDb,
+                storedOperationConfiguration.effectiveConfiguration,
+                storedOperationConfiguration.effectiveConfigurationFingerprint,
+              )
             : undefined
           const acceptedBardWikiSettings =
             isRecord(storedEffectiveConfiguration) &&
@@ -7038,8 +7070,13 @@ function startDurableGeneration(args: {
         chatOnlyEnabled: args.options.chatOccupancyEnabled === true,
       })
       const effectiveConfiguration = captureAcceptedEffectiveGenerationConfiguration(args.db, args.dataDir, input)
-      acceptedEffectiveConfiguration = effectiveConfiguration
-      const effectiveConfigurationFingerprint = generationEffectiveConfigurationFingerprint(effectiveConfiguration)
+      const storedConfiguration = storeGenerationConfiguration(args.db, effectiveConfiguration)
+      const effectiveConfigurationFingerprint = generationEffectiveConfigurationFingerprint(storedConfiguration)
+      acceptedEffectiveConfiguration = resolveGenerationConfiguration(
+        args.db,
+        storedConfiguration,
+        effectiveConfigurationFingerprint,
+      )
       const accepted = insertGenerationOperationInTransaction(args.db, {
         databaseLineage,
         operationId,
@@ -7048,7 +7085,7 @@ function startDurableGeneration(args: {
         creatorWriterSessionId: writerSessionId,
         creatorWriterEpoch: writerEpoch,
         generationScope,
-        effectiveConfiguration,
+        effectiveConfiguration: storedConfiguration,
         effectiveConfigurationFingerprint,
         bindingServerInstanceId: args.serverInstanceId,
         characterId: input.characterId,

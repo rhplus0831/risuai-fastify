@@ -78,7 +78,7 @@ describe('migration and recovery foundation', () => {
     legacy.close()
 
     const migrated = openDatabase(dataDir)
-    expect(getSchemaState(migrated)).toEqual({ version: 40, revision: 41 })
+    expect(getSchemaState(migrated)).toEqual({ version: CURRENT_SCHEMA_VERSION, revision: 41 })
     expect(
       (migrated.prepare("PRAGMA table_info('chat_occupancies')").all() as Array<{ name: string }>).map(
         ({ name }) => name,
@@ -160,7 +160,7 @@ describe('migration and recovery foundation', () => {
     migrated.close()
 
     const reopened = openDatabase(dataDir)
-    expect(getSchemaState(reopened)).toEqual({ version: 40, revision: 41 })
+    expect(getSchemaState(reopened)).toEqual({ version: CURRENT_SCHEMA_VERSION, revision: 41 })
     expect(new ChatOccupancyService(reopened, { now: () => 2_000 }).snapshot().occupancies).toEqual([claimed])
     reopened.close()
   })
@@ -196,7 +196,7 @@ describe('migration and recovery foundation', () => {
     historical.close()
 
     const migrated = openDatabase(dataDir)
-    expect(getSchemaState(migrated)).toEqual({ version: 40, revision: 0 })
+    expect(getSchemaState(migrated)).toEqual({ version: CURRENT_SCHEMA_VERSION, revision: 0 })
     expect(
       migrated
         .prepare(

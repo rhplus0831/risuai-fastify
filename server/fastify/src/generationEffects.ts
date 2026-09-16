@@ -1,3 +1,4 @@
+import { resolveGenerationConfiguration } from './generationConfiguration.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
@@ -9,10 +10,7 @@ import {
   type GenerationScopeColumns,
   type PersistedGenerationScope,
 } from './generationScope.js'
-import {
-  assertGenerationEffectiveConfigurationFingerprint,
-  getGenerationOperationAttemptAcceptedConfiguration,
-} from './generationOperations.js'
+import { getGenerationOperationAttemptAcceptedConfiguration } from './generationOperations.js'
 import {
   getAlternateMessages,
   getChatMessages,
@@ -413,14 +411,20 @@ export function ensureGenerationEffectLedgerInTransaction(
 function acceptedIgpConfigured(db: DatabaseSync, databaseLineage: string, operationId: string): boolean | undefined {
   const row = db
     .prepare(
-      `SELECT effective_configuration_json AS effectiveConfigurationJson
+      `SELECT effective_configuration_json AS effectiveConfigurationJson, effective_configuration_fingerprint AS fingerprint
        FROM generation_operations
        WHERE database_lineage = ? AND operation_id = ?`,
     )
-    .get(databaseLineage, operationId) as { effectiveConfigurationJson: string | null } | undefined
+    .get(databaseLineage, operationId) as
+    | { effectiveConfigurationJson: string | null; fingerprint: string | null }
+    | undefined
   if (!row?.effectiveConfigurationJson) return undefined
   try {
-    const configuration = JSON.parse(row.effectiveConfigurationJson) as unknown
+    const configuration = resolveGenerationConfiguration(
+      db,
+      JSON.parse(row.effectiveConfigurationJson),
+      row.fingerprint ?? undefined,
+    )
     if (!configuration || typeof configuration !== 'object' || Array.isArray(configuration)) return undefined
     const database = (configuration as { database?: unknown }).database
     if (!database || typeof database !== 'object' || Array.isArray(database)) return undefined
@@ -641,7 +645,8 @@ function acceptedOwnerInlayMode(
   )
   if (!accepted) return undefined
   try {
-    assertGenerationEffectiveConfigurationFingerprint(
+    accepted.effectiveConfiguration = resolveGenerationConfiguration(
+      db,
       accepted.effectiveConfiguration,
       accepted.effectiveConfigurationFingerprint,
     )

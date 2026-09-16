@@ -1,3 +1,4 @@
+import { createGenerationConfigurationTables } from './generationConfiguration.js'
 import { DatabaseSync } from 'node:sqlite'
 import { createDisplayModuleVersioning } from './displayModuleCache.js'
 import { createChatOccupancyTable } from './chatOccupancy.js'
@@ -30,7 +31,7 @@ import {
   repairPersistedLegacyLocalStopStringsInSqlite,
 } from './repository.js'
 
-export const CURRENT_SCHEMA_VERSION = 40
+export const CURRENT_SCHEMA_VERSION = 41
 
 export const CURRENT_SCHEMA_TABLES = [
   'assets',
@@ -52,6 +53,7 @@ export const CURRENT_SCHEMA_TABLES = [
   'command_events',
   'command_mutation_receipts',
   'database_metadata',
+  'generation_configuration_dependencies',
   'generation_effects',
   'generation_finalization_retries',
   'generation_operation_attempts',
@@ -528,6 +530,11 @@ export const MIGRATIONS: readonly MigrationStep[] = [
       createBardWikiTables(db)
     },
   },
+  {
+    version: 41,
+    name: 'immutable-generation-configuration',
+    up: createGenerationConfigurationTables,
+  },
 ]
 
 export function assertMigrationCatalog(
@@ -638,6 +645,7 @@ function initializeFreshDatabase(db: DatabaseSync): void {
   createCommandMutationReceiptTable(db)
   createGenerationFinalizationRetryTable(db)
   createGenerationOperationTables(db)
+  createGenerationConfigurationTables(db)
   createGenerationEffectLedgerTable(db)
   createAssetMetadataTable(db)
   createInlayCatalogTable(db)

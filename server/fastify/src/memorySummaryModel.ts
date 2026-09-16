@@ -1,3 +1,5 @@
+import type { DatabaseSync } from 'node:sqlite'
+import { refreshAcceptedProfileCredential } from './generationCredentials.js'
 import type { ModelProfileProviderOptions } from '@risuai/shared-core/model-profile-resolver'
 import { resolveModelProfile } from '@risuai/shared-core/model-profile-resolver'
 import type { WorkingGenerationSettings as Database } from './prompt/serverTypes.js'
@@ -15,7 +17,11 @@ export type ResolveMemorySummaryModelResult =
   | { ok: true; request: MemorySummaryModelRequest }
   | { ok: false; error: string }
 
-export function resolveMemorySummaryModel(db: Database, requestedModel: string): ResolveMemorySummaryModelResult {
+export function resolveMemorySummaryModel(
+  db: Database,
+  requestedModel: string,
+  sqlite?: DatabaseSync,
+): ResolveMemorySummaryModelResult {
   if (requestedModel !== 'subModel' && requestedModel !== 'memory') {
     return {
       ok: false,
@@ -23,7 +29,7 @@ export function resolveMemorySummaryModel(db: Database, requestedModel: string):
     }
   }
 
-  const profile = resolveModelProfile({ database: db, role: 'memory' })
+  const profile = refreshAcceptedProfileCredential(sqlite, db, resolveModelProfile({ database: db, role: 'memory' }))
   const provider = resolveMemoryModelCapability(profile)
   if (provider.ok === false) return provider
 

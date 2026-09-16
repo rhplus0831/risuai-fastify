@@ -1,3 +1,4 @@
+import { resolveGenerationConfiguration } from './generationConfiguration.js'
 import { randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
 import { isBardWikiGlobalSettings, type BardWikiGlobalSettings } from '@risuai/protocol'
@@ -11,10 +12,7 @@ import {
   type PersistedGenerationScope,
 } from './generationScope.js'
 import { getDatabaseLineage } from './databaseLineage.js'
-import {
-  assertGenerationEffectiveConfigurationFingerprint,
-  type GenerationOperationStoredRequest,
-} from './generationOperations.js'
+import { type GenerationOperationStoredRequest } from './generationOperations.js'
 
 export const BARDWIKI_JOB_DEFAULT_MAX_ATTEMPTS = 3
 export const BARDWIKI_JOB_DEFAULT_BACKOFF_BASE_MS = 1_000
@@ -349,8 +347,11 @@ export function getBardWikiJobAcceptedEffectiveConfiguration(
   }
   let configuration: unknown
   try {
-    configuration = JSON.parse(row.effective_configuration_json) as unknown
-    assertGenerationEffectiveConfigurationFingerprint(configuration, row.effective_configuration_fingerprint)
+    configuration = resolveGenerationConfiguration(
+      db,
+      JSON.parse(row.effective_configuration_json),
+      row.effective_configuration_fingerprint,
+    )
   } catch {
     throw new GenerationAdmissionError(409, 'generation_job_configuration_stale')
   }

@@ -254,6 +254,43 @@ replay is safe. Upstream stream-gap timing measures awaited provider reads and
 excludes local consumer work; an absent measurement means the stage was not
 observed, not that it took zero time.
 
+## Local Production Size Dump
+
+For configuration-size failures or startup/hydration investigations, an operator
+can run `util/dump-generation-diagnostics.ts` from the deployed source checkout:
+
+```sh
+pnpm exec tsx util/dump-generation-diagnostics.ts \
+  --data-dir /absolute/path/to/data \
+  --character-id CHARACTER_ID --chat-id CHAT_ID \
+  --output /tmp/risu-generation-diagnostic.json
+```
+
+The command opens `risu.db` read-only with SQLite `query_only` in a consistent
+read transaction. It does not start the app, run migrations, repair data, acquire
+writer ownership, or call providers. No server restart is needed. Repository
+reads that attempt a repair are reported as errors rather than permitted to
+write. The output file is created exclusively with mode 0600; use a new filename
+for another run.
+
+The report includes current code revision, canonical effective-configuration
+bytes versus the limit, ranked field sizes, selected persisted-row sizes,
+character hydration, and database-backed bootstrap projection probes. Optional
+`--writer-session-id` selects the recovery session; otherwise probes use the
+persisted general writer. Optional `--request-uid` labels the report only and
+does not fetch request logs. This is current persisted-state evidence, not an
+exact replay of the failed request or browser startup. Auth, live jobs, and
+browser execution are outside its scope.
+
+Values, credentials, message text, names, IDs, exception messages, and unknown
+object keys are omitted. Paths retain source-defined schema field names;
+unknown keys get positional labels. Nested byte counts overlap and should not
+be summed. Raw JSON row profiling is capped at 64 MiB, field output at 160
+entries, and traversal depth at six; truncation is explicit. Application probes
+still load their normal database inputs and can use significant memory on a
+large database. Focused coverage lives in
+`util/dump-generation-diagnostics.test.ts`.
+
 ## Rollback And Owners
 
 To disable remote collection, turn off `RISU_SUPPORT_DIAGNOSTICS` and
@@ -285,3 +322,8 @@ Focused coverage includes `server/fastify/__tests__/clientDiagnostics.test.ts`,
 `src/ts/diagnostics.dom.test.ts`,
 `src/lib/Setting/Pages/Advanced/DiagnosticsPanel.svelte.test.ts`, and
 `util/diagnostics-remote.test.ts`.
+
+The size dump distinguishes the expanded effective configuration from the
+version-2 manifest actually subject to admission's limit. It constructs that
+manifest in a disposable in-memory SQLite database and reports dependency
+counts/bytes by kind; the production database remains read-only.

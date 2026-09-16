@@ -1,3 +1,4 @@
+import { resolveGenerationConfiguration } from './generationConfiguration.js'
 import { randomUUID } from 'node:crypto'
 import {
   GenerationAdmissionError,
@@ -8,7 +9,6 @@ import {
   type PersistedGenerationScope,
 } from './generationScope.js'
 import { getDatabaseLineage } from './databaseLineage.js'
-import { assertGenerationEffectiveConfigurationFingerprint } from './generationOperations.js'
 import type { DatabaseSync, StatementSync } from 'node:sqlite'
 import { ValidationError } from './repository.js'
 
@@ -1321,8 +1321,11 @@ export function getMemoryJobAcceptedEffectiveConfiguration(
   }
   let configuration: unknown
   try {
-    configuration = JSON.parse(row.effective_configuration_json) as unknown
-    assertGenerationEffectiveConfigurationFingerprint(configuration, row.effective_configuration_fingerprint)
+    configuration = resolveGenerationConfiguration(
+      db,
+      JSON.parse(row.effective_configuration_json),
+      row.effective_configuration_fingerprint,
+    )
   } catch {
     throw new GenerationAdmissionError(409, 'generation_job_configuration_stale')
   }

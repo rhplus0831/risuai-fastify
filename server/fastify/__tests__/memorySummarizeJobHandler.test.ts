@@ -161,74 +161,90 @@ function seedBatchJob(
 }
 
 describe('summarize memory job handler', () => {
-  it('uses the accepted generation configuration after live summary settings and profiles change', async () => {
-    const db = openDatabase(makeDataDir())
-    try {
-      const acceptedDatabase = database({ summarizationPrompt: 'Accepted prompt: {{slot}}' })
-      const provenance = acceptedGenerationProvenance(db, acceptedDatabase, 'memory-summary')
-      const chats: PromptMessage[] = [
-        { role: 'assistant', content: 'accepted source', memo: 'm0' },
-        { role: 'assistant', content: 'accepted second', memo: 'm1' },
-        { role: 'assistant', content: 'recent tail', memo: 'tail' },
-      ]
-      const plan = planStandardHypaV3Memory({
-        chats,
-        currentTokens: 100,
-        maxContextTokens: 100,
-        maxResponseTokens: 0,
-        settings: {
-          maxChatsPerSummary: 2,
-          queryChatCount: 1,
-          summarizationModel: 'subModel',
-        },
-        tokenizeChat: () => 10,
-      })
-      const planned = planHypaV3ChunkJobs({
-        db,
-        chatId: 'chat-1',
-        chats,
-        plan,
-        ...provenance,
-      })
-      const job = planned.planned[0]?.job
-      if (!job) throw new Error('accepted planner did not create a summarize job')
-      const chunkId = planned.planned[0].chunk.id
+  it.each([1, 2] as const)(
+    'uses accepted v%s configuration after live summary settings and profiles change',
+    async (storageVersion) => {
+      const db = openDatabase(makeDataDir())
+      try {
+        const acceptedDatabase = database({ summarizationPrompt: 'Accepted prompt: {{slot}}' })
+        const provenance = acceptedGenerationProvenance(db, acceptedDatabase, 'memory-summary', storageVersion)
+        db.prepare('INSERT INTO settings (id, data_json) VALUES (1, ?)').run(
+          JSON.stringify({
+            providerCredentials: acceptedDatabase.providerCredentials.map((row) => ({
+              ...row,
+              apiKey: 'rotated-memory-key',
+            })),
+          }),
+        )
+        const chats: PromptMessage[] = [
+          { role: 'assistant', content: 'accepted source', memo: 'm0' },
+          { role: 'assistant', content: 'accepted second', memo: 'm1' },
+          { role: 'assistant', content: 'recent tail', memo: 'tail' },
+        ]
+        const plan = planStandardHypaV3Memory({
+          chats,
+          currentTokens: 100,
+          maxContextTokens: 100,
+          maxResponseTokens: 0,
+          settings: {
+            maxChatsPerSummary: 2,
+            queryChatCount: 1,
+            summarizationModel: 'subModel',
+          },
+          tokenizeChat: () => 10,
+        })
+        const planned = planHypaV3ChunkJobs({
+          db,
+          chatId: 'chat-1',
+          chats,
+          plan,
+          ...provenance,
+        })
+        const job = planned.planned[0]?.job
+        if (!job) throw new Error('accepted planner did not create a summarize job')
+        const chunkId = planned.planned[0].chunk.id
 
-      ;(acceptedDatabase.hypaV3Presets[0].settings as Record<string, unknown>).summarizationPrompt =
-        'Mutated after enqueue: {{slot}}'
-      acceptedDatabase.modelProfiles[0].providerOptions.requestModel = 'mutated-after-enqueue'
-      const loadDatabase = vi.fn(() => {
-        const live = database({ summarizationPrompt: 'Later live prompt: {{slot}}' })
-        live.modelProfiles[0].providerOptions.requestModel = 'later-live-model'
-        return live
-      })
-      const summarize = vi.fn(async () => ({ text: 'accepted summary', tokens: 2 }))
+        ;(acceptedDatabase.hypaV3Presets[0].settings as Record<string, unknown>).summarizationPrompt =
+          'Mutated after enqueue: {{slot}}'
+        acceptedDatabase.modelProfiles[0].providerOptions.requestModel = 'mutated-after-enqueue'
+        const loadDatabase = vi.fn(() => {
+          const live = database({ summarizationPrompt: 'Later live prompt: {{slot}}' })
+          live.modelProfiles[0].providerOptions.requestModel = 'later-live-model'
+          return live
+        })
+        const summarize = vi.fn(async () => ({ text: 'accepted summary', tokens: 2 }))
 
-      const worker = new MemoryWorker({
-        db,
-        batchHandlers: {
-          summarize: createSummarizeMemoryJobBatchHandler({ db, loadDatabase, summarize }),
-        },
-      })
-      expect(job.status).toBe('pending')
-      expect(await worker.tick()).toBe(true)
+        const worker = new MemoryWorker({
+          db,
+          batchHandlers: {
+            summarize: createSummarizeMemoryJobBatchHandler({ db, loadDatabase, summarize }),
+          },
+        })
+        expect(job.status).toBe('pending')
+        expect(await worker.tick()).toBe(true)
 
-      expect(loadDatabase).not.toHaveBeenCalled()
-      expect(summarize).toHaveBeenCalledWith(
-        [
-          { role: 'user', content: 'assistant: accepted source\nassistant: accepted second' },
-          { role: 'system', content: 'Accepted prompt: {{slot}}' },
-        ],
-        expect.objectContaining({ model: 'gpt-4o-mini' }),
-      )
-      expect(listMemorySummaries(db, { chatId: 'chat-1', chunkId })).toEqual([
-        expect.objectContaining({ text: 'accepted summary' }),
-      ])
-      expect(getMemoryJob(db, job.id)).toMatchObject({ status: 'completed' })
-    } finally {
-      db.close()
-    }
-  })
+        expect(loadDatabase).not.toHaveBeenCalled()
+        expect(summarize).toHaveBeenCalledWith(
+          [
+            { role: 'user', content: 'assistant: accepted source\nassistant: accepted second' },
+            { role: 'system', content: 'Accepted prompt: {{slot}}' },
+          ],
+          expect.objectContaining({
+            model: 'gpt-4o-mini',
+            options: expect.objectContaining({
+              openai: expect.objectContaining({ apiKey: storageVersion === 2 ? 'rotated-memory-key' : 'sk-test' }),
+            }),
+          }),
+        )
+        expect(listMemorySummaries(db, { chatId: 'chat-1', chunkId })).toEqual([
+          expect.objectContaining({ text: 'accepted summary' }),
+        ])
+        expect(getMemoryJob(db, job.id)).toMatchObject({ status: 'completed' })
+      } finally {
+        db.close()
+      }
+    },
+  )
 
   it('fails a modern operation-linked job whose generation scope is missing before provider dispatch', async () => {
     const db = openDatabase(makeDataDir())

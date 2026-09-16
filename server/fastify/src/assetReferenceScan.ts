@@ -379,6 +379,26 @@ export async function scanAssetReferences(
       }
     }
 
+    // Dependencies outlive module edits/deletion. Scan their compact retained
+    // asset index instead of repeatedly hydrating every accepted operation.
+    await scanRows(
+      {
+        from: 'generation_configuration_dependencies AS dependency, json_each(dependency.asset_ids_json) AS asset',
+        keys: ['dependency.rowid', 'asset.id'],
+        columns: 'asset.value AS asset_id',
+      },
+      (row) => mark({}, [{ value: row.asset_id, path: 'acceptedConfiguration' }]),
+    )
+    await scanRows(
+      {
+        from: 'generation_operations',
+        keys: ['rowid'],
+        where: "json_extract(effective_configuration_json, '$.version') = 1",
+        columns: "json_extract(effective_configuration_json, '$.database') AS database_json",
+      },
+      (row) => mark(parseJson(row.database_json)),
+    )
+
     await scanRows({ from: 'inlay_catalog', keys: ['rowid'], columns: 'asset_id' }, (row) =>
       mark({}, [{ value: row.asset_id, path: 'inlayCatalog' }]),
     )

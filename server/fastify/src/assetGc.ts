@@ -275,7 +275,33 @@ export function buildAssetGcRisuSaveAssetReport(
     ...collectMessageInlayReferences(db, database),
     ...collectInlayCatalogReferences(db),
     ...collectPendingFinalizationInlayReferences(db),
+    ...collectAcceptedConfigurationAssetReferences(db),
   ])
+}
+
+function collectAcceptedConfigurationAssetReferences(db: DatabaseSync): RisuSaveAssetReferenceSource[] {
+  const references: RisuSaveAssetReferenceSource[] = []
+  for (const row of db
+    .prepare(
+      `
+    SELECT asset.value AS value FROM generation_configuration_dependencies AS dependency,
+    json_each(dependency.asset_ids_json) AS asset
+  `,
+    )
+    .iterate()) {
+    references.push({ value: row.value, path: 'acceptedConfiguration' })
+    references.push(...collectInlayAssetReferenceSources(row.value, 'acceptedConfiguration'))
+  }
+  for (const row of db
+    .prepare(
+      "SELECT json_extract(effective_configuration_json, '$.database') AS json FROM generation_operations WHERE json_extract(effective_configuration_json, '$.version') = 1",
+    )
+    .iterate()) {
+    for (const asset of buildRisuSaveAssetReport(JSON.parse(String(row.json)), []).referenced) {
+      references.push({ value: asset.id, path: 'acceptedConfiguration' })
+    }
+  }
+  return references
 }
 
 function loadPluginCustomStorageReferenceShape(db: DatabaseSync): JsonRecord | null {

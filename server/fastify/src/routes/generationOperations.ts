@@ -1,3 +1,8 @@
+import {
+  storeGenerationConfiguration,
+  resolveGenerationConfiguration,
+  type StoredGenerationConfiguration,
+} from '../generationConfiguration.js'
 import { randomUUID } from 'node:crypto'
 import { CHAT_OCCUPANCY_EPOCH_HEADER } from '@risuai/protocol/chat-occupancy'
 import type { DatabaseSync } from 'node:sqlite'
@@ -33,7 +38,6 @@ import {
   GENERATION_OPERATION_PROTOCOL_VERSION,
   GenerationEffectiveConfigurationTooLargeError,
   GenerationOperationAttemptConflictError,
-  assertGenerationEffectiveConfigurationFingerprint,
   bindCancelledGenerationOperationInTransaction,
   createGenerationOperation,
   generationOperationForRetryRequest,
@@ -76,26 +80,25 @@ import {
 const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/
 
 function acceptedEffectiveConfiguration(
+  db: DatabaseSync,
   stored: ReturnType<typeof getGenerationOperationStoredRequest>,
 ): AcceptedEffectiveGenerationConfiguration {
-  const configuration = stored?.effectiveConfiguration
-  if (!isRecord(configuration) || configuration.version !== 1 || !isRecord(configuration.database)) {
-    throw new OperationHttpError(409, 'operation_effective_configuration_missing')
-  }
   try {
-    assertGenerationEffectiveConfigurationFingerprint(configuration, stored?.effectiveConfigurationFingerprint)
+    return resolveGenerationConfiguration(db, stored?.effectiveConfiguration, stored?.effectiveConfigurationFingerprint)
   } catch {
     throw new OperationHttpError(409, 'operation_effective_configuration_invalid')
   }
-  return configuration as unknown as AcceptedEffectiveGenerationConfiguration
 }
 
 function captureBoundedEffectiveConfiguration(
   db: DatabaseSync,
   dataDir: string,
   input: AssembleInput,
-): { configuration: AcceptedEffectiveGenerationConfiguration; fingerprint: string } {
-  const configuration = captureAcceptedEffectiveGenerationConfiguration(db, dataDir, input)
+): { configuration: StoredGenerationConfiguration; fingerprint: string } {
+  const configuration = storeGenerationConfiguration(
+    db,
+    captureAcceptedEffectiveGenerationConfiguration(db, dataDir, input),
+  )
   return { configuration, fingerprint: generationEffectiveConfigurationFingerprint(configuration) }
 }
 
@@ -757,7 +760,9 @@ function launchCommittedOperation(args: {
   reuseAcceptedSubmitTransforms?: boolean
 }): GenerationOperationProjection {
   const stored = getGenerationOperationStoredRequest(args.db, getDatabaseLineage(args.db), args.operation.operationId)
-  const effectiveConfiguration = stored?.effectiveConfiguration ? acceptedEffectiveConfiguration(stored) : undefined
+  const effectiveConfiguration = stored?.effectiveConfiguration
+    ? acceptedEffectiveConfiguration(args.db, stored)
+    : undefined
   let operation = args.operation
   if (operation.state === 'accepted' || operation.state === 'retryable' || operation.state === 'abandoned') {
     const reservation = reserveGenerationOperationAttempt(args.db, {
@@ -1198,7 +1203,7 @@ export function registerGenerationOperationRoutes(
             throw new OperationHttpError(409, 'operation_intent_missing')
           }
           if (stored.effectiveConfiguration) {
-            acceptedEffectiveConfiguration(stored)
+            acceptedEffectiveConfiguration(db, stored)
           }
           intent = stored.intent as unknown as GenerationOperationIntent
           if (replay) {

@@ -1,3 +1,4 @@
+import { refreshAcceptedProfileCredential } from '../generationCredentials.js'
 import type { ProviderGenerationSettings as Database, ServerSeparateParameters } from './serverTypes.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { PromptMessage } from './promptMessage.js'
@@ -76,6 +77,8 @@ export interface ChatDispatchHistoryInput {
 export type ChatDispatchDatabase = Database
 
 interface ChatDispatchArgs {
+  /** Authoritative credential source even when request-history recording is disabled. */
+  credentialDb?: DatabaseSync
   database: ChatDispatchDatabase
   formated: PromptMessage[]
   outputTokens?: number
@@ -1127,7 +1130,11 @@ export async function dispatchChatProvider(args: ChatDispatchArgs): Promise<Asyn
 }
 
 async function dispatchChatProviderPrepared(args: ChatDispatchArgs): Promise<AsyncIterable<CompletionStreamFrame>> {
-  const profile = args.profile ?? resolveModelProfile({ database: args.database })
+  const profile = refreshAcceptedProfileCredential(
+    args.credentialDb ?? args.history?.db,
+    args.database,
+    args.profile ?? resolveModelProfile({ database: args.database }),
+  )
   const finalizedMessages = reformatMessages(args.database, args.formated, profile.modelInfo.flags)
   const handle = args.history
     ? tryBeginRequestHistory({
@@ -1178,7 +1185,11 @@ async function dispatchChatProviderPrepared(args: ChatDispatchArgs): Promise<Asy
 async function dispatchChatProviderCore(args: ChatDispatchArgs): Promise<AsyncIterable<CompletionStreamFrame>> {
   const { database: db, outputTokens, signal, trace } = args
   await ensureTokenizerLoadedForDb(db)
-  const profile = args.profile ?? resolveModelProfile({ database: db })
+  const profile = refreshAcceptedProfileCredential(
+    args.credentialDb ?? args.history?.db,
+    db,
+    args.profile ?? resolveModelProfile({ database: db }),
+  )
   assertModelProfileGenerationReady(profile)
   const info = profile.modelInfo
   const route = resolveChatProviderRoute(db, profile)

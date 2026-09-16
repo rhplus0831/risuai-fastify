@@ -91,12 +91,38 @@ is request-local and never persists settings. The route's `createGenerationAssem
 that preparation; accepted sends, operation retries, and subsequent preparations
 read current authoritative inputs again.
 
-Accepted operation configuration snapshots omit chat message bodies and
-`hypaV3Data`; their 8 MiB budget applies to configuration rather than accumulated
-history. Attempts reload these fields from SQLite. A compact accepted transcript
-tail (message ID and role) preserves IGP target validation, with a fallback to
-the embedded transcript for older snapshots. Chat settings, script variables,
-presets, and memory policy remain in the accepted configuration.
+Accepted operations use a version-2 manifest (semantic contract 1) with an
+8 MiB manifest budget. The explicit field owners in
+[generationConfigurationManifest.ts](../../server/fastify/src/generationConfigurationManifest.ts)
+exclude unrelated settings, UI state, and chat runtime.
+[generationConfiguration.ts](../../server/fastify/src/generationConfiguration.ts)
+stores selected definitions and ordered asset catalogs by immutable content hash
+in SQLite, sharing unchanged payloads across operations and sharing templates
+with their preset mirrors. Capture and dependency writes occur inside
+acceptance's transaction.
+
+Attempts load accepted dependency versions and current transcript, scriptstate,
+lastMemory, Hypa state, and truncation acknowledgement. Extracted-chat runtime
+reads do not resolve or validate edited live settings. IGP and generated
+translation reload variables at their validated terminal/source boundary.
+Memory/BardWiki jobs and all generation effects use the same verified
+configuration loader. Missing/corrupt dependencies or unsupported contract
+versions fail explicitly. Legacy inline snapshots retain their original
+fingerprints and compatibility reader.
+
+A compact accepted transcript tail preserves IGP target identity. Configuration
+payloads contain references to separately classified secret rows. For new
+operations, durable credential IDs retain their accepted provider/model/endpoint
+binding, but dispatch reads the current secret for the same ID. Revoked/missing
+IDs and changed credential types fail; Vertex service-account identity cannot
+change. Legacy flat credentials and legacy inline operations retain their
+accepted authentication semantics.
+
+Dependencies and their asset-retention index are backed up and restored with
+operations. GC retains referenced binary assets after module edits/deletion.
+Dependency pruning requires a transaction and preserves every extant operation,
+including terminal operations supporting retry; there is no new timed expiry.
+Portable database replacement clears the old operation/dependency store.
 
 Repository query preparation retains at most 16 fixed SQLite programs per
 database in a weakly keyed map; it never caches query results. Selectors exceeding

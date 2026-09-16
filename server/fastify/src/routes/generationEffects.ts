@@ -1,3 +1,4 @@
+import { resolveGenerationConfiguration, overlayGenerationChatRuntime } from '../generationConfiguration.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { FastifyInstance, FastifyRequest } from 'fastify'
 import type { AuthState } from '../auth.js'
@@ -24,7 +25,6 @@ import {
   type GenerationEffectProjection,
 } from '../generationEffects.js'
 import {
-  assertGenerationEffectiveConfigurationFingerprint,
   getGenerationOperationProjection,
   getGenerationOperationAttemptAcceptedConfiguration,
   getGenerationOperationStoredRequest,
@@ -251,19 +251,14 @@ function claimedIgpAcceptedExecution(
     effect.operationAttemptNo,
   )
   if (!accepted) throw new GenerationAdmissionError(409, 'operation_effective_configuration_missing')
+  let configuration
   try {
-    assertGenerationEffectiveConfigurationFingerprint(
+    configuration = resolveGenerationConfiguration(
+      db,
       accepted.effectiveConfiguration,
       accepted.effectiveConfigurationFingerprint,
     )
   } catch {
-    throw new GenerationAdmissionError(409, 'operation_effective_configuration_invalid')
-  }
-  if (
-    !isRecord(accepted.effectiveConfiguration) ||
-    accepted.effectiveConfiguration.version !== 1 ||
-    !isRecord(accepted.effectiveConfiguration.database)
-  ) {
     throw new GenerationAdmissionError(409, 'operation_effective_configuration_invalid')
   }
   const stored = getGenerationOperationStoredRequest(db, effect.databaseLineage, effect.operationId)
@@ -271,8 +266,8 @@ function claimedIgpAcceptedExecution(
   const generation = intent && isRecord(intent.generation) ? intent.generation : undefined
   const clientContext = generation && isRecord(generation.clientContext) ? generation.clientContext : undefined
   return {
-    database: decodeGenerationDatabase(structuredClone(accepted.effectiveConfiguration.database)),
-    acceptedTranscriptTail: accepted.effectiveConfiguration.acceptedTranscriptTail,
+    database: decodeGenerationDatabase(structuredClone(configuration.database)),
+    acceptedTranscriptTail: configuration.acceptedTranscriptTail,
     ...(clientContext ? { clientContext: clientContext as ReportedClientContext } : {}),
   }
 }
@@ -423,6 +418,7 @@ function bindClaimedIgpTerminalTranscript(
   // advances to the exact terminal Send/Reroll/Continue result for dynamic CBS
   // macros.
   currentChat.message = structuredClone(terminalMessages) as typeof currentChat.message
+  overlayGenerationChatRuntime(db, currentChat as unknown as Record<string, unknown>)
 }
 
 export function registerGenerationEffectRoutes(
@@ -1036,6 +1032,7 @@ export function registerGenerationEffectRoutes(
         const requestAbort = attachAbort(req, reply)
         try {
           const frames = await dispatchChatProvider({
+            credentialDb: db,
             database: executionDatabase,
             formated,
             profile,

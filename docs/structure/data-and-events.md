@@ -64,7 +64,11 @@ split collections; assets; command events and mutation receipts; the inlay
 catalog; push subscriptions; Hypa V3 memory state; generation finalization
 retries; greeting translations; durable LLM request history; lineage-scoped
 generation operations and attempts; the generation-effect ledger; and BardWiki
-state. Schema version 40 also includes `chat_occupancies`, keyed by chat id with
+state. Schema version 41 adds generation_configuration_dependencies for
+content-addressed accepted definitions, catalogs, separately classified secrets,
+and their asset-retention indexes. These rows share the operation backup/reset
+policy; acceptance writes them atomically and legacy inline operations remain
+readable. Schema version 40 introduced `chat_occupancies`, keyed by chat id with
 database lineage, page session, monotonic occupancy epoch, claim class, lease
 timestamps, and released tombstones. Active stream viewers and job attachments remain process-local. Current
 browser state is rebuilt from concrete REST resources rather than a cached

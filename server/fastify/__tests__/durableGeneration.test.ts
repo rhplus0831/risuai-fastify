@@ -1,3 +1,4 @@
+import { resolveGenerationConfiguration } from '../src/generationConfiguration.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { randomUUID } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
@@ -2139,9 +2140,15 @@ describe('Durable generation', () => {
     const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
     try {
       const operationRow = db
-        .prepare('SELECT effective_configuration_json FROM generation_operations WHERE operation_id = ?')
-        .get(operationId) as { effective_configuration_json: string }
-      const effectiveConfiguration = JSON.parse(operationRow.effective_configuration_json) as JsonRecord
+        .prepare(
+          'SELECT effective_configuration_json, effective_configuration_fingerprint FROM generation_operations WHERE operation_id = ?',
+        )
+        .get(operationId) as { effective_configuration_json: string; effective_configuration_fingerprint: string }
+      const effectiveConfiguration = resolveGenerationConfiguration(
+        db,
+        JSON.parse(operationRow.effective_configuration_json),
+        operationRow.effective_configuration_fingerprint,
+      )
       expect(effectiveConfiguration.acceptedBardWikiSettings).toEqual(acceptedBardWikiSettings)
       const jobRow = db
         .prepare("SELECT operation_id, payload_json FROM bardwiki_jobs WHERE kind = 'apply_turn'")
@@ -3298,7 +3305,7 @@ describe('Durable generation', () => {
         const chat = configuration.database.characters[0].chats[0]
         expect(chat.message).toEqual([])
         expect(chat.hypaV3Data).toBeUndefined()
-        expect(chat.scriptstate).toEqual({ $mood: 'accepted' })
+        expect(chat.scriptstate).toBeUndefined()
         expect(chat.generationSettings).toEqual(durableGenerationSettings())
         expect(configuration.acceptedTranscriptTail).toEqual({ role: 'user', chatId: 'accepted-user' })
 
@@ -3318,6 +3325,10 @@ describe('Durable generation', () => {
           'chat-1',
         )
         setChatHypaV3(db, 'chat-1', { summaries: [] })
+        db.prepare("UPDATE settings SET data_json = json_set(data_json, '$.customModels', json(?)) WHERE id = 1").run(
+          JSON.stringify([{ id: 4 }]),
+        )
+
         const retry = resources().loadDatabase()!.characters[0].chats[0]
         expect(retry.message[0].data).toBe('transformed input')
         expect(retry.hypaV3Data).toEqual({ summaries: [] })
@@ -3367,7 +3378,74 @@ describe('Durable generation', () => {
         )
         .get(operationId) as { configuration: string }
       expect(Buffer.byteLength(row.configuration)).toBeLessThan(GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES)
-      expect(JSON.parse(row.configuration).database.characters[0].chats[0].hypaV3Data).toBeUndefined()
+      expect(JSON.parse(row.configuration).configuration.database.characters[0].chats[0].hypaV3Data).toBeUndefined()
+    } finally {
+      stored.close()
+    }
+  })
+
+  it('accepts and completes a send with fourteen large immutable module catalogs', async () => {
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      const ids = Array.from({ length: 14 }, (_, index) => 'large-module-' + index)
+      db.prepare("UPDATE settings SET data_json = json_set(data_json, '$.enabledModules', json(?)) WHERE id = 1").run(
+        JSON.stringify(ids),
+      )
+      for (const [index, id] of ids.entries()) {
+        db.prepare('INSERT INTO modules (position, data_json) VALUES (?, ?)').run(
+          index,
+          JSON.stringify({
+            id,
+            name: id,
+            description: '',
+            assets: Array.from({ length: 11000 }, (_, asset) => [
+              'asset-' + index + '-' + asset,
+              'a'.repeat(64),
+              'image/png',
+            ]),
+          }),
+        )
+      }
+    } finally {
+      db.close()
+    }
+    let providerCalls = 0
+    providerImpl = () => {
+      providerCalls += 1
+      return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'Accepted large chat' }
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    }
+    const authority = await operationAuthority()
+    const operationId = randomUUID()
+    const response = await postAtomicOperation(
+      authority.databaseLineage,
+      atomicSendRequest({ operationId, acceptedMessageId: randomUUID(), baseRevision: authority.revision }),
+    )
+    expect(response.status).toBe(201)
+    await waitFor(async () => {
+      const status = await operationStatus(operationId)
+      return status.operation.state === 'completed' ? status : undefined
+    })
+    expect(providerCalls).toBe(1)
+    const stored = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      const row = stored
+        .prepare(
+          'SELECT effective_configuration_json AS configuration FROM generation_operations WHERE operation_id = ?',
+        )
+        .get(operationId) as { configuration: string }
+      expect(Buffer.byteLength(row.configuration)).toBeLessThan(GENERATION_EFFECTIVE_CONFIGURATION_MAX_BYTES)
+      expect(JSON.parse(row.configuration).version).toBe(2)
+      expect(Buffer.byteLength(row.configuration)).toBeLessThan(32 * 1024)
+      expect(
+        stored
+          .prepare(
+            'SELECT count(*) AS count FROM generation_configuration_dependencies WHERE json_array_length(json) = 11000',
+          )
+          .get(),
+      ).toEqual({ count: 14 })
     } finally {
       stored.close()
     }

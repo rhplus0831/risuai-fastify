@@ -3853,6 +3853,7 @@ export async function applyImport(
       db.exec('DELETE FROM generation_effects')
       db.exec('DELETE FROM generation_operation_attempts')
       db.exec('DELETE FROM generation_operations')
+      db.exec('DELETE FROM generation_configuration_dependencies')
       bumpGenerationOperationProjectionEpoch(db)
       const databaseLineage = rotateDatabaseLineage(db)
       const event = persistRevisionedCommandEvent(db, COMMAND_EVENT_CATALOG.stateImported)
@@ -4233,6 +4234,7 @@ export const SQLITE_BACKUP_TABLES = [
   'generation_finalization_retries',
   'generation_operation_projection_state',
   'generation_operations',
+  'generation_configuration_dependencies',
   'generation_operation_attempts',
   'generation_effects',
   'memory_chunks',

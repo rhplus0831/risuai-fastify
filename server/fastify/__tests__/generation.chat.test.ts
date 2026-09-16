@@ -5845,6 +5845,7 @@ describe('POST /api/v1/generate/chat', () => {
     expect(runMessageTranslation).toHaveBeenCalledTimes(1)
     const acceptedConfiguration = runMessageTranslation.mock.calls[0]![0].acceptedEffectiveConfiguration
     expect(acceptedConfiguration?.translationSettings).toMatchObject({
+      translator: 'ko',
       translatorPresets: expect.arrayContaining([
         expect.objectContaining({
           id: 'accepted-preset',
@@ -5854,7 +5855,6 @@ describe('POST /api/v1/generate/chat', () => {
       ]),
     })
     expect(acceptedConfiguration?.database).toMatchObject({
-      translator: 'ko',
       modelProfiles: expect.arrayContaining([acceptedProfile]),
     })
     const persistedMessages = (await readPersistedMessages(assertion)) as Array<{

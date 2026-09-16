@@ -28,6 +28,8 @@ import type { PromptMessage } from './promptMessage.js'
 
 /** Optional fields and supported legacy null clears retain downstream defaults and preset precedence. */
 export type GenerationSettings = {
+  /** Server-only marker on hydrated contract-v1 accepted configuration. */
+  acceptedCredentialPolicy?: 'live-id-v1'
   adaptiveThinkingEffort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
   additionalParams?: [string, string][]
   additionalPrompt?: string

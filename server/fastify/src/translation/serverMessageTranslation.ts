@@ -1,3 +1,4 @@
+import { overlayGenerationChatRuntime } from '../generationConfiguration.js'
 import { isDeepStrictEqual } from 'node:util'
 import type { DatabaseSync } from 'node:sqlite'
 import { getSchemaState } from '../db.js'
@@ -69,6 +70,7 @@ function resolveTranslationConfiguration(
     const database = structuredClone(input.acceptedEffectiveConfiguration.database)
     const characters = normalizeAllCharacterChats(database)
     const { character, chat } = requireChatLocation(characters, source.chatId)
+    overlayGenerationChatRuntime(input.db, chat as unknown as Record<string, unknown>)
     return {
       settings: {
         ...(database as unknown as Record<string, unknown>),

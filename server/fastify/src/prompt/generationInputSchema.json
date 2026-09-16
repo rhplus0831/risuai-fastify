@@ -4,6 +4,9 @@
     "record0": {
       "type": "object",
       "properties": {
+        "acceptedCredentialPolicy": {
+          "const": "live-id-v1"
+        },
         "adaptiveThinkingEffort": {
           "anyOf": [
             {
@@ -10421,6 +10424,9 @@
               "$ref": "#/$defs/record213"
             }
           ]
+        },
+        "acceptedCredentialPolicy": {
+          "const": "live-id-v1"
         },
         "additionalPrompt": {
           "type": "string"
@@ -21651,6 +21657,9 @@
             }
           ]
         },
+        "acceptedCredentialPolicy": {
+          "const": "live-id-v1"
+        },
         "additionalPrompt": {
           "type": "string"
         },
@@ -23014,6 +23023,9 @@
             }
           ]
         },
+        "acceptedCredentialPolicy": {
+          "const": "live-id-v1"
+        },
         "additionalPrompt": {
           "type": "string"
         },
@@ -24326,6 +24338,9 @@
               "$ref": "#/$defs/record213"
             }
           ]
+        },
+        "acceptedCredentialPolicy": {
+          "const": "live-id-v1"
         },
         "additionalPrompt": {
           "type": "string"

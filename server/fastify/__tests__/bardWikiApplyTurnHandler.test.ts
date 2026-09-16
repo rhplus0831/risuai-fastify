@@ -1,3 +1,5 @@
+import { storeGenerationConfiguration } from '../src/generationConfiguration.js'
+import type { AcceptedEffectiveGenerationConfiguration } from '../src/prompt/assemble.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -111,7 +113,21 @@ function bindApplyJobToAcceptedConfiguration(
   db: DatabaseSync,
   bardWikiJobId: string,
   effectiveConfiguration: unknown,
+  storageVersion: 1 | 2 = 1,
 ): void {
+  if (storageVersion === 2) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      effectiveConfiguration = storeGenerationConfiguration(
+        db,
+        effectiveConfiguration as AcceptedEffectiveGenerationConfiguration,
+      )
+      db.exec('COMMIT')
+    } catch (error) {
+      db.exec('ROLLBACK')
+      throw error
+    }
+  }
   const databaseLineage = getDatabaseLineage(db)
   const operation = createGenerationOperation(db, {
     databaseLineage,
@@ -152,65 +168,73 @@ function bindApplyJobToAcceptedConfiguration(
 }
 
 describe('BardWiki apply-turn handler', () => {
-  it('uses the accepted provider and BardWiki settings after later configuration edits', async () => {
-    const harness = createHarness()
-    const acceptedDatabase = createInitialDatabase() as unknown as Record<string, unknown>
-    acceptedDatabase.temperature = 0.17
-    const acceptedSettings = {
-      ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
-      enabledByDefault: true,
-      canonicalUpdates: false,
-      modelProfileId: 'accepted-profile',
-      promptPresetId: 'accepted-prompt',
-    }
-    const storedJob = getBardWikiJob(harness.db, harness.confirmation.job.id)!
-    harness.db
-      .prepare('UPDATE bardwiki_jobs SET payload_json = ? WHERE id = ?')
-      .run(JSON.stringify({ ...storedJob.payload, acceptedSettings }), storedJob.id)
-    bindApplyJobToAcceptedConfiguration(harness.db, storedJob.id, {
-      version: 1,
-      database: acceptedDatabase,
-      promptInfo: {},
-      resolvedMainProfile: {},
-      acceptedBardWikiSettings: acceptedSettings,
-    })
-
-    const liveDatabase = createInitialDatabase() as unknown as Record<string, unknown>
-    liveDatabase.temperature = 0.91
-    const loadDatabase = vi.fn(() => liveDatabase)
-    let observedTemperature: unknown
-    let observedSettings: unknown
-    try {
-      const worker = workerFor(harness, {
-        db: harness.db,
-        dataDir: harness.dataDir,
-        loadDatabase,
-        analyze: async (request) => {
-          observedTemperature = (request.database as unknown as Record<string, unknown>).temperature
-          observedSettings = request.settings
-          return VALID_DRAFT
-        },
-      })
-      const current = createInitialDatabase() as unknown as Record<string, unknown>
-      current.bardWiki = {
+  it.each([1, 2] as const)(
+    'uses accepted v%s provider and BardWiki settings after later configuration edits',
+    async (storageVersion) => {
+      const harness = createHarness()
+      const acceptedDatabase = createInitialDatabase() as unknown as Record<string, unknown>
+      acceptedDatabase.temperature = 0.17
+      const acceptedSettings = {
         ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
-        enabledByDefault: false,
-        canonicalUpdates: true,
-        modelProfileId: 'later-profile',
-        promptPresetId: 'later-prompt',
+        enabledByDefault: true,
+        canonicalUpdates: false,
+        modelProfileId: 'accepted-profile',
+        promptPresetId: 'accepted-prompt',
       }
-      harness.db.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(current))
+      const storedJob = getBardWikiJob(harness.db, harness.confirmation.job.id)!
+      harness.db
+        .prepare('UPDATE bardwiki_jobs SET payload_json = ? WHERE id = ?')
+        .run(JSON.stringify({ ...storedJob.payload, acceptedSettings }), storedJob.id)
+      bindApplyJobToAcceptedConfiguration(
+        harness.db,
+        storedJob.id,
+        {
+          version: 1,
+          database: acceptedDatabase,
+          promptInfo: {},
+          resolvedMainProfile: {},
+          acceptedBardWikiSettings: acceptedSettings,
+        },
+        storageVersion,
+      )
 
-      await expect(worker.tick()).resolves.toBe(true)
+      const liveDatabase = createInitialDatabase() as unknown as Record<string, unknown>
+      liveDatabase.temperature = 0.91
+      const loadDatabase = vi.fn(() => liveDatabase)
+      let observedTemperature: unknown
+      let observedSettings: unknown
+      try {
+        const worker = workerFor(harness, {
+          db: harness.db,
+          dataDir: harness.dataDir,
+          loadDatabase,
+          analyze: async (request) => {
+            observedTemperature = (request.database as unknown as Record<string, unknown>).temperature
+            observedSettings = request.settings
+            return VALID_DRAFT
+          },
+        })
+        const current = createInitialDatabase() as unknown as Record<string, unknown>
+        current.bardWiki = {
+          ...DEFAULT_BARDWIKI_GLOBAL_SETTINGS,
+          enabledByDefault: false,
+          canonicalUpdates: true,
+          modelProfileId: 'later-profile',
+          promptPresetId: 'later-prompt',
+        }
+        harness.db.prepare('UPDATE settings SET data_json = ? WHERE id = 1').run(JSON.stringify(current))
 
-      expect(loadDatabase).not.toHaveBeenCalled()
-      expect(observedTemperature).toBe(0.17)
-      expect(observedSettings).toEqual(acceptedSettings)
-      expect(getBardWikiJob(harness.db, storedJob.id)?.status).toBe('completed')
-    } finally {
-      harness.db.close()
-    }
-  })
+        await expect(worker.tick()).resolves.toBe(true)
+
+        expect(loadDatabase).not.toHaveBeenCalled()
+        expect(observedTemperature).toBe(0.17)
+        expect(observedSettings).toEqual(acceptedSettings)
+        expect(getBardWikiJob(harness.db, storedJob.id)?.status).toBe('completed')
+      } finally {
+        harness.db.close()
+      }
+    },
+  )
 
   it('commits one forced event document, provenance, manifest, revision, event, and prompt-search row', async () => {
     const harness = createHarness({ pathCollision: true })

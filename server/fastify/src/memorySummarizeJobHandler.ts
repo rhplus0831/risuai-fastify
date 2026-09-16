@@ -195,11 +195,6 @@ async function executeSummarizeJob(input: {
   }
 
   assertChatExists(input.database, input.job.chatId)
-  const modelRequest = resolveMemorySummaryModel(input.database, payload.model)
-  if (modelRequest.ok === false) {
-    updateMemoryChunkStatusForJob(input.opts.db, input.job, chunk.id, 'failed')
-    throw new Error(modelRequest.error)
-  }
 
   const prompt = buildHypaV3SummaryPrompt({
     chunkText: chunk.text,
@@ -211,6 +206,11 @@ async function executeSummarizeJob(input: {
   assertDatabaseLineage(input.opts.db, lineage)
   if (input.signal?.aborted) {
     throw input.signal.reason instanceof Error ? input.signal.reason : new Error('memory job cancelled')
+  }
+  const modelRequest = resolveMemorySummaryModel(input.database, payload.model, input.opts.db)
+  if (modelRequest.ok === false) {
+    updateMemoryChunkStatusForJob(input.opts.db, input.job, chunk.id, 'failed')
+    throw new Error(modelRequest.error)
   }
   const abortScope = createMemoryProviderAbortScope(input.signal, input.opts.providerFetchDeadlineMs)
   let summary: SummaryAdapterResult

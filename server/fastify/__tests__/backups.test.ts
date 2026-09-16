@@ -1,3 +1,6 @@
+import { storeGenerationConfiguration, resolveGenerationConfiguration } from '../src/generationConfiguration.js'
+import { generationEffectiveConfigurationFingerprint } from '../src/generationOperations.js'
+import type { AcceptedEffectiveGenerationConfiguration } from '../src/prompt/assemble.js'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs, { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -496,6 +499,16 @@ describe('backups', () => {
     try {
       const [moduleA] = readDisplayModules(cacheDb, ['test'])
       const versionA = getDisplayModuleVersion(cacheDb)
+      cacheDb.exec('BEGIN IMMEDIATE')
+      const accepted = storeGenerationConfiguration(cacheDb, {
+        version: 1,
+        database: { characters: [], modules: [{ id: 'module-a', name: 'Accepted', description: '', assets: [] }] },
+        promptInfo: {},
+        resolvedMainProfile: {},
+      } as unknown as AcceptedEffectiveGenerationConfiguration)
+      const fingerprint = generationEffectiveConfigurationFingerprint(accepted)
+      cacheDb.exec('COMMIT')
+
       const backup = await harness.app.inject({
         method: 'POST',
         url: '/api/v1/backups',
@@ -529,6 +542,8 @@ describe('backups', () => {
         headers: { 'risu-auth': assertion },
       })
       expect(restored.statusCode).toBe(200)
+      expect(resolveGenerationConfiguration(cacheDb, accepted, fingerprint).database.modules?.[0].name).toBe('Accepted')
+
       const revisionAfter = restored.json().revision
       expect(restored.json().event).toEqual({
         type: 'state.restored',
