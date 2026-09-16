@@ -15,6 +15,7 @@ export const uiCoverageTestFiles = [
 // stays unique and points to files that still exist.
 export const uiCoverageSupportFiles = [
   'src/lib/ChatScreens/Chat.parserDependenciesHarness.svelte',
+  'src/lib/ChatScreens/Chat.testSupport.ts',
   'src/lib/ChatScreens/DefaultChatScreen.shellGreetingStub.svelte',
   'src/lib/ChatScreens/DefaultChatScreen.testChat.svelte',
   'src/lib/ChatScreens/DefaultChatScreen.testChatController.ts',
