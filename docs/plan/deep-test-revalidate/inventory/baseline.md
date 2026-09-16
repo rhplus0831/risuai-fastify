@@ -88,7 +88,7 @@ Rows are sorted by path within each source area. The `Reviewed` column tracks re
 | [src/lib/ChatScreens/Chat.loadingAnimation.test.ts](../../../../src/lib/ChatScreens/Chat.loadingAnimation.test.ts) | frontend-node | 1 | 0 | 1 | O |
 | [src/lib/ChatScreens/Chat.owner.test.ts](../../../../src/lib/ChatScreens/Chat.owner.test.ts) | frontend-node | 4 | 0 | 4 | O |
 | [src/lib/ChatScreens/Chat.parserDependencies.test.ts](../../../../src/lib/ChatScreens/Chat.parserDependencies.test.ts) | frontend-dom | 19 | 0 | 19 | O |
-| [src/lib/ChatScreens/ChatBody.parseMemo.test.ts](../../../../src/lib/ChatScreens/ChatBody.parseMemo.test.ts) | frontend-dom | 27 | 0 | 27 | X |
+| [src/lib/ChatScreens/ChatBody.parseMemo.test.ts](../../../../src/lib/ChatScreens/ChatBody.parseMemo.test.ts) | frontend-dom | 27 | 0 | 27 | O |
 | [src/lib/ChatScreens/ChatBody.svelte.test.ts](../../../../src/lib/ChatScreens/ChatBody.svelte.test.ts) | frontend-dom | 17 | 0 | 17 | X |
 | [src/lib/ChatScreens/ChatBodyRenderMemo.test.ts](../../../../src/lib/ChatScreens/ChatBodyRenderMemo.test.ts) | frontend-node | 2 | 0 | 2 | X |
 | [src/lib/ChatScreens/ChatScreen.characterOwner.test.ts](../../../../src/lib/ChatScreens/ChatScreen.characterOwner.test.ts) | frontend-node | 2 | 0 | 2 | X |
