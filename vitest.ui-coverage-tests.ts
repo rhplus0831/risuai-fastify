@@ -6,7 +6,9 @@ export const uiCoverageTestFiles = [
   'src/lib/Others/ChatList.svelte.test.ts',
   'src/lib/SideBars/SideChatList.svelte.test.ts',
   'src/lib/SideBars/Sidebar.charList.test.ts',
-  'src/lib/ChatScreens/ChatBody.svelte.test.ts',
+  'src/lib/ChatScreens/ChatBody.translation.dom.test.ts',
+  'src/lib/ChatScreens/ChatBody.assets.dom.test.ts',
+  'src/lib/ChatScreens/ChatBody.displayLifecycle.dom.test.ts',
   'src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts',
 ] as const
 
@@ -14,6 +16,7 @@ export const uiCoverageTestFiles = [
 // stubs, and harnesses. util/test-all.test.ts verifies that this reviewed list
 // stays unique and points to files that still exist.
 export const uiCoverageSupportFiles = [
+  'src/lib/ChatScreens/ChatBody.testSupport.ts',
   'src/lib/ChatScreens/Chat.parserDependenciesHarness.svelte',
   'src/lib/ChatScreens/Chat.testSupport.ts',
   'src/lib/ChatScreens/DefaultChatScreen.shellGreetingStub.svelte',
