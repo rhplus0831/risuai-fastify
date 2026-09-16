@@ -78,7 +78,7 @@ Rows are sorted by path within each source area. The `Reviewed` column tracks re
 | [src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts](../../../../src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts) | frontend-dom | 10 | 0 | 10 | O |
 | [src/lib/ChatScreens/BardWikiWorkspace.lazy.test.ts](../../../../src/lib/ChatScreens/BardWikiWorkspace.lazy.test.ts) | frontend-node | 1 | 0 | 1 | O |
 | [src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts](../../../../src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts) | frontend-dom | 21 | 0 | 21 | O |
-| [src/lib/ChatScreens/CharacterShellHydrationGate.svelte.test.ts](../../../../src/lib/ChatScreens/CharacterShellHydrationGate.svelte.test.ts) | frontend-dom | 2 | 0 | 2 | X |
+| [src/lib/ChatScreens/CharacterShellHydrationGate.svelte.test.ts](../../../../src/lib/ChatScreens/CharacterShellHydrationGate.svelte.test.ts) | frontend-dom | 2 | 0 | 2 | O |
 | [src/lib/ChatScreens/Chat.customHtml.test.ts](../../../../src/lib/ChatScreens/Chat.customHtml.test.ts) | frontend-dom | 87 | 0 | 87 | X |
 | [src/lib/ChatScreens/Chat.loadingAnimation.test.ts](../../../../src/lib/ChatScreens/Chat.loadingAnimation.test.ts) | frontend-node | 1 | 0 | 1 | X |
 | [src/lib/ChatScreens/Chat.owner.test.ts](../../../../src/lib/ChatScreens/Chat.owner.test.ts) | frontend-node | 4 | 0 | 4 | X |
