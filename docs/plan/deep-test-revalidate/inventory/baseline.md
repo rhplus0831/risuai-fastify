@@ -68,6 +68,8 @@ Sources of ownership: [frontend configuration](../../../../vitest.config.ts), [f
 
 Rows are sorted by path within each source area. The `Reviewed` column tracks review completion: `O` = review completed; `X` = pending review (not a test pass/fail result). All rows start as `X`. During subsequent review, record the protected behavior, assertion evidence, and keep/remove/strengthen decision; file names alone do not establish test value.
 
+Review decision for `ChatScreen.characterOwner.test.ts`: replaced source-string assertions with mounted behavior tests in `ChatScreen.hydration.svelte.test.ts` and `ChatScreen.bardWiki.svelte.test.ts`. Coverage observes loading/ready ownership, resource and row errors, cleared selection, duplicate character/chat identities, recovery, and live display-layout updates. Existing `displaySettings.dom.test.ts` retains detailed paint-fallback coverage. The original file was removed; its baseline row and counts are retained.
+
 ### Frontend source
 
 642 files; 8,859 cases.
@@ -91,7 +93,7 @@ Rows are sorted by path within each source area. The `Reviewed` column tracks re
 | [src/lib/ChatScreens/ChatBody.parseMemo.test.ts](../../../../src/lib/ChatScreens/ChatBody.parseMemo.test.ts) | frontend-dom | 27 | 0 | 27 | O |
 | [src/lib/ChatScreens/ChatBody.svelte.test.ts](../../../../src/lib/ChatScreens/ChatBody.svelte.test.ts) | frontend-dom | 17 | 0 | 17 | O |
 | [src/lib/ChatScreens/ChatBodyRenderMemo.test.ts](../../../../src/lib/ChatScreens/ChatBodyRenderMemo.test.ts) | frontend-node | 2 | 0 | 2 | O |
-| [src/lib/ChatScreens/ChatScreen.characterOwner.test.ts](../../../../src/lib/ChatScreens/ChatScreen.characterOwner.test.ts) | frontend-node | 2 | 0 | 2 | X |
+| [src/lib/ChatScreens/ChatScreen.characterOwner.test.ts](../../../../src/lib/ChatScreens/ChatScreen.characterOwner.test.ts) | frontend-node | 2 | 0 | 2 | O |
 | [src/lib/ChatScreens/ChatScreenBackground.test.ts](../../../../src/lib/ChatScreens/ChatScreenBackground.test.ts) | frontend-node | 2 | 0 | 2 | X |
 | [src/lib/ChatScreens/Chats.owner.test.ts](../../../../src/lib/ChatScreens/Chats.owner.test.ts) | frontend-node | 2 | 0 | 2 | X |
 | [src/lib/ChatScreens/Chats.startup.dom.test.ts](../../../../src/lib/ChatScreens/Chats.startup.dom.test.ts) | frontend-dom | 8 | 0 | 8 | X |

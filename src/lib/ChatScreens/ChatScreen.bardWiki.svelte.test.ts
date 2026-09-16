@@ -102,4 +102,31 @@ describe('ChatScreen BardWiki integration', () => {
     await tick()
     expect(target.querySelector('[data-risu-lazy-surface="bardwiki-workspace"]')).toBeNull()
   })
+
+  it.each(['duplicate character', 'duplicate chat in character', 'duplicate chat across characters'] as const)(
+    'closes the workspace and rejects reopening with %s',
+    async (reason) => {
+      await openWorkspace()
+      if (reason === 'duplicate chat in character') {
+        charactersResourceState.characters[0]!.chats.push({ id: 'chat-a' } as character['chats'][number])
+      } else {
+        charactersResourceState.characters.push({
+          chaId: reason === 'duplicate character' ? 'character-a' : 'character-b',
+          chatPage: 0,
+          chats: [{ id: reason === 'duplicate character' ? 'chat-c' : 'chat-a' }],
+        } as character)
+      }
+      await waitFor(() => expect(workspace()).toBeNull())
+      const request = { characterId: 'character-a', chatId: 'chat-a' }
+      bardWikiWorkspaceOpenRequest.set(request)
+      await tick()
+      expect(target.querySelector('[data-risu-lazy-surface="bardwiki-workspace"]')).toBeNull()
+      expect(get(bardWikiWorkspaceOpenRequest)).toEqual(request)
+
+      if (reason === 'duplicate chat in character') charactersResourceState.characters[0]!.chats.pop()
+      else charactersResourceState.characters.pop()
+      await waitFor(() => expect(workspace()?.getAttribute('data-chat-id')).toBe('chat-a'))
+      expect(get(bardWikiWorkspaceOpenRequest)).toBeNull()
+    },
+  )
 })
