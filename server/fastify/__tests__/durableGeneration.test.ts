@@ -3958,6 +3958,43 @@ describe('Durable generation', () => {
     expect(providerCalls).toBe(2)
   })
 
+  it.each([true, false])(
+    'preserves accepted automatic speech eligibility (%s) after settings edits',
+    async (enabled) => {
+      const setAutoSpeech = (value: boolean) => {
+        const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+        try {
+          db.prepare(
+            "UPDATE settings SET data_json = json_set(data_json, '$.ttsAutoSpeech', json(?)) WHERE id = 1",
+          ).run(JSON.stringify(value))
+        } finally {
+          db.close()
+        }
+      }
+      setAutoSpeech(enabled)
+      providerImpl = () => {
+        // Dispatch happens after acceptance; later editor changes must not alter
+        // this operation's speech eligibility.
+        setAutoSpeech(!enabled)
+        return (async function* (): AsyncGenerator<CompletionStreamFrame> {
+          yield { kind: 'token', content: 'spoken reply' }
+          yield { kind: 'done', finishReason: 'stop' }
+        })()
+      }
+
+      const response = await postDurable({})
+      expect(response.status).toBe(200)
+      const events = await readSse(response, (event) => event.type === 'done')
+      expect(events.some((event) => event.type === 'error')).toBe(false)
+      expect(events.at(-1)?.type).toBe('done')
+      expect(
+        events
+          .filter((event) => event.type === 'side_effect' && event.data.kind === 'tts')
+          .map((event) => event.data.payload),
+      ).toEqual(enabled ? [{ text: 'spoken reply', characterId: 'char-1' }] : [])
+    },
+  )
+
   it('exposes the accepted durable job id before the SSE body is consumed', async () => {
     const res = await postDurable({})
     const headerJobId = res.headers.get('x-risu-generation-job-id')

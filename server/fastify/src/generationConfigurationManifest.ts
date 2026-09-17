@@ -176,7 +176,7 @@ export const GenerationSettingsOwners = {
   top_a: 'fixed',
   top_k: 'fixed',
   top_p: 'fixed',
-  ttsAutoSpeech: 'outside',
+  ttsAutoSpeech: 'fixed',
   username: 'fixed',
   useSayNothing: 'fixed',
   useStreaming: 'fixed',
@@ -298,6 +298,24 @@ export const translationPolicyFields = [
   'autoTranslateCachedOnly',
   'autoTranslateNotificationDeferCapSeconds',
 ] as const
+
+/** Image execution accepts record-shaped settings outside GenerationSettings.
+ * Keep its additional provider inputs explicit, as for translation policy. */
+export const imageGenerationPolicyFields = [
+  'NAIImgUrl',
+  'NAIApiKey',
+  'stabilityKey',
+  'falToken',
+  'keiServerURL',
+] as const
+
+export const openAiCompatibleImageOwners = {
+  url: 'fixed',
+  model: 'fixed',
+  size: 'fixed',
+  quality: 'fixed',
+  key: 'fixed',
+} as const
 
 export function selectFixedFields(
   value: Record<string, unknown>,

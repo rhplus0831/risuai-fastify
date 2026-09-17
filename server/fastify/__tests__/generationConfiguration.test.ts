@@ -1,7 +1,11 @@
 import { bootPromptVariables } from '../src/prompt/promptVariablesBoot.js'
 import { insertAssetMetadataBatch, assetsDir } from '../src/repository.js'
 import { expandVariables } from '../src/prompt/variables.js'
-import { afterEach, beforeAll, describe, expect, it } from 'vitest'
+import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { zipSync } from 'fflate'
+import { executeImageGeneration } from '../src/imageGeneration.js'
+import { runServerLua } from '../src/prompt/luaRuntime.js'
+import { createTriggerVarEngine } from '../src/prompt/triggerVars.js'
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -342,6 +346,166 @@ describe('accepted configuration contract', () => {
       db.close()
     }
   })
+
+  it.each([
+    {
+      provider: 'openai-compat',
+      settings: {
+        openaiCompatImage: {
+          url: 'https://images.example/accepted',
+          model: 'accepted-model',
+          size: '1024x1024',
+          quality: 'medium',
+          key: 'accepted-image-secret',
+          editorCache: 'unrelated-image-cache',
+        },
+      },
+      url: 'https://images.example/accepted',
+      authorization: 'Bearer accepted-image-secret',
+    },
+    {
+      provider: 'novelai',
+      settings: {
+        NAIImgUrl: 'https://image.novelai.net/accepted',
+        NAIApiKey: 'accepted-image-secret',
+        NAIImgModel: 'nai-diffusion-4-5-full',
+        NAIImgConfig: {
+          width: 1024,
+          height: 1024,
+          steps: 28,
+          scale: 5,
+          sampler: 'k_euler_ancestral',
+          noise_schedule: 'karras',
+        },
+      },
+      url: 'https://image.novelai.net/accepted',
+      authorization: 'Bearer accepted-image-secret',
+    },
+    {
+      provider: 'stability',
+      settings: { stabilityKey: 'accepted-image-secret', stabilityModel: 'core' },
+      url: 'https://api.stability.ai/v2beta/stable-image/generate/core',
+      authorization: 'Bearer accepted-image-secret',
+    },
+    {
+      provider: 'fal',
+      settings: {
+        falToken: 'accepted-image-secret',
+        falModel: 'fal-ai/flux/dev',
+        sdConfig: { width: 1024, height: 1024 },
+      },
+      url: 'https://fal.run/fal-ai/flux/dev',
+      authorization: 'Key accepted-image-secret',
+    },
+    {
+      provider: 'kei',
+      settings: {
+        keiServerURL: 'https://kei.example/accepted',
+        account: { token: 'accepted-image-secret', cache: 'unrelated-account-cache' },
+      },
+      url: 'https://kei.example/accepted/imaggen',
+      authorization: 'accepted-image-secret',
+    },
+  ])(
+    'executes Lua $provider images with accepted settings and separately stored secrets',
+    async ({ provider, settings, url, authorization }) => {
+      const { db } = setup()
+      try {
+        const input = configuration()
+        Object.assign(input.database, settings, { sdProvider: provider })
+        const first = accept(db, input)
+        const edited = structuredClone(input)
+        Object.assign(edited.database, JSON.parse(JSON.stringify(settings).replaceAll('accepted', 'edited')))
+        const next = accept(db, edited, 'operation-b')
+        expect(next.fingerprint).not.toBe(first.fingerprint)
+        // Old work retains accepted policy; a new operation adopts the edit.
+        for (const [phase, snapshot] of [
+          ['accepted', first],
+          ['edited', next],
+        ] as const) {
+          const database = resolveGenerationConfiguration(db, snapshot.stored, snapshot.fingerprint).database
+          expect(JSON.stringify(snapshot.stored)).not.toContain(`${phase}-image-secret`)
+          expect(JSON.stringify(database)).not.toContain('unrelated-')
+          for (const row of db
+            .prepare("SELECT json FROM generation_configuration_dependencies WHERE kind <> 'secret'")
+            .all()) {
+            expect(row.json).not.toContain(`${phase}-image-secret`)
+          }
+
+          const bytes = Buffer.from(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z8Z0AAAAASUVORK5CYII=',
+            'base64',
+          )
+          const fetchImpl = vi.fn<typeof fetch>(async (target) => {
+            if (String(target).startsWith('https://fal.run/')) {
+              return new Response(JSON.stringify({ images: [{ url: 'https://v3.fal.media/files/result.png' }] }))
+            }
+            if (provider === 'novelai') return new Response(zipSync({ 'image.png': bytes }) as BodyInit)
+            if (provider === 'stability' || provider === 'fal') {
+              return new Response(bytes, { headers: { 'content-type': 'image/png' } })
+            }
+            return new Response(
+              JSON.stringify(
+                provider === 'kei'
+                  ? { success: true, data: `data:image/png;base64,${bytes.toString('base64')}` }
+                  : { data: [{ b64_json: bytes.toString('base64') }] },
+              ),
+            )
+          })
+          const character = database.characters[0]
+          const chat = character.chats[0]
+          const persist = vi.fn(() => 'image-asset')
+          const result = await runServerLua(
+            {
+              code: `listenEdit('editRequest', function(id, data)
+            data[1].content = generateImage(id, 'a lighthouse'):await()
+            return data
+          end)`,
+              mode: 'editRequest',
+              data: [{ role: 'user', content: 'original' }],
+              lowLevelAccess: true,
+            },
+            {
+              database,
+              chat,
+              char: character,
+              selectedCharID: 0,
+              chatPage: 0,
+              varEngine: createTriggerVarEngine({
+                database,
+                chat,
+                selectedCharID: 0,
+                chatPage: 0,
+                defaultVariables: [],
+              }),
+              luaImageGeneration: {
+                execute: (request, acceptedSettings, options) =>
+                  executeImageGeneration(request, acceptedSettings, { ...options, fetchImpl }),
+                persist,
+              },
+            },
+          )
+          expect(result.error).toBeUndefined()
+          expect(result.res).toEqual([{ role: 'user', content: '{{inlay::image-asset}}' }])
+          expect(persist).toHaveBeenCalledExactlyOnceWith({ bytes, contentType: 'image/png' })
+          expect(fetchImpl.mock.calls[0][0]).toBe(url.replaceAll('accepted', phase))
+          const init = fetchImpl.mock.calls[0][1]!
+          expect(new Headers(init.headers).get(provider === 'kei' ? 'x-api-key' : 'authorization')).toBe(
+            authorization.replaceAll('accepted', phase),
+          )
+          if (provider === 'openai-compat') {
+            expect(JSON.parse(String(init.body))).toMatchObject({
+              model: `${phase}-model`,
+              size: '1024x1024',
+              quality: 'medium',
+            })
+          }
+        }
+      } finally {
+        db.close()
+      }
+    },
+  )
 
   it('retains accepted catalog binaries through live deletion, then reclaims them after dependency pruning', async () => {
     const { dir, db } = setup()

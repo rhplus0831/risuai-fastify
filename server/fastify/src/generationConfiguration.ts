@@ -13,6 +13,8 @@ import {
   selectFixedFields,
   translationPolicyFields,
   ModuleOwners,
+  imageGenerationPolicyFields,
+  openAiCompatibleImageOwners,
 } from './generationConfigurationManifest.js'
 import { PROVIDER_SECRET_PATHS, PROVIDER_SECRET_PATH_WILDCARD } from '@risuai/shared-core/provider-secret-mask'
 
@@ -69,6 +71,16 @@ export function projectGenerationConfiguration(
 ): AcceptedEffectiveGenerationConfiguration {
   const database = input.database as unknown as RecordValue
   const projected = selectFixedFields(database, GenerationSettingsOwners)
+  for (const key of imageGenerationPolicyFields) {
+    if (Object.hasOwn(database, key)) projected[key] = database[key]
+  }
+  if (Object.hasOwn(database, 'openaiCompatImage')) {
+    projected.openaiCompatImage = record(database.openaiCompatImage)
+      ? selectFixedFields(database.openaiCompatImage, openAiCompatibleImageOwners)
+      : database.openaiCompatImage
+  }
+  // Kei consumes the account token, not the account's unrelated profile/cache.
+  if (record(database.account)) projected.account = selectFixedFields(database.account, { token: 'fixed' })
   if (Array.isArray(database.modules))
     projected.modules = database.modules.map((module) =>
       record(module) ? selectFixedFields(module, ModuleOwners) : module,
