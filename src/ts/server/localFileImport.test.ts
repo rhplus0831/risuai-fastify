@@ -29,6 +29,7 @@ vi.mock('./commands', () => ({
 }))
 
 import { importLocalCharacterFileFromServer, importLocalModuleFileFromServer } from './localFileImport'
+import { LOCAL_CHARACTER_IMPORT_DUPLEX_PROGRESS_MAX_BYTES } from './localFileImportTransport'
 
 beforeEach(() => {
   resetClientSessionForTests()
@@ -152,6 +153,36 @@ describe('local file import client', () => {
     xhr.onload!()
     await expect(importing).resolves.toEqual({ status: 'conflict', currentRevision: 12 })
     expect(setRevision).toHaveBeenCalledWith(12)
+  })
+
+  it('uses upload progress without a duplex SSE response for oversized files', async () => {
+    vi.stubGlobal('XMLHttpRequest', FakeImportXhr)
+    const file = new Blob(['card'])
+    Object.defineProperty(file, 'size', { value: LOCAL_CHARACTER_IMPORT_DUPLEX_PROGRESS_MAX_BYTES + 1 })
+    const onProgress = vi.fn()
+    const importing = importLocalCharacterFileFromServer({
+      file,
+      fileName: 'large.charx',
+      stream: true,
+      onProgress,
+    })
+    await vi.waitFor(() => expect(FakeImportXhr.latest).toBeDefined())
+    const xhr = FakeImportXhr.latest!
+    expect(xhr.headers).not.toHaveProperty('accept')
+    xhr.upload.onprogress!({ loaded: 50, total: 100, lengthComputable: true })
+    expect(onProgress).toHaveBeenLastCalledWith({ phase: 'upload', completedBytes: 50, totalBytes: 100 })
+    xhr.upload.onload!()
+    expect(onProgress).toHaveBeenLastCalledWith({ phase: 'processing' })
+    xhr.contentType = 'application/json'
+    xhr.status = 200
+    xhr.responseText = JSON.stringify({
+      revision: 8,
+      event: { type: 'character.created', resource: 'character', revision: 8, id: 'large' },
+      characterId: 'large',
+      importReport: { droppedArchiveEntries: [], droppedInlineAssets: [] },
+    })
+    xhr.onload!()
+    await expect(importing).resolves.toMatchObject({ status: 'ok', characterId: 'large' })
   })
 
   it('sends one multipart character file and reconciles the server-created event', async () => {

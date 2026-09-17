@@ -330,8 +330,10 @@ XHR upload events drive byte progress, while server `progress` frames report
 reading, asset import, conversion, and saving. Archive input reports measured
 bytes and saved-asset counts. The terminal `result` frame carries the ordinary
 status code and JSON body, including confirmation tokens and conflicts; it is
-the acceptance boundary. Callers without SSE keep the JSON response. The
-browser refreshes command projections before closing its progress dialog.
+the acceptance boundary. To avoid a bidirectional HTTP/2 stream through reverse
+proxies, uploads above 64 MiB use XHR upload progress followed by the ordinary
+JSON response instead of concurrent SSE. The browser refreshes command
+projections before closing its progress dialog.
 
 Local character-card asset writes and the character mutation now run in the
 same server request. Content-addressed assets written before a later validation

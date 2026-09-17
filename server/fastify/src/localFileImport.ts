@@ -22,6 +22,7 @@ type JsonRecord = Record<string, unknown>
 const CHARACTER_CARD_MAX_ENTRY_BYTES = 50 * 1024 * 1024
 const CHARACTER_CARD_STREAM_CHUNK_BYTES = 64 * 1024
 const CHARACTER_CARD_TEXT_BYTES = 5 * 1024 * 1024
+const ZIP_COMPLETION_TAIL_BYTES = 65_557
 const RISU_MODULE_MAGIC_BYTE = 111
 const RISU_MODULE_VERSION = 0
 const RPACK_DECODE_MAP = Buffer.from(
@@ -274,15 +275,32 @@ export async function importLocalFileStream(args: {
 }
 
 async function* completeZipSource(source: AsyncIterable<Uint8Array>): AsyncIterable<Uint8Array> {
-  let tail = Buffer.alloc(0)
+  const tailBuffer = Buffer.allocUnsafe(ZIP_COMPLETION_TAIL_BYTES)
+  let tailLength = 0
+  let writeOffset = 0
   for await (const chunk of source) {
     // EOCD plus the maximum ZIP comment; never retain the archive itself.
-    tail =
-      chunk.length >= 65557
-        ? Buffer.from(chunk.subarray(chunk.length - 65557))
-        : Buffer.concat([tail, chunk]).subarray(-65557)
+    // Keep it in a fixed ring: rebuilding the tail for every 64 KiB upload
+    // chunk creates allocation churn proportional to the entire archive.
+    if (chunk.length >= ZIP_COMPLETION_TAIL_BYTES) {
+      tailBuffer.set(chunk.subarray(chunk.length - ZIP_COMPLETION_TAIL_BYTES))
+      tailLength = ZIP_COMPLETION_TAIL_BYTES
+      writeOffset = 0
+    } else if (chunk.length > 0) {
+      const firstLength = Math.min(chunk.length, ZIP_COMPLETION_TAIL_BYTES - writeOffset)
+      tailBuffer.set(chunk.subarray(0, firstLength), writeOffset)
+      if (firstLength < chunk.length) tailBuffer.set(chunk.subarray(firstLength), 0)
+      writeOffset = (writeOffset + chunk.length) % ZIP_COMPLETION_TAIL_BYTES
+      tailLength = Math.min(ZIP_COMPLETION_TAIL_BYTES, tailLength + chunk.length)
+    }
     yield chunk
   }
+  const tail =
+    tailLength < ZIP_COMPLETION_TAIL_BYTES
+      ? tailBuffer.subarray(0, tailLength)
+      : writeOffset === 0
+        ? tailBuffer
+        : Buffer.concat([tailBuffer.subarray(writeOffset), tailBuffer.subarray(0, writeOffset)], tailLength)
   for (let i = tail.length - 22; i >= 0; i--) {
     if (tail.readUInt32LE(i) === 0x06054b50 && i + 22 + tail.readUInt16LE(i + 20) === tail.length) return
   }

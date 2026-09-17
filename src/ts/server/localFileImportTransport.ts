@@ -11,6 +11,8 @@ export type LocalFileImportProgress =
   | { phase: 'prepare' | 'processing' | 'refresh' }
   | { phase: 'upload'; completedBytes: number; totalBytes?: number }
 
+export const LOCAL_CHARACTER_IMPORT_DUPLEX_PROGRESS_MAX_BYTES = 64 * 1024 * 1024
+
 export function reportLocalFileImportProgress(
   callback: ((progress: LocalFileImportProgress) => void) | undefined,
   progress: LocalFileImportProgress,
@@ -28,6 +30,7 @@ export function sendLocalCharacterImport(input: {
   body: FormData | string
   headers: Record<string, string>
   signal?: AbortSignal | null
+  serverProgress?: boolean
   onProgress: (progress: LocalFileImportProgress) => void
 }): Promise<Response> {
   return new Promise((resolve, reject) => {
@@ -72,7 +75,7 @@ export function sendLocalCharacterImport(input: {
 
     xhr.open('POST', input.url)
     for (const [key, value] of Object.entries(input.headers)) xhr.setRequestHeader(key, value)
-    xhr.setRequestHeader('accept', 'text/event-stream')
+    if (input.serverProgress !== false) xhr.setRequestHeader('accept', 'text/event-stream')
     if (input.body instanceof FormData) {
       report({ phase: 'upload', completedBytes: 0 })
       xhr.upload.onprogress = (event) => {

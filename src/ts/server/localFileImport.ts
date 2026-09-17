@@ -3,6 +3,7 @@ import { isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { activeWriterSessionHeader, handleActiveWriterStaleResponse } from './activeWriterSession'
 import {
+  LOCAL_CHARACTER_IMPORT_DUPLEX_PROGRESS_MAX_BYTES,
   sendLocalCharacterImport,
   reportLocalFileImportProgress,
   type LocalFileImportProgress,
@@ -135,6 +136,7 @@ async function importLocalFileFromServer(
                 headers,
                 body,
                 signal: options.signal,
+                serverProgress: !options.file || options.file.size <= LOCAL_CHARACTER_IMPORT_DUPLEX_PROGRESS_MAX_BYTES,
                 onProgress,
               })
             : await fetch(url, {

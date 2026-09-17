@@ -668,6 +668,31 @@ describe('live local-file ingestion', () => {
     })
   })
 
+  it('keeps ZIP completion tracking allocation-bounded across small upload chunks', async () => {
+    const { importLocalFileStream } = await import('../src/localFileImport.js')
+    const archive = characterArchive(Buffer.alloc(2 * 1024 * 1024, 42))
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    const concat = vi.spyOn(Buffer, 'concat')
+    try {
+      const imported = await importLocalFileStream({
+        kind: 'character',
+        source: (async function* () {
+          for (let offset = 0; offset < archive.length; offset += 1024) {
+            yield archive.subarray(offset, offset + 1024)
+          }
+        })(),
+        db,
+        dataDir: harness.dataDir,
+        fileName: 'small-chunks.charx',
+      })
+      expect(imported).toMatchObject({ character: { name: 'Uploaded Character' } })
+      expect(concat.mock.calls.length).toBeLessThan(20)
+    } finally {
+      concat.mockRestore()
+      db.close()
+    }
+  })
+
   it('reads framed module assets incrementally and rejects truncated input without creation', async () => {
     const bytes = risum({ id: 'old', name: 'Streamed module', lowLevelAccess: true, assets: [['one', 'old', 'png']] }, [
       Buffer.from('streamed asset'),
