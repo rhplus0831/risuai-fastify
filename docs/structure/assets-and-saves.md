@@ -282,22 +282,52 @@ only the prompt half, or cancel without writing either half.
 
 ### Character Cards
 
-`POST /api/v1/import/character-card` accepts one multipart JSON, PNG, CharX, or
-JPEG-embedded CharX file. Fastify streams the upload to a temporary file,
-decodes archives server-side, stores content-addressed assets, converts the
-card, and creates the character in one revisioned operation. Entries that
-expand beyond 50 MiB and oversized inline data-URI assets are dropped while
-readable card content is imported; the response report drives the existing
-localized completion alert. Missing non-dropped assets remain hard errors.
-Password and low-level-access prompts use a short-lived pending token, so a
-confirmation retry sends JSON only and does not upload or unpack the file
-again. The older browser `CharXImporter` remains for non-picker compatibility
-callers and export-adjacent tests.
+The bot picker selects one file. `src/ts/server/localFilePreflight.ts` reads
+bounded metadata through Blob slices before uploading: PNG chunk headers,
+CharX ZIP directory/card metadata (including metadata-last archives), and
+module headers. Password-protected PNG cards are decrypted locally for the
+permission check; password and low-level-access prompts finish before upload.
+Local decryption uses JavaScript SHA-256/AES-GCM fallbacks when browser
+SubtleCrypto is unavailable. Standalone JSON is read as a complete document
+for preflight; its size allowance is enforced by the server configuration.
+`src/ts/server/localFileImportPreflightPrompt.ts` fences those prompts against
+writer changes. The server independently validates the uploaded content.
+
+`POST /api/v1/import/character-card` accepts multipart JSON, PNG, CharX, or
+JPEG-embedded CharX. Current picker/drop callers use `?stream=1`, with an
+`options` form field preceding the file. Fastify feeds incoming file chunks
+directly into the parser; it does not first save and reread the complete upload.
+CharX and RISUM assets are decoded and persisted entry by entry with input
+backpressure. The cumulative 310 MiB Realm expansion ceiling does not apply to
+streamed archives; the configured upload ceiling still applies. Archive metadata
+and individual packaged assets remain bounded to 50 MiB (PNG card text to 5 MiB).
+Standalone JSON character/module/lorebook imports and standalone RISUM metadata
+headers retain the configured expanded size limit (310 MiB by default),
+independently of archive-entry limits. Cancellation destroys both the multipart
+file stream and unfinished HTTP request so stalled uploads cannot hold shutdown
+open. Both live and retained intake connect to shutdown cancellation before
+waiting for multipart file headers. Temporary-file intake still permits
+maintenance and rechecks admission before conversion. PNG text
+chunks are classified by keyword before applying payload limits; unrelated text
+and oversized card text are drained without retaining their complete payloads,
+while oversized embedded assets remain errors.
+Oversized CharX entries and inline data-URI assets are reported as dropped;
+missing non-dropped assets and incomplete streams remain errors.
+
+The final character/module create remains revision-checked, after complete
+input validation and a fresh writer-epoch check. Callers without `stream=1`
+retain the temporary-upload/pending-token compatibility path. Those older
+callers can answer password/permission challenges without uploading again.
+The older browser `CharXImporter` remains for non-picker compatibility callers
+and export-adjacent tests. Regression coverage lives in
+`server/fastify/__tests__/localFileImport.test.ts` and
+`src/ts/server/localFilePreflight.test.ts`, including metadata-last archives,
+pre-upload encryption inspection, and incremental input above 310 MiB.
 
 Local character-card callers can opt into an SSE response with
 `Accept: text/event-stream`. The upload remains a single multipart request;
-XHR upload events drive byte progress, then server `progress` frames report
-reading, asset import, conversion, and saving. Archive passes report measured
+XHR upload events drive byte progress, while server `progress` frames report
+reading, asset import, conversion, and saving. Archive input reports measured
 bytes and saved-asset counts. The terminal `result` frame carries the ordinary
 status code and JSON body, including confirmation tokens and conflicts; it is
 the acceptance boundary. Callers without SSE keep the JSON response. The

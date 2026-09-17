@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pipeline } from 'node:stream/promises'
+import { addAbortSignal } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { DatabaseSync } from 'node:sqlite'
@@ -19,6 +20,7 @@ import {
   CharacterPasswordInvalidError,
   CharacterPasswordRequiredError,
   importLocalCharacterFile,
+  importLocalFileStream,
   importLocalModuleFile,
 } from '../localFileImport.js'
 import { LowLevelAccessImportError } from '../realmImport/characterCard.js'
@@ -33,6 +35,7 @@ import { setImmediate as yieldToIo } from 'node:timers/promises'
 type ImportKind = 'character' | 'module'
 
 interface ImportQuery {
+  stream?: unknown
   baseRevision?: unknown
 }
 
@@ -97,6 +100,7 @@ export function registerLocalFileImportRoutes(
         db,
         dataDir,
         eventSink,
+        activeWriterState,
         pendingImports,
         ttlMs,
         options,
@@ -114,6 +118,7 @@ export function registerLocalFileImportRoutes(
         db,
         dataDir,
         eventSink,
+        activeWriterState,
         pendingImports,
         ttlMs,
         options,
@@ -175,15 +180,29 @@ async function handleLocalFileImport(args: {
   db: DatabaseSync
   dataDir: string
   eventSink: CommandEventSink
+  activeWriterState: ActiveWriterState
   pendingImports: Map<string, PendingLocalFileImport>
   ttlMs: number
   options: { maxUploadBytes: number; maxExpandedBytes?: number }
   reportProgress?: (progress: LocalCharacterImportProgress) => void
 }): Promise<unknown> {
+  const writerEpoch = args.activeWriterState.epoch
+  const writerSession = args.activeWriterState.sessionId
+  const writerIsCurrent = () =>
+    args.activeWriterState.epoch === writerEpoch && args.activeWriterState.sessionId === writerSession
+  const staleWriter = () => {
+    if (pending) consumePendingImport(args.pendingImports, pending)
+    args.reply.code(423)
+    return {
+      error: 'active_writer_stale',
+      reason: 'A newer browser session is now the active writer. Reload this session before saving.',
+    }
+  }
   let pending: PendingLocalFileImport | null = null
   let ownsUpload = false
   const requestAbort = attachMaintenanceAbort(args.req, args.reply)
   const coordinator = getMaintenanceCoordinator(args.dataDir)
+  const intakeSignal = AbortSignal.any([requestAbort.signal, coordinator.shutdownSignal])
   let lease: MaintenanceLease | undefined
   try {
     const retry = args.req.isMultipart() ? null : readPendingImportBody(args.req.body)
@@ -191,44 +210,88 @@ async function handleLocalFileImport(args: {
       ? readBaseRevisionQuery((args.req.query ?? {}) as ImportQuery)
       : readBaseRevision(retry?.baseRevision)
     let allowLowLevelAccess = retry?.allowLowLevelAccess === true
-    const password = typeof retry?.password === 'string' ? retry.password : undefined
+    let password = typeof retry?.password === 'string' ? retry.password : undefined
 
-    // Reject an already busy owner before receiving the upload. Temporary bytes
-    // need no live-asset protection; recheck admission after intake completes.
-    coordinator.beginAssetStaging(requestAbort.signal).release()
-    if (retry) {
+    // Reject busy owners, but temporary intake must still allow maintenance.
+    coordinator.beginAssetStaging(intakeSignal).release()
+    // Shutdown must wake req.file() even before a file stream/lease exists.
+    addAbortSignal(intakeSignal, args.req.raw)
+    let streamed: Awaited<ReturnType<typeof importLocalFileStream>> | undefined
+    if (!retry && (args.req.query as ImportQuery)?.stream === '1') {
+      // Preflight options precede the file, so consent/password are available
+      // before consuming any asset payload. They never appear in URLs or logs.
+      const file = await args.req.file({ limits: { fileSize: args.options.maxUploadBytes } })
+      if (!file) throw new ValidationError('Import file missing')
+      const field = file.fields.options
+      if (!field || Array.isArray(field) || field.type !== 'field' || typeof field.value !== 'string')
+        throw new ValidationError('Import options must precede the file')
+      let parsedOptions: unknown
+      try {
+        parsedOptions = JSON.parse(field.value)
+      } catch {
+        throw new ValidationError('Invalid import options')
+      }
+      const options = readPendingImportBody(parsedOptions)
+      allowLowLevelAccess = options.allowLowLevelAccess === true
+      password = typeof options.password === 'string' ? options.password : undefined
+      lease = coordinator.beginAssetStaging(intakeSignal)
+      // Wake pending reads when shutdown or disconnect cancels a stalled upload.
+      addAbortSignal(lease.signal, file.file)
+      const source = async function* () {
+        let size = 0
+        for await (const chunk of file.file) {
+          lease!.signal.throwIfAborted()
+          size += chunk.length
+          yield chunk as Buffer
+        }
+        if (file.file.truncated) throw new ValidationError('Import upload exceeds size limit')
+        if (!size) throw new ValidationError('Import file is empty')
+      }
+      streamed = await importLocalFileStream({
+        kind: args.kind,
+        source: source(),
+        maxExpandedBytes: args.options.maxExpandedBytes,
+        db: args.db,
+        dataDir: args.dataDir,
+        fileName: file.filename,
+        password,
+        allowLowLevelAccess,
+        signal: lease.signal,
+        reportProgress: args.reportProgress,
+      })
+      // A receive-time authority change must not authorize a late commit.
+      if (!writerIsCurrent()) return staleWriter()
+    } else if (retry) {
       pending = takePendingImport(args.pendingImports, retry.pendingImportToken, args.kind, false)
     } else {
-      pending = await receivePendingImport(
-        args.req,
-        args.kind,
-        args.options.maxUploadBytes,
-        args.ttlMs,
-        requestAbort.signal,
-      )
+      pending = await receivePendingImport(args.req, args.kind, args.options.maxUploadBytes, args.ttlMs, intakeSignal)
       ownsUpload = true
     }
 
     // Conversion writes live assets across awaits, so retain this lease through
     // the final command (or failed conversion) and release before confirmation.
-    lease = coordinator.beginAssetStaging(requestAbort.signal)
+    lease ??= coordinator.beginAssetStaging(intakeSignal)
     lease.signal.throwIfAborted()
     const eventOrigin = commandEventOrigin(args.req)
     if (args.kind === 'character') {
-      const imported = await importLocalCharacterFile({
-        db: args.db,
-        dataDir: args.dataDir,
-        filePath: pending.filePath,
-        fileName: pending.fileName,
-        allowLowLevelAccess,
-        password,
-        maxExpandedBytes: args.options.maxExpandedBytes,
-        reportProgress: args.reportProgress,
-        signal: lease.signal,
-      })
+      const imported =
+        streamed && 'character' in streamed
+          ? streamed
+          : await importLocalCharacterFile({
+              db: args.db,
+              dataDir: args.dataDir,
+              filePath: pending!.filePath,
+              fileName: pending!.fileName,
+              allowLowLevelAccess,
+              password,
+              maxExpandedBytes: args.options.maxExpandedBytes,
+              reportProgress: args.reportProgress,
+              signal: lease.signal,
+            })
       args.reportProgress?.({ phase: 'commit' })
       if (args.reportProgress) await yieldToIo()
       lease.signal.throwIfAborted()
+      if (!writerIsCurrent()) return staleWriter()
       const result = appendRealmCharacter({
         db: args.db,
         dataDir: args.dataDir,
@@ -237,7 +300,7 @@ async function handleLocalFileImport(args: {
         baseRevision,
         character: imported.character,
       })
-      consumePendingImport(args.pendingImports, pending)
+      if (pending) consumePendingImport(args.pendingImports, pending)
       return {
         revision: result.revision,
         event: result.event,
@@ -246,15 +309,19 @@ async function handleLocalFileImport(args: {
       }
     }
 
-    const imported = await importLocalModuleFile({
-      db: args.db,
-      dataDir: args.dataDir,
-      filePath: pending.filePath,
-      fileName: pending.fileName,
-      allowLowLevelAccess,
-      maxExpandedBytes: args.options.maxExpandedBytes,
-    })
+    const imported =
+      streamed && 'module' in streamed
+        ? streamed
+        : await importLocalModuleFile({
+            db: args.db,
+            dataDir: args.dataDir,
+            filePath: pending!.filePath,
+            fileName: pending!.fileName,
+            allowLowLevelAccess,
+            maxExpandedBytes: args.options.maxExpandedBytes,
+          })
     lease.signal.throwIfAborted()
+    if (!writerIsCurrent()) return staleWriter()
     const module = createModuleRecord(imported.module, 'module', { allowMcp: true }, { assetDb: args.db })
     const result = applyTargetedCommandMutation<{ moduleId: string }>({
       db: args.db,
@@ -281,7 +348,7 @@ async function handleLocalFileImport(args: {
         }
       },
     })
-    consumePendingImport(args.pendingImports, pending)
+    if (pending) consumePendingImport(args.pendingImports, pending)
     return { revision: result.revision, event: result.event, ...result.extra }
   } catch (error) {
     if (error instanceof MaintenanceBusyError) {

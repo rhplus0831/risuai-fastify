@@ -1,3 +1,4 @@
+import { prepareLocalFileImport } from './server/localFileImportPreflightPrompt'
 import { captureClientSessionGeneration } from './clientSession'
 import { awaitClientWriteOperation, isClientWriteOperationCurrent } from './clientWriteOperation'
 import {
@@ -236,18 +237,10 @@ export async function importCharacter(): Promise<CharacterImportOutcome | null |
   const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
   if (!isCurrent()) return null
   try {
-    const files = await selectFileByDom(['*'], 'multiple')
-    if (!isCurrent() || !files) {
-      return
-    }
-
-    let outcome: CharacterImportOutcome | null = null
-    for (const f of files) {
-      const nextOutcome = await importCharacterFile(f, f.name)
-      if (nextOutcome) outcome = nextOutcome
-      if (!isCurrent()) return outcome
-      checkCharOrder()
-    }
+    const file = (await selectFileByDom(['*'], 'single'))?.[0]
+    if (!isCurrent() || !file) return
+    const outcome = await importCharacterFile(file, file.name)
+    if (isCurrent()) checkCharOrder()
     return outcome
   } catch (error) {
     if (!isCurrent()) return null
@@ -274,7 +267,9 @@ export async function importCharacterFile(
     if (isCurrent()) showLocalCharacterImportProgress(progress, fileName)
   }
   onProgress({ phase: 'prepare' })
-  let result = await importLocalCharacterFileFromServer({ file, fileName, onProgress })
+  const preflight = await prepareLocalFileImport(file, fileName, 'character', sourceGeneration)
+  if (!preflight || !isCurrent()) return null
+  let result = await importLocalCharacterFileFromServer({ file, fileName, onProgress, ...preflight })
   let pendingImportToken: string | undefined
   let password: string | undefined
   let allowLowLevelAccess = false

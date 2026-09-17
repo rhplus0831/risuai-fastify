@@ -38,6 +38,11 @@ export class MaintenanceCoordinator {
   private closePromise: Promise<void> | undefined
   private resolveClose: (() => void) | undefined
 
+  /** Cancels intake that does not yet own live assets or a maintenance lease. */
+  get shutdownSignal(): AbortSignal {
+    return this.shutdown.signal
+  }
+
   get activityVersion(): number {
     return this.activity
   }

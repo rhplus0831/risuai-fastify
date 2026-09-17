@@ -1,3 +1,4 @@
+vi.mock('../server/localFileImportPreflightPrompt', () => ({ prepareLocalFileImport: vi.fn(async () => ({})) }))
 import { resetClientSessionForTests } from '../clientSession'
 import {
   setManagedWriterForTest,

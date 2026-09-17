@@ -1,6 +1,7 @@
 import { createHash, randomUUID, webcrypto } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
+import { StreamBytes, StreamedPngImage } from './localImportStreamBytes.js'
 import type { DatabaseSync } from 'node:sqlite'
 import * as fflate from 'fflate'
 import { normalizeScriptDefinitionCollection } from './commands/scriptDefinitions.js'
@@ -70,6 +71,252 @@ interface ParsedCharxMetadata {
   card: JsonRecord
   moduleBytes: Buffer | null
   droppedEntries: string[]
+}
+
+/** Live multipart ingestion. Asset payloads are released entry-by-entry; the
+ * archive's total size is not a memory limit. The final create remains revisioned.
+ * Like ordinary uploads, assets left by a failed create are reclaimed by GC. */
+export async function importLocalFileStream(args: {
+  kind: 'character' | 'module'
+  source: AsyncIterable<Uint8Array>
+  /** Configured standalone metadata limit; archive entries have separate bounds. */
+  maxExpandedBytes?: number
+  db: DatabaseSync
+  dataDir: string
+  fileName: string
+  allowLowLevelAccess?: boolean
+  password?: string
+  signal?: AbortSignal
+  reportProgress?: (progress: LocalCharacterImportProgress) => void
+}): Promise<LocalCharacterFileImportResult | LocalModuleFileImportResult> {
+  const extension = fileExtension(args.fileName)
+  const report: LocalFileImportReport = { droppedArchiveEntries: [], droppedInlineAssets: [] }
+  const assetDict: Record<string, string> = Object.create(null)
+  let completedAssets = 0
+  const save = (bytes: Uint8Array, name: string) => {
+    args.signal?.throwIfAborted()
+    const id = persistAsset(args.db, args.dataDir, bytes, name).entry.id
+    args.reportProgress?.({ phase: 'assets', completedAssets: ++completedAssets })
+    return id
+  }
+  args.reportProgress?.({ phase: 'read' })
+  const reader = new StreamBytes(args.source, args.signal)
+  if (args.kind === 'module') {
+    let module: JsonRecord
+    if (extension === 'risum') {
+      module = await readRisumStream(reader, args.allowLowLevelAccess, save, args.maxExpandedBytes ?? Infinity)
+    } else if (extension === 'json' || extension === 'lorebook') {
+      module = convertJsonModule(parseJsonBytes(await reader.rest(args.maxExpandedBytes ?? Infinity), 'module'))
+      assertModuleLowLevelAccessAllowed(module, args.allowLowLevelAccess)
+    } else throw new ValidationError('Unsupported module file type')
+    delete module.scriptModelOverrides
+    module.id = randomUUID()
+    normalizeScriptDefinitionCollection({ modules: [module] })
+    return { module }
+  }
+
+  let card: unknown
+  let mainImageId: string | undefined
+  let moduleLorebook: unknown[] | undefined
+  if (extension === 'charx' || extension === 'jpg' || extension === 'jpeg') {
+    let moduleBytes: Buffer | undefined
+    let openEntries = 0
+    // Synchronous entry callbacks keep only one bounded entry alive. Input reads
+    // await each push, so neither the network nor asset writes build a queue.
+    await streamZip(
+      completeZipSource(args.source),
+      (file, fail) => {
+        if (file.name.endsWith('/') || (file.name.endsWith('.json') && file.name !== 'card.json')) {
+          file.ondata = (error) => {
+            if (error) fail(error)
+          }
+          file.start()
+          return
+        }
+        const drop = () => {
+          if (!report.droppedArchiveEntries.includes(file.name)) report.droppedArchiveEntries.push(file.name)
+          // Start or keep draining the decoder. terminate() alone leaves
+          // unstarted compressed payloads retained by fflate.
+          file.ondata = (error) => {
+            if (error) fail(error)
+          }
+        }
+        if ((file.originalSize ?? 0) > CHARACTER_CARD_MAX_ENTRY_BYTES) {
+          drop()
+          file.start()
+          return
+        }
+        openEntries++
+        let chunks: Buffer[] = []
+        let size = 0
+        file.ondata = (error, data, final) => {
+          if (error) return fail(error)
+          size += data.length
+          if (size > CHARACTER_CARD_MAX_ENTRY_BYTES) {
+            chunks = []
+            openEntries--
+            drop()
+            return
+          }
+          if (data.length) chunks.push(Buffer.from(data))
+          if (!final) return
+          openEntries--
+          try {
+            const bytes = Buffer.concat(chunks, size)
+            chunks = []
+            if (file.name === 'card.json') {
+              card = parseJsonBytes(bytes, 'card.json')
+            } else if (file.name === 'module.risum') moduleBytes = bytes
+            else {
+              if (!size) throw new ValidationError('Character archive asset is empty')
+              assetDict[file.name] = save(bytes, file.name)
+            }
+          } catch (error) {
+            fail(error instanceof Error ? error : new Error(String(error)))
+          }
+        }
+        file.start()
+      },
+      (completedBytes) => {
+        args.signal?.throwIfAborted()
+        args.reportProgress?.({ phase: 'assets', completedBytes, completedAssets })
+      },
+    )
+    if (openEntries !== 0) throw new ValidationError('Character archive ended unexpectedly')
+    const record = readRecord(card, 'card.json')
+    if (record.spec !== 'chara_card_v3') throw new ValidationError('Character archive card must be chara_card_v3')
+    if (moduleBytes) {
+      const parsed = parseRisum(moduleBytes, { db: args.db, dataDir: args.dataDir, persistAssets: false }).module
+      const risuai = ensureRecordField(ensureRecordField(readRecord(record.data, 'card.data'), 'extensions'), 'risuai')
+      if (Array.isArray(parsed.regex)) risuai.customScripts = cloneJson(parsed.regex)
+      if (Array.isArray(parsed.trigger)) risuai.triggerscript = cloneJson(parsed.trigger)
+      if (Array.isArray(parsed.lorebook)) moduleLorebook = cloneJson(parsed.lorebook)
+      assertLowLevelAccessAllowed(card, args.allowLowLevelAccess)
+      parseRisum(moduleBytes, { db: args.db, dataDir: args.dataDir, persistAssets: true })
+    }
+    removeDroppedCardAssets(card, report.droppedArchiveEntries)
+  } else if (extension === 'png') {
+    const signature = await reader.read(8)
+    if (!signature.equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])))
+      throw new ValidationError('Malformed PNG character card')
+    const image = new StreamedPngImage()
+    try {
+      image.write(signature)
+      let cardText = ''
+      let v3Text = ''
+      while (true) {
+        const header = await reader.read(8)
+        const length = header.readUInt32BE(0)
+        const type = header.toString('ascii', 4)
+        if (type === 'tEXt') {
+          // PNG keywords are at most 79 bytes plus the separator. Identify the
+          // payload before applying card-text or embedded-asset limits.
+          const prefix = await reader.read(Math.min(length, 80))
+          const separator = prefix.indexOf(0)
+          const key = separator < 0 ? '' : prefix.toString('utf8', 0, separator)
+          const valueLength = length - separator - 1
+          const isCard = key === 'chara' || key === 'ccv3'
+          const isAsset = key.startsWith('chara-ext-asset_')
+          if ((isCard && valueLength <= CHARACTER_CARD_TEXT_BYTES) || isAsset) {
+            const limit = Math.ceil((CHARACTER_CARD_MAX_ENTRY_BYTES * 4) / 3) + 1024
+            if (isAsset && valueLength > limit) throw new ValidationError('PNG embedded asset exceeds size limit')
+            const value = Buffer.concat([
+              prefix.subarray(separator + 1),
+              await reader.read(length - prefix.length, limit),
+            ]).toString('utf8')
+            if (key === 'chara') cardText = value
+            else if (key === 'ccv3') v3Text = value
+            else {
+              const bytes = Buffer.from(value, 'base64')
+              if (bytes.length > CHARACTER_CARD_MAX_ENTRY_BYTES)
+                throw new ValidationError('PNG embedded asset exceeds size limit')
+              assetDict[key.replace('chara-ext-asset_:', '').replace('chara-ext-asset_', '')] = save(bytes, 'asset.png')
+            }
+          } else {
+            // Retain the old parser's handling of irrelevant or oversized card
+            // text: ignore it and continue looking for usable card metadata.
+            await reader.skip(length - prefix.length)
+          }
+          await reader.skip(4) // CRC (as in the retained parser, not validated here).
+        } else {
+          image.write(header)
+          let remaining = length + 4
+          while (remaining > 0) {
+            const count = Math.min(remaining, CHARACTER_CARD_STREAM_CHUNK_BYTES)
+            image.write(await reader.read(count))
+            remaining -= count
+          }
+        }
+        if (type === 'IEND') break
+      }
+      await reader.finish()
+      const encoded = v3Text || cardText
+      if (!encoded) throw new ValidationError('PNG character card metadata missing')
+      card = encoded.startsWith('rcc||')
+        ? await decodeEncryptedCard(encoded, args.password)
+        : decodeBase64Json(encoded, 'PNG card metadata')
+      assertLowLevelAccessAllowed(card, args.allowLowLevelAccess)
+      args.signal?.throwIfAborted()
+      mainImageId = image.register(args.db, args.dataDir)
+      args.reportProgress?.({ phase: 'assets', completedAssets: ++completedAssets })
+    } finally {
+      image.dispose()
+    }
+  } else if (extension === 'json') {
+    card = parseJsonBytes(await reader.rest(args.maxExpandedBytes ?? Infinity), 'character card')
+  } else throw new ValidationError('Unsupported character card file type')
+  assertLowLevelAccessAllowed(card, args.allowLowLevelAccess)
+  dropOversizedInlineAssets(card, report)
+  const character = await convertLocalCard(card, args, assetDict, mainImageId, extension === 'png')
+  if (moduleLorebook)
+    character.globalLore = repairLorebookEntries(moduleLorebook, `character ${String(character.chaId)}.globalLore`)
+  return { character, report }
+}
+
+async function* completeZipSource(source: AsyncIterable<Uint8Array>): AsyncIterable<Uint8Array> {
+  let tail = Buffer.alloc(0)
+  for await (const chunk of source) {
+    // EOCD plus the maximum ZIP comment; never retain the archive itself.
+    tail =
+      chunk.length >= 65557
+        ? Buffer.from(chunk.subarray(chunk.length - 65557))
+        : Buffer.concat([tail, chunk]).subarray(-65557)
+    yield chunk
+  }
+  for (let i = tail.length - 22; i >= 0; i--) {
+    if (tail.readUInt32LE(i) === 0x06054b50 && i + 22 + tail.readUInt16LE(i + 20) === tail.length) return
+  }
+  throw new ValidationError('Character archive ended without a complete directory')
+}
+
+async function readRisumStream(
+  reader: StreamBytes,
+  allowLowLevelAccess: boolean | undefined,
+  save: (bytes: Uint8Array, name: string) => string,
+  maxMetadataBytes: number,
+): Promise<JsonRecord> {
+  const prefix = await reader.read(6)
+  if (prefix[0] !== RISU_MODULE_MAGIC_BYTE || prefix[1] !== RISU_MODULE_VERSION)
+    throw new ValidationError('Malformed module: invalid magic or version')
+  const module = normalizeModuleMetadata(
+    parseJsonBytes(decodeRpack(await reader.read(prefix.readUInt32LE(2), maxMetadataBytes)), 'module header'),
+  )
+  assertModuleLowLevelAccessAllowed(module, allowLowLevelAccess)
+  const assets = normalizeModuleAssets(module.assets)
+  let index = 0
+  while (true) {
+    const marker = (await reader.read(1))[0]
+    if (marker === 0) break
+    if (marker !== 1 || index >= assets.length) throw new ValidationError('Malformed module asset payload')
+    const length = (await reader.read(4)).readUInt32LE(0)
+    const decoded = decodeRpack(await reader.read(length, CHARACTER_CARD_MAX_ENTRY_BYTES))
+    assets[index][1] = save(decoded, uploadFileNameForModuleAsset(assets[index][2], decoded))
+    index++
+  }
+  if (index !== assets.length) throw new ValidationError('Module asset payload count does not match metadata')
+  await reader.finish()
+  module.assets = assets
+  return module
 }
 
 export async function importLocalCharacterFile(args: {
@@ -549,7 +796,7 @@ async function persistCharxAssets(
 }
 
 async function streamZip(
-  filePath: string,
+  filePath: string | AsyncIterable<Uint8Array>,
   onFile: (file: fflate.UnzipFile, fail: (error: Error) => void) => void,
   onBytes?: (bytes: number) => void,
 ): Promise<void> {
@@ -569,7 +816,9 @@ async function streamZip(
       }
     }
     let completedBytes = 0
-    for await (const chunk of fs.createReadStream(filePath, { highWaterMark: CHARACTER_CARD_STREAM_CHUNK_BYTES })) {
+    for await (const chunk of typeof filePath === 'string'
+      ? fs.createReadStream(filePath, { highWaterMark: CHARACTER_CARD_STREAM_CHUNK_BYTES })
+      : filePath) {
       if (parseError) break
       unzip.push(chunk, false)
       completedBytes += chunk.byteLength

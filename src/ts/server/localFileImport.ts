@@ -50,6 +50,7 @@ export type ServerLocalFileImportFailure =
   | { status: 'unavailable' }
 
 interface LocalFileImportOptions {
+  stream?: boolean
   file?: Blob
   fileName?: string
   pendingImportToken?: string
@@ -112,9 +113,17 @@ async function importLocalFileFromServer(
       } else {
         if (!options.file) return { status: 'error', error: 'Import file is required' }
         const form = new FormData()
+        if (options.stream)
+          form.append(
+            'options',
+            JSON.stringify({
+              allowLowLevelAccess: options.allowLowLevelAccess === true,
+              ...(options.password !== undefined ? { password: options.password } : {}),
+            }),
+          )
         form.append('file', options.file, options.fileName ?? defaultFileName(kind))
         body = form
-        url = `${endpoint}?baseRevision=${encodeURIComponent(String(baseRevision))}`
+        url = `${endpoint}?baseRevision=${encodeURIComponent(String(baseRevision))}${options.stream ? '&stream=1' : ''}`
       }
 
       let response: Response

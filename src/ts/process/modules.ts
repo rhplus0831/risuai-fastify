@@ -1,3 +1,4 @@
+import { prepareLocalFileImport } from '../server/localFileImportPreflightPrompt'
 import { captureClientSessionGeneration } from '../clientSession'
 import { awaitClientWriteOperation, isClientWriteOperationCurrent } from '../clientWriteOperation'
 import { language } from 'src/lang'
@@ -628,8 +629,10 @@ export async function importModuleFile(
 ) {
   const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
   if (!isCurrent()) return
+  const preflight = await prepareLocalFileImport(file, fileName, 'module', sourceGeneration)
+  if (!preflight || !isCurrent()) return
   alertWait('Loading... (Uploading)')
-  let result = await importLocalModuleFileFromServer({ file, fileName })
+  let result = await importLocalModuleFileFromServer({ file, fileName, ...preflight })
   if (!isCurrent()) return
   if (result.status === 'low-level-access') {
     const confirmed = await alertConfirm(language.lowLevelAccessConfirm)

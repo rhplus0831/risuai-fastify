@@ -1,8 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { request } from 'node:http'
+import { getMaintenanceCoordinator } from '../src/maintenanceCoordinator.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import fs, { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
-import { createHash } from 'node:crypto'
+import { createHash, createCipheriv } from 'node:crypto'
 import { DatabaseSync } from 'node:sqlite'
 import * as fflate from 'fflate'
 import type { FastifyInstance } from 'fastify'
@@ -19,7 +21,7 @@ interface Harness {
 const rpackMap = readFileSync(path.join(process.cwd(), 'src/ts/rpack/rpack_map.bin'))
 const rpackEncodeMap = rpackMap.subarray(0, 256)
 
-async function startHarness(): Promise<Harness> {
+async function startHarness(maxExpandedBytes?: number): Promise<Harness> {
   process.env.LOG_LEVEL = 'silent'
   const dataDir = mkdtempSync(path.join(tmpdir(), 'risu-local-file-import-'))
   const { app } = await buildApp({
@@ -29,6 +31,7 @@ async function startHarness(): Promise<Harness> {
       dataDir,
       bodyLimit: 1024 * 1024,
       importMaxBytes: 16 * 1024 * 1024,
+      realmImportMaxExpandedBytes: maxExpandedBytes,
       trustProxy: false,
       hubUrl: 'https://sv.risuai.xyz',
     },
@@ -367,3 +370,372 @@ describe('local character and module file imports', () => {
     expect(modules[0]).not.toHaveProperty('folderId')
   })
 })
+
+// These requests opt into live intake, rather than only a streamed response.
+describe('live local-file ingestion', () => {
+  function streamingUpload(bytes: Uint8Array, filename: string, options: Record<string, unknown> = {}) {
+    const upload = multipartFile(bytes, filename)
+    const boundary = upload.contentType.split('boundary=')[1]
+    const field = Buffer.from(
+      `--${boundary}\r\nContent-Disposition: form-data; name="options"\r\n\r\n${JSON.stringify(options)}\r\n`,
+    )
+    return { ...upload, payload: Buffer.concat([field, upload.payload]) }
+  }
+  async function send(bytes: Uint8Array, filename: string, kind = 'character-card', options = {}) {
+    const upload = streamingUpload(bytes, filename, options)
+    return harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/import/${kind}?stream=1&baseRevision=${currentRevision(harness.dataDir)}`,
+      headers: { 'content-type': upload.contentType, 'risu-auth': assertion, 'risu-writer-session': 'writer-a' },
+      payload: upload.payload,
+    })
+  }
+  it.each([
+    ['bot.json', 'character-card', { name: 'Bot', description: 'Description', first_mes: 'Hello' }],
+    ['module.json', 'module', { type: 'risuModule', module: { id: 'old', name: 'Module' } }],
+    ['module.lorebook', 'module', { type: 'risuModule', module: { id: 'old', name: 'Module' } }],
+  ] as const)('enforces the configured JSON limit for %s at the route', async (filename, kind, data) => {
+    await harness.app.close()
+    rmSync(harness.dataDir, { recursive: true, force: true })
+    harness = await startHarness(1024)
+    ;({ assertion } = await setupAuthedClient(harness.app))
+    const initialized = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/commands/state/initialize',
+      headers: { 'risu-auth': assertion, 'risu-writer-session': 'writer-a' },
+      payload: {},
+    })
+    expect(initialized.statusCode, initialized.body).toBe(200)
+    const response = await send(Buffer.from(JSON.stringify(data) + ' '.repeat(1024)), filename, kind)
+    expect(response.statusCode, response.body).toBe(400)
+    expect(response.json().error).toContain('exceeds size limit')
+    const state = persistedState(harness.dataDir).database
+    expect(state.characters ?? []).toHaveLength(0)
+    expect(state.modules ?? []).toHaveLength(0)
+  })
+
+  it.each([
+    ['bot.json', 'character', { name: 'Large bot', description: 'Description', first_mes: 'Hello' }],
+    ['module.json', 'module', { type: 'risuModule', module: { id: 'old', name: 'Large module' } }],
+    ['module.lorebook', 'module', { type: 'risuModule', module: { id: 'old', name: 'Large module' } }],
+  ] as const)('imports standalone %s above 50 MiB within the configured limit', async (fileName, kind, data) => {
+    const { importLocalFileStream } = await import('../src/localFileImport.js')
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    async function* source() {
+      yield Buffer.from(JSON.stringify(data))
+      const padding = Buffer.alloc(1024 * 1024, 32)
+      for (let i = 0; i < 51; i++) yield padding
+    }
+    try {
+      const imported = await importLocalFileStream({
+        kind,
+        source: source(),
+        db,
+        dataDir: harness.dataDir,
+        fileName,
+        maxExpandedBytes: 310 * 1024 * 1024,
+      })
+      expect(imported).toMatchObject(
+        kind === 'character' ? { character: { name: 'Large bot' } } : { module: { name: 'Large module' } },
+      )
+    } finally {
+      db.close()
+    }
+  })
+  it('accepts a large risum header within the configured allowance and rejects it above that allowance', async () => {
+    const { importLocalFileStream } = await import('../src/localFileImport.js')
+    const bytes = risum({ id: 'old', name: 'Large module', description: 'x'.repeat(51 * 1024 * 1024) })
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    const importing = (maxExpandedBytes: number) =>
+      importLocalFileStream({
+        kind: 'module',
+        fileName: 'large.risum',
+        db,
+        dataDir: harness.dataDir,
+        maxExpandedBytes,
+        source: (async function* () {
+          for (let offset = 0; offset < bytes.length; offset += 64 * 1024)
+            yield bytes.subarray(offset, offset + 64 * 1024)
+        })(),
+      })
+    try {
+      await expect(importing(50 * 1024 * 1024)).rejects.toThrow('exceeds size limit')
+      const result = await importing(60 * 1024 * 1024)
+      expect(result).toMatchObject({ module: { name: 'Large module' } })
+      expect('module' in result && (result.module.description as string).length).toBe(51 * 1024 * 1024)
+    } finally {
+      db.close()
+    }
+  })
+
+  it.each(
+    ['module', 'character-card'].flatMap((kind) =>
+      ['live', 'retained'].flatMap((mode) => ['before-file', 'during-file'].map((phase) => ({ kind, mode, phase }))),
+    ),
+  )('drains a stalled $kind upload ($mode, $phase) on server shutdown', async ({ kind, mode, phase }) => {
+    const address = await harness.app.listen({ host: '127.0.0.1', port: 0 })
+    const boundary = 'stalled-import'
+    const coordinator = getMaintenanceCoordinator(harness.dataDir)
+    const admission = vi.spyOn(coordinator, 'beginAssetStaging')
+    const upload = request(
+      `${address}/api/v1/import/${kind}?stream=${mode === 'live' ? 1 : 0}&baseRevision=${currentRevision(harness.dataDir)}`,
+      {
+        method: 'POST',
+        headers: {
+          'content-type': `multipart/form-data; boundary=${boundary}`,
+          'risu-auth': assertion,
+          'risu-writer-session': 'writer-a',
+          ...(kind === 'character-card' ? { accept: 'text/event-stream' } : {}),
+        },
+      },
+      (response) => response.resume(),
+    )
+    upload.on('error', () => {})
+    let closing: Promise<void> | undefined
+    try {
+      const filename = kind === 'module' ? 'stalled.risum' : 'stalled.charx'
+      upload.write(`--${boundary}\r\nContent-Disposition: form-data; name="options"\r\n\r\n{}\r\n`)
+      if (phase === 'during-file') {
+        upload.write(
+          `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+        )
+        upload.write(Buffer.from(kind === 'module' ? [111, 0] : [80, 75]))
+      }
+      await vi.waitFor(() => expect(admission).toHaveBeenCalled())
+      if (mode === 'live' && phase === 'during-file') {
+        await vi.waitFor(() => expect(coordinator.isReclamationBlocked()).toBe(true))
+      }
+      let closed = false
+      closing = harness.app.close().then(() => {
+        closed = true
+      })
+      await vi.waitFor(() => expect(closed).toBe(true), { timeout: 2000 })
+      expect(coordinator.isClosed).toBe(true)
+    } finally {
+      upload.destroy()
+      await closing
+      admission.mockRestore()
+    }
+  })
+
+  it('imports a metadata-last archive and requires server-side consent despite client preflight', async () => {
+    const image = Buffer.from('live intake image')
+    const files = fflate.unzipSync(characterArchive(image))
+    const data = JSON.parse(Buffer.from(files['card.json']).toString())
+    data.data.extensions.risuai.lowLevelAccess = true
+    const archive = fflate.zipSync({ 'assets/main.png': image, 'card.json': Buffer.from(JSON.stringify(data)) })
+    const denied = await send(archive, 'bot.charx')
+    expect(denied.statusCode, denied.body).toBe(400)
+    expect(persistedState(harness.dataDir).database.characters as unknown[]).toHaveLength(0)
+    const accepted = await send(archive, 'bot.charx', 'character-card', { allowLowLevelAccess: true })
+    expect(accepted.statusCode, accepted.body).toBe(200)
+    expect(accepted.json().importReport.droppedArchiveEntries).toEqual([])
+  })
+  it('streams encrypted PNG chunks and reconstructs the image after preflight consent', async () => {
+    const card = JSON.parse(
+      Buffer.from(fflate.unzipSync(characterArchive(Buffer.from('image')))['card.json']).toString(),
+    )
+    card.spec = 'chara_card_v2'
+    delete card.data.assets
+    card.data.extensions.risuai.lowLevelAccess = true
+    const cipher = createCipheriv('aes-256-gcm', createHash('sha256').update('secret').digest(), Buffer.alloc(12))
+    const encrypted = Buffer.concat([cipher.update(JSON.stringify(card)), cipher.final(), cipher.getAuthTag()])
+    const encoded = `rcc||rccv1||${encrypted.toString('base64')}||${createHash('sha256').update(encrypted).digest('hex')}||${Buffer.from(JSON.stringify({ usePassword: true })).toString('base64')}`
+    const chunk = (name: string, bytes: Buffer) => {
+      const output = Buffer.alloc(bytes.length + 12)
+      output.writeUInt32BE(bytes.length)
+      output.write(name, 4)
+      bytes.copy(output, 8)
+      return output
+    }
+    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+    const image = Buffer.concat([signature, chunk('IDAT', Buffer.from('image bytes')), chunk('IEND', Buffer.alloc(0))])
+    const bytes = Buffer.concat([signature, chunk('tEXt', Buffer.from(`ccv3\0${encoded}`)), image.subarray(8)])
+    const response = await send(bytes, 'bot.png', 'character-card', { password: 'secret', allowLowLevelAccess: true })
+    expect(response.statusCode, response.body).toBe(200)
+    const state = persistedState(harness.dataDir)
+    expect(state.assets).toHaveLength(1)
+    expect(state.assets[0].id).toBe(createHash('sha256').update(image).digest('hex'))
+  })
+
+  it.each(['Comment', 'chara'])('skips large PNG %s text while preserving the usable card and image', async (key) => {
+    const { importLocalFileStream, importLocalCharacterFile } = await import('../src/localFileImport.js')
+    const { StreamBytes } = await import('../src/localImportStreamBytes.js')
+    const chunk = (name: string, bytes: Buffer) => {
+      const output = Buffer.alloc(bytes.length + 12)
+      output.writeUInt32BE(bytes.length)
+      output.write(name, 4)
+      bytes.copy(output, 8)
+      return output
+    }
+    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+    const image = Buffer.concat([signature, chunk('IDAT', Buffer.from('image')), chunk('IEND', Buffer.alloc(0))])
+    const card = { name: 'Text chunk fixture', description: 'Preserved', first_mes: 'Hello' }
+    const ignored = chunk('tEXt', Buffer.concat([Buffer.from(`${key}\0`), Buffer.alloc(67 * 1024 * 1024, 32)]))
+    const bytes = Buffer.concat([
+      signature,
+      ignored,
+      chunk('tEXt', Buffer.from(`ccv3\0${Buffer.from(JSON.stringify(card)).toString('base64')}`)),
+      image.subarray(8),
+    ])
+    const filePath = path.join(harness.dataDir, 'text-fixture.png')
+    fs.writeFileSync(filePath, bytes)
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    const args = { db, dataDir: harness.dataDir, fileName: 'bot.png', maxExpandedBytes: 310 * 1024 * 1024 }
+    const read = vi.spyOn(StreamBytes.prototype, 'read')
+    try {
+      const retained = await importLocalCharacterFile({ ...args, filePath })
+      const streamed = await importLocalFileStream({
+        ...args,
+        kind: 'character',
+        source: (async function* () {
+          for (let offset = 0; offset < bytes.length; offset += 64 * 1024)
+            yield bytes.subarray(offset, offset + 64 * 1024)
+        })(),
+      })
+      expect(streamed).toMatchObject({
+        character: { name: card.name, desc: card.description, image: retained.character.image },
+        report: { droppedArchiveEntries: [], droppedInlineAssets: [] },
+      })
+      expect(retained.character.image).toBe(createHash('sha256').update(image).digest('hex'))
+      expect(Math.max(...read.mock.calls.map(([size]) => size))).toBeLessThanOrEqual(64 * 1024)
+      // Draining ignored data must still reject truncation, not silently accept it.
+      await expect(
+        importLocalFileStream({
+          ...args,
+          kind: 'character',
+          source: (async function* () {
+            yield bytes.subarray(0, 1024)
+          })(),
+        }),
+      ).rejects.toThrow('ended unexpectedly')
+    } finally {
+      read.mockRestore()
+      db.close()
+    }
+  })
+
+  it('still rejects an oversized PNG embedded asset instead of skipping it as ancillary text', async () => {
+    const { importLocalFileStream } = await import('../src/localFileImport.js')
+    const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])
+    const header = Buffer.alloc(8)
+    header.writeUInt32BE(67 * 1024 * 1024)
+    header.write('tEXt', 4)
+    const prefix = Buffer.alloc(80, 65)
+    Buffer.from('chara-ext-asset_:fixture\0').copy(prefix)
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      await expect(
+        importLocalFileStream({
+          db,
+          dataDir: harness.dataDir,
+          kind: 'character',
+          fileName: 'oversized.png',
+          source: (async function* () {
+            yield Buffer.concat([signature, header, prefix])
+          })(),
+        }),
+      ).rejects.toThrow('PNG embedded asset exceeds size limit')
+      expect(getAllAssetMetadata(db)).toEqual([])
+    } finally {
+      db.close()
+    }
+  })
+
+  it('rejects a truncated archive instead of committing a partially received bot', async () => {
+    const bytes = characterArchive(Buffer.from('image'))
+    const response = await send(bytes.subarray(0, bytes.length - 10), 'bot.charx')
+    expect(response.statusCode, response.body).toBe(400)
+    expect(persistedState(harness.dataDir).database.characters).toHaveLength(0)
+  })
+
+  it('preserves a terminal result when live intake also streams progress', async () => {
+    const upload = streamingUpload(characterArchive(Buffer.from('live SSE image')), 'bot.charx')
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/import/character-card?stream=1&baseRevision=${currentRevision(harness.dataDir)}`,
+      headers: {
+        'content-type': upload.contentType,
+        accept: 'text/event-stream',
+        'risu-auth': assertion,
+        'risu-writer-session': 'writer-a',
+      },
+      payload: upload.payload,
+    })
+    expect(readImportFrames(response.body).at(-1)).toMatchObject({
+      event: 'result',
+      data: { statusCode: 200, body: { event: { type: 'character.created' } } },
+    })
+  })
+
+  it('reads framed module assets incrementally and rejects truncated input without creation', async () => {
+    const bytes = risum({ id: 'old', name: 'Streamed module', lowLevelAccess: true, assets: [['one', 'old', 'png']] }, [
+      Buffer.from('streamed asset'),
+    ])
+    const malformed = await send(bytes.subarray(0, bytes.length - 2), 'module.risum', 'module', {
+      allowLowLevelAccess: true,
+    })
+    expect(malformed.statusCode, malformed.body).toBe(400)
+    expect(persistedState(harness.dataDir).database.modules).toEqual([])
+    const accepted = await send(bytes, 'module.risum', 'module', { allowLowLevelAccess: true })
+    expect(accepted.statusCode, accepted.body).toBe(200)
+    expect(accepted.json().event.type).toBe('module.created')
+  })
+})
+
+it('imports more than 310 MiB incrementally with metadata last and no dropped tail assets', async () => {
+  const { importLocalFileStream } = await import('../src/localFileImport.js')
+  const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+  let uploadEnded = false
+  let persistedDuringUpload = false
+  let generatedBytes = 0
+  const image = Buffer.alloc(1024 * 1024, 42)
+  const card = JSON.parse(Buffer.from(fflate.unzipSync(characterArchive(image))['card.json']).toString())
+  card.data.assets[0].uri = 'embeded://assets/319.png'
+  async function* source() {
+    let output: Uint8Array[] = []
+    const zip = new fflate.Zip((error, bytes) => {
+      if (error) throw error
+      output.push(bytes)
+    })
+    for (let index = 0; index < 320; index++) {
+      const entry = new fflate.ZipPassThrough(`assets/${index}.png`)
+      zip.add(entry)
+      entry.push(image, true)
+      for (const bytes of output) {
+        generatedBytes += bytes.length
+        yield bytes
+      }
+      output = []
+    }
+    const entry = new fflate.ZipPassThrough('card.json')
+    zip.add(entry)
+    entry.push(Buffer.from(JSON.stringify(card)), true)
+    zip.end()
+    for (const bytes of output) {
+      generatedBytes += bytes.length
+      yield bytes
+    }
+    uploadEnded = true
+  }
+  try {
+    const imported = await importLocalFileStream({
+      kind: 'character',
+      source: source(),
+      db,
+      dataDir: harness.dataDir,
+      fileName: 'large.charx',
+      reportProgress: (progress) => {
+        if (progress.completedAssets && !uploadEnded) persistedDuringUpload = true
+      },
+    })
+    expect(generatedBytes).toBeGreaterThan(310 * 1024 * 1024)
+    expect(persistedDuringUpload).toBe(true)
+    expect(imported).toMatchObject({
+      character: { image: createHash('sha256').update(image).digest('hex') },
+      report: { droppedArchiveEntries: [] },
+    })
+  } finally {
+    db.close()
+  }
+}, 30000)

@@ -76,6 +76,29 @@ describe('local file import client', () => {
     expect(reconcileEvent).toHaveBeenCalledWith(event)
   })
 
+  it('sends preflight options before the file without putting passwords in the URL', async () => {
+    const fetch = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ revision: 8, event: { type: 'module.created' }, moduleId: 'm' }), {
+          status: 200,
+        }),
+    )
+    vi.stubGlobal('fetch', fetch)
+    await importLocalModuleFileFromServer({
+      file: new Blob(['module']),
+      fileName: 'module.risum',
+      stream: true,
+      password: 'secret',
+      allowLowLevelAccess: true,
+    })
+    const [url, request] = fetch.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('&stream=1')
+    expect(url).not.toContain('secret')
+    const fields = Array.from((request.body as FormData).entries())
+    expect(fields.map(([key]) => key)).toEqual(['options', 'file'])
+    expect(JSON.parse(fields[0][1] as string)).toEqual({ password: 'secret', allowLowLevelAccess: true })
+  })
+
   it('keeps streamed challenges as challenges and sends confirmation as JSON', async () => {
     vi.stubGlobal('XMLHttpRequest', FakeImportXhr)
     const importing = importLocalCharacterFileFromServer({

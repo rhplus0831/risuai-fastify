@@ -1,3 +1,4 @@
+vi.mock('./server/localFileImportPreflightPrompt', () => ({ prepareLocalFileImport: vi.fn(async () => ({})) }))
 import { resetClientSessionForTests } from './clientSession'
 import {
   setManagedWriterForTest,
@@ -833,6 +834,7 @@ describe('PNG character card import', () => {
       pendingImportToken: 'pending',
     })
     await expect(importCharacter()).resolves.toMatchObject({ status: 'accepted' })
+    expect(filePickerState.selectFileByDom).toHaveBeenCalledWith(['*'], 'single')
     expect(alertState.alertClear.mock.invocationCallOrder[0]).toBeLessThan(
       alertState.alertConfirm.mock.invocationCallOrder[0],
     )
