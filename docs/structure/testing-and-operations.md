@@ -179,8 +179,10 @@ isolated server Vitest projects with `--tagsFilter core`, `build:smoke`, and the
 four isolated browser journeys selected by `--grep @core`.
 `util/core-test-contract.ts` supplies the exact frontend, server, and browser
 file filters so tag selection does not collect the complete suite first.
-The smoke build fills a free regular-lane slot after `check:server`, at lower
-priority than the other checks, overlapping remaining frontend tests.
+The agent profile runs up to three regular lanes concurrently by default. The
+smoke build is independent in that profile and fills a free regular-lane slot at
+lower priority than the other checks, overlapping typechecks or remaining
+frontend tests.
 Typechecks use `noEmit`, so they do not share build outputs. The agent profile
 explicitly disables the two frontend performance probes. Every selected lane
 still finishes after another lane fails. The core browser subset does not require

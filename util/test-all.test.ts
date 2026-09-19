@@ -26,7 +26,8 @@ describe('test:all orchestration', () => {
     expect(parseTestAllJobs('4')).toBe(4)
     expect(() => parseTestAllJobs('0')).toThrow('positive integer')
     expect(parseTestAllCli(['--timings=json'])).toMatchObject({ timingsJson: true })
-    expect(parseTestAllCli([])).toMatchObject({ timingsJson: false })
+    expect(parseTestAllCli([])).toMatchObject({ jobs: 2, timingsJson: false })
+    expect(parseTestAllCli([], 'test:agent')).toMatchObject({ jobs: 3, timingsJson: false })
   })
 
   it('keeps the agent final profile focused on core tests, typechecks, topology, and browser verification', () => {
@@ -67,8 +68,8 @@ describe('test:all orchestration', () => {
     })
     expect(byId.get('browser-smoke-build')).toMatchObject({
       args: ['build:smoke'],
-      after: ['server-check'],
     })
+    expect(byId.get('browser-smoke-build')?.after).toBeUndefined()
     expect(byId.get('browser-smoke-build')?.isolated).toBeUndefined()
     expect(byId.get('browser-core-tests')).toMatchObject({
       args: [

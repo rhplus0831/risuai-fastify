@@ -46,7 +46,10 @@ type LaneRunner = (lane: QualityLane) => Promise<QualityLaneResult>
 
 export type QualityCommandName = 'test:agent' | 'test:all'
 
-const defaultJobs = 2
+const defaultJobsByCommand: Readonly<Record<QualityCommandName, number>> = {
+  'test:agent': 3,
+  'test:all': 2,
+}
 
 export const qualityLanes: readonly QualityLane[] = [
   {
@@ -198,7 +201,12 @@ export const agentQualityLanes: readonly QualityLane[] = [
       CORE_TEST_TAG,
     ],
   },
-  requiredQualityLane('browser-smoke-build'),
+  {
+    ...requiredQualityLane('browser-smoke-build'),
+    // The agent build has no emitted typecheck prerequisite and can occupy an
+    // immediately available regular-lane slot. Browser tests still consume it.
+    after: undefined,
+  },
   {
     id: 'browser-core-tests',
     label: 'browser core tests',
@@ -227,13 +235,13 @@ function parsePositiveInteger(raw: string, option: string): number {
   return value
 }
 
-export function parseTestAllJobs(raw: string | undefined): number {
+export function parseTestAllJobs(raw: string | undefined, defaultJobs = defaultJobsByCommand['test:all']): number {
   return raw ? parsePositiveInteger(raw, 'RISU_TEST_ALL_JOBS') : defaultJobs
 }
 
 export function parseTestAllCli(args: string[], commandName: QualityCommandName = 'test:all'): TestAllCliOptions {
   let dryRun = false
-  let jobs = parseTestAllJobs(process.env.RISU_TEST_ALL_JOBS?.trim())
+  let jobs = parseTestAllJobs(process.env.RISU_TEST_ALL_JOBS?.trim(), defaultJobsByCommand[commandName])
   let timingsJson = false
 
   for (let index = 0; index < args.length; index += 1) {
@@ -255,7 +263,7 @@ export function parseTestAllCli(args: string[], commandName: QualityCommandName 
       console.log(`Usage: pnpm ${commandName} [--jobs <count>] [--dry-run] [--timings=json]
 
 Runs independent quality lanes with bounded concurrency, then runs dist- or load-sensitive
-lanes in isolation. RISU_TEST_ALL_JOBS sets the default concurrency (${defaultJobs}).
+lanes in isolation. RISU_TEST_ALL_JOBS overrides the default concurrency (${defaultJobsByCommand[commandName]}).
 --timings=json prints a final machine-readable critical-path record.`)
       process.exit(0)
     } else {
