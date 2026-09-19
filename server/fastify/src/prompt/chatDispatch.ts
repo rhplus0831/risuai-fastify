@@ -937,16 +937,8 @@ function resolveOllamaThinkMode(value: unknown): boolean | 'low' | 'medium' | 'h
   return undefined
 }
 
-function resolveDebugEchoMessage(profile: ResolvedModelProfile): string {
-  return JSON.stringify(
-    {
-      provider: 'debug-echo',
-      baseUrl: profile.providerOptions.baseUrl ?? '',
-      requestModel: profile.providerOptions.requestModel ?? '',
-    },
-    null,
-    2,
-  )
+function resolveDebugEchoMessage(messages: readonly PromptMessage[]): string {
+  return messages.at(-1)?.content ?? ''
 }
 
 function resolveProfileVertexAuth(profile: ResolvedModelProfile): VertexAuthInput | undefined {
@@ -1298,12 +1290,14 @@ async function dispatchChatProviderCore(args: ChatDispatchArgs): Promise<AsyncIt
 
   if (provider === 'echo') {
     const isDebugEchoProfile = profile.status.providerId === 'debug-echo'
+    const debugEchoMessage = isDebugEchoProfile ? resolveDebugEchoMessage(messages) : undefined
     const request = resolveEchoRequest({
-      message: isDebugEchoProfile ? resolveDebugEchoMessage(profile) : db.echoMessage,
+      message: debugEchoMessage ?? db.echoMessage,
       delayMs: isDebugEchoProfile ? 0 : (db.echoDelay ?? 0) * 1000,
       additionalParams: dispatchAdditionalParams,
       signal,
     })
+    if (debugEchoMessage !== undefined) request.message = debugEchoMessage
     return stream ? runEchoStream(request) : bufferedResultFrames(runEcho(request))
   }
 

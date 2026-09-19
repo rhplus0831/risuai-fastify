@@ -14,15 +14,7 @@ const PROMPT_PRESET_ID = 'debug-echo-layout-prompt-preset'
 const DEBUG_BASE_URL = 'debug://layout-stability-smoke'
 const DEBUG_REQUEST_MODEL = 'layout-stability-model'
 const SENT_MESSAGE = 'Measure the real delayed Debug Echo send.'
-const EXPECTED_RESPONSE = JSON.stringify(
-  {
-    provider: 'debug-echo',
-    baseUrl: DEBUG_BASE_URL,
-    requestModel: DEBUG_REQUEST_MODEL,
-  },
-  null,
-  2,
-)
+const EXPECTED_RESPONSE = SENT_MESSAGE
 
 interface HorizontalRectSnapshot {
   left: number
@@ -103,8 +95,7 @@ test('debug echo send stays visually stable through the first-token wait and for
   })
 
   const visibleMessages = page.locator('.chat-message-container')
-  await expect(visibleMessages.filter({ hasText: SENT_MESSAGE })).toHaveCount(1)
-  await expect(visibleMessages.filter({ hasText: 'debug-echo' })).toHaveCount(1)
+  await expect(visibleMessages.filter({ hasText: SENT_MESSAGE })).toHaveCount(2)
   expect(responseReceivedAt - sendStartedAt).toBeGreaterThanOrEqual(9_500)
   expect(responseReceivedAt - sendStartedAt).toBeLessThan(20_000)
 
@@ -363,7 +354,13 @@ function debugEchoLayoutFixture(): Record<string, unknown> {
     ],
     botPresets: [],
     modelPresets: [{ id: MODEL_PRESET_ID, name: 'Debug Echo Layout Model Preset' }],
-    promptPresets: [{ id: PROMPT_PRESET_ID, name: 'Debug Echo Layout Prompt Preset', promptTemplate: [] }],
+    promptPresets: [
+      {
+        id: PROMPT_PRESET_ID,
+        name: 'Debug Echo Layout Prompt Preset',
+        promptTemplate: [{ type: 'chat', rangeStart: 0, rangeEnd: 'end' }],
+      },
+    ],
     modelProfiles: [
       {
         id: PROFILE_ID,

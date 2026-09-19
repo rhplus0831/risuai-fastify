@@ -110,6 +110,9 @@ Model-profile UI ownership is in the
 
 First-class authored providers are `openai`, `llmgateway`, `neuralwatt`,
 `anthropic`, `google`, `vertex`, `ollama`, `custom-api`, and `debug-echo`.
+Debug Echo returns the final formatted prompt row's content exactly, including
+its whitespace, while retaining the local echo transport's streaming and
+configurable-delay behavior.
 Compatibility records can still normalize other legacy shapes without gaining
 a first-class editor. Custom API profiles represent OpenAI-compatible Chat
 Completions and store a base URL; dispatch appends the chat-completions suffix.

@@ -5863,10 +5863,8 @@ describe('POST /api/v1/generate/chat', () => {
     }>
     expect(persistedMessages.at(-1)?.translation).toMatchObject({
       targetLanguage: 'ko',
-      text: expect.stringContaining('debug://accepted-translator'),
+      text: 'Accepted Generated reply',
     })
-    expect(persistedMessages.at(-1)?.translation?.text).toContain('accepted-translation-model')
-    expect(persistedMessages.at(-1)?.translation?.text).not.toContain('later-translation-model')
   })
 
   it('translates a durable completion after its last viewer disconnects and pushes after persistence', async () => {
@@ -6554,12 +6552,12 @@ describe('POST /api/v1/generate/chat', () => {
     }
 
     expect(done.result).toBe('server echo reply')
-    expect(done.postGeneration?.finalText).toContain('"requestModel": "agent-after-model"')
+    expect(done.postGeneration?.finalText).toBe('Author instruction:\nRewrite the final answer.')
     expect(done.postGeneration?.revision).toBe(2)
 
     const persisted = await persistedMessages(assertion)
     const assistant = persisted.at(-1)
-    expect(assistant?.data).toContain('"requestModel": "agent-after-model"')
+    expect(assistant?.data).toBe('Author instruction:\nRewrite the final answer.')
     const agentPresetInfo = assistant?.generationInfo as { agentPreset?: Record<string, unknown> } | undefined
     expect(agentPresetInfo?.agentPreset).toMatchObject({
       presetId: 'ap_after',
@@ -6641,12 +6639,17 @@ describe('POST /api/v1/generate/chat', () => {
 
     const events = parseEvents(res.body)
     const prompt = events.find((event) => event.type === 'prompt')
-    expect(JSON.stringify(prompt?.data.messages)).toContain('agent-input-model')
+    expect(prompt?.data.messages).toContainEqual({
+      role: 'user',
+      content: 'Author instruction:\nRewrite the current user message for the main model.',
+    })
     expect(doneFrame(events).postGeneration?.revision).toBe(3)
 
     const persisted = await persistedMessages(assertion)
-    expect(persisted[0]).toMatchObject({ role: 'user' })
-    expect(persisted[0]?.data).toContain('agent-input-model')
+    expect(persisted[0]).toMatchObject({
+      role: 'user',
+      data: 'Author instruction:\nRewrite the current user message for the main model.',
+    })
     const assistant = persisted.at(-1)
     const diagnostics = assistant?.generationInfo as { agentPreset?: Record<string, unknown> } | undefined
     expect(diagnostics?.agentPreset).toMatchObject({

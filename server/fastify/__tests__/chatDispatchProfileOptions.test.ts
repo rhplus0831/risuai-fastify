@@ -2944,7 +2944,7 @@ describe('dispatchChatProvider profile providerOptions', () => {
     expect(captured[0].body.model).toBe('gemma-4-31b')
   })
 
-  it('uses first-class Debug Echo provider options as the echo payload', async () => {
+  it('returns the final input content as-is for first-class Debug Echo profiles', async () => {
     const profile = resolveModelProfile({
       database: db({
         modelProfiles: [
@@ -2962,15 +2962,7 @@ describe('dispatchChatProvider profile providerOptions', () => {
         modelRoleProfiles: { chatMain: { mode: 'profile', profileId: 'debug-echo-profile' } },
       } as unknown as Partial<Database>),
     })
-    const expectedContent = JSON.stringify(
-      {
-        provider: 'debug-echo',
-        baseUrl: 'debug://profile-base',
-        requestModel: 'profile-debug-model',
-      },
-      null,
-      2,
-    )
+    const expectedContent = '  exact input\ncontent  '
     const controller = new AbortController()
     const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout')
 
@@ -2980,9 +2972,15 @@ describe('dispatchChatProvider profile providerOptions', () => {
           aiModel: 'echo_model',
           echoMessage: 'flat echo should not leak',
           echoDelay: 60,
+          applyAdditionalParamsToAll: true,
+          additionalParams: [['message', 'additional params should not replace the input']],
         } as Partial<Database>),
         profile,
-        formated: [{ role: 'user', content: 'hello' }],
+        formated: [
+          { role: 'system', content: 'do not echo this' },
+          { role: 'assistant', content: 'or this' },
+          { role: 'user', content: expectedContent },
+        ],
         signal: controller.signal,
       })
       expect(setTimeoutSpy).not.toHaveBeenCalled()
