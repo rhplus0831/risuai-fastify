@@ -983,19 +983,43 @@
       "files": [
         {
           "file": "src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts",
-          "count": 6
+          "count": 9
         },
         {
           "file": "src/lib/ChatScreens/Chat.customHtml.test.ts",
           "count": 2
         },
         {
+          "file": "src/lib/ChatScreens/Chat.deletion.dom.test.ts",
+          "count": 7
+        },
+        {
+          "file": "src/lib/ChatScreens/Chat.editing.dom.test.ts",
+          "count": 3
+        },
+        {
           "file": "src/lib/ChatScreens/Chat.parserDependencies.test.ts",
-          "count": 21
+          "count": 4
+        },
+        {
+          "file": "src/lib/ChatScreens/Chat.partialEditing.dom.test.ts",
+          "count": 6
+        },
+        {
+          "file": "src/lib/ChatScreens/Chat.testSupport.ts",
+          "count": 3
         },
         {
           "file": "src/lib/ChatScreens/ChatBody.parseMemo.test.ts",
-          "count": 28
+          "count": 2
+        },
+        {
+          "file": "src/lib/ChatScreens/ChatBodyParseMemo.dom.test.ts",
+          "count": 24
+        },
+        {
+          "file": "src/lib/ChatScreens/chatBodyParseMemoTestFixtures.ts",
+          "count": 2
         },
         {
           "file": "src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts",
@@ -1083,7 +1107,7 @@
       "files": [
         {
           "file": "src/App.routeEffect.dom.test.ts",
-          "count": 7
+          "count": 8
         },
         {
           "file": "src/lib/_audit/optimisticTogglePaint.dom.test.ts",

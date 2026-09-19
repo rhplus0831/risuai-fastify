@@ -174,6 +174,19 @@ describe('compatibility disposition gate', () => {
 })
 
 describe('client resource ownership gate', () => {
+  it('classifies colocated test-support and fixture modules as test-only consumers', () => {
+    const root = fixtureRoot()
+    fs.writeFileSync(path.join(root, 'src/Panel.testSupport.ts'), 'getResourceDatabase()\n')
+    fs.writeFileSync(path.join(root, 'src/panelTestFixtures.ts'), 'getResourceDatabase()\n')
+
+    expect(collectClientResourceObservation(root).consumers).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ file: 'src/Panel.testSupport.ts', lane: 'test' }),
+        expect.objectContaining({ file: 'src/panelTestFixtures.ts', lane: 'test' }),
+      ]),
+    )
+  })
+
   it('keeps the standalone lorebook foundation on the supported owner capabilities', () => {
     const matrix = JSON.parse(
       fs.readFileSync(

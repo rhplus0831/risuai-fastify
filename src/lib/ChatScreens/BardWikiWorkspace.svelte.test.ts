@@ -458,6 +458,10 @@ describe('BardWiki workspace', () => {
   })
 
   it('creates, renames, and deletes the same document through explicit actions', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn(() => ({ matches: true })),
+    )
     component = mount(BardWikiWorkspace, { target, props: { chatId: 'chat-a' } })
     await waitFor(() => expect(target.querySelector('[aria-label="Open Old Tavern"]')).not.toBeNull())
     buttonNamed(language.bardWiki.newDocument).click()
@@ -497,6 +501,9 @@ describe('BardWiki workspace', () => {
     )
     await waitFor(() => expect(buttonNamed(language.save).disabled).toBe(true))
     expect(target.querySelector<HTMLTextAreaElement>('textarea')?.value).toBe('# Arrival')
+    expect(document.activeElement).toBe(
+      target.querySelector<HTMLButtonElement>('[data-risu-bardwiki-back-to-documents]'),
+    )
 
     const renamed = { ...created, title: 'Arrival at the Tavern', version: 2, contentHash: 'b'.repeat(64) }
     mutations.update.mockResolvedValueOnce({ status: 'accepted', result: { document: renamed } })

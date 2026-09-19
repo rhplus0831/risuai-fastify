@@ -39,6 +39,7 @@ test('configured chat-only IGP commits atomically once when its response and rec
   browser,
 }, testInfo) => {
   test.setTimeout(240_000)
+  const rotatedIgpCredential = 'rotated-accepted-igp-key'
   const provider = new OccupancyProvider()
   provider.configure(CHAT_OBSERVER, { chunks: ['Configured IGP source.'] })
   const igpProvider = await startIgpProvider()
@@ -302,7 +303,14 @@ test('configured chat-only IGP commits atomically once when its response and rec
     expect(completionExecutions).toEqual([])
 
     await patchOwnerSettings(owner.page, 'providers', {
-      providerCredentials: [],
+      providerCredentials: [
+        {
+          id: 'accepted-igp-credential',
+          name: 'Rotated accepted IGP credential',
+          type: 'apiKey',
+          apiKey: rotatedIgpCredential,
+        },
+      ],
       modelProfiles: [],
       modelProfileOrder: [],
       modelRoleProfiles: {},
@@ -320,7 +328,14 @@ test('configured chat-only IGP commits atomically once when its response and rec
       })
       .toEqual({
         igpPrompt: ACCEPTED_IGP_PROMPT,
-        providerCredentials: [],
+        providerCredentials: [
+          {
+            id: 'accepted-igp-credential',
+            name: 'Rotated accepted IGP credential',
+            type: 'apiKey',
+            apiKey: rotatedIgpCredential,
+          },
+        ],
         modelProfiles: [],
         modelProfileOrder: [],
         modelRoleProfiles: CLEARED_MODEL_ROLE_PROFILES,
@@ -401,7 +416,7 @@ test('configured chat-only IGP commits atomically once when its response and rec
     expect(igpProviderRequests[0]).toMatchObject({
       method: 'POST',
       path: '/v1/chat/completions',
-      authorization: `Bearer ${ACCEPTED_IGP_CREDENTIAL}`,
+      authorization: `Bearer ${rotatedIgpCredential}`,
       body: {
         model: ACCEPTED_IGP_MODEL,
         stream: false,
@@ -514,7 +529,14 @@ test('configured chat-only IGP commits atomically once when its response and rec
       modelRoleProfiles: settingsAfterReload.modelRoleProfiles,
     }).toEqual({
       igpPrompt: ACCEPTED_IGP_PROMPT,
-      providerCredentials: [],
+      providerCredentials: [
+        {
+          id: 'accepted-igp-credential',
+          name: 'Rotated accepted IGP credential',
+          type: 'apiKey',
+          apiKey: rotatedIgpCredential,
+        },
+      ],
       modelProfiles: [],
       modelProfileOrder: [],
       modelRoleProfiles: CLEARED_MODEL_ROLE_PROFILES,

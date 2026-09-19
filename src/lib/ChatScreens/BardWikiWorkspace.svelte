@@ -668,8 +668,10 @@
       selectedDocumentId = targetId
       documentLoadState = 'ready'
       // Acknowledging an older save advances the conflict baseline, not newer user typing.
-      if (JSON.stringify(documentDraft) === JSON.stringify(submittedDraft)) adoptDocumentDraft(result.document)
-      else {
+      if (JSON.stringify(documentDraft) === JSON.stringify(submittedDraft)) {
+        adoptDocumentDraft(result.document)
+        await focusMobileDetail()
+      } else {
         documentBaseline = JSON.stringify(draftFromDocument(result.document))
         editorMode = 'edit'
       }

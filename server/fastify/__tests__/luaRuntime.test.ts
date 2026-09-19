@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { beforeAll, describe, expect, it } from 'vitest'
 import type {
   FastifyChat as Chat,
@@ -15,6 +16,7 @@ import { createTriggerVarEngine, type TriggerVarEngine } from '../src/prompt/tri
 import { bootPromptVariables } from '../src/prompt/promptVariablesBoot.js'
 import { openDatabase } from '../src/db.js'
 import { assetPath, getAssetMetadataById, listInlayCatalogEntries } from '../src/repository.js'
+import { createRequestHistoryTable, listRequestHistory } from '../src/requestHistory.js'
 import {
   createLuaExecBudget,
   isBlockedAddress,
@@ -574,6 +576,13 @@ describe('server Lua runtime — request() binding + low-level gate', () => {
 })
 
 describe('server Lua runtime — low-level LLM bindings', () => {
+  function attachRequestHistory(ctx: ServerLuaRuntimeContext): DatabaseSync {
+    const db = new DatabaseSync(':memory:')
+    createRequestHistoryTable(db)
+    ctx.requestHistoryDb = db
+    return db
+  }
+
   function debugEchoDatabase(): Partial<Database> {
     return {
       aiModel: 'echo_model',
@@ -629,6 +638,7 @@ describe('server Lua runtime — low-level LLM bindings', () => {
 
   it('routes axLLM through the scriptAux model role when low-level access is granted', async () => {
     const { ctx } = makeRuntime({ database: debugEchoDatabase() })
+    const historyDb = attachRequestHistory(ctx)
     const code = `
       listenEdit('editRequest', function(id, data, meta)
         local res = axLLM(id, {{ role = 'user', content = 'translate this' }})
@@ -640,17 +650,20 @@ describe('server Lua runtime — low-level LLM bindings', () => {
     const result = await runServerLua({ code, mode: 'editRequest', data: rows('orig'), lowLevelAccess: true }, ctx)
 
     expect(result.error).toBeUndefined()
-    const payload = JSON.parse((result.res as PromptMessage[])[0].content)
-    expect(payload).toMatchObject({
+    expect((result.res as PromptMessage[])[0].content).toBe('translate this')
+    expect(listRequestHistory(historyDb, 20)[0]?.profile).toMatchObject({
+      id: 'script-aux-debug',
+      role: 'scriptAux',
       provider: 'debug-echo',
-      baseUrl: 'debug://script-aux',
       requestModel: 'script-aux-model',
     })
+    historyDb.close()
   })
 
   it('uses the active character script model override for LLM calls', async () => {
     const char = makeChar({ scriptModelOverrides: { llmProfileId: 'character-script-debug' } })
     const { ctx } = makeRuntime({ char, database: debugEchoDatabase() })
+    const historyDb = attachRequestHistory(ctx)
     const code = `
       listenEdit('editRequest', function(id, data, meta)
         local res = LLM(id, {{ role = 'user', content = 'character prompt' }})
@@ -661,11 +674,13 @@ describe('server Lua runtime — low-level LLM bindings', () => {
 
     const result = await runServerLua({ code, mode: 'editRequest', data: rows('orig'), lowLevelAccess: true }, ctx)
 
-    const payload = JSON.parse((result.res as PromptMessage[])[0].content)
-    expect(payload).toMatchObject({
-      baseUrl: 'debug://character-script',
+    expect((result.res as PromptMessage[])[0].content).toBe('character prompt')
+    expect(listRequestHistory(historyDb, 20)[0]?.profile).toMatchObject({
+      id: 'character-script-debug',
+      role: 'scriptMain',
       requestModel: 'character-script-model',
     })
+    historyDb.close()
   })
 
   it('uses the owning module override instead of the active character override', async () => {
@@ -675,6 +690,7 @@ describe('server Lua runtime — low-level LLM bindings', () => {
       char,
       database: { ...debugEchoDatabase(), modules: [module] },
     })
+    const historyDb = attachRequestHistory(ctx)
     const code = `
       listenEdit('editRequest', function(id, data, meta)
         local res = axLLM(id, {{ role = 'user', content = 'module prompt' }})
@@ -694,11 +710,13 @@ describe('server Lua runtime — low-level LLM bindings', () => {
       ctx,
     )
 
-    const payload = JSON.parse((result.res as PromptMessage[])[0].content)
-    expect(payload).toMatchObject({
-      baseUrl: 'debug://module-aux',
+    expect((result.res as PromptMessage[])[0].content).toBe('module prompt')
+    expect(listRequestHistory(historyDb, 20)[0]?.profile).toMatchObject({
+      id: 'module-aux-debug',
+      role: 'scriptAux',
       requestModel: 'module-aux-model',
     })
+    historyDb.close()
   })
 
   it('fails explicitly when a local script override references a missing profile', async () => {
@@ -736,6 +754,7 @@ describe('server Lua runtime — low-level LLM bindings', () => {
 
   it('routes LLM and simpleLLM through the scriptMain model role', async () => {
     const { ctx } = makeRuntime({ database: debugEchoDatabase() })
+    const historyDb = attachRequestHistory(ctx)
     const code = `
       listenEdit('editRequest', function(id, data, meta)
         local full = LLM(id, {{ role = 'user', content = 'main full' }})
@@ -748,17 +767,18 @@ describe('server Lua runtime — low-level LLM bindings', () => {
     const result = await runServerLua({ code, mode: 'editRequest', data: rows('orig'), lowLevelAccess: true }, ctx)
 
     expect(result.error).toBeUndefined()
-    const [full, simple] = (result.res as PromptMessage[])[0].content.split('\n---\n').map((part) => JSON.parse(part))
-    expect(full).toMatchObject({
-      provider: 'debug-echo',
-      baseUrl: 'debug://script-main',
-      requestModel: 'script-main-model',
-    })
-    expect(simple).toMatchObject({
-      provider: 'debug-echo',
-      baseUrl: 'debug://script-main',
-      requestModel: 'script-main-model',
-    })
+    expect((result.res as PromptMessage[])[0].content).toBe('main full\n---\nmain simple')
+    const profiles = listRequestHistory(historyDb, 20).map((record) => record.profile)
+    expect(profiles).toHaveLength(2)
+    for (const profile of profiles) {
+      expect(profile).toMatchObject({
+        id: 'script-main-debug',
+        role: 'scriptMain',
+        provider: 'debug-echo',
+        requestModel: 'script-main-model',
+      })
+    }
+    historyDb.close()
   })
 })
 

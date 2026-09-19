@@ -774,7 +774,7 @@ describe('legacy generation migration finalization', () => {
     ).toMatchObject({
       operationAttemptNo: 1,
       targetLanguage: 'ko',
-      translatedText: expect.stringContaining('debug://historical-translation'),
+      translatedText: 'Translate historical reply',
     })
     expect(db.prepare('SELECT COUNT(*) AS count FROM command_events WHERE operation_id = ?').get(operationId)).toEqual({
       count: 1,
@@ -981,7 +981,7 @@ describe('legacy generation migration finalization', () => {
     ).toMatchObject({
       operationAttemptNo: 1,
       targetLanguage: 'ko',
-      translatedText: expect.stringContaining('debug://historical-translation'),
+      translatedText: 'Translate journaled historical reply',
     })
     expect(db.prepare('SELECT COUNT(*) AS count FROM command_events WHERE operation_id = ?').get(operationId)).toEqual({
       count: 1,
@@ -1097,7 +1097,7 @@ describe('legacy generation migration finalization', () => {
         .get(resultMessageId),
     ).toMatchObject({
       targetLanguage: 'ko',
-      translatedText: expect.stringContaining('debug://historical-translation'),
+      translatedText: 'Translate historical generated reply',
     })
     expect(
       db

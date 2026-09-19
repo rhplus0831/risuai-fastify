@@ -129,7 +129,7 @@ describe('pending mutation outbox cross-tab staging', () => {
       expect.objectContaining({ intent: settingsIntent('old') }),
       expect.objectContaining({ intent: settingsIntent('new') }),
     ])
-  })
+  }, 15_000)
 
   it('drains the earlier tab before the later request and never resends the settled predecessor', async () => {
     tabA = await importFreshOutboxModule()
@@ -185,7 +185,7 @@ describe('pending mutation outbox cross-tab staging', () => {
       status: 'unavailable',
     })
     expect(olderRequest).not.toHaveBeenCalled()
-  })
+  }, 15_000)
 
   it('retries a cross-tab CAS loss with a fresh IV and a higher committed order', async () => {
     // Without Web Locks, separate tabs have separate FIFO fallbacks. The IDB

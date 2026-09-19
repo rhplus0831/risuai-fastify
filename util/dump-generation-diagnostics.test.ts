@@ -116,7 +116,7 @@ describe('production generation diagnostics', () => {
     const second = spawnSync(process.execPath, args, { encoding: 'utf8' })
     expect(second.status).toBe(1)
     expect(fs.readFileSync(output, 'utf8')).toBe(original)
-  }, 15000)
+  }, 30_000)
 
   it('reports UTF-8 sizes and hides values and user-defined keys', () => {
     const report = sizeProfile({

@@ -195,7 +195,12 @@ function walkFiles(directory: string): string[] {
 function clientLane(file: string): ClientConsumerLane {
   if (file.startsWith('server/fastify/browser-smoke/')) return 'browser-smoke'
   if (file.startsWith('server/fastify/src/')) return 'server'
-  if (/(?:^|\/)(?:__tests__|tests|__fixtures__)(?:\/|$)/.test(file) || /\.test\.[^.]+$/.test(file)) return 'test'
+  if (
+    /(?:^|\/)(?:__tests__|tests|__fixtures__)(?:\/|$)/.test(file) ||
+    /(?:\.test|\.testSupport|TestFixtures)\.[^.]+$/.test(file)
+  ) {
+    return 'test'
+  }
   return 'production'
 }
 

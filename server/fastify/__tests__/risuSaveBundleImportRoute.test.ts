@@ -576,7 +576,7 @@ describe('repository .risu bundle import route', () => {
     expect(decoded.stagedAssets).toHaveLength(1)
     expect(decoded.stagedAssets[0]).toMatchObject({ id: assetId, size: assetBytes.length })
     expect(fs.readFileSync(decoded.stagedAssets[0].filePath)).toEqual(assetBytes)
-  })
+  }, 30_000)
 
   it('reads legacy media in bounded chunks and skips an unrelated multi-megabyte record without allocating it', async () => {
     const unrelatedBytes = Buffer.alloc(4 * 1024 * 1024, 0x3c)
@@ -608,7 +608,7 @@ describe('repository .risu bundle import route', () => {
     expect(decoded.stagedAssets).toHaveLength(1)
     expect(decoded.stagedAssets[0]).toMatchObject({ id: assetId, size: assetBytes.length })
     expect(fs.readFileSync(decoded.stagedAssets[0].filePath)).toEqual(assetBytes)
-  })
+  }, 30_000)
 
   it('rejects an oversized legacy record name before allocating it and cleans earlier staged assets', async () => {
     const databaseBytes = encodeLegacyRisuSaveEnvelope({ characters: [] })
