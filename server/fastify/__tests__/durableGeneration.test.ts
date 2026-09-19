@@ -1037,6 +1037,8 @@ function seedGenerationFinalizationRetryRow(
   )
 }
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('Durable generation', () => {
   it('enforces the exact protocol-v1 chat-only tuple and rejects unsupported targeted interactions', async () => {
     await resetHarness({}, true)
@@ -2285,7 +2287,8 @@ describe('Durable generation', () => {
     ])
   })
 
-  it('atomically replays one accepted send and carries exact lineage through SSE, bootstrap, journal, result, and events', async () => {
+  // prettier-ignore
+  coreIt('atomically replays one accepted send and carries exact lineage through SSE, bootstrap, journal, result, and events', async () => {
     const gated = makeGatedProvider({ before: 'lineage', after: ' result' })
     let providerCalls = 0
     providerImpl = (context) => {
@@ -3811,7 +3814,8 @@ describe('Durable generation', () => {
     })
   })
 
-  it('replays one explicit retry without re-appending or re-running committed submit transforms', async () => {
+  // prettier-ignore
+  coreIt('replays one explicit retry without re-appending or re-running committed submit transforms', async () => {
     const database = structuredClone(fixtureDatabase) as JsonRecord
     const character = (database.characters as JsonRecord[])[0]!
     character.triggerscript = [
@@ -4053,7 +4057,8 @@ describe('Durable generation', () => {
   )
 
   // The generation survives the client drop and persists with no client present.
-  it('keeps generating after the client drops mid-stream and persists the result', async () => {
+  // prettier-ignore
+  coreIt('keeps generating after the client drops mid-stream and persists the result', async () => {
     const gated = makeGatedProvider({ before: 'Hel', after: 'lo' })
     providerImpl = gated.dispatchProvider
 
@@ -4328,7 +4333,8 @@ describe('Durable generation', () => {
     controller.abort()
   })
 
-  it('confirms the exact pending journal row before reporting a retryable persistence failure as queued', async () => {
+  // prettier-ignore
+  coreIt('confirms the exact pending journal row before reporting a retryable persistence failure as queued', async () => {
     await resetHarness({ finalizationRetry: false })
     const gated = makeGatedProvider({ before: 'queued', after: ' result' })
     providerImpl = gated.dispatchProvider
@@ -5169,7 +5175,8 @@ describe('Durable generation', () => {
     controllerTwo.abort()
   })
 
-  it('rejects a durable send from a stale (non-active) writer with 423', async () => {
+  // prettier-ignore
+  coreIt('rejects a durable send from a stale (non-active) writer with 423', async () => {
     // writer-a claims the active-writer role via bootstrap.
     const claim = await fetch(`${harness.baseUrl}/api/v1/bootstrap`, {
       headers: authHeaders({ 'risu-writer-session': 'writer-a' }),
@@ -5549,7 +5556,8 @@ describe('Durable generation', () => {
     },
   )
 
-  it('rejects stale durable send finalization when the submitted user tail is truncated', async () => {
+  // prettier-ignore
+  coreIt('rejects stale durable send finalization when the submitted user tail is truncated', async () => {
     await seedChatWithMessages([{ role: 'user', data: 'hi', chatId: 'msg-user-1' }])
     const gated = makeGatedProvider({ before: 'stale', after: ' reply' })
     providerImpl = gated.dispatchProvider
@@ -5730,7 +5738,8 @@ describe('Durable generation', () => {
   // append/extend disposition, regenerate replaces the target, and send appends.
   // Each survives a mid-stream disconnect, and streaming-cancel persistence is mode-aware too.
 
-  it('survives a disconnect on an append-style durable continue without replacing the prior assistant', async () => {
+  // prettier-ignore
+  coreIt('survives a disconnect on an append-style durable continue without replacing the prior assistant', async () => {
     await seedChatWithMessages([
       { role: 'user', data: 'tell me a story', chatId: 'msg-user-1' },
       { role: 'char', data: 'Once upon a time', chatId: 'msg-char-1', saying: 'char-1' },
@@ -5760,7 +5769,8 @@ describe('Durable generation', () => {
     expect(messages[2].chatId).not.toBe('msg-char-1')
   })
 
-  it('survives a disconnect on a durable regenerate and replaces the target', async () => {
+  // prettier-ignore
+  coreIt('survives a disconnect on a durable regenerate and replaces the target', async () => {
     await seedChatWithMessages([
       { role: 'user', data: 'greet me', chatId: 'msg-user-1' },
       { role: 'char', data: 'old reply', chatId: 'msg-char-1', saying: 'char-1' },
@@ -6288,7 +6298,8 @@ describe('Durable generation', () => {
     }
   })
 
-  it('lets an acknowledged stopping runner persist its partial before graceful shutdown closes SQLite', async () => {
+  // prettier-ignore
+  coreIt('lets an acknowledged stopping runner persist its partial before graceful shutdown closes SQLite', async () => {
     const gated = makeGatedProvider({ before: 'partial stopped during shutdown' })
     providerImpl = gated.dispatchProvider
     let markCancelPersistenceStarted!: () => void

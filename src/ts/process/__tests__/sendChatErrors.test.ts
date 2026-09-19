@@ -1,3 +1,4 @@
+/** @module-tag core */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 const { alertErrorSpy } = vi.hoisted(() => ({ alertErrorSpy: vi.fn() }))

@@ -1,3 +1,4 @@
+/** @module-tag core */
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 

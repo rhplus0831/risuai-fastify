@@ -78,4 +78,20 @@ describe('check:server orchestration', () => {
     expect(result).toBe(1)
     expect(started).toContain('browser-smoke')
   })
+
+  it('can run only the typechecks for the minimal agent profile', async () => {
+    const started: ServerCheck['id'][] = []
+
+    await expect(
+      runServerChecks(
+        async (check) => {
+          started.push(check.id)
+          return 0
+        },
+        { includeArchitectureInventory: false },
+      ),
+    ).resolves.toBe(0)
+
+    expect(started).toEqual([protocolCheck.id, sharedCoreCheck.id, ...downstreamServerChecks.map((check) => check.id)])
+  })
 })

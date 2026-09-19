@@ -1,3 +1,4 @@
+/** @module-tag core */
 import {
   resetClientSessionForTests,
   beginClientSession,

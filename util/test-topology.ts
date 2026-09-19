@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
@@ -9,6 +9,7 @@ import {
 } from '../vitest.frontend-routing.js'
 import { performanceTestFiles as configuredPerformanceTestFiles } from '../vitest.performance-tests.js'
 import { uiCoverageTestFiles as configuredUiCoverageTestFiles } from '../vitest.ui-coverage-tests.js'
+import { browserCoreTestFiles, frontendCoreTestFiles, serverCoreTestFiles } from './core-test-contract.js'
 
 export interface ListedTestFile {
   file: string
@@ -26,6 +27,10 @@ export interface TestTopologySnapshot {
 export interface ConfiguredTestFileGroup {
   files: readonly string[]
   label: string
+}
+
+export interface CoreTestMarkerGroup extends ConfiguredTestFileGroup {
+  marker: RegExp
 }
 
 type ExpectedTestFiles = Map<string, FrontendVitestProject | undefined>
@@ -108,11 +113,30 @@ export function validateConfiguredTestFiles(
     { label: 'performance tests', files: configuredPerformanceTestFiles },
     { label: 'UI-map tests', files: configuredUiCoverageTestFiles },
     { label: 'isolated compatibility tests', files: isolatedCompatibilityTestFiles },
+    { label: 'frontend core tests', files: frontendCoreTestFiles },
+    { label: 'server core tests', files: serverCoreTestFiles },
+    { label: 'browser core tests', files: browserCoreTestFiles },
   ],
 ): string[] {
   const tracked = new Set(trackedTests)
   return groups.flatMap(({ files, label }) =>
     files.filter((file) => !tracked.has(file)).map((file) => `${label}: configured test is missing: ${file}`),
+  )
+}
+
+export function validateCoreTestMarkers(
+  groups: readonly CoreTestMarkerGroup[] = [
+    {
+      label: 'Vitest core tests',
+      files: [...frontendCoreTestFiles, ...serverCoreTestFiles],
+      marker: /@module-tag\s+core|tags:\s*['"]core['"]|coreIt\(['"]/,
+    },
+    { label: 'browser core tests', files: browserCoreTestFiles, marker: /@core\b/ },
+  ],
+  readSource: (file: string) => string = (file) => readFileSync(path.resolve(import.meta.dirname, '..', file), 'utf8'),
+): string[] {
+  return groups.flatMap(({ files, label, marker }) =>
+    files.filter((file) => !marker.test(readSource(file))).map((file) => `${label}: missing core marker: ${file}`),
   )
 }
 
@@ -169,7 +193,16 @@ function listVitestFiles(args: string[], env?: NodeJS.ProcessEnv): ListedTestFil
 
 function loadTrackedTests(): string[] {
   const root = path.resolve(import.meta.dirname, '..')
-  return runCommand('git', ['ls-files', '--cached', '--others', '--exclude-standard', '-z', '--', '*.test.ts'])
+  return runCommand('git', [
+    'ls-files',
+    '--cached',
+    '--others',
+    '--exclude-standard',
+    '-z',
+    '--',
+    '*.test.ts',
+    '*.spec.ts',
+  ])
     .split('\0')
     .filter(Boolean)
     .map(normalizeRepoPath)
@@ -184,7 +217,11 @@ export function runTestTopologyCli(): number {
     server: listVitestFiles(['--config', 'server/fastify/vitest.config.ts']),
     trackedTests: loadTrackedTests(),
   }
-  const errors = [...validateTestTopology(snapshot), ...validateConfiguredTestFiles(snapshot.trackedTests)]
+  const errors = [
+    ...validateTestTopology(snapshot),
+    ...validateConfiguredTestFiles(snapshot.trackedTests),
+    ...validateCoreTestMarkers(),
+  ]
   if (errors.length > 0) {
     console.error(`Test topology: FAIL\n${errors.map((error) => `- ${error}`).join('\n')}`)
     return 1

@@ -3,6 +3,7 @@ import { defineProject } from 'vitest/config'
 import { explicitDomTestFileGlobs, legacyDomTestFiles } from './vitest.frontend-routing'
 import { performanceTestFiles } from './vitest.performance-tests'
 import { excludeUiCoverageTests, uiCoverageTestFiles } from './vitest.ui-coverage-tests'
+import { testTags } from './vitest.test-tags'
 
 const includeExplicitPerformanceTests = process.env.RISU_TEST_INCLUDE_GATES === 'true'
 
@@ -21,6 +22,7 @@ export default defineProject({
     pool: 'threads',
     environment: 'happy-dom',
     setupFiles: ['vitest.setup.ts', 'vitest.dom.setup.ts'],
+    tags: testTags,
     include: [...explicitDomTestFileGlobs, ...legacyDomTestFiles],
     exclude: [
       '**/node_modules/**',

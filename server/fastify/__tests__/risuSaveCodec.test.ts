@@ -48,6 +48,8 @@ import {
 
 const dataDirs: string[] = []
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('legacy stop-string import repair', () => {
   it.each([
     { ext: 0, data: [0] },
@@ -1059,7 +1061,8 @@ describe('server .risu fixture harness', () => {
     }
   })
 
-  it('round-trips ordered reroll candidates with identity and metadata through every portable .risu codec', async () => {
+  // prettier-ignore
+  coreIt('round-trips ordered reroll candidates with identity and metadata through every portable .risu codec', async () => {
     const candidates = [
       {
         role: 'char',
@@ -1199,7 +1202,8 @@ describe('server .risu fixture harness', () => {
     }
   })
 
-  it('round-trips canonical owner identities and translator cache inputs through every portable .risu codec', async () => {
+  // prettier-ignore
+  coreIt('round-trips canonical owner identities and translator cache inputs through every portable .risu codec', async () => {
     const envelopeCases = [
       {
         expected: 'legacy-raw',

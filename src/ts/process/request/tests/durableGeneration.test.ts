@@ -1,3 +1,4 @@
+/** @module-tag core */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mirrors serverPromptAssembly.test.ts: the platform gate is a hoisted getter.

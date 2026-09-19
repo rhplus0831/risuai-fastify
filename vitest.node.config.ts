@@ -8,6 +8,7 @@ import {
   svelteNodeTestFileGlob,
 } from './vitest.frontend-routing'
 import { excludeUiCoverageTests, uiCoverageTestFiles } from './vitest.ui-coverage-tests'
+import { testTags } from './vitest.test-tags'
 
 export default defineProject({
   // Related-test discovery transforms transitive dynamic imports even when a
@@ -26,6 +27,7 @@ export default defineProject({
     pool: 'threads',
     environment: 'node',
     setupFiles: ['vitest.setup.ts'],
+    tags: testTags,
     include: [frontendTestFileGlob],
     exclude: [
       '**/node_modules/**',

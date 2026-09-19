@@ -49,6 +49,26 @@ Playwright discovery when an exact current inventory is required. Browser
 `*.spec.ts` files form a separate Playwright class; the static topology utility
 covers tracked `*.test.ts` files.
 
+### Minimal agent protection
+
+`pnpm test:agent` is the small safety harness used before broader test cleanup or
+for cross-area agent validation. Vitest cases tagged `core` protect startup,
+authentication, data integrity, durable mutations, message sending/streaming,
+recovery, backup/restore, and shared provider transport. A file whose complete
+scope is core uses a top-level `@module-tag core`; mixed files tag only the
+relevant `describe` blocks or tests. Untagged cases are extended coverage and
+remain in `test:all`, CI, and focused execution.
+`util/core-test-contract.ts` is the reviewed file-level inventory that keeps the
+agent run from importing the complete suite before applying those case tags;
+test topology rejects missing inventory entries.
+
+Playwright uses the equivalent `@core` tag. The agent aggregate runs four
+cross-layer journeys: bootstrap/event/command refresh, send/stream/reload with
+one persisted reply, durable edit replay after a real revision gap, and server
+backup restore followed by reload. Layout, responsive, performance, optional
+feature depth, and provider-specific adapter conformance remain outside the
+minimal profile unless they block one of those core contracts.
+
 ### Compatibility evidence ownership
 
 Compatibility lane authority, golden updates, provenance, and retained
@@ -92,8 +112,8 @@ application handled it. Keep explicit input/output fixtures; avoid copying the
 implementation when those expected values already provide the oracle.
 
 Repository-wide documentation and architecture validation belong to `check:docs`
-and `check:server`, reached by both aggregates. Validator unit tests focus on
-small valid/invalid fixtures and distinct policy assertions. Compatibility
+and the full `check:server`, reached by `test:all`; the minimal agent profile runs
+only the server typecheck portion. Validator unit tests focus on small valid/invalid fixtures and distinct policy assertions. Compatibility
 governance unit tests construct valid in-memory fixtures for mutation checks;
 `test/compat-harness/run.ts` separately validates committed manifests and digests
 in its designated compatibility lane.

@@ -254,6 +254,8 @@ afterEach(async () => {
   await stopHarness(harness)
 })
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('backups', () => {
   describe('SQLite backup table ownership policy', () => {
     it('classifies every production schema table as restored or deliberately device-local', () => {
@@ -484,7 +486,8 @@ describe('backups', () => {
     expect(res.json()).toEqual({ backups: [] })
   })
 
-  it('round-trips: import A, backup, import B, restore, bootstrap returns A', async () => {
+  // prettier-ignore
+  coreIt('round-trips: import A, backup, import B, restore, bootstrap returns A', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await importDb(harness.app, assertion, {
       tag: 'A',
@@ -1884,7 +1887,8 @@ describe('backups', () => {
     }
   })
 
-  it('snapshots pre-restore state and also protects restores of automatic snapshots', async () => {
+  // prettier-ignore
+  coreIt('snapshots pre-restore state and also protects restores of automatic snapshots', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await importDb(harness.app, assertion, { tag: 'A' })
     await importDb(harness.app, assertion, { tag: 'B' })
@@ -2491,7 +2495,8 @@ describe('backups', () => {
     })
   })
 
-  it('keeps pre-restore state when restore event persistence fails', async () => {
+  // prettier-ignore
+  coreIt('keeps pre-restore state when restore event persistence fails', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await importDb(harness.app, assertion, { tag: 'A' })
     const backup = await harness.app.inject({
@@ -2750,7 +2755,8 @@ describe('backups', () => {
     expect(existsSync(path.join(harness.dataDir, `.restore-journal-${backupId}.json`))).toBe(false)
   })
 
-  it('round-trips chat messages and per-chat hypaV3Data (SQLite tables) with backup/restore', async () => {
+  // prettier-ignore
+  coreIt('round-trips chat messages and per-chat hypaV3Data (SQLite tables) with backup/restore', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await importDb(harness.app, assertion, {
       characters: [
@@ -2827,7 +2833,8 @@ describe('backups', () => {
     expect(hydration.json().hypaV3Data).toEqual({ marker: 'hypa-A' })
   })
 
-  it('round-trips asset bytes with the backup snapshot', async () => {
+  // prettier-ignore
+  coreIt('round-trips asset bytes with the backup snapshot', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const upload = await harness.app.inject({
       method: 'POST',

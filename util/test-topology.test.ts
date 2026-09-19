@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   validateConfiguredTestFiles,
+  validateCoreTestMarkers,
   validateTestTopology,
   type ListedTestFile,
   type TestTopologySnapshot,
@@ -63,5 +64,31 @@ describe('test topology validation', () => {
         [{ label: 'focused tests', files: ['src/present.test.ts', 'src/missing.test.ts'] }],
       ),
     ).toEqual(['focused tests: configured test is missing: src/missing.test.ts'])
+  })
+
+  it('requires every core inventory file to carry its runner marker', () => {
+    const sources = new Map([
+      ['src/tagged.test.ts', "describe('core', { tags: 'core' }, () => {})"],
+      ['src/missing.test.ts', "describe('extended', () => {})"],
+      ['server/fastify/browser-smoke/core.spec.ts', "test('@core journey', async () => {})"],
+    ])
+
+    expect(
+      validateCoreTestMarkers(
+        [
+          {
+            label: 'Vitest core tests',
+            files: ['src/tagged.test.ts', 'src/missing.test.ts'],
+            marker: /tags:\s*['"]core['"]/,
+          },
+          {
+            label: 'browser core tests',
+            files: ['server/fastify/browser-smoke/core.spec.ts'],
+            marker: /@core\b/,
+          },
+        ],
+        (file) => sources.get(file) ?? '',
+      ),
+    ).toEqual(['Vitest core tests: missing core marker: src/missing.test.ts'])
   })
 })

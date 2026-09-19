@@ -126,7 +126,7 @@ test.afterEach(async ({ context }) => {
   rmSync(harness.dataDir, { recursive: true, force: true })
 })
 
-test('Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command', async ({
+test('@core Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command', async ({
   page,
 }) => {
   const apiRequests: string[] = []

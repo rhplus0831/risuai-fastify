@@ -3,6 +3,12 @@ import { describe, expect, it } from 'vitest'
 import { uiCoverageSupportFiles, uiCoverageTestFiles } from '../vitest.ui-coverage-tests.js'
 import { performanceTestFiles } from '../vitest.performance-tests.js'
 import {
+  browserCoreTestFiles,
+  CORE_BROWSER_TEST_TAG,
+  frontendCoreTestFiles,
+  serverCoreTestFiles,
+} from './core-test-contract.js'
+import {
   agentQualityLanes,
   createQualityRunReport,
   parseTestAllCli,
@@ -23,28 +29,62 @@ describe('test:all orchestration', () => {
     expect(parseTestAllCli([])).toMatchObject({ timingsJson: false })
   })
 
-  it('keeps the agent final profile focused on core tests, checks, and the smoke build', () => {
+  it('keeps the agent final profile focused on core tests, typechecks, topology, and browser verification', () => {
     expect(agentQualityLanes.map((lane) => lane.id)).toEqual([
       'server-check',
       'test-topology',
-      'docs',
-      'frontend-tests',
+      'frontend-core-tests',
       'frontend-check',
-      'server-tests',
+      'server-core-tests',
       'browser-smoke-build',
+      'browser-core-tests',
     ])
 
     const byId = new Map(agentQualityLanes.map((lane) => [lane.id, lane]))
-    expect(byId.get('frontend-tests')?.env).toEqual({
+    expect(byId.get('server-check')).toMatchObject({
+      args: ['exec', 'tsx', 'util/check-server.ts', '--typechecks-only'],
+    })
+    expect(byId.get('frontend-core-tests')).toMatchObject({
+      args: ['exec', 'vitest', 'run', ...frontendCoreTestFiles, '--tagsFilter', 'core'],
+      after: ['test-topology'],
+    })
+    expect(byId.get('frontend-core-tests')?.env).toEqual({
       RISU_TEST_EXCLUDE_UI_MAP: 'false',
       RISU_TEST_INCLUDE_GATES: 'false',
     })
-    expect(byId.get('server-tests')?.isolated).toBe(true)
+    expect(byId.get('server-core-tests')).toMatchObject({
+      args: [
+        'exec',
+        'vitest',
+        'run',
+        '--config',
+        'server/fastify/vitest.config.ts',
+        ...serverCoreTestFiles,
+        '--tagsFilter',
+        'core',
+      ],
+      isolated: true,
+    })
     expect(byId.get('browser-smoke-build')).toMatchObject({
       args: ['build:smoke'],
       after: ['server-check'],
     })
     expect(byId.get('browser-smoke-build')?.isolated).toBeUndefined()
+    expect(byId.get('browser-core-tests')).toMatchObject({
+      args: [
+        'exec',
+        'playwright',
+        'test',
+        '-c',
+        'playwright.fastify-smoke.config.ts',
+        ...browserCoreTestFiles,
+        '--grep',
+        CORE_BROWSER_TEST_TAG,
+      ],
+      after: ['browser-smoke-build'],
+      env: { VITE_FASTIFY_BROWSER_SMOKE: 'TRUE', RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED: 'false' },
+      isolated: true,
+    })
     expect(() => validateQualityLanePhases(agentQualityLanes)).not.toThrow()
   })
 

@@ -8,8 +8,9 @@ pnpm test -- server/fastify/__tests__/<owner>.test.ts
 pnpm test -- server/fastify/src/<owner>.ts
 ```
 
-The complete server lane runs in `pnpm test:agent` when the impact-based policy
-requires that aggregate, and in the user/CI `pnpm test:all` aggregate.
+`pnpm test:agent` runs the `core`-tagged server contract when the impact-based
+policy requires that aggregate. The complete server lane remains in the user/CI
+`pnpm test:all` aggregate.
 
 ## Current Buckets
 

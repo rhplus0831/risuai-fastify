@@ -320,7 +320,7 @@ for (const order of ['SSE-before-HTTP', 'HTTP-before-SSE'] as const) {
   })
 }
 
-test('a visible queued edit converges after a real revision gap and reload replay', async ({ page }) => {
+test('@core a visible queued edit converges after a real revision gap and reload replay', async ({ page }) => {
   await installEventDeliveryControl(page)
   await bootDisplay(page)
   const before = truth()

@@ -171,7 +171,7 @@ function callArgs(
   }
 }
 
-describe('consumeStreamResponse', () => {
+describe('consumeStreamResponse', { tags: 'core' }, () => {
   beforeEach(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
     vi.setSystemTime(new Date(1000))

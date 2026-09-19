@@ -36,7 +36,7 @@ environment variables live in
 | `pnpm validate:compat-registers` | Validate the compatibility inventory/findings schemas, cross-register references, and pinned upstream commit coverage. |
 | `pnpm test:compat-harness` | Compare pinned local/Fastify generation matrices against a prepared pre-Fastify worktree; opt-in and not part of `test:all`. |
 | `pnpm prepare:compat-baseline` | Create or verify the exact detached compatibility-baseline worktree and install its frozen dependencies. |
-| `pnpm test:agent` | Agent-final aggregate for typechecks, current docs, topology, ordinary frontend/server tests, and the browser-smoke build; excludes the specialized full-quality lanes. |
+| `pnpm test:agent` | Minimal agent-final protection: typechecks, topology, `core`-tagged frontend/server tests, the browser-smoke build, and four `@core` Playwright journeys. |
 | `pnpm test:all` | User-owned full local aggregate for format, typechecks, current docs, topology, frontend/server tests, compatibility, coverage, scale, performance, and browser smoke. |
 | `pnpm coverage:ui-map` | Run the focused UI coverage gate and write text/JSON reports to `coverage/ui-map`; use `coverage:ui-map:html` for an on-demand HTML report. |
 | `pnpm smoke:fastify-browser` | User/CI command that builds the smoke client without production sourcemaps, then runs the full Playwright Fastify browser smoke suite. |
@@ -62,7 +62,8 @@ worker recovery, generation/provider/recovery evidence, and browser publishing.
 `server/fastify/browser-smoke/remoteDiagnostics.spec.ts` is the focused real
 browser/auth/upload/HTTPS-helper journey; it uses a fresh disposable database
 and temporary test CA. Run it through the focused test runner after a smoke
-build. The agent aggregate builds the smoke client but does not run Playwright.
+build. The agent aggregate runs only its four cross-layer `@core` Playwright
+journeys, so this specialized diagnostics case remains focused/full-suite owned.
 
 ## Tests And Checks
 
@@ -74,19 +75,19 @@ Read by task: [focused execution](#focused-execution),
 | Area | Command/config | Environment | Locations |
 | --- | --- | --- | --- |
 | Browser/client/domain tests | `pnpm test -- <file>`, `vitest*.config.ts` | Node + Svelte/Node + `happy-dom` | One exact test, or tests related to one source file, outside the server tree. |
-| Agent-final aggregate | `pnpm test:agent`, `util/test-agent.ts`, `util/test-all.ts` | Node + Svelte/Node + `happy-dom` | Core typechecks, current docs, topology, all ordinary frontend/server tests, and a Vite browser-smoke build without Playwright. |
-| Current documentation | `pnpm check:docs`, `util/current-documentation-validator.ts` | Node filesystem | Both aggregates and CI validate current guides, three focused indexes, local links/anchors, and literal repository paths. |
+| Agent-final aggregate | `pnpm test:agent`, `util/test-agent.ts`, `util/test-all.ts` | Node + Svelte/Node + `happy-dom` + Chromium | Typechecks, topology, `core`-tagged frontend/server tests, and four `@core` built-browser journeys. |
+| Current documentation | `pnpm check:docs`, `util/current-documentation-validator.ts` | Node filesystem | `test:all` and CI validate current guides, three focused indexes, local links/anchors, and literal repository paths. |
 | Test topology | `util/test-topology.ts`, `vitest*.config.ts`, `server/fastify/vitest.config.ts` | Static Vitest discovery | Agent/user/CI aggregate owner; validates each tracked `*.test.ts` exactly once in its configured Vitest project. Browser `*.spec.ts` discovery stays with Playwright and the focused runner. |
 | Specialized frontend gates | `vitest.performance-tests.ts`, `vitest.config.ts` | Node + `happy-dom` | Exact performance owners; isolated in `test:all`/CI, or individually selectable through the focused runner. |
-| Focused UI audit tests | `pnpm test -- <audit-test-file>`, `vitest.config.ts` | Node + `happy-dom` | One exact `src/lib/_audit/**/*.test.ts` file; both aggregates include the complete audit set. |
-| Full frontend tests | `pnpm test:agent`, `pnpm test:all`, CI, `vitest.config.ts` | Node + Svelte/Node + `happy-dom` | Agent profile owns the ordinary suite; user/CI additionally own explicit performance and coverage gates. |
+| Focused UI audit tests | `pnpm test -- <audit-test-file>`, `vitest.config.ts` | Node + `happy-dom` | One exact `src/lib/_audit/**/*.test.ts` file; `test:all` and CI include the complete audit set. |
+| Full frontend tests | `pnpm test:all`, CI, `vitest.config.ts` | Node + Svelte/Node + `happy-dom` | User/CI own the ordinary suite plus explicit performance and coverage gates; the agent aggregate selects only `core`. |
 | Frontend coverage | `pnpm coverage:frontend`, `vitest.config.ts` | Node + Svelte/Node + `happy-dom` | Broad coverage over `src/**/*.{ts,svelte}` and `util/**/*.ts`; reports under `coverage/frontend`. |
 | UI coverage map | `pnpm coverage:ui-map`, `vitest.config.ts` | Node + `happy-dom` | Six focused tests mapped over `src/lib/ChatScreens`, `src/lib/Others`, `src/lib/SideBars`, and `src/ts/server`. |
-| Fastify/server tests | `pnpm test -- <file>`, `pnpm test:agent`, `pnpm test:all`, `server/fastify/vitest.config.ts` | Node | Focused feedback or the complete `server/fastify/__tests__/**/*.test.ts` suite; the direct Realm scale case remains specialized. |
+| Fastify/server tests | `pnpm test -- <file>`, `pnpm test:agent`, `pnpm test:all`, `server/fastify/vitest.config.ts` | Node | Focused feedback, the agent `core` subset, or the complete user/CI suite; the direct Realm scale case remains specialized. |
 | Realm import scale gate | `pnpm test:all`, CI, `server/fastify/vitest.config.ts` | Node | The direct-only 7,000-display-asset Realm/CharX import case; isolated in the user/CI aggregate. |
 | Compatibility harness | `pnpm test:all`, `pnpm test:compat-harness`, `test/compat-harness/*.vitest.config.ts` | Node | User/CI current goldens plus the separately governed full pinned differential. |
 | Backend coverage | `pnpm coverage:backend`, `server/fastify/vitest.config.ts` | Node | Broad coverage over `server/fastify/src/**/*.ts`; reports under `coverage/backend`. |
-| Browser smoke | `pnpm test -- <spec-file>`; full suite via user/CI | Chromium | One exact spec through the focused runner, or all specs through the user/CI aggregate. |
+| Browser smoke | `pnpm test -- <spec-file>`; core journeys via `test:agent`; full suite via user/CI | Chromium | One exact spec, four `@core` journeys, or the complete user/CI suite. |
 
 ### Focused Execution
 
@@ -102,12 +103,12 @@ Agents use the focused command only for a concrete diagnostic need while work
 is in progress. After implementation, choose final validation from the actual
 impact and remaining uncertainty under `AGENTS.md`. Run `pnpm test:agent` only
 for changes to shared behavior/contracts, explicit user requests, or integration
-risk that focused checks cannot cover. That aggregate runs the core broad
-checks, current-document validator, ordinary frontend/server suites, and smoke
-build. It does not
-run repository-wide formatting, coverage instrumentation, compatibility and
-Realm scale gates, explicit performance probes, or Playwright. The user and CI
-retain those lanes through `pnpm test:all` and the split Quality workflow. On a
+risk that focused checks cannot cover. That aggregate runs typechecks, topology,
+the `core`-tagged frontend/server suites, a smoke build, and four `@core`
+Playwright journeys. It does not run current-document validation,
+repository-wide formatting, coverage instrumentation, compatibility and Realm
+scale gates, explicit performance probes, or the remaining Playwright suite.
+The user and CI retain those lanes through `pnpm test:all` and the split Quality workflow. On a
 fresh machine, the user/CI smoke owner runs
 `pnpm exec playwright install --with-deps chromium` before browser smoke.
 `server/fastify/__tests__/README.md` is the maintained topical map for the flat
@@ -173,14 +174,17 @@ and reviews the scheduled/manual differential.
 ### Aggregate Scheduling
 
 `pnpm test:agent` uses the same bounded scheduler and failure aggregation as
-`test:all`. It runs `check:server`, current-document validation, topology, the
-frontend suite with the six UI sentinel files restored as ordinary
-uninstrumented tests, `pnpm check`, `build:smoke`, and the isolated server suite.
+`test:all`. It runs the typecheck-only mode of `check:server`, topology, `pnpm check`, the frontend and
+isolated server Vitest projects with `--tagsFilter core`, `build:smoke`, and the
+four isolated browser journeys selected by `--grep @core`.
+`util/core-test-contract.ts` supplies the exact frontend, server, and browser
+file filters so tag selection does not collect the complete suite first.
 The smoke build fills a free regular-lane slot after `check:server`, at lower
 priority than the other checks, overlapping remaining frontend tests.
 Typechecks use `noEmit`, so they do not share build outputs. The agent profile
-explicitly disables the two frontend performance probes and does not launch
-Playwright. Every selected lane still finishes after another lane fails.
+explicitly disables the two frontend performance probes. Every selected lane
+still finishes after another lane fails. The core browser subset does not require
+the full browser matrix's merged fast-bootstrap artifact.
 `RISU_TEST_ALL_JOBS`, `--jobs`, `--dry-run`, and `--timings=json` work for
 both commands.
 
@@ -261,9 +265,8 @@ and thresholds. The user/CI performance and broad-coverage lanes set
 `RISU_TEST_INCLUDE_GATES=true`; an exact focused performance test does the same
 while retaining one-worker isolation. `test:agent` instead forces
 `RISU_TEST_EXCLUDE_UI_MAP=false` and
-`RISU_TEST_INCLUDE_GATES=false`, so inherited shell variables cannot remove the
-six UI tests or pull the resource-sensitive performance probes into the ordinary
-frontend run. Server Vitest uses Node, forks, a 15s
+`RISU_TEST_INCLUDE_GATES=false`, then uses the `core` tag so inherited shell
+variables cannot alter its explicit minimal contract. Server Vitest uses Node, forks, a 15s
 test timeout, and
 sets `RISU_DIRECT_REALM_IMPORT_TEST` only when the Realm import test is directly
 selected. Playwright smoke keeps tests within each file serial except for the

@@ -474,6 +474,8 @@ function firstRerollText(snapshot: FixtureSnapshot): string | null {
   return null
 }
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('sendChat fixtures (/chat route-backed prompt assembly)', () => {
   beforeAll(() => {
     vi.useFakeTimers({ toFake: ['Date'] })
@@ -693,7 +695,7 @@ describe('sendChat fixtures (/chat route-backed prompt assembly)', () => {
     }
   })
 
-  it('applies the server-owned editoutput final text to the assistant message', async () => {
+  coreIt('applies the server-owned editoutput final text to the assistant message', async () => {
     const harness = await createRouteBackedHarness()
     try {
       const loaded = await loadFixture('simple-send')
@@ -1198,7 +1200,7 @@ describe('sendChat fixtures (/chat adapter replay)', () => {
     expect(getServerCompletionCalls()).toEqual([])
   })
 
-  it('rolls back server-applied chat mutations when /chat dispatch fails after streaming starts', async () => {
+  coreIt('rolls back server-applied chat mutations when /chat dispatch fails after streaming starts', async () => {
     const loaded = await loadFixture('simple-send')
     cleanups.push(loaded.cleanup)
     markFixtureActiveChatGenerationSettingsReady({ canonicalOpenAiProfile: true })
@@ -1400,7 +1402,7 @@ describe('sendChat fixtures (/chat adapter replay)', () => {
     },
   )
 
-  it('reconciles a cancelled partial snapshot but suppresses every success-only terminal consumer', async () => {
+  coreIt('reconciles a cancelled partial snapshot but suppresses every success-only terminal consumer', async () => {
     const loaded = await loadFixture('simple-send')
     cleanups.push(loaded.cleanup)
     testDatabaseState.db.characters[0].chats[0].id = 'chat-cancelled-replay'

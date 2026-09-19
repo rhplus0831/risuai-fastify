@@ -600,7 +600,7 @@ describe('chat generation settings prompt owner validation', () => {
   })
 })
 
-describe('command foundation', () => {
+describe('command foundation', { tags: 'core' }, () => {
   it('rejects unauthenticated runtime settings commands once a password is set', async () => {
     await harness.app.inject({
       method: 'POST',
@@ -1047,7 +1047,7 @@ describe('command foundation', () => {
   })
 })
 
-describe('first-run database seed', () => {
+describe('first-run database seed', { tags: 'core' }, () => {
   it('rejects a settings command on a never-seeded (null database) server', async () => {
     // Regression: a fresh server ships database: null, and every command path
     // requires an existing object. The welcome screen's first action (set

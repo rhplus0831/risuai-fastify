@@ -11,6 +11,10 @@ export interface ServerCheck {
 
 export type ServerCheckRunner = (check: ServerCheck) => Promise<number>
 
+export interface RunServerChecksOptions {
+  includeArchitectureInventory?: boolean
+}
+
 export const protocolCheck: ServerCheck = {
   id: 'protocol',
   label: 'protocol typecheck',
@@ -43,10 +47,13 @@ export const downstreamServerChecks: readonly ServerCheck[] = [
 ]
 
 /** Check shared prerequisites, then check the independent consumers concurrently. */
-export async function runServerChecks(runCheck: ServerCheckRunner): Promise<number> {
+export async function runServerChecks(
+  runCheck: ServerCheckRunner,
+  { includeArchitectureInventory = true }: RunServerChecksOptions = {},
+): Promise<number> {
   if ((await runCheck(protocolCheck)) !== 0) return 1
   if ((await runCheck(sharedCoreCheck)) !== 0) return 1
-  if ((await runCheck(architectureInventoryCheck)) !== 0) return 1
+  if (includeArchitectureInventory && (await runCheck(architectureInventoryCheck)) !== 0) return 1
   const exitCodes = await Promise.all(downstreamServerChecks.map(runCheck))
   return exitCodes.every((exitCode) => exitCode === 0) ? 0 : 1
 }
@@ -86,7 +93,9 @@ async function run(): Promise<void> {
     return exitCode
   }
 
-  const exitCode = await runServerChecks(runCheck)
+  const exitCode = await runServerChecks(runCheck, {
+    includeArchitectureInventory: !process.argv.includes('--typechecks-only'),
+  })
   if (interruptedSignal) {
     process.exitCode = interruptedSignal === 'SIGINT' ? 130 : 143
   } else {

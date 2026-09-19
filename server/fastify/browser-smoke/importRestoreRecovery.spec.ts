@@ -165,7 +165,7 @@ for (const schedule of ['invalid-upload', 'refresh-failure', 'lost-response', 'w
   })
 }
 
-test('server backup selection restores authored settings and survives reload', async ({ page }) => {
+test('server backup selection restores authored settings and survives reload', { tag: '@core' }, async ({ page }) => {
   test.setTimeout(60_000)
   const database = smallFastBootstrapFixture()
   database.showMemoryLimit = true

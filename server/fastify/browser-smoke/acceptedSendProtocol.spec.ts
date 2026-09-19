@@ -397,7 +397,7 @@ test.afterAll(async () => {
   await harness.close()
 })
 
-test('send -> mid-stream and completed reloads retain one exact reply', async ({ page }) => {
+test('send -> mid-stream and completed reloads retain one exact reply', { tag: '@core' }, async ({ page }) => {
   const chatId = chats.reloadDesktop
   const userText = 'desktop reload request'
   const partial = 'Desktop reload'

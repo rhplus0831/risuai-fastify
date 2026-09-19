@@ -1,3 +1,4 @@
+/** @module-tag core */
 import { describe, expect, it, vi } from 'vitest'
 import type { CompletionStreamFrame } from '../src/generation/frames.js'
 import { emitProviderChunks } from '../src/prompt/providerTransport.js'

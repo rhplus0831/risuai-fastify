@@ -171,6 +171,8 @@ afterEach(async () => {
   vi.unstubAllGlobals()
 })
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('pending mutation outbox', () => {
   it('isolates occupied-chat generation rows from every general owner listing and counter', async () => {
     const authority = occupancyAuthority()
@@ -603,7 +605,7 @@ describe('pending mutation outbox', () => {
     expect(await readRawOrderCounters()).toEqual([expect.objectContaining({ lastCommittedOrder: 2 })])
   })
 
-  it('rolls back both the counter and row when the final transaction aborts', async () => {
+  coreIt('rolls back both the counter and row when the final transaction aborts', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {})
     setPendingMutationCommitTransactionHookForTests((transaction) => transaction.abort())
 
@@ -797,7 +799,7 @@ describe('pending mutation outbox', () => {
     await expect(countBlockingPendingMutationRecords()).resolves.toBeNull()
   })
 
-  it('persists encrypted intents across runtime cache resets without plaintext secrets at rest', async () => {
+  coreIt('persists encrypted intents across runtime cache resets without plaintext secrets at rest', async () => {
     const secret = 'sentinel-provider-secret-never-store-plaintext'
     const handle = stagePendingMutation('settings:runtime', settingsIntent(secret))
 
@@ -827,7 +829,7 @@ describe('pending mutation outbox', () => {
     expect(entries[0]?.handle.mutationId).toBe(handle.mutationId)
   })
 
-  it('atomically replaces an unstarted staged payload under a fresh mutation id', async () => {
+  coreIt('atomically replaces an unstarted staged payload under a fresh mutation id', async () => {
     const clock = vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000)
     const first = stagePendingMutation('settings:runtime', settingsIntent('first'))
     await first.ready
@@ -1153,7 +1155,7 @@ describe('pending mutation outbox', () => {
     expect(await readRawMutation(rejected.mutationId)).toBeDefined()
   })
 
-  it('quarantines another writer session and lets each owner reclaim only its own rows', async () => {
+  coreIt('quarantines another writer session and lets each owner reclaim only its own rows', async () => {
     const pending = stagePendingMutation('settings:runtime', settingsIntent('recover-owner'))
     await pending.ready
     resetPendingMutationOutboxForTests()
@@ -1210,7 +1212,7 @@ describe('pending mutation outbox', () => {
     expect(await readRawMutation(pending.mutationId)).toBeDefined()
   })
 
-  it('deletes rows and receipt ACKs belonging to a different database lineage', async () => {
+  coreIt('deletes rows and receipt ACKs belonging to a different database lineage', async () => {
     const old = stagePendingMutation('settings:runtime', settingsIntent('old-database'))
     await old.ready
     await completePendingMutation(old, 1)

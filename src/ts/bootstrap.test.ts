@@ -646,6 +646,8 @@ afterEach(() => {
   vi.restoreAllMocks()
 })
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('API-backed client bootstrap', () => {
   it('fails closed when the globally selected prompt owner is duplicated', () => {
     getDatabase().promptPresets = [
@@ -820,7 +822,8 @@ describe('API-backed client bootstrap', () => {
     expect(backgroundReady()).toBe(true)
   })
 
-  it('keeps commands blocked until the owning session finishes recovery, coherent hydration, and subscription', async () => {
+  // prettier-ignore
+  coreIt('keeps commands blocked until the owning session finishes recovery, coherent hydration, and subscription', async () => {
     let releaseEvents!: (value: { status: 'ok'; unsubscribe: typeof eventApi.unsubscribe }) => void
     eventApi.subscribe.mockImplementationOnce((input) => {
       eventApi.subscriptions.push(input)
@@ -2003,7 +2006,8 @@ describe('API-backed client bootstrap', () => {
     expect(eventApi.subscriptions[0]?.sinceRevision).toBe(5)
   })
 
-  it('preserves the owner, takeover, outbox, receipt, replay, projection, and event order', async () => {
+  // prettier-ignore
+  coreIt('preserves the owner, takeover, outbox, receipt, replay, projection, and event order', async () => {
     pendingMutationApi.readOwner.mockResolvedValueOnce({
       writerSessionId: 'recovered-writer',
       writerEpoch: 1,
@@ -2114,7 +2118,8 @@ describe('API-backed client bootstrap', () => {
     expect(alertError).toHaveBeenCalledWith(expect.stringContaining('pending changes'))
   })
 
-  it('initializes a fresh server without refetching unchanged runtime metadata', async () => {
+  // prettier-ignore
+  coreIt('initializes a fresh server without refetching unchanged runtime metadata', async () => {
     bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap({ initialized: false, revision: 0 }))
 
     await loadWebInitialDatabase()
@@ -6045,7 +6050,8 @@ describe('API-backed client bootstrap', () => {
     expect(peekAppliedServerResourceRevision()).toBe(5)
   })
 
-  it('reconciles ownership before replay-unavailable recovery when a disconnected tab missed a restore', async () => {
+  // prettier-ignore
+  coreIt('reconciles ownership before replay-unavailable recovery when a disconnected tab missed a restore', async () => {
     eventApi.subscribe.mockResolvedValueOnce({ status: 'replay-unavailable', currentRevision: 3 })
     bootstrapApi.fetchOwnership.mockResolvedValue(
       runtimeOwnership({

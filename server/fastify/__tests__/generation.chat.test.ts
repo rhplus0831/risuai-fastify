@@ -760,6 +760,9 @@ async function readStreamingEvents(
   return events
 }
 
+const coreIt = (name: string, fn: () => void | Promise<void>, timeout?: number): void =>
+  it(name, timeout === undefined ? { tags: 'core' } : { tags: 'core', timeout }, fn)
+
 describe('POST /api/v1/generate/chat', () => {
   it('returns 401 without auth once a password is set', async () => {
     await harness.app.inject({
@@ -1119,7 +1122,8 @@ describe('POST /api/v1/generate/chat', () => {
     expect(events.at(-1)?.type).toBe('done')
   })
 
-  it('streams the assembled prompt for a seeded database', async () => {
+  // prettier-ignore
+  coreIt('streams the assembled prompt for a seeded database', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await seedDatabase(harness.app, assertion, fixtureDatabase)
 
@@ -4552,7 +4556,8 @@ describe('POST /api/v1/generate/chat', () => {
     expect(events.find((e) => e.type === 'prompt')).toBeDefined()
   })
 
-  it('streams provider tokens after prompt metadata through the chat SSE taxonomy', async () => {
+  // prettier-ignore
+  coreIt('streams provider tokens after prompt metadata through the chat SSE taxonomy', async () => {
     await restartHarness({
       dispatchProvider: ({ input, result, signal }) => {
         expect(input.mode).toBe('send')
@@ -6002,7 +6007,8 @@ describe('POST /api/v1/generate/chat', () => {
     expect(done.postGeneration?.revision).toBe(2)
   })
 
-  it('durable DELETE cancel persists an editoutput-processed partial without completion-only effects', async () => {
+  // prettier-ignore
+  coreIt('durable DELETE cancel persists an editoutput-processed partial without completion-only effects', async () => {
     let providerSawAbort = false
     await restartHarness({
       dispatchProvider: ({ signal }) => {
@@ -7110,7 +7116,8 @@ describe('POST /api/v1/generate/chat', () => {
     })
   }
 
-  it('persists a continue result server-side, extending the last row in place', async () => {
+  // prettier-ignore
+  coreIt('persists a continue result server-side, extending the last row in place', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await seedChatWithMessages(
       assertion,
@@ -7352,7 +7359,8 @@ describe('POST /api/v1/generate/chat', () => {
     expect(alternates.some((message) => message.data === 'A')).toBe(false)
   })
 
-  it('persists a regenerate result server-side, replacing the target message', async () => {
+  // prettier-ignore
+  coreIt('persists a regenerate result server-side, replacing the target message', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await seedChatWithMessages(
       assertion,
@@ -8037,7 +8045,8 @@ describe('POST /api/v1/generate/chat', () => {
     })
   })
 
-  it('maps provider transport failures to error then done after prompt metadata', async () => {
+  // prettier-ignore
+  coreIt('maps provider transport failures to error then done after prompt metadata', async () => {
     await restartHarness({
       dispatchProvider: () => {
         async function* source(): AsyncGenerator<CompletionStreamFrame> {
@@ -8102,7 +8111,8 @@ describe('POST /api/v1/generate/chat', () => {
     ])
   })
 
-  it('keeps the transcript unchanged when a provider stream fails before its first token', async () => {
+  // prettier-ignore
+  coreIt('keeps the transcript unchanged when a provider stream fails before its first token', async () => {
     await restartHarness({
       dispatchProvider: () => {
         async function* source(): AsyncGenerator<CompletionStreamFrame> {

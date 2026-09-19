@@ -3,6 +3,13 @@ import { existsSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { performanceTestFiles } from '../vitest.performance-tests.js'
+import { CORE_TEST_TAG } from '../vitest.test-tags.js'
+import {
+  browserCoreTestFiles,
+  CORE_BROWSER_TEST_TAG,
+  frontendCoreTestFiles,
+  serverCoreTestFiles,
+} from './core-test-contract.js'
 
 export interface QualityLane {
   id: string
@@ -159,21 +166,57 @@ function requiredQualityLane(id: string): QualityLane {
 }
 
 export const agentQualityLanes: readonly QualityLane[] = [
-  requiredQualityLane('server-check'),
+  {
+    ...requiredQualityLane('server-check'),
+    args: ['exec', 'tsx', 'util/check-server.ts', '--typechecks-only'],
+  },
   requiredQualityLane('test-topology'),
-  requiredQualityLane('docs'),
   {
     ...requiredQualityLane('frontend-tests'),
-    // The agent profile runs the UI-map tests normally, without coverage, and
-    // leaves the resource-sensitive performance probes to their explicit lane.
+    id: 'frontend-core-tests',
+    label: 'frontend core tests',
+    args: ['exec', 'vitest', 'run', ...frontendCoreTestFiles, '--tagsFilter', CORE_TEST_TAG],
+    // Core selection is independent from the coverage and performance cohorts.
     env: {
       RISU_TEST_EXCLUDE_UI_MAP: 'false',
       RISU_TEST_INCLUDE_GATES: 'false',
     },
   },
   requiredQualityLane('frontend-check'),
-  requiredQualityLane('server-tests'),
+  {
+    ...requiredQualityLane('server-tests'),
+    id: 'server-core-tests',
+    label: 'server core tests',
+    args: [
+      'exec',
+      'vitest',
+      'run',
+      '--config',
+      'server/fastify/vitest.config.ts',
+      ...serverCoreTestFiles,
+      '--tagsFilter',
+      CORE_TEST_TAG,
+    ],
+  },
   requiredQualityLane('browser-smoke-build'),
+  {
+    id: 'browser-core-tests',
+    label: 'browser core tests',
+    args: [
+      'exec',
+      'playwright',
+      'test',
+      '-c',
+      'playwright.fastify-smoke.config.ts',
+      ...browserCoreTestFiles,
+      '--grep',
+      CORE_BROWSER_TEST_TAG,
+    ],
+    // The integration artifact belongs to the complete browser matrix, not this four-journey subset.
+    env: { VITE_FASTIFY_BROWSER_SMOKE: 'TRUE', RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED: 'false' },
+    after: ['browser-smoke-build'],
+    isolated: true,
+  },
 ]
 
 function parsePositiveInteger(raw: string, option: string): number {
