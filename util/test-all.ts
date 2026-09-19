@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { createWriteStream, existsSync, type WriteStream } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { performanceTestFiles } from '../vitest.performance-tests.js'
@@ -22,6 +22,7 @@ export interface QualityLane {
 }
 
 export interface QualityLaneResult {
+  failedTests?: string[]
   finishedOffsetMs: number
   id: string
   exitCode: number
@@ -49,6 +50,26 @@ export type QualityCommandName = 'test:agent' | 'test:all'
 const defaultJobsByCommand: Readonly<Record<QualityCommandName, number>> = {
   'test:agent': 3,
   'test:all': 2,
+}
+
+export const latestTestAllLogPath = 'latest-test-all.log'
+
+const ansiEscapePattern = /\u001b\[[0-?]*[ -/]*[@-~]/g
+
+export function extractFailedTestNames(output: string): string[] {
+  const failures = new Set<string>()
+  for (const rawLine of output.split(/\r?\n/)) {
+    const line = rawLine.replace(ansiEscapePattern, '')
+    const vitestFailure = line.match(/^\s*FAIL\s+(.+?)\s*$/)
+    if (vitestFailure?.[1]) {
+      failures.add(vitestFailure[1])
+      continue
+    }
+
+    const playwrightFailure = line.match(/^\s*\d+\)\s+(.+?\s+›\s+.+?)\s*$/)
+    if (playwrightFailure?.[1]) failures.add(playwrightFailure[1])
+  }
+  return [...failures]
 }
 
 export const qualityLanes: readonly QualityLane[] = [
@@ -365,6 +386,54 @@ function formatDuration(elapsedMs: number): string {
   return `${minutes}m ${seconds}s`
 }
 
+function formatMinutes(elapsedMs: number): string {
+  return `${(elapsedMs / 60_000).toFixed(2)} min`
+}
+
+export function createQualityTextSummary(
+  commandName: QualityCommandName,
+  lanes: readonly QualityLane[],
+  results: readonly QualityLaneResult[],
+  aggregateElapsedMs: number,
+): string {
+  const byId = new Map(results.map((result) => [result.id, result]))
+  const failed = lanes.flatMap((lane) => {
+    const result = byId.get(lane.id)
+    return result && result.exitCode !== 0 ? [{ lane, result }] : []
+  })
+  const lines = [
+    '',
+    `[${commandName}] final status: ${failed.length === 0 ? 'PASS' : 'FAIL'}`,
+    `[${commandName}] total elapsed: ${formatMinutes(aggregateElapsedMs)}`,
+    `[${commandName}] failed test groups:`,
+  ]
+
+  if (failed.length === 0) {
+    lines.push('  none')
+  } else {
+    for (const { lane, result } of failed) lines.push(`  - ${lane.label} (exit ${result.exitCode})`)
+  }
+
+  lines.push(`[${commandName}] failed tests reported by test runners:`)
+  const reportedTests = failed.flatMap(({ lane, result }) =>
+    (result.failedTests ?? []).map((failedTest) => `  - ${lane.label}: ${failedTest}`),
+  )
+  lines.push(...(reportedTests.length > 0 ? reportedTests : ['  none']))
+
+  lines.push(`[${commandName}] major test group timings:`)
+  for (const lane of lanes) {
+    const result = byId.get(lane.id)
+    const status = result?.exitCode === 0 ? 'PASS' : 'FAIL'
+    lines.push(`  ${status}  ${lane.label}: ${formatMinutes(result?.elapsedMs ?? 0)}`)
+  }
+  return `${lines.join('\n')}\n`
+}
+
+async function closeLogStream(stream: WriteStream | undefined): Promise<void> {
+  if (!stream || stream.destroyed) return
+  await new Promise<void>((resolve) => stream.end(resolve))
+}
+
 function displayCommand(lane: QualityLane): string {
   const env = lane.env
     ? `${Object.entries(lane.env)
@@ -423,6 +492,27 @@ export async function runQualityCommand(
   printPlan(commandName, lanes, options.jobs)
   if (options.dryRun) return
 
+  const logStream =
+    commandName === 'test:all'
+      ? createWriteStream(path.resolve(process.cwd(), latestTestAllLogPath), { flags: 'w' })
+      : undefined
+  let logWritable = Boolean(logStream)
+  logStream?.once('error', (error) => {
+    logWritable = false
+    process.stderr.write(`[${commandName}] could not write ${latestTestAllLogPath}: ${error.message}\n`)
+  })
+  const appendToLog = (chunk: string | Buffer): void => {
+    if (logWritable && !logStream?.destroyed) logStream?.write(chunk)
+  }
+  const writeStdout = (chunk: string | Buffer): void => {
+    process.stdout.write(chunk)
+    appendToLog(chunk)
+  }
+  const writeStderr = (chunk: string | Buffer): void => {
+    process.stderr.write(chunk)
+    appendToLog(chunk)
+  }
+
   const pnpmCommand = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm'
   const children = new Set<ChildProcess>()
   let interruptedSignal: NodeJS.Signals | undefined
@@ -432,8 +522,12 @@ export async function runQualityCommand(
     interruptedSignal = signal
     for (const child of children) child.kill(signal)
   }
-  process.once('SIGINT', () => interrupt('SIGINT'))
-  process.once('SIGTERM', () => interrupt('SIGTERM'))
+  const interruptWithSigint = (): void => interrupt('SIGINT')
+  const interruptWithSigterm = (): void => interrupt('SIGTERM')
+  process.once('SIGINT', interruptWithSigint)
+  process.once('SIGTERM', interruptWithSigterm)
+
+  if (logStream) writeStdout(`[${commandName}] started at ${new Date().toISOString()}\n`)
 
   const runLane: LaneRunner = async (lane) => {
     if (interruptedSignal) {
@@ -441,32 +535,43 @@ export async function runQualityCommand(
       return { id: lane.id, exitCode: 1, elapsedMs: 0, finishedOffsetMs: offset, startedOffsetMs: offset }
     }
     const laneStartedAt = performance.now()
-    console.log(`\n[${commandName}] starting ${lane.label}: ${displayCommand(lane)}`)
+    writeStdout(`\n[${commandName}] starting ${lane.label}: ${displayCommand(lane)}\n`)
+    let capturedOutput = ''
 
     const exitCode = await new Promise<number>((resolve) => {
       const spawnOptions: SpawnOptions = {
         cwd: process.cwd(),
         env: { ...process.env, ...lane.env },
-        stdio: 'inherit',
+        stdio: logStream ? ['inherit', 'pipe', 'pipe'] : 'inherit',
       }
       const child = spawn(pnpmCommand, lane.args, spawnOptions)
       children.add(child)
+      const forwardOutput = (target: NodeJS.WriteStream, chunk: Buffer): void => {
+        target.write(chunk)
+        appendToLog(chunk)
+        capturedOutput += chunk.toString()
+      }
+      if (logStream) {
+        child.stdout?.on('data', (chunk: Buffer) => forwardOutput(process.stdout, chunk))
+        child.stderr?.on('data', (chunk: Buffer) => forwardOutput(process.stderr, chunk))
+      }
+      let spawnFailed = false
       child.once('error', (error) => {
-        children.delete(child)
-        console.error(`[${commandName}] could not start ${lane.label}: ${error.message}`)
-        resolve(1)
+        spawnFailed = true
+        writeStderr(`[${commandName}] could not start ${lane.label}: ${error.message}\n`)
       })
-      child.once('exit', (code) => {
+      child.once('close', (code) => {
         children.delete(child)
-        resolve(code ?? 1)
+        resolve(spawnFailed ? 1 : (code ?? 1))
       })
     })
 
     const finishedAt = performance.now()
     const elapsedMs = finishedAt - laneStartedAt
     const status = exitCode === 0 ? 'passed' : `failed (exit ${exitCode})`
-    console.log(`\n[${commandName}] ${lane.label} ${status} in ${formatDuration(elapsedMs)}`)
+    writeStdout(`\n[${commandName}] ${lane.label} ${status} in ${formatDuration(elapsedMs)}\n`)
     return {
+      failedTests: exitCode === 0 ? [] : extractFailedTestNames(capturedOutput),
       id: lane.id,
       exitCode,
       elapsedMs,
@@ -475,29 +580,39 @@ export async function runQualityCommand(
     }
   }
 
-  const regularLanes = lanes.filter((lane) => !lane.isolated)
-  const isolatedLanes = lanes.filter((lane) => lane.isolated)
-  const results = await runLanePool(regularLanes, options.jobs, runLane)
-  for (const lane of isolatedLanes) {
-    results.push(await runLane(lane))
-  }
+  try {
+    const regularLanes = lanes.filter((lane) => !lane.isolated)
+    const isolatedLanes = lanes.filter((lane) => lane.isolated)
+    const results = await runLanePool(regularLanes, options.jobs, runLane)
+    for (const lane of isolatedLanes) {
+      results.push(await runLane(lane))
+    }
 
-  if (interruptedSignal) {
-    console.error(`[${commandName}] interrupted by ${interruptedSignal}`)
-    process.exitCode = interruptedSignal === 'SIGINT' ? 130 : 143
-    return
-  }
+    if (interruptedSignal) {
+      writeStderr(`[${commandName}] interrupted by ${interruptedSignal}\n`)
+      process.exitCode = interruptedSignal === 'SIGINT' ? 130 : 143
+      return
+    }
 
-  const aggregateElapsedMs = performance.now() - startedAt
-  console.log(`\n[${commandName}] completed in ${formatDuration(aggregateElapsedMs)}`)
-  for (const lane of lanes) {
-    const result = results.find((candidate) => candidate.id === lane.id)
-    const status = result?.exitCode === 0 ? 'PASS' : 'FAIL'
-    console.log(`  ${status}  ${lane.label} (${formatDuration(result?.elapsedMs ?? 0)})`)
+    const aggregateElapsedMs = performance.now() - startedAt
+    if (commandName === 'test:all') {
+      writeStdout(createQualityTextSummary(commandName, lanes, results, aggregateElapsedMs))
+    } else {
+      writeStdout(`\n[${commandName}] completed in ${formatDuration(aggregateElapsedMs)}\n`)
+      for (const lane of lanes) {
+        const result = results.find((candidate) => candidate.id === lane.id)
+        const status = result?.exitCode === 0 ? 'PASS' : 'FAIL'
+        writeStdout(`  ${status}  ${lane.label} (${formatDuration(result?.elapsedMs ?? 0)})\n`)
+      }
+    }
+    if (options.timingsJson)
+      writeStdout(`${JSON.stringify(createQualityRunReport(lanes, results, options.jobs, aggregateElapsedMs))}\n`)
+    if (results.some((result) => result.exitCode !== 0)) process.exitCode = 1
+  } finally {
+    process.removeListener('SIGINT', interruptWithSigint)
+    process.removeListener('SIGTERM', interruptWithSigterm)
+    await closeLogStream(logStream)
   }
-  if (options.timingsJson)
-    console.log(JSON.stringify(createQualityRunReport(lanes, results, options.jobs, aggregateElapsedMs)))
-  if (results.some((result) => result.exitCode !== 0)) process.exitCode = 1
 }
 
 export function runQualityCommandCli(commandName: QualityCommandName, lanes: readonly QualityLane[]): void {

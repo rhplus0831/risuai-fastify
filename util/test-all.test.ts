@@ -11,6 +11,9 @@ import {
 import {
   agentQualityLanes,
   createQualityRunReport,
+  createQualityTextSummary,
+  extractFailedTestNames,
+  latestTestAllLogPath,
   parseTestAllCli,
   parseTestAllJobs,
   qualityLanes,
@@ -237,6 +240,59 @@ describe('test:all orchestration', () => {
       ],
       schemaVersion: 1,
     })
+  })
+
+  it('extracts failed Vitest and Playwright tests for the durable summary', () => {
+    const output = [
+      '\u001b[31m FAIL \u001b[39m src/example.test.ts > example suite > reports a failure',
+      '  1) [chromium] › server/fastify/browser-smoke/example.spec.ts:10:3 › smoke › reports a failure',
+      '  2) server/fastify/browser-smoke/plain.spec.ts:20:5 › smoke › reports another failure',
+      '\u001b[31m FAIL \u001b[39m src/example.test.ts > example suite > reports a failure',
+      '  PASS  src/passing.test.ts',
+    ].join('\n')
+
+    expect(extractFailedTestNames(output)).toEqual([
+      'src/example.test.ts > example suite > reports a failure',
+      '[chromium] › server/fastify/browser-smoke/example.spec.ts:10:3 › smoke › reports a failure',
+      'server/fastify/browser-smoke/plain.spec.ts:20:5 › smoke › reports another failure',
+    ])
+  })
+
+  it('formats failed groups, failed tests, and every lane duration in minutes', () => {
+    const lanes: QualityLane[] = [
+      { id: 'frontend', label: 'frontend tests', args: [] },
+      { id: 'browser', label: 'browser smoke tests', args: [], isolated: true },
+    ]
+    const summary = createQualityTextSummary(
+      'test:all',
+      lanes,
+      [
+        {
+          id: 'frontend',
+          exitCode: 1,
+          elapsedMs: 90_000,
+          startedOffsetMs: 0,
+          finishedOffsetMs: 90_000,
+          failedTests: ['src/example.test.ts > reports a failure'],
+        },
+        {
+          id: 'browser',
+          exitCode: 0,
+          elapsedMs: 30_000,
+          startedOffsetMs: 90_000,
+          finishedOffsetMs: 120_000,
+        },
+      ],
+      120_000,
+    )
+
+    expect(latestTestAllLogPath).toBe('latest-test-all.log')
+    expect(summary).toContain('[test:all] final status: FAIL')
+    expect(summary).toContain('- frontend tests (exit 1)')
+    expect(summary).toContain('frontend tests: src/example.test.ts > reports a failure')
+    expect(summary).toContain('FAIL  frontend tests: 1.50 min')
+    expect(summary).toContain('PASS  browser smoke tests: 0.50 min')
+    expect(summary).toContain('[test:all] total elapsed: 2.00 min')
   })
 
   it('validates the regular-to-isolated phase barrier and isolated order', () => {

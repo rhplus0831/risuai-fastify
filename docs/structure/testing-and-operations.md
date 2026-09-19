@@ -37,7 +37,7 @@ environment variables live in
 | `pnpm test:compat-harness` | Compare pinned local/Fastify generation matrices against a prepared pre-Fastify worktree; opt-in and not part of `test:all`. |
 | `pnpm prepare:compat-baseline` | Create or verify the exact detached compatibility-baseline worktree and install its frozen dependencies. |
 | `pnpm test:agent` | Minimal agent-final protection: typechecks, topology, `core`-tagged frontend/server tests, the browser-smoke build, and four `@core` Playwright journeys. |
-| `pnpm test:all` | User-owned full local aggregate for format, typechecks, current docs, topology, frontend/server tests, compatibility, coverage, scale, performance, and browser smoke. |
+| `pnpm test:all` | User-owned full local aggregate for format, typechecks, current docs, topology, frontend/server tests, compatibility, coverage, scale, performance, and browser smoke. The complete latest run and its final status summary are written to `latest-test-all.log`. |
 | `pnpm coverage:ui-map` | Run the focused UI coverage gate and write text/JSON reports to `coverage/ui-map`; use `coverage:ui-map:html` for an on-demand HTML report. |
 | `pnpm smoke:fastify-browser` | User/CI command that builds the smoke client without production sourcemaps, then runs the full Playwright Fastify browser smoke suite. |
 | `pnpm analyze:db <path>` | Analyze `.risu`, JSON, raw database JSON, or data dirs containing `db.json`; SQLite sidecars are copied when present. Add `--json` for machine-readable output. |
@@ -193,7 +193,11 @@ both commands.
 `pnpm test:all` runs up to two ordinary lanes concurrently by default and
 preserves any failure in the final aggregate result. Set
 `RISU_TEST_ALL_JOBS` or pass `--jobs <count>` to tune that outer limit, and use
-`--dry-run` to inspect the lane graph. Its topology lane validates discovery
+`--dry-run` to inspect the lane graph without replacing the last completed-run
+log. A real run replaces the ignored root `latest-test-all.log`, tees all child
+output into it, and ends the file with the overall status, failed groups,
+test-runner-reported failed test names, and every major lane's duration in
+minutes. Its topology lane validates discovery
 before the ordinary frontend lane starts. The smoke build fills a regular-lane
 slot after `check:server`, overlapping remaining frontend work without sharing
 emitted outputs with the typechecks. Browser smoke then consumes that build
