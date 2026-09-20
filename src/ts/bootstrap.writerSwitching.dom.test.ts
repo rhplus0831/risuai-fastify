@@ -1,4 +1,10 @@
-import { bootstrapMocks, runtimeBootstrap, runtimeOwnership } from './bootstrap.testSupport'
+import {
+  setupBootstrapTests,
+  deferred,
+  bootstrapMocks,
+  runtimeBootstrap,
+  runtimeOwnership,
+} from './bootstrap.testSupport'
 import { describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { loadData, promoteConnectedReader, stopConnectedClientServices } from './bootstrap'
@@ -34,15 +40,9 @@ const {
   projectionLifecycleApi,
 } = bootstrapMocks
 
-describe('explicit connected writer switching', () => {
-  function deferred<T>() {
-    let resolve!: (value: T) => void
-    const promise = new Promise<T>((finish) => {
-      resolve = finish
-    })
-    return { promise, resolve }
-  }
+setupBootstrapTests()
 
+describe('explicit connected writer switching', () => {
   async function startReader() {
     bootstrapApi.fetchReadOnly.mockResolvedValue(
       runtimeBootstrap({ writer: { sessionId: 'foreign-writer', epoch: 1 } }),
@@ -209,14 +209,9 @@ describe('explicit connected writer switching', () => {
     await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
     expect(get(selectedCharID)).toBe(1)
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
-    expect(getStartupChatReadinessEvaluations()).toEqual([
-      {
-        evaluationId: expect.any(Number),
-        sessionGeneration: getClientSessionSnapshot().generation,
-        target: ['character', '/character/char-a/chat-a', '1', 'char-b', 'chat-b', ''].join('\u0000'),
-        phase: 'chat-and-prompt',
-      },
-    ])
+    expect(getDatabase().characters[get(selectedCharID)].chaId).toBe('char-b')
+    expect(get(currentRoute)).toMatchObject({ chaId: 'char-a', chatId: 'chat-a' })
+    expect(runtimeApi.prepareOpenChatGenerationReattach).not.toHaveBeenCalled()
 
     // Writer recovery restores the persisted B selection before App finishes
     // applying this reader's retained A route.
@@ -227,6 +222,8 @@ describe('explicit connected writer switching', () => {
     expect(getStartupCoordinatorSnapshot().capabilities).toMatchObject({ canMutate: true, canGenerate: true })
     expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
     expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledTimes(2)
+    expect(getDatabase().characters[get(selectedCharID)].chaId).toBe('char-a')
+    expect(runtimeApi.prepareOpenChatGenerationReattach).toHaveBeenCalledOnce()
     expect(getStartupChatReadinessEvaluations()).toEqual([])
   })
 

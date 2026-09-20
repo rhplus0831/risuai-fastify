@@ -1,4 +1,4 @@
-import { bootstrapMocks } from './bootstrap.testSupport'
+import { setupBootstrapTests, bootstrapMocks } from './bootstrap.testSupport'
 import { describe, expect, it, vi } from 'vitest'
 import { loadWebInitialDatabase } from './bootstrap'
 import { language } from 'src/lang'
@@ -21,6 +21,8 @@ import {
 import { getDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
 
 const { resourceApi, commandApi, eventApi, promptTemplateApi } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it('acknowledges contiguous legacy/model preset reorders without collection or settings reads', async () => {

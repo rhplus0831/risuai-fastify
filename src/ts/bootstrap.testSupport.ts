@@ -2,20 +2,14 @@
 import { afterEach, beforeEach, it, vi } from 'vitest'
 import { stopDeferredStartupRuntimes, stopConnectedClientServices, stopServerResourceEvents } from './bootstrap'
 import { setClientConnectionState } from './clientSession'
-import { loadPlugins, startPluginRuntimeSync } from './plugins/plugins.svelte'
-import { alertError, alertRequiredSelect, waitAlert } from './alert'
-import { language } from 'src/lang'
-import { updateHeightMode } from './gui/heightMode'
 import { clearAppliedServerResourceRevision, clearCachedServerCommandRevision } from './server/commands'
 import { getActiveWriterSessionId, resetWriterAccessLostForTests } from './server/activeWriterSession'
 import { recordStartupMilestone, resetStartupReadinessForTests } from './startupReadiness'
 import { replaceResourceDatabase, resetServerResourceState } from './server/resourceState.svelte'
 import { selectedCharID } from './stores.svelte'
 import { currentRoute } from './router'
-import { updateReducedMotion } from './gui/animation'
-import { updateColorScheme, updateTextThemeAndCSS } from './gui/colorscheme'
-import { updateGuisize } from './gui/guisize'
 import { resetReaderWorkspaceLifecycleForTests } from './readerWorkspaceLifecycle.svelte'
+import type { ServerWriterEvent } from './server/events'
 
 const readerApi = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), retry: vi.fn() }))
 const autoWriterApi = vi.hoisted(() => ({ enabled: vi.fn() }))
@@ -188,11 +182,7 @@ export interface TestMemorySnapshot {
   jobs: Array<TestMemoryEvent['job'] & { chatId: string }>
 }
 
-export interface TestWriterEvent {
-  databaseLineage?: string
-  sessionId: string | null
-  epoch: number
-}
+export type TestWriterEvent = ServerWriterEvent
 
 // The lifecycle's real hydration/cache clearing has its own focused suite.
 // Keep bootstrap ordering independent of that cold dynamic import's duration.
@@ -486,100 +476,95 @@ function seedResourceDatabase() {
   )
 }
 
-beforeEach(() => {
-  stopConnectedClientServices()
-  resetWriterAccessLostForTests()
-  identityApi.exclusive = true
-  resetReaderWorkspaceLifecycleForTests()
-  resetStartupReadinessForTests()
-  recordStartupMilestone('entry', 0)
-  recordStartupMilestone('shell-mounted', 1)
-  stopDeferredStartupRuntimes()
-  stopServerResourceEvents()
-  resetServerResourceState()
-  seedResourceDatabase()
-  selectedCharID.set(-1)
-  currentRoute.set({ kind: 'home', path: '/' })
-  clearCachedServerCommandRevision()
-  clearAppliedServerResourceRevision()
+/** Register an isolated startup session for this suite; importing mocks alone does not seed state. */
+export function setupBootstrapTests() {
+  beforeEach(() => {
+    stopConnectedClientServices()
+    resetWriterAccessLostForTests()
+    identityApi.exclusive = true
+    resetReaderWorkspaceLifecycleForTests()
+    resetStartupReadinessForTests()
+    recordStartupMilestone('entry', 0)
+    recordStartupMilestone('shell-mounted', 1)
+    stopDeferredStartupRuntimes()
+    stopServerResourceEvents()
+    resetServerResourceState()
+    seedResourceDatabase()
+    selectedCharID.set(-1)
+    currentRoute.set({ kind: 'home', path: '/' })
+    clearCachedServerCommandRevision()
+    clearAppliedServerResourceRevision()
 
-  vi.clearAllMocks()
-  autoWriterApi.enabled.mockReset().mockResolvedValue(false)
-  runtimeApi.applyGenerationOperationBootstrap.mockReset().mockReturnValue(true)
-  occupancyApi.configure.mockReset()
-  occupancyApi.applyEvent.mockReset()
-  occupancyApi.setIdentity.mockReset()
-  occupancyApi.clearIdentity.mockReset()
-  readerApi.start.mockImplementation(() => {
-    setClientConnectionState('live')
-    return { stop: readerApi.stop, retry: readerApi.retry, ready: Promise.resolve() }
+    // Reset queued one-shot results as well as call history so held scenarios cannot leak.
+    vi.resetAllMocks()
+    autoWriterApi.enabled.mockResolvedValue(false)
+    runtimeApi.applyGenerationOperationBootstrap.mockReturnValue(true)
+    readerApi.start.mockImplementation(() => {
+      setClientConnectionState('live')
+      return { stop: readerApi.stop, retry: readerApi.retry, ready: Promise.resolve() }
+    })
+    recoveredGenerationApi.discardPendingRecoveredGenerationEffects.mockResolvedValue(undefined)
+    recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects.mockResolvedValue(undefined)
+    optionalRuntimeApi.installStoreEffects.mockReturnValue(optionalRuntimeApi.disposeStoreEffects)
+    optionalRuntimeApi.startObserver.mockReturnValue(optionalRuntimeApi.stopObserver)
+    projectionLifecycleApi.discard.mockResolvedValue(undefined)
+    commandApi.reconciler = null
+    eventApi.subscriptions = []
+    hydrationApi.readinessRefreshHook = null
+    ownerMutationLifecycleApi.start.mockReturnValue(ownerMutationLifecycleApi.stop)
+    pendingMutationApi.flushAcknowledgements.mockResolvedValue(undefined)
+    pendingMutationApi.count.mockResolvedValue(0)
+    pendingMutationApi.prepare.mockImplementation(async (input) => {
+      const scope = `${input.writerSessionId}\u0000${input.writerEpoch}\u0000${input.databaseLineage}`
+      if (pendingMutationApi.scope !== null && pendingMutationApi.scope !== scope) input.onOwnershipChange?.()
+      pendingMutationApi.scope = scope
+      return { discarded: 0 }
+    })
+    pendingMutationApi.scope = null
+    pendingMutationApi.readOwner.mockResolvedValue(null)
+    pendingMutationApi.replay.mockResolvedValue({ attempted: 0, discarded: 0, retained: 0, succeeded: 0 })
+    promptTemplateApi.ensure.mockResolvedValue(true)
+    promptTemplateApi.hasOwnerEpochChanged.mockReturnValue(false)
+    promptTemplateApi.isHydrated.mockReturnValue(true)
+    promptTemplateApi.isTainted.mockReturnValue(false)
+    promptTemplateApi.peekOwnerRevision.mockReturnValue(5)
+    bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap())
+    bootstrapApi.fetchReadOnly.mockResolvedValue(runtimeBootstrap({ revision: 5 }))
+    bootstrapApi.fetchOwnership.mockResolvedValue(runtimeOwnership())
+    resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
+    resourceApi.readAll.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
+    routeResourceApi.ensure.mockResolvedValue(undefined)
+    resourceApi.refreshInvalidated.mockImplementation(async (events: TestCommandEvent | TestCommandEvent[]) => {
+      const batch = Array.isArray(events) ? events : [events]
+      return { status: 'ok', revision: batch.at(-1)?.revision ?? 5, scope: 'targeted' }
+    })
+    resourceApi.forceRefresh.mockResolvedValue({ status: 'ok', revision: 9 })
+    resourceApi.forceReplacement.mockResolvedValue({ status: 'ok', revision: 9 })
+    commandApi.initialize.mockResolvedValue({ status: 'ok', revision: 1, initialized: true })
+    eventApi.subscribe.mockImplementation(async (input) => {
+      eventApi.subscriptions.push(input)
+      return { status: 'ok', unsubscribe: eventApi.unsubscribe }
+    })
   })
-  recoveredGenerationApi.discardPendingRecoveredGenerationEffects.mockReset().mockResolvedValue(undefined)
-  recoveredGenerationApi.reconcilePendingRecoveredGenerationEffects.mockReset().mockResolvedValue(undefined)
-  recoveredGenerationApi.setPendingRecoveredGenerationEffects.mockReset()
-  activeWriterApi.adoptPendingOwner.mockClear()
-  optionalRuntimeApi.installStoreEffects.mockReturnValue(optionalRuntimeApi.disposeStoreEffects)
-  optionalRuntimeApi.startObserver.mockReturnValue(optionalRuntimeApi.stopObserver)
-  ownershipApi.count.mockClear()
-  ownershipApi.discard.mockReset()
-  ownershipApi.reset.mockReset()
-  projectionLifecycleApi.discard.mockReset().mockResolvedValue(undefined)
-  eventApi.subscriptions = []
-  hydrationApi.readinessRefreshHook = null
-  ownerMutationLifecycleApi.start.mockReturnValue(ownerMutationLifecycleApi.stop)
-  pendingMutationApi.flushAcknowledgements.mockReset()
-  pendingMutationApi.flushAcknowledgements.mockResolvedValue(undefined)
-  pendingMutationApi.count.mockReset()
-  pendingMutationApi.count.mockResolvedValue(0)
-  pendingMutationApi.prepare.mockReset()
-  pendingMutationApi.prepare.mockImplementation(async (input) => {
-    const scope = `${input.writerSessionId}\u0000${input.writerEpoch}\u0000${input.databaseLineage}`
-    if (pendingMutationApi.scope !== null && pendingMutationApi.scope !== scope) input.onOwnershipChange?.()
-    pendingMutationApi.scope = scope
-    return { discarded: 0 }
-  })
-  pendingMutationApi.scope = null
-  pendingMutationApi.readOwner.mockReset()
-  pendingMutationApi.readOwner.mockResolvedValue(null)
-  pendingMutationApi.replay.mockResolvedValue({ attempted: 0, discarded: 0, retained: 0, succeeded: 0 })
-  promptTemplateApi.ensure.mockReset().mockResolvedValue(true)
-  promptTemplateApi.hasOwnerEpochChanged.mockReset()
-  promptTemplateApi.hasOwnerEpochChanged.mockReturnValue(false)
-  promptTemplateApi.isHydrated.mockReset()
-  promptTemplateApi.isHydrated.mockReturnValue(true)
-  promptTemplateApi.isTainted.mockReset()
-  promptTemplateApi.isTainted.mockReturnValue(false)
-  promptTemplateApi.markProjectionApplied.mockReset()
-  promptTemplateApi.peekOwnerRevision.mockReset()
-  promptTemplateApi.peekOwnerRevision.mockReturnValue(5)
-  bootstrapApi.fetch.mockResolvedValue(runtimeBootstrap())
-  bootstrapApi.fetchReadOnly.mockResolvedValue(runtimeBootstrap({ revision: 5 }))
-  bootstrapApi.fetchOwnership.mockResolvedValue(runtimeOwnership())
-  resourceApi.loadInitial.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
-  resourceApi.readAll.mockResolvedValue({ status: 'ok', revision: 5, scope: 'full' })
-  routeResourceApi.ensure.mockReset().mockResolvedValue(undefined)
-  resourceApi.refreshInvalidated.mockImplementation(async (events: TestCommandEvent | TestCommandEvent[]) => {
-    const batch = Array.isArray(events) ? events : [events]
-    return { status: 'ok', revision: batch.at(-1)?.revision ?? 5, scope: 'targeted' }
-  })
-  resourceApi.forceRefresh.mockResolvedValue({ status: 'ok', revision: 9 })
-  resourceApi.forceReplacement.mockResolvedValue({ status: 'ok', revision: 9 })
-  commandApi.initialize.mockResolvedValue({ status: 'ok', revision: 1, initialized: true })
-  eventApi.subscribe.mockImplementation(async (input) => {
-    eventApi.subscriptions.push(input)
-    return { status: 'ok', unsubscribe: eventApi.unsubscribe }
-  })
-})
 
-afterEach(() => {
-  stopConnectedClientServices()
-  resetReaderWorkspaceLifecycleForTests()
-  stopDeferredStartupRuntimes()
-  stopServerResourceEvents()
-  resetStartupReadinessForTests()
-  vi.useRealTimers()
-  vi.restoreAllMocks()
-})
+  afterEach(() => {
+    stopConnectedClientServices()
+    resetReaderWorkspaceLifecycleForTests()
+    stopDeferredStartupRuntimes()
+    stopServerResourceEvents()
+    resetStartupReadinessForTests()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+}
+
+export function deferred<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void
+  const promise = new Promise<T>((finish) => {
+    resolve = finish
+  })
+  return { promise, resolve }
+}
 
 export const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
 export const bootstrapMocks = {

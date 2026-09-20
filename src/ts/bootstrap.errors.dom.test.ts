@@ -1,7 +1,10 @@
-import './bootstrap.testSupport'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+
+vi.mock('./alert', () => ({ alertError: vi.fn() }))
 import { createGlobalErrorHandlers } from './bootstrap'
 import { alertError } from './alert'
+
+beforeEach(() => vi.clearAllMocks())
 
 describe('global bootstrap error handlers', () => {
   it('global handlers ignore null error events and undefined rejections without useless alerts', () => {

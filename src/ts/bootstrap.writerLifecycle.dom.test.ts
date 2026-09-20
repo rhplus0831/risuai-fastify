@@ -1,4 +1,4 @@
-import { bootstrapMocks, runtimeBootstrap, runtimeOwnership } from './bootstrap.testSupport'
+import { setupBootstrapTests, bootstrapMocks, runtimeBootstrap, runtimeOwnership } from './bootstrap.testSupport'
 import { describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import {
@@ -31,6 +31,8 @@ const {
   pendingMutationApi,
   projectionLifecycleApi,
 } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it.each([true, false])('foreground reader acquisition respects enabled=%s', async (enabled) => {

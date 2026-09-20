@@ -1,4 +1,4 @@
-import { bootstrapMocks } from './bootstrap.testSupport'
+import { setupBootstrapTests, bootstrapMocks } from './bootstrap.testSupport'
 import { describe, expect, it } from 'vitest'
 import { loadWebInitialDatabase } from './bootstrap'
 import { peekAppliedServerResourceRevision } from './server/commands'
@@ -10,6 +10,8 @@ import {
 import { getDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
 
 const { resourceApi, commandApi } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it('acknowledges contiguous optimistic plugin storage without fetching the full map', async () => {

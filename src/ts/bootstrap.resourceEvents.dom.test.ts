@@ -1,4 +1,5 @@
 import {
+  setupBootstrapTests,
   bootstrapMocks,
   runtimeBootstrap,
   runtimeOwnership,
@@ -45,6 +46,8 @@ const {
   occupancyApi,
   activeWriterApi,
 } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it('refreshes the targeted API resources for a contiguous command event', async () => {

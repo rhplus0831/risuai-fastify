@@ -1,4 +1,4 @@
-import { bootstrapMocks } from './bootstrap.testSupport'
+import { setupBootstrapTests, bootstrapMocks } from './bootstrap.testSupport'
 import { describe, expect, it } from 'vitest'
 import { get } from 'svelte/store'
 import { loadWebInitialDatabase } from './bootstrap'
@@ -14,6 +14,8 @@ import { selectedCharID } from './stores.svelte'
 import { getDatabase, withTestDatabaseWrite } from 'src/ts/__tests__/resourceDatabaseState'
 
 const { resourceApi, commandApi, hydrationApi, occupancyApi } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it('acknowledges contiguous optimistic character definitions without reading the row', async () => {

@@ -1,4 +1,4 @@
-import { bootstrapMocks, runtimeBootstrap, coreIt } from './bootstrap.testSupport'
+import { setupBootstrapTests, bootstrapMocks, runtimeBootstrap, coreIt } from './bootstrap.testSupport'
 import { describe, expect, it, vi } from 'vitest'
 import { get } from 'svelte/store'
 import { currentGlobalPromptTemplateOwnerId, loadData, loadWebInitialDatabase } from './bootstrap'
@@ -29,6 +29,8 @@ const {
   activeWriterApi,
   pushApi,
 } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it('fails closed when the globally selected prompt owner is duplicated', () => {

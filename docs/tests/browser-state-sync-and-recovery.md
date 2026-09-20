@@ -266,8 +266,9 @@ for those controlled asynchronous schedules.
 The former monolithic bootstrap suite is split by behavior. Runtime collection on
 2026-09-20 reports **249 cases across 11 files**: the original 247 cases plus rejected-memory
 publication and same-writer database-lineage regressions. Shared mocks, response fixtures,
-and lifecycle cleanup live in `src/ts/bootstrap.testSupport.ts`; scenario-specific overrides
-remain beside their assertions. These suites test bootstrap orchestration; focused service
+and lifecycle cleanup live in `src/ts/bootstrap.testSupport.ts`. Orchestration suites explicitly
+register `setupBootstrapTests()`; scenario-specific overrides remain beside their assertions.
+The error-filtering suite mocks only its alert sink and does not seed startup state. These suites test bootstrap orchestration; focused service
 suites still own actual transport, persistence, hydration, and projection algorithms.
 
 | File | Cases | Owned behavior |

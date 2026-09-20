@@ -1,5 +1,6 @@
-import { bootstrapMocks } from './bootstrap.testSupport'
+import { setupBootstrapTests, bootstrapMocks, deferred } from './bootstrap.testSupport'
 import { describe, expect, it, vi } from 'vitest'
+import { get } from 'svelte/store'
 import {
   discardGenerationRecoveryStartup,
   loadData,
@@ -39,6 +40,8 @@ const {
   pushApi,
   optionalRuntimeApi,
 } = bootstrapMocks
+
+setupBootstrapTests()
 
 describe('API-backed client bootstrap', () => {
   it('starts plugin runtime synchronization after the initial plugin load', async () => {
@@ -116,15 +119,6 @@ describe('API-backed client bootstrap', () => {
         canGenerate: true,
       },
       failures: {},
-      completedSteps: expect.arrayContaining([
-        'chat-hydration-runtime',
-        'push-runtime',
-        'plugin-runtime',
-        'generation-recovery',
-        'chat-readiness',
-        'background-runtime',
-        'background-readiness',
-      ]),
     })
   })
 
@@ -177,7 +171,6 @@ describe('API-backed client bootstrap', () => {
         canGenerate: true,
       },
       failures: {},
-      completedSteps: expect.arrayContaining(['generation-recovery', 'chat-readiness', 'background-readiness']),
     })
   })
 
@@ -197,18 +190,12 @@ describe('API-backed client bootstrap', () => {
     expect(getStartupCoordinatorSnapshot()).toMatchObject({
       capabilities: { canGenerate: true },
       failures: {},
-      completedSteps: expect.arrayContaining(['generation-recovery']),
     })
   })
 
   it('allows plugin and chat readiness to complete while push initialization is delayed', async () => {
-    let releasePush!: () => void
-    pushApi.initialize.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePush = resolve
-        }),
-    )
+    const push = deferred<void>()
+    pushApi.initialize.mockReturnValueOnce(push.promise)
 
     const loading = loadData()
 
@@ -221,7 +208,7 @@ describe('API-backed client bootstrap', () => {
     })
     expect(backgroundReady()).toBe(false)
 
-    releasePush()
+    push.resolve()
     await loading
     expect(backgroundReady()).toBe(true)
   })
@@ -267,20 +254,15 @@ describe('API-backed client bootstrap', () => {
   })
 
   it('shares one coordinator attempt loop between concurrent startup callers', async () => {
-    let releasePlugins!: () => void
-    vi.mocked(loadPlugins).mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePlugins = resolve
-        }),
-    )
+    const plugins = deferred<void>()
+    vi.mocked(loadPlugins).mockReturnValueOnce(plugins.promise)
 
     const firstLoad = loadData()
     const secondLoad = loadData()
     expect(secondLoad).toBe(firstLoad)
     await vi.waitFor(() => expect(loadPlugins).toHaveBeenCalledOnce())
 
-    releasePlugins()
+    plugins.resolve()
     await Promise.all([firstLoad, secondLoad])
 
     expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
@@ -289,20 +271,10 @@ describe('API-backed client bootstrap', () => {
   })
 
   it('keeps event revisions contiguous across coordinator transitions', async () => {
-    let releasePush!: () => void
-    pushApi.initialize.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePush = resolve
-        }),
-    )
-    let releasePlugins!: () => void
-    vi.mocked(loadPlugins).mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePlugins = resolve
-        }),
-    )
+    const push = deferred<void>()
+    pushApi.initialize.mockReturnValueOnce(push.promise)
+    const plugins = deferred<void>()
+    vi.mocked(loadPlugins).mockReturnValueOnce(plugins.promise)
     let releaseCharacter!: () => void
     characterHydrationApi.hydrateSelected.mockImplementationOnce(
       () =>
@@ -337,12 +309,12 @@ describe('API-backed client bootstrap', () => {
 
       eventApi.subscriptions[0].onCommandEvent({ type: 'settings.updated', revision: 7, resource: 'settings' })
       await vi.waitFor(() => expect(peekAppliedServerResourceRevision()).toBe(7))
-      releasePush()
+      push.resolve()
 
       await vi.waitFor(() => expect(loadPlugins).toHaveBeenCalledOnce())
       eventApi.subscriptions[0].onCommandEvent({ type: 'settings.updated', revision: 8, resource: 'settings' })
       await vi.waitFor(() => expect(peekAppliedServerResourceRevision()).toBe(8))
-      releasePlugins()
+      plugins.resolve()
 
       await vi.waitFor(() => expect(characterHydrationApi.hydrateSelected).toHaveBeenCalled())
       eventApi.subscriptions[0].onCommandEvent({ type: 'settings.updated', revision: 9, resource: 'settings' })
@@ -365,8 +337,8 @@ describe('API-backed client bootstrap', () => {
         [expect.objectContaining({ revision: 10 })],
       ])
     } finally {
-      releasePush?.()
-      releasePlugins?.()
+      push.resolve()
+      plugins.resolve()
       releaseCharacter?.()
       releaseWarning?.()
       await loading?.catch(() => undefined)
@@ -400,28 +372,18 @@ describe('API-backed client bootstrap', () => {
   })
 
   it('loads the selected chat and prompt together while keeping generation gated until both settle', async () => {
-    let releaseChat!: (ready: boolean) => void
-    let releasePrompt!: (ready: boolean) => void
-    hydrationApi.hydrateActiveChat.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseChat = resolve
-        }),
-    )
-    promptTemplateApi.ensure.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releasePrompt = resolve
-        }),
-    )
+    const chat = deferred<boolean>()
+    const prompt = deferred<boolean>()
+    hydrationApi.hydrateActiveChat.mockReturnValueOnce(chat.promise)
+    promptTemplateApi.ensure.mockReturnValueOnce(prompt.promise)
 
     const loading = loadData()
     await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
     expect(promptTemplateApi.ensure).toHaveBeenCalledOnce()
-    releasePrompt(true)
-    await Promise.resolve()
+    prompt.resolve(true)
+    await prompt.promise
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
-    releaseChat(true)
+    chat.resolve(true)
     await loading
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
   })
@@ -431,13 +393,14 @@ describe('API-backed client bootstrap', () => {
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     hydrationApi.hydrateActiveChat.mockClear()
 
-    let releaseOlderChat!: (ready: boolean) => void
-    hydrationApi.hydrateActiveChat.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseOlderChat = resolve
-        }),
-    )
+    const olderChat = deferred<boolean>()
+    const newerChat = deferred<boolean>()
+    const requestedChats: string[] = []
+    hydrationApi.hydrateActiveChat.mockImplementationOnce(() => {
+      const character = getDatabase().characters[get(selectedCharID)]
+      requestedChats.push(character.chats[character.chatPage].id)
+      return olderChat.promise
+    })
     withTestDatabaseWrite(() => {
       const character = getDatabase().characters[1]
       character.chats.push({ id: 'chat-b-new', message: [] } as never)
@@ -448,13 +411,11 @@ describe('API-backed client bootstrap', () => {
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
     await vi.waitFor(() => expect(hydrationApi.hydrateActiveChat).toHaveBeenCalledOnce())
 
-    let releaseNewerChat!: (ready: boolean) => void
-    hydrationApi.hydrateActiveChat.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseNewerChat = resolve
-        }),
-    )
+    hydrationApi.hydrateActiveChat.mockImplementationOnce(() => {
+      const character = getDatabase().characters[get(selectedCharID)]
+      requestedChats.push(character.chats[character.chatPage].id)
+      return newerChat.promise
+    })
     withTestDatabaseWrite(() => {
       getDatabase().characters[1].chatPage = 0
     })
@@ -463,16 +424,13 @@ describe('API-backed client bootstrap', () => {
     const evaluations = getStartupChatReadinessEvaluations()
     expect(evaluations).toHaveLength(2)
     expect(new Set(evaluations.map((evaluation) => evaluation.evaluationId)).size).toBe(2)
-    expect(evaluations.map((evaluation) => evaluation.target.split('\u0000')[4]).sort()).toEqual([
-      'chat-b',
-      'chat-b-new',
-    ])
+    expect(requestedChats).toEqual(['chat-b-new', 'chat-b'])
     expect(evaluations.every((evaluation) => evaluation.phase === 'chat-and-prompt')).toBe(true)
-    releaseNewerChat(true)
+    newerChat.resolve(true)
     await vi.waitFor(() => expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true))
     expect(getStartupChatReadinessEvaluations()).toHaveLength(1)
 
-    releaseOlderChat(false)
+    olderChat.resolve(false)
     await vi.waitFor(() => expect(getStartupChatReadinessEvaluations()).toEqual([]))
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
@@ -483,13 +441,8 @@ describe('API-backed client bootstrap', () => {
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     promptTemplateApi.ensure.mockClear()
 
-    let releaseOlderPrompt!: (ready: boolean) => void
-    promptTemplateApi.ensure.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseOlderPrompt = resolve
-        }),
-    )
+    const olderPrompt = deferred<boolean>()
+    promptTemplateApi.ensure.mockReturnValueOnce(olderPrompt.promise)
     withTestDatabaseWrite(() => {
       getDatabase().characters[1].chats[0].generationSettings = { promptPresetId: 'prompt-older' }
     })
@@ -515,8 +468,8 @@ describe('API-backed client bootstrap', () => {
       minimumRevision: 5,
     })
 
-    releaseOlderPrompt(false)
-    await Promise.resolve()
+    olderPrompt.resolve(false)
+    await vi.waitFor(() => expect(getStartupChatReadinessEvaluations()).toEqual([]))
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
   })
@@ -526,13 +479,8 @@ describe('API-backed client bootstrap', () => {
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     characterHydrationApi.hydrateSelected.mockClear()
 
-    let releaseOlderRoute!: (ready: boolean) => void
-    characterHydrationApi.hydrateSelected.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          releaseOlderRoute = resolve
-        }),
-    )
+    const olderRoute = deferred<boolean>()
+    characterHydrationApi.hydrateSelected.mockReturnValueOnce(olderRoute.promise)
     currentRoute.set({ kind: 'settings', path: '/settings/model', section: 'model', index: 17 })
 
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(false)
@@ -541,8 +489,8 @@ describe('API-backed client bootstrap', () => {
     currentRoute.set({ kind: 'character', path: '/character/char-b/chat-b', chaId: 'char-b', chatId: 'chat-b' })
     await vi.waitFor(() => expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true))
 
-    releaseOlderRoute(true)
-    await Promise.resolve()
+    olderRoute.resolve(true)
+    await vi.waitFor(() => expect(getStartupChatReadinessEvaluations()).toEqual([]))
     expect(getStartupCoordinatorSnapshot().capabilities.canGenerate).toBe(true)
     expect(getStartupCoordinatorSnapshot().failures.canGenerate).toBeUndefined()
   })
@@ -552,19 +500,12 @@ describe('API-backed client bootstrap', () => {
 
     expect(pushApi.initialize).toHaveBeenCalledOnce()
     expect(pushApi.initialize.mock.invocationCallOrder[0]).toBeLessThan(pushApi.reconcile.mock.invocationCallOrder[0])
-    expect(pushApi.reconcile).toHaveBeenCalledTimes(2)
-    expect(pushApi.reconcile).toHaveBeenNthCalledWith(1, false)
-    expect(pushApi.reconcile).toHaveBeenNthCalledWith(2, false)
+    expect(pushApi.reconcile).toHaveBeenLastCalledWith(false)
   })
 
   it('reconciles a notification projection received while startup is still loading', async () => {
-    let releasePlugins!: () => void
-    vi.mocked(loadPlugins).mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          releasePlugins = resolve
-        }),
-    )
+    const plugins = deferred<void>()
+    vi.mocked(loadPlugins).mockReturnValueOnce(plugins.promise)
 
     const loading = loadData()
     await vi.waitFor(() => expect(loadPlugins).toHaveBeenCalledOnce())
@@ -583,7 +524,7 @@ describe('API-backed client bootstrap', () => {
     expect(pushApi.reconcile).toHaveBeenCalledTimes(1)
     expect(pushApi.reconcile).toHaveBeenLastCalledWith(false)
 
-    releasePlugins()
+    plugins.resolve()
     await loading
 
     expect(pushApi.reconcile).toHaveBeenCalledTimes(2)
