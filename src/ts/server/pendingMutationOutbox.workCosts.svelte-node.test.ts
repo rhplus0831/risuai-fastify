@@ -1,8 +1,11 @@
+import { settingsIntent } from './pendingMutationOutbox.testSupport'
 import { IDBFactory } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { measureJsonWork, reportBrowserWork } from '../__tests__/browserWorkProbe'
 import {
   clearPendingMutationOutbox,
+  discardPendingMutation,
+  replaceStagedPendingMutationIntent,
   listPendingMutations,
   MAX_DURABLE_MUTATION_PAYLOAD_BYTES,
   preparePendingMutationOutbox,
@@ -101,4 +104,33 @@ describe('F05 durable staging work probe', () => {
       })
     }
   }
+})
+
+describe('pending mutation outbox replacement work', () => {
+  it.each(['replaced', 'successor'] as const)(
+    'owns one normalized snapshot when a prepared intent is %s',
+    async (expectedStatus) => {
+      const placeholder = stagePendingMutation('settings:runtime', settingsIntent('placeholder'))
+      await placeholder.ready
+      if (expectedStatus === 'successor') {
+        await expect(discardPendingMutation((await listPendingMutations())[0]!.handle)).resolves.toBe('deleted')
+      }
+      const input = settingsIntent('exact captured value')
+      const measured = await measureJsonWork(
+        async () => {
+          const replacement = replaceStagedPendingMutationIntent(placeholder, input)
+          input.requests[0]!.body.patch = { openAIKey: 'caller changed after capture' }
+          return replacement
+        },
+        (stack) => (stack.includes('normalizeRequest') ? 'normalization' : undefined),
+      )
+      expect(measured.result.status).toBe(expectedStatus)
+      expect(measured.counters.normalization?.count).toBe(1)
+      expect((await listPendingMutations()).map((entry) => entry.intent)).toEqual([
+        settingsIntent('exact captured value'),
+      ])
+      if (measured.result.status === 'successor')
+        expect(measured.result.handle.mutationId).not.toBe(placeholder.mutationId)
+    },
+  )
 })

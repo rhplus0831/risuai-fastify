@@ -2,6 +2,13 @@
 
 Snapshot: 2026-09-19, source revision `528c6d62b`. **1,034 test files; 14,862 registered test cases.**
 
+Post-snapshot update (2026-09-20): the original `pendingMutationOutbox.test.ts` coverage is now split across
+`pendingMutationOutbox.test.ts`, `pendingMutationOutbox.intent.test.ts`, `pendingMutationOutbox.occupancy.test.ts`,
+and `pendingMutationOutbox.projection.test.ts`; its replacement snapshot/work cases moved to
+`pendingMutationOutbox.workCosts.svelte-node.test.ts`. The historical counts and rankings below describe the
+snapshot, not these new file boundaries. See [Browser State Sync and Recovery](tests/browser-state-sync-and-recovery.md)
+for current coverage ownership.
+
 This inventory ranks the current test files by the product consequences their assertions protect. Each file received a Luna High evaluation of its actual assertions. Ratings are qualitative review judgments, not measured defect rates or evidence that the suite passes.
 
 Order: **Critical → High → Medium → Low**, then **Frequently → Often → Occasionally**, then **test count descending**. Repository-relative path breaks remaining ties. For a file covering several behaviors, severity follows the most serious credible direct consequence and frequency follows that severity-determining scenario.
