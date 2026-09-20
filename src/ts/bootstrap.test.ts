@@ -173,6 +173,7 @@ interface TestMemorySnapshot {
 }
 
 interface TestWriterEvent {
+  databaseLineage?: string
   sessionId: string | null
   epoch: number
 }
@@ -6110,6 +6111,32 @@ describe('API-backed client bootstrap', () => {
     expect(resourceApi.refreshInvalidated).not.toHaveBeenCalled()
   })
 
+  it('does not publish memory events rejected by the projection', async () => {
+    await loadWebInitialDatabase()
+    memoryApi.applyEvent.mockReturnValueOnce(false)
+    const event: TestMemoryEvent = {
+      type: 'memory.job',
+      streamId: 'memory-stream-1',
+      version: 1,
+      chatId: 'chat-a',
+      job: {
+        id: 'job-a',
+        instanceId: 'job-instance-a',
+        kind: 'summarize',
+        status: 'running',
+        attemptCount: 1,
+        maxAttempts: 3,
+      },
+    }
+
+    eventApi.subscriptions[0].onMemoryEvent!(event)
+
+    expect(memoryApi.applyEvent).toHaveBeenCalledWith(event)
+    expect(memoryApi.publish).not.toHaveBeenCalled()
+    expect(resourceApi.refreshInvalidated).not.toHaveBeenCalled()
+    expect(peekAppliedServerResourceRevision()).toBe(5)
+  })
+
   it('hydrates memory projection snapshots without refreshing durable resources', async () => {
     await loadWebInitialDatabase()
     const snapshot: TestMemorySnapshot = {
@@ -6166,6 +6193,27 @@ describe('API-backed client bootstrap', () => {
 
     eventApi.subscriptions[0].onWriterEvent?.({ sessionId: 'different-writer', epoch: 2 })
     expect(activeWriterApi.enterTakeover).toHaveBeenCalledOnce()
+  })
+
+  it('revokes writes and refreshes when a same-writer event changes database lineage', async () => {
+    await loadData()
+    expect(canUseClientWriteAccess()).toBe(true)
+    const writer = { sessionId: getActiveWriterSessionId(), epoch: 1 }
+    bootstrapApi.fetchReadOnly.mockResolvedValue(runtimeBootstrap({ databaseLineage: 'database-b', writer }))
+
+    eventApi.subscriptions[0].onWriterEvent!({ ...writer, databaseLineage: 'database-b' })
+
+    expect(canUseClientWriteAccess()).toBe(false)
+    await vi.waitFor(() => expect(projectionLifecycleApi.discard).toHaveBeenCalledWith('lineage-change'))
+    await vi.waitFor(() =>
+      expect(getClientSessionSnapshot()).toMatchObject({
+        lifecycle: 'reading',
+        databaseLineage: 'database-b',
+        connection: 'live',
+      }),
+    )
+    expect(bootstrapApi.fetch).toHaveBeenCalledOnce()
+    expect(canUseClientWriteAccess()).toBe(false)
   })
 
   it('stops the resource event subscription and owner mutation lifecycle', async () => {
