@@ -10,9 +10,12 @@ import {
 } from './core-test-contract.js'
 import {
   agentQualityLanes,
+  createQualityCompactSummary,
   createQualityRunReport,
   createQualityTextSummary,
+  extractFailedTestFiles,
   extractFailedTestNames,
+  latestTestAllCompactLogPath,
   latestTestAllLogPath,
   parseTestAllCli,
   parseTestAllJobs,
@@ -244,17 +247,22 @@ describe('test:all orchestration', () => {
 
   it('extracts failed Vitest and Playwright tests for the durable summary', () => {
     const output = [
-      '\u001b[31m FAIL \u001b[39m src/example.test.ts > example suite > reports a failure',
+      '\u001b[31m FAIL \u001b[39m |frontend-dom| src/example.test.ts > example suite > reports a failure',
       '  1) [chromium] › server/fastify/browser-smoke/example.spec.ts:10:3 › smoke › reports a failure',
       '  2) server/fastify/browser-smoke/plain.spec.ts:20:5 › smoke › reports another failure',
-      '\u001b[31m FAIL \u001b[39m src/example.test.ts > example suite > reports a failure',
+      '\u001b[31m FAIL \u001b[39m |frontend-dom| src/example.test.ts > example suite > reports a failure',
       '  PASS  src/passing.test.ts',
     ].join('\n')
 
     expect(extractFailedTestNames(output)).toEqual([
-      'src/example.test.ts > example suite > reports a failure',
+      '|frontend-dom| src/example.test.ts > example suite > reports a failure',
       '[chromium] › server/fastify/browser-smoke/example.spec.ts:10:3 › smoke › reports a failure',
       'server/fastify/browser-smoke/plain.spec.ts:20:5 › smoke › reports another failure',
+    ])
+    expect(extractFailedTestFiles(output)).toEqual([
+      'src/example.test.ts',
+      'server/fastify/browser-smoke/example.spec.ts',
+      'server/fastify/browser-smoke/plain.spec.ts',
     ])
   })
 
@@ -293,6 +301,42 @@ describe('test:all orchestration', () => {
     expect(summary).toContain('FAIL  frontend tests: 1.50 min')
     expect(summary).toContain('PASS  browser smoke tests: 0.50 min')
     expect(summary).toContain('[test:all] total elapsed: 2.00 min')
+  })
+
+  it('formats only failed test files and total elapsed time in the compact summary', () => {
+    const results: QualityLaneResult[] = [
+      {
+        id: 'frontend',
+        exitCode: 1,
+        elapsedMs: 90_000,
+        startedOffsetMs: 0,
+        finishedOffsetMs: 90_000,
+        failedTestFiles: ['src/first.test.ts', 'src/shared.test.ts'],
+      },
+      {
+        id: 'browser',
+        exitCode: 1,
+        elapsedMs: 30_000,
+        startedOffsetMs: 90_000,
+        finishedOffsetMs: 120_000,
+        failedTestFiles: ['src/shared.test.ts', 'server/fastify/browser-smoke/example.spec.ts'],
+      },
+    ]
+
+    expect(latestTestAllCompactLogPath).toBe('latest-test-all-compact.log')
+    expect(createQualityCompactSummary(results, 120_000)).toBe(
+      [
+        '[test:all] failed test files:',
+        '  - src/first.test.ts',
+        '  - src/shared.test.ts',
+        '  - server/fastify/browser-smoke/example.spec.ts',
+        '[test:all] total elapsed: 2.00 min',
+        '',
+      ].join('\n'),
+    )
+    expect(createQualityCompactSummary([], 500)).toBe(
+      ['[test:all] failed test files:', '  none', '[test:all] total elapsed: 0.01 min', ''].join('\n'),
+    )
   })
 
   it('validates the regular-to-isolated phase barrier and isolated order', () => {

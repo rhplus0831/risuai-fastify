@@ -22,6 +22,7 @@ export interface QualityLane {
 }
 
 export interface QualityLaneResult {
+  failedTestFiles?: string[]
   failedTests?: string[]
   finishedOffsetMs: number
   id: string
@@ -53,6 +54,7 @@ const defaultJobsByCommand: Readonly<Record<QualityCommandName, number>> = {
 }
 
 export const latestTestAllLogPath = 'latest-test-all.log'
+export const latestTestAllCompactLogPath = 'latest-test-all-compact.log'
 
 const ansiEscapePattern = /\u001b\[[0-?]*[ -/]*[@-~]/g
 
@@ -70,6 +72,19 @@ export function extractFailedTestNames(output: string): string[] {
     if (playwrightFailure?.[1]) failures.add(playwrightFailure[1])
   }
   return [...failures]
+}
+
+export function extractFailedTestFiles(output: string): string[] {
+  const failedFiles = new Set<string>()
+  for (const failedTest of extractFailedTestNames(output)) {
+    const playwrightPath = failedTest.match(
+      /^(?:\[[^\]]+\]\s+›\s+)?(.+?\.(?:spec|test)\.[cm]?[jt]sx?):\d+:\d+(?:\s+›|$)/,
+    )?.[1]
+    const vitestPath = failedTest.match(/^(?:\|[^|]+\|\s+)?(.+?\.(?:spec|test)\.[cm]?[jt]sx?)(?=\s|$)/)?.[1]
+    const failedFile = playwrightPath ?? vitestPath
+    if (failedFile) failedFiles.add(failedFile)
+  }
+  return [...failedFiles]
 }
 
 export const qualityLanes: readonly QualityLane[] = [
@@ -429,6 +444,14 @@ export function createQualityTextSummary(
   return `${lines.join('\n')}\n`
 }
 
+export function createQualityCompactSummary(results: readonly QualityLaneResult[], aggregateElapsedMs: number): string {
+  const failedTestFiles = [...new Set(results.flatMap((result) => result.failedTestFiles ?? []))]
+  const lines = ['[test:all] failed test files:']
+  lines.push(...(failedTestFiles.length > 0 ? failedTestFiles.map((file) => `  - ${file}`) : ['  none']))
+  lines.push(`[test:all] total elapsed: ${formatMinutes(aggregateElapsedMs)}`)
+  return `${lines.join('\n')}\n`
+}
+
 async function closeLogStream(stream: WriteStream | undefined): Promise<void> {
   if (!stream || stream.destroyed) return
   await new Promise<void>((resolve) => stream.end(resolve))
@@ -496,10 +519,19 @@ export async function runQualityCommand(
     commandName === 'test:all'
       ? createWriteStream(path.resolve(process.cwd(), latestTestAllLogPath), { flags: 'w' })
       : undefined
+  const compactLogStream =
+    commandName === 'test:all'
+      ? createWriteStream(path.resolve(process.cwd(), latestTestAllCompactLogPath), { flags: 'w' })
+      : undefined
   let logWritable = Boolean(logStream)
   logStream?.once('error', (error) => {
     logWritable = false
     process.stderr.write(`[${commandName}] could not write ${latestTestAllLogPath}: ${error.message}\n`)
+  })
+  let compactLogWritable = Boolean(compactLogStream)
+  compactLogStream?.once('error', (error) => {
+    compactLogWritable = false
+    process.stderr.write(`[${commandName}] could not write ${latestTestAllCompactLogPath}: ${error.message}\n`)
   })
   const appendToLog = (chunk: string | Buffer): void => {
     if (logWritable && !logStream?.destroyed) logStream?.write(chunk)
@@ -571,6 +603,7 @@ export async function runQualityCommand(
     const status = exitCode === 0 ? 'passed' : `failed (exit ${exitCode})`
     writeStdout(`\n[${commandName}] ${lane.label} ${status} in ${formatDuration(elapsedMs)}\n`)
     return {
+      failedTestFiles: exitCode === 0 ? [] : extractFailedTestFiles(capturedOutput),
       failedTests: exitCode === 0 ? [] : extractFailedTestNames(capturedOutput),
       id: lane.id,
       exitCode,
@@ -597,6 +630,9 @@ export async function runQualityCommand(
     const aggregateElapsedMs = performance.now() - startedAt
     if (commandName === 'test:all') {
       writeStdout(createQualityTextSummary(commandName, lanes, results, aggregateElapsedMs))
+      if (compactLogWritable && !compactLogStream?.destroyed) {
+        compactLogStream?.write(createQualityCompactSummary(results, aggregateElapsedMs))
+      }
     } else {
       writeStdout(`\n[${commandName}] completed in ${formatDuration(aggregateElapsedMs)}\n`)
       for (const lane of lanes) {
@@ -612,6 +648,7 @@ export async function runQualityCommand(
     process.removeListener('SIGINT', interruptWithSigint)
     process.removeListener('SIGTERM', interruptWithSigterm)
     await closeLogStream(logStream)
+    await closeLogStream(compactLogStream)
   }
 }
 
