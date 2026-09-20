@@ -13,6 +13,7 @@ import type {
 } from './serverTypes.js'
 import {
   createChatGenerationSettingsIncompleteError,
+  projectSidebarTogglesToGlobalChatVariables,
   resolveChatGenerationSettingsReadiness,
   type ChatGenerationSettingsIncompleteErrorBody,
   type ChatGenerationSettingsReadiness,
@@ -180,14 +181,10 @@ function resolveGenerationConfiguration<Module extends GenerationPreflightModule
   effectiveDatabase.selectedPersona = selectedPersonaIndexFromStableId(effectiveDatabase)
   mirrorLegacyProfile(effectiveDatabase, effectivePersona)
 
-  effectiveDatabase.globalChatVariables = {
-    ...recordOfStrings(effectiveDatabase.globalChatVariables),
-  }
-  for (const [key, value] of Object.entries(settings?.sidebarToggles ?? {})) {
-    if (typeof value === 'string') {
-      effectiveDatabase.globalChatVariables[`toggle_${key}`] = value
-    }
-  }
+  effectiveDatabase.globalChatVariables = projectSidebarTogglesToGlobalChatVariables(
+    effectiveDatabase.globalChatVariables,
+    settings?.sidebarToggles,
+  )
   effectiveDatabase.jailbreakToggle = settings?.jailbreakToggle === true
 
   const legacyBinding = normalizeModelRoleProfiles(effectiveDatabase.modelRoleProfiles).chatMain.mode === 'legacy'
@@ -246,13 +243,4 @@ function findById<T extends { id?: string | null }>(collection: readonly T[], id
 
 function stringArray(value: unknown): string[] {
   return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
-}
-
-function recordOfStrings(value: unknown): Record<string, string> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {}
-  const out: Record<string, string> = {}
-  for (const [key, raw] of Object.entries(value)) {
-    if (typeof raw === 'string') out[key] = raw
-  }
-  return out
 }

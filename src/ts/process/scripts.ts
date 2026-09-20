@@ -331,6 +331,7 @@ function currentScriptCacheScope(mode: ScriptMode, activeChat?: Chat) {
       selectedChar: get(selectedCharID),
       chatId: chat?.id,
       scriptstate: chat?.scriptstate ?? null,
+      sidebarToggles: chat?.generationSettings?.sidebarToggles ?? null,
       variableReloadEpoch: get(VariableReloadGUIPointer),
     })
   } catch {
@@ -338,6 +339,7 @@ function currentScriptCacheScope(mode: ScriptMode, activeChat?: Chat) {
       selectedChar: get(selectedCharID),
       chatId: null,
       scriptstate: null,
+      sidebarToggles: null,
       variableReloadEpoch: get(VariableReloadGUIPointer),
     })
   }

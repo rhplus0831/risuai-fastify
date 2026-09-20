@@ -1,4 +1,5 @@
 import { resolveUniquePromptPreset } from '@risuai/shared-core/effective-prompt-template'
+import { projectSidebarTogglesToGlobalChatVariables } from '@risuai/shared-core/chat-generation-settings'
 import { parseKeyValue } from '../util'
 import { setChatVarBackend } from './chatVarBackend'
 import { setParserStateBackend } from './parserStateBackend'
@@ -75,11 +76,17 @@ export function setChatVar(key: string, value: string): boolean {
 }
 
 export function getGlobalChatVar(key: string): string {
-  if (settingsResourceState.groupStatuses.sidebar === 'error') return 'null'
-  const globalChatVariables = (settingsResourceState.value as Record<string, unknown>).globalChatVariables
-  if (!globalChatVariables || typeof globalChatVariables !== 'object' || Array.isArray(globalChatVariables))
-    return 'null'
-  const value = (globalChatVariables as Record<string, unknown>)[key]
+  const owner = charactersResourceState.status === 'ready' ? currentChatScriptstateOwner() : undefined
+  const character = owner ? getCharacterResourceOwner(owner.characterId) : undefined
+  const chat = character?.chats.find((candidate) => candidate.id === owner?.chatId)
+  const globalChatVariables =
+    settingsResourceState.groupStatuses.sidebar === 'error'
+      ? undefined
+      : (settingsResourceState.value as Record<string, unknown>).globalChatVariables
+  const value = projectSidebarTogglesToGlobalChatVariables(
+    globalChatVariables,
+    chat?.generationSettings?.sidebarToggles,
+  )[key]
   return typeof value === 'string' ? value : 'null'
 }
 

@@ -167,6 +167,22 @@ test('can get a global chat variable', () => {
   )
 })
 
+test('projects active-chat sidebar toggles over legacy global toggle variables', () => {
+  selectedChat().generationSettings = {
+    sidebarToggles: {
+      title: '1',
+    },
+  }
+  ;(settingsResourceState.value as Record<string, unknown>).globalChatVariables = {
+    toggle_title: '0',
+    ordinary: 'global',
+  }
+
+  expect(getGlobalChatVar('toggle_title')).toBe('1')
+  expect(getGlobalChatVar('ordinary')).toBe('global')
+  expect((settingsResourceState.value.globalChatVariables as Record<string, string>).toggle_title).toBe('0')
+})
+
 test('writes the ready active chat through its stable-id scriptstate owner and durable command path', () => {
   selectedCharacter().chaId = 'owner-character'
   selectedChat().id = 'owner-chat'

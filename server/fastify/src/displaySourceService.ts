@@ -13,6 +13,7 @@ import type {
 import type { CbsConditions } from '@risuai/shared-core/risuchat-parser-helpers'
 import { resolvePromptPresetRegexField } from '@risuai/shared-core/preset-split'
 import { selectedPersonaIndexFromStableId } from '@risuai/shared-core/persona-selection-identity'
+import { projectSidebarTogglesToGlobalChatVariables } from '@risuai/shared-core/chat-generation-settings'
 import {
   DISPLAY_SOURCE_PROTOCOL_VERSION,
   DISPLAY_SOURCE_TRANSFORM_VERSION,
@@ -192,6 +193,10 @@ function displayScope(database: Database, characterId: string, chatId: string): 
   if (chatPage < 0) return null
   const chat = character.chats[chatPage]
   database.presetRegex = structuredClone(activePromptPresetRegex(database, chat))
+  database.globalChatVariables = projectSidebarTogglesToGlobalChatVariables(
+    database.globalChatVariables,
+    chat.generationSettings?.sidebarToggles,
+  )
   return { database, character, chat, chatId, selectedCharID, chatPage }
 }
 

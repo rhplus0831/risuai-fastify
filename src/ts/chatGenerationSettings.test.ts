@@ -6,6 +6,7 @@ import {
   applySparseChatGenerationSettingsUpdate,
   createChatGenerationSettingsIncompleteError,
   diffChatGenerationSettings,
+  projectSidebarTogglesToGlobalChatVariables,
   resolveChatGenerationControlRequirements,
   resolveDisplayedSidebarToggles,
   resolveChatGenerationSettingsReadiness,
@@ -30,6 +31,19 @@ function readinessInput(
 }
 
 describe('chat generation settings contract', () => {
+  it('projects chat sidebar toggles over legacy global CBS variables without mutating either source', () => {
+    const globals = { toggle_title: '0', ordinary: 'global', malformed: 1 }
+    const sidebarToggles = { title: '1', note: '', malformed: false }
+
+    expect(projectSidebarTogglesToGlobalChatVariables(globals, sidebarToggles)).toEqual({
+      toggle_title: '1',
+      toggle_note: '',
+      ordinary: 'global',
+    })
+    expect(globals).toEqual({ toggle_title: '0', ordinary: 'global', malformed: 1 })
+    expect(sidebarToggles).toEqual({ title: '1', note: '', malformed: false })
+  })
+
   it('diffs and reapplies scalar, optional, and nested toggle changes', () => {
     const previous = {
       configured: true,

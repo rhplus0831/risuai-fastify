@@ -100,6 +100,78 @@ afterEach(async () => {
 })
 
 describe('POST /api/v1/chats/:chatId/display-sources', () => {
+  it('projects chat-scoped select values into editdisplay global toggle variables', async () => {
+    const assertion = await setupAuthedClient(harness.app)
+    const db = openDatabase(harness.dataDir)
+    let revision: number
+    try {
+      const seeded = await applyImport(
+        db,
+        harness.dataDir,
+        normalizeRisuSaveSnapshotDatabase({
+          globalChatVariables: { toggle_title: '0' },
+          promptPresets: [
+            {
+              id: 'prompt-preset',
+              name: 'Prompt preset',
+              customPromptTemplateToggle: 'title=Show Title=select=Hide,Show',
+              regex: [{ in: 'hello', out: '{{getglobalvar::toggle_title}}', type: 'editdisplay' }],
+            },
+          ],
+          characters: [
+            {
+              chaId: 'char-1',
+              name: 'Character',
+              chats: [
+                {
+                  id: 'chat-1',
+                  generationSettings: {
+                    promptPresetId: 'prompt-preset',
+                    sidebarToggles: { title: '1' },
+                  },
+                  message: [{ role: 'char', data: 'hello', chatId: 'message-1' }],
+                },
+              ],
+            },
+          ],
+        }),
+      )
+      revision = seeded.revision
+    } finally {
+      db.close()
+    }
+
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/chats/chat-1/display-sources',
+      headers: { 'risu-auth': assertion },
+      payload: {
+        protocolVersion: 1,
+        baseRevision: revision,
+        context: { pageSessionId: 'chat-toggle' },
+        targets: [
+          {
+            requestKey: 'chat-toggle',
+            characterId: 'char-1',
+            messageId: 'message-1',
+            index: 0,
+            role: 'char',
+            firstMessage: false,
+            layer: 'original',
+            source: 'hello',
+            sourceHash: sourceHash('hello'),
+            projectionEpoch: 1,
+          },
+        ],
+      },
+    })
+
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json().entries).toEqual([
+      expect.objectContaining({ requestKey: 'chat-toggle', status: 'ok', displaySource: '1' }),
+    ])
+  })
+
   it('accepts a production-shaped singleton-tuple module without rewriting or enabling its automatic triggers', async () => {
     const assertion = await setupAuthedClient(harness.app)
     const tupleTriggers = Array.from({ length: 10 }, (_, index) => ({

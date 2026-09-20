@@ -31,6 +31,29 @@ export interface ChatGenerationSettings {
   sidebarToggles?: Record<string, string>
 }
 
+/**
+ * Project chat-scoped sidebar controls onto the legacy CBS `toggle_*` names.
+ * The returned map is request-local: callers must not persist it back into
+ * global settings because each chat owns its own toggle selections.
+ */
+export function projectSidebarTogglesToGlobalChatVariables(
+  globalChatVariables: unknown,
+  sidebarToggles: unknown,
+): Record<string, string> {
+  const projected: Record<string, string> = {}
+  if (isRecord(globalChatVariables)) {
+    for (const [key, value] of Object.entries(globalChatVariables)) {
+      if (typeof value === 'string') projected[key] = value
+    }
+  }
+  if (isRecord(sidebarToggles)) {
+    for (const [key, value] of Object.entries(sidebarToggles)) {
+      if (typeof value === 'string') projected[`toggle_${key}`] = value
+    }
+  }
+  return projected
+}
+
 export const CHAT_GENERATION_SETTINGS_KEYS = [
   'configured',
   'personaId',

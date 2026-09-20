@@ -354,6 +354,29 @@ describe('editdisplay render path logging', () => {
     await expect(processScriptFull(char, 'CHOICE', 'editdisplay', -1)).resolves.toMatchObject({ data: 'second' })
   })
 
+  it('projects active-chat select values into editdisplay global toggle variables and invalidates the cache', async () => {
+    const char = seedDb()
+    const chat = testDatabaseState.db.characters[0].chats[0]
+    chat.generationSettings = { sidebarToggles: { title: '1' } }
+    testDatabaseState.db.globalChatVariables = { toggle_title: '0' }
+    char.customscript = [
+      {
+        comment: 'select-display',
+        type: 'editdisplay',
+        in: 'TITLE',
+        out: '{{getglobalvar::toggle_title}}',
+        flag: 'g',
+        ableFlag: true,
+      },
+    ] as any
+
+    await expect(processScriptFull(char, 'TITLE', 'editdisplay', 0)).resolves.toMatchObject({ data: '1' })
+
+    chat.generationSettings.sidebarToggles!.title = '0'
+    await expect(processScriptFull(char, 'TITLE', 'editdisplay', 0)).resolves.toMatchObject({ data: '0' })
+    expect(testDatabaseState.db.globalChatVariables.toggle_title).toBe('0')
+  })
+
   it('does not reuse script output across delimiter-shaped definition identities', async () => {
     const char = seedDb()
     char.customscript = [
