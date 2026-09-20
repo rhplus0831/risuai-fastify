@@ -9,6 +9,11 @@ and `pendingMutationOutbox.projection.test.ts`; its replacement snapshot/work ca
 snapshot, not these new file boundaries. See [Browser State Sync and Recovery](tests/browser-state-sync-and-recovery.md)
 for current coverage ownership.
 
+Post-snapshot bootstrap update (2026-09-20): the original `src/ts/bootstrap.test.ts` suite
+now has **249 cases across 11 files**, including two new memory-rejection and writer-lineage
+regressions. See [Bootstrap coverage ownership](tests/browser-state-sync-and-recovery.md#bootstrap-coverage-ownership)
+for current file names and counts. The row below retains the historical 247-case scope and ranking.
+
 This inventory ranks the current test files by the product consequences their assertions protect. Each file received a Luna High evaluation of its actual assertions. Ratings are qualitative review judgments, not measured defect rates or evidence that the suite passes.
 
 Order: **Critical → High → Medium → Low**, then **Frequently → Often → Occasionally**, then **test count descending**. Repository-relative path breaks remaining ties. For a file covering several behaviors, severity follows the most serious credible direct consequence and frequency follows that severity-determining scenario.

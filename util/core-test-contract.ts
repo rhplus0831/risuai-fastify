@@ -1,5 +1,6 @@
 export const frontendCoreTestFiles = [
   'src/ts/bootstrap.test.ts',
+  'src/ts/bootstrap.resourceEvents.dom.test.ts',
   'src/ts/process/__tests__/sendChat.fixtures.serverBacked.test.ts',
   'src/ts/process/__tests__/sendChatErrors.test.ts',
   'src/ts/process/__tests__/streamResponse.test.ts',
