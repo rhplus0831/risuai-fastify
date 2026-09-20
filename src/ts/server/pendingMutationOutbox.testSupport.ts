@@ -1,4 +1,4 @@
-import { vi } from 'vitest'
+import { expect, vi } from 'vitest'
 import type { DurableMutationIntent } from './pendingMutationOutbox'
 
 export function settingsIntent(value: string): DurableMutationIntent {
@@ -147,4 +147,21 @@ export async function corruptRawMutationCiphertext(mutationId: string): Promise<
   await mutateRawMutation(mutationId, (record) => {
     record.ciphertext = new ArrayBuffer(1)
   })
+}
+
+/** Inspect structured-cloned storage, including binary fields hidden by JSON.stringify. */
+export function expectStoredValueToExcludeSecret(value: unknown, secret: string): void {
+  if (typeof value === 'string') {
+    expect(value).not.toContain(secret)
+  } else if (value instanceof ArrayBuffer) {
+    expect(new TextDecoder().decode(value)).not.toContain(secret)
+  } else if (ArrayBuffer.isView(value)) {
+    const bytes = new Uint8Array(value.buffer, value.byteOffset, value.byteLength)
+    expect(new TextDecoder().decode(bytes)).not.toContain(secret)
+  } else if (value && typeof value === 'object') {
+    for (const [key, entry] of Object.entries(value)) {
+      expect(key).not.toContain(secret)
+      expectStoredValueToExcludeSecret(entry, secret)
+    }
+  }
 }

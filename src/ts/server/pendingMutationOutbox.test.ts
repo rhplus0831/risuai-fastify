@@ -37,6 +37,8 @@ import {
   removeRawKeyKind,
   removeRawDispatchStarted,
   corruptRawMutationCiphertext,
+  mutateRawMutation,
+  expectStoredValueToExcludeSecret,
 } from './pendingMutationOutbox.testSupport'
 
 const browserEvidence = vi.hoisted(() => ({ entries: [] as Record<string, unknown>[], generation: 0 }))
@@ -267,14 +269,30 @@ describe('pending mutation outbox persistence', () => {
     await expect(countPendingMutationRecords()).resolves.toBe(1)
     await expect(countBlockingPendingMutationRecords()).resolves.toBeNull()
   })
+})
 
-  coreIt('persists encrypted intents across runtime cache resets without plaintext secrets at rest', async () => {
+describe.each(['subtle', 'raw'] as const)('pending mutation outbox %s encryption', { tags: 'core' }, (keyKind) => {
+  beforeEach(async () => {
+    if (keyKind === 'raw') {
+      stubCryptoWithoutSubtle()
+      resetPendingMutationOutboxForTests()
+      await preparePendingMutationOutbox({
+        writerSessionId: 'writer-a',
+        writerEpoch: 1,
+        databaseLineage: 'database-a',
+        requestedWriterWasActive: true,
+      })
+    }
+  })
+
+  it('persists encrypted intents across runtime cache resets without plaintext secrets at rest', async () => {
     const secret = 'sentinel-provider-secret-never-store-plaintext'
     const handle = stagePendingMutation('settings:runtime', settingsIntent(secret))
 
     await expect(handle.ready).resolves.toBe('persisted')
     const rawRecord = await readRawMutation(handle.mutationId)
     expect(rawRecord).toMatchObject({
+      keyKind,
       semanticKey: 'settings:runtime',
       mutationId: handle.mutationId,
       sequence: handle.sequence,
@@ -282,7 +300,7 @@ describe('pending mutation outbox persistence', () => {
       writerEpoch: 1,
       databaseLineage: 'database-a',
     })
-    expect(JSON.stringify(rawRecord)).not.toContain(secret)
+    expectStoredValueToExcludeSecret(rawRecord, secret)
     expect(rawRecord?.ciphertext).toBeInstanceOf(ArrayBuffer)
 
     resetPendingMutationOutboxForTests()
@@ -296,6 +314,82 @@ describe('pending mutation outbox persistence', () => {
     expect(entries).toHaveLength(1)
     expect(entries[0]?.intent).toEqual(settingsIntent(secret))
     expect(entries[0]?.handle.mutationId).toBe(handle.mutationId)
+
+    const replacementSecret = 'sentinel-replacement-secret-never-store-plaintext'
+    const replacement = await replaceStagedPendingMutationIntent(entries[0]!.handle, settingsIntent(replacementSecret))
+    expect(replacement.status).toBe('replaced')
+    const replacedRecord = await readRawMutation(handle.mutationId)
+    expect(replacedRecord).toMatchObject({ keyKind })
+    expect(replacedRecord?.ciphertext).toBeInstanceOf(ArrayBuffer)
+    expectStoredValueToExcludeSecret(replacedRecord, secret)
+    expectStoredValueToExcludeSecret(replacedRecord, replacementSecret)
+    expect((await listPendingMutations()).map((entry) => entry.intent)).toEqual([settingsIntent(replacementSecret)])
+  })
+
+  it.each([
+    ['semanticKey', 'settings:tampered'],
+    ['mutationId', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+    ['sequence', 42],
+    ['order', 42],
+    ['ownerWriterSessionId', 'writer-b'],
+    ['writerEpoch', 2],
+    ['databaseLineage', 'database-b'],
+  ] as const)('retains but refuses to replay an intent with tampered %s', async (field, value) => {
+    const intent = settingsIntent('authenticated-metadata-canary')
+    const handle = stagePendingMutation('settings:runtime', intent)
+    await expect(handle.ready).resolves.toBe('persisted')
+    await expect(readRawMutation(handle.mutationId)).resolves.toMatchObject({ keyKind })
+    expect((await listPendingMutations()).map((entry) => entry.intent)).toEqual([intent])
+
+    const tampered = await mutateRawMutation(handle.mutationId, (record) => {
+      record[field] = value
+    })
+    const mutationId = tampered.mutationId as string
+    // Adopt the tampered scope so the row reaches decryption instead of being
+    // excluded by the owner/lineage filter or deleted during preparation.
+    await expect(
+      preparePendingMutationOutbox({
+        writerSessionId: tampered.ownerWriterSessionId as string,
+        writerEpoch: tampered.writerEpoch as number,
+        databaseLineage: tampered.databaseLineage as string,
+        requestedWriterWasActive: true,
+      }),
+    ).resolves.toEqual({ discarded: 0 })
+    await expect(countPendingMutationRecords()).resolves.toBe(1)
+    vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+    await expect(listPendingMutations()).resolves.toEqual([])
+    await expect(countBlockingPendingMutationRecords()).resolves.toBeNull()
+    await expect(countPendingMutationRecords()).resolves.toBe(1)
+    await expect(readRawMutation(mutationId)).resolves.toEqual(tampered)
+  })
+
+  it('uses fresh nonces for ordinary writes and exact intent replacement', async () => {
+    const first = stagePendingMutation('settings:first', settingsIntent('first'))
+    const second = stagePendingMutation('settings:second', settingsIntent('second'))
+    await expect(Promise.all([first.ready, second.ready])).resolves.toEqual(['persisted', 'persisted'])
+    const firstRow = await readRawMutation(first.mutationId)
+    const secondRow = await readRawMutation(second.mutationId)
+    expect(firstRow).toMatchObject({ keyKind })
+    expect(secondRow).toMatchObject({ keyKind })
+
+    const replacement = await replaceStagedPendingMutationIntent(first, settingsIntent('exact replacement'))
+    expect(replacement.status).toBe('replaced')
+    if (replacement.status !== 'replaced') throw new Error('Expected exact replacement')
+    expect(replacement.handle.mutationId).toBe(first.mutationId)
+    const replacementRow = await readRawMutation(first.mutationId)
+    expect(replacementRow).toMatchObject({ keyKind, order: firstRow!.order })
+
+    const firstIv = new Uint8Array(firstRow!.iv as ArrayBuffer)
+    const secondIv = new Uint8Array(secondRow!.iv as ArrayBuffer)
+    const replacementIv = new Uint8Array(replacementRow!.iv as ArrayBuffer)
+    expect(secondIv).not.toEqual(firstIv)
+    expect(replacementIv).not.toEqual(firstIv)
+    expect(replacementIv).not.toEqual(secondIv)
+    expect((await listPendingMutations()).map((entry) => entry.intent)).toEqual([
+      settingsIntent('exact replacement'),
+      settingsIntent('second'),
+    ])
   })
 })
 
