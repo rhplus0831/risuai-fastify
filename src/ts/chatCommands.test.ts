@@ -617,11 +617,6 @@ function jsonClone<T>(value: T): T {
   return JSON.parse(JSON.stringify(value)) as T
 }
 
-function jsonSnapshot(value: unknown): string {
-  const snapshot = JSON.stringify(value)
-  return snapshot === undefined ? '__undefined__' : snapshot
-}
-
 function serverMessagePlaceholder(): Message {
   return {
     role: 'char',
@@ -632,30 +627,14 @@ function serverMessagePlaceholder(): Message {
   } as Message
 }
 
-function legacyChangedChatMetadata(previous: Chat, current: Chat): ChatSnapshot {
-  const patch: ChatSnapshot = {}
-  const previousSnapshot = sanitizeChatPatch(jsonClone(previous) as unknown as ChatSnapshot)
-  const currentSnapshot = sanitizeChatPatch(jsonClone(current) as unknown as ChatSnapshot)
-  const keys = new Set([...Object.keys(previousSnapshot), ...Object.keys(currentSnapshot)])
-  for (const key of keys) {
-    if (jsonSnapshot(previousSnapshot[key]) !== jsonSnapshot(currentSnapshot[key])) {
-      patch[key] = jsonClone(currentSnapshot[key])
-    }
-  }
-  return patch
-}
-
-function orderedChatMetadata(values: Record<string, unknown>): Chat {
-  const chat: Record<string, unknown> = {
+function chatMetadataFixture(values: Record<string, unknown>): Chat {
+  return {
     id: 'chat-m9',
     message: [{ role: 'user', data: 'ignored transcript', chatId: 'msg-m9' }],
     localLore: [{ id: 'ignored-lore', key: 'x', content: 'ignored' }],
     hypaV3Data: { ignored: true },
-  }
-  for (const key of CHAT_PATCH_ALLOWED_KEYS) {
-    if (key in values) chat[key] = values[key]
-  }
-  return chat as unknown as Chat
+    ...values,
+  } as unknown as Chat
 }
 
 function seedReadyActiveChatGenerationSettings(): void {
@@ -5505,11 +5484,33 @@ describe('chat-metadata-row rollback', () => {
 })
 
 describe('chat metadata allowed-key diff', () => {
+  it('persists sdData metadata through the chat command without sending transcript fields', async () => {
+    const calls = stubCommandFetch()
+    const snapshot = captureChatMetadataPatch(
+      'chat-a',
+      { sdData: 'saved image data', message: [{ role: 'user', data: 'must stay local' }] },
+      'char-a',
+    )!
+
+    expect(snapshot?.attempted).toEqual({ sdData: 'saved image data' })
+    expect(applyChatMetadataOwnerPatch('char-a', 'chat-a', snapshot.attempted)).toBe(true)
+    await expect(dispatchChatMetadataPatchWithOutcome(snapshot)).resolves.toMatchObject({ status: 'accepted' })
+
+    expect(calls).toHaveLength(2)
+    expect(calls[1]).toMatchObject({
+      url: '/api/v1/commands/chats/chat-a',
+      method: 'PATCH',
+      body: { patch: { sdData: 'saved image data' }, select: false },
+    })
+    expect((calls[1].body as { patch: unknown }).patch).toEqual({ sdData: 'saved image data' })
+    expect(getDatabase().characters[0].chats[0].sdData).toBe('saved image data')
+  })
+
   it('keeps generationSettings out of generic chat metadata patching', () => {
-    const previous = orderedChatMetadata({
+    const previous = chatMetadataFixture({
       name: 'Same chat',
     })
-    const current = orderedChatMetadata({
+    const current = chatMetadataFixture({
       name: 'Same chat',
     })
     previous.generationSettings = {
@@ -5533,8 +5534,8 @@ describe('chat metadata allowed-key diff', () => {
     expect(changedChatMetadata(previous, current)).toEqual({})
   })
 
-  it('allowed metadata diffs match the previous clone-sanitize patch bytes', () => {
-    const previous = orderedChatMetadata({
+  it('emits the expected allowed metadata patch and preserves serialized key order', () => {
+    const previous = chatMetadataFixture({
       name: 'Old chat',
       note: 'same note',
       lastMemory: 'same memory',
@@ -5547,7 +5548,7 @@ describe('chat metadata allowed-key diff', () => {
       modules: ['module-a'],
       pinned: false,
     })
-    const current = orderedChatMetadata({
+    const current = chatMetadataFixture({
       name: 'New chat',
       note: 'same note',
       sdData: 'new sd payload',
@@ -5565,11 +5566,24 @@ describe('chat metadata allowed-key diff', () => {
     ;(current as any).hypaV3Data = { ignored: 'changed memory payload' }
 
     const patch = changedChatMetadata(previous, current)
-    const legacyPatch = legacyChangedChatMetadata(previous, current)
+    const expectedPatch = {
+      name: 'New chat',
+      suggestMessages: ['new suggestion'],
+      bindedPersona: undefined,
+      fmIndex: 2,
+      folderId: null,
+      bookmarks: ['msg-new'],
+      bookmarkNames: { 'msg-new': 'New bookmark' },
+      modules: ['module-a', 'module-b'],
+      pinned: true,
+      sdData: 'new sd payload',
+    }
 
-    expect(Object.keys(patch)).toEqual(Object.keys(legacyPatch))
-    expect(JSON.stringify(patch)).toBe(JSON.stringify(legacyPatch))
-    expect(JSON.stringify(sanitizeChatPatch(patch))).toBe(JSON.stringify(sanitizeChatPatch(legacyPatch)))
+    expect(patch).toStrictEqual(expectedPatch)
+    expect(Object.keys(patch)).toEqual(Object.keys(expectedPatch))
+    expect(JSON.stringify(patch)).toBe(JSON.stringify(expectedPatch))
+    const { bindedPersona: _deletedPersona, ...expectedWirePatch } = expectedPatch
+    expect(sanitizeChatPatch(patch)).toEqual(expectedWirePatch)
     expect(patch).toHaveProperty('bindedPersona', undefined)
     expect(sanitizeChatPatch(patch)).not.toHaveProperty('bindedPersona')
     expect(patch).not.toHaveProperty('message')
@@ -5579,7 +5593,7 @@ describe('chat metadata allowed-key diff', () => {
 
   it('message-only changes produce an empty patch without serializing message arrays', () => {
     const body = 'x'.repeat(1200)
-    const previous = orderedChatMetadata({ name: 'Same chat', note: 'same note' })
+    const previous = chatMetadataFixture({ name: 'Same chat', note: 'same note' })
     previous.message = Array.from({ length: 120 }, (_unused, index) => ({
       role: index % 2 === 0 ? 'user' : 'char',
       data: `${body}-${index}`,
@@ -5606,7 +5620,7 @@ describe('chat metadata allowed-key diff', () => {
   })
 
   it('changed object metadata is detached from the current chat record', () => {
-    const previous = orderedChatMetadata({
+    const previous = chatMetadataFixture({
       name: 'Same chat',
       bookmarks: ['msg-old'],
       bookmarkNames: { 'msg-old': 'Old bookmark' },
@@ -5617,7 +5631,7 @@ describe('chat metadata allowed-key diff', () => {
     const bookmarkNames = { 'msg-new': 'New bookmark' }
     const modules = ['module-a', 'module-b']
     const suggestMessages = ['new suggestion']
-    const current = orderedChatMetadata({
+    const current = chatMetadataFixture({
       name: 'Same chat',
       bookmarks,
       bookmarkNames,
@@ -6173,40 +6187,52 @@ describe('chat-scoped message attempt rollback', () => {
     const { calls, firstResponse, secondResponse } = stubControlledMessagePatchFetch()
     seedActiveMessages([{ role: 'char', data: 'before', chatId: 'm-1' }])
     const stalePrevious = currentChatScopedSnapshot()
-    dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
-    dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
+    const firstMutation = dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
+    const secondMutation = dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
 
-    expect(getDatabase().characters[0].chats[0].message[0].data).toBe('same')
-    await waitForCallCount(calls, 2)
-    firstResponse.resolve(successfulMessagePatchResponse(11))
-    await waitForCallCount(calls, 3)
-    secondResponse.resolve(jsonResponse({ error: 'second patch failed' }, 500))
-
-    await vi.waitFor(() => {
+    try {
       expect(getDatabase().characters[0].chats[0].message[0].data).toBe('same')
-    })
-    expect(calls.slice(1).map((call) => call.body)).toEqual([
-      expect.objectContaining({ patch: { data: 'same' } }),
-      expect.objectContaining({ patch: { data: 'same' } }),
-    ])
+      await waitForCallCount(calls, 2)
+      firstResponse.resolve(successfulMessagePatchResponse(11))
+      await waitForCallCount(calls, 3)
+      secondResponse.resolve(jsonResponse({ error: 'second patch failed' }, 500))
+
+      await expect(firstMutation).resolves.toMatchObject({ status: 'accepted' })
+      await expect(secondMutation).resolves.toMatchObject({ status: 'failed' })
+      expect(getDatabase().characters[0].chats[0].message[0].data).toBe('same')
+      expect(calls.slice(1).map((call) => call.body)).toEqual([
+        expect.objectContaining({ patch: { data: 'same' } }),
+        expect.objectContaining({ patch: { data: 'same' } }),
+      ])
+    } finally {
+      firstResponse.resolve(jsonResponse({ error: 'cleanup' }, 500))
+      secondResponse.resolve(jsonResponse({ error: 'cleanup' }, 500))
+      await Promise.allSettled([firstMutation, secondMutation])
+    }
   })
 
   it('repaints a duplicate stale-snapshot patch when the first request fails and the second succeeds', async () => {
     const { calls, firstResponse, secondResponse } = stubControlledMessagePatchFetch()
     seedActiveMessages([{ role: 'char', data: 'before', chatId: 'm-1' }])
     const stalePrevious = currentChatScopedSnapshot()
-    dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
-    dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
+    const firstMutation = dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
+    const secondMutation = dispatchUpdateMessageScoped('m-1', { data: 'same' }, stalePrevious)
 
-    await waitForCallCount(calls, 2)
-    firstResponse.resolve(jsonResponse({ error: 'first patch failed' }, 500))
-    await waitForCallCount(calls, 3)
-    expect(getDatabase().characters[0].chats[0].message[0].data).toBe('same')
-    secondResponse.resolve(successfulMessagePatchResponse(11))
-
-    await vi.waitFor(() => {
+    try {
+      await waitForCallCount(calls, 2)
+      firstResponse.resolve(jsonResponse({ error: 'first patch failed' }, 500))
+      await waitForCallCount(calls, 3)
       expect(getDatabase().characters[0].chats[0].message[0].data).toBe('same')
-    })
+      secondResponse.resolve(successfulMessagePatchResponse(11))
+
+      await expect(firstMutation).resolves.toMatchObject({ status: 'failed' })
+      await expect(secondMutation).resolves.toMatchObject({ status: 'accepted' })
+      expect(getDatabase().characters[0].chats[0].message[0].data).toBe('same')
+    } finally {
+      firstResponse.resolve(jsonResponse({ error: 'cleanup' }, 500))
+      secondResponse.resolve(jsonResponse({ error: 'cleanup' }, 500))
+      await Promise.allSettled([firstMutation, secondMutation])
+    }
   })
 
   it('retains an optimistic edit while its transport is still queued', async () => {
@@ -7352,26 +7378,38 @@ describe('runner rejection rollback', () => {
   })
 
   it('a mid-sequence rejection rolls back once and skips the remaining commands', async () => {
-    stubCommandFetch()
+    setCachedServerCommandRevision(10)
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
     const rollback = vi.fn()
-    const laterCommand = vi.fn(async () => ({ status: 'ok' }) as const)
-
-    runOptimisticCommandSequence(
-      [
-        async () => {
-          throw new Error('first factory exploded')
-        },
-        laterCommand as unknown as (baseRevision: number) => Promise<ServerCommandResult>,
-      ],
-      rollback,
-    )
-
-    await vi.waitFor(() => {
-      expect(rollback).toHaveBeenCalledTimes(1)
+    const reconciliations: number[][] = []
+    setServerCommandSuccessReconciler((_event, events) => {
+      reconciliations.push(events.map((event) => event.revision))
     })
-    expect(laterCommand).not.toHaveBeenCalled()
-    consoleError.mockRestore()
+    const acceptedCommand = vi.fn(
+      async (baseRevision: number): Promise<ServerCommandResult> => ({
+        status: 'ok',
+        revision: baseRevision + 1,
+        event: { type: 'chat.updated', revision: baseRevision + 1, resource: 'characterRow' },
+      }),
+    )
+    const rejectingCommand = vi.fn(async (_baseRevision: number): Promise<ServerCommandResult> => {
+      throw new Error('second factory exploded')
+    })
+    const laterCommand = vi.fn(async (): Promise<ServerCommandResult> => ({ status: 'unavailable' }))
+
+    try {
+      await expect(
+        runOptimisticCommandSequenceAsync([acceptedCommand, rejectingCommand, laterCommand], rollback),
+      ).resolves.toMatchObject({ status: 'error', error: expect.stringContaining('second factory exploded') })
+
+      expect(acceptedCommand).toHaveBeenCalledExactlyOnceWith(10)
+      expect(rejectingCommand).toHaveBeenCalledExactlyOnceWith(11)
+      expect(rollback).toHaveBeenCalledOnce()
+      expect(laterCommand).not.toHaveBeenCalled()
+      expect(reconciliations).toEqual([[11]])
+    } finally {
+      consoleError.mockRestore()
+    }
   })
 })
 
