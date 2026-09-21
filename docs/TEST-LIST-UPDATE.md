@@ -79,3 +79,23 @@ production code and the architecture baseline are unchanged. The
 [worklist](TEST-REVIEW-WORKLIST.md#completed-second-wave) records the evidence
 and 19 completed original entries overall. Historical inventory counts and
 ratings remain unchanged.
+
+Post-snapshot third-wave update (2026-09-21): eleven more Critical entries were
+improved across [client ownership](test-reviews/wave-3-client-ownership.md),
+[access and privacy](test-reviews/wave-3-access-privacy.md), and
+[storage and assets](test-reviews/wave-3-storage-assets.md).
+`commands.clientSession.test.ts` now has 19 cases; `startupReadiness.test.ts`, 17;
+`connectedTabIdentity.test.ts`, 8; `clientSession.test.ts`, 25;
+`auth.test.ts`, 16; `legacyStorage.test.ts`, 14; `assetGc.test.ts`, 13; and
+`assetReferenceScan.test.ts`, 17. `routeProtection.test.ts` retains 17,
+`requestHistory.test.ts` retains nine, and `bootstrap.test.ts` in the Fastify
+tests retains eight, with stronger assertions. All 141 original cases remain,
+and all 163 resulting cases pass after integration. Improvements cover stale
+ownership and startup work, independent access controls, secrets before
+persistence, populated bootstrap projections, binary recovery, and asset
+retention and scanning. All 29 sampled mutations are detected, including 27
+that survived their original owning files. Client/server typechecks and
+architecture validation pass; production code and the architecture baseline
+are unchanged. The [worklist](TEST-REVIEW-WORKLIST.md#completed-third-wave)
+records 30 completed original entries overall and 413 still pending. Historical
+inventory counts and ratings remain unchanged.

@@ -759,10 +759,30 @@
         "protectedBehavior": "It verifies timeout and cancellation isolation, reader denial before auth, recovery-only replay and receipt access, queue retirement across demotion/promotion, originating-role rechecks, stale 423 and revision handling, and reconciliation retirement during active flushes."
       },
       "currentFiles": ["src/ts/server/commands.clientSession.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-client-ownership",
       "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added a held receipt-acknowledgement race across writer demotion and repromotion, requiring the stale operation to retire without dispatch and a fresh acknowledgement to succeed with exact wire arguments.",
+        "reportedFamilyCases": 19,
+        "evidence": {
+          "commits": ["79200b577612354c5af6c0eed93c936736eccc94"],
+          "documents": ["docs/test-reviews/wave-3-client-ownership.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Client ownership batch: all 55 original cases retained, fourteen added, 69 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Network/auth and session transitions remain controlled test boundaries; actual browser suspension and network authentication are not established. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0020",
@@ -775,10 +795,30 @@
         "protectedBehavior": "The integration tests verify reviewed public and conditional exceptions, manifest coverage and uniqueness for live routes, unauthenticated rejection, public-route reachability, active-writer header behavior, expensive-route HEAD rejection, raw-body protection, and login, asset, and generation rate limits."
       },
       "currentFiles": ["server/fastify/__tests__/routeProtection.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-access-privacy",
       "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened the public asset-existence probe to require its successful status and exact result. Added valid latched-writer admission before missing-header rejection, then required accepted settings and revision to remain unchanged.",
+        "reportedFamilyCases": 17,
+        "evidence": {
+          "commits": ["7c63fff9e44ec4a76e82d0469045377f192fe7d0"],
+          "documents": ["docs/test-reviews/wave-3-access-privacy.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Access/privacy batch: all 45 original cases retained, five added, 50 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Uses injected HTTP requests; adjacent active-writer takeover, connection, and lineage matrices retain separate ownership. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0021",
@@ -791,10 +831,30 @@
         "protectedBehavior": "Asserts ordered milestone transitions and diagnostics, generation blockers, shell and route gating, writer demotion and restoration, chat and generation-recovery prerequisites, capability failure cleanup, deduplicated startup steps and retries, owner supersession, and milestone timeout behavior."
       },
       "currentFiles": ["src/ts/startupReadiness.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-client-ownership",
       "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened pending replacement-step deduplication and added managed-session supersession before dispatch and during held work, with fresh-session completion controls.",
+        "reportedFamilyCases": 17,
+        "evidence": {
+          "commits": ["79200b577612354c5af6c0eed93c936736eccc94"],
+          "documents": ["docs/test-reviews/wave-3-client-ownership.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Client ownership batch: all 55 original cases retained, fourteen added, 69 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Managed session and asynchronous step boundaries are controlled fixtures; mounted UI and real browser lifecycle behavior remain outside this suite. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0022",
@@ -807,10 +867,30 @@
         "protectedBehavior": "Integration checks cover authenticated raw-byte read/write, atomic replacement and cleanup after write or rename failures, missing and invalid path validation, empty-body rejection, UTF-8 key listing, batched removal atomicity and idempotence, and the SHA-256 auth crypto endpoint."
       },
       "currentFiles": ["server/fastify/__tests__/legacyStorage.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-storage-assets",
       "owner": "/root/wave3_storage; branch codex/wave-3-storage-assets; worktree /home/codex/worktrees/risuai-wave-3-storage-assets",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened binary preservation with all 256 byte values and added file-flush failure recovery requiring old/sibling bytes, temporary-file cleanup, and a successful subsequent replacement.",
+        "reportedFamilyCases": 14,
+        "evidence": {
+          "commits": ["5fe21e4435ca9755c992fa6e64a2b6fe847f650f"],
+          "documents": ["docs/test-reviews/wave-3-storage-assets.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Storage/assets batch: all 41 original cases retained, three added, 44 passed. All seven selected mutations detected; five survived their original owning file and two were already caught.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Injected flush failure verifies observable recovery; it does not simulate power loss or prove filesystem crash durability. Maintenance and active-writer compatibility-write matrices remain separate. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0023",
@@ -823,10 +903,30 @@
         "protectedBehavior": "Integration assertions cover orphan and stray reclamation, grace-window deferral and convergence, catalog retention, missing metadata files, no-op behavior, scoped message-free scanning, parity with the hydrated reference walker, references across settings/collections/characters/chats/messages, SQLite inlays, and pending finalization payloads."
       },
       "currentFiles": ["server/fastify/__tests__/assetGc.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-storage-assets",
       "owner": "/root/wave3_storage; branch codex/wave-3-storage-assets; worktree /home/codex/worktrees/risuai-wave-3-storage-assets",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added referenced-file retention without asset metadata, requiring exact referenced bytes and an unrelated operator file to survive while an unrelated old stray is reclaimed.",
+        "reportedFamilyCases": 13,
+        "evidence": {
+          "commits": ["5fe21e4435ca9755c992fa6e64a2b6fe847f650f"],
+          "documents": ["docs/test-reviews/wave-3-storage-assets.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Storage/assets batch: all 41 original cases retained, three added, 44 passed. All seven selected mutations detected; five survived their original owning file and two were already caught.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "The lost-reference mutation removes both selection and revalidation membership guards; either guard alone still protects this fixture. Scheduling, load, and generation-retention suites retain separate ownership. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0024",
@@ -839,10 +939,30 @@
         "protectedBehavior": "Integration and unit assertions cover bounded known-key cache eviction and persistence, loopback-only agent bypass and protected storage access, blank-password rejection, persisted fallback-session acceptance and expiry removal, and exactly-once or pre-body auth enforcement for bulk, proxy, and hub routes."
       },
       "currentFiles": ["server/fastify/__tests__/auth.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-access-privacy",
       "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added independently signed expired, unsupported-algorithm, unregistered-key, and altered-signature rejection cases with valid controls, plus persisted fallback-token tampering and reopen controls.",
+        "reportedFamilyCases": 16,
+        "evidence": {
+          "commits": ["7c63fff9e44ec4a76e82d0469045377f192fe7d0"],
+          "documents": ["docs/test-reviews/wave-3-access-privacy.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Access/privacy batch: all 45 original cases retained, five added, 50 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "These are direct authentication-boundary tests; HTTP expired-assertion coverage already exists in the smoke suite. Selected owning-file survivors do not establish repository-wide gaps. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0025",
@@ -891,10 +1011,30 @@
         "protectedBehavior": "Assertions cover table migration, newest-record retention and metadata separation, recursive and value-based secret redaction, disable-and-clear semantics, streaming capture and terminal timing, UTF-8 field caps with truncation metadata, total-byte pruning, and credential-free resolved-profile snapshots."
       },
       "currentFiles": ["server/fastify/__tests__/requestHistory.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-access-privacy",
       "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened secret-redaction checks with raw SQLite columns while pending and after completion, preserving safe context, toggle, and metadata values alongside existing getter assertions.",
+        "reportedFamilyCases": 9,
+        "evidence": {
+          "commits": ["7c63fff9e44ec4a76e82d0469045377f192fe7d0"],
+          "documents": ["docs/test-reviews/wave-3-access-privacy.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Access/privacy batch: all 45 original cases retained, five added, 50 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Raw persistence is checked directly, but the selected secret shapes are not an exhaustive redaction vocabulary; route access and deletion remain owned by request-history route tests. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0027",
@@ -907,10 +1047,30 @@
         "protectedBehavior": "Integration tests assert authentication gating, runtime-only projection without database transfer, initialization/revision/protocol metadata, coherent chat-occupancy override, writer-scoped pending/terminal/legacy finalization reconstruction, pre-Agent settings migration before generation commands, and gzip body equivalence for large responses."
       },
       "currentFiles": ["server/fastify/__tests__/bootstrap.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-access-privacy",
       "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened populated bootstrap compression coverage with an exact independent 64-job projection, retaining compressed/uncompressed byte equality and existing metadata and restart assertions.",
+        "reportedFamilyCases": 8,
+        "evidence": {
+          "commits": ["7c63fff9e44ec4a76e82d0469045377f192fe7d0"],
+          "documents": ["docs/test-reviews/wave-3-access-privacy.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Access/privacy batch: all 45 original cases retained, five added, 50 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Legacy bootstrap recovery remains covered here; modern immutable-session finalization, effect recovery, and job lifecycle matrices retain separate ownership. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0028",
@@ -923,10 +1083,30 @@
         "protectedBehavior": "Browser-identity tests cover lock-held reload reuse, copied session deduplication, missing or rejected Web Locks, concurrent in-page resolution, teardown fencing against late callbacks, and reader-only fallback when secure identity APIs are unavailable."
       },
       "currentFiles": ["src/ts/server/connectedTabIdentity.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-client-ownership",
       "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened literal Web Locks namespace and exclusivity options, and added same-page release/reacquisition requiring the held lock and cached identity to retire.",
+        "reportedFamilyCases": 8,
+        "evidence": {
+          "commits": ["79200b577612354c5af6c0eed93c936736eccc94"],
+          "documents": ["docs/test-reviews/wave-3-client-ownership.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Client ownership batch: all 55 original cases retained, fourteen added, 69 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Web Locks, session storage, and page-module lifecycles are mocked; this is not real cross-tab browser or suspension validation. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0029",
@@ -1211,10 +1391,30 @@
         "protectedBehavior": "Exercises reference parity across settings, extracted and embedded collections, characters, chats, active and alternate messages, retries, catalogs, malformed legacy JSON, stale ownership, signed rowids, pagination/yield limits, cancellation, scratch recovery, and idempotent closure."
       },
       "currentFiles": ["server/fastify/__tests__/assetReferenceScan.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-storage-assets",
       "owner": "/root/wave3_storage; branch codex/wave-3-storage-assets; worktree /home/codex/worktrees/risuai-wave-3-storage-assets",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added nested legacy character/chat/message references across page boundaries with disjoint generated IDs, exact distinct-reference expectations, cooperative yielding, and unchanged source rows.",
+        "reportedFamilyCases": 17,
+        "evidence": {
+          "commits": ["5fe21e4435ca9755c992fa6e64a2b6fe847f650f"],
+          "documents": ["docs/test-reviews/wave-3-storage-assets.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Storage/assets batch: all 41 original cases retained, three added, 44 passed. All seven selected mutations detected; five survived their original owning file and two were already caught.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "The fixture checks nested keyset completeness and deduplication, not all reference-owner fields or neighboring maintenance/load/scale gates. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0047",
@@ -1227,10 +1427,30 @@
         "protectedBehavior": "The unit suite covers reader and writer admission, promotion and resume fencing, projection and connection readiness, diagnostic privacy and failure isolation, generation invalidation, ownership and lineage ordering, draft capture on demotion, and failed-operation recovery."
       },
       "currentFiles": ["src/ts/clientSession.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-3-client-ownership",
       "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added live-connection recovery gating, copied-operation-token rejection, and eight invalid ownership fixtures with independent pending-state snapshots and valid recovery controls.",
+        "reportedFamilyCases": 25,
+        "evidence": {
+          "commits": ["79200b577612354c5af6c0eed93c936736eccc94"],
+          "documents": ["docs/test-reviews/wave-3-client-ownership.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from bf99853b10f491f5cb56ccbb51a771f1fecf7658 in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Client ownership batch: all 55 original cases retained, fourteen added, 69 passed. All eleven selected mutations detected; all eleven survived their original owning file.",
+            "Integrated focused runs: 69 frontend tests in four files and 94 server tests in seven files passed, with no skips. All 141 original file/full-name/tag identities retained; 22 added.",
+            "All 29 selected mutations detected after improvement; 27 survived their original owning file and two were already caught. This is selected-suite evidence, not a repository-wide mutation score.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Exercises the session reducer and capability boundary with controlled connection/projection state; persistence and mounted UI behavior are outside this unit suite. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0048",

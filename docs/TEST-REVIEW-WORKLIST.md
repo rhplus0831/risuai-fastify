@@ -174,6 +174,45 @@ commands, mutations, and limitations in version control.
 This checkpoint has **18 `improved`, one `verified_unchanged`, and 424 `pending`**
 original entries. Passing neighboring tests does not change their audit status.
 
+## Completed third wave
+
+Eleven Critical entries completed on 2026-09-21 in three isolated batches:
+
+| Batch report                                                | Entries                                    | Baseline → final cases | Main improvements                                                                                                      |
+| ----------------------------------------------------------- | ------------------------------------------ | ---------------------: | ---------------------------------------------------------------------------------------------------------------------- |
+| [Client ownership](test-reviews/wave-3-client-ownership.md) | `TL-0019`, `TL-0021`, `TL-0028`, `TL-0047` |                55 → 69 | Receipt and startup supersession, Web Locks exclusivity, operation identity, ownership validation, and live recovery.  |
+| [Access and privacy](test-reviews/wave-3-access-privacy.md) | `TL-0020`, `TL-0024`, `TL-0026`, `TL-0027` |                45 → 50 | Valid-writer controls, signed-token rejection, raw SQLite secret redaction, and populated bootstrap projections.       |
+| [Storage and assets](test-reviews/wave-3-storage-assets.md) | `TL-0022`, `TL-0023`, `TL-0046`            |                41 → 44 | Binary preservation, flush-failure recovery, referenced-file retention, nested scan completeness, and distinct counts. |
+
+All eleven outcomes are `improved`. Integration passes **163 tests**: 69 in
+four frontend files and 94 in seven server files, with no skips. All 141 original
+file/full-name/tag identities remain and 22 cases were added. No tests moved;
+production code, shared helpers, configuration, routing, and tags are unchanged.
+
+All 29 selected mutations were detected after improvement. Each probe ran its
+entire owning file; 27 survived that original file and two were already caught.
+These results are not a repository-wide mutation score. Reports identify
+neighboring coverage that already protects some boundaries and retain the
+limitations of mocked browser lifecycles and injected filesystem failures.
+
+`pnpm check` passed with zero errors and warnings, and `pnpm check:server`
+passed protocol, shared-core, Fastify, browser-smoke, and architecture checks.
+The architecture inventory still matches its existing 4,289 fixture references;
+no refresh was needed. Documentation validation, Prettier, worklist integrity,
+and diff checks also passed. The earlier
+[full repository validation](test-reviews/pilot-full-validation.md) remains a
+separate checkpoint; no full aggregate or browser suite was rerun for these
+localized test-only changes.
+
+Temporary execution evidence uses `/tmp/wave3-*`, including integrated client
+and server JSON results, three case-conservation reports, typecheck logs, and
+mutation evidence. The batch reports preserve findings, commands, selected
+mutations, and limitations in version control.
+
+This checkpoint has **29 `improved`, one `verified_unchanged`, and 413 `pending`**
+original entries: 30 completed of 443. The remaining entries are 172 Critical
+and 241 High; neighboring suites retain their own pending review obligations.
+
 ## Finding and assigning work
 
 Run these commands from the repository root. Show current progress:
