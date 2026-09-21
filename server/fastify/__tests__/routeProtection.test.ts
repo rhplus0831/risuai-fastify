@@ -283,7 +283,8 @@ describe('route protection (table-wide auth enforcement)', () => {
       url: '/api/v1/assets/exists',
       payload: { ids: [] },
     })
-    expect(exists.statusCode).not.toBe(401)
+    expect(exists.statusCode).toBe(200)
+    expect(exists.json()).toEqual({ missing: [] })
 
     // content-addressed asset reads are public; a missing asset should 404, not 401.
     const missingAssetId = 'a'.repeat(64)
@@ -364,15 +365,33 @@ describe('active-writer header validation', () => {
     })
     expect(bootstrap.statusCode).toBe(200)
 
+    const accepted = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/import/risusave',
+      headers: { 'risu-auth': assertion, [ACTIVE_WRITER_SESSION_HEADER]: 'session-a' },
+      payload: { database: { streamGeminiThoughts: false } },
+    })
+    expect(accepted.statusCode, accepted.body).toBe(200)
+
     // A mutating request with NO writer-session header is not the active writer.
     const noHeader = await harness.app.inject({
       method: 'POST',
       url: '/api/v1/import/risusave',
       headers: { 'risu-auth': assertion },
-      payload: { database: { streamGeminiThoughts: false } },
+      payload: { database: { streamGeminiThoughts: true } },
     })
     expect(noHeader.statusCode).toBe(423)
     expect(noHeader.json()).toMatchObject({ error: 'active_writer_stale' })
+    const unchanged = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/settings',
+      headers: { 'risu-auth': assertion },
+    })
+    expect(unchanged.statusCode, unchanged.body).toBe(200)
+    expect(unchanged.json()).toMatchObject({
+      revision: accepted.json().revision,
+      settings: { streamGeminiThoughts: false },
+    })
   })
 
   it('rejects an empty / whitespace-only / oversize writer-session header', async () => {

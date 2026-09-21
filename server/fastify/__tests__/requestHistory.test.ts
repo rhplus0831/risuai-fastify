@@ -111,15 +111,21 @@ describe('request history repository', () => {
       source: 'chat',
       profile,
       prompt: [{ role: 'user', content: 'do not persist opaque-credential-value' }],
-      metadata: { authorization: 'Bearer begin-secret' },
+      context: { characterName: 'Character opaque-credential-value', chatId: 'safe-chat' },
+      toggles: { mode: 'safe-mode', api_key: 'toggle-secret' },
+      metadata: { authorization: 'Bearer begin-secret', attempt: 3 },
       redactionValues: ['opaque-credential-value'],
     })
+
+    const pendingRow = db.prepare('SELECT * FROM request_history WHERE id = ?').get('redacted')
+    expect(pendingRow).toBeDefined()
+    expect(JSON.stringify(pendingRow)).not.toMatch(/opaque-credential-value|begin-secret|toggle-secret/u)
 
     completeRequestHistory(handle, {
       status: 'error',
       response: 'echoed opaque-credential-value',
       error: 'Incorrect API key provided: sk-live-secret; password=hunter2; credential=opaque-credential-value',
-      metadata: { access_token: 'metadata-token-secret' },
+      metadata: { access_token: 'metadata-token-secret', finishReason: 'provider-error' },
       apiMetadata: {
         api_key: 'sk-json-secret',
         nested: {
@@ -134,7 +140,14 @@ describe('request history repository', () => {
     expect(record).toMatchObject({
       prompt: [{ content: 'do not persist [redacted]' }],
       response: 'echoed [redacted]',
-      metadata: { authorization: '[redacted]', access_token: '[redacted]' },
+      context: { characterName: 'Character [redacted]', chatId: 'safe-chat' },
+      toggles: { mode: 'safe-mode', api_key: '[redacted]' },
+      metadata: {
+        authorization: '[redacted]',
+        access_token: '[redacted]',
+        attempt: 3,
+        finishReason: 'provider-error',
+      },
       apiMetadata: {
         api_key: '[redacted]',
         nested: { access_token: '[redacted]', message: 'Authorization: Bearer [redacted]' },
@@ -142,9 +155,13 @@ describe('request history repository', () => {
     })
     expect(record?.error).toContain('API key provided: [redacted]')
     expect(record?.error).toContain('password=[redacted]')
-    expect(serialized).not.toMatch(
-      /opaque-credential-value|sk-live-secret|hunter2|metadata-token-secret|sk-json-secret|token-json-secret|upstream-secret/u,
-    )
+    const storedRow = db.prepare('SELECT * FROM request_history WHERE id = ?').get('redacted')
+    expect(storedRow).toBeDefined()
+    for (const representation of [serialized, JSON.stringify(storedRow)]) {
+      expect(representation).not.toMatch(
+        /opaque-credential-value|begin-secret|toggle-secret|sk-live-secret|hunter2|metadata-token-secret|sk-json-secret|token-json-secret|upstream-secret/u,
+      )
+    }
   })
 
   it('uses zero as disable-and-clear', () => {

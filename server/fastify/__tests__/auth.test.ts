@@ -2,6 +2,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { webcrypto } from 'node:crypto'
 import { describe, expect, it, beforeEach, afterEach, vi } from 'vitest'
 import {
   createAuthState,
@@ -73,6 +74,61 @@ describe('auth.knownKeyHashes (bounded accumulator)', () => {
     // The oldest entry is evicted (insertion order).
     expect(state.knownKeyHashes.has('hash-0000')).toBe(false)
     expect(state.knownKeyHashes.has('hash-4096')).toBe(true)
+  })
+})
+
+describe('signed assertion validation', () => {
+  it.each([
+    ['expired', 'expired'],
+    ['unsupported algorithm', 'bad-alg'],
+    ['unregistered key', 'unknown-key'],
+    ['altered signature', 'bad-signature'],
+  ] as const)('rejects an %s assertion while preserving the valid registered assertion', async (variation, reason) => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'risu-auth-assertion-'))
+    try {
+      const state = createAuthState(dataDir)
+      const subtle = webcrypto.subtle
+      const keyPair = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+      const publicKey = await subtle.exportKey('jwk', keyPair.publicKey)
+      registerPublicKey(state, publicKey)
+      const now = Math.floor(Date.now() / 1000)
+      const sign = async (options: { alg?: string; iat?: number; exp?: number; keyPair?: CryptoKeyPair } = {}) => {
+        const signingKeyPair = options.keyPair ?? keyPair
+        const pub = await subtle.exportKey('jwk', signingKeyPair.publicKey)
+        const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url')
+        const input = `${encode({ alg: options.alg ?? 'ES256', typ: 'JWT' })}.${encode({
+          iat: options.iat ?? now,
+          exp: options.exp ?? now + 60,
+          pub,
+        })}`
+        const signature = await subtle.sign(
+          { name: 'ECDSA', hash: 'SHA-256' },
+          signingKeyPair.privateKey,
+          Buffer.from(input),
+        )
+        return `${input}.${Buffer.from(signature).toString('base64url')}`
+      }
+
+      const valid = await sign()
+      await expect(verifyAssertion(state, valid)).resolves.toEqual({ ok: true })
+      let rejected: string
+      if (variation === 'expired') rejected = await sign({ iat: now - 120, exp: now - 60 })
+      else if (variation === 'unsupported algorithm') rejected = await sign({ alg: 'RS256' })
+      else if (variation === 'unregistered key') {
+        const unregistered = await subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify'])
+        rejected = await sign({ keyPair: unregistered })
+      } else {
+        const [header, payload, signature] = valid.split('.')
+        const altered = Buffer.from(signature, 'base64url')
+        altered[0] ^= 1
+        rejected = `${header}.${payload}.${altered.toString('base64url')}`
+      }
+
+      await expect(verifyAssertion(state, rejected)).resolves.toEqual({ ok: false, reason })
+      await expect(verifyAssertion(state, valid)).resolves.toEqual({ ok: true })
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true })
+    }
   })
 })
 
@@ -206,6 +262,26 @@ describe('fallback session authentication', () => {
 
       await expect(verifyAssertion(reopenedState, token)).resolves.toEqual({ ok: true })
       expect(reopenedState.knownSessionTokenHashes.size).toBe(1)
+    } finally {
+      fs.rmSync(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects fallback tokens with an altered expiry or secret without revoking the original', async () => {
+    const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'risu-auth-session-tamper-'))
+    try {
+      const token = registerSessionToken(createAuthState(dataDir))
+      const state = createAuthState(dataDir)
+      const [prefix, expiresAt, secret] = token.split('.')
+      const laterExpiry = (Number.parseInt(expiresAt, 36) + 60).toString(36)
+      const alteredSecret = `${secret[0] === 'a' ? 'b' : 'a'}${secret.slice(1)}`
+
+      for (const candidate of [`${prefix}.${laterExpiry}.${secret}`, `${prefix}.${expiresAt}.${alteredSecret}`]) {
+        await expect(verifyAssertion(state, token)).resolves.toEqual({ ok: true })
+        await expect(verifyAssertion(state, candidate)).resolves.toEqual({ ok: false, reason: 'unknown-key' })
+        expect(state.knownSessionTokenHashes.size).toBe(1)
+      }
+      await expect(verifyAssertion(createAuthState(dataDir), token)).resolves.toEqual({ ok: true })
     } finally {
       fs.rmSync(dataDir, { recursive: true, force: true })
     }

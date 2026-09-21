@@ -379,11 +379,13 @@ describe('bootstrap runtime metadata', () => {
         threshold: 1024,
       })
       const generationJobs = new GenerationJobRegistry()
+      const expectedJobs: Array<{ chatId: string; jobId: string; mode: string }> = []
       for (let index = 0; index < 64; index++) {
         const job = generationJobs.registry.create({ timeoutMs: 60_000, heartbeatSec: 15 })
         job.chatId = `chat-${index}-${'active'.repeat(40)}`
         job.mode = 'send'
         generationJobs.register(job.chatId, job.id)
+        expectedJobs.push({ chatId: job.chatId, jobId: job.id, mode: 'send' })
       }
       registerBootstrapRoutes(
         app,
@@ -403,6 +405,7 @@ describe('bootstrap runtime metadata', () => {
 
       expect(uncompressed.statusCode).toBe(200)
       expect(uncompressed.headers['content-encoding']).toBeUndefined()
+      expect(uncompressed.json().activeGenerationJobs).toEqual(expectedJobs)
       expect(compressed.statusCode).toBe(200)
       expect(compressed.headers['content-encoding']).toBe('gzip')
       expect(gunzipSync(compressed.rawPayload).toString('utf8')).toBe(uncompressed.body)
