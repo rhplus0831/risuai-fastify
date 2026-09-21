@@ -58,7 +58,13 @@ covers tracked `*.test.ts` files.
 `pnpm test:agent` is the small safety harness used before broader test cleanup or
 for cross-area agent validation. Vitest cases tagged `core` protect startup,
 authentication, data integrity, durable mutations, message sending/streaming,
-recovery, backup/restore, and shared provider transport. A file whose complete
+recovery, backup/restore, and shared provider transport. They also protect
+access and egress fences, secret masking and credential binding, writer
+ownership and chat occupancy, targeted command persistence, generation
+operation and prompt assembly boundaries, asset retention, and client-side
+ownership and rollback fences. Each of those promotions was accepted only after
+a production mutation survived the previous core lane and failed the promoted
+case; `docs/test-reviews/core-suite-phase-2.md` records the evidence. A file whose complete
 scope is core uses a top-level `@module-tag core`; mixed files tag only the
 relevant `describe` blocks or tests. Untagged cases are extended coverage and
 remain in `test:all`, CI, and focused execution.
@@ -66,10 +72,14 @@ remain in `test:all`, CI, and focused execution.
 agent run from importing the complete suite before applying those case tags;
 test topology rejects missing inventory entries.
 
-Playwright uses the equivalent `@core` tag. The agent aggregate runs four
-cross-layer journeys: bootstrap/event/command refresh, send/stream/reload with
-one persisted reply, durable edit replay after a real revision gap, and server
-backup restore followed by reload. Layout, responsive, performance, optional
+Playwright uses the equivalent `@core` tag. The agent aggregate runs nine
+cross-layer journeys: bootstrap/event/command refresh with secret-free shell
+reads and a byte-checked bundle round trip, send/stream/reload with one
+persisted reply, durable edit replay after a real revision gap, server backup
+restore of database, asset, and save bytes followed by reload, failed-mutation
+rollback, reroll alternates surviving a reload, reader updates through a writer
+takeover, two concurrent chats staying isolated, and bounded viewer reconnect
+with a canonical terminal snapshot. Layout, responsive, performance, optional
 feature depth, and provider-specific adapter conformance remain outside the
 minimal profile unless they block one of those core contracts.
 
