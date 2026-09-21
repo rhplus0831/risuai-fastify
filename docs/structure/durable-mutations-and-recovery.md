@@ -140,7 +140,7 @@ chat, and retains or rolls back that projection according to the normal
 intentionally supplies no compact local effect; its `chats.reset` event
 therefore reconciles through the authoritative
 `/api/v1/characters/:characterId` row. `src/ts/chatCommands.organization.dom.test.ts` guards the
-outcome/rollback path and `src/ts/server/commands.test.ts` guards the wire
+outcome/rollback path and `src/ts/server/commands.chats.test.ts` guards the wire
 contract.
 
 Chat organization capture is operation-scoped: identities/order/assignments for

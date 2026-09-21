@@ -22,6 +22,15 @@
 [Chat command coverage ownership](tests/domain-mutations-and-editing-bridges.md#chat-command-coverage-ownership)을
 참고하세요. 아래 행의 231개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
 
+스냅샷 이후 browser command 변경 (2026-09-21): 기존 `src/ts/server/commands.test.ts` 범위는
+**21개 파일, 167개 케이스**로 분리했습니다. 전송, 준비 상태, 응답 검증, 리비전 테스트는 기존
+파일에 유지하고, 큐, 재실행, 도메인별 어댑터 테스트를 별도 파일로 옮겼습니다. writer 헤더,
+영속 영수증 ACK 경로, prompt-item 로컬 효과의 전체 값을 검증하도록 보강했습니다. 잘못된
+compact-settings 응답 6개는 acknowledgement를 활성화한 독립 케이스로 실행하고 정상 응답
+대조 케이스를 추가했습니다. 현재 파일별 범위와 개수는
+[Browser command coverage ownership](tests/browser-state-sync-and-recovery.md#browser-command-coverage-ownership)을
+참고하세요. 아래 행의 161개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
+
 이 목록은 각 검증이 보호하는 제품상의 결과를 기준으로 현재 테스트 파일의 우선순위를 매깁니다. 각 파일의 실제 검증 내용은 Luna High로 평가했습니다. 등급은 정성적인 검토 판단이며, 측정된 결함률이나 테스트 스위트의 통과 여부를 나타내는 근거가 아닙니다.
 
 정렬 순서는 **치명적 → 높음 → 중간 → 낮음**, 그다음 **빈번 → 종종 → 가끔**, 그다음 **테스트 수 내림차순**입니다. 순위가 같으면 저장소 상대 경로로 결정합니다. 여러 동작을 검증하는 파일은 신뢰할 수 있는 직접 결과 중 가장 심각한 결과를 기준으로 심각도를 정하고, 그 심각도를 결정한 시나리오를 기준으로 빈도를 정합니다.

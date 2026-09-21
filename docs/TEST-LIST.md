@@ -29,6 +29,14 @@ mid-sequence rejection strengthen the existing cases, with one new `sdData` disp
 See [Chat command coverage ownership](tests/domain-mutations-and-editing-bridges.md#chat-command-coverage-ownership).
 The row below retains the historical 231-case scope and ranking.
 
+Post-snapshot browser command update (2026-09-21): the original `src/ts/server/commands.test.ts`
+coverage now has **167 cases across 21 files**. Transport, readiness, response decoding, and
+revision cases remain in the original file; queue, replay, and domain adapters have focused suites.
+Writer headers, receipt ACK routing, and complete prompt-item effects are now asserted. The six
+malformed compact-settings variants run independently with acknowledgement enabled, alongside
+an exact-receipt control. See [Browser command coverage ownership](tests/browser-state-sync-and-recovery.md#browser-command-coverage-ownership).
+The row below retains the historical 161-case scope and ranking.
+
 This inventory ranks the current test files by the product consequences their assertions protect. Each file received a Luna High evaluation of its actual assertions. Ratings are qualitative review judgments, not measured defect rates or evidence that the suite passes.
 
 Order: **Critical → High → Medium → Low**, then **Frequently → Often → Occasionally**, then **test count descending**. Repository-relative path breaks remaining ties. For a file covering several behaviors, severity follows the most serious credible direct consequence and frequency follows that severity-determining scenario.

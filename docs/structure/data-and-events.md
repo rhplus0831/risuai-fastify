@@ -266,7 +266,7 @@ bumps the revision once, and emits `chats.reset` with resource `characterRow`.
 The response deliberately has no compact local-effect certificate, so normal
 reconciliation rereads `/api/v1/characters/:characterId`. The server contract
 is guarded by `server/fastify/__tests__/commands.chats.test.ts`; browser command
-decoding is guarded by `src/ts/server/commands.test.ts`.
+decoding is guarded by `src/ts/server/commands.chats.test.ts`.
 The user-facing export, confirmation, and exact-export fence are owned by
 [Assets And Saves](assets-and-saves.md#chats-and-datasets).
 
