@@ -532,7 +532,7 @@ describe('POST /api/v1/proxy/fetch', () => {
     }
   })
 
-  it('strips risu-* and host-class headers from the upstream request', async () => {
+  it('strips risu-* and host-class headers from the upstream request', { tags: 'core' }, async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await harness.app.inject({
       method: 'POST',

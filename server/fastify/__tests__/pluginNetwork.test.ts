@@ -129,7 +129,7 @@ describe('plugin network target validation', () => {
     })
   })
 
-  it('rejects a public-looking hostname if any DNS answer is private', async () => {
+  it('rejects a public-looking hostname if any DNS answer is private', { tags: 'core' }, async () => {
     await expect(
       resolvePluginNetworkTarget('https://attacker.example', async () => [
         { address: '93.184.216.34', family: 4 },
@@ -215,22 +215,26 @@ describe('plugin network redirects', () => {
     expect(redirectServer.requests[1].headers['x-plugin-header']).toBe('kept')
   })
 
-  it('blocks a public redirect that pivots to the metadata service before the second connection', async () => {
-    redirectServer = await startRedirectServer()
-    redirectServer.setResponder((_req, res) => {
-      res.writeHead(302, { location: 'http://169.254.169.254/latest/meta-data' })
-      res.end()
-    })
+  it(
+    'blocks a public redirect that pivots to the metadata service before the second connection',
+    { tags: 'core' },
+    async () => {
+      redirectServer = await startRedirectServer()
+      redirectServer.setResponder((_req, res) => {
+        res.writeHead(302, { location: 'http://169.254.169.254/latest/meta-data' })
+        res.end()
+      })
 
-    await expect(
-      requestPluginNetworkWithRedirects(
-        `http://public-a.test:${redirectServer.port}/start`,
-        { method: 'GET', headers: {} },
-        pinnedTestDependencies(),
-      ),
-    ).rejects.toMatchObject({ statusCode: 403 })
-    expect(redirectServer.requests).toHaveLength(1)
-  })
+      await expect(
+        requestPluginNetworkWithRedirects(
+          `http://public-a.test:${redirectServer.port}/start`,
+          { method: 'GET', headers: {} },
+          pinnedTestDependencies(),
+        ),
+      ).rejects.toMatchObject({ statusCode: 403 })
+      expect(redirectServer.requests).toHaveLength(1)
+    },
+  )
 
   it('aborts while DNS resolution is pending without starting a connection', async () => {
     let finishResolution: ((target: ResolvedPluginNetworkTarget) => void) | undefined

@@ -58,9 +58,21 @@ async function stopHarness(h: Harness): Promise<void> {
 
 type InjectMethod = 'GET' | 'HEAD' | 'POST' | 'PUT' | 'PATCH' | 'DELETE' | 'OPTIONS'
 
+const HUB_WILDCARD_PATH = '/api/v1/hub/*'
+const HUB_WILDCARD_METHODS: InjectMethod[] = ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS', 'HEAD']
+
 /** Replace `:param` route segments with a concrete placeholder so inject hits it. */
 function concreteUrl(path: string): string {
   return path.replace(/:[^/]+/g, 'x').replace(/\*/g, 'x')
+}
+
+function liveApiRoutes(app: FastifyInstance) {
+  const routes = parseRouteTree(app.printRoutes({ commonPrefix: false }))
+  const hubWildcardRoutes = routes.filter((route) => route.path === '*' || route.path === HUB_WILDCARD_PATH)
+  expect(hubWildcardRoutes.map((route) => route.method).sort()).toEqual([...HUB_WILDCARD_METHODS].sort())
+  return routes
+    .map((route) => (route.path === '*' ? { ...route, path: HUB_WILDCARD_PATH } : route))
+    .filter((route) => route.path.startsWith('/api/v1/'))
 }
 
 async function setupPassword(app: FastifyInstance): Promise<string> {
@@ -187,7 +199,7 @@ describe('route protection (table-wide auth enforcement)', () => {
   })
 
   it('has a protocol-manifest decision for every live API route', async () => {
-    const routes = parseRouteTree(harness.app.printRoutes({ commonPrefix: false }))
+    const routes = liveApiRoutes(harness.app)
     const unclassified = routes
       .filter((route) => route.path.startsWith('/api/v1/'))
       .filter((route) => !findProtocolRouteDecision(route.method, route.path))
@@ -197,9 +209,7 @@ describe('route protection (table-wide auth enforcement)', () => {
   })
 
   it('keeps live routes, shared operations, and server policy bidirectionally unique', () => {
-    const routes = parseRouteTree(harness.app.printRoutes({ commonPrefix: false })).filter((route) =>
-      route.path.startsWith('/api/v1/'),
-    )
+    const routes = liveApiRoutes(harness.app)
     const ambiguousOrMissing = routes
       .map((route) => ({ route, decisions: findProtocolRouteDecisions(route.method, route.path) }))
       .filter(({ decisions }) => decisions.length !== 1)
@@ -219,8 +229,7 @@ describe('route protection (table-wide auth enforcement)', () => {
   it('requires auth on every manifest-protected API route once a password is set', async () => {
     await setupPassword(harness.app)
 
-    const routes = parseRouteTree(harness.app.printRoutes({ commonPrefix: false }))
-    const apiRoutes = routes.filter((route) => route.path.startsWith('/api/v1/'))
+    const apiRoutes = liveApiRoutes(harness.app)
     // Sanity: the parser actually found the command surface.
     expect(apiRoutes.filter((route) => isProtocolMutatingMethod(route.method)).length).toBeGreaterThan(50)
 
@@ -234,6 +243,9 @@ describe('route protection (table-wide auth enforcement)', () => {
       const request = {
         method,
         url: concreteUrl(route.path),
+        ...(decision.auth.decision === 'conditional'
+          ? { headers: { 'x-risu-node-path': encodeURIComponent('http://127.0.0.1:1/audit') } }
+          : {}),
         ...(isProtocolMutatingMethod(route.method) ? { payload: {} } : {}),
       }
       const res = await harness.app.inject({

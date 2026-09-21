@@ -303,7 +303,7 @@ describe('hub passthrough', () => {
     expect(echo.requests).toHaveLength(0)
   })
 
-  it('rejects unauthenticated upstream URL overrides on otherwise public methods', async () => {
+  it('rejects unauthenticated upstream URL overrides on otherwise public methods', { tags: 'core' }, async () => {
     await harness.app.inject({
       method: 'POST',
       url: '/api/v1/auth/setup',
@@ -435,7 +435,7 @@ describe('hub passthrough', () => {
     expect(echo.requests).toHaveLength(0)
   })
 
-  it('rejects proxy overrides before a persisted Realm token can be injected', async () => {
+  it('rejects proxy overrides before a persisted Realm token can be injected', { tags: 'core' }, async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     persistRealmAccount(harness.dataDir, {
       id: 'realm-owner',
@@ -458,7 +458,7 @@ describe('hub passthrough', () => {
     expect(echo.requests).toHaveLength(0)
   })
 
-  it('rejects query variants of the secret-injecting Realm removal route', async () => {
+  it('rejects query variants of the secret-injecting Realm removal route', { tags: 'core' }, async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     persistRealmAccount(harness.dataDir, {
       id: 'realm-owner',

@@ -294,11 +294,16 @@ describe('fallback session authentication', () => {
     try {
       const state = createAuthState(dataDir)
       const token = registerSessionToken(state)
+      const secondToken = registerSessionToken(state)
       expect(token.split('.')).toHaveLength(3)
+      expect(secondToken).not.toBe(token)
+      expect(Buffer.from(token.split('.')[2], 'base64url')).toHaveLength(32)
+      expect(Buffer.from(secondToken.split('.')[2], 'base64url')).toHaveLength(32)
       await expect(verifyAssertion(state, token)).resolves.toEqual({ ok: true })
 
       clock.mockReturnValue(now + (SESSION_TOKEN_TTL_SECONDS + 1) * 1000)
       await expect(verifyAssertion(state, token)).resolves.toEqual({ ok: false, reason: 'expired' })
+      await expect(verifyAssertion(state, secondToken)).resolves.toEqual({ ok: false, reason: 'expired' })
       expect(state.knownSessionTokenHashes.size).toBe(0)
     } finally {
       clock.mockRestore()

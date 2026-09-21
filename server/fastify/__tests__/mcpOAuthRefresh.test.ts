@@ -391,7 +391,7 @@ async function seedRefreshRecord(app: FastifyInstance): Promise<void> {
 }
 
 describe('POST /api/v1/mcp/oauth/refresh', () => {
-  it('loads the raw SQLite row without returning refresh credentials', async () => {
+  it('loads the raw SQLite row without returning refresh credentials', { tags: 'core' }, async () => {
     const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Promise.resolve(new Response(JSON.stringify({ access_token: 'route-access-token' }))),
     )

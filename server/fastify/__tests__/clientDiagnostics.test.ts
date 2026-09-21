@@ -69,37 +69,41 @@ describe('client diagnostics', () => {
     expect(bootstrap.headers['x-request-uid']).toBeUndefined()
   })
 
-  it('exposes useful request/error metadata without bodies, URLs, credentials, or free text', async () => {
-    const app = await harness(true)
-    const privateText = 'PRIVATE-PROMPT-MESSAGE-SECRET'
-    app.post('/api/v1/diagnostic-test/:id', async () => {
-      throw new TypeError(privateText)
-    })
-    const { assertion } = await setupAuthedClient(app)
-    const headers = { 'risu-auth': assertion }
-    const response = await app.inject({
-      method: 'POST',
-      url: `/api/v1/diagnostic-test/${privateText}?key=${privateText}`,
-      headers: { ...headers, 'x-api-key': privateText, 'x-request-uid': privateText },
-      payload: { prompt: privateText, message: privateText },
-    })
-    expect(response.statusCode).toBe(500)
-    const uid = response.headers['x-request-uid']
-    expect(uid).toMatch(/^[a-f0-9]{64}$/)
-    const result = await app.inject({ url: '/api/v1/diagnostics', headers })
-    expect(result.headers['cache-control']).toBe('no-store')
-    expect(isDiagnosticsResponse(result.json())).toBe(true)
-    expect(result.body).not.toContain(privateText)
-    expect(result.body).not.toContain(assertion)
-    expect(result.json().entries).toContainEqual(
-      expect.objectContaining({ event: 'http', statusCode: 500, requestUid: uid, routeId: 'unknown' }),
-    )
-    expect(result.json().entries).toContainEqual(
-      expect.objectContaining({ event: 'runtime-error', errorName: 'TypeError', requestUid: uid }),
-    )
-    const bootstrap = await app.inject({ url: '/api/v1/bootstrap', headers })
-    expect(bootstrap.json().clientDiagnostics).toEqual({ version: 1 })
-  })
+  it(
+    'exposes useful request/error metadata without bodies, URLs, credentials, or free text',
+    { tags: 'core' },
+    async () => {
+      const app = await harness(true)
+      const privateText = 'PRIVATE-PROMPT-MESSAGE-SECRET'
+      app.post('/api/v1/diagnostic-test/:id', async () => {
+        throw new TypeError(privateText)
+      })
+      const { assertion } = await setupAuthedClient(app)
+      const headers = { 'risu-auth': assertion }
+      const response = await app.inject({
+        method: 'POST',
+        url: `/api/v1/diagnostic-test/${privateText}?key=${privateText}`,
+        headers: { ...headers, 'x-api-key': privateText, 'x-request-uid': privateText },
+        payload: { prompt: privateText, message: privateText },
+      })
+      expect(response.statusCode).toBe(500)
+      const uid = response.headers['x-request-uid']
+      expect(uid).toMatch(/^[a-f0-9]{64}$/)
+      const result = await app.inject({ url: '/api/v1/diagnostics', headers })
+      expect(result.headers['cache-control']).toBe('no-store')
+      expect(isDiagnosticsResponse(result.json())).toBe(true)
+      expect(result.body).not.toContain(privateText)
+      expect(result.body).not.toContain(assertion)
+      expect(result.json().entries).toContainEqual(
+        expect.objectContaining({ event: 'http', statusCode: 500, requestUid: uid, routeId: 'unknown' }),
+      )
+      expect(result.json().entries).toContainEqual(
+        expect.objectContaining({ event: 'runtime-error', errorName: 'TypeError', requestUid: uid }),
+      )
+      const bootstrap = await app.inject({ url: '/api/v1/bootstrap', headers })
+      expect(bootstrap.json().clientDiagnostics).toEqual({ version: 1 })
+    },
+  )
 
   it('captures selected correlated metrics without enabling raw protocol output or leaking between app instances', async () => {
     const app = await harness(true)

@@ -402,32 +402,36 @@ describe('remote support diagnostics', () => {
     expect(invalid.json()).toEqual({ error: 'invalid-query' })
   })
 
-  it('requires independent explicit enablement and valid credentials in every application auth state', async () => {
-    const h = await harness()
-    expect((await h.app.inject(SUPPORT_DIAGNOSTICS_ENDPOINT)).statusCode).toBe(401)
-    expect((await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })).statusCode).toBe(200)
-    const { assertion } = await setupAuthedClient(h.app)
-    expect(
-      (await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: { 'risu-auth': assertion } })).statusCode,
-    ).toBe(401)
-    h.credential.revokedAt = Date.now() as never
-    h.save()
-    expect((await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })).statusCode).toBe(401)
-    h.credential.revokedAt = null
-    h.credential.expiresAt = Date.now() - 1
-    h.save()
-    expect((await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })).statusCode).toBe(401)
-    const bypass = await harness({ bypass: true })
-    expect((await bypass.app.inject(SUPPORT_DIAGNOSTICS_ENDPOINT)).statusCode).toBe(401)
-    const off = await harness({ enabled: false })
-    expect((await off.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: off.headers })).json()).toEqual({
-      error: 'disabled',
-    })
-    const noCollection = await harness({ collection: false })
-    expect(
-      (await noCollection.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: noCollection.headers })).json(),
-    ).toEqual({ error: 'collection-disabled' })
-  })
+  it(
+    'requires independent explicit enablement and valid credentials in every application auth state',
+    { tags: 'core' },
+    async () => {
+      const h = await harness()
+      expect((await h.app.inject(SUPPORT_DIAGNOSTICS_ENDPOINT)).statusCode).toBe(401)
+      expect((await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })).statusCode).toBe(200)
+      const { assertion } = await setupAuthedClient(h.app)
+      expect(
+        (await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: { 'risu-auth': assertion } })).statusCode,
+      ).toBe(401)
+      h.credential.revokedAt = Date.now() as never
+      h.save()
+      expect((await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })).statusCode).toBe(401)
+      h.credential.revokedAt = null
+      h.credential.expiresAt = Date.now() - 1
+      h.save()
+      expect((await h.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: h.headers })).statusCode).toBe(401)
+      const bypass = await harness({ bypass: true })
+      expect((await bypass.app.inject(SUPPORT_DIAGNOSTICS_ENDPOINT)).statusCode).toBe(401)
+      const off = await harness({ enabled: false })
+      expect((await off.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: off.headers })).json()).toEqual({
+        error: 'disabled',
+      })
+      const noCollection = await harness({ collection: false })
+      expect(
+        (await noCollection.app.inject({ url: SUPPORT_DIAGNOSTICS_ENDPOINT, headers: noCollection.headers })).json(),
+      ).toEqual({ error: 'collection-disabled' })
+    },
+  )
 
   it('grants no access through ordinary authentication on every protected route', async () => {
     const h = await harness()
