@@ -83,8 +83,9 @@ Server defaults and migration normalization live in
 message state, and route freshness all affect scroll behavior. A queued bookmark
 jump expands and hydrates the necessary window only after its target route is
 current. `DefaultChatScreen.loadPages.test.ts`, the shared-core load-page tests,
-`src/ts/setting/advancedSettingsData.test.ts`, and
-`src/ts/server/chatMessageHydration.test.ts` guard this boundary.
+`src/ts/setting/advancedSettingsData.test.ts`,
+`src/ts/server/chatMessageHydration.test.ts` and
+`src/ts/server/chatMessageHydration.freshness.dom.test.ts` guard this boundary.
 
 `Chats.svelte` separately selects DOM residency from that logical window using
 `transcriptResidency.ts`. It starts with 30 working rows and reserves room for

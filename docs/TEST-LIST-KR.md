@@ -31,6 +31,14 @@ compact-settings 응답 6개는 acknowledgement를 활성화한 독립 케이스
 [Browser command coverage ownership](tests/browser-state-sync-and-recovery.md#browser-command-coverage-ownership)을
 참고하세요. 아래 행의 161개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
 
+스냅샷 이후 chat hydration 변경 (2026-09-21): 기존 `src/ts/server/chatMessageHydration.test.ts`
+범위는 **6개 파일, 125개 케이스**로 분리했습니다. 기존 105개 케이스를 유지하고,
+식별자 검증·동시 요청·초기화 경합 회귀 테스트 18개를 추가했으며, bulk 재시도와 strict 실패
+시나리오를 분리하여 등록 케이스가 2개 늘었습니다. Reader 전환, 최신 상태 보존, bulk 읽기,
+accepted-send 완료, 캐릭터 로어북 테스트는 별도 파일로 옮겼습니다. 현재 파일별 범위와 개수는
+[Chat hydration coverage ownership](tests/browser-state-sync-and-recovery.md#chat-hydration-coverage-ownership)을
+참고하세요. 아래 행의 105개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
+
 이 목록은 각 검증이 보호하는 제품상의 결과를 기준으로 현재 테스트 파일의 우선순위를 매깁니다. 각 파일의 실제 검증 내용은 Luna High로 평가했습니다. 등급은 정성적인 검토 판단이며, 측정된 결함률이나 테스트 스위트의 통과 여부를 나타내는 근거가 아닙니다.
 
 정렬 순서는 **치명적 → 높음 → 중간 → 낮음**, 그다음 **빈번 → 종종 → 가끔**, 그다음 **테스트 수 내림차순**입니다. 순위가 같으면 저장소 상대 경로로 결정합니다. 여러 동작을 검증하는 파일은 신뢰할 수 있는 직접 결과 중 가장 심각한 결과를 기준으로 심각도를 정하고, 그 심각도를 결정한 시나리오를 기준으로 빈도를 정합니다.

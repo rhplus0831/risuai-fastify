@@ -148,12 +148,16 @@ without cancellation. Healthy-focus cases cover both idle and active observation
 discovery is not restarted and an active viewer is retained, while suspension
 still triggers recovery. Native focus/request evidence is indexed in
 [Browser State Sync and Recovery](browser-state-sync-and-recovery.md#resource-hydration-and-navigation-races).
-`src/ts/server/chatMessageHydration.test.ts` verifies exact
+`src/ts/server/chatMessageHydration.reader.dom.test.ts` verifies exact
 generation-suffix reads and late-reader fences. Its Reader-to-writer regression
 uses actual role changes, retained-body hydration resets and equal-revision
 metadata clones to require one authorized alternates read before reroll candidates
 become ready. The existing reroll browser case verifies visible candidates after
 real reload.
+`src/ts/server/chatMessageHydration.completion.dom.test.ts` owns the accepted-send completion
+barrier, including exact operation/result identities in downloaded and newer resident replies and
+verification after retained projections are reapplied. See [Chat hydration coverage ownership](browser-state-sync-and-recovery.md#chat-hydration-coverage-ownership)
+for the remaining hydration suites.
 `src/lib/ReaderTranscript.svelte.test.ts` and
 `src/lib/ChatScreens/readerGenerationRows.test.ts` cover transient row presentation and handoff.
 
