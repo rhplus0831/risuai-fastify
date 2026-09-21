@@ -1,6 +1,6 @@
 /** @module-tag core */
 import { afterEach, describe, expect, it } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
@@ -695,10 +695,13 @@ describe('repository message-aware load/write', () => {
         },
       ],
     }
-    writeFileSync(path.join(dataDir, 'db.json'), JSON.stringify({ _version: 1, database, assets: [legacyAsset] }))
+    const legacyPath = path.join(dataDir, 'db.json')
+    writeFileSync(legacyPath, JSON.stringify({ _version: 1, database, assets: [legacyAsset] }))
 
     ensureDbJsonImported(db, dataDir)
 
+    expect(existsSync(legacyPath)).toBe(false)
+    expect(existsSync(`${legacyPath}.migrated`)).toBe(true)
     // Characters and messages are now in SQLite.
     const hydrated = loadPersistedWithMessages(db, dataDir).database as {
       characters: Array<{ chats: Array<{ id: string; message: unknown[] }> }>

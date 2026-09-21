@@ -137,7 +137,7 @@ describe('legacy cold-storage recovery commands', () => {
     expect(() => readJsonRow(harness.dataDir, 'chats', 'shell-chat')).toThrow()
   })
 
-  it('rejects character archives with missing chat arrays before changing live rows', async () => {
+  it('rejects character archives with missing chat arrays before changing live rows', { tags: 'core' }, async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const revision = await importDatabase(harness.app, assertion, {
       characters: [

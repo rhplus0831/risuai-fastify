@@ -245,7 +245,7 @@ describe('script and trigger definition commands', () => {
     expect(bootstrap.resourceDatabase.characters[0].triggerscript).toEqual([])
   })
 
-  it('replaces only the owned definition field on sparse raw character and module rows', async () => {
+  it('replaces only the owned definition field on sparse raw character and module rows', { tags: 'core' }, async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     let revision = await importDatabase(harness.app, assertion, {
       characters: [{ chaId: 'char-a', name: 'A', customscript: [], triggerscript: [] }],

@@ -519,119 +519,125 @@ describe('lorebook commands', () => {
     }
   })
 
-  it('applies sparse lorebook entry patches in every scope without replacing unchanged fields or siblings', async () => {
-    const { assertion } = await setupAuthedClient(harness.app)
-    const entry = (id: string, label: string) => ({
-      id,
-      key: label.toLowerCase(),
-      secondkey: '',
-      insertorder: 100,
-      comment: label,
-      content: `${label}:${'large-content-'.repeat(200)}`,
-      mode: 'normal',
-      alwaysActive: false,
-      selective: false,
-      activationPercent: 40,
-      unknownExtension: { preserve: label },
-    })
-    let revision = await importDatabase(harness.app, assertion, {
-      loreBook: [{ id: 'book-a', name: 'A', data: [entry('global-a', 'Global A'), entry('global-b', 'Global B')] }],
-      loreBookPage: 0,
-      characters: [
+  it(
+    'applies sparse lorebook entry patches in every scope without replacing unchanged fields or siblings',
+    { tags: 'core' },
+    async () => {
+      const { assertion } = await setupAuthedClient(harness.app)
+      const entry = (id: string, label: string) => ({
+        id,
+        key: label.toLowerCase(),
+        secondkey: '',
+        insertorder: 100,
+        comment: label,
+        content: `${label}:${'large-content-'.repeat(200)}`,
+        mode: 'normal',
+        alwaysActive: false,
+        selective: false,
+        activationPercent: 40,
+        unknownExtension: { preserve: label },
+      })
+      let revision = await importDatabase(harness.app, assertion, {
+        loreBook: [{ id: 'book-a', name: 'A', data: [entry('global-a', 'Global A'), entry('global-b', 'Global B')] }],
+        loreBookPage: 0,
+        characters: [
+          {
+            chaId: 'char-a',
+            name: 'A',
+            globalLore: [entry('char-a', 'Character A'), entry('char-b', 'Character B')],
+            chats: [
+              {
+                id: 'chat-a',
+                name: 'Chat',
+                note: '',
+                message: [],
+                localLore: [entry('chat-a', 'Chat A'), entry('chat-b', 'Chat B')],
+              },
+            ],
+            chatFolders: [],
+            chatPage: 0,
+          },
+        ],
+        characterOrder: ['char-a'],
+        modules: [
+          { id: 'mod-a', name: 'Mod', lorebook: [entry('module-a', 'Module A'), entry('module-b', 'Module B')] },
+        ],
+      })
+
+      const cases = [
+        { url: '/api/v1/commands/lorebooks/book-a/entries/global-a', targetKey: 'lorebookId', targetId: 'book-a' },
         {
-          chaId: 'char-a',
-          name: 'A',
-          globalLore: [entry('char-a', 'Character A'), entry('char-b', 'Character B')],
-          chats: [
-            {
-              id: 'chat-a',
-              name: 'Chat',
-              note: '',
-              message: [],
-              localLore: [entry('chat-a', 'Chat A'), entry('chat-b', 'Chat B')],
-            },
-          ],
-          chatFolders: [],
-          chatPage: 0,
+          url: '/api/v1/commands/characters/char-a/lorebooks/entries/char-a',
+          targetKey: 'characterId',
+          targetId: 'char-a',
         },
-      ],
-      characterOrder: ['char-a'],
-      modules: [{ id: 'mod-a', name: 'Mod', lorebook: [entry('module-a', 'Module A'), entry('module-b', 'Module B')] }],
-    })
+        { url: '/api/v1/commands/chats/chat-a/lorebooks/entries/chat-a', targetKey: 'chatId', targetId: 'chat-a' },
+        { url: '/api/v1/commands/modules/mod-a/lorebooks/entries/module-a', targetKey: 'moduleId', targetId: 'mod-a' },
+      ]
+      for (const testCase of cases) {
+        const response = await harness.app.inject({
+          method: 'PUT',
+          url: testCase.url,
+          headers: { 'risu-auth': assertion },
+          payload: {
+            baseRevision: revision,
+            patch: { comment: 'Sparse update', nullableExtension: null },
+            deleteKeys: ['activationPercent'],
+          },
+        })
+        expect(response.statusCode, JSON.stringify(response.json())).toBe(200)
+        expect(response.json()).toMatchObject({
+          [testCase.targetKey]: testCase.targetId,
+          created: false,
+          patchedKeys: ['comment', 'nullableExtension'],
+          deletedKeys: ['activationPercent'],
+        })
+        revision = response.json().revision
+      }
 
-    const cases = [
-      { url: '/api/v1/commands/lorebooks/book-a/entries/global-a', targetKey: 'lorebookId', targetId: 'book-a' },
-      {
-        url: '/api/v1/commands/characters/char-a/lorebooks/entries/char-a',
-        targetKey: 'characterId',
-        targetId: 'char-a',
-      },
-      { url: '/api/v1/commands/chats/chat-a/lorebooks/entries/chat-a', targetKey: 'chatId', targetId: 'chat-a' },
-      { url: '/api/v1/commands/modules/mod-a/lorebooks/entries/module-a', targetKey: 'moduleId', targetId: 'mod-a' },
-    ]
-    for (const testCase of cases) {
-      const response = await harness.app.inject({
-        method: 'PUT',
-        url: testCase.url,
+      const bootstrap = await injectComposedResourceDatabase(harness.app, {
+        method: 'GET',
+        url: '/api/v1/bootstrap',
         headers: { 'risu-auth': assertion },
-        payload: {
-          baseRevision: revision,
-          patch: { comment: 'Sparse update', nullableExtension: null },
-          deleteKeys: ['activationPercent'],
-        },
       })
-      expect(response.statusCode, JSON.stringify(response.json())).toBe(200)
-      expect(response.json()).toMatchObject({
-        [testCase.targetKey]: testCase.targetId,
-        created: false,
-        patchedKeys: ['comment', 'nullableExtension'],
-        deletedKeys: ['activationPercent'],
-      })
-      revision = response.json().revision
-    }
+      const database = bootstrap.resourceDatabase
+      const module = readJsonRow(harness.dataDir, 'modules', 'mod-a')
+      const updatedEntries = [
+        database.loreBook[0].data[0],
+        database.characters[0].globalLore[0],
+        database.characters[0].chats[0].localLore[0],
+        (module.lorebook as Array<Record<string, unknown>>)[0],
+      ]
+      for (const updated of updatedEntries) {
+        expect(updated.comment).toBe('Sparse update')
+        expect(updated.nullableExtension).toBeNull()
+        expect(updated).not.toHaveProperty('activationPercent')
+        expect(updated.content).toContain('large-content-')
+        expect(updated.unknownExtension).toHaveProperty('preserve')
+      }
+      expect(database.loreBook[0].data[1]).toMatchObject(entry('global-b', 'Global B'))
+      expect(database.characters[0].globalLore[1]).toMatchObject(entry('char-b', 'Character B'))
+      expect(database.characters[0].chats[0].localLore[1]).toMatchObject(entry('chat-b', 'Chat B'))
+      expect((module.lorebook as Array<Record<string, unknown>>)[1]).toMatchObject(entry('module-b', 'Module B'))
 
-    const bootstrap = await injectComposedResourceDatabase(harness.app, {
-      method: 'GET',
-      url: '/api/v1/bootstrap',
-      headers: { 'risu-auth': assertion },
-    })
-    const database = bootstrap.resourceDatabase
-    const module = readJsonRow(harness.dataDir, 'modules', 'mod-a')
-    const updatedEntries = [
-      database.loreBook[0].data[0],
-      database.characters[0].globalLore[0],
-      database.characters[0].chats[0].localLore[0],
-      (module.lorebook as Array<Record<string, unknown>>)[0],
-    ]
-    for (const updated of updatedEntries) {
-      expect(updated.comment).toBe('Sparse update')
-      expect(updated.nullableExtension).toBeNull()
-      expect(updated).not.toHaveProperty('activationPercent')
-      expect(updated.content).toContain('large-content-')
-      expect(updated.unknownExtension).toHaveProperty('preserve')
-    }
-    expect(database.loreBook[0].data[1]).toMatchObject(entry('global-b', 'Global B'))
-    expect(database.characters[0].globalLore[1]).toMatchObject(entry('char-b', 'Character B'))
-    expect(database.characters[0].chats[0].localLore[1]).toMatchObject(entry('chat-b', 'Chat B'))
-    expect((module.lorebook as Array<Record<string, unknown>>)[1]).toMatchObject(entry('module-b', 'Module B'))
-
-    for (const testCase of cases) {
-      const missingUrl = testCase.url.replace(/[^/]+$/, 'missing-entry')
-      const missing = await harness.app.inject({
-        method: 'PUT',
-        url: missingUrl,
+      for (const testCase of cases) {
+        const missingUrl = testCase.url.replace(/[^/]+$/, 'missing-entry')
+        const missing = await harness.app.inject({
+          method: 'PUT',
+          url: missingUrl,
+          headers: { 'risu-auth': assertion },
+          payload: { baseRevision: revision, patch: { comment: 'must not create' } },
+        })
+        expect(missing.statusCode).toBe(404)
+      }
+      const unchanged = await injectComposedResourceDatabase(harness.app, {
+        method: 'GET',
+        url: '/api/v1/bootstrap',
         headers: { 'risu-auth': assertion },
-        payload: { baseRevision: revision, patch: { comment: 'must not create' } },
       })
-      expect(missing.statusCode).toBe(404)
-    }
-    const unchanged = await injectComposedResourceDatabase(harness.app, {
-      method: 'GET',
-      url: '/api/v1/bootstrap',
-      headers: { 'risu-auth': assertion },
-    })
-    expect(unchanged.json().revision).toBe(revision)
-  })
+      expect(unchanged.json().revision).toBe(revision)
+    },
+  )
 
   it('rejects malformed sparse lorebook entry writes without bumping revision', async () => {
     const { assertion } = await setupAuthedClient(harness.app)

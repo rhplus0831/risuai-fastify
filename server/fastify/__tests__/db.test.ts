@@ -997,9 +997,11 @@ describe('schema migrations', () => {
     try {
       const journalMode = db.prepare('PRAGMA journal_mode').get() as { journal_mode: string }
       const synchronous = db.prepare('PRAGMA synchronous').get() as { synchronous: number }
+      const foreignKeys = db.prepare('PRAGMA foreign_keys').get() as { foreign_keys: number }
 
       expect(journalMode.journal_mode.toLowerCase()).toBe('wal')
       expect(synchronous.synchronous).toBe(1)
+      expect(foreignKeys.foreign_keys).toBe(1)
     } finally {
       db.close()
     }

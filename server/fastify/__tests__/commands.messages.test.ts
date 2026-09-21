@@ -214,138 +214,142 @@ describe('surgical message writes', () => {
     expect((await persistedChatMessages(harness.app, assertion, 'chat-a'))[0].data).toBe('{{inlay::asset-a}}')
   })
 
-  it('updates, deletes, truncates, and replaces target chat rows without touching unrelated chats', async () => {
-    const { assertion } = await setupAuthedClient(harness.app)
-    let revision = await importDatabase(harness.app, assertion, {
-      characters: [
-        {
-          chaId: 'char-a',
-          name: 'A',
-          chats: [
-            {
-              id: 'chat-a',
-              name: 'A',
-              note: '',
-              localLore: [],
-              bookmarks: ['msg-a1', 'msg-a2', 'msg-a3'],
-              bookmarkNames: { 'msg-a1': 'One', 'msg-a2': 'Two', 'msg-a3': 'Three' },
-              message: [
-                { role: 'user', data: 'a1', chatId: 'msg-a1' },
-                { role: 'char', data: 'a2', chatId: 'msg-a2' },
-                { role: 'user', data: 'a3', chatId: 'msg-a3' },
-              ],
-            },
-            {
-              id: 'chat-b',
-              name: 'B',
-              note: '',
-              localLore: [],
-              message: [
-                { role: 'user', data: 'b1', chatId: 'msg-b1' },
-                { role: 'char', data: 'b2', chatId: 'msg-b2' },
-              ],
-            },
-          ],
-          chatFolders: [],
-          chatPage: 0,
-        },
-      ],
-      characterOrder: ['char-a'],
-    })
-    const chatBBefore = messageRowids(harness.dataDir, 'chat-b')
-    const chatABefore = messageRowids(harness.dataDir, 'chat-a')
-
-    const updated = await harness.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/commands/messages/msg-a2',
-      headers: { 'risu-auth': assertion },
-      payload: { baseRevision: revision, patch: { data: 'a2 updated', disabled: true } },
-    })
-    expect(updated.statusCode).toBe(200)
-    revision = updated.json().revision
-    expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
-    expect(messageRowids(harness.dataDir, 'chat-a')).toEqual(chatABefore)
-
-    const deleted = await harness.app.inject({
-      method: 'DELETE',
-      url: '/api/v1/commands/messages/msg-a2',
-      headers: { 'risu-auth': assertion },
-      payload: { baseRevision: revision },
-    })
-    expect(deleted.statusCode).toBe(200)
-    revision = deleted.json().revision
-    expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
-    const afterDelete = messageRowids(harness.dataDir, 'chat-a')
-    expect(afterDelete).toHaveLength(2)
-    expect(afterDelete[0]).toEqual(chatABefore[0])
-    expect(afterDelete.map((row) => row.seq)).toEqual([0, 1])
-    expect((await persistedChatMessages(harness.app, assertion, 'chat-a')).map((m) => m.chatId)).toEqual([
-      'msg-a1',
-      'msg-a3',
-    ])
-    expect(readJsonRow(harness.dataDir, 'chats', 'chat-a')).toMatchObject({
-      bookmarks: ['msg-a1', 'msg-a3'],
-      bookmarkNames: { 'msg-a1': 'One', 'msg-a3': 'Three' },
-    })
-
-    const appended = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/commands/chats/chat-a/messages',
-      headers: { 'risu-auth': assertion },
-      payload: {
-        baseRevision: revision,
-        message: { role: 'char', data: 'a4', chatId: 'msg-a4' },
-      },
-    })
-    expect(appended.statusCode).toBe(200)
-    revision = appended.json().revision
-
-    const beforeTruncate = messageRowids(harness.dataDir, 'chat-a')
-    const truncated = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/commands/chats/chat-a/messages/truncate',
-      headers: { 'risu-auth': assertion },
-      payload: { baseRevision: revision, afterMessageId: 'msg-a1' },
-    })
-    expect(truncated.statusCode).toBe(200)
-    revision = truncated.json().revision
-    expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
-    const afterTruncate = messageRowids(harness.dataDir, 'chat-a')
-    expect(afterTruncate).toEqual([beforeTruncate[0]])
-    expect(readJsonRow(harness.dataDir, 'chats', 'chat-a')).toMatchObject({
-      bookmarks: ['msg-a1'],
-      bookmarkNames: { 'msg-a1': 'One' },
-    })
-
-    const replaced = await harness.app.inject({
-      method: 'PUT',
-      url: '/api/v1/commands/chats/chat-a/messages',
-      headers: { 'risu-auth': assertion },
-      payload: {
-        baseRevision: revision,
-        messages: [
-          { role: 'user', data: 'a1', chatId: 'msg-a1' },
-          { role: 'char', data: 'a5', chatId: 'msg-a5' },
-          { role: 'user', data: 'a6', chatId: 'msg-a6' },
+  it(
+    'updates, deletes, truncates, and replaces target chat rows without touching unrelated chats',
+    { tags: 'core' },
+    async () => {
+      const { assertion } = await setupAuthedClient(harness.app)
+      let revision = await importDatabase(harness.app, assertion, {
+        characters: [
+          {
+            chaId: 'char-a',
+            name: 'A',
+            chats: [
+              {
+                id: 'chat-a',
+                name: 'A',
+                note: '',
+                localLore: [],
+                bookmarks: ['msg-a1', 'msg-a2', 'msg-a3'],
+                bookmarkNames: { 'msg-a1': 'One', 'msg-a2': 'Two', 'msg-a3': 'Three' },
+                message: [
+                  { role: 'user', data: 'a1', chatId: 'msg-a1' },
+                  { role: 'char', data: 'a2', chatId: 'msg-a2' },
+                  { role: 'user', data: 'a3', chatId: 'msg-a3' },
+                ],
+              },
+              {
+                id: 'chat-b',
+                name: 'B',
+                note: '',
+                localLore: [],
+                message: [
+                  { role: 'user', data: 'b1', chatId: 'msg-b1' },
+                  { role: 'char', data: 'b2', chatId: 'msg-b2' },
+                ],
+              },
+            ],
+            chatFolders: [],
+            chatPage: 0,
+          },
         ],
-      },
-    })
-    expect(replaced.statusCode).toBe(200)
-    expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
-    const afterReplace = messageRowids(harness.dataDir, 'chat-a')
-    expect(afterReplace).toHaveLength(3)
-    expect(afterReplace[0]).toEqual(afterTruncate[0])
-    expect(afterReplace.map((row) => row.seq)).toEqual([0, 1, 2])
-    expect((await persistedChatMessages(harness.app, assertion, 'chat-a')).map((m) => m.chatId)).toEqual([
-      'msg-a1',
-      'msg-a5',
-      'msg-a6',
-    ])
-    expect(readJsonRow(harness.dataDir, 'chats', 'chat-a')).toMatchObject({
-      bookmarks: ['msg-a1'],
-      bookmarkNames: { 'msg-a1': 'One' },
-    })
-  })
+        characterOrder: ['char-a'],
+      })
+      const chatBBefore = messageRowids(harness.dataDir, 'chat-b')
+      const chatABefore = messageRowids(harness.dataDir, 'chat-a')
+
+      const updated = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/v1/commands/messages/msg-a2',
+        headers: { 'risu-auth': assertion },
+        payload: { baseRevision: revision, patch: { data: 'a2 updated', disabled: true } },
+      })
+      expect(updated.statusCode).toBe(200)
+      revision = updated.json().revision
+      expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
+      expect(messageRowids(harness.dataDir, 'chat-a')).toEqual(chatABefore)
+
+      const deleted = await harness.app.inject({
+        method: 'DELETE',
+        url: '/api/v1/commands/messages/msg-a2',
+        headers: { 'risu-auth': assertion },
+        payload: { baseRevision: revision },
+      })
+      expect(deleted.statusCode).toBe(200)
+      revision = deleted.json().revision
+      expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
+      const afterDelete = messageRowids(harness.dataDir, 'chat-a')
+      expect(afterDelete).toHaveLength(2)
+      expect(afterDelete[0]).toEqual(chatABefore[0])
+      expect(afterDelete.map((row) => row.seq)).toEqual([0, 1])
+      expect((await persistedChatMessages(harness.app, assertion, 'chat-a')).map((m) => m.chatId)).toEqual([
+        'msg-a1',
+        'msg-a3',
+      ])
+      expect(readJsonRow(harness.dataDir, 'chats', 'chat-a')).toMatchObject({
+        bookmarks: ['msg-a1', 'msg-a3'],
+        bookmarkNames: { 'msg-a1': 'One', 'msg-a3': 'Three' },
+      })
+
+      const appended = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/commands/chats/chat-a/messages',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          baseRevision: revision,
+          message: { role: 'char', data: 'a4', chatId: 'msg-a4' },
+        },
+      })
+      expect(appended.statusCode).toBe(200)
+      revision = appended.json().revision
+
+      const beforeTruncate = messageRowids(harness.dataDir, 'chat-a')
+      const truncated = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/commands/chats/chat-a/messages/truncate',
+        headers: { 'risu-auth': assertion },
+        payload: { baseRevision: revision, afterMessageId: 'msg-a1' },
+      })
+      expect(truncated.statusCode).toBe(200)
+      revision = truncated.json().revision
+      expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
+      const afterTruncate = messageRowids(harness.dataDir, 'chat-a')
+      expect(afterTruncate).toEqual([beforeTruncate[0]])
+      expect(readJsonRow(harness.dataDir, 'chats', 'chat-a')).toMatchObject({
+        bookmarks: ['msg-a1'],
+        bookmarkNames: { 'msg-a1': 'One' },
+      })
+
+      const replaced = await harness.app.inject({
+        method: 'PUT',
+        url: '/api/v1/commands/chats/chat-a/messages',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          baseRevision: revision,
+          messages: [
+            { role: 'user', data: 'a1', chatId: 'msg-a1' },
+            { role: 'char', data: 'a5', chatId: 'msg-a5' },
+            { role: 'user', data: 'a6', chatId: 'msg-a6' },
+          ],
+        },
+      })
+      expect(replaced.statusCode).toBe(200)
+      expect(messageRowids(harness.dataDir, 'chat-b')).toEqual(chatBBefore)
+      const afterReplace = messageRowids(harness.dataDir, 'chat-a')
+      expect(afterReplace).toHaveLength(3)
+      expect(afterReplace[0]).toEqual(afterTruncate[0])
+      expect(afterReplace.map((row) => row.seq)).toEqual([0, 1, 2])
+      expect((await persistedChatMessages(harness.app, assertion, 'chat-a')).map((m) => m.chatId)).toEqual([
+        'msg-a1',
+        'msg-a5',
+        'msg-a6',
+      ])
+      expect(readJsonRow(harness.dataDir, 'chats', 'chat-a')).toMatchObject({
+        bookmarks: ['msg-a1'],
+        bookmarkNames: { 'msg-a1': 'One' },
+      })
+    },
+  )
 
   it('a non-message command writes nothing to the messages table', async () => {
     const { assertion } = await setupAuthedClient(harness.app)

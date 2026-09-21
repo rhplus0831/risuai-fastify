@@ -201,23 +201,27 @@ afterEach(async () => {
 })
 
 describe('cross-owner module deletion', () => {
-  it('DELETE modules/:id uses targeted collection writes and strips references across every table', async () => {
-    const revision = await importDatabase(seedDatabase())
+  it(
+    'DELETE modules/:id uses targeted collection writes and strips references across every table',
+    { tags: 'core' },
+    async () => {
+      const revision = await importDatabase(seedDatabase())
 
-    const { metric } = await runCommand({
-      method: 'DELETE',
-      url: '/api/v1/commands/modules/mod-x',
-      payload: { baseRevision: revision },
-    })
+      const { metric } = await runCommand({
+        method: 'DELETE',
+        url: '/api/v1/commands/modules/mod-x',
+        payload: { baseRevision: revision },
+      })
 
-    // `removeModuleReferences` now discovers the broad reference set once but
-    // persists only the changed settings, collection, character, and chat rows.
-    expect(metric.mutationPath).toBe('targeted-cross-owner')
-    assertCommandMetricGate(metric)
-    expect(readSettings().enabledModules).toEqual([])
-    expect(readCharacter('char-a').modules).toEqual([])
-    expect(readChat('chat-a-1').modules).toEqual([])
-    expect((readCollection('loadouts')[0] as { modules: string[] }).modules).toEqual(['mod-y'])
-    expect((readCollection('modules') as Array<{ id: string }>).map((m) => m.id)).toEqual(['mod-y'])
-  })
+      // `removeModuleReferences` now discovers the broad reference set once but
+      // persists only the changed settings, collection, character, and chat rows.
+      expect(metric.mutationPath).toBe('targeted-cross-owner')
+      assertCommandMetricGate(metric)
+      expect(readSettings().enabledModules).toEqual([])
+      expect(readCharacter('char-a').modules).toEqual([])
+      expect(readChat('chat-a-1').modules).toEqual([])
+      expect((readCollection('loadouts')[0] as { modules: string[] }).modules).toEqual(['mod-y'])
+      expect((readCollection('modules') as Array<{ id: string }>).map((m) => m.id)).toEqual(['mod-y'])
+    },
+  )
 })

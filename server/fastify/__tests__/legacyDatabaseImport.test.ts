@@ -110,7 +110,7 @@ describe('legacy db.json boot import', () => {
     expect(loadPersistedWithMessages(db, dataDir).database).toMatchObject({ tag: 'legacy' })
   })
 
-  it('checkpoints and retires a successful migration, then a second boot is a no-op', () => {
+  it('checkpoints and retires a successful migration, then a second boot is a no-op', { tags: 'core' }, () => {
     const dataDir = makeDataDir()
     const filePath = path.join(dataDir, 'db.json')
     const raw = JSON.stringify(snapshot('legacy', 'legacy-chat', 'legacy message'))
@@ -150,7 +150,7 @@ describe('legacy db.json boot import', () => {
     expect(readFileSync(`${filePath}.migrated`, 'utf8')).toBe(raw)
   })
 
-  it('repairs missing and duplicate chat ids before extracting transcript and Hypa rows', () => {
+  it('repairs missing and duplicate chat ids before extracting transcript and Hypa rows', { tags: 'core' }, () => {
     const dataDir = makeDataDir()
     const filePath = path.join(dataDir, 'db.json')
     const legacy: Persisted = {

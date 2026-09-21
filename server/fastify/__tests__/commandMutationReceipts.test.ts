@@ -69,6 +69,18 @@ function readSettings(): Record<string, unknown> {
   }
 }
 
+function readCharacterDataJson(characterId: string): string {
+  const db = openRawDatabase()
+  try {
+    const row = db.prepare('SELECT data_json FROM characters WHERE id = ?').get(characterId) as {
+      data_json: string
+    }
+    return row.data_json
+  } finally {
+    db.close()
+  }
+}
+
 async function readChatMessages(chatId: string): Promise<Array<Record<string, unknown>>> {
   const response = await harness.app.inject({
     method: 'GET',
@@ -236,9 +248,25 @@ describe('transactional command mutation receipts', () => {
           chats: [{ id: 'chat-source', name: 'Source', note: '', localLore: [], message: [] }],
           chatFolders: [],
         },
+        {
+          chaId: 'char-b',
+          name: 'Character B',
+          chatPage: 0,
+          chats: [{ id: 'chat-sibling', name: 'Sibling', note: '', localLore: [], message: [] }],
+          chatFolders: [],
+        },
       ],
-      characterOrder: ['char-a'],
+      characterOrder: ['char-a', 'char-b'],
     })
+    const sibling = JSON.parse(readCharacterDataJson('char-b')) as Record<string, unknown>
+    sibling.opaqueSiblingField = { preserve: ['exactly', 1] }
+    const siblingBefore = JSON.stringify(sibling, null, 2)
+    const siblingDb = openRawDatabase()
+    try {
+      siblingDb.prepare('UPDATE characters SET data_json = ? WHERE id = ?').run(siblingBefore, 'char-b')
+    } finally {
+      siblingDb.close()
+    }
     const lineageDb = openRawDatabase()
     try {
       databaseLineage = getDatabaseLineage(lineageDb)
@@ -339,6 +367,7 @@ describe('transactional command mutation receipts', () => {
     await expect(readChatMessages('chat-forked')).resolves.toEqual(forkedChat.message)
     expect(harness.commandEvents.list()).toHaveLength(3)
     expect(receiptCount()).toBe(3)
+    expect(readCharacterDataJson('char-b')).toBe(siblingBefore)
   })
 
   it('replays chat and folder edits and reorders without applying structure twice', async () => {
@@ -888,7 +917,14 @@ describe('transactional command mutation receipts', () => {
 
     const settings = readSettings()
     expect(settings.modelProfiles).toHaveLength(1)
-    expect(settings.agentPresets).toHaveLength(1)
+    expect(settings.agentPresets).toEqual([
+      expect.objectContaining({
+        id: presetBody.presetId,
+        name: 'Durable agent preset',
+        agentUses: [],
+        steps: [],
+      }),
+    ])
     expect(receiptCount()).toBe(2)
   })
 })

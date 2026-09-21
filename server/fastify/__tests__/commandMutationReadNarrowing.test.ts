@@ -1267,7 +1267,7 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     }
   })
 
-  it('single-chat commands preserve noncanonical target metadata and sibling rows', async () => {
+  it('single-chat commands preserve noncanonical target metadata and sibling rows', { tags: 'core' }, async () => {
     const fixture = buildLargeCorpusFixture()
     const revision = await importDatabase(fixture.database)
     const db = openDatabase(harness.dataDir)
@@ -1715,7 +1715,7 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     }
   })
 
-  it('rejects chat-scoped reads combined with writeDatabase (data-loss guard)', async () => {
+  it('rejects chat-scoped reads combined with writeDatabase (data-loss guard)', { tags: 'core' }, async () => {
     const db = openDatabase(harness.dataDir)
     try {
       expect(() =>
@@ -1746,6 +1746,76 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
           },
         }),
       ).toThrow('chatGenerationSettingsScopedRead cannot be combined with writeDatabase')
+      expect(() =>
+        applyTargetedCommandMutation({
+          db,
+          dataDir: harness.dataDir,
+          baseRevision: 0,
+          eventSink: { emit() {} } as never,
+          mutationPath: 'targeted-settings',
+          writeDatabase: true,
+          settingsScopedRead: true,
+          mutate() {
+            throw new Error('must not be reached')
+          },
+        }),
+      ).toThrow('settingsScopedRead cannot be combined with writeDatabase')
+      expect(() =>
+        applyTargetedCommandMutation({
+          db,
+          dataDir: harness.dataDir,
+          baseRevision: 0,
+          eventSink: { emit() {} } as never,
+          mutationPath: 'targeted-collection',
+          writeDatabase: true,
+          collectionScopedRead: ['modules'],
+          mutate() {
+            throw new Error('must not be reached')
+          },
+        }),
+      ).toThrow('collectionScopedRead cannot be combined with writeDatabase')
+      expect(() =>
+        applyTargetedCommandMutation({
+          db,
+          dataDir: harness.dataDir,
+          baseRevision: 0,
+          eventSink: { emit() {} } as never,
+          mutationPath: 'targeted-character-row',
+          writeDatabase: true,
+          characterScopedRead: { characterId: 'any' },
+          mutate() {
+            throw new Error('must not be reached')
+          },
+        }),
+      ).toThrow('scoped reads cannot be combined with writeDatabase')
+      expect(() =>
+        applyTargetedCommandMutation({
+          db,
+          dataDir: harness.dataDir,
+          baseRevision: 0,
+          eventSink: { emit() {} } as never,
+          mutationPath: 'message-free',
+          writeDatabase: true,
+          skipDatabaseLoad: true,
+          mutate() {
+            throw new Error('must not be reached')
+          },
+        }),
+      ).toThrow('skipDatabaseLoad cannot be combined with writeDatabase')
+      expect(() =>
+        applyTargetedCommandMutation({
+          db,
+          dataDir: harness.dataDir,
+          baseRevision: 0,
+          eventSink: { emit() {} } as never,
+          mutationPath: 'message-free',
+          skipDatabaseLoad: true,
+          settingsScopedRead: true,
+          mutate() {
+            throw new Error('must not be reached')
+          },
+        }),
+      ).toThrow('skipDatabaseLoad cannot be combined with scoped reads')
     } finally {
       db.close()
     }
