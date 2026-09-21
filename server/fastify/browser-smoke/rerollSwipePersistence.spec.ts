@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { buildApp } from '../src/app.js'
@@ -107,6 +108,10 @@ test('rerolled candidates survive a reload and stay swipe-recoverable', { tag: '
   await expect(page.getByTestId('default-chat-send-button')).toBeVisible({ timeout: 15_000 })
   expect(generationRequestPaths.some((pathname) => pathname === '/api/v1/generation-operations')).toBe(true)
   expect(generationRequestPaths.some((pathname) => pathname.includes('/messages/truncate'))).toBe(false)
+  expect(persistedRerollCandidates()).toEqual(
+    expect.arrayContaining([expect.stringContaining('old reply'), expect.stringContaining('rerolled reply')]),
+  )
+  expect(persistedRerollCandidates()).toHaveLength(2)
 
   // RELOAD: the buffer must be rebuilt purely from the persisted projection.
   await page.reload()
@@ -164,6 +169,20 @@ test('rerolled candidates survive a reload and stay swipe-recoverable', { tag: '
 
 async function expectLoadedCharacterVisible(page: Page): Promise<void> {
   await expect(page.locator('[data-char-id="char-1"]')).toBeVisible()
+}
+
+function persistedRerollCandidates(): string[] {
+  const database = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+  try {
+    const rows = database
+      .prepare('SELECT json FROM messages WHERE chat_id = ? AND alternate = 1 ORDER BY seq ASC')
+      .all('chat-1') as Array<{ json: string }>
+    return rows
+      .map((row) => (JSON.parse(row.json) as { data?: unknown }).data)
+      .filter((data): data is string => typeof data === 'string')
+  } finally {
+    database.close()
+  }
 }
 
 async function openFixtureChat(page: Page): Promise<void> {

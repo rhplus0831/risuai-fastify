@@ -354,7 +354,9 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
 
   const bundleFiles = unzipSync(Uint8Array.from(apiRouteResults.bundleBytes))
   const bundledAssetPath = `assets/${apiRouteResults.assetId}.png`
-  expect(Buffer.from(bundleFiles[bundledAssetPath])).toEqual(Buffer.from(seededAssetBytes))
+  const bundledAsset = bundleFiles[bundledAssetPath]
+  expect(bundledAsset, `bundle is missing ${bundledAssetPath}`).toBeDefined()
+  expect(Buffer.from(bundledAsset!)).toEqual(Buffer.from(seededAssetBytes))
   const bundleManifest = JSON.parse(Buffer.from(bundleFiles['manifest.json']).toString('utf8')) as {
     includedAssets?: Array<{ id?: unknown; path?: unknown }>
   }
