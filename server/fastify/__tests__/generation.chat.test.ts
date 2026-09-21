@@ -1125,7 +1125,32 @@ describe('POST /api/v1/generate/chat', () => {
   // prettier-ignore
   coreIt('streams the assembled prompt for a seeded database', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
-    await seedDatabase(harness.app, assertion, fixtureDatabase)
+    const seededUserMessage = 'SEEDED USER MESSAGE MUST REACH THE PROMPT'
+    const unrelatedCharacterText = 'OTHER CHARACTER DESCRIPTION MUST STAY OUT OF THE PROMPT'
+    await seedDatabase(harness.app, assertion, {
+      ...fixtureDatabase,
+      characters: [
+        {
+          ...fixtureDatabase.characters[0],
+          chats: [
+            {
+              ...fixtureDatabase.characters[0].chats[0],
+              message: [
+                { role: 'user', data: seededUserMessage, chatId: 'seed-user' },
+                { role: 'char', data: 'earlier reply', chatId: 'seed-char' },
+              ],
+            },
+          ],
+        },
+        {
+          ...fixtureDatabase.characters[0],
+          name: 'Other character',
+          chaId: 'char-2',
+          desc: unrelatedCharacterText,
+          chats: [{ id: 'chat-2', message: [], note: '', name: 'Other chat', localLore: [] }],
+        },
+      ],
+    })
 
     const res = await harness.app.inject({
       method: 'POST',
@@ -1157,6 +1182,14 @@ describe('POST /api/v1/generate/chat', () => {
     const formated = prompt.data.formated as Array<{ role: string; content: unknown }>
     expect(Array.isArray(formated)).toBe(true)
     expect(formated.map((r) => ({ role: r.role, content: r.content }))).toEqual(prompt.data.messages)
+    const contents = formated.map((row) => String(row.content))
+    const mainIndex = contents.indexOf('MAIN')
+    const descriptionIndex = contents.indexOf('DESC')
+    const userIndex = contents.findIndex((content) => content.includes(seededUserMessage))
+    expect(mainIndex).toBeGreaterThanOrEqual(0)
+    expect(descriptionIndex).toBeGreaterThan(mainIndex)
+    expect(userIndex).toBeGreaterThan(descriptionIndex)
+    expect(contents.join('\n')).not.toContain(unrelatedCharacterText)
     expect((prompt.data as Record<string, unknown>).biases).toEqual([])
     const messagePatch = events.find((e) => e.type === 'message_patch')
     expect(messagePatch?.data.patch).toMatchObject({
@@ -1173,7 +1206,7 @@ describe('POST /api/v1/generate/chat', () => {
     expect(events.at(-1)?.type).toBe('done')
   })
 
-  it('prefetches live Hypa query vectors and selects similar memory through the generation route', async () => {
+  coreIt('prefetches live Hypa query vectors and selects similar memory through the generation route', async () => {
     let dispatchContext: ChatProviderDispatchContext | undefined
     const embedPromptMemoryQueryTexts: NonNullable<GenerationChatRouteOptions['embedPromptMemoryQueryTexts']> = vi.fn(
       async ({ input }) => ({
@@ -1772,7 +1805,7 @@ describe('POST /api/v1/generate/chat', () => {
     expect(serializedRows).not.toContain('PA1-PRIVATE-APPENDIX-MUST-NOT-REACH-THE-PROMPT')
   })
 
-  it('keeps unsupported trigger families as no-ops and warns once per effect type', async () => {
+  coreIt('keeps unsupported trigger families as no-ops and warns once per effect type', async () => {
     await restartHarness({
       dispatchProvider: () =>
         (async function* (): AsyncGenerator<CompletionStreamFrame> {
@@ -2097,7 +2130,7 @@ describe('POST /api/v1/generate/chat', () => {
     expect(bootstrap.resourceDatabase.characters[0].chats[0].scriptstate).toEqual({ $score: '9' })
   })
 
-  it('persists lorebook @@keep_activate_after_match and uses it on the next send', async () => {
+  coreIt('persists lorebook @@keep_activate_after_match and uses it on the next send', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const db = structuredClone(fixtureDatabase) as typeof fixtureDatabase & {
       characters: Array<
@@ -3664,7 +3697,7 @@ describe('POST /api/v1/generate/chat', () => {
     expect(chat.message.map((m) => ({ role: m.role, data: m.data }))).toEqual([{ role: 'user', data: 'CHAT' }])
   })
 
-  it('unsafe imported regex stops before provider dispatch and assistant persistence', async () => {
+  coreIt('unsafe imported regex stops before provider dispatch and assistant persistence', async () => {
     let providerCalls = 0
     await restartHarness({
       dispatchProvider: () => {
@@ -4287,7 +4320,7 @@ describe('POST /api/v1/generate/chat', () => {
     expect(afterConfirmation.resourceDatabase.characters[0].chats[0].hypaContextTruncationAcknowledged).toBe(true)
   })
 
-  it('emits a final prompt overflow error when pinned rows exceed the context window', async () => {
+  coreIt('emits a final prompt overflow error when pinned rows exceed the context window', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const db = dbWithEditRequestLua(`
       listenEdit('editRequest', function(id, data, meta)
@@ -7394,6 +7427,9 @@ describe('POST /api/v1/generate/chat', () => {
     expect(persisted[1].data).toContain('a brand new reply')
     expect(persisted[1].chatId).not.toBe('msg-char-1')
     expect(persisted.some((m) => m.data === 'old reply')).toBe(false)
+    expect(await persistedAlternates(assertion)).toContainEqual(
+      expect.objectContaining({ role: 'char', data: 'old reply', chatId: 'msg-char-1' }),
+    )
   })
 
   it('rejects regenerate when the requested target is no longer authoritative', async () => {
