@@ -205,7 +205,7 @@ afterEach(() => {
 })
 
 describe('MCP character writes optimistic projection', () => {
-  it('does not mutate after its owner aborts while access confirmation is pending', async () => {
+  it('does not mutate after its owner aborts while access confirmation is pending', { tags: 'core' }, async () => {
     const { calls } = stubCommandFetch()
     const controller = new AbortController()
     const handler = new CharacterHandler(controller.signal)
@@ -259,35 +259,39 @@ describe('MCP character writes optimistic projection', () => {
     expect(calls).toEqual([])
   })
 
-  it('rejects setCharacterInfo when the character row is replaced while access is pending', async () => {
-    const { calls } = stubCommandFetch()
-    const handler = new CharacterHandler()
-    const replacement = { ...getDatabase().characters[1], name: 'Replacement character' }
-    let acceptPrompt!: (accepted: boolean) => void
-    alertConfirmSpy.mockImplementationOnce(
-      () =>
-        new Promise<boolean>((resolve) => {
-          acceptPrompt = resolve
-        }),
-    )
+  it(
+    'rejects setCharacterInfo when the character row is replaced while access is pending',
+    { tags: 'core' },
+    async () => {
+      const { calls } = stubCommandFetch()
+      const handler = new CharacterHandler()
+      const replacement = { ...getDatabase().characters[1], name: 'Replacement character' }
+      let acceptPrompt!: (accepted: boolean) => void
+      alertConfirmSpy.mockImplementationOnce(
+        () =>
+          new Promise<boolean>((resolve) => {
+            acceptPrompt = resolve
+          }),
+      )
 
-    const pending = handler.handle('risu-set-character-info', {
-      id: 'char-1',
-      data: { name: 'Stale patch' },
-    })
+      const pending = handler.handle('risu-set-character-info', {
+        id: 'char-1',
+        data: { name: 'Stale patch' },
+      })
 
-    expect(alertConfirmSpy).toHaveBeenCalledTimes(1)
-    withTestDatabaseWrite(() => {
-      getDatabase().characters[1] = replacement
-    })
-    acceptPrompt(true)
+      expect(alertConfirmSpy).toHaveBeenCalledTimes(1)
+      withTestDatabaseWrite(() => {
+        getDatabase().characters[1] = replacement
+      })
+      acceptPrompt(true)
 
-    expect(toolText(await pending)).toBe(
-      'Error: Character with ID char-1 changed before access was accepted. Please retry.',
-    )
-    expect(getDatabase().characters[1].name).toBe('Replacement character')
-    expect(calls).toEqual([])
-  })
+      expect(toolText(await pending)).toBe(
+        'Error: Character with ID char-1 changed before access was accepted. Please retry.',
+      )
+      expect(getDatabase().characters[1].name).toBe('Replacement character')
+      expect(calls).toEqual([])
+    },
+  )
 
   it.each([
     {

@@ -684,67 +684,71 @@ describe('character list create/delete rollback', () => {
     expect(get(selectedCharID)).toBe(0)
   })
 
-  it('failed permanent delete reinserts only the missing deleted row at the previous index, restores order placement, and preserves sibling edits/appended rows', async () => {
-    const calls = stubCharacterCollectionCommandFetch({
-      failDelete: true,
-      onDelete: () => {
-        withTestDatabaseWrite(() => {
-          testDatabaseState.db.characters[0].name = 'A newer edit'
-          testDatabaseState.db.characters.push({ chaId: 'char-d', name: 'D appended', chats: [] } as any)
-          const folder = charactersResourceState.characterOrder.find(
-            (entry: any) => typeof entry !== 'string' && entry.id === 'folder-1',
-          )
-          if (folder && typeof folder !== 'string') {
-            folder.name = 'Newer Folder'
-            folder.color = 'green'
-          }
-          charactersResourceState.characterOrder.push('char-d')
-        })
-      },
-    })
-    testDatabaseState.db = {
-      characters: [
-        { chaId: 'char-a', name: 'A', chats: [] },
-        { chaId: 'char-b', name: 'B latest optimistic profile edit', chats: [] },
-        { chaId: 'char-c', name: 'C', chats: [] },
-      ],
-      characterOrder: ['char-a', { id: 'folder-1', name: 'Folder', color: 'blue', data: ['char-b', 'char-c'] }],
-      currentChar: 1,
-    } as any
-    selectedCharID.set(1)
-    const previous = currentCharacterStateSnapshot()
+  it(
+    'failed permanent delete reinserts only the missing deleted row at the previous index, restores order placement, and preserves sibling edits/appended rows',
+    { tags: 'core' },
+    async () => {
+      const calls = stubCharacterCollectionCommandFetch({
+        failDelete: true,
+        onDelete: () => {
+          withTestDatabaseWrite(() => {
+            testDatabaseState.db.characters[0].name = 'A newer edit'
+            testDatabaseState.db.characters.push({ chaId: 'char-d', name: 'D appended', chats: [] } as any)
+            const folder = charactersResourceState.characterOrder.find(
+              (entry: any) => typeof entry !== 'string' && entry.id === 'folder-1',
+            )
+            if (folder && typeof folder !== 'string') {
+              folder.name = 'Newer Folder'
+              folder.color = 'green'
+            }
+            charactersResourceState.characterOrder.push('char-d')
+          })
+        },
+      })
+      testDatabaseState.db = {
+        characters: [
+          { chaId: 'char-a', name: 'A', chats: [] },
+          { chaId: 'char-b', name: 'B latest optimistic profile edit', chats: [] },
+          { chaId: 'char-c', name: 'C', chats: [] },
+        ],
+        characterOrder: ['char-a', { id: 'folder-1', name: 'Folder', color: 'blue', data: ['char-b', 'char-c'] }],
+        currentChar: 1,
+      } as any
+      selectedCharID.set(1)
+      const previous = currentCharacterStateSnapshot()
 
-    withTestDatabaseWrite(() => {
-      testDatabaseState.db.characters.splice(1, 1)
-    })
-    dispatchDeleteCharacter('char-b', previous)
-    repairCharacterOrderOptimistically({ dispatchReorder: false })
-    charactersResourceState.currentChar = -1
-    selectedCharID.set(-1)
+      withTestDatabaseWrite(() => {
+        testDatabaseState.db.characters.splice(1, 1)
+      })
+      dispatchDeleteCharacter('char-b', previous)
+      repairCharacterOrderOptimistically({ dispatchReorder: false })
+      charactersResourceState.currentChar = -1
+      selectedCharID.set(-1)
 
-    await waitForCallCount(calls, 2)
-    await vi.waitFor(() => {
-      expect(testDatabaseState.db.characters.map((character: any) => character.chaId)).toEqual([
+      await waitForCallCount(calls, 2)
+      await vi.waitFor(() => {
+        expect(testDatabaseState.db.characters.map((character: any) => character.chaId)).toEqual([
+          'char-a',
+          'char-b',
+          'char-c',
+          'char-d',
+        ])
+      })
+      expect(testDatabaseState.db.characters.map((character: any) => character.name)).toEqual([
+        'A newer edit',
+        'B latest optimistic profile edit',
+        'C',
+        'D appended',
+      ])
+      expect(charactersResourceState.characterOrder).toEqual([
         'char-a',
-        'char-b',
-        'char-c',
+        { id: 'folder-1', name: 'Newer Folder', color: 'green', data: ['char-b', 'char-c'] },
         'char-d',
       ])
-    })
-    expect(testDatabaseState.db.characters.map((character: any) => character.name)).toEqual([
-      'A newer edit',
-      'B latest optimistic profile edit',
-      'C',
-      'D appended',
-    ])
-    expect(charactersResourceState.characterOrder).toEqual([
-      'char-a',
-      { id: 'folder-1', name: 'Newer Folder', color: 'green', data: ['char-b', 'char-c'] },
-      'char-d',
-    ])
-    expect(get(selectedCharID)).toBe(1)
-    expect(charactersResourceState.currentChar).toBe(1)
-  })
+      expect(get(selectedCharID)).toBe(1)
+      expect(charactersResourceState.currentChar).toBe(1)
+    },
+  )
 
   it('normalizes an out-of-range current character pointer during optimistic deletion', async () => {
     const calls = stubCharacterCollectionCommandFetch()

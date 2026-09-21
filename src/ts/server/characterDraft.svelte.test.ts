@@ -241,7 +241,7 @@ describe('character owner draft', () => {
     stop()
   })
 
-  it('refreshes clean fields from an authoritative row while retaining a dirty field', async () => {
+  it('refreshes clean fields from an authoritative row while retaining a dirty field', { tags: 'core' }, async () => {
     seed([characterRow('char-a', 'Initial', { desc: 'Initial description' })])
     const { draft, stop } = await mountDraft(['name', 'desc'])
 

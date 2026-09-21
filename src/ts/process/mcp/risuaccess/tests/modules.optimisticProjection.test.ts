@@ -241,7 +241,7 @@ describe('MCP module writes optimistic projection', () => {
     expect(calls).toEqual([])
   })
 
-  it('rejects setModuleInfo when the module object is replaced while access is pending', async () => {
+  it('rejects setModuleInfo when the module object is replaced while access is pending', { tags: 'core' }, async () => {
     const { calls } = stubCommandFetch()
     const handler = new ModuleHandler()
     const replacement = makeModule({ id: 'module-a', name: 'Replacement module' })

@@ -1556,22 +1556,26 @@ describe('chat-scoped message attempt rollback', () => {
     expect(getDatabase().characters[0].chats[0].message).toEqual(previousMessages)
   })
 
-  it('failed scoped message update restores attempted fields and preserves newer same-chat metadata', async () => {
-    const calls = stubFailingCommandFetch({
-      matches: (url, init) => url === '/api/v1/commands/messages/m-1' && init.method === 'PATCH',
-    })
-    seedActiveMessages([{ role: 'char', data: 'before', chatId: 'm-1' }])
-    const previous = currentChatScopedSnapshot()
+  it(
+    'failed scoped message update restores attempted fields and preserves newer same-chat metadata',
+    { tags: 'core' },
+    async () => {
+      const calls = stubFailingCommandFetch({
+        matches: (url, init) => url === '/api/v1/commands/messages/m-1' && init.method === 'PATCH',
+      })
+      seedActiveMessages([{ role: 'char', data: 'before', chatId: 'm-1' }])
+      const previous = currentChatScopedSnapshot()
 
-    getDatabase().characters[0].chats[0].name = 'newer metadata'
+      getDatabase().characters[0].chats[0].name = 'newer metadata'
 
-    dispatchUpdateMessageScoped('m-1', { data: 'attempted' }, previous)
-    expect(getDatabase().characters[0].chats[0].message[0].data).toBe('attempted')
-    await waitForCallCount(calls, 2)
+      dispatchUpdateMessageScoped('m-1', { data: 'attempted' }, previous)
+      expect(getDatabase().characters[0].chats[0].message[0].data).toBe('attempted')
+      await waitForCallCount(calls, 2)
 
-    expect(getDatabase().characters[0].chats[0].message).toEqual([{ role: 'char', data: 'before', chatId: 'm-1' }])
-    expect(getDatabase().characters[0].chats[0].name).toBe('newer metadata')
-  })
+      expect(getDatabase().characters[0].chats[0].message).toEqual([{ role: 'char', data: 'before', chatId: 'm-1' }])
+      expect(getDatabase().characters[0].chats[0].name).toBe('newer metadata')
+    },
+  )
 
   it('failed scoped message update skips rollback when the message changed again after the attempt', async () => {
     const calls = stubFailingCommandFetch({
