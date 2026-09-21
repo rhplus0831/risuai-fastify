@@ -5,6 +5,10 @@ Targeted source check: 2026-09-12 (current test families and documentation routi
 
 This documentation groups the current suite by protected product behavior. Treat `package.json` and the runner configuration files as the source of truth for commands and discovery; this guide intentionally avoids snapshot case counts and pass totals, which become stale whenever tests are added or parameterized matrices change.
 
+The [Priority Test Review Worklist](../TEST-REVIEW-WORKLIST.md) tracks audits,
+current file mappings, and evidence for all Critical inventory entries and High
+entries rated Frequently or Often.
+
 ## Index
 
 ### Product flows and UI

@@ -1,3 +1,9 @@
+Worklist created (2026-09-21): [Priority Test Review Worklist](TEST-REVIEW-WORKLIST.md)
+tracks the 443 selected original inventory entries: all Critical entries plus High
+entries rated Frequently or Often. Its canonical JSON maps those entries to current
+files and imports the six completed reviews below with prior evidence; 437 entries
+remain pending at creation. The historical inventory's ratings and counts are unchanged.
+
 Post-snapshot update (2026-09-20): the original `pendingMutationOutbox.test.ts` coverage is now split across
 `pendingMutationOutbox.test.ts`, `pendingMutationOutbox.intent.test.ts`, `pendingMutationOutbox.occupancy.test.ts`,
 and `pendingMutationOutbox.projection.test.ts`; its replacement snapshot/work cases moved to

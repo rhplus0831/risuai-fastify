@@ -4,6 +4,8 @@ Snapshot: 2026-09-19, source revision `528c6d62b`. **1,034 test files; 14,862 re
 
 Write update note in [Update Document](TEST-LIST-UPDATE.md)
 
+Track the selected Critical and High-priority reviews in the [Priority Test Review Worklist](TEST-REVIEW-WORKLIST.md).
+
 This inventory ranks the current test files by the product consequences their assertions protect. Each file received a Luna High evaluation of its actual assertions. Ratings are qualitative review judgments, not measured defect rates or evidence that the suite passes.
 
 Order: **Critical → High → Medium → Low**, then **Frequently → Often → Occasionally**, then **test count descending**. Repository-relative path breaks remaining ties. For a file covering several behaviors, severity follows the most serious credible direct consequence and frequency follows that severity-determining scenario.
