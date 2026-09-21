@@ -759,9 +759,9 @@
         "protectedBehavior": "It verifies timeout and cancellation isolation, reader denial before auth, recovery-only replay and receipt access, queue retirement across demotion/promotion, originating-role rechecks, stale 423 and revision handling, and reconciliation retirement during active flushes."
       },
       "currentFiles": ["src/ts/server/commands.clientSession.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-client-ownership",
+      "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
       "review": null
     },
     {
@@ -775,9 +775,9 @@
         "protectedBehavior": "The integration tests verify reviewed public and conditional exceptions, manifest coverage and uniqueness for live routes, unauthenticated rejection, public-route reachability, active-writer header behavior, expensive-route HEAD rejection, raw-body protection, and login, asset, and generation rate limits."
       },
       "currentFiles": ["server/fastify/__tests__/routeProtection.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-access-privacy",
+      "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
       "review": null
     },
     {
@@ -791,9 +791,9 @@
         "protectedBehavior": "Asserts ordered milestone transitions and diagnostics, generation blockers, shell and route gating, writer demotion and restoration, chat and generation-recovery prerequisites, capability failure cleanup, deduplicated startup steps and retries, owner supersession, and milestone timeout behavior."
       },
       "currentFiles": ["src/ts/startupReadiness.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-client-ownership",
+      "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
       "review": null
     },
     {
@@ -807,9 +807,9 @@
         "protectedBehavior": "Integration checks cover authenticated raw-byte read/write, atomic replacement and cleanup after write or rename failures, missing and invalid path validation, empty-body rejection, UTF-8 key listing, batched removal atomicity and idempotence, and the SHA-256 auth crypto endpoint."
       },
       "currentFiles": ["server/fastify/__tests__/legacyStorage.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-storage-assets",
+      "owner": "/root/wave3_storage; branch codex/wave-3-storage-assets; worktree /home/codex/worktrees/risuai-wave-3-storage-assets",
       "review": null
     },
     {
@@ -823,9 +823,9 @@
         "protectedBehavior": "Integration assertions cover orphan and stray reclamation, grace-window deferral and convergence, catalog retention, missing metadata files, no-op behavior, scoped message-free scanning, parity with the hydrated reference walker, references across settings/collections/characters/chats/messages, SQLite inlays, and pending finalization payloads."
       },
       "currentFiles": ["server/fastify/__tests__/assetGc.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-storage-assets",
+      "owner": "/root/wave3_storage; branch codex/wave-3-storage-assets; worktree /home/codex/worktrees/risuai-wave-3-storage-assets",
       "review": null
     },
     {
@@ -839,9 +839,9 @@
         "protectedBehavior": "Integration and unit assertions cover bounded known-key cache eviction and persistence, loopback-only agent bypass and protected storage access, blank-password rejection, persisted fallback-session acceptance and expiry removal, and exactly-once or pre-body auth enforcement for bulk, proxy, and hub routes."
       },
       "currentFiles": ["server/fastify/__tests__/auth.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-access-privacy",
+      "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
       "review": null
     },
     {
@@ -891,9 +891,9 @@
         "protectedBehavior": "Assertions cover table migration, newest-record retention and metadata separation, recursive and value-based secret redaction, disable-and-clear semantics, streaming capture and terminal timing, UTF-8 field caps with truncation metadata, total-byte pruning, and credential-free resolved-profile snapshots."
       },
       "currentFiles": ["server/fastify/__tests__/requestHistory.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-access-privacy",
+      "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
       "review": null
     },
     {
@@ -907,9 +907,9 @@
         "protectedBehavior": "Integration tests assert authentication gating, runtime-only projection without database transfer, initialization/revision/protocol metadata, coherent chat-occupancy override, writer-scoped pending/terminal/legacy finalization reconstruction, pre-Agent settings migration before generation commands, and gzip body equivalence for large responses."
       },
       "currentFiles": ["server/fastify/__tests__/bootstrap.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-access-privacy",
+      "owner": "/root/wave3_access; branch codex/wave-3-access-privacy; worktree /home/codex/worktrees/risuai-wave-3-access-privacy",
       "review": null
     },
     {
@@ -923,9 +923,9 @@
         "protectedBehavior": "Browser-identity tests cover lock-held reload reuse, copied session deduplication, missing or rejected Web Locks, concurrent in-page resolution, teardown fencing against late callbacks, and reader-only fallback when secure identity APIs are unavailable."
       },
       "currentFiles": ["src/ts/server/connectedTabIdentity.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-client-ownership",
+      "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
       "review": null
     },
     {
@@ -1211,9 +1211,9 @@
         "protectedBehavior": "Exercises reference parity across settings, extracted and embedded collections, characters, chats, active and alternate messages, retries, catalogs, malformed legacy JSON, stale ownership, signed rowids, pagination/yield limits, cancellation, scratch recovery, and idempotent closure."
       },
       "currentFiles": ["server/fastify/__tests__/assetReferenceScan.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-storage-assets",
+      "owner": "/root/wave3_storage; branch codex/wave-3-storage-assets; worktree /home/codex/worktrees/risuai-wave-3-storage-assets",
       "review": null
     },
     {
@@ -1227,9 +1227,9 @@
         "protectedBehavior": "The unit suite covers reader and writer admission, promotion and resume fencing, projection and connection readiness, diagnostic privacy and failure isolation, generation invalidation, ownership and lineage ordering, draft capture on demotion, and failed-operation recovery."
       },
       "currentFiles": ["src/ts/clientSession.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-3-client-ownership",
+      "owner": "/root/wave3_client; branch codex/wave-3-client-ownership; worktree /home/codex/worktrees/risuai-wave-3-client-ownership",
       "review": null
     },
     {
