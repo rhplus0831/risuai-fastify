@@ -186,7 +186,7 @@ describe('legacy db.json boot import', () => {
     writeFileSync(filePath, JSON.stringify(legacy))
 
     const firstDb = makeDb(dataDir)
-    ensureDbJsonImported(firstDb, dataDir, makeLogger())
+    expect(() => ensureDbJsonImported(firstDb, dataDir, makeLogger())).not.toThrow()
     const afterFirstBoot = loadPersistedWithMessages(firstDb, dataDir)
     closeDb(firstDb)
 
