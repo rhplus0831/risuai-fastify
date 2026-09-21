@@ -82,6 +82,41 @@ describe('messageStore CRUD', () => {
     expect(getAllChatIdsWithMessages(db)).toEqual(['chat-1'])
     expect(activeMessageIdExistsInChat(db, 'm2', 'chat-1')).toBe(true)
     expect(activeMessageIdExistsInChat(db, 'm2', 'chat-other')).toBe(false)
+    // Transcript reads use json; independently protect the indexed/stub columns too.
+    expect(
+      db.prepare('SELECT chat_id, seq, uid, role, data, disabled, json, alternate FROM messages ORDER BY seq').all(),
+    ).toEqual([
+      {
+        chat_id: 'chat-1',
+        seq: 0,
+        uid: 'm1',
+        role: 'user',
+        data: 'hello',
+        disabled: null,
+        json: JSON.stringify(messages[0]),
+        alternate: 0,
+      },
+      {
+        chat_id: 'chat-1',
+        seq: 1,
+        uid: 'm2',
+        role: 'char',
+        data: 'hi there',
+        disabled: null,
+        json: JSON.stringify(messages[1]),
+        alternate: 0,
+      },
+      {
+        chat_id: 'chat-1',
+        seq: 2,
+        uid: 'm3',
+        role: 'user',
+        data: 'bye',
+        disabled: 'allBefore',
+        json: JSON.stringify(messages[2]),
+        alternate: 0,
+      },
+    ])
   })
 
   it('keeps a source-valid Draft-hook translation and clears it after the sent text changes', () => {
@@ -138,6 +173,7 @@ describe('messageStore CRUD', () => {
     expect(getChatMessages(db, 'chat-a')).toEqual([])
     expect(countChatMessages(db, 'chat-a')).toBe(0)
     expect(getAllChatIdsWithMessages(db)).toEqual(['chat-b'])
+    expect(getChatMessages(db, 'chat-b')).toEqual([msg('b1', 'user', 'b')])
   })
 
   it('replaceChatMessages with an empty array removes all active rows', () => {
@@ -172,6 +208,10 @@ describe('reroll-alternate rows', () => {
     expect(getChatMessages(db, 'chat-1')).toEqual([msg('m1', 'user', 'hi'), msg('m2', 'char', 'active')])
     expect(countChatMessages(db, 'chat-1')).toBe(2)
     expect(getAllChatIdsWithMessages(db)).toEqual(['chat-1'])
+    expect(getChatMessagesRange(db, 'chat-1', 0, 10)).toEqual([msg('m1', 'user', 'hi'), msg('m2', 'char', 'active')])
+    expect(getChatMessagesRange(db, 'chat-1', 1, 1)).toEqual([msg('m2', 'char', 'active')])
+    expect(activeMessageIdExistsInChat(db, 'alt1', 'chat-1')).toBe(false)
+    expect(resolveActiveMessageLocationById(db, 'alt1')).toEqual({ ok: false, reason: 'missing' })
     // The alternate is retrievable via the dedicated buffer queries.
     expect(getAlternateMessages(db, 'chat-1')).toEqual([msg('alt1', 'char', 'old candidate')])
     expect(countAlternateMessages(db, 'chat-1')).toBe(1)
@@ -242,6 +282,23 @@ describe('reroll-alternate rows', () => {
 })
 
 describe('applyChatMessageDiff surgical writes', () => {
+  function observeMessageWrites(db: DatabaseSync) {
+    // SQLite may reuse rowids after DELETE + INSERT. Triggers witness actual writes.
+    db.exec(`
+      CREATE TEMP TABLE message_write_audit (operation TEXT, chat_id TEXT, seq INTEGER, uid TEXT);
+      CREATE TEMP TRIGGER audit_message_insert AFTER INSERT ON messages BEGIN
+        INSERT INTO message_write_audit VALUES ('insert', NEW.chat_id, NEW.seq, NEW.uid);
+      END;
+      CREATE TEMP TRIGGER audit_message_update AFTER UPDATE ON messages BEGIN
+        INSERT INTO message_write_audit VALUES ('update', NEW.chat_id, NEW.seq, NEW.uid);
+      END;
+      CREATE TEMP TRIGGER audit_message_delete AFTER DELETE ON messages BEGIN
+        INSERT INTO message_write_audit VALUES ('delete', OLD.chat_id, OLD.seq, OLD.uid);
+      END;
+    `)
+    return () => db.prepare('SELECT * FROM message_write_audit ORDER BY operation, chat_id, seq, uid').all()
+  }
+
   function rowids(db: DatabaseSync, chatId: string): { seq: number; rowid: number }[] {
     return db.prepare('SELECT rowid, seq FROM messages WHERE chat_id = ? ORDER BY seq').all(chatId) as {
       seq: number
@@ -262,6 +319,7 @@ describe('applyChatMessageDiff surgical writes', () => {
     const base = [msg('m1', 'user', 'a'), msg('m2', 'char', 'b')]
     replaceChatMessages(db, 'chat-1', base)
     const before = rowids(db, 'chat-1')
+    const writes = observeMessageWrites(db)
 
     applyChatMessageDiff(db, 'chat-1', base, [...base, msg('m3', 'user', 'c')])
 
@@ -270,6 +328,7 @@ describe('applyChatMessageDiff surgical writes', () => {
     expect(after.slice(0, 2)).toEqual(before)
     expect(after).toHaveLength(3)
     expect(getChatMessages(db, 'chat-1')).toEqual([...base, msg('m3', 'user', 'c')])
+    expect(writes()).toEqual([{ operation: 'insert', chat_id: 'chat-1', seq: 2, uid: 'm3' }])
   })
 
   it('writes nothing when the array is unchanged', () => {
@@ -277,24 +336,45 @@ describe('applyChatMessageDiff surgical writes', () => {
     const base = [msg('m1', 'user', 'a'), msg('m2', 'char', 'b')]
     replaceChatMessages(db, 'chat-1', base)
     const before = rowids(db, 'chat-1')
+    const writes = observeMessageWrites(db)
 
     applyChatMessageDiff(db, 'chat-1', base, structuredClone(base))
 
     expect(rowids(db, 'chat-1')).toEqual(before)
+    expect(getChatMessages(db, 'chat-1')).toEqual(base)
+    expect(writes()).toEqual([])
   })
 
   it('deletes from the divergence point and reseqs the tail', () => {
     const db = makeDb(makeDataDir())
     const base = [msg('m1', 'user', 'a'), msg('m2', 'char', 'b'), msg('m3', 'user', 'c')]
     replaceChatMessages(db, 'chat-1', base)
+    replaceChatMessages(db, 'chat-other', [msg('other', 'char', 'keep')])
+    addAlternateMessage(db, 'chat-1', msg('alternate', 'char', 'candidate'))
     const before = rowids(db, 'chat-1')
+    const writes = observeMessageWrites(db)
 
     // Delete the middle message → tail reseqs.
     applyChatMessageDiff(db, 'chat-1', base, [base[0], base[2]])
 
     expect(getChatMessages(db, 'chat-1')).toEqual([msg('m1', 'user', 'a'), msg('m3', 'user', 'c')])
     // The untouched prefix (m1 at seq 0) keeps its rowid.
-    expect(rowids(db, 'chat-1')[0]).toEqual(before[0])
+    expect(rowids(db, 'chat-1').find(({ seq }) => seq === 0)).toEqual(before.find(({ seq }) => seq === 0))
+    expect(getChatMessages(db, 'chat-other')).toEqual([msg('other', 'char', 'keep')])
+    expect(getAlternateMessages(db, 'chat-1')).toEqual([msg('alternate', 'char', 'candidate')])
+    expect(
+      rowids(db, 'chat-1')
+        .filter(({ seq }) => seq >= 0)
+        .map(({ seq }) => seq),
+    ).toEqual([0, 1])
+    const tailWrites = writes()
+    expect(tailWrites.length).toBeGreaterThan(0)
+    // An UPDATE-based resequence is also valid; only the affected active tail may change.
+    for (const write of tailWrites) {
+      expect(write.chat_id).toBe('chat-1')
+      expect([1, 2]).toContain(write.seq)
+      expect(['m2', 'm3']).toContain(write.uid)
+    }
   })
 
   it('truncates by dropping trailing rows only', () => {
@@ -302,15 +382,19 @@ describe('applyChatMessageDiff surgical writes', () => {
     const base = [msg('m1', 'user', 'a'), msg('m2', 'char', 'b'), msg('m3', 'user', 'c')]
     replaceChatMessages(db, 'chat-1', base)
     const before = rowids(db, 'chat-1')
+    const writes = observeMessageWrites(db)
 
     applyChatMessageDiff(db, 'chat-1', base, base.slice(0, 1))
 
     expect(getChatMessages(db, 'chat-1')).toEqual([msg('m1', 'user', 'a')])
     expect(rowids(db, 'chat-1')).toEqual([before[0]])
+    expect(writes()).toEqual([
+      { operation: 'delete', chat_id: 'chat-1', seq: 1, uid: 'm2' },
+      { operation: 'delete', chat_id: 'chat-1', seq: 2, uid: 'm3' },
+    ])
   })
 
   it('append-only tail persistence writes byte-identical rows without generic diff work', () => {
-    const expectedDb = makeDb(makeDataDir())
     const db = makeDb(makeDataDir())
     const base = Array.from({ length: 64 }, (_, index) =>
       msg(`m${index}`, index % 2 === 0 ? 'user' : 'char', `row ${index}`, {
@@ -323,10 +407,11 @@ describe('applyChatMessageDiff surgical writes', () => {
     })
     const next = [...base, tail]
 
-    replaceChatMessages(expectedDb, 'chat-1', next)
     replaceChatMessages(db, 'chat-1', base)
     addAlternateMessage(db, 'chat-1', msg('alt', 'char', 'candidate'))
     const prefixRowids = rowids(db, 'chat-1').filter(({ seq }) => seq >= 0)
+    const prefixRows = persistedActiveRows(db, 'chat-1')
+    const writes = observeMessageWrites(db)
 
     resetChatMessageDiffInstrumentation()
     const appended = appendActiveChatMessageTail(db, 'chat-1', next, base)
@@ -338,7 +423,20 @@ describe('applyChatMessageDiff surgical writes', () => {
       stableEqualStringifies: 0,
       appendFastPathRows: 1,
     })
-    expect(persistedActiveRows(db, 'chat-1')).toEqual(persistedActiveRows(expectedDb, 'chat-1'))
+    expect(persistedActiveRows(db, 'chat-1')).toEqual([
+      ...prefixRows,
+      {
+        seq: 64,
+        uid: 'm64',
+        role: 'char',
+        data: 'tail',
+        disabled: 'true',
+        json: JSON.stringify(tail),
+        alternate: 0,
+      },
+    ])
+    expect(getChatMessages(db, 'chat-1')).toEqual(next)
+    expect(writes()).toEqual([{ operation: 'insert', chat_id: 'chat-1', seq: 64, uid: 'm64' }])
     expect(
       rowids(db, 'chat-1')
         .filter(({ seq }) => seq >= 0)
@@ -355,6 +453,7 @@ describe('applyChatMessageDiff surgical writes', () => {
     replaceChatMessages(db, 'chat-1', concurrentlyEdited)
     const beforeRows = persistedActiveRows(db, 'chat-1')
     const beforeRowids = rowids(db, 'chat-1')
+    const writes = observeMessageWrites(db)
 
     resetChatMessageDiffInstrumentation()
     const appended = appendActiveChatMessageTail(db, 'chat-1', desired, initial)
@@ -363,12 +462,50 @@ describe('applyChatMessageDiff surgical writes', () => {
     expect(getChatMessages(db, 'chat-1')).toEqual(concurrentlyEdited)
     expect(persistedActiveRows(db, 'chat-1')).toEqual(beforeRows)
     expect(rowids(db, 'chat-1')).toEqual(beforeRowids)
+    expect(writes()).toEqual([])
     expect(getChatMessageDiffInstrumentation()).toMatchObject({
       genericDiffRuns: 0,
       stableEqualCalls: 0,
       stableEqualStringifies: 0,
       appendFastPathRows: 0,
     })
+  })
+
+  it.each([
+    { change: 'identity', patch: { chatId: 'replacement-id' } },
+    { change: 'role', patch: { role: 'user' } },
+    { change: 'metadata', patch: { disabled: true } },
+  ])('rejects a stale append when only prefix $change changes', ({ patch }) => {
+    const db = makeDb(makeDataDir())
+    const initial = [msg('m1', 'user', 'question'), msg('m2', 'char', 'answer')]
+    const current = [initial[0], { ...initial[1], ...patch }]
+    replaceChatMessages(db, 'chat-1', current)
+    replaceChatMessages(db, 'chat-other', [msg('other', 'char', 'keep')])
+    addAlternateMessage(db, 'chat-1', msg('alt', 'char', 'candidate'))
+    const before = db.prepare('SELECT rowid, * FROM messages ORDER BY chat_id, seq').all()
+    const writes = observeMessageWrites(db)
+    resetChatMessageDiffInstrumentation()
+
+    expect(appendActiveChatMessageTail(db, 'chat-1', [...initial, msg('m3', 'user', 'stale')], initial)).toBe(false)
+
+    expect(db.prepare('SELECT rowid, * FROM messages ORDER BY chat_id, seq').all()).toEqual(before)
+    expect(writes()).toEqual([])
+    expect(getChatMessageDiffInstrumentation().appendFastPathRows).toBe(0)
+  })
+
+  it.each([0, 1])('rejects a non-growing append of %i rows without writing', (length) => {
+    const db = makeDb(makeDataDir())
+    const base = [msg('m1', 'user', 'question')]
+    replaceChatMessages(db, 'chat-1', base)
+    const before = persistedActiveRows(db, 'chat-1')
+    const writes = observeMessageWrites(db)
+    resetChatMessageDiffInstrumentation()
+
+    expect(appendActiveChatMessageTail(db, 'chat-1', base.slice(0, length), base)).toBe(false)
+
+    expect(persistedActiveRows(db, 'chat-1')).toEqual(before)
+    expect(writes()).toEqual([])
+    expect(getChatMessageDiffInstrumentation().appendFastPathRows).toBe(0)
   })
 })
 

@@ -5,7 +5,6 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { applyMigrations, CURRENT_SCHEMA_VERSION, getSchemaState, openDatabase } from '../src/db.js'
-import { normalizeTranslatorPreset } from '@risuai/shared-core/translator-presets'
 
 const dataDirs: string[] = []
 
@@ -53,6 +52,26 @@ function insertMemoryChunk(db: DatabaseSync, id = 'chunk-1'): void {
       ) VALUES (?, 'chat-1', 'message-1', 0, 3, 'chunk text', 'pending')
     `,
   ).run(id)
+}
+
+function translatorPreset(id: string, name = id, maxResponse = 500) {
+  return {
+    id,
+    name,
+    prompt: `Prompt for ${id}`,
+    maxResponse,
+    steps: [
+      {
+        id: `${id}-step`,
+        name: 'Translate',
+        enabled: true,
+        prompt: `Prompt for ${id}`,
+        maxResponse,
+        model: { mode: 'inheritTranslate' },
+      },
+    ],
+    extension: { preserve: 'migration must not normalize this body' },
+  }
 }
 
 afterEach(() => {
@@ -497,66 +516,68 @@ describe('schema migrations', () => {
   })
 
   it.each([
-    { selection: 1, expected: 'translator-b' },
-    { selection: 0, expected: 'translator-a' },
-    { selection: undefined, expected: 'translator-a' },
-    { selection: null, expected: 'translator-a' },
-    { selection: '', expected: 'translator-a' },
-    { selection: 99, expected: 'translator-a' },
-    { selection: 'translator-b', expected: 'translator-b' },
-  ])('migrates translator selection $selection without changing preset bodies', ({ selection, expected }) => {
-    const dataDir = makeDataDir()
-    const initial = openDatabase(dataDir)
-    const settings = { translatorPresetId: selection, theme: 'light' }
-    const presets = ['translator-a', 'translator-b'].map((id) =>
-      normalizeTranslatorPreset({ id, name: id, prompt: `Prompt for ${id}`, maxResponse: 500 }),
-    )
-    initial.prepare('INSERT INTO settings (id, data_json) VALUES (1, ?)').run(JSON.stringify(settings))
-    const insertPreset = initial.prepare('INSERT INTO translator_presets (position, data_json) VALUES (?, ?)')
-    presets.forEach((preset, index) => insertPreset.run(index, JSON.stringify(preset)))
-    initial.prepare('UPDATE schema_version SET version = 36, revision = 23 WHERE id = 1').run()
-    initial.close()
+    { selection: 1, expected: 'translator-b', expectedMaxResponse: 750 },
+    { selection: 0, expected: 'translator-a', expectedMaxResponse: 500 },
+    { selection: undefined, expected: 'translator-a', expectedMaxResponse: 500 },
+    { selection: null, expected: 'translator-a', expectedMaxResponse: 500 },
+    { selection: '', expected: 'translator-a', expectedMaxResponse: 500 },
+    { selection: 99, expected: 'translator-a', expectedMaxResponse: 500 },
+    { selection: 'translator-b', expected: 'translator-b', expectedMaxResponse: 750 },
+  ])(
+    'migrates translator selection $selection without changing preset bodies',
+    ({ selection, expected, expectedMaxResponse }) => {
+      const dataDir = makeDataDir()
+      const initial = openDatabase(dataDir)
+      const settings = { translatorPresetId: selection, theme: 'light' }
+      const presets = [translatorPreset('translator-a'), translatorPreset('translator-b', 'translator-b', 750)]
+      const presetRows = presets.map((preset) => ({ data_json: JSON.stringify(preset, null, 2) }))
+      initial.prepare('INSERT INTO settings (id, data_json) VALUES (1, ?)').run(JSON.stringify(settings))
+      const insertPreset = initial.prepare('INSERT INTO translator_presets (position, data_json) VALUES (?, ?)')
+      presetRows.forEach(({ data_json }, index) => insertPreset.run(index, data_json))
+      initial.prepare('UPDATE schema_version SET version = 36, revision = 23 WHERE id = 1').run()
+      initial.close()
 
-    const migrated = openDatabase(dataDir)
-    let persistedSettings: string
-    try {
-      expect(getSchemaState(migrated)).toEqual({ version: CURRENT_SCHEMA_VERSION, revision: 23 })
-      persistedSettings = (
-        migrated.prepare('SELECT data_json FROM settings WHERE id = 1').get() as { data_json: string }
-      ).data_json
-      expect(JSON.parse(persistedSettings)).toMatchObject({ translatorPresetId: expected, theme: 'light' })
-      if (typeof selection === 'string' && selection === expected) {
-        expect(persistedSettings).toBe(JSON.stringify(settings))
-      } else {
-        expect(JSON.parse(persistedSettings)).toMatchObject({
-          translatorPrompt: `Prompt for ${expected}`,
-          translatorMaxResponse: 500,
-        })
+      const migrated = openDatabase(dataDir)
+      let persistedSettings: string
+      try {
+        expect(getSchemaState(migrated)).toEqual({ version: CURRENT_SCHEMA_VERSION, revision: 23 })
+        persistedSettings = (
+          migrated.prepare('SELECT data_json FROM settings WHERE id = 1').get() as { data_json: string }
+        ).data_json
+        expect(JSON.parse(persistedSettings)).toMatchObject({ translatorPresetId: expected, theme: 'light' })
+        if (typeof selection === 'string' && selection === expected) {
+          expect(persistedSettings).toBe(JSON.stringify(settings))
+        } else {
+          expect(JSON.parse(persistedSettings)).toEqual({
+            translatorPresetId: expected,
+            theme: 'light',
+            translatorPrompt: `Prompt for ${expected}`,
+            translatorMaxResponse: expectedMaxResponse,
+          })
+        }
+        expect(migrated.prepare('SELECT data_json FROM translator_presets ORDER BY position').all()).toEqual(presetRows)
+      } finally {
+        migrated.close()
       }
-      expect(migrated.prepare('SELECT data_json FROM translator_presets ORDER BY position').all()).toEqual(
-        presets.map((preset) => ({ data_json: JSON.stringify(preset) })),
-      )
-    } finally {
-      migrated.close()
-    }
-    const reopened = openDatabase(dataDir)
-    try {
-      expect(reopened.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual({
-        data_json: persistedSettings,
-      })
-    } finally {
-      reopened.close()
-    }
-  })
+      const reopened = openDatabase(dataDir)
+      try {
+        expect(reopened.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual({
+          data_json: persistedSettings,
+        })
+        expect(reopened.prepare('SELECT data_json FROM translator_presets ORDER BY position').all()).toEqual(presetRows)
+      } finally {
+        reopened.close()
+      }
+    },
+  )
 
   it('rolls back translator selection repair if the migration cannot commit', () => {
     const dataDir = makeDataDir()
     const initial = openDatabase(dataDir)
     const settings = JSON.stringify({ translatorPresetId: 0 })
+    const presetBody = JSON.stringify(translatorPreset('translator-a', 'A'), null, 2)
     initial.prepare('INSERT INTO settings (id, data_json) VALUES (1, ?)').run(settings)
-    initial
-      .prepare('INSERT INTO translator_presets (position, data_json) VALUES (0, ?)')
-      .run(JSON.stringify(normalizeTranslatorPreset({ id: 'translator-a', name: 'A' })))
+    initial.prepare('INSERT INTO translator_presets (position, data_json) VALUES (0, ?)').run(presetBody)
     initial.exec(`
       UPDATE schema_version SET version = 36, revision = 23 WHERE id = 1;
       CREATE TRIGGER fail_translator_identity_version_bump
@@ -571,6 +592,9 @@ describe('schema migrations', () => {
     try {
       expect(getSchemaState(failed)).toEqual({ version: 36, revision: 23 })
       expect(failed.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual({ data_json: settings })
+      expect(failed.prepare('SELECT data_json FROM translator_presets WHERE position = 0').get()).toEqual({
+        data_json: presetBody,
+      })
       failed.exec('DROP TRIGGER fail_translator_identity_version_bump')
     } finally {
       failed.close()
@@ -583,6 +607,9 @@ describe('schema migrations', () => {
           (retried.prepare('SELECT data_json FROM settings WHERE id = 1').get() as { data_json: string }).data_json,
         ).translatorPresetId,
       ).toBe('translator-a')
+      expect(retried.prepare('SELECT data_json FROM translator_presets WHERE position = 0').get()).toEqual({
+        data_json: presetBody,
+      })
     } finally {
       retried.close()
     }
@@ -1185,17 +1212,38 @@ describe('schema migrations', () => {
   it('is safe to reopen and reapply after migrations are current', () => {
     const dataDir = makeDataDir()
     seedSchemaVersion(dataDir, 0, 3)
+    const persistedRows = (db: DatabaseSync) => ({
+      settings: db.prepare('SELECT * FROM settings').all(),
+      chunks: db.prepare('SELECT * FROM memory_chunks ORDER BY id').all(),
+      metadata: db.prepare('SELECT * FROM database_metadata').all(),
+    })
 
     const first = openDatabase(dataDir)
-    first.close()
+    let before: ReturnType<typeof persistedRows>
+    try {
+      insertMemoryChunk(first)
+      first.prepare('INSERT INTO settings (id, data_json) VALUES (1, ?)').run('{ "theme": "dark", "custom": true }')
+      first.exec(
+        "UPDATE database_metadata SET active_writer_session_id = 'writer-before', writer_epoch = 4 WHERE id = 1",
+      )
+      before = persistedRows(first)
+    } finally {
+      first.close()
+    }
 
     const second = openDatabase(dataDir)
     try {
+      expect(persistedRows(second)).toEqual(before)
       applyMigrations(second, getSchemaState(second).version)
       expect(getSchemaState(second)).toEqual({ version: CURRENT_SCHEMA_VERSION, revision: 3 })
-      insertMemoryChunk(second)
+      expect(persistedRows(second)).toEqual(before)
       const chunk = second.prepare('SELECT id, status FROM memory_chunks WHERE id = ?').get('chunk-1')
       expect(chunk).toEqual({ id: 'chunk-1', status: 'pending' })
+      insertMemoryChunk(second, 'chunk-after-reopen')
+      expect(second.prepare('SELECT id, status FROM memory_chunks WHERE id = ?').get('chunk-after-reopen')).toEqual({
+        id: 'chunk-after-reopen',
+        status: 'pending',
+      })
     } finally {
       second.close()
     }
@@ -1251,6 +1299,13 @@ describe('schema migrations', () => {
   it('enforces memory table status, kind, and payload constraints', () => {
     const db = openDatabase(makeDataDir())
     try {
+      insertMemoryChunk(db, 'valid-chunk')
+      const insertJob = db.prepare(`
+        INSERT INTO memory_jobs (id, instance_id, chat_id, kind, status, payload_json)
+        VALUES (?, 'valid-instance', 'chat-1', ?, ?, ?)
+      `)
+      insertJob.run('valid-job', 'chunk', 'pending', '{}')
+
       expect(() => {
         db.prepare(
           `
@@ -1264,35 +1319,20 @@ describe('schema migrations', () => {
             ) VALUES ('chunk-1', 'chat-1', 0, 1, 'text', 'queued')
           `,
         ).run()
-      }).toThrow()
+      }).toThrow(/CHECK constraint failed: status IN/)
 
-      expect(() => {
-        db.prepare(
-          `
-            INSERT INTO memory_jobs (
-              id,
-              chat_id,
-              kind,
-              status,
-              payload_json
-            ) VALUES ('job-1', 'chat-1', 'translate', 'pending', '{}')
-          `,
-        ).run()
-      }).toThrow()
-
-      expect(() => {
-        db.prepare(
-          `
-            INSERT INTO memory_jobs (
-              id,
-              chat_id,
-              kind,
-              status,
-              payload_json
-            ) VALUES ('job-2', 'chat-1', 'chunk', 'pending', 'not json')
-          `,
-        ).run()
-      }).toThrow()
+      // Keep every other field valid, including the required instance identity.
+      expect(() => insertJob.run('bad-kind', 'translate', 'pending', '{}')).toThrow(/CHECK constraint failed: kind IN/)
+      expect(() => insertJob.run('bad-status', 'chunk', 'queued', '{}')).toThrow(/CHECK constraint failed: status IN/)
+      expect(() => insertJob.run('bad-payload', 'chunk', 'pending', 'not json')).toThrow(
+        /CHECK constraint failed: json_valid\(payload_json\)/,
+      )
+      expect(db.prepare('SELECT id, status FROM memory_chunks').all()).toEqual([
+        { id: 'valid-chunk', status: 'pending' },
+      ])
+      expect(db.prepare('SELECT id, instance_id, kind, status, payload_json FROM memory_jobs').all()).toEqual([
+        { id: 'valid-job', instance_id: 'valid-instance', kind: 'chunk', status: 'pending', payload_json: '{}' },
+      ])
     } finally {
       db.close()
     }
@@ -1342,13 +1382,24 @@ describe('schema migrations', () => {
 
   it('rejects databases newer than the app schema version', () => {
     const dataDir = makeDataDir()
-    seedSchemaVersion(dataDir, CURRENT_SCHEMA_VERSION + 1)
+    seedSchemaVersion(dataDir, CURRENT_SCHEMA_VERSION + 1, 19)
+    const seed = new DatabaseSync(path.join(dataDir, 'risu.db'))
+    try {
+      seed.exec(
+        "CREATE TABLE future_data (id TEXT PRIMARY KEY, payload TEXT); INSERT INTO future_data VALUES ('keep', 'future payload')",
+      )
+    } finally {
+      seed.close()
+    }
 
     expect(() => openDatabase(dataDir)).toThrow(/newer than supported version/)
 
     const db = new DatabaseSync(path.join(dataDir, 'risu.db'))
     try {
-      expect(listTables(db)).toEqual(['schema_version'])
+      expect(() => applyMigrations(db, CURRENT_SCHEMA_VERSION + 1)).toThrow(/newer than supported version/)
+      expect(getSchemaState(db)).toEqual({ version: CURRENT_SCHEMA_VERSION + 1, revision: 19 })
+      expect(listTables(db)).toEqual(['future_data', 'schema_version'])
+      expect(db.prepare('SELECT * FROM future_data').all()).toEqual([{ id: 'keep', payload: 'future payload' }])
     } finally {
       db.close()
     }
