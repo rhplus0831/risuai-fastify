@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enterClientWriter, repromoteClientWriter } from './__tests__/clientSession'
-import { demoteClientSession } from './clientSession'
+import { beginClientSession, demoteClientSession } from './clientSession'
 import {
   backgroundReady,
   beginStartupAttempt,
@@ -303,21 +303,55 @@ describe('startup readiness instrumentation', () => {
     await vi.waitFor(() => expect(firstStep).toHaveBeenCalledOnce())
 
     firstCurrent = false
-    const replacementStep = vi.fn(async () => 'replacement')
-    await expect(runStartupStep('plugin-runtime', replacementStep, { owner: {}, isCurrent: () => true })).resolves.toBe(
-      'replacement',
+    let releaseReplacement!: (value: string) => void
+    const replacementStep = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          releaseReplacement = resolve
+        }),
     )
-    expect(replacementStep).toHaveBeenCalledOnce()
+    const replacementOwnership = { owner: {}, isCurrent: () => true }
+    const replacement = runStartupStep('plugin-runtime', replacementStep, replacementOwnership)
+    await vi.waitFor(() => expect(replacementStep).toHaveBeenCalledOnce())
 
     releaseFirst('retired')
     await expect(first).rejects.toThrow('Startup step was superseded')
-    await expect(
-      runStartupStep(
-        'plugin-runtime',
-        vi.fn(async () => 'unexpected'),
-      ),
-    ).resolves.toBe('replacement')
+    const unexpected = vi.fn(async () => 'unexpected')
+    const concurrent = runStartupStep('plugin-runtime', unexpected, replacementOwnership)
+    releaseReplacement('replacement')
+    await expect(replacement).resolves.toBe('replacement')
+    await expect(concurrent).resolves.toBe('replacement')
+    expect(unexpected).not.toHaveBeenCalled()
+    await expect(runStartupStep('plugin-runtime', unexpected)).resolves.toBe('replacement')
+    expect(unexpected).not.toHaveBeenCalled()
   })
+
+  it.each(['before dispatch', 'while pending'] as const)(
+    'rejects startup work from a replaced session %s without certifying the replacement',
+    async (timing) => {
+      beginClientSession('old-page')
+      let release!: (value: string) => void
+      const held = new Promise<string>((resolve) => {
+        release = resolve
+      })
+      const oldStep = vi.fn(() => held)
+      const old = runStartupStep('plugin-runtime', oldStep)
+      if (timing === 'while pending') await vi.waitFor(() => expect(oldStep).toHaveBeenCalledOnce())
+      beginClientSession('new-page')
+      release('retired')
+      await expect(old).rejects.toThrow('Startup step was superseded')
+      expect(oldStep).toHaveBeenCalledTimes(timing === 'while pending' ? 1 : 0)
+      expect(getStartupCoordinatorSnapshot().completedSteps).not.toContain('plugin-runtime')
+
+      const freshStep = vi.fn(async () => 'replacement')
+      await expect(runStartupStep('plugin-runtime', freshStep)).resolves.toBe('replacement')
+      const duplicateStep = vi.fn(async () => 'unexpected')
+      await expect(runStartupStep('plugin-runtime', duplicateStep)).resolves.toBe('replacement')
+      expect(freshStep).toHaveBeenCalledOnce()
+      expect(duplicateStep).not.toHaveBeenCalled()
+      expect(getStartupCoordinatorSnapshot().completedSteps).toContain('plugin-runtime')
+    },
+  )
 
   it('shares a rejected capability retry and permits a fresh retry after cleanup', async () => {
     const retry = vi.fn().mockRejectedValueOnce(new Error('still offline')).mockResolvedValueOnce('recovered')

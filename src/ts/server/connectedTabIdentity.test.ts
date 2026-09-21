@@ -49,7 +49,7 @@ async function page() {
 
 describe('connected page identity', () => {
   it('retains an exclusive identity across a legitimate reload after page teardown', async () => {
-    const { held } = installLocks()
+    const { held, request } = installLocks()
     const first = await page()
     expect(await first.resolveConnectedTabIdentity()).toEqual({
       sessionId: 'originating-tab',
@@ -57,6 +57,11 @@ describe('connected page identity', () => {
       previousSessionId: null,
     })
     expect(held.size).toBe(1)
+    expect(request).toHaveBeenCalledWith(
+      'risu:client-session:originating-tab',
+      { mode: 'exclusive', ifAvailable: true },
+      expect.any(Function),
+    )
     first.releaseConnectedTabIdentity()
     await Promise.resolve()
     await Promise.resolve()
@@ -64,8 +69,24 @@ describe('connected page identity', () => {
     expect((await next.resolveConnectedTabIdentity()).sessionId).toBe('originating-tab')
   })
 
+  it('reacquires exclusivity after the same page releases its cached identity', async () => {
+    const { held, request } = installLocks()
+    const current = await page()
+    const first = await current.resolveConnectedTabIdentity()
+    expect(await current.resolveConnectedTabIdentity()).toEqual(first)
+    expect(request).toHaveBeenCalledOnce()
+
+    current.releaseConnectedTabIdentity()
+    await vi.waitFor(() => expect(held.size).toBe(0))
+    const resumed = await current.resolveConnectedTabIdentity()
+    expect(resumed).toEqual({ sessionId: 'originating-tab', exclusive: true, previousSessionId: null })
+    expect(request).toHaveBeenCalledTimes(2)
+    expect(held.has('risu:client-session:originating-tab')).toBe(true)
+    expect(identity.install).toHaveBeenCalledTimes(2)
+  })
+
   it('deduplicates copied sessionStorage while the originating page is suspended with its lock held', async () => {
-    const { held } = installLocks()
+    const { held, request } = installLocks()
     const first = await page()
     await first.resolveConnectedTabIdentity()
     const duplicate = await page()
@@ -73,6 +94,11 @@ describe('connected page identity', () => {
     expect(result).toMatchObject({ exclusive: true, previousSessionId: null })
     expect(result.sessionId).not.toBe('originating-tab')
     expect(held.size).toBe(2)
+    expect(request.mock.calls.map(([name, options]) => [name, options])).toEqual([
+      ['risu:client-session:originating-tab', { mode: 'exclusive', ifAvailable: true }],
+      ['risu:client-session:originating-tab', { mode: 'exclusive', ifAvailable: true }],
+      [`risu:client-session:${result.sessionId}`, { mode: 'exclusive', ifAvailable: true }],
+    ])
     expect(identity.install).toHaveBeenLastCalledWith(result.sessionId)
   })
 

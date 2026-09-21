@@ -206,6 +206,63 @@ describe('connected client session authority', () => {
     expect(completeClientWriterRecovery(operation)).toBe(false)
   })
 
+  it('requires the live connection before an authorized coherent writer can complete recovery', () => {
+    const operation = beginClientSession('client-a')
+    expect(authorizeClientWriterRecovery(operation, ownership('client-a'))).toBe(true)
+    setClientProjectionReady(true)
+    expect(canUseClientRecoveryAccess()).toBe(true)
+    expect(completeClientWriterRecovery(operation)).toBe(false)
+    expect(getClientSessionSnapshot().lifecycle).toBe('recovering-writer')
+    expect(canUseClientWriteAccess()).toBe(false)
+
+    setClientConnectionState('live')
+    expect(completeClientWriterRecovery(operation)).toBe(true)
+    expect(canUseClientWriteAccess()).toBe(true)
+  })
+
+  it('rejects a copied operation token without consuming the genuine startup operation', () => {
+    const operation = beginClientSession('client-a')
+    const copied = { ...operation }
+    const pending = structuredClone(getClientSessionSnapshot())
+    expect(authenticateClientSessionReadView(copied, ownership('client-a'))).toBe(false)
+    expect(authorizeClientWriterRecovery(copied, ownership('client-a'))).toBe(false)
+    expect(settleClientReader(copied, ownership('client-b'))).toBe(false)
+    expect(failClientSessionOperation(copied)).toBe(false)
+    expect(getClientSessionSnapshot()).toEqual(pending)
+    expect(authorizeClientWriterRecovery(operation, ownership('client-a'))).toBe(true)
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    expect(completeClientWriterRecovery(operation)).toBe(true)
+    expect(canUseClientWriteAccess()).toBe(true)
+  })
+
+  it.each([
+    { label: 'empty lineage', value: ownership('client-a', 1, '') },
+    { label: 'negative epoch', value: ownership('client-a', -1) },
+    { label: 'fractional epoch', value: ownership('client-a', 1.5) },
+    { label: 'unsafe epoch', value: ownership('client-a', Number.MAX_SAFE_INTEGER + 1) },
+    { label: 'NaN epoch', value: ownership('client-a', NaN) },
+    { label: 'empty writer identity', value: ownership('') },
+    { label: 'blank writer identity', value: ownership(' ') },
+    { label: 'overlong writer identity', value: ownership('x'.repeat(129)) },
+  ])('rejects $label without authenticating or consuming the startup operation', ({ value }) => {
+    const operation = beginClientSession('client-a')
+    const pending = structuredClone(getClientSessionSnapshot())
+    expect(authenticateClientSessionReadView(operation, value)).toBe(false)
+    expect(settleClientReader(operation, value)).toBe(false)
+    expect(authorizeClientWriterRecovery(operation, value)).toBe(false)
+    expect(getClientSessionSnapshot()).toEqual(pending)
+    expect(canUseClientReadServices()).toBe(false)
+    expect(canUseClientRecoveryAccess()).toBe(false)
+    expect(canUseClientWriteAccess()).toBe(false)
+
+    expect(authorizeClientWriterRecovery(operation, ownership('client-a', 0))).toBe(true)
+    setClientProjectionReady(true)
+    setClientConnectionState('live')
+    expect(completeClientWriterRecovery(operation)).toBe(true)
+    expect(canUseClientWriteAccess()).toBe(true)
+  })
+
   it('shares promotion, tolerates its old initial frame and rejects a superseding writer', () => {
     becomeReader()
     const promotion = beginClientPromotion()!

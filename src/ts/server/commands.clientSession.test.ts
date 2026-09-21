@@ -298,6 +298,31 @@ describe('command transport across connected client roles', () => {
     expect(fetch).not.toHaveBeenCalled()
   })
 
+  it('does not acknowledge old receipts after auth resolves under a newly promoted writer', async () => {
+    becomeWriter()
+    const auth = deferred<string>()
+    mocks.auth.mockReturnValueOnce(auth.promise)
+    const stale = acknowledgeServerMutationReceipts('old-mutation', 2, 'lineage-a')
+    await vi.waitFor(() => expect(mocks.auth).toHaveBeenCalledOnce())
+    loseAndRegainWriteAccess()
+    auth.resolve('old-auth')
+    await expect(stale).resolves.toBe(false)
+    expect(fetch).not.toHaveBeenCalled()
+    expect(canUseClientWriteAccess()).toBe(true)
+
+    await expect(acknowledgeServerMutationReceipts('new-mutation', 3, 'lineage-a')).resolves.toBe(true)
+    expect(fetch).toHaveBeenCalledOnce()
+    const [url, init] = vi.mocked(fetch).mock.calls[0]
+    expect(url).toBe('/api/v1/commands/mutation-receipts/ack')
+    expect(init?.method).toBe('POST')
+    expect(new Headers(init?.headers).get('risu-auth')).toBe('test-auth')
+    expect(JSON.parse(String(init?.body))).toEqual({
+      mutationId: 'new-mutation',
+      requestCount: 3,
+      databaseLineage: 'lineage-a',
+    })
+  })
+
   it('settles a late accepted receipt without replaying its old optimistic reconciliation', async () => {
     becomeWriter()
     const response = deferred<Response>()
