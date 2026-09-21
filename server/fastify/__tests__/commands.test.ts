@@ -11596,9 +11596,8 @@ describe('surgical message writes', () => {
     expect(chatAAfter).toHaveLength(chatABefore.length + 1)
   })
 
-  it('conditionally finalizes a generated message only while its owner, generation, and text still match', async () => {
-    const { assertion } = await setupAuthedClient(harness.app)
-    const revision = await importDatabase(harness.app, assertion, {
+  async function seedGeneratedMessage(assertion: string): Promise<number> {
+    return importDatabase(harness.app, assertion, {
       characters: [
         {
           chaId: 'char-a',
@@ -11625,20 +11624,43 @@ describe('surgical message writes', () => {
       ],
       characterOrder: ['char-a'],
     })
+  }
 
-    const wrongCondition = await harness.app.inject({
-      method: 'PATCH',
-      url: '/api/v1/commands/messages/message-a',
-      headers: { 'risu-auth': assertion },
-      payload: {
-        baseRevision: revision,
-        patch: { data: '{{inlay::asset-a}}' },
-        expectedData: 'different source',
-        expectedChatId: 'chat-a',
-        expectedGenerationId: 'generation-a',
-      },
-    })
-    expect(wrongCondition.statusCode).toBe(400)
+  it.each([
+    ['text', { expectedData: 'different source' }],
+    ['chat', { expectedChatId: 'other-chat' }],
+    ['generation', { expectedGenerationId: 'other-generation' }],
+  ] as const)(
+    'rejects a mismatched finalization %s without changing messages, revision, or events',
+    async (_name, mismatch) => {
+      const { assertion } = await setupAuthedClient(harness.app)
+      const revision = await seedGeneratedMessage(assertion)
+      harness.commandEvents.clear()
+      const before = readAllDatabaseRows(harness.dataDir)
+
+      const rejected = await harness.app.inject({
+        method: 'PATCH',
+        url: '/api/v1/commands/messages/message-a',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          baseRevision: revision,
+          patch: { data: '{{inlay::asset-stale}}' },
+          expectedData: '<ImgGen="cat">',
+          expectedChatId: 'chat-a',
+          expectedGenerationId: 'generation-a',
+          ...mismatch,
+        },
+      })
+
+      expect(rejected.statusCode).toBe(400)
+      expect(readAllDatabaseRows(harness.dataDir)).toEqual(before)
+      expect(harness.commandEvents.list()).toEqual([])
+    },
+  )
+
+  it('conditionally finalizes a generated message only while its owner, generation, and text still match', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await seedGeneratedMessage(assertion)
 
     const finalized = await harness.app.inject({
       method: 'PATCH',
@@ -11653,6 +11675,9 @@ describe('surgical message writes', () => {
       },
     })
     expect(finalized.statusCode).toBe(200)
+    expect(finalized.json().revision).toBe(revision + 1)
+    const beforeStaleFinalization = readAllDatabaseRows(harness.dataDir)
+    harness.commandEvents.clear()
 
     const staleFinalization = await harness.app.inject({
       method: 'PATCH',
@@ -11667,6 +11692,8 @@ describe('surgical message writes', () => {
       },
     })
     expect(staleFinalization.statusCode).toBe(400)
+    expect(readAllDatabaseRows(harness.dataDir)).toEqual(beforeStaleFinalization)
+    expect(harness.commandEvents.list()).toEqual([])
     expect((await persistedChatMessages(harness.app, assertion, 'chat-a'))[0].data).toBe('{{inlay::asset-a}}')
   })
 
@@ -11806,7 +11833,23 @@ describe('surgical message writes', () => {
   it('a non-message command writes nothing to the messages table', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const revision = await seedTwoChats(assertion)
-    const before = [...messageRowids(harness.dataDir, 'chat-a'), ...messageRowids(harness.dataDir, 'chat-b')]
+    const before = readAllDatabaseRows(harness.dataDir).messages
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+    try {
+      // Persistent triggers observe the app's separate SQLite connection and
+      // catch even UPDATEs that leave both content and rowids unchanged.
+      db.exec('CREATE TABLE message_write_audit (operation TEXT NOT NULL)')
+      for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
+        db.exec(`
+          CREATE TRIGGER audit_message_${operation.toLowerCase()} AFTER ${operation} ON messages
+          BEGIN
+            INSERT INTO message_write_audit (operation) VALUES ('${operation}');
+          END;
+        `)
+      }
+    } finally {
+      db.close()
+    }
 
     const persona = await harness.app.inject({
       method: 'POST',
@@ -11819,8 +11862,9 @@ describe('surgical message writes', () => {
     })
     expect(persona.statusCode).toBe(200)
 
-    const after = [...messageRowids(harness.dataDir, 'chat-a'), ...messageRowids(harness.dataDir, 'chat-b')]
-    expect(after).toEqual(before)
+    const after = readAllDatabaseRows(harness.dataDir)
+    expect(after.messages).toEqual(before)
+    expect(after.message_write_audit).toEqual([])
   })
 
   it('deleting a chat drops its message rows', async () => {
