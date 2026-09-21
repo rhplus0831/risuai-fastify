@@ -111,6 +111,31 @@ marked as imported and was not rerun for this worklist.
 | `TL-0005` | Browser command adapters              |            21 | [Browser command ownership](tests/browser-state-sync-and-recovery.md#browser-command-coverage-ownership) |
 | `TL-0006` | Chat and character-lorebook hydration |             6 | [Hydration ownership](tests/browser-state-sync-and-recovery.md#chat-hydration-coverage-ownership)        |
 
+## Completed pilot wave
+
+The first three batches completed on 2026-09-21:
+
+| Batch report                                           | Entries              | Baseline → final cases | Outcome                                                                     |
+| ------------------------------------------------------ | -------------------- | ---------------------: | --------------------------------------------------------------------------- |
+| [Provider execution](test-reviews/pilot-providers.md)  | `TL-0007`, `TL-0008` |              199 → 209 | Dispatch verified unchanged; completion assertions improved.                |
+| [Character commands](test-reviews/pilot-characters.md) | `TL-0009`            |                88 → 90 | Payload, settlement, selection, and Hypa assertions improved.               |
+| [Persistence](test-reviews/pilot-persistence.md)       | `TL-0012`, `TL-0016` |                60 → 65 | Migration, constraint, message-column, and write-scope assertions improved. |
+
+Integration retained all 347 original cases and passed all 364 resulting cases:
+274 in the four-file Fastify batch and 90 in the character suite. Client and
+Fastify typechecks passed. The batches detected all 24 sampled mutations after
+improvement; reports distinguish newly caught regressions from existing
+protection. No production source, configuration, test ownership, or tags changed,
+and no split or deletion was needed. These are focused results, not a full-suite
+or exhaustive mutation claim.
+
+The wave completed five additional original entries, bringing recorded outcomes
+to ten `improved`, one `verified_unchanged`, and 432 `pending` at that checkpoint.
+Use the JSON queries below for subsequent progress. The reports retain each
+batch's limitations, commands, and sizing observations. Review and mutation
+interpretation dominated execution time; continue grouping by shared behavior
+and fixture ownership rather than treating every file as a separate task.
+
 ## Finding and assigning work
 
 Run these commands from the repository root. Show current progress:

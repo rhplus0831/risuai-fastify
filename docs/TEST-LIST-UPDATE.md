@@ -45,3 +45,20 @@ identity/concurrency/reset regressions and two additional registered cases from 
 and strict-failure scenarios. Reader handoff, freshness, bulk reads, accepted-send completion, and
 character lorebooks have focused suites. See [Chat hydration coverage ownership](tests/browser-state-sync-and-recovery.md#chat-hydration-coverage-ownership).
 The row below retains the historical 105-case scope and ranking.
+
+Post-snapshot pilot update (2026-09-21): five more original entries were reviewed
+in three isolated batches. `chatDispatchProfileOptions.test.ts` was verified
+unchanged at 103 cases; `generation.completion.test.ts` now has 106 cases with
+independent request-rejection controls and an exact UTF-8 output-cap boundary.
+`characterCommands.test.ts` now has 90 cases with corrected fixture identities,
+independent expectations, awaited outcomes, and isolated selection guards.
+`db.test.ts` retains 33 cases with stronger migration/constraint assertions;
+`messageStore.test.ts` now has 32 cases with independent row, active-range,
+write-audit, and stale-append checks. All 347 original cases remain; the 364
+resulting cases pass after integration. No files were split or consolidated and
+production code is unchanged. See the [provider](test-reviews/pilot-providers.md),
+[character](test-reviews/pilot-characters.md), and
+[persistence](test-reviews/pilot-persistence.md) reports for mutation evidence,
+validation, and limitations. The [worklist](TEST-REVIEW-WORKLIST.md) records four
+improved outcomes and one verified-unchanged outcome for this wave; the historical
+inventory retains its original counts and ratings.

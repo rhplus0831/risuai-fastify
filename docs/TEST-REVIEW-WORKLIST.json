@@ -327,10 +327,30 @@
         "protectedBehavior": "Mocked provider-dispatch tests cover streaming and output parsing, runtime controls and prompt sanitization, profile-over-flat precedence across many providers, fixed endpoint enforcement, credential absence and masking, provider-specific schema/media/tool/thinking options, and generation model labels."
       },
       "currentFiles": ["server/fastify/__tests__/chatDispatchProfileOptions.test.ts"],
-      "status": "in_progress",
+      "status": "verified_unchanged",
       "batchId": "pilot-providers",
       "owner": "/root/pilot_providers; branch codex/test-pilot-providers; worktree /home/codex/worktrees/risuai-test-pilot-providers",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Verified profile credential/model/endpoint precedence and explicit wire/output contracts; retained the existing suite without splits or consolidation.",
+        "reportedFamilyCases": 103,
+        "evidence": {
+          "commits": ["7d73342ce3649048c433bfee375ec9c1680268d7"],
+          "documents": ["docs/test-reviews/pilot-providers.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed in isolated pilot worktrees and revalidated after integration on fastify; temporary source mutations restored.",
+          "checks": [
+            "103 original and final dispatch cases pass; all collected names and tags preserved.",
+            "Existing credential/model expectations detect both sampled dispatch regressions; the eight-probe provider batch passes all behavioral detection checks after completion-test improvements.",
+            "Integrated Fastify batch: 274 tests passed across four files; pnpm exec tsc -p server/fastify/tsconfig.json --noEmit passed.",
+            "All five pilot entries: 347 original cases retained, 17 added, 364 passed after integration."
+          ],
+          "limitations": "Targeted review and mocked providers; not live-provider conformance or exhaustive mutation coverage. Full test:agent/test:all and browser lanes were not run for these localized test-only changes."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0008",
@@ -343,10 +363,30 @@
         "protectedBehavior": "Fastify integration tests cover auth and request validation, server-owned model/profile selection, tool rounds, history redaction, fixed provider endpoints and credentials, streaming and buffered normalization across OpenAI, Anthropic, Mistral, Cohere, Gemini, Ollama, Horde, Bedrock, and Vertex, timeout/backpressure/output caps, and provider error handling."
       },
       "currentFiles": ["server/fastify/__tests__/generation.completion.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "pilot-providers",
       "owner": "/root/pilot_providers; branch codex/test-pilot-providers; worktree /home/codex/worktrees/risuai-test-pilot-providers",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added independently invalid provider/model/options fields, streaming-tools and supplied-tools rejection with successful controls, and exact UTF-8 output-cap acceptance.",
+        "reportedFamilyCases": 106,
+        "evidence": {
+          "commits": ["7d73342ce3649048c433bfee375ec9c1680268d7"],
+          "documents": ["docs/test-reviews/pilot-providers.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed in isolated pilot worktrees and revalidated after integration on fastify; temporary source mutations restored.",
+          "checks": [
+            "Original completion baseline 96 passed; final 106 passed. All 96 original names preserved and ten added.",
+            "All eight provider/completion mutation probes detected; six original batch survivors now fail intended assertions.",
+            "Integrated Fastify batch: 274 tests passed across four files; pnpm exec tsc -p server/fastify/tsconfig.json --noEmit passed.",
+            "All five pilot entries: 347 original cases retained, 17 added, 364 passed after integration."
+          ],
+          "limitations": "Targeted mutations and mocked provider responses. Legacy Kobold/Ooba route branches lack direct HTTP cases here; adjacent adapter/profile coverage exists, and no defect was established for those branches. Full test:agent/test:all and browser lanes were not run for these localized test-only changes."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0009",
@@ -359,10 +399,30 @@
         "protectedBehavior": "SQLite/resource-state and command assertions cover create payload sanitization, optimistic create/delete/select rollback, durable mutation ordering and replay, folder and character reorder, memory-flag patches, stable-ID snapshots and diffs, concurrent sibling edits, queued failures, and soft-delete confirmation races."
       },
       "currentFiles": ["src/ts/characterCommands.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "pilot-characters",
       "owner": "/root/pilot_characters; branch codex/test-pilot-characters; worktree /home/codex/worktrees/risuai-test-pilot-characters",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Replaced an aliased starter-chat oracle, corrected DELETE identity and awaited settlement, isolated selection identity/timestamp fences, and repaired obsolete Hypa no-op fixtures.",
+        "reportedFamilyCases": 90,
+        "evidence": {
+          "commits": ["3663b91ebabb6b65fda244864f3638f6782aa166"],
+          "documents": ["docs/test-reviews/pilot-characters.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed in isolated pilot worktrees and revalidated after integration on fastify; temporary source mutations restored.",
+          "checks": [
+            "Baseline 88 passed; final integrated 90 passed. All 88 original collected names/tags retained and two selection-race cases added.",
+            "Seven behavioral mutation probes detected. Two survivors of the complete original suite and one survivor of the original Hypa no-op case are closed.",
+            "Client typecheck: pnpm check passed with zero errors and warnings.",
+            "All five pilot entries: 347 original cases retained, 17 added, 364 passed after integration."
+          ],
+          "limitations": "HTTP responses remain mocked; SQLite persistence, rendered UI recovery, and an exhaustive mutation score are outside this review. Full test:agent/test:all and browser lanes were not run for these localized test-only changes."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0010",
@@ -407,10 +467,30 @@
         "protectedBehavior": "Covers fresh schema/table creation, current and legacy migrations through the supported versions, transactional rollback and retry, durable identity and selection repairs, command and generation lineage tables, lorebook and memory migrations, WAL settings, constraints and cascades, future-version rejection, and reopen idempotence."
       },
       "currentFiles": ["server/fastify/__tests__/db.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "pilot-persistence",
       "owner": "/root/pilot_persistence; branch codex/test-pilot-persistence; worktree /home/codex/worktrees/risuai-test-pilot-persistence",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Used independent translator fixtures and distinct selected-owner values; strengthened migration body/metadata preservation, reopen/future-version checks, and isolated memory-job CHECK rejections with valid control rows.",
+        "reportedFamilyCases": 33,
+        "evidence": {
+          "commits": ["f68c805a34a33b03049d1c4699d82b3d7f0df050"],
+          "documents": ["docs/test-reviews/pilot-persistence.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed in isolated pilot worktrees and revalidated after integration on fastify; temporary source mutations restored.",
+          "checks": [
+            "All 33 original database cases pass with their collected names and core tags preserved.",
+            "Persistence batch: nine mutation probes detected, including seven pre-fix survivors. Database probes cover translator owner selection, failed-migration rollback, and independently reachable memory-job kind/JSON constraints.",
+            "Integrated Fastify batch: 274 tests passed across four files; pnpm exec tsc -p server/fastify/tsconfig.json --noEmit passed.",
+            "All five pilot entries: 347 original cases retained, 17 added, 364 passed after integration."
+          ],
+          "limitations": "Not every schema version, interruption point, or embedded/malformed translator-preset input is covered by this matrix. Full test:agent/test:all and browser lanes were not run for these localized test-only changes."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0013",
@@ -471,10 +551,30 @@
         "protectedBehavior": "SQLite integration checks active message CRUD, ordering, ranges, per-chat scope, translation invalidation, duplicate-ID safety, alternate reroll isolation and lifecycle, surgical diff append/truncate/resequence and stale rejection, Hypa upsert/delete, message-aware SQLite split/rejoin, legacy import, no-op behavior, and removed-chat reclamation."
       },
       "currentFiles": ["server/fastify/__tests__/messageStore.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "pilot-persistence",
       "owner": "/root/pilot_persistence; branch codex/test-pilot-persistence; worktree /home/codex/worktrees/risuai-test-pilot-persistence",
-      "review": null
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added literal raw-row expectations and SQL write audits; protected active ranges against alternates and added independent identity/role/metadata stale-prefix and non-growing append cases.",
+        "reportedFamilyCases": 32,
+        "evidence": {
+          "commits": ["f68c805a34a33b03049d1c4699d82b3d7f0df050"],
+          "documents": ["docs/test-reviews/pilot-persistence.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed in isolated pilot worktrees and revalidated after integration on fastify; temporary source mutations restored.",
+          "checks": [
+            "Baseline 27 passed; final 32 passed. All 27 original collected names and core tags retained; five cases added.",
+            "Persistence batch: nine mutation probes detected, including seven pre-fix survivors. Message probes cover unwanted prefix writes, disabled-column loss, stale metadata/identity/role, and alternate leakage.",
+            "Integrated Fastify batch: 274 tests passed across four files; pnpm exec tsc -p server/fastify/tsconfig.json --noEmit passed.",
+            "All five pilot entries: 347 original cases retained, 17 added, 364 passed after integration."
+          ],
+          "limitations": "Caller-proven append-only input and surrounding transaction ownership remain their existing contracts; this is not exhaustive message-store or integration coverage. Full test:agent/test:all and browser lanes were not run for these localized test-only changes."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0017",

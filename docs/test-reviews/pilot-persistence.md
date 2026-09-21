@@ -3,10 +3,10 @@
 Reviewed on 2026-09-21 for priority worklist entries `TL-0012` and `TL-0016`.
 The review changed tests only; all temporary production mutations were restored.
 
-| Entry | Current file | Baseline cases | Final cases | Outcome |
-| --- | --- | ---: | ---: | --- |
-| TL-0012 | [db.test.ts](../../server/fastify/__tests__/db.test.ts) | 33 | 33 | Improved |
-| TL-0016 | [messageStore.test.ts](../../server/fastify/__tests__/messageStore.test.ts) | 27 | 32 | Improved |
+| Entry   | Current file                                                                | Baseline cases | Final cases | Outcome  |
+| ------- | --------------------------------------------------------------------------- | -------------: | ----------: | -------- |
+| TL-0012 | [db.test.ts](../../server/fastify/__tests__/db.test.ts)                     |             33 |          33 | Improved |
+| TL-0016 | [messageStore.test.ts](../../server/fastify/__tests__/messageStore.test.ts) |             27 |          32 | Improved |
 
 ## Findings and changes
 
@@ -62,17 +62,17 @@ import, setup, or timeout failures. "Before" means before the relevant assertion
 change; the two memory-job probes ran after unrelated improvements but before
 changing that original constraint case.
 
-| Temporary mutation | Before | After | Evidence |
-| --- | --- | --- | --- |
-| Set generic diff `prefix = 0` immediately before the unchanged check | 27 passed | 4 failed / 28 passed | Append, unchanged, resequence, and truncation tests detect unwanted prefix writes/identity replacement. |
-| Replace `toRow`'s `disabled: disabledColumn(message)` with `disabled: null` | 27 passed | 2 failed / 30 passed | CRUD and fast-append raw-row expectations detect lost disabled values. |
-| Replace append's deep prefix equality check with transcript-length equality | 1 failed / 26 passed | 4 failed / 28 passed | Original stale-text assertion already detects this regression; new identity/role/metadata cases also reject it. |
-| Compare only message `data` arrays in append's deep prefix equality check | 27 passed | 3 failed / 29 passed | Identity-, role-, and metadata-only stale appends incorrectly return true. |
-| Remove `alternate = 0` from `getChatMessagesRange`'s SQL filter | 27 passed | 1 failed / 31 passed | The active range contains a reroll candidate. |
-| Replace migration error-path `db.exec('ROLLBACK')` with `db.exec('COMMIT')` | 5 failed / 28 passed | 5 failed / 28 passed | Stop-string, model, persona, Hypa, and translator cases detect changed persisted data after failure. |
-| Set translator compatibility `maxResponse` from `presets[0]` instead of `selected` | 33 passed | 1 failed / 32 passed | Selecting translator-b produces 500 instead of its independent 750 limit. |
-| Remove memory-job `CHECK (kind IN ('chunk', 'embed', 'summarize'))` | 33 passed | 1 failed / 32 passed | The isolated invalid-kind insert no longer throws. |
-| Remove memory-job `CHECK (json_valid(payload_json))` | 33 passed | 1 failed / 32 passed | The isolated malformed-payload insert no longer throws. |
+| Temporary mutation                                                                 | Before               | After                | Evidence                                                                                                        |
+| ---------------------------------------------------------------------------------- | -------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------- |
+| Set generic diff `prefix = 0` immediately before the unchanged check               | 27 passed            | 4 failed / 28 passed | Append, unchanged, resequence, and truncation tests detect unwanted prefix writes/identity replacement.         |
+| Replace `toRow`'s `disabled: disabledColumn(message)` with `disabled: null`        | 27 passed            | 2 failed / 30 passed | CRUD and fast-append raw-row expectations detect lost disabled values.                                          |
+| Replace append's deep prefix equality check with transcript-length equality        | 1 failed / 26 passed | 4 failed / 28 passed | Original stale-text assertion already detects this regression; new identity/role/metadata cases also reject it. |
+| Compare only message `data` arrays in append's deep prefix equality check          | 27 passed            | 3 failed / 29 passed | Identity-, role-, and metadata-only stale appends incorrectly return true.                                      |
+| Remove `alternate = 0` from `getChatMessagesRange`'s SQL filter                    | 27 passed            | 1 failed / 31 passed | The active range contains a reroll candidate.                                                                   |
+| Replace migration error-path `db.exec('ROLLBACK')` with `db.exec('COMMIT')`        | 5 failed / 28 passed | 5 failed / 28 passed | Stop-string, model, persona, Hypa, and translator cases detect changed persisted data after failure.            |
+| Set translator compatibility `maxResponse` from `presets[0]` instead of `selected` | 33 passed            | 1 failed / 32 passed | Selecting translator-b produces 500 instead of its independent 750 limit.                                       |
+| Remove memory-job `CHECK (kind IN ('chunk', 'embed', 'summarize'))`                | 33 passed            | 1 failed / 32 passed | The isolated invalid-kind insert no longer throws.                                                              |
+| Remove memory-job `CHECK (json_valid(payload_json))`                               | 33 passed            | 1 failed / 32 passed | The isolated malformed-payload insert no longer throws.                                                         |
 
 Seven pre-fix survivors represented assertion gaps; all nine probes are detected
 after strengthening, including two controls already caught before changes. This
