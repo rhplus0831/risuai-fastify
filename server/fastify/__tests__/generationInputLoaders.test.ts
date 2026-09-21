@@ -379,55 +379,62 @@ describe('selected generation repository inputs', () => {
     expect(prepare).not.toHaveBeenCalled()
   })
 
-  it('holds fixed selected read/output scope across unrelated characters, collections and assets', () => {
-    const databaseBytes: number[] = []
-    const preflightBytes: number[] = []
-    for (const unrelated of [0, 12, 48]) {
-      const { db, directory } = openFixture(fixture(unrelated))
-      insertAssetMetadataBatch(
-        db,
-        Array.from({ length: unrelated * 8 }, (_, index) => ({
-          id: index.toString(16).padStart(64, '0'),
-          ext: 'png',
-          size: 4096,
-          contentType: 'image/png',
-        })),
-      )
-      const preflight = observed(db, () => loadPersistedForGenerationPreflight(db, directory, target))
-      expect(preflight.result.generationScope).toBe('selected')
-      expect(preflight.result).not.toHaveProperty('missingTarget')
-      expect(preflight.calls.some(({ sql }) => sql.startsWith('SELECT 1 AS present FROM characters WHERE id'))).toBe(
-        false,
-      )
-      expect(preflight.returnedRows).toBeLessThanOrEqual(6)
-      expect(preflight.calls.some(({ sql }) => /\b(?:messages|chat_hypa_v3|assets)\b/i.test(sql))).toBe(false)
-      expect(preflight.result.preflightInputs?.currentChar).toEqual({ chaId: target.characterId })
-      expect(preflight.result.preflightInputs?.currentChat).toEqual({ id: target.chatId, generationSettings: settings })
-      expect(record(preflight.result.preflightInputs?.database)).not.toHaveProperty('characters')
-      preflightBytes.push(Buffer.byteLength(JSON.stringify(preflight.result.preflightInputs)))
+  it(
+    'holds fixed selected read/output scope across unrelated characters, collections and assets',
+    { tags: 'core' },
+    () => {
+      const databaseBytes: number[] = []
+      const preflightBytes: number[] = []
+      for (const unrelated of [0, 12, 48]) {
+        const { db, directory } = openFixture(fixture(unrelated))
+        insertAssetMetadataBatch(
+          db,
+          Array.from({ length: unrelated * 8 }, (_, index) => ({
+            id: index.toString(16).padStart(64, '0'),
+            ext: 'png',
+            size: 4096,
+            contentType: 'image/png',
+          })),
+        )
+        const preflight = observed(db, () => loadPersistedForGenerationPreflight(db, directory, target))
+        expect(preflight.result.generationScope).toBe('selected')
+        expect(preflight.result).not.toHaveProperty('missingTarget')
+        expect(preflight.calls.some(({ sql }) => sql.startsWith('SELECT 1 AS present FROM characters WHERE id'))).toBe(
+          false,
+        )
+        expect(preflight.returnedRows).toBeLessThanOrEqual(6)
+        expect(preflight.calls.some(({ sql }) => /\b(?:messages|chat_hypa_v3|assets)\b/i.test(sql))).toBe(false)
+        expect(preflight.result.preflightInputs?.currentChar).toEqual({ chaId: target.characterId })
+        expect(preflight.result.preflightInputs?.currentChat).toEqual({
+          id: target.chatId,
+          generationSettings: settings,
+        })
+        expect(record(preflight.result.preflightInputs?.database)).not.toHaveProperty('characters')
+        preflightBytes.push(Buffer.byteLength(JSON.stringify(preflight.result.preflightInputs)))
 
-      const assembly = observed(db, () => loadPersistedForGenerationAssembly(db, directory, target))
-      const database = record(assembly.result.database)
-      const character = records(database.characters)[0]
-      const chat = records(character.chats)[0]
-      expect(assembly.returnedRows).toBeLessThanOrEqual(10)
-      expect(assembly.result.generationScope).toBe('selected')
-      expect(assembly.result.assets).toEqual([])
-      expect(assembly.calls.some(({ sql }) => /\bassets\b/i.test(sql))).toBe(false)
-      expect(database.currentChar).toBe(0)
-      expect(records(database.characters)).toHaveLength(1)
-      expect(records(character.chats)).toHaveLength(1)
-      expect(records(chat.message)).toHaveLength(4)
-      expect(database.modules).toEqual([])
-      expect(records(database.modelPresets).map((value) => value.id)).toEqual(['selected-model'])
-      expect(records(database.promptPresets).map((value) => value.id)).toEqual(['selected-prompt'])
-      expect(records(database.personas).map((value) => value.id)).toEqual(['selected-persona'])
-      expect(JSON.stringify(database)).not.toContain('unrelated body')
-      databaseBytes.push(Buffer.byteLength(JSON.stringify(database)))
-    }
-    expect(new Set(databaseBytes).size).toBe(1)
-    expect(new Set(preflightBytes).size).toBe(1)
-  })
+        const assembly = observed(db, () => loadPersistedForGenerationAssembly(db, directory, target))
+        const database = record(assembly.result.database)
+        const character = records(database.characters)[0]
+        const chat = records(character.chats)[0]
+        expect(assembly.returnedRows).toBeLessThanOrEqual(10)
+        expect(assembly.result.generationScope).toBe('selected')
+        expect(assembly.result.assets).toEqual([])
+        expect(assembly.calls.some(({ sql }) => /\bassets\b/i.test(sql))).toBe(false)
+        expect(database.currentChar).toBe(0)
+        expect(records(database.characters)).toHaveLength(1)
+        expect(records(character.chats)).toHaveLength(1)
+        expect(records(chat.message)).toHaveLength(4)
+        expect(database.modules).toEqual([])
+        expect(records(database.modelPresets).map((value) => value.id)).toEqual(['selected-model'])
+        expect(records(database.promptPresets).map((value) => value.id)).toEqual(['selected-prompt'])
+        expect(records(database.personas).map((value) => value.id)).toEqual(['selected-persona'])
+        expect(JSON.stringify(database)).not.toContain('unrelated body')
+        databaseBytes.push(Buffer.byteLength(JSON.stringify(database)))
+      }
+      expect(new Set(databaseBytes).size).toBe(1)
+      expect(new Set(preflightBytes).size).toBe(1)
+    },
+  )
 
   it('resolves every module activation source by ID or namespace while retaining matching duplicate order', () => {
     const database = fixture()

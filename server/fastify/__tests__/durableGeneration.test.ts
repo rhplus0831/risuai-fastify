@@ -1123,7 +1123,7 @@ describe('Durable generation', () => {
     }
   })
 
-  it('keeps scoped Stop authority with the originating session while preserving legacy owner handoff', async () => {
+  coreIt('keeps scoped Stop authority with the originating session while preserving legacy owner handoff', async () => {
     await resetHarness({}, true)
     const ownerGate = makeGatedProvider({ before: 'owner handoff partial' })
     providerImpl = ownerGate.dispatchProvider
@@ -5824,7 +5824,7 @@ describe('Durable generation', () => {
     expect(generationFinalizationRetryRows()).toEqual([])
   })
 
-  it('preserves reroll alternates while durable regenerate keeps its target authoritative', async () => {
+  coreIt('preserves reroll alternates while durable regenerate keeps its target authoritative', async () => {
     await seedChatWithMessages([
       { role: 'user', data: 'greet me', chatId: 'msg-user-1' },
       { role: 'char', data: 'old reply', chatId: 'msg-char-1', saying: 'char-1' },

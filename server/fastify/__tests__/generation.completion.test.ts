@@ -427,113 +427,117 @@ describe('POST /api/v1/generate/completion', () => {
     expect(res.json()).toEqual({ type: 'success', result: 'server-owned pong' })
   })
 
-  it('round-trips only supplied tool calls and browser results through server-owned OpenAI dispatch', async () => {
-    writeDatabase({ aiModel: 'gpt4o', openAIKey: 'sk-server-owned' })
-    const tool = {
-      name: 'risu-get-character-info',
-      description: 'Get character information.',
-      inputSchema: {
-        type: 'object',
-        properties: { id: { type: 'string' } },
-        required: ['id'],
-      },
-    }
-    const sentBodies: Array<Record<string, unknown>> = []
-    globalThis.fetch = (async (_url: string, init: RequestInit) => {
-      sentBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
-      if (sentBodies.length === 1) {
-        return new Response(
-          JSON.stringify({
-            choices: [
-              {
-                message: {
-                  content: null,
-                  tool_calls: [
-                    {
-                      id: 'call-1',
-                      type: 'function',
-                      function: { name: tool.name, arguments: '{"id":"mira-id"}' },
-                    },
-                  ],
-                },
-                finish_reason: 'tool_calls',
-              },
-            ],
-          }),
-          { status: 200, headers: { 'content-type': 'application/json' } },
-        )
-      }
-      return openAIChatResponse('Mira is ready.')
-    }) as unknown as typeof globalThis.fetch
-
-    const { assertion } = await setupAuthedClient(harness.app)
-    const first = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/generate/completion',
-      headers: { 'risu-auth': assertion },
-      payload: {
-        kind: 'server-intent',
-        messages: [{ role: 'user', content: 'Is Mira available?' }],
-        stream: false,
-        mode: 'model',
-        tools: [tool],
-      },
-    })
-    expect(first.statusCode, first.body).toBe(200)
-    expect(first.json()).toEqual({
-      type: 'success',
-      result: '',
-      toolCalls: [{ id: 'call-1', name: tool.name, arguments: { id: 'mira-id' } }],
-    })
-
-    const second = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/generate/completion',
-      headers: { 'risu-auth': assertion },
-      payload: {
-        kind: 'server-intent',
-        messages: [{ role: 'user', content: 'Is Mira available?' }],
-        stream: false,
-        mode: 'model',
-        tools: [tool],
-        toolRounds: [
-          {
-            assistantContent: '',
-            calls: [{ id: 'call-1', name: tool.name, arguments: { id: 'mira-id' } }],
-            results: [{ callId: 'call-1', name: tool.name, content: '{"name":"Mira"}' }],
-          },
-        ],
-      },
-    })
-    expect(second.statusCode).toBe(200)
-    expect(second.json()).toEqual({ type: 'success', result: 'Mira is ready.' })
-    expect(sentBodies).toHaveLength(2)
-    expect(sentBodies[0].tools).toEqual([
-      {
-        type: 'function',
-        function: {
-          name: tool.name,
-          description: tool.description,
-          parameters: tool.inputSchema,
+  it(
+    'round-trips only supplied tool calls and browser results through server-owned OpenAI dispatch',
+    { tags: 'core' },
+    async () => {
+      writeDatabase({ aiModel: 'gpt4o', openAIKey: 'sk-server-owned' })
+      const tool = {
+        name: 'risu-get-character-info',
+        description: 'Get character information.',
+        inputSchema: {
+          type: 'object',
+          properties: { id: { type: 'string' } },
+          required: ['id'],
         },
-      },
-    ])
-    expect(sentBodies[1].messages).toEqual([
-      { role: 'user', content: 'Is Mira available?' },
-      {
-        role: 'assistant',
-        content: null,
-        tool_calls: [
-          {
-            id: 'call-1',
-            type: 'function',
-            function: { name: tool.name, arguments: '{"id":"mira-id"}' },
+      }
+      const sentBodies: Array<Record<string, unknown>> = []
+      globalThis.fetch = (async (_url: string, init: RequestInit) => {
+        sentBodies.push(JSON.parse(String(init.body)) as Record<string, unknown>)
+        if (sentBodies.length === 1) {
+          return new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call-1',
+                        type: 'function',
+                        function: { name: tool.name, arguments: '{"id":"mira-id"}' },
+                      },
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          )
+        }
+        return openAIChatResponse('Mira is ready.')
+      }) as unknown as typeof globalThis.fetch
+
+      const { assertion } = await setupAuthedClient(harness.app)
+      const first = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/generate/completion',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          kind: 'server-intent',
+          messages: [{ role: 'user', content: 'Is Mira available?' }],
+          stream: false,
+          mode: 'model',
+          tools: [tool],
+        },
+      })
+      expect(first.statusCode, first.body).toBe(200)
+      expect(first.json()).toEqual({
+        type: 'success',
+        result: '',
+        toolCalls: [{ id: 'call-1', name: tool.name, arguments: { id: 'mira-id' } }],
+      })
+
+      const second = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/generate/completion',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          kind: 'server-intent',
+          messages: [{ role: 'user', content: 'Is Mira available?' }],
+          stream: false,
+          mode: 'model',
+          tools: [tool],
+          toolRounds: [
+            {
+              assistantContent: '',
+              calls: [{ id: 'call-1', name: tool.name, arguments: { id: 'mira-id' } }],
+              results: [{ callId: 'call-1', name: tool.name, content: '{"name":"Mira"}' }],
+            },
+          ],
+        },
+      })
+      expect(second.statusCode).toBe(200)
+      expect(second.json()).toEqual({ type: 'success', result: 'Mira is ready.' })
+      expect(sentBodies).toHaveLength(2)
+      expect(sentBodies[0].tools).toEqual([
+        {
+          type: 'function',
+          function: {
+            name: tool.name,
+            description: tool.description,
+            parameters: tool.inputSchema,
           },
-        ],
-      },
-      { role: 'tool', tool_call_id: 'call-1', content: '{"name":"Mira"}' },
-    ])
-  })
+        },
+      ])
+      expect(sentBodies[1].messages).toEqual([
+        { role: 'user', content: 'Is Mira available?' },
+        {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              id: 'call-1',
+              type: 'function',
+              function: { name: tool.name, arguments: '{"id":"mira-id"}' },
+            },
+          ],
+        },
+        { role: 'tool', tool_call_id: 'call-1', content: '{"name":"Mira"}' },
+      ])
+    },
+  )
 
   it('proxies native Ollama Cloud tool rounds with the server model and stored credential', async () => {
     writeDatabase({
