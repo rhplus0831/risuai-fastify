@@ -21,6 +21,14 @@ to focused files, with three independent message-finalization rejection cases ad
 message write-isolation assertions strengthened. See [Command coverage ownership](tests/persistence-commands-and-events.md#command-coverage-ownership).
 The row below retains the historical 244-case scope and ranking.
 
+Post-snapshot chat command update (2026-09-21): the original `src/ts/chatCommands.test.ts`
+coverage now has **232 cases across eight files**. Sequence-wrapper cases remain in the original file;
+metadata, organization, generation settings, messages, notes/scriptstate, imports, and durable batches
+have focused suites. Independent metadata expectations, awaited duplicate-edit outcomes, and a true
+mid-sequence rejection strengthen the existing cases, with one new `sdData` dispatch regression.
+See [Chat command coverage ownership](tests/domain-mutations-and-editing-bridges.md#chat-command-coverage-ownership).
+The row below retains the historical 231-case scope and ranking.
+
 This inventory ranks the current test files by the product consequences their assertions protect. Each file received a Luna High evaluation of its actual assertions. Ratings are qualitative review judgments, not measured defect rates or evidence that the suite passes.
 
 Order: **Critical → High → Medium → Low**, then **Frequently → Often → Occasionally**, then **test count descending**. Repository-relative path breaks remaining ties. For a file covering several behaviors, severity follows the most serious credible direct consequence and frequency follows that severity-determining scenario.

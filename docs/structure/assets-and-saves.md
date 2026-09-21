@@ -391,7 +391,7 @@ affect single-chat, dataset, character-card, `.risu`, bundle, or local-backup
 exports. The client contract is guarded by
 `src/ts/characters.exportChat.test.ts`,
 `src/lib/SideBars/SideChatList.svelte.test.ts`, and
-`src/ts/chatCommands.test.ts`. The server-side transaction, revision, and event
+`src/ts/chatCommands.organization.dom.test.ts`. The server-side transaction, revision, and event
 contract belongs to
 [Data And Events](data-and-events.md#revision-contract).
 

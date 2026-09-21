@@ -252,7 +252,7 @@ all chats with an empty `Chat 1`. The optimistic durable reset preserves chat
 folders, routes the still-current view to the replacement, and rolls back on
 failure. Canceling, a failed export, or a changed export fence leaves chat
 structure unchanged. Guards are `SideChatList.svelte.test.ts`,
-`src/ts/characters.exportChat.test.ts`, and `src/ts/chatCommands.test.ts`.
+`src/ts/characters.exportChat.test.ts`, and `src/ts/chatCommands.organization.dom.test.ts`.
 
 The branch-graph action also strictly hydrates every chat and abandons its
 result if the character owner changes. It passes a read-only graph of hashed

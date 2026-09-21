@@ -139,7 +139,7 @@ chat, and retains or rolls back that projection according to the normal
 `accepted`/`queued`/`failed` outcome. The low-level `resetChatsCommand()`
 intentionally supplies no compact local effect; its `chats.reset` event
 therefore reconciles through the authoritative
-`/api/v1/characters/:characterId` row. `src/ts/chatCommands.test.ts` guards the
+`/api/v1/characters/:characterId` row. `src/ts/chatCommands.organization.dom.test.ts` guards the
 outcome/rollback path and `src/ts/server/commands.test.ts` guards the wire
 contract.
 
