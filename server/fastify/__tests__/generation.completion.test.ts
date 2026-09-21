@@ -536,6 +536,77 @@ describe('POST /api/v1/generate/completion', () => {
         },
         { role: 'tool', tool_call_id: 'call-1', content: '{"name":"Mira"}' },
       ])
+
+      const unavailableToolName = 'risu-not-supplied'
+      const unsuppliedProviderCall = vi.fn(
+        async () =>
+          new Response(
+            JSON.stringify({
+              choices: [
+                {
+                  message: {
+                    content: null,
+                    tool_calls: [
+                      {
+                        id: 'call-unavailable',
+                        type: 'function',
+                        function: { name: unavailableToolName, arguments: '{}' },
+                      },
+                    ],
+                  },
+                  finish_reason: 'tool_calls',
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+      )
+      globalThis.fetch = unsuppliedProviderCall as unknown as typeof globalThis.fetch
+      const rejectedProviderCall = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/generate/completion',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          kind: 'server-intent',
+          messages: [{ role: 'user', content: 'Use only the supplied tool.' }],
+          stream: false,
+          mode: 'model',
+          tools: [tool],
+        },
+      })
+      expect(rejectedProviderCall.statusCode).toBe(200)
+      expect(rejectedProviderCall.json()).toEqual({
+        type: 'fail',
+        result: `invalid upstream tool call: tool call requested an unavailable tool: ${unavailableToolName}`,
+      })
+      expect(unsuppliedProviderCall).toHaveBeenCalledOnce()
+
+      const browserRoundDispatch = vi.fn(async () => openAIChatResponse('must not dispatch'))
+      globalThis.fetch = browserRoundDispatch as unknown as typeof globalThis.fetch
+      const rejectedBrowserRound = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/generate/completion',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          kind: 'server-intent',
+          messages: [{ role: 'user', content: 'Use only the supplied tool.' }],
+          stream: false,
+          mode: 'model',
+          tools: [tool],
+          toolRounds: [
+            {
+              assistantContent: '',
+              calls: [{ id: 'call-unavailable', name: unavailableToolName, arguments: {} }],
+              results: [{ callId: 'call-unavailable', name: unavailableToolName, content: '{}' }],
+            },
+          ],
+        },
+      })
+      expect(rejectedBrowserRound.statusCode).toBe(400)
+      expect(rejectedBrowserRound.json()).toEqual({
+        error: `tool call requested an unavailable tool: ${unavailableToolName}`,
+      })
+      expect(browserRoundDispatch).not.toHaveBeenCalled()
     },
   )
 
