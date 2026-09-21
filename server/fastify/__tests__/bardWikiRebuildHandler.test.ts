@@ -402,39 +402,43 @@ describe('BardWiki historical rebuild', () => {
     },
   )
 
-  it('publishes a new derived document while preserving a manually edited previous rebuild document', async () => {
-    const harness = createHarness(1)
-    try {
-      enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
-      await harness.worker.tick()
-      const original = listBardWikiDocuments(harness.db, 'chat-a')[0]
-      const manual = updateBardWikiDocument(harness.db, 'chat-a', original.id, {
-        expectedVersion: original.version,
-        expectedContentHash: original.contentHash,
-        markdown: 'Manual correction that must survive every rebuild.',
-        actor: 'user',
-        commandRevision: 2,
-      })
-      const replacement = enqueueBardWikiRebuild(harness.db, {
-        chatId: 'chat-a',
-        policy: 'full',
-        expectedSourceCount: 1,
-      })
-      await harness.worker.tick()
-      expect(getBardWikiJob(harness.db, replacement.id)).toMatchObject({ status: 'completed' })
-      expect(getBardWikiDocument(harness.db, 'chat-a', original.id)).toEqual(manual)
-      const documents = listBardWikiDocuments(harness.db, 'chat-a')
-      expect(documents).toHaveLength(2)
-      expect(documents.find((document) => document.id !== original.id)?.markdown).toBe('## assistant-0\nAnswer 0')
-      const third = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
-      await harness.worker.tick()
-      expect(getBardWikiJob(harness.db, third.id)).toMatchObject({ status: 'completed' })
-      expect(getBardWikiDocument(harness.db, 'chat-a', original.id)).toEqual(manual)
-      expect(listBardWikiDocuments(harness.db, 'chat-a')).toHaveLength(2)
-    } finally {
-      harness.db.close()
-    }
-  })
+  it(
+    'publishes a new derived document while preserving a manually edited previous rebuild document',
+    { tags: 'core' },
+    async () => {
+      const harness = createHarness(1)
+      try {
+        enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+        await harness.worker.tick()
+        const original = listBardWikiDocuments(harness.db, 'chat-a')[0]
+        const manual = updateBardWikiDocument(harness.db, 'chat-a', original.id, {
+          expectedVersion: original.version,
+          expectedContentHash: original.contentHash,
+          markdown: 'Manual correction that must survive every rebuild.',
+          actor: 'user',
+          commandRevision: 2,
+        })
+        const replacement = enqueueBardWikiRebuild(harness.db, {
+          chatId: 'chat-a',
+          policy: 'full',
+          expectedSourceCount: 1,
+        })
+        await harness.worker.tick()
+        expect(getBardWikiJob(harness.db, replacement.id)).toMatchObject({ status: 'completed' })
+        expect(getBardWikiDocument(harness.db, 'chat-a', original.id)).toEqual(manual)
+        const documents = listBardWikiDocuments(harness.db, 'chat-a')
+        expect(documents).toHaveLength(2)
+        expect(documents.find((document) => document.id !== original.id)?.markdown).toBe('## assistant-0\nAnswer 0')
+        const third = enqueueBardWikiRebuild(harness.db, { chatId: 'chat-a', policy: 'full', expectedSourceCount: 1 })
+        await harness.worker.tick()
+        expect(getBardWikiJob(harness.db, third.id)).toMatchObject({ status: 'completed' })
+        expect(getBardWikiDocument(harness.db, 'chat-a', original.id)).toEqual(manual)
+        expect(listBardWikiDocuments(harness.db, 'chat-a')).toHaveLength(2)
+      } finally {
+        harness.db.close()
+      }
+    },
+  )
 
   it('keeps existing derived documents in missing-only merge mode', async () => {
     const harness = createHarness(1)

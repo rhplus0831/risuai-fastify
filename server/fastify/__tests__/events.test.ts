@@ -502,6 +502,68 @@ describe('command events stream', () => {
     }
   })
 
+  it('rejects owner-class escalation from a chat-only session at the route boundary', async () => {
+    await stopHarness(harness)
+    harness = await startHarness({ chatOccupancyEnabled: true })
+    const { assertion } = await setupAuthedClient(harness.app)
+    await importDatabase(harness.app, assertion, {
+      characters: [
+        {
+          chaId: 'character-occupancy',
+          name: 'Occupancy',
+          chats: [
+            { id: 'chat-a', message: [] },
+            { id: 'chat-b', message: [] },
+          ],
+        },
+      ],
+    })
+    const bootstrap = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/bootstrap',
+      headers: { 'risu-auth': assertion },
+    })
+    const databaseLineage = bootstrap.json().databaseLineage as string
+    const baseHeaders = {
+      'risu-auth': assertion,
+      'risu-writer-session': 'reader-occupancy',
+      'risu-database-lineage': databaseLineage,
+      'risu-chat-occupancy-epoch': '0',
+    }
+    const chatOnly = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/chat-occupancies/chat-a/claim',
+      headers: baseHeaders,
+      payload: { version: 1, claimClass: 'chat_only' },
+    })
+    expect(chatOnly.statusCode).toBe(200)
+
+    const escalation = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/chat-occupancies/chat-b/claim',
+      headers: baseHeaders,
+      payload: { version: 1, claimClass: 'owner' },
+    })
+    expect(escalation.statusCode).toBe(423)
+    expect(escalation.json()).toMatchObject({
+      error: 'active_writer_stale',
+      reason: 'An owner-class claim requires the durable active owner session.',
+    })
+
+    const snapshot = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/chat-occupancies',
+      headers: { 'risu-auth': assertion },
+    })
+    expect(snapshot.json().occupancies).toEqual([
+      expect.objectContaining({
+        chatId: 'chat-a',
+        occupantSessionId: 'reader-occupancy',
+        claimClass: 'chat_only',
+      }),
+    ])
+  })
+
   it('coalesces setup-window occupancy transitions to the latest complete snapshot and streams later mutations', async () => {
     await stopHarness(harness)
     harness = await startHarness({ chatOccupancyEnabled: true })

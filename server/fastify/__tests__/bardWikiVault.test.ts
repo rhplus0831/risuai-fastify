@@ -143,25 +143,23 @@ describe('BardWiki Markdown vault import', () => {
     expect(listBardWikiDocuments(db, 'chat-a')).toHaveLength(1)
   })
 
-  it('requires an exact version and hash fence before replacement', () => {
+  it('requires an exact version and hash fence before replacement', { tags: 'core' }, () => {
     createDocument('document-a', 'Lore/A', { markdown: '## Imported\nValue.' })
     const decoded = decodeBardWikiVault(encodeBardWikiVault(db, 'chat-a'))
     db.prepare('DELETE FROM bardwiki_documents WHERE chat_id = ?').run('chat-a')
     const local = createDocument('document-a', 'Lore/A', { markdown: '## Local\nValue.' })
 
     expect(planBardWikiVaultImport(db, 'chat-a', decoded, 'replace')).toMatchObject({ applicable: false, skips: 1 })
-    const preview = planBardWikiVaultImport(db, 'chat-a', decoded, 'replace', [
-      { documentId: local.id, version: local.version, contentHash: local.contentHash },
-    ])
+    const exactFence = { documentId: local.id, version: local.version, contentHash: local.contentHash }
+    expect(
+      planBardWikiVaultImport(db, 'chat-a', decoded, 'replace', [{ ...exactFence, version: exactFence.version + 1 }]),
+    ).toMatchObject({ applicable: false, replacements: 0, skips: 1 })
+    expect(
+      planBardWikiVaultImport(db, 'chat-a', decoded, 'replace', [{ ...exactFence, contentHash: '0'.repeat(64) }]),
+    ).toMatchObject({ applicable: false, replacements: 0, skips: 1 })
+    const preview = planBardWikiVaultImport(db, 'chat-a', decoded, 'replace', [exactFence])
     expect(preview).toMatchObject({ applicable: true, replacements: 1 })
-    applyBardWikiVaultImport(
-      db,
-      'chat-a',
-      decoded,
-      'replace',
-      [{ documentId: local.id, version: local.version, contentHash: local.contentHash }],
-      2,
-    )
+    applyBardWikiVaultImport(db, 'chat-a', decoded, 'replace', [exactFence], 2)
     expect(listBardWikiDocuments(db, 'chat-a')[0].markdown).toBe('## Imported\nValue.')
   })
 

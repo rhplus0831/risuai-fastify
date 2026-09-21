@@ -278,37 +278,41 @@ describe('BardWiki source lifecycle', () => {
     }
   })
 
-  it('preserves later manual Markdown and escalates every affected live document to needs_review', async () => {
-    const harness = createHarness()
-    try {
-      await harness.worker.tick()
-      const applied = getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)!
-      const event = getBardWikiDocument(harness.db, 'chat-a', applied.eventDocumentId!)!
-      const manualMarkdown = `${event.markdown}\n\nManual correction that must survive.`
-      updateBardWikiDocument(harness.db, 'chat-a', event.id, {
-        expectedVersion: event.version,
-        expectedContentHash: event.contentHash,
-        markdown: manualMarkdown,
-        commandRevision: 1,
-      })
+  it(
+    'preserves later manual Markdown and escalates every affected live document to needs_review',
+    { tags: 'core' },
+    async () => {
+      const harness = createHarness()
+      try {
+        await harness.worker.tick()
+        const applied = getBardWikiReceiptSummary(harness.db, harness.confirmation.receipt.id)!
+        const event = getBardWikiDocument(harness.db, 'chat-a', applied.eventDocumentId!)!
+        const manualMarkdown = `${event.markdown}\n\nManual correction that must survive.`
+        updateBardWikiDocument(harness.db, 'chat-a', event.id, {
+          expectedVersion: event.version,
+          expectedContentHash: event.contentHash,
+          markdown: manualMarkdown,
+          commandRevision: 1,
+        })
 
-      updateActiveMessageById(harness.db, 'user-a', { data: `${USER_TEXT} Edited.` })
-      await harness.worker.tick()
+        updateActiveMessageById(harness.db, 'user-a', { data: `${USER_TEXT} Edited.` })
+        await harness.worker.tick()
 
-      expect(getBardWikiReceiptSummary(harness.db, applied.id)).toMatchObject({
-        state: 'needs_review',
-        errorCode: 'bardwiki_reconcile_needs_review',
-      })
-      expect(getBardWikiDocument(harness.db, 'chat-a', event.id)).toMatchObject({
-        reviewState: 'needs_review',
-        markdown: manualMarkdown,
-        version: 3,
-      })
-      expect(getSchemaState(harness.db).revision).toBe(2)
-    } finally {
-      harness.db.close()
-    }
-  })
+        expect(getBardWikiReceiptSummary(harness.db, applied.id)).toMatchObject({
+          state: 'needs_review',
+          errorCode: 'bardwiki_reconcile_needs_review',
+        })
+        expect(getBardWikiDocument(harness.db, 'chat-a', event.id)).toMatchObject({
+          reviewState: 'needs_review',
+          markdown: manualMarkdown,
+          version: 3,
+        })
+        expect(getSchemaState(harness.db).revision).toBe(2)
+      } finally {
+        harness.db.close()
+      }
+    },
+  )
 
   it('preserves a vault replacement through queued source reconciliation and the next full rebuild', async () => {
     const harness = createHarness()

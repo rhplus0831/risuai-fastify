@@ -117,7 +117,7 @@ describe('chat occupancy service', () => {
     expect(db.prepare('SELECT revision FROM schema_version WHERE id = 1').get()).toEqual({ revision: 7 })
   })
 
-  it('requires durable owner identity for owner admission and preserves idempotent epochs', () => {
+  it('requires durable owner identity for owner admission and preserves idempotent epochs', { tags: 'core' }, () => {
     registerDatabaseWriterSession(db, 'owner-a')
     expectCode(
       () =>

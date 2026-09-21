@@ -133,29 +133,33 @@ describe('active writer session guard', () => {
     }
   })
 
-  it('lets only one acquisition use the same no-owner snapshot, preserving the winning disconnected writer', async () => {
-    const discovery = await harness.app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: authedHeaders() })
-    const observed = discovery.json()
-    expect(observed.writer).toEqual({ sessionId: null, epoch: 0 })
-    const responses = await Promise.all(
-      ['session-a', 'session-b'].map((sessionId) =>
-        harness.app.inject({
-          method: 'GET',
-          url: '/api/v1/bootstrap',
-          headers: { ...authedHeaders(sessionId), ...expectedWriterHeaders(observed) },
-        }),
-      ),
-    )
-    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409])
-    const winner = responses.find((response) => response.statusCode === 200)!.json()
-    expect(winner.writer.epoch).toBe(1)
-    expect(responses.find((response) => response.statusCode === 409)!.json()).toMatchObject({
-      error: 'active_writer_changed',
-    })
-    const current = await harness.app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: authedHeaders() })
-    expect(current.json().writer).toEqual(winner.writer)
-    expect(current.json().revision).toBe(observed.revision)
-  })
+  it(
+    'lets only one acquisition use the same no-owner snapshot, preserving the winning disconnected writer',
+    { tags: 'core' },
+    async () => {
+      const discovery = await harness.app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: authedHeaders() })
+      const observed = discovery.json()
+      expect(observed.writer).toEqual({ sessionId: null, epoch: 0 })
+      const responses = await Promise.all(
+        ['session-a', 'session-b'].map((sessionId) =>
+          harness.app.inject({
+            method: 'GET',
+            url: '/api/v1/bootstrap',
+            headers: { ...authedHeaders(sessionId), ...expectedWriterHeaders(observed) },
+          }),
+        ),
+      )
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 409])
+      const winner = responses.find((response) => response.statusCode === 200)!.json()
+      expect(winner.writer.epoch).toBe(1)
+      expect(responses.find((response) => response.statusCode === 409)!.json()).toMatchObject({
+        error: 'active_writer_changed',
+      })
+      const current = await harness.app.inject({ method: 'GET', url: '/api/v1/bootstrap', headers: authedHeaders() })
+      expect(current.json().writer).toEqual(winner.writer)
+      expect(current.json().revision).toBe(observed.revision)
+    },
+  )
 
   it('conditionally resumes the same writer and explicitly acquires a disconnected foreign writer', async () => {
     await bootstrapSession(harness.app, 'session-a')
@@ -316,7 +320,7 @@ describe('active writer session guard', () => {
     expect(current.json().writer).toEqual({ sessionId: 'session-a', epoch: 1 })
   })
 
-  it('persists writer ownership and epochs across a server restart', async () => {
+  it('persists writer ownership and epochs across a server restart', { tags: 'core' }, async () => {
     const writerA = await harness.app.inject({
       method: 'GET',
       url: '/api/v1/bootstrap',

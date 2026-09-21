@@ -554,7 +554,7 @@ describe('chat occupancy command enforcement', () => {
     expect(readRows('SELECT * FROM chats WHERE id = ?', 'chat-a')).toEqual(beforeOccupied)
   })
 
-  it('rejects database replacement before publication and retains lineage and rows', async () => {
+  it('rejects database replacement before publication and retains lineage and rows', { tags: 'core' }, async () => {
     await claim('chat-a', 'reader-a')
     const beforeChats = readRows('SELECT * FROM chats ORDER BY id')
 
@@ -582,32 +582,36 @@ describe('chat occupancy command enforcement', () => {
     ])
   })
 
-  it('rejects backup restore inside its publication transaction while a chat is occupied', async () => {
-    const backup = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/backups',
-      headers: ownerHeaders(),
-      payload: { label: 'before occupancy' },
-    })
-    expect(backup.statusCode).toBe(201)
-    await claim('chat-a', 'reader-a')
-    const beforeChats = readRows('SELECT * FROM chats ORDER BY id')
+  it(
+    'rejects backup restore inside its publication transaction while a chat is occupied',
+    { tags: 'core' },
+    async () => {
+      const backup = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/backups',
+        headers: ownerHeaders(),
+        payload: { label: 'before occupancy' },
+      })
+      expect(backup.statusCode).toBe(201)
+      await claim('chat-a', 'reader-a')
+      const beforeChats = readRows('SELECT * FROM chats ORDER BY id')
 
-    const restored = await harness.app.inject({
-      method: 'POST',
-      url: `/api/v1/backups/${backup.json().id}/restore`,
-      headers: ownerHeaders(),
-    })
+      const restored = await harness.app.inject({
+        method: 'POST',
+        url: `/api/v1/backups/${backup.json().id}/restore`,
+        headers: ownerHeaders(),
+      })
 
-    expect(restored.statusCode).toBe(423)
-    expect(restored.json()).toMatchObject({
-      error: 'chat_occupied',
-      conflictingChatIds: ['chat-a'],
-      safeRelease: expect.any(String),
-    })
-    expect(readRows('SELECT * FROM chats ORDER BY id')).toEqual(beforeChats)
-    expect(readRows('SELECT lineage FROM database_metadata WHERE id = 1')).toEqual([
-      { lineage: harness.databaseLineage },
-    ])
-  })
+      expect(restored.statusCode).toBe(423)
+      expect(restored.json()).toMatchObject({
+        error: 'chat_occupied',
+        conflictingChatIds: ['chat-a'],
+        safeRelease: expect.any(String),
+      })
+      expect(readRows('SELECT * FROM chats ORDER BY id')).toEqual(beforeChats)
+      expect(readRows('SELECT lineage FROM database_metadata WHERE id = 1')).toEqual([
+        { lineage: harness.databaseLineage },
+      ])
+    },
+  )
 })
