@@ -227,6 +227,8 @@ function cachePayload(hashes: Record<string, string[]>): Record<string, unknown>
   return { cache: { version: 2, hashes } }
 }
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('authenticated resource read routes', () => {
   it('loads greeting translations with nullable legacy generation settings without rewriting them', async () => {
     const sqlite = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
@@ -332,7 +334,7 @@ describe('authenticated resource read routes', () => {
     },
   )
 
-  it('returns the exact versioned coherent shell projection', async () => {
+  coreIt('returns the exact versioned coherent shell projection', async () => {
     const response = await harness.app.inject({
       method: 'GET',
       url: '/api/v1/resources/shell',
@@ -537,7 +539,7 @@ describe('authenticated resource read routes', () => {
     expect(readAllDatabaseRows()).toEqual(before)
   })
 
-  it('returns an allowlisted, masked settings group without collection-owned memory presets', async () => {
+  coreIt('returns an allowlisted, masked settings group without collection-owned memory presets', async () => {
     const providers = await harness.app.inject({
       method: 'GET',
       url: '/api/v1/settings/providers',
@@ -772,7 +774,7 @@ describe('authenticated resource read routes', () => {
     })
   })
 
-  it('returns aggregate and allowlisted targeted collections with masked secrets', async () => {
+  coreIt('returns aggregate and allowlisted targeted collections with masked secrets', async () => {
     const aggregate = await harness.app.inject({
       method: 'GET',
       url: '/api/v1/collections',

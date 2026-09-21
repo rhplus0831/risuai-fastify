@@ -516,6 +516,57 @@ describe('model profile and credential commands', () => {
     })
   })
 
+  it('creates and renames a provider credential while preserving its masked secret', { tags: 'core' }, async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await importDatabase(harness.app, assertion, {})
+
+    const created = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/commands/provider-credentials',
+      headers: { 'risu-auth': assertion },
+      payload: {
+        baseRevision: revision,
+        credential: { name: 'Created API key', type: 'apiKey', apiKey: 'created-secret' },
+      },
+    })
+    expect(created.statusCode, created.body).toBe(200)
+    const credentialId = created.json().credentialId as string
+
+    const renamed = await harness.app.inject({
+      method: 'PATCH',
+      url: `/api/v1/commands/provider-credentials/${credentialId}`,
+      headers: { 'risu-auth': assertion },
+      payload: {
+        baseRevision: created.json().revision,
+        expectedCredential: {
+          id: credentialId,
+          name: 'Created API key',
+          type: 'apiKey',
+          apiKey: MASKED_PROVIDER_SECRET,
+        },
+        credential: {
+          id: credentialId,
+          name: 'Renamed API key',
+          type: 'apiKey',
+          apiKey: MASKED_PROVIDER_SECRET,
+        },
+      },
+    })
+    expect(renamed.statusCode, renamed.body).toBe(200)
+    expect(
+      (
+        loadPersistedFromDir(harness.dataDir).database as {
+          providerCredentials: Array<Record<string, unknown>>
+        }
+      ).providerCredentials,
+    ).toContainEqual({
+      id: credentialId,
+      name: 'Renamed API key',
+      type: 'apiKey',
+      apiKey: 'created-secret',
+    })
+  })
+
   it('creates, renames, rotates, and deletes provider credentials with masked placeholder semantics', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const revision = await importDatabase(harness.app, assertion, {

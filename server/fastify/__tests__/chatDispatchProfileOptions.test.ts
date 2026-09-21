@@ -20,6 +20,8 @@ import { _resetVertexTokenCacheForTesting } from '../src/generation/vertexAuth.j
 import { dispatchChatProvider, getServerGenerationModelString } from '../src/prompt/chatDispatch.js'
 import type { PromptRowSummary } from '../src/prompt/promptSummary.js'
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 interface CapturedDispatchRequest {
   url: string
   headers: Record<string, string>
@@ -2871,7 +2873,7 @@ describe('dispatchChatProvider profile providerOptions', () => {
     expect(captured[0].body.model).toBe('profile-custom-model')
   })
 
-  it('dispatches first-class LLM Gateway profiles through its fixed OpenAI-compatible endpoint', async () => {
+  coreIt('dispatches first-class LLM Gateway profiles through its fixed OpenAI-compatible endpoint', async () => {
     const profile = resolveModelProfile({
       database: db({
         providerCredentials: [{ id: 'credential-gateway', name: 'LLM Gateway', type: 'apiKey', apiKey: 'sk-gateway' }],

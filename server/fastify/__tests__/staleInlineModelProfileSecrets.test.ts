@@ -95,7 +95,7 @@ describe('stale inline profile secrets in a pre-credential-store DB', () => {
     rmSync(dataDir, { recursive: true, force: true })
   })
 
-  it('durably scrubs settings and preset rows before reads, exports, or extraction', async () => {
+  it('durably scrubs settings and preset rows before reads, exports, or extraction', { tags: 'core' }, async () => {
     // 1. Seed a valid DB through the import route.
     const assertion1 = await signAssertion(keypair.privateKey, publicJwk)
     const imported = await app.inject({

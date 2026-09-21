@@ -447,7 +447,7 @@ describe('POST /api/v1/tts/synthesize', () => {
     expect(response.body).not.toContain('persisted-tts.example')
   })
 
-  it('rejects an endpoint override before a stored character credential reaches egress', async () => {
+  it('rejects an endpoint override before a stored character credential reaches egress', { tags: 'core' }, async () => {
     const fetchImpl = vi.fn()
     const harness = await startHarness(fetchImpl as typeof fetch)
     await seedTtsDatabase(harness.app)

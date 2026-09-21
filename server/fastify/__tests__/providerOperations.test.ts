@@ -64,6 +64,8 @@ function header(init: RequestInit, name: string): string | null {
   return new Headers(init.headers).get(name)
 }
 
+const coreIt = (name: string, fn: () => void | Promise<void>): void => it(name, { tags: 'core' }, fn)
+
 describe('provider operation allowlist', () => {
   it.each([
     {
@@ -231,7 +233,7 @@ describe('provider operation allowlist', () => {
     expect(header(neuralwatt.init, 'authorization')).toBeNull()
   })
 
-  it('resolves only matching model-profile secrets and preserves the same-provider flat fallback', () => {
+  coreIt('resolves only matching model-profile secrets and preserves the same-provider flat fallback', () => {
     const profile = resolveProviderUpstreamRequest(
       {
         operation: 'openrouter.models',

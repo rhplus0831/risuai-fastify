@@ -528,7 +528,7 @@ async function seedOpenAiKey(app: FastifyInstance, openAIKey: string): Promise<v
 }
 
 describe('POST /api/v1/image-generation', () => {
-  it('returns bounded binary image bytes without exposing the raw SQLite key', async () => {
+  it('returns bounded binary image bytes without exposing the raw SQLite key', { tags: 'core' }, async () => {
     const fetchImpl = vi.fn(async (_input: string | URL | Request, _init?: RequestInit) =>
       Promise.resolve(new Response(pngJson())),
     )
