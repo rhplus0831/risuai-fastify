@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test'
 import { DatabaseSync } from 'node:sqlite'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { zipSync } from 'fflate'
 import { encodeLegacyRisuSaveEnvelope } from '../src/risuSave/legacyEnvelopeCodec.js'
@@ -170,6 +171,14 @@ test('server backup selection restores authored settings and survives reload', {
   const database = smallFastBootstrapFixture()
   database.showMemoryLimit = true
   const harness = await startFastBootstrapHarness(database, { temporaryDirectoryPrefix: 'risu-phase06-restore-' })
+  const restoredAssetPath = path.join(harness.dataDir, 'assets', 'phase2-restore-asset.bin')
+  const restoredSavePath = path.join(harness.dataDir, 'save', 'phase2-restore-save.txt')
+  const restoredAssetBytes = Buffer.from('phase2 distinctive backup asset bytes')
+  const restoredSaveBytes = Buffer.from('phase2 distinctive backup save bytes')
+  mkdirSync(path.dirname(restoredAssetPath), { recursive: true })
+  mkdirSync(path.dirname(restoredSavePath), { recursive: true })
+  writeFileSync(restoredAssetPath, restoredAssetBytes)
+  writeFileSync(restoredSavePath, restoredSaveBytes)
   try {
     await ready(page, harness)
     await page.getByRole('button', { name: 'Save Server Backup', exact: true }).click()
@@ -187,6 +196,10 @@ test('server backup selection restores authored settings and survives reload', {
     await page.getByRole('checkbox', { name: 'Show Memory Limit', exact: true }).press('Space')
     expect((await changed).ok()).toBe(true)
     expect(state(harness).settings.showMemoryLimit).toBe(false)
+    writeFileSync(restoredAssetPath, 'changed after backup')
+    rmSync(restoredSavePath)
+    expect(readFileSync(restoredAssetPath).equals(restoredAssetBytes)).toBe(false)
+    expect(existsSync(restoredSavePath)).toBe(false)
     await ready(page, harness)
     const before = state(harness)
     await page.getByRole('button', { name: 'Load Server Backup', exact: true }).click()
@@ -198,7 +211,13 @@ test('server backup selection restores authored settings and survives reload', {
     await loaded.getByRole('button', { name: 'OK', exact: true }).click()
     expect(state(harness).ownership).not.toEqual(before.ownership)
     expect(state(harness).restores).toHaveLength(1)
+    expect(existsSync(restoredAssetPath)).toBe(true)
+    expect(existsSync(restoredSavePath)).toBe(true)
+    expect(readFileSync(restoredAssetPath)).toEqual(restoredAssetBytes)
+    expect(readFileSync(restoredSavePath)).toEqual(restoredSaveBytes)
     await checkRestoredSetting(page, harness)
+    expect(readFileSync(restoredAssetPath)).toEqual(restoredAssetBytes)
+    expect(readFileSync(restoredSavePath)).toEqual(restoredSaveBytes)
   } finally {
     await page.close()
     await closeFastBootstrapHarness(harness)

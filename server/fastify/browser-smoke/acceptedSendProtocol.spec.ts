@@ -1079,24 +1079,28 @@ test('Pixel visibility/pageshow Stop remains exact and persists one stopped part
   }
 })
 
-test('viewer transport loss reconnects boundedly and terminal snapshot stays canonical', async ({ page }) => {
-  const chatId = chats.transport
-  const userText = 'transport recovery request'
-  const partial = 'Canonical'
-  const reply = `${partial} terminal snapshot`
-  harness.provider.configure(chatId, { chunks: [partial, ' terminal', ' snapshot'], holdAfterChunk: 1 })
+test(
+  'viewer transport loss reconnects boundedly and terminal snapshot stays canonical',
+  { tag: '@core' },
+  async ({ page }) => {
+    const chatId = chats.transport
+    const userText = 'transport recovery request'
+    const partial = 'Canonical'
+    const reply = `${partial} terminal snapshot`
+    harness.provider.configure(chatId, { chunks: [partial, ' terminal', ' snapshot'], holdAfterChunk: 1 })
 
-  await bootChat(page, chatId)
-  await sendMessage(page, userText)
-  const operation = await expectRunningTruth(page, chatId, userText, partial)
-  expect(harness.provider.severCurrentViewers(chatId)).toBeGreaterThanOrEqual(1)
-  await expect.poll(() => harness.provider.viewerStarts(chatId), { timeout: 10_000 }).toBe(2)
+    await bootChat(page, chatId)
+    await sendMessage(page, userText)
+    const operation = await expectRunningTruth(page, chatId, userText, partial)
+    expect(harness.provider.severCurrentViewers(chatId)).toBeGreaterThanOrEqual(1)
+    await expect.poll(() => harness.provider.viewerStarts(chatId), { timeout: 10_000 }).toBe(2)
 
-  harness.provider.release(chatId)
-  await expectTerminalTruth(page, chatId, userText, reply, 'completed', operation.operationId)
-  expect(harness.provider.calls(chatId)).toBe(1)
-  expect(harness.provider.viewerStarts(chatId)).toBe(2)
-})
+    harness.provider.release(chatId)
+    await expectTerminalTruth(page, chatId, userText, reply, 'completed', operation.operationId)
+    expect(harness.provider.calls(chatId)).toBe(1)
+    expect(harness.provider.viewerStarts(chatId)).toBe(2)
+  },
+)
 
 test('preserved runtime reconciles completion after its observer and replay job expire', async ({ page }) => {
   test.setTimeout(45_000)
@@ -1128,7 +1132,7 @@ test('preserved runtime reconciles completion after its observer and replay job 
   expect(harness.provider.calls(chatId)).toBe(1)
 })
 
-test('two concurrent chats keep stable-target UI, recovery, and jobs isolated', async ({ page }) => {
+test('two concurrent chats keep stable-target UI, recovery, and jobs isolated', { tag: '@core' }, async ({ page }) => {
   const userA = 'concurrent request A'
   const userB = 'concurrent request B'
   const partialA = 'Chat A partial'

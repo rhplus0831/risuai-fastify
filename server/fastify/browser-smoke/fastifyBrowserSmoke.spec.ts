@@ -1,7 +1,9 @@
 import { devices, expect, test, type Locator, type Page } from '@playwright/test'
 import { mkdtempSync, rmSync } from 'node:fs'
+import { DatabaseSync } from 'node:sqlite'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { unzipSync } from 'fflate'
 import { buildApp } from '../src/app.js'
 import type { FastifyInstance } from 'fastify'
 import { setupBrowserSmokeAuth } from './auth.js'
@@ -129,8 +131,14 @@ test.afterEach(async ({ context }) => {
 test('@core Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command', async ({
   page,
 }) => {
+  const providerSecret = 'phase2-shell-provider-secret-9e0bb554'
+  const seededDatabase = browserSmokeDatabase()
+  seededDatabase.openAIKey = providerSecret
+  await importDatabase(harness.app, browserSmokeAssertion, seededDatabase)
+  const seededAssetBytes = [82, 105, 115, 117, 65, 73, 32, 98, 117, 110, 100, 108, 101, 32, 97, 115, 115, 101, 116]
   const apiRequests: string[] = []
   const resourceCacheRequests: Array<{ path: string; hashes: Record<string, unknown> }> = []
+  const sensitiveProjectionResponses: Array<{ path: string; body: Promise<string> }> = []
   const browserDiagnostics: string[] = []
   await page.addInitScript(() => {
     const audit: { records: StorageAuditRecord[] } = { records: [] }
@@ -172,6 +180,16 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
   page.on('pageerror', (error) => {
     browserDiagnostics.push(`pageerror: ${error.message}`)
   })
+  page.on('response', (response) => {
+    const pathname = new URL(response.url()).pathname
+    if (
+      pathname === '/api/v1/resources/shell' ||
+      pathname === '/api/v1/settings' ||
+      pathname.startsWith('/api/v1/settings/')
+    ) {
+      sensitiveProjectionResponses.push({ path: pathname, body: response.text() })
+    }
+  })
   page.on('request', (request) => {
     const url = new URL(request.url())
     if (url.pathname.startsWith('/api/v1/')) {
@@ -209,6 +227,15 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
     )
   }
   await expect(page.locator('[data-char-id="char-smoke"]')).toBeVisible()
+  await expect
+    .poll(() => ({
+      settings: sensitiveProjectionResponses.some((response) => response.path.startsWith('/api/v1/settings/')),
+      shell: sensitiveProjectionResponses.some((response) => response.path === '/api/v1/resources/shell'),
+    }))
+    .toEqual({ settings: true, shell: true })
+  for (const response of sensitiveProjectionResponses) {
+    expect(await response.body, `${response.path} exposed a provider secret`).not.toContain(providerSecret)
+  }
 
   await expect
     .poll(() => apiRequests.filter((entry) => entry === 'GET /api/v1/bootstrap').length)
@@ -237,7 +264,7 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
     event: { type: 'settings.updated', resource: 'settings' },
   })
 
-  const apiRouteResults = await page.evaluate(async () => {
+  const apiRouteResults = await page.evaluate(async (assetBytes) => {
     const activeWriterHeaders = await window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders()
     const generated = await fetch('/api/v1/generate/completion', {
       body: JSON.stringify({
@@ -258,6 +285,28 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
     const summaries = await fetch('/api/v1/memory/summaries/chat-smoke', {
       headers: activeWriterHeaders,
     })
+
+    const uploaded = await fetch('/api/v1/assets', {
+      body: new Uint8Array(assetBytes),
+      headers: { ...activeWriterHeaders, 'content-type': 'image/png' },
+      method: 'POST',
+    })
+    const uploadedBody = (await uploaded.json()) as { assetId: string }
+    const bootstrap = await fetch('/api/v1/bootstrap', { headers: activeWriterHeaders })
+    const bootstrapBody = (await bootstrap.json()) as { databaseLineage: string; revision: number }
+    const character = await fetch('/api/v1/commands/characters/char-smoke', {
+      body: JSON.stringify({ baseRevision: bootstrapBody.revision, patch: { image: uploadedBody.assetId } }),
+      headers: {
+        ...activeWriterHeaders,
+        'content-type': 'application/json',
+        'risu-database-lineage': bootstrapBody.databaseLineage,
+      },
+      method: 'PATCH',
+    })
+    const asset = await fetch(`/api/v1/assets/${uploadedBody.assetId}`, {
+      headers: activeWriterHeaders,
+    })
+
     const exported = await fetch('/api/v1/export/risusave', {
       headers: activeWriterHeaders,
     })
@@ -271,20 +320,14 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
     })
     const importedBody = await imported.json()
     const bundle = await fetch('/api/v1/export/bundle', { headers: activeWriterHeaders })
-
-    const uploaded = await fetch('/api/v1/assets', {
-      body: new Uint8Array([1, 2, 3]),
-      headers: { ...activeWriterHeaders, 'content-type': 'image/png' },
-      method: 'POST',
-    })
-    const uploadedBody = await uploaded.json()
-    const asset = await fetch(`/api/v1/assets/${uploadedBody.assetId}`, {
-      headers: activeWriterHeaders,
-    })
+    const bundleBytes = Array.from(new Uint8Array(await bundle.arrayBuffer()))
 
     return {
       asset: asset.status,
+      assetId: uploadedBody.assetId,
       bundle: bundle.status,
+      bundleBytes,
+      character: character.status,
       chunks: chunks.status,
       exported: exported.status,
       generated: generated.status,
@@ -294,10 +337,11 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
       summaries: summaries.status,
       uploaded: uploaded.status,
     }
-  })
+  }, seededAssetBytes)
   expect(apiRouteResults).toMatchObject({
     asset: 200,
     bundle: 200,
+    character: 200,
     chunks: 200,
     exported: 200,
     generated: 200,
@@ -307,6 +351,57 @@ test('@core Fastify-served browser loads bootstrap, subscribes to events, and re
     summaries: 200,
     uploaded: 201,
   })
+
+  const bundleFiles = unzipSync(Uint8Array.from(apiRouteResults.bundleBytes))
+  const bundledAssetPath = `assets/${apiRouteResults.assetId}.png`
+  expect(Buffer.from(bundleFiles[bundledAssetPath])).toEqual(Buffer.from(seededAssetBytes))
+  const bundleManifest = JSON.parse(Buffer.from(bundleFiles['manifest.json']).toString('utf8')) as {
+    includedAssets?: Array<{ id?: unknown; path?: unknown }>
+  }
+  expect(bundleManifest.includedAssets).toContainEqual(
+    expect.objectContaining({ id: apiRouteResults.assetId, path: bundledAssetPath }),
+  )
+
+  const liveDatabase = new DatabaseSync(path.join(harness.dataDir, 'risu.db'))
+  try {
+    liveDatabase.exec('BEGIN')
+    liveDatabase
+      .prepare("UPDATE characters SET data_json = json_set(data_json, '$.image', '') WHERE id = 'char-smoke'")
+      .run()
+    liveDatabase.prepare('DELETE FROM assets WHERE id = ?').run(apiRouteResults.assetId)
+    liveDatabase.exec('COMMIT')
+  } catch (error) {
+    liveDatabase.exec('ROLLBACK')
+    throw error
+  } finally {
+    liveDatabase.close()
+  }
+  rmSync(path.join(harness.dataDir, 'assets', `${apiRouteResults.assetId}.png`), { force: true })
+  const missingAsset = await harness.app.inject({
+    method: 'GET',
+    url: `/api/v1/assets/${apiRouteResults.assetId}`,
+    headers: { 'risu-auth': browserSmokeAssertion },
+  })
+  expect(missingAsset.statusCode).toBe(404)
+  const bundleImport = await page.evaluate(async (bundleBytes) => {
+    const activeWriterHeaders = await window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders()
+    const form = new FormData()
+    form.append('file', new Blob([new Uint8Array(bundleBytes)], { type: 'application/zip' }), 'database.risu.zip')
+    const response = await fetch('/api/v1/import/bundle', {
+      body: form,
+      headers: activeWriterHeaders,
+      method: 'POST',
+    })
+    return { body: await response.json(), status: response.status }
+  }, apiRouteResults.bundleBytes)
+  expect(bundleImport).toMatchObject({ status: 200, body: { event: { type: 'state.imported', resource: 'state' } } })
+  const restoredAsset = await harness.app.inject({
+    method: 'GET',
+    url: `/api/v1/assets/${apiRouteResults.assetId}`,
+    headers: { 'risu-auth': browserSmokeAssertion },
+  })
+  expect(restoredAsset.statusCode).toBe(200)
+  expect(restoredAsset.rawPayload).toEqual(Buffer.from(seededAssetBytes))
 
   await expect
     .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().streamGeminiThoughts))
@@ -564,7 +659,7 @@ test('translator preset bindings persist independently across chats', async ({ p
   await expect(presetSelect()).toHaveValue('translator-smoke-b')
 })
 
-test('a connected reader keeps receiving updates through a writer takeover', async ({ browser }) => {
+test('a connected reader keeps receiving updates through a writer takeover', { tag: '@core' }, async ({ browser }) => {
   test.setTimeout(60_000)
   await importDatabase(harness.app, browserSmokeAssertion, browserSmokeDatabase())
   const writerContext = await browser.newContext()

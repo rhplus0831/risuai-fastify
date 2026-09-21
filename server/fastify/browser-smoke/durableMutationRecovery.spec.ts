@@ -132,33 +132,35 @@ for (const fault of ['lost-after-commit', 'malformed-after-commit', 'before-acce
   })
 }
 
-test('failed local staging plus failed transport rolls back the visible setting and reports failure', async ({
-  page,
-}) => {
-  await bootDisplay(page)
-  const before = truth()
-  await page.evaluate(() => {
-    const put = IDBObjectStore.prototype.put
-    IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
-      if (this.name === 'mutations') throw new DOMException('Injected staging failure', 'QuotaExceededError')
-      return put.call(this, value, key)
-    }
-  })
-  const receiptHeaders: Array<string | undefined> = []
-  await page.route(commandPath, (route) => {
-    receiptHeaders.push(route.request().headers()['risu-mutation-id'])
-    return route.abort('connectionclosed')
-  })
-  await flip(page)
-  await expect.poll(() => receiptHeaders.length).toBe(1)
-  await expect(page.getByRole('alertdialog')).toBeVisible()
-  await expect(page.getByRole('alertdialog')).toContainText(/network|save|persist/i)
-  await page.getByRole('alertdialog').getByRole('button', { name: 'OK', exact: true }).click()
-  await expect(toggle(page)).not.toBeChecked()
-  await expect.poll(() => lifecycle(page)).toMatchObject({ outbox: [], receiptAcknowledgements: [] })
-  expect(receiptHeaders).toEqual([undefined])
-  expect(truth()).toEqual(before)
-})
+test(
+  'failed local staging plus failed transport rolls back the visible setting and reports failure',
+  { tag: '@core' },
+  async ({ page }) => {
+    await bootDisplay(page)
+    const before = truth()
+    await page.evaluate(() => {
+      const put = IDBObjectStore.prototype.put
+      IDBObjectStore.prototype.put = function (value: unknown, key?: IDBValidKey) {
+        if (this.name === 'mutations') throw new DOMException('Injected staging failure', 'QuotaExceededError')
+        return put.call(this, value, key)
+      }
+    })
+    const receiptHeaders: Array<string | undefined> = []
+    await page.route(commandPath, (route) => {
+      receiptHeaders.push(route.request().headers()['risu-mutation-id'])
+      return route.abort('connectionclosed')
+    })
+    await flip(page)
+    await expect.poll(() => receiptHeaders.length).toBe(1)
+    await expect(page.getByRole('alertdialog')).toBeVisible()
+    await expect(page.getByRole('alertdialog')).toContainText(/network|save|persist/i)
+    await page.getByRole('alertdialog').getByRole('button', { name: 'OK', exact: true }).click()
+    await expect(toggle(page)).not.toBeChecked()
+    await expect.poll(() => lifecycle(page)).toMatchObject({ outbox: [], receiptAcknowledgements: [] })
+    expect(receiptHeaders).toEqual([undefined])
+    expect(truth()).toEqual(before)
+  },
+)
 
 test('a held committed receipt acknowledgement releases the queue for a newer visible edit', async ({ page }) => {
   await bootDisplay(page)
