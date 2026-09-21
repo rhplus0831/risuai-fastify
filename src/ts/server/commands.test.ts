@@ -8,7 +8,7 @@ import {
   serializePersonaProfileDigestInput,
 } from '../personaMutationCertificate'
 import { serializeScriptDefinitionCollectionDigestInput } from './scriptDefinitionMutations'
-import { resetWriterAccessLostForTests } from './activeWriterSession'
+import { installConnectedWriterSessionId, resetWriterAccessLostForTests } from './activeWriterSession'
 import {
   recordStartupMilestone,
   resetStartupReadinessForTests,
@@ -206,6 +206,7 @@ interface CapturedFetch {
   url: string
   method: string
   authHeader: string | null
+  writerSessionHeader: string | null
   contentType: string | null
   body: unknown
 }
@@ -246,14 +247,15 @@ function makeCommandFetch(bodyForUrl: (url: string, init: RequestInit) => unknow
   return {
     calls,
     fetch: vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const headers = init.headers as Record<string, string> | undefined
+      const headers = new Headers(init.headers)
       const rawBody = typeof init.body === 'string' ? JSON.parse(init.body) : null
       const url = String(input)
       calls.push({
         url,
         method: init.method ?? 'GET',
-        authHeader: headers?.['risu-auth'] ?? null,
-        contentType: headers?.['content-type'] ?? null,
+        authHeader: headers.get('risu-auth'),
+        writerSessionHeader: headers.get('risu-writer-session'),
+        contentType: headers.get('content-type'),
         body: rawBody,
       })
       const body = bodyForUrl(url, init)
@@ -281,6 +283,7 @@ function canonicalLoadoutSnapshot(id = 'loadout-a') {
 }
 
 beforeEach(() => {
+  installConnectedWriterSessionId('command-test-writer')
   resetStartupReadinessForTests()
   for (const milestone of ['entry', 'shell-mounted', 'reader-ready', 'writer-ready'] as const) {
     recordStartupMilestone(milestone)
@@ -640,7 +643,7 @@ describe('server command API adapter', () => {
     expect(secondCommand).not.toHaveBeenCalled()
   })
 
-  it('patches runtime settings with the auth header and baseRevision', async () => {
+  it('patches runtime settings with auth, the active writer identity, and baseRevision', async () => {
     const event = { type: 'settings.updated', revision: 2, resource: 'settings' }
     const commandFetch = makeCommandFetch(() => ({ revision: 2, event }))
     vi.stubGlobal('fetch', commandFetch.fetch)
@@ -656,6 +659,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/commands/settings/runtime',
         method: 'PATCH',
         authHeader: 'test-auth-token',
+        writerSessionHeader: 'command-test-writer',
         contentType: 'application/json',
         body: {
           baseRevision: 1,
@@ -787,6 +791,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/commands/onboarding',
         method: 'POST',
         authHeader: 'test-auth-token',
+        writerSessionHeader: 'command-test-writer',
         contentType: 'application/json',
         body: {
           baseRevision: 2,
@@ -817,6 +822,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/commands/settings/display',
         method: 'PATCH',
         authHeader: 'test-auth-token',
+        writerSessionHeader: 'command-test-writer',
         contentType: 'application/json',
         body: {
           baseRevision: 2,
@@ -999,6 +1005,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/commands/settings/media/objects/NAIImgConfig',
         method: 'PATCH',
         authHeader: 'test-auth-token',
+        writerSessionHeader: 'command-test-writer',
         contentType: 'application/json',
         body: { baseRevision: 2, patch: { width: 832 } },
       },
@@ -1113,78 +1120,87 @@ describe('server command API adapter', () => {
     expect(observedEffectCounts).toEqual([0, 0])
   })
 
-  it('keeps malformed compact settings acknowledgements on the authoritative fallback path', async () => {
-    const event = {
-      type: 'settings.updated',
+  it('accepts an exact value-free compact settings acknowledgement', async () => {
+    const event = { type: 'settings.updated', revision: 3, resource: 'settings', id: 'display' }
+    const commandFetch = makeCommandFetch(() => ({
       revision: 3,
-      resource: 'settings',
-      id: 'display',
-    }
-    const malformedBodies: Array<Record<string, unknown>> = [
-      {
-        revision: 3,
-        event,
-        acknowledgedKeys: ['theme'],
-        settings: {},
-      },
-      {
-        revision: 3,
-        event,
-        acknowledgedKeys: ['theme', 'theme', 'zoomsize'],
-        settings: {},
-      },
-      {
-        revision: 3,
-        event,
-        acknowledgedKeys: ['theme', 'zoomsize'],
-        settings: { customCSS: 'not acknowledged' },
-      },
-      {
-        revision: 3,
-        event,
-        acknowledgedKeys: ['theme', 'zoomsize'],
-        settings: { theme: Number.NaN },
-      },
-      {
-        revision: 3,
-        event: { ...event, type: 'settings.other' },
-        acknowledgedKeys: ['theme', 'zoomsize'],
-        settings: {},
-      },
-      {
-        revision: 3,
-        event: { ...event, parentId: 'unexpected' },
-        acknowledgedKeys: ['theme', 'zoomsize'],
-        settings: {},
-      },
-    ]
-    let responseIndex = 0
-    vi.stubGlobal(
-      'fetch',
-      vi.fn(async () => {
-        const body = malformedBodies[responseIndex++]
-        return {
-          status: 200,
-          ok: true,
-          json: async () => body,
-        } as Response
-      }) as unknown as typeof fetch,
-    )
-    const observedEffectCounts: number[] = []
-    setServerCommandSuccessReconciler((_event, _coalescedEvents, localEffects) => {
-      observedEffectCounts.push(localEffects.size)
+      event,
+      acknowledgedKeys: ['theme', 'zoomsize'],
+      settings: {},
+    }))
+    vi.stubGlobal('fetch', commandFetch.fetch)
+    const observedEffects: ServerCommandLocalEffect[] = []
+    setServerCommandSuccessReconciler((_event, _events, localEffects) => {
+      observedEffects.push(...localEffects.values())
     })
 
-    for (const _body of malformedBodies) {
-      await patchSettingsGroup({
+    const result = await patchSettingsGroup({
+      group: 'display',
+      baseRevision: 2,
+      patch: { theme: 'light', zoomsize: 90 },
+      acknowledgeOptimistic: true,
+      optimisticProjectionEpoch: 12,
+    })
+
+    expect(result.status).toBe('ok')
+    expect(observedEffects).toEqual([
+      {
+        kind: 'settingsPatch',
+        group: 'display',
+        attemptedPatch: { theme: 'light', zoomsize: 90 },
+        settings: { theme: 'light', zoomsize: 90 },
+        settingsProjectionEpoch: 12,
+      },
+    ])
+  })
+
+  it.each([
+    { label: 'missing acknowledgement key', overrides: { acknowledgedKeys: ['theme'] } },
+    { label: 'duplicate acknowledgement key', overrides: { acknowledgedKeys: ['theme', 'theme', 'zoomsize'] } },
+    { label: 'foreign canonical override', overrides: { settings: { customCSS: 'not acknowledged' } } },
+    { label: 'non-JSON canonical override', overrides: { settings: { theme: Number.NaN } } },
+    {
+      label: 'wrong event type',
+      overrides: { event: { type: 'settings.other', revision: 3, resource: 'settings', id: 'display' } },
+    },
+    {
+      label: 'parent-scoped event',
+      overrides: {
+        event: { type: 'settings.updated', revision: 3, resource: 'settings', id: 'display', parentId: 'unexpected' },
+      },
+    },
+  ])(
+    'keeps malformed compact settings acknowledgements on the authoritative fallback path: $label',
+    async ({ overrides }) => {
+      const body = {
+        revision: 3,
+        event: { type: 'settings.updated', revision: 3, resource: 'settings', id: 'display' },
+        acknowledgedKeys: ['theme', 'zoomsize'],
+        settings: {},
+        ...overrides,
+      }
+      // Preserve the non-JSON override so this case exercises validation, not JSON's NaN-to-null conversion.
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => ({ status: 200, ok: true, json: async () => body }) as Response),
+      )
+      const reconciliations: Array<{ event: unknown; effects: ServerCommandLocalEffect[] }> = []
+      setServerCommandSuccessReconciler((event, _events, localEffects) => {
+        reconciliations.push({ event, effects: [...localEffects.values()] })
+      })
+
+      const result = await patchSettingsGroup({
         group: 'display',
         baseRevision: 2,
         patch: { theme: 'light', zoomsize: 90 },
+        acknowledgeOptimistic: true,
+        optimisticProjectionEpoch: 12,
       })
-    }
 
-    expect(observedEffectCounts).toEqual(malformedBodies.map(() => 0))
-  })
+      expect(result.status).toBe('ok')
+      expect(reconciliations).toEqual([{ event: body.event, effects: [] }])
+    },
+  )
 
   it('notifies the command success reconciler before resolving an ok command', async () => {
     const event = {
@@ -1494,9 +1510,11 @@ describe('server command API adapter', () => {
 
   it('sends lineage-bound durable receipt acknowledgements', async () => {
     let captured: RequestInit | undefined
+    let capturedUrl: string | undefined
     vi.stubGlobal(
       'fetch',
-      vi.fn(async (_input: RequestInfo | URL, init: RequestInit = {}) => {
+      vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
+        capturedUrl = String(input)
         captured = init
         return jsonResponse({ acknowledged: 1, requested: 1 })
       }) as unknown as typeof fetch,
@@ -1504,6 +1522,7 @@ describe('server command API adapter', () => {
 
     await expect(acknowledgeServerMutationReceipts('pending-a', 1, 'database-a')).resolves.toBe(true)
 
+    expect(capturedUrl).toBe('/api/v1/commands/mutation-receipts/ack')
     expect(captured?.method).toBe('POST')
     expect(JSON.parse(String(captured?.body))).toEqual({
       mutationId: 'pending-a',
@@ -1514,7 +1533,7 @@ describe('server command API adapter', () => {
       expect.objectContaining({
         'content-type': 'application/json',
         'risu-auth': 'test-auth-token',
-        'risu-writer-session': expect.any(String),
+        'risu-writer-session': 'command-test-writer',
       }),
     )
   })
@@ -2233,6 +2252,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/bootstrap',
         method: 'GET',
         authHeader: 'test-auth-token',
+        writerSessionHeader: null,
         contentType: null,
         body: null,
       },
@@ -2624,6 +2644,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/commands/presets',
         method: 'POST',
         authHeader: 'test-auth-token',
+        writerSessionHeader: 'command-test-writer',
         contentType: 'application/json',
         body: {
           baseRevision: 1,
@@ -4525,21 +4546,70 @@ describe('server command API adapter', () => {
     })
 
     expect(observedEffects).toEqual([
-      expect.objectContaining({ kind: 'promptItemMutation', operation: 'create', itemId: 'item-b' }),
-      expect.objectContaining({ kind: 'promptItemMutation', operation: 'update', itemId: 'item-b' }),
-      expect.objectContaining({ kind: 'promptItemMutation', operation: 'delete', itemId: 'item-a' }),
-      expect.objectContaining({
+      {
+        kind: 'promptItemMutation',
+        operation: 'create',
+        itemId: 'item-b',
+        promptPresetId: 'prompt-preset-a',
+        collectionProjectionEpoch: 11,
+        ownerProjectionEpoch: 12,
+        ownerState: {
+          enabled: true,
+          items: [
+            { id: 'item-a', type: 'plain', text: 'A' },
+            { id: 'item-b', type: 'memory', text: 'B' },
+          ],
+        },
+      },
+      {
+        kind: 'promptItemMutation',
+        operation: 'update',
+        itemId: 'item-b',
+        promptPresetId: 'prompt-preset-a',
+        collectionProjectionEpoch: 11,
+        ownerProjectionEpoch: 12,
+        ownerState: {
+          enabled: true,
+          items: [
+            { id: 'item-a', type: 'plain', text: 'A' },
+            { id: 'item-b', type: 'description' },
+          ],
+        },
+      },
+      {
+        kind: 'promptItemMutation',
+        operation: 'delete',
+        itemId: 'item-a',
+        promptPresetId: 'prompt-preset-a',
+        collectionProjectionEpoch: 11,
+        ownerProjectionEpoch: 12,
+        ownerState: { enabled: true, items: [{ id: 'item-b', type: 'description' }] },
+      },
+      {
         kind: 'promptItemMutation',
         operation: 'reorder',
         itemIds: ['item-b', 'item-a'],
-      }),
-      expect.objectContaining({ kind: 'promptItemMutation', operation: 'enable', enabled: false }),
+        promptPresetId: 'prompt-preset-a',
+        collectionProjectionEpoch: 11,
+        ownerProjectionEpoch: 12,
+        ownerState: {
+          enabled: true,
+          items: [
+            { id: 'item-b', type: 'memory', text: 'B' },
+            { id: 'item-a', type: 'plain', text: 'A' },
+          ],
+        },
+      },
+      {
+        kind: 'promptItemMutation',
+        operation: 'enable',
+        enabled: false,
+        promptPresetId: 'prompt-preset-a',
+        collectionProjectionEpoch: 11,
+        ownerProjectionEpoch: 12,
+        ownerState: { enabled: false },
+      },
     ])
-    expect(
-      observedEffects.every(
-        (effect) => effect.kind !== 'promptItemMutation' || effect.promptPresetId === 'prompt-preset-a',
-      ),
-    ).toBe(true)
     expect(
       commandFetch.calls.every(
         (call) => !Object.prototype.hasOwnProperty.call(call.body ?? {}, 'optimisticAcknowledgement'),
@@ -8887,6 +8957,7 @@ describe('server command API adapter', () => {
         url: '/api/v1/commands/settings/advanced/global-scripts',
         method: 'PATCH',
         authHeader: 'test-auth-token',
+        writerSessionHeader: 'command-test-writer',
         contentType: 'application/json',
         body: {
           baseRevision: 11,
