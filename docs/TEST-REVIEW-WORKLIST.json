@@ -435,9 +435,9 @@
         "protectedBehavior": "Mocked HTTP and SSE flows cover protocol and auth headers, prompt and result parsing, errors and message restoration, cancellation and recovery obligations, half-streaming and progress, durable replay gaps and terminal snapshots, reattachment and stale attempts, occupancy fencing, concurrent-chat isolation, and reader/writer lifecycle."
       },
       "currentFiles": ["src/ts/process/request/tests/serverChat.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-generation-transport",
+      "owner": "wave2_generation; worktree /home/codex/worktrees/risuai-wave-2-generation-transport",
       "review": null
     },
     {
@@ -451,9 +451,9 @@
         "protectedBehavior": "It verifies cancellation/deadline replacement, single-flight ownership probes, bounded read-only and writer requests, strict metadata validation, conditional acquisition and disconnect headers, active-writer conflicts, revision caching, diagnostics negotiation, and generation jobs/effects/finalizations parsing."
       },
       "currentFiles": ["src/ts/server/bootstrap.svelte-node.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-bootstrap-auth",
+      "owner": "wave2_bootstrap; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
       "review": null
     },
     {
@@ -503,9 +503,9 @@
         "protectedBehavior": "SQLite-backed repository and decoder tests cover selected-owner precedence, invalid configuration rejection, bounded query reads and caching, module and agent activation, prompt/Hypa fallbacks and repair, embedded legacy ownership, speaker names, duplicate identity handling, missing targets, and expression-index plans without a real provider call."
       },
       "currentFiles": ["server/fastify/__tests__/generationInputLoaders.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-server-reads",
+      "owner": "wave2_reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
       "review": null
     },
     {
@@ -519,9 +519,9 @@
         "protectedBehavior": "Mocked fetch and auth cases verify stale sessions and superseded waits do not dispatch or revoke current state, asynchronous cache negotiation retains its original auth scope, delayed 401 bodies revoke current projections before parsing completes, old bootstrap results cannot restore cleared cache or diagnostics, aborted/old 401s are ignored, current 401s use the shared auth-loss boundary, and read-only bootstrap preserves HTTP status."
       },
       "currentFiles": ["src/ts/server/readerReadAuth.svelte-node.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-bootstrap-auth",
+      "owner": "wave2_bootstrap; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
       "review": null
     },
     {
@@ -535,9 +535,9 @@
         "protectedBehavior": "Fastify integration tests verify authenticated versioned shell and settings projections, secret masking and allowlists, content-hash cache inventories, legacy and prompt-template hydration, character summaries and lorebooks, ranged and bulk chat messages with alternates, malformed-state immutability, migration normalization, and request-size bounds."
       },
       "currentFiles": ["server/fastify/__tests__/resourceReads.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-server-reads",
+      "owner": "wave2_reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
       "review": null
     },
     {
@@ -587,9 +587,9 @@
         "protectedBehavior": "Through a Fastify and SQLite large-corpus harness, exercises scoped read budgets and persistence for chat, message, character, module, prompt, settings, plugin, and collection mutations; validates lifecycle writes, legacy broad fallbacks, canonical-row precedence, malformed-row rejection, sibling preservation, and the data-loss guard."
       },
       "currentFiles": ["server/fastify/__tests__/commandMutationReadNarrowing.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-server-reads",
+      "owner": "wave2_reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
       "review": null
     },
     {
@@ -603,9 +603,9 @@
         "protectedBehavior": "Vitest cases cover foreign-writer reader fallback, automatic disconnected-writer acquisition, no-owner and first-run confirmation, losing acquisition races, startup supersession, empty-server ownership checks, projection and recovery/write gating, and unauthorized discovery handling."
       },
       "currentFiles": ["src/ts/connectedClientStartup.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-bootstrap-auth",
+      "owner": "wave2_bootstrap; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
       "review": null
     },
     {
@@ -715,9 +715,9 @@
         "protectedBehavior": "It verifies server-intent routing and preview rejection, provider-agnostic payloads and static model forwarding, bounded tool history and returned-call validation, no-retry failures, status/code preservation, SSE token/error parsing, and Anthropic system extraction."
       },
       "currentFiles": ["src/ts/process/request/tests/serverCompletion.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "wave-2-generation-transport",
+      "owner": "wave2_generation; worktree /home/codex/worktrees/risuai-wave-2-generation-transport",
       "review": null
     },
     {
