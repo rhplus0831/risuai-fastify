@@ -2,42 +2,7 @@
 
 스냅샷: 2026-09-19, 소스 리비전 `528c6d62b`. **테스트 파일 1,034개, 등록된 테스트 케이스 14,862개.**
 
-스냅샷 이후 bootstrap 변경 (2026-09-20): 기존 `src/ts/bootstrap.test.ts` 스위트는
-메모리 이벤트 거부 및 writer 데이터 계보 변경 회귀 테스트 2개를 추가하여 **11개 파일, 249개 케이스**로
-분리했습니다. 현재 파일별 범위와 개수는 [Bootstrap coverage ownership](tests/browser-state-sync-and-recovery.md#bootstrap-coverage-ownership)을
-참고하세요. 아래 행의 247개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
-
-스냅샷 이후 command 변경 (2026-09-21): 기존
-`server/fastify/__tests__/commands.test.ts` 범위는 **20개 파일, 247개 케이스**로
-분리했습니다. 핵심 트랜잭션과 초기화 테스트는 기존 파일에 유지하고, 메시지 완료 조건
-거부 테스트 3개와 메시지 쓰기 격리 검증을 보강했습니다. 현재 파일별 범위와 개수는
-[Command coverage ownership](tests/persistence-commands-and-events.md#command-coverage-ownership)을
-참고하세요. 아래 행의 244개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
-
-스냅샷 이후 chat command 변경 (2026-09-21): 기존 `src/ts/chatCommands.test.ts` 범위는
-**8개 파일, 232개 케이스**로 분리했습니다. 순차 실행 래퍼 테스트는 기존 파일에 유지하고,
-메타데이터, 채팅 구조, 생성 설정, 메시지, 노트/스크립트 상태, 가져오기, 영속 배치 테스트를
-별도 파일로 옮겼습니다. 메타데이터 기대값을 구현과 분리하고, 중복 편집 결과를 기다리도록
-보강했으며, 순차 실행 도중 거부와 `sdData` 전송 회귀를 검증합니다. 현재 파일별 범위와 개수는
-[Chat command coverage ownership](tests/domain-mutations-and-editing-bridges.md#chat-command-coverage-ownership)을
-참고하세요. 아래 행의 231개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
-
-스냅샷 이후 browser command 변경 (2026-09-21): 기존 `src/ts/server/commands.test.ts` 범위는
-**21개 파일, 167개 케이스**로 분리했습니다. 전송, 준비 상태, 응답 검증, 리비전 테스트는 기존
-파일에 유지하고, 큐, 재실행, 도메인별 어댑터 테스트를 별도 파일로 옮겼습니다. writer 헤더,
-영속 영수증 ACK 경로, prompt-item 로컬 효과의 전체 값을 검증하도록 보강했습니다. 잘못된
-compact-settings 응답 6개는 acknowledgement를 활성화한 독립 케이스로 실행하고 정상 응답
-대조 케이스를 추가했습니다. 현재 파일별 범위와 개수는
-[Browser command coverage ownership](tests/browser-state-sync-and-recovery.md#browser-command-coverage-ownership)을
-참고하세요. 아래 행의 161개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
-
-스냅샷 이후 chat hydration 변경 (2026-09-21): 기존 `src/ts/server/chatMessageHydration.test.ts`
-범위는 **6개 파일, 125개 케이스**로 분리했습니다. 기존 105개 케이스를 유지하고,
-식별자 검증·동시 요청·초기화 경합 회귀 테스트 18개를 추가했으며, bulk 재시도와 strict 실패
-시나리오를 분리하여 등록 케이스가 2개 늘었습니다. Reader 전환, 최신 상태 보존, bulk 읽기,
-accepted-send 완료, 캐릭터 로어북 테스트는 별도 파일로 옮겼습니다. 현재 파일별 범위와 개수는
-[Chat hydration coverage ownership](tests/browser-state-sync-and-recovery.md#chat-hydration-coverage-ownership)을
-참고하세요. 아래 행의 105개 케이스와 순위는 스냅샷 당시 범위를 유지합니다.
+이 파일은 사람이 참조하기 위해 만들어진 파일입니다. 스냅샷 업데이트 상황을 기록하지 마세요.
 
 이 목록은 각 검증이 보호하는 제품상의 결과를 기준으로 현재 테스트 파일의 우선순위를 매깁니다. 각 파일의 실제 검증 내용은 Luna High로 평가했습니다. 등급은 정성적인 검토 판단이며, 측정된 결함률이나 테스트 스위트의 통과 여부를 나타내는 근거가 아닙니다.
 
