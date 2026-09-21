@@ -444,7 +444,7 @@ describe('asset GC scheduling and reclamation fences', () => {
     getMaintenanceCoordinator(dataDir).beginExclusive('backup').release()
   })
 
-  it('invalidates discovery on a deduplicated upload that only refreshes file mtime', async () => {
+  it('invalidates discovery on a deduplicated upload that only refreshes file mtime', { tags: 'core' }, async () => {
     const uploadId = createHash('sha256').update(BYTES).digest('hex')
     seedOrphans([uploadId, SECOND_ORPHAN])
     const changesBeforeUpload = totalChanges()

@@ -2599,7 +2599,7 @@ describe('backups', () => {
     expect(existsSync(oldSave)).toBe(false)
   })
 
-  it('recovers forward on boot after the database commits but old-directory cleanup crashes', async () => {
+  coreIt('recovers forward on boot after the database commits but old-directory cleanup crashes', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     await importDb(harness.app, assertion, { tag: 'restore-source-A' })
     const liveAssetFile = path.join(harness.dataDir, 'assets', 'forward-sentinel')

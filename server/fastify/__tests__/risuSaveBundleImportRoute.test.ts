@@ -926,7 +926,7 @@ describe('repository .risu bundle import route', () => {
     ).toBe(false)
   })
 
-  it('restores the database and bundled assets into a fresh instance', async () => {
+  it('restores the database and bundled assets into a fresh instance', { tags: 'core' }, async () => {
     persistDatabaseWithAsset(harness.dataDir)
     const zip = await exportBundleZip()
 
@@ -1090,7 +1090,7 @@ describe('repository .risu bundle import route', () => {
     }
   })
 
-  it('takes pre-import safety snapshots for zip and legacy .bin replacements', async () => {
+  it('takes pre-import safety snapshots for zip and legacy .bin replacements', { tags: 'core' }, async () => {
     persistDatabaseWithAsset(harness.dataDir)
     const zip = await exportBundleZip()
     const exported = await authedInject({

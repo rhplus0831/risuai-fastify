@@ -44,7 +44,7 @@ describe('streaming bounded inflate', () => {
     expect(equalsPayload(decompressBounded(gz))).toBe(true)
   })
 
-  it('aborts an oversized inflate at the cap instead of materializing the payload', () => {
+  it('aborts an oversized inflate at the cap instead of materializing the payload', { tags: 'core' }, () => {
     // 64 MiB of zeros compresses to ~64 KiB — the gzip-bomb shape. With a 1 MiB
     // cap the inflate must throw long before 64 MiB ever exists in memory.
     const bomb = fflate.gzipSync(new Uint8Array(64 * MIB))

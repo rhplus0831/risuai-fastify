@@ -33,7 +33,13 @@ import {
   encodeRepositoryRisuSaveLegacyExport,
 } from '../src/risuSave/exportSnapshot.js'
 import { RISU_SERVER_DATA_KEY } from '../src/risuSave/portableMetadata.js'
-import { applyImport, listBackups, loadPersistedWithMessages, writePersistedWithMessages } from '../src/repository.js'
+import {
+  applyImport,
+  insertAssetMetadataBatch,
+  listBackups,
+  loadPersistedWithMessages,
+  writePersistedWithMessages,
+} from '../src/repository.js'
 import { openDatabase } from '../src/db.js'
 import {
   getGreetingTranslation,
@@ -1204,6 +1210,12 @@ describe('server .risu fixture harness', () => {
 
   // prettier-ignore
   coreIt('round-trips canonical owner identities and translator cache inputs through every portable .risu codec', async () => {
+    const preservedAssetMetadata = {
+      id: 'a'.repeat(64),
+      ext: 'png',
+      size: 12,
+      contentType: 'image/png',
+    }
     const envelopeCases = [
       {
         expected: 'legacy-raw',
@@ -1233,8 +1245,9 @@ describe('server .risu fixture harness', () => {
         writePersistedWithMessages(sourceDb, sourceDataDir, {
           _version: 1,
           database: canonicalOwnerPersistenceDatabase(),
-          assets: [],
+          assets: [preservedAssetMetadata],
         })
+        insertAssetMetadataBatch(sourceDb, [preservedAssetMetadata])
         encoded = envelopeCase.encode(sourceDb, sourceDataDir)
       } finally {
         sourceDb.close()
@@ -1245,6 +1258,7 @@ describe('server .risu fixture harness', () => {
       const targetDataDir = makeDataDir()
       const targetDb = openDatabase(targetDataDir)
       try {
+        insertAssetMetadataBatch(targetDb, [preservedAssetMetadata])
         await applyImport(targetDb, targetDataDir, decoded.database, {
           greetingTranslations: decoded.greetingTranslations,
           automaticBackupRetention: 0,
@@ -1255,8 +1269,10 @@ describe('server .risu fixture harness', () => {
 
       const reopened = openDatabase(targetDataDir)
       try {
+        const reloaded = loadPersistedWithMessages(reopened, targetDataDir)
+        expect(reloaded.assets, envelopeCase.expected).toEqual([preservedAssetMetadata])
         expect(
-          canonicalOwnerPersistenceSnapshot(loadPersistedWithMessages(reopened, targetDataDir).database),
+          canonicalOwnerPersistenceSnapshot(reloaded.database),
           envelopeCase.expected,
         ).toEqual(EXPECTED_CANONICAL_OWNER_PERSISTENCE_SNAPSHOT)
       } finally {

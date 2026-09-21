@@ -1706,73 +1706,77 @@ describe('Realm character import route', () => {
     expect((persisted.database as { characters: unknown[] }).characters).toHaveLength(0)
   })
 
-  it('removes new CharX assets but preserves deduplicated assets when character append fails', async () => {
-    let assetSuffix = ''
-    echo.setResponder((req, res) => {
-      if (req.url?.startsWith('/api/v1/download/dynamic/realm-id')) {
-        res.writeHead(200, { 'content-type': 'application/charx' })
-        res.end(
-          Buffer.from(
-            realmCharx(
-              assetSuffix
-                ? {
-                    assetSuffix,
-                    preserveMainAsset: true,
-                  }
-                : {},
+  it(
+    'removes new CharX assets but preserves deduplicated assets when character append fails',
+    { tags: 'core' },
+    async () => {
+      let assetSuffix = ''
+      echo.setResponder((req, res) => {
+        if (req.url?.startsWith('/api/v1/download/dynamic/realm-id')) {
+          res.writeHead(200, { 'content-type': 'application/charx' })
+          res.end(
+            Buffer.from(
+              realmCharx(
+                assetSuffix
+                  ? {
+                      assetSuffix,
+                      preserveMainAsset: true,
+                    }
+                  : {},
+              ),
             ),
-          ),
-        )
-        return
+          )
+          return
+        }
+        res.writeHead(404)
+        res.end()
+      })
+
+      const duplicateCharacterId = '11111111-1111-4111-8111-111111111111'
+      cryptoMock.randomUuidOverride = duplicateCharacterId
+
+      try {
+        const { assertion } = await setupAuthedClient(harness.app)
+        const baseRevision = await importEmptyDatabase(harness.app, assertion)
+        const first = await harness.app.inject({
+          method: 'POST',
+          url: '/api/v1/import/realm-character',
+          headers: { 'risu-auth': assertion, 'risu-writer-session': 'writer-a' },
+          payload: { id: 'realm-id', baseRevision },
+        })
+
+        expect(first.statusCode).toBe(200)
+        const assetsAfterFirstImport = queryAssets(harness.dataDir)
+        const filesAfterFirstImport = assetFileNames(harness.dataDir)
+
+        assetSuffix = 'second'
+        const duplicate = await harness.app.inject({
+          method: 'POST',
+          url: '/api/v1/import/realm-character',
+          headers: { 'risu-auth': assertion, 'risu-writer-session': 'writer-a' },
+          payload: { id: 'realm-id', baseRevision: currentRevision(harness.dataDir) },
+        })
+
+        expect(duplicate.statusCode).toBe(400)
+        expect(duplicate.json()).toEqual({
+          error: `Duplicate character id: ${duplicateCharacterId}`,
+        })
+        expect(queryAssets(harness.dataDir)).toEqual(assetsAfterFirstImport)
+        expect(assetFileNames(harness.dataDir)).toEqual(filesAfterFirstImport)
+        expect(existsSync(path.join(harness.dataDir, 'assets', `${assetIdFor('main image')}.png`))).toBe(true)
+
+        const newAssetFiles = [
+          `${assetIdFor('happy image second')}.png`,
+          `${assetIdFor('body { color: red; } /* second */')}.css`,
+        ]
+        for (const fileName of newAssetFiles) {
+          expect(existsSync(path.join(harness.dataDir, 'assets', fileName))).toBe(false)
+        }
+      } finally {
+        cryptoMock.randomUuidOverride = undefined
       }
-      res.writeHead(404)
-      res.end()
-    })
-
-    const duplicateCharacterId = '11111111-1111-4111-8111-111111111111'
-    cryptoMock.randomUuidOverride = duplicateCharacterId
-
-    try {
-      const { assertion } = await setupAuthedClient(harness.app)
-      const baseRevision = await importEmptyDatabase(harness.app, assertion)
-      const first = await harness.app.inject({
-        method: 'POST',
-        url: '/api/v1/import/realm-character',
-        headers: { 'risu-auth': assertion, 'risu-writer-session': 'writer-a' },
-        payload: { id: 'realm-id', baseRevision },
-      })
-
-      expect(first.statusCode).toBe(200)
-      const assetsAfterFirstImport = queryAssets(harness.dataDir)
-      const filesAfterFirstImport = assetFileNames(harness.dataDir)
-
-      assetSuffix = 'second'
-      const duplicate = await harness.app.inject({
-        method: 'POST',
-        url: '/api/v1/import/realm-character',
-        headers: { 'risu-auth': assertion, 'risu-writer-session': 'writer-a' },
-        payload: { id: 'realm-id', baseRevision: currentRevision(harness.dataDir) },
-      })
-
-      expect(duplicate.statusCode).toBe(400)
-      expect(duplicate.json()).toEqual({
-        error: `Duplicate character id: ${duplicateCharacterId}`,
-      })
-      expect(queryAssets(harness.dataDir)).toEqual(assetsAfterFirstImport)
-      expect(assetFileNames(harness.dataDir)).toEqual(filesAfterFirstImport)
-      expect(existsSync(path.join(harness.dataDir, 'assets', `${assetIdFor('main image')}.png`))).toBe(true)
-
-      const newAssetFiles = [
-        `${assetIdFor('happy image second')}.png`,
-        `${assetIdFor('body { color: red; } /* second */')}.css`,
-      ]
-      for (const fileName of newAssetFiles) {
-        expect(existsSync(path.join(harness.dataDir, 'assets', fileName))).toBe(false)
-      }
-    } finally {
-      cryptoMock.randomUuidOverride = undefined
-    }
-  })
+    },
+  )
 
   it('rejects known-length Realm charx downloads above the staging cap before reading the body', async () => {
     let bodyWriteAttempted = false
