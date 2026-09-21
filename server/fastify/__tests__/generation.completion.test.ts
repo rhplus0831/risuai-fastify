@@ -1323,6 +1323,111 @@ describe('POST /api/v1/generate/completion', () => {
     })
   })
 
+  it.each([
+    { field: 'provider', label: 'a provider', value: 'openai' },
+    { field: 'model', label: 'a model', value: 'client-owned-model' },
+    { field: 'options', label: 'options', value: { openai: { apiKey: 'client-owned-key' } } },
+    { field: 'provider', label: 'a null provider', value: null },
+    { field: 'model', label: 'a null model', value: null },
+    { field: 'options', label: 'null options', value: null },
+  ])('server-intent completion rejects $label independently before dispatch', async ({ field, value }) => {
+    writeDatabase({ aiModel: 'gpt4o', openAIKey: 'sk-server-owned' })
+    const fetchSpy = vi.fn(async () => openAIChatResponse('server-owned answer'))
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch
+    const { assertion } = await setupAuthedClient(harness.app)
+    const request = {
+      method: 'POST' as const,
+      url: '/api/v1/generate/completion',
+      headers: { 'risu-auth': assertion },
+    }
+    const payload = {
+      kind: 'server-intent',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+    }
+
+    // The identical request without the forbidden field must be dispatchable.
+    const control = await harness.app.inject({ ...request, payload })
+    expect(control.statusCode).toBe(200)
+    expect(control.json()).toEqual({ type: 'success', result: 'server-owned answer' })
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    fetchSpy.mockClear()
+
+    const rejected = await harness.app.inject({ ...request, payload: { ...payload, [field]: value } })
+
+    expect(rejected.statusCode).toBe(400)
+    expect(rejected.json()).toEqual({
+      error: 'server-intent completion must not include provider, model, or options',
+    })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('server-intent completion rejects streaming tools before dispatch', async () => {
+    writeDatabase({ aiModel: 'gpt4o', openAIKey: 'sk-server-owned' })
+    const fetchSpy = vi.fn(async () => openAIChatResponse('buffered tool answer'))
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch
+    const { assertion } = await setupAuthedClient(harness.app)
+    const request = {
+      method: 'POST' as const,
+      url: '/api/v1/generate/completion',
+      headers: { 'risu-auth': assertion },
+    }
+    const payload = {
+      kind: 'server-intent',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+      tools: [{ name: 'lookup', description: 'Look up a record', inputSchema: { type: 'object' } }],
+    }
+
+    const control = await harness.app.inject({ ...request, payload })
+    expect(control.statusCode).toBe(200)
+    expect(control.json()).toEqual({ type: 'success', result: 'buffered tool answer' })
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    fetchSpy.mockClear()
+
+    const rejected = await harness.app.inject({ ...request, payload: { ...payload, stream: true } })
+
+    expect(rejected.statusCode).toBe(400)
+    expect(rejected.headers['content-type']).toMatch(/application\/json/)
+    expect(rejected.json()).toEqual({ error: 'server-intent tool requests must use buffered completion' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    { label: 'missing', tools: undefined },
+    { label: 'empty', tools: [] },
+  ])('server-intent completion rejects toolRounds with $label tools before dispatch', async ({ tools }) => {
+    writeDatabase({ aiModel: 'gpt4o', openAIKey: 'sk-server-owned' })
+    const fetchSpy = vi.fn(async () => openAIChatResponse('tool round answer'))
+    globalThis.fetch = fetchSpy as unknown as typeof globalThis.fetch
+    const { assertion } = await setupAuthedClient(harness.app)
+    const request = {
+      method: 'POST' as const,
+      url: '/api/v1/generate/completion',
+      headers: { 'risu-auth': assertion },
+    }
+    const payload = {
+      kind: 'server-intent',
+      messages: [{ role: 'user', content: 'hi' }],
+      stream: false,
+      tools: [{ name: 'lookup', description: 'Look up a record', inputSchema: { type: 'object' } }],
+      // No unavailable call or malformed result can mask the tools requirement.
+      toolRounds: [],
+    }
+
+    const control = await harness.app.inject({ ...request, payload })
+    expect(control.statusCode).toBe(200)
+    expect(control.json()).toEqual({ type: 'success', result: 'tool round answer' })
+    expect(fetchSpy).toHaveBeenCalledOnce()
+    fetchSpy.mockClear()
+
+    const rejected = await harness.app.inject({ ...request, payload: { ...payload, tools } })
+
+    expect(rejected.statusCode).toBe(400)
+    expect(rejected.json()).toEqual({ error: 'toolRounds require supplied tools' })
+    expect(fetchSpy).not.toHaveBeenCalled()
+  })
+
   it('echo non-streaming honors options.echo.delayMs', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const start = Date.now()
@@ -1538,6 +1643,23 @@ describe('POST /api/v1/generate/completion (openai)', () => {
         maxBytes: 5,
       }),
     )
+    expect(finalized).toBe(true)
+  })
+
+  it('accepts buffered completion output exactly at the UTF-8 byte cap', async () => {
+    let finalized = false
+    async function* frames(): AsyncGenerator<CompletionStreamFrame> {
+      try {
+        yield { kind: 'token', content: '한' }
+        yield { kind: 'token', content: 'ab' }
+        yield { kind: 'token', content: '' }
+        yield { kind: 'done', finishReason: 'stop' }
+      } finally {
+        finalized = true
+      }
+    }
+
+    await expect(collectCompletionFrames(frames(), 5)).resolves.toEqual({ type: 'success', result: '한ab' })
     expect(finalized).toBe(true)
   })
 
