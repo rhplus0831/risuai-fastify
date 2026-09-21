@@ -112,7 +112,7 @@ describe('/api/v1/storage', () => {
 
   it('writes raw bytes under a hex-encoded path and reads them back', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
-    const payload = Buffer.from('hello-world')
+    const payload = Buffer.from(Array.from({ length: 256 }, (_, value) => value))
 
     const writeRes = await harness.app.inject({
       method: 'POST',
@@ -198,6 +198,57 @@ describe('/api/v1/storage', () => {
     })
     expect(res.statusCode).toBe(500)
     expect(Buffer.from(readFileSync(onDisk))).toEqual(oldPayload)
+    expect(legacyStorageTempFiles(harness.dataDir)).toEqual([])
+  })
+
+  it('preserves existing bytes after a file flush failure and accepts a later replacement', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const headers = { 'risu-auth': assertion, 'file-path': HELLO_HEX }
+    const oldPayload = Buffer.from([0, 255, 128, 1])
+    const replacement = Buffer.from([254, 0, 129, 2, 3])
+    const initial = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/storage/write',
+      headers,
+      payload: oldPayload,
+    })
+    expect(initial.statusCode).toBe(200)
+    const onDisk = path.join(harness.dataDir, 'save', HELLO_HEX)
+    expect(readFileSync(onDisk)).toEqual(oldPayload)
+    const sibling = path.join(harness.dataDir, 'save', Buffer.from('coldstorage/sibling').toString('hex'))
+    const siblingBytes = Buffer.from([17, 0, 240, 18])
+    writeFileSync(sibling, siblingBytes)
+
+    const originalOpen = fs.promises.open.bind(fs.promises)
+    const open = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args)
+      if (isLegacyStorageTempPath(args[0])) {
+        vi.spyOn(handle, 'sync').mockRejectedValue(new Error('simulated file flush failure'))
+      }
+      return handle
+    })
+    const failed = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/storage/write',
+      headers,
+      payload: replacement,
+    })
+    expect(failed.statusCode).toBe(500)
+    expect(readFileSync(onDisk)).toEqual(oldPayload)
+    expect(readFileSync(sibling)).toEqual(siblingBytes)
+    expect(legacyStorageTempFiles(harness.dataDir)).toEqual([])
+
+    open.mockRestore()
+    const retried = await harness.app.inject({
+      method: 'POST',
+      url: '/api/v1/storage/write',
+      headers,
+      payload: replacement,
+    })
+    expect(retried.statusCode).toBe(200)
+    expect(retried.json()).toEqual({ success: true })
+    expect(readFileSync(onDisk)).toEqual(replacement)
+    expect(readFileSync(sibling)).toEqual(siblingBytes)
     expect(legacyStorageTempFiles(harness.dataDir)).toEqual([])
   })
 

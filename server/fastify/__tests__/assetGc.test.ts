@@ -1,4 +1,4 @@
-import { existsSync, mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
@@ -191,6 +191,30 @@ describe('runAssetGc', () => {
 
     expect(result.deletedStrayFiles).toEqual([`${STRAY_OLD}.png`])
     expect(existsSync(strayOld)).toBe(false)
+  })
+
+  it('retains referenced bytes without metadata while reclaiming unrelated strays', async () => {
+    db.prepare('INSERT OR REPLACE INTO settings (id, data_json) VALUES (1, ?)').run(
+      JSON.stringify({ userIcon: REFERENCED }),
+    )
+    const referencedFile = writeAssetFile(REFERENCED, OLD_MTIME)
+    const referencedBytes = Buffer.from([0, 255, 17, 128])
+    writeFileSync(referencedFile, referencedBytes)
+    utimesSync(referencedFile, OLD_MTIME / 1000, OLD_MTIME / 1000)
+    const strayFile = writeAssetFile(STRAY_OLD, OLD_MTIME)
+    const unrelatedFile = path.join(assetsDir(dataDir), 'operator-note.txt')
+    writeFileSync(unrelatedFile, 'keep unrelated files')
+
+    const result = await runAssetGc(dataDir, { db, graceMs: GRACE_MS, now: () => NOW })
+
+    expect(result.status).toBe('completed')
+    expect(result.deletedAssetIds).toEqual([])
+    expect(result.deletedStrayFiles).toEqual([`${STRAY_OLD}.png`])
+    expect(result.deletedStrayFileCount).toBe(1)
+    expect(readFileSync(referencedFile)).toEqual(referencedBytes)
+    expect(readFileSync(unrelatedFile, 'utf8')).toBe('keep unrelated files')
+    expect(existsSync(strayFile)).toBe(false)
+    expect(db.prepare('SELECT id FROM assets').all()).toEqual([])
   })
 
   it('is a no-op when nothing is reclaimed', async () => {

@@ -328,6 +328,37 @@ describe('scanAssetReferences', () => {
     expect(queries.some((query) => /SELECT data_json\b/.test(query))).toBe(false)
   })
 
+  it('retains nested legacy references and deduplicates shared IDs across source pages', async () => {
+    const messagesPerChat = ASSET_REFERENCE_SCAN_ROWS + 1
+    const sharedId = id(500)
+    const characters = Array.from({ length: 2 }, (_, characterIndex) => ({
+      image: sharedId,
+      chats: Array.from({ length: 2 }, (_, chatIndex) => ({
+        id: `legacy-${characterIndex}-${chatIndex}`,
+        message: Array.from({ length: messagesPerChat }, (_, messageIndex) => ({
+          data: `${inlay(1000 + (characterIndex * 2 + chatIndex) * messagesPerChat + messageIndex)} {{inlay::${sharedId}}}`,
+        })),
+      })),
+    }))
+    settings({ userIcon: sharedId, characters })
+    message('legacy-1-1', 501)
+    message('legacy-1-1', 502, 1, 1)
+    const rawSettings = db.prepare('SELECT data_json FROM settings WHERE id = 1').get()
+    const before = db.prepare('SELECT total_changes() AS changes').get()
+    const expected = [
+      ...Array.from({ length: 4 * messagesPerChat }, (_, index) => id(1000 + index)),
+      sharedId,
+      id(501),
+      id(502),
+    ]
+
+    const marks = await parity(expected)
+
+    expect(marks.stats.yields).toBeGreaterThan(0)
+    expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual(rawSettings)
+    expect(db.prepare('SELECT total_changes() AS changes').get()).toEqual(before)
+  })
+
   it('reports and yields after an oversized existing scalar without rejecting it', async () => {
     settings({})
     character('character', { firstMessage: `${'x'.repeat(ASSET_REFERENCE_SCAN_BYTES + 1)}${inlay(1)}` })
