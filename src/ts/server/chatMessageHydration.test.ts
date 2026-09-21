@@ -299,6 +299,52 @@ const db = () =>
   ).db
 
 describe('chat message hydration owner', () => {
+  it.each(['full', 'tail'] as const)('rejects a wrong-chat response during %s hydration', async (kind) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      projectionState.fetchChat.mockResolvedValueOnce(
+        okResult('chat-2', [{ role: 'user', data: 'another conversation', chatId: 'foreign-message' }]),
+      )
+
+      if (kind === 'full') await hydrateChatMessages('chat-1')
+      else await expect(hydrateActiveChat()).resolves.toBe(false)
+
+      expect(db().characters[0].chats.map((chat) => chat.message)).toEqual([[], []])
+      expect(hasChatMessageHydrationFailed('chat-1', 0)).toBe(true)
+      expect(isChatMessageHydrationPending('chat-2', 0)).toBe(true)
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it.each(['success', 'failure'] as const)('shares an in-flight full read through %s', async (outcome) => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const response = deferred<ReturnType<typeof okResult> | { status: 'error'; error: string }>()
+      projectionState.fetchChat.mockReturnValue(response.promise)
+      const first = hydrateChatMessages('chat-1')
+      const second = hydrateChatMessages('chat-1')
+      const callsWhilePending = projectionState.fetchChat.mock.calls.length
+      const message = [{ role: 'user', data: 'loaded once', chatId: 'message-a' }]
+
+      response.resolve(outcome === 'success' ? okResult('chat-1', message) : { status: 'error', error: 'offline' })
+      await Promise.all([first, second])
+
+      expect(callsWhilePending).toBe(1)
+      expect(db().characters[0].chats[0].message).toEqual(outcome === 'success' ? message : [])
+      expect(hasChatMessageHydrationFailed('chat-1', 0)).toBe(outcome === 'failure')
+      if (outcome === 'failure') {
+        projectionState.fetchChat.mockResolvedValueOnce(okResult('chat-1', message))
+        await hydrateChatMessages('chat-1')
+        expect(projectionState.fetchChat).toHaveBeenCalledTimes(2)
+        expect(db().characters[0].chats[0].message).toEqual(message)
+        expect(hasChatMessageHydrationFailed('chat-1', 0)).toBe(false)
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
   it('rebuilds persisted reroll candidates when a reader-filled tail is handed to writer hydration', async () => {
     setManagedReaderForTest()
     seedTwoStubChats()
@@ -1565,6 +1611,33 @@ describe('chat message hydration owner', () => {
     expect(db().characters[0].chats[0].message).toEqual([{ role: 'user', data: 'fresh retry', chatId: 'm-fresh' }])
   })
 
+  it('preserves a reroll-only change while a full transcript read is pending', async () => {
+    const resident = [{ role: 'char', data: 'resident reply', chatId: 'resident' }]
+    db().characters[0].chats[0].message = resident
+    const response = deferred<ReturnType<typeof okResult>>()
+    projectionState.fetchChat.mockReturnValueOnce(response.promise)
+    const hydration = hydrateActiveChatFully()
+    const epoch = captureChatBodyProjectionEpoch('chat-1')
+
+    seedRerollBufferFromAlternates(
+      resident,
+      [resident[0], { role: 'char', data: 'new local alternate', chatId: 'local-alternate' }],
+      acceptedSendTarget(),
+    )
+    // Keep the transcript and epoch unchanged so only the reroll fence can reject this read.
+    expect(db().characters[0].chats[0].message).toEqual(resident)
+    expect(captureChatBodyProjectionEpoch('chat-1')).toBe(epoch)
+    response.resolve(okResult('chat-1', [{ role: 'char', data: 'old server reply', chatId: 'old-reply' }]))
+    await hydration
+
+    expect(db().characters[0].chats[0].message).toEqual(resident)
+    expect(getRerollBuffer(acceptedSendTarget()).map((candidate) => candidate[0]?.data)).toEqual([
+      'new local alternate',
+      'resident reply',
+    ])
+    expect(getRerollId(acceptedSendTarget())).toBe(1)
+  })
+
   it('keeps a pending full hydration fresh across a compatible range hydration write', async () => {
     const tailHydration = deferred<ReturnType<typeof okWindowResult> & { hypaV3Data: unknown }>()
     const fullHydration = deferred<ReturnType<typeof okResult> & { hypaV3Data: unknown }>()
@@ -1683,6 +1756,103 @@ describe('chat message hydration owner', () => {
 })
 
 describe('accepted-send authoritative completion barrier', () => {
+  it.each([
+    { name: 'matching identities', operationId: 'operation-a', resultMessageId: 'generation-a', matches: true },
+    { name: 'wrong result identity', operationId: 'operation-a', resultMessageId: 'other-reply', matches: false },
+    {
+      name: 'wrong operation identity',
+      operationId: 'other-operation',
+      resultMessageId: 'generation-a',
+      matches: false,
+    },
+  ])('checks $name in the downloaded completion', async ({ operationId, resultMessageId, matches }) => {
+    const accepted = { role: 'user', data: 'hello', chatId: 'message-a' }
+    const reply = {
+      role: 'char',
+      data: 'complete reply',
+      chatId: 'generation-a',
+      generationInfo: { operationId: 'operation-a' },
+    }
+    db().characters[0].chats[0].message = [accepted]
+    projectionState.fetchGenerationChat.mockResolvedValueOnce(completedGenerationResult({ message: [accepted, reply] }))
+
+    await expect(
+      reconcileAcceptedSendCompletion(acceptedSendTarget(), 'message-a', { operationId, resultMessageId }),
+    ).resolves.toEqual(
+      matches ? { status: 'reconciled', source: 'applied' } : { status: 'not_reconciled', reason: 'reply_missing' },
+    )
+    expect(db().characters[0].chats[0].message).toEqual(matches ? [accepted, reply] : [accepted])
+  })
+
+  it.each([
+    { name: 'matching identities', operationId: 'operation-a', resultMessageId: 'generation-a', matches: true },
+    { name: 'wrong result identity', operationId: 'operation-a', resultMessageId: 'other-reply', matches: false },
+    {
+      name: 'wrong operation identity',
+      operationId: 'other-operation',
+      resultMessageId: 'generation-a',
+      matches: false,
+    },
+  ])('checks $name in a newer resident completion', async ({ operationId, resultMessageId, matches }) => {
+    const accepted = { role: 'user', data: 'hello', chatId: 'message-a' }
+    const reply = {
+      role: 'char',
+      data: 'newer reply',
+      chatId: 'generation-a',
+      generationInfo: { operationId: 'operation-a' },
+    }
+    db().characters[0].chats[0].message = [accepted]
+    const response = deferred<ReturnType<typeof completedGenerationResult>>()
+    projectionState.fetchGenerationChat.mockReturnValueOnce(response.promise)
+
+    const reconciliation = reconcileAcceptedSendCompletion(acceptedSendTarget(), 'message-a', {
+      operationId,
+      resultMessageId,
+    })
+    expect(applyServerChatMessagesResource('chat-1', [accepted, reply], undefined, [])).toBe(true)
+    markChatBodyResourceRevision('chat-1', 8)
+    response.resolve(completedGenerationResult({ revision: 7 }))
+
+    await expect(reconciliation).resolves.toEqual(
+      matches
+        ? { status: 'reconciled', source: 'newer_resident_projection' }
+        : { status: 'not_reconciled', reason: 'superseded' },
+    )
+    expect(db().characters[0].chats[0].message).toEqual([accepted, reply])
+  })
+
+  it.each([
+    { name: 'result identity', chatId: 'other-reply', operationId: 'operation-a' },
+    { name: 'operation identity', chatId: 'generation-a', operationId: 'other-operation' },
+  ])('rechecks $name after retained projections replace an adjacent reply', async ({ chatId, operationId }) => {
+    const accepted = { role: 'user', data: 'hello', chatId: 'message-a' }
+    const authoritativeReply = {
+      role: 'char',
+      data: 'complete reply',
+      chatId: 'generation-a',
+      generationInfo: { operationId: 'operation-a' },
+    }
+    const retainedReply = { role: 'char', data: 'retained reply', chatId, generationInfo: { operationId } }
+    db().characters[0].chats[0].message = [accepted]
+    projectionState.fetchGenerationChat.mockResolvedValueOnce(
+      completedGenerationResult({ message: [accepted, authoritativeReply] }),
+    )
+    const release = registerRetainedChatProjection({ kind: 'chat-body', chatId: 'chat-1' }, () => {
+      db().characters[0].chats[0].message = [accepted, retainedReply]
+    })
+    try {
+      await expect(
+        reconcileAcceptedSendCompletion(acceptedSendTarget(), 'message-a', {
+          operationId: 'operation-a',
+          resultMessageId: 'generation-a',
+        }),
+      ).resolves.toEqual({ status: 'not_reconciled', reason: 'post_apply_verification_failed' })
+      expect(db().characters[0].chats[0].message).toEqual([accepted, retainedReply])
+    } finally {
+      release()
+    }
+  })
+
   it('applies a generation suffix to a background user-only chat before reporting reconciliation', async () => {
     const prefix = [
       { role: 'user', data: 'older user', chatId: 'older-user' },
@@ -2001,6 +2171,93 @@ describe('isChatMessageHydrationPending', () => {
 })
 
 describe('character globalLore hydration', () => {
+  it.each(['success', 'failure'] as const)('shares an in-flight lorebook read through %s', async (outcome) => {
+    seedManyLorebookStubCharacters(1)
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const result = {
+        status: 'ok' as const,
+        revision: 1,
+        characterId: 'char-1',
+        globalLore: [{ key: 'loaded', content: 'lore' }],
+      }
+      const response = deferred<typeof result | { status: 'error'; error: string }>()
+      projectionState.fetchCharLore.mockReturnValue(response.promise)
+      const first = hydrateActiveCharacterLorebook()
+      const second = hydrateActiveCharacterLorebook()
+      const callsWhilePending = projectionState.fetchCharLore.mock.calls.length
+      response.resolve(outcome === 'success' ? result : { status: 'error', error: 'offline' })
+      await Promise.all([first, second])
+
+      expect(callsWhilePending).toBe(1)
+      expect((db().characters[0] as { globalLore?: unknown[] }).globalLore).toEqual(
+        outcome === 'success' ? result.globalLore : [],
+      )
+      expect(isCharacterLorebookHydrated('char-1')).toBe(outcome === 'success')
+      if (outcome === 'failure') {
+        expect(hasCharacterLorebookHydrationFailed('char-1')).toBe(true)
+        projectionState.fetchCharLore.mockResolvedValueOnce(result)
+        await hydrateActiveCharacterLorebook()
+        expect(projectionState.fetchCharLore).toHaveBeenCalledTimes(2)
+        expect((db().characters[0] as { globalLore?: unknown[] }).globalLore).toEqual(result.globalLore)
+        expect(isCharacterLorebookHydrated('char-1')).toBe(true)
+        expect(hasCharacterLorebookHydrationFailed('char-1')).toBe(false)
+      }
+    } finally {
+      warn.mockRestore()
+    }
+  })
+
+  it('rejects a single lorebook response from before a hydration reset and permits retry', async () => {
+    seedManyLorebookStubCharacters(1)
+    const oldResult = {
+      status: 'ok' as const,
+      revision: 1,
+      characterId: 'char-1',
+      globalLore: [{ key: 'old', content: 'stale lore' }],
+    }
+    const response = deferred<typeof oldResult>()
+    projectionState.fetchCharLore.mockReturnValueOnce(response.promise)
+    const hydration = hydrateActiveCharacterLorebook()
+    resetChatHydration()
+    response.resolve(oldResult)
+    await hydration
+
+    expect((db().characters[0] as { globalLore?: unknown[] }).globalLore).toEqual([])
+    expect(isCharacterLorebookHydrated('char-1')).toBe(false)
+    expect(isCharacterLorebookHydrationPending('char-1')).toBe(true)
+    projectionState.fetchCharLore.mockResolvedValueOnce({
+      ...oldResult,
+      globalLore: [{ key: 'new', content: 'fresh lore' }],
+    })
+    await hydrateActiveCharacterLorebook()
+    expect(projectionState.fetchCharLore).toHaveBeenCalledTimes(2)
+    expect((db().characters[0] as { globalLore?: unknown[] }).globalLore).toEqual([
+      { key: 'new', content: 'fresh lore' },
+    ])
+    expect(isCharacterLorebookHydrated('char-1')).toBe(true)
+  })
+
+  it.each([false, true])('rejects a bulk lorebook response from before a reset with strict=%s', async (strict) => {
+    seedManyLorebookStubCharacters(65)
+    const response = deferred<ReturnType<typeof okBulkLorebookResult>>()
+    projectionState.fetchBulkCharLore.mockReturnValueOnce(response.promise)
+    const hydration = ensureAllCharacterLorebooksHydrated({ strict })
+    const settlement = strict
+      ? expect(hydration).rejects.toThrow(/stale after a reset/)
+      : expect(hydration).resolves.toBeUndefined()
+    resetChatHydration()
+    response.resolve(okBulkLorebookResult(Array.from({ length: 32 }, (_, index) => `char-${index + 1}`)))
+    await settlement
+
+    expect(projectionState.fetchBulkCharLore).toHaveBeenCalledTimes(1)
+    for (const [index, character] of db().characters.entries()) {
+      expect((character as { globalLore?: unknown[] }).globalLore).toEqual([])
+      expect(isCharacterLorebookHydrated(`char-${index + 1}`)).toBe(false)
+      expect(isCharacterLorebookHydrationPending(`char-${index + 1}`)).toBe(true)
+    }
+  })
+
   it('exposes a failed hydration and returns to loading while retrying', async () => {
     ;(testDatabaseState.db as { enableLorebookStubs?: boolean }).enableLorebookStubs = true
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {})
