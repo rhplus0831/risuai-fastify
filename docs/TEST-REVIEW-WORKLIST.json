@@ -327,9 +327,9 @@
         "protectedBehavior": "Mocked provider-dispatch tests cover streaming and output parsing, runtime controls and prompt sanitization, profile-over-flat precedence across many providers, fixed endpoint enforcement, credential absence and masking, provider-specific schema/media/tool/thinking options, and generation model labels."
       },
       "currentFiles": ["server/fastify/__tests__/chatDispatchProfileOptions.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "pilot-providers",
+      "owner": "/root/pilot_providers; branch codex/test-pilot-providers; worktree /home/codex/worktrees/risuai-test-pilot-providers",
       "review": null
     },
     {
@@ -343,9 +343,9 @@
         "protectedBehavior": "Fastify integration tests cover auth and request validation, server-owned model/profile selection, tool rounds, history redaction, fixed provider endpoints and credentials, streaming and buffered normalization across OpenAI, Anthropic, Mistral, Cohere, Gemini, Ollama, Horde, Bedrock, and Vertex, timeout/backpressure/output caps, and provider error handling."
       },
       "currentFiles": ["server/fastify/__tests__/generation.completion.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "pilot-providers",
+      "owner": "/root/pilot_providers; branch codex/test-pilot-providers; worktree /home/codex/worktrees/risuai-test-pilot-providers",
       "review": null
     },
     {
@@ -359,9 +359,9 @@
         "protectedBehavior": "SQLite/resource-state and command assertions cover create payload sanitization, optimistic create/delete/select rollback, durable mutation ordering and replay, folder and character reorder, memory-flag patches, stable-ID snapshots and diffs, concurrent sibling edits, queued failures, and soft-delete confirmation races."
       },
       "currentFiles": ["src/ts/characterCommands.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "pilot-characters",
+      "owner": "/root/pilot_characters; branch codex/test-pilot-characters; worktree /home/codex/worktrees/risuai-test-pilot-characters",
       "review": null
     },
     {
@@ -407,9 +407,9 @@
         "protectedBehavior": "Covers fresh schema/table creation, current and legacy migrations through the supported versions, transactional rollback and retry, durable identity and selection repairs, command and generation lineage tables, lorebook and memory migrations, WAL settings, constraints and cascades, future-version rejection, and reopen idempotence."
       },
       "currentFiles": ["server/fastify/__tests__/db.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "pilot-persistence",
+      "owner": "/root/pilot_persistence; branch codex/test-pilot-persistence; worktree /home/codex/worktrees/risuai-test-pilot-persistence",
       "review": null
     },
     {
@@ -471,9 +471,9 @@
         "protectedBehavior": "SQLite integration checks active message CRUD, ordering, ranges, per-chat scope, translation invalidation, duplicate-ID safety, alternate reroll isolation and lifecycle, surgical diff append/truncate/resequence and stale rejection, Hypa upsert/delete, message-aware SQLite split/rejoin, legacy import, no-op behavior, and removed-chat reclamation."
       },
       "currentFiles": ["server/fastify/__tests__/messageStore.test.ts"],
-      "status": "pending",
-      "batchId": null,
-      "owner": null,
+      "status": "in_progress",
+      "batchId": "pilot-persistence",
+      "owner": "/root/pilot_persistence; branch codex/test-pilot-persistence; worktree /home/codex/worktrees/risuai-test-pilot-persistence",
       "review": null
     },
     {
