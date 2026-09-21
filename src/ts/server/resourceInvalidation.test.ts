@@ -865,7 +865,7 @@ describe('API-backed resource invalidation', () => {
     expect(sideEffects.mergeAgentPresetCharacters).toHaveBeenCalledOnce()
   })
 
-  it('retries inconsistent full reads and applies only a common revision', async () => {
+  it('retries inconsistent full reads and applies only a common revision', { tags: 'core' }, async () => {
     const optimisticEpoch = captureDestructiveRefreshEpoch()
     api.settings
       .mockResolvedValueOnce({ status: 'ok', revision: 5, settings: { language: 'stale' } })
@@ -897,7 +897,7 @@ describe('API-backed resource invalidation', () => {
     expect(hasDestructiveRefreshEpochChanged(optimisticEpoch)).toBe(true)
   })
 
-  it('fails after bounded revision mismatches without applying any response', async () => {
+  it('fails after bounded revision mismatches without applying any response', { tags: 'core' }, async () => {
     seedResources(1)
     api.settings.mockResolvedValue({ status: 'ok', revision: 2, settings: { language: 'not-applied' } })
     api.collections.mockResolvedValue({ status: 'ok', revision: 3, collections: completeCollections() })

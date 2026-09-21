@@ -109,24 +109,30 @@ describe('accepted-send authoritative completion barrier', () => {
       resultMessageId: 'generation-a',
       matches: false,
     },
-  ])('checks $name in the downloaded completion', async ({ operationId, resultMessageId, matches }) => {
-    const accepted = { role: 'user', data: 'hello', chatId: 'message-a' }
-    const reply = {
-      role: 'char',
-      data: 'complete reply',
-      chatId: 'generation-a',
-      generationInfo: { operationId: 'operation-a' },
-    }
-    db().characters[0].chats[0].message = [accepted]
-    projectionState.fetchGenerationChat.mockResolvedValueOnce(completedGenerationResult({ message: [accepted, reply] }))
+  ])(
+    'checks $name in the downloaded completion',
+    { tags: 'core' },
+    async ({ operationId, resultMessageId, matches }) => {
+      const accepted = { role: 'user', data: 'hello', chatId: 'message-a' }
+      const reply = {
+        role: 'char',
+        data: 'complete reply',
+        chatId: 'generation-a',
+        generationInfo: { operationId: 'operation-a' },
+      }
+      db().characters[0].chats[0].message = [accepted]
+      projectionState.fetchGenerationChat.mockResolvedValueOnce(
+        completedGenerationResult({ message: [accepted, reply] }),
+      )
 
-    await expect(
-      reconcileAcceptedSendCompletion(acceptedSendTarget(), 'message-a', { operationId, resultMessageId }),
-    ).resolves.toEqual(
-      matches ? { status: 'reconciled', source: 'applied' } : { status: 'not_reconciled', reason: 'reply_missing' },
-    )
-    expect(db().characters[0].chats[0].message).toEqual(matches ? [accepted, reply] : [accepted])
-  })
+      await expect(
+        reconcileAcceptedSendCompletion(acceptedSendTarget(), 'message-a', { operationId, resultMessageId }),
+      ).resolves.toEqual(
+        matches ? { status: 'reconciled', source: 'applied' } : { status: 'not_reconciled', reason: 'reply_missing' },
+      )
+      expect(db().characters[0].chats[0].message).toEqual(matches ? [accepted, reply] : [accepted])
+    },
+  )
 
   it.each([
     { name: 'matching identities', operationId: 'operation-a', resultMessageId: 'generation-a', matches: true },

@@ -85,22 +85,26 @@ describe('connected page identity', () => {
     expect(identity.install).toHaveBeenCalledTimes(2)
   })
 
-  it('deduplicates copied sessionStorage while the originating page is suspended with its lock held', async () => {
-    const { held, request } = installLocks()
-    const first = await page()
-    await first.resolveConnectedTabIdentity()
-    const duplicate = await page()
-    const result = await duplicate.resolveConnectedTabIdentity()
-    expect(result).toMatchObject({ exclusive: true, previousSessionId: null })
-    expect(result.sessionId).not.toBe('originating-tab')
-    expect(held.size).toBe(2)
-    expect(request.mock.calls.map(([name, options]) => [name, options])).toEqual([
-      ['risu:client-session:originating-tab', { mode: 'exclusive', ifAvailable: true }],
-      ['risu:client-session:originating-tab', { mode: 'exclusive', ifAvailable: true }],
-      [`risu:client-session:${result.sessionId}`, { mode: 'exclusive', ifAvailable: true }],
-    ])
-    expect(identity.install).toHaveBeenLastCalledWith(result.sessionId)
-  })
+  it(
+    'deduplicates copied sessionStorage while the originating page is suspended with its lock held',
+    { tags: 'core' },
+    async () => {
+      const { held, request } = installLocks()
+      const first = await page()
+      await first.resolveConnectedTabIdentity()
+      const duplicate = await page()
+      const result = await duplicate.resolveConnectedTabIdentity()
+      expect(result).toMatchObject({ exclusive: true, previousSessionId: null })
+      expect(result.sessionId).not.toBe('originating-tab')
+      expect(held.size).toBe(2)
+      expect(request.mock.calls.map(([name, options]) => [name, options])).toEqual([
+        ['risu:client-session:originating-tab', { mode: 'exclusive', ifAvailable: true }],
+        ['risu:client-session:originating-tab', { mode: 'exclusive', ifAvailable: true }],
+        [`risu:client-session:${result.sessionId}`, { mode: 'exclusive', ifAvailable: true }],
+      ])
+      expect(identity.install).toHaveBeenLastCalledWith(result.sessionId)
+    },
+  )
 
   it.each(['missing', 'rejected'])(
     'uses a fresh reader identity and preserves originating recovery scope when locks are %s',

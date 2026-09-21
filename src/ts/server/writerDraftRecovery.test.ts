@@ -111,36 +111,40 @@ afterEach(async () => {
 })
 
 describe('writer draft capture boundary', () => {
-  it('clones mounted inputs synchronously after revocation and before reader subscribers unmount them', async () => {
-    const input = draft()
-    let readerPublished = false
-    const capture = vi.fn(() => {
-      expect(canUseClientWriteAccess()).toBe(false)
-      expect(readerPublished).toBe(false)
-      return input
-    })
-    const unregister = registerWriterDraftCapture(capture)
-    const stopView = clientSessionStore.subscribe((session) => {
-      if (session.lifecycle !== 'reading') return
-      readerPublished = true
-      unregister()
-      input.fields[0].value = 'unmounted'
-      ;(input.data as { nested: string[] }).nested[0] = 'cleared'
-    })
-    demoteClientSession()
-    expect(capture).toHaveBeenCalledOnce()
-    expect(get(writerDraftRecoveryStore).drafts[0]).toMatchObject({
-      ...draft(),
-      scope,
-      generation: expect.any(String),
-      updatedAt: expect.any(Number),
-    })
-    const returned = readWriterDraft(input.key)!
-    returned.fields[0].value = 'consumer changed its copy'
-    expect(readWriterDraft(input.key)?.fields[0].value).toBe('unsaved edit')
-    await flushWriterDraftRecoveryForTests()
-    stopView()
-  })
+  it(
+    'clones mounted inputs synchronously after revocation and before reader subscribers unmount them',
+    { tags: 'core' },
+    async () => {
+      const input = draft()
+      let readerPublished = false
+      const capture = vi.fn(() => {
+        expect(canUseClientWriteAccess()).toBe(false)
+        expect(readerPublished).toBe(false)
+        return input
+      })
+      const unregister = registerWriterDraftCapture(capture)
+      const stopView = clientSessionStore.subscribe((session) => {
+        if (session.lifecycle !== 'reading') return
+        readerPublished = true
+        unregister()
+        input.fields[0].value = 'unmounted'
+        ;(input.data as { nested: string[] }).nested[0] = 'cleared'
+      })
+      demoteClientSession()
+      expect(capture).toHaveBeenCalledOnce()
+      expect(get(writerDraftRecoveryStore).drafts[0]).toMatchObject({
+        ...draft(),
+        scope,
+        generation: expect.any(String),
+        updatedAt: expect.any(Number),
+      })
+      const returned = readWriterDraft(input.key)!
+      returned.fields[0].value = 'consumer changed its copy'
+      expect(readWriterDraft(input.key)?.fields[0].value).toBe('unsaved edit')
+      await flushWriterDraftRecoveryForTests()
+      stopView()
+    },
+  )
 
   it('keeps other mounted captures when a callback throws, and respects unregistration', async () => {
     registerWriterDraftCapture(() => {

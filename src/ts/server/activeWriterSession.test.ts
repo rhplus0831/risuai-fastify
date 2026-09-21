@@ -159,7 +159,7 @@ describe('active writer browser session', () => {
     expect(activeWriterSession.getActiveWriterSessionId()).toBe('storage-blocked-writer')
   })
 
-  it('latches a 423 takeover without scheduling a reload and gates server commands', async () => {
+  it('latches a 423 takeover without scheduling a reload and gates server commands', { tags: 'core' }, async () => {
     vi.useFakeTimers()
     const reload = vi.fn()
     vi.stubGlobal('location', { reload })

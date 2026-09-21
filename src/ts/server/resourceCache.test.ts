@@ -138,7 +138,7 @@ describe('IndexedDB resource cache', () => {
     ).resolves.toBeNull()
   })
 
-  it('does not advertise an IndexedDB entry whose bytes do not match its key', async () => {
+  it('does not advertise an IndexedDB entry whose bytes do not match its key', { tags: 'core' }, async () => {
     const claimedHash = await sha256JsonValue({ id: 'expected' })
     const request = indexedDB.open('risu-resource-cache-v1', 1)
     const database = await new Promise<IDBDatabase>((resolve, reject) => {
