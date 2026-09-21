@@ -289,7 +289,7 @@ Toggle reconciliation has an additional readiness contract:
 
 Regression owners: `src/ts/activeChatGenerationSettings.test.ts`,
 `src/lib/SideBars/chatGenerationSettingsControls.test.ts`, and
-`server/fastify/__tests__/commands.test.ts` (delayed Persona-module hydration
+`server/fastify/__tests__/commands.chatGenerationSettings.test.ts` (delayed Persona-module hydration
 and required-value removal).
 
 ### Saved Toggles Presets

@@ -185,7 +185,7 @@ The character-owned all-chat reset is likewise one command transaction. It
 requires one replacement chat with no message or Hypa V3 body, removes the
 character's previous chat/message/memory rows, preserves the character's chat
 folders, selects page `0`, and emits the `COMMAND_EVENT_CATALOG.chatsReset`
-`characterRow` event. `server/fastify/__tests__/commands.test.ts` guards the
+`characterRow` event. `server/fastify/__tests__/commands.chats.test.ts` guards the
 atomic write and rollback contract; the browser recovery path is documented in
 [Durable Mutations And Recovery](durable-mutations-and-recovery.md#durable-mutation-recovery-command-queue-and-local-acknowledgements).
 
@@ -209,7 +209,8 @@ affected chat `fmIndex` values and return a cascade certificate;
 `server/fastify/src/commands/modules.ts` removes module references from global
 enablement, characters, chats, and loadouts. Guards are
 `server/fastify/__tests__/generation.chat.test.ts`,
-`server/fastify/__tests__/commands.test.ts`, and
+`server/fastify/__tests__/commands.characters.test.ts`,
+`server/fastify/__tests__/commands.modules.test.ts`, and
 `server/fastify/__tests__/commandMessageFreeCeiling.test.ts`.
 
 `routeManifest.ts` classifies auth, active-writer, and streaming decisions;

@@ -19,7 +19,7 @@ but files should be read and split by these ownership buckets:
 
 | Bucket | Typical files |
 | --- | --- |
-| Commands and persistence mutations | `commands.test.ts`, `command*.test.ts`, `targetedMutationPaths.test.ts`, `messageStore.test.ts`, `repositoryWriterKit.test.ts`, `splitPresets.test.ts`, `greetingTranslationStore.test.ts` |
+| Commands and persistence mutations | `commands.test.ts`, domain `commands.*.test.ts` files, `command*.test.ts`, `targetedMutationPaths.test.ts`, `messageStore.test.ts`, `repositoryWriterKit.test.ts`, `splitPresets.test.ts`, `greetingTranslationStore.test.ts` |
 | Generation and prompt assembly | `generation.*.test.ts`, `generationOperations*.test.ts`, `generationEffects.test.ts`, `assemble.test.ts`, `agentPresetExecution.test.ts`, `generationInput*.test.ts`, `preflight.test.ts`, `budgetFinalize.test.ts`, `generationBodyCap.test.ts`, `history.test.ts`, `templates.test.ts`, `scripts.test.ts`, `triggers.test.ts`, `luaRuntime.test.ts`, `plainSections.test.ts`, `staticSections.test.ts` |
 | Intermediate display | `displaySource*.test.ts`, including scoped loading, queue priority, cache namespaces, preparation cost, diagnostics, and route behavior. |
 | Memory | `memory*.test.ts`, `promptMemoryAdapter.test.ts` |
@@ -43,6 +43,12 @@ The embed and summarize handler suites share
 `helpers/acceptedMemoryGeneration.ts` for accepted configuration and attempt
 provenance. Their provider and job assertions remain with the individual worker
 suites.
+
+The command suite keeps its core transaction and initialization cases in
+`commands.test.ts`; domain cases live in the `commands.*.test.ts` files. See
+[Command coverage ownership](../../../docs/tests/persistence-commands-and-events.md#command-coverage-ownership)
+for exact file scopes and counts. `helpers/commandHarness.ts` shares setup and
+resource reads; each integration case still gets a fresh app and database.
 
 ## Cleanup Rule
 

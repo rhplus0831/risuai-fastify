@@ -108,7 +108,7 @@ export const requiredImports: Record<string, readonly string[]> = {
   ],
   '@risuai/shared-core/chat-generation-settings': [
     'server/fastify/__tests__/commandSingleRowPaths.test.ts',
-    'server/fastify/__tests__/commands.test.ts',
+    'server/fastify/__tests__/commands.chatGenerationSettings.test.ts',
     'server/fastify/src/chatGenerationSettingsStorage.ts',
     'server/fastify/src/commands/chats.ts',
     'server/fastify/src/prompt/effectiveGenerationConfig.ts',
@@ -229,7 +229,7 @@ export const requiredImports: Record<string, readonly string[]> = {
   '@risuai/shared-core/model-types': [
     'server/fastify/__tests__/assemble.test.ts',
     'server/fastify/__tests__/chatDispatchProfileOptions.test.ts',
-    'server/fastify/__tests__/commands.test.ts',
+    'server/fastify/__tests__/commands.modelProfiles.test.ts',
     'server/fastify/__tests__/databaseDefaults.test.ts',
     'server/fastify/__tests__/generation.chat.test.ts',
     'server/fastify/__tests__/generation.completion.test.ts',
@@ -259,7 +259,8 @@ export const requiredImports: Record<string, readonly string[]> = {
     'src/ts/moduleActivation.ts',
   ],
   '@risuai/shared-core/mutation-certificates': [
-    'server/fastify/__tests__/commands.test.ts',
+    'server/fastify/__tests__/commands.personas.test.ts',
+    'server/fastify/__tests__/commands.settings.test.ts',
     'server/fastify/src/commands/personas.ts',
     'server/fastify/src/commands/scriptDefinitions.ts',
     'src/ts/personaMutationCertificate.ts',

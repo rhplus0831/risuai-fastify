@@ -14,6 +14,13 @@ now has **249 cases across 11 files**, including two new memory-rejection and wr
 regressions. See [Bootstrap coverage ownership](tests/browser-state-sync-and-recovery.md#bootstrap-coverage-ownership)
 for current file names and counts. The row below retains the historical 247-case scope and ranking.
 
+Post-snapshot command update (2026-09-21): the original
+`server/fastify/__tests__/commands.test.ts` coverage now has **247 cases across 20 files**.
+The core transaction/initialization cases remain in `commands.test.ts`; domain cases moved
+to focused files, with three independent message-finalization rejection cases added and
+message write-isolation assertions strengthened. See [Command coverage ownership](tests/persistence-commands-and-events.md#command-coverage-ownership).
+The row below retains the historical 244-case scope and ranking.
+
 This inventory ranks the current test files by the product consequences their assertions protect. Each file received a Luna High evaluation of its actual assertions. Ratings are qualitative review judgments, not measured defect rates or evidence that the suite passes.
 
 Order: **Critical → High → Medium → Low**, then **Frequently → Often → Occasionally**, then **test count descending**. Repository-relative path breaks remaining ties. For a file covering several behaviors, severity follows the most serious credible direct consequence and frequency follows that severity-determining scenario.

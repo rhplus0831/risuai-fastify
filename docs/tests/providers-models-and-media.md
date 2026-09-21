@@ -52,7 +52,7 @@ honors abort, late success/failure after retry, deletion before persistence,
 provider-success/storage-failure rollback, and retained output with fresh
 process-local registries after SQLite reopen. The raw pipeline cases remain in
 `rawMessageTranslation.test.ts`; source/replacement/disconnect routes remain in
-`server/fastify/__tests__/commands.test.ts`.
+`server/fastify/__tests__/commands.translation.test.ts`.
 
 `src/ts/server/messageTranslationJobs.test.ts` exercises both browser translation
 refresh owners across held reads, terminal updates and stop/restart. The native

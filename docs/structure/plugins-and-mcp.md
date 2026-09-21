@@ -205,7 +205,7 @@ live in `server/fastify/src/routes/commands.ts`, with mutation logic in
 `server/fastify/src/commands/plugins.ts` and `pluginStorage.ts`. The route and
 storage contracts are guarded by
 `server/fastify/__tests__/routeProtection.test.ts`,
-`server/fastify/__tests__/commands.test.ts`, and
+`server/fastify/__tests__/commands.plugins.test.ts`, and
 `server/fastify/__tests__/commandSettingsAndPluginStorageRange.test.ts`.
 
 Plugin record `PATCH` requests contain only changed fields. Because JSON omits
@@ -242,7 +242,7 @@ snapshots retain folders and assignments. Activation, prompt assembly, and MCP
 selection do not read folder metadata.
 
 Focused guards: `src/ts/moduleOrganization.test.ts`,
-`src/ts/moduleCommands.test.ts`, `server/fastify/__tests__/commands.test.ts`,
+`src/ts/moduleCommands.test.ts`, `server/fastify/__tests__/commands.modules.test.ts`,
 and `src/ts/server/resourceInvalidation.test.ts`.
 
 ### Plugin Storage And Collection Sequences
@@ -373,7 +373,7 @@ through the ordinary revisioned module commands. It does not rewrite
 `moduleIntergration` text. The module UI displays imported MCP rows, supports
 those two global lifecycle actions, hides edit/export, and hides unsupported
 scoped-link controls. Server behavior is guarded by
-`server/fastify/__tests__/commands.test.ts`; UI restrictions are guarded by
+`server/fastify/__tests__/commands.modules.test.ts`; UI restrictions are guarded by
 `src/lib/Setting/Pages/Module/ModuleSettings.svelte.test.ts` and
 `src/lib/Setting/Pages/Module/ModuleChatMenu.svelte.test.ts`. The import-picker
 exclusion is guarded by `src/ts/process/mcp/mcp.test.ts`.
