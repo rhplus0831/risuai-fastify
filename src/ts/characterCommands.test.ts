@@ -47,6 +47,7 @@ import {
   dispatchCreateAndSelectCharacter,
   dispatchCreateCharacter,
   dispatchDeleteCharacter,
+  dispatchDeleteCharacterWithOutcome,
   dispatchSelectCharacter,
   dispatchSelectCharacterWithOutcome,
   dispatchUpdateCharacterScoped,
@@ -185,6 +186,7 @@ function stubCharacterCollectionCommandFetch({
   failCreate = false,
   failCreateAndSelect = false,
   failDelete = false,
+  deleteCharacterId = 'char-b',
   onCreate,
   onCreateAndSelect,
   onDelete,
@@ -192,6 +194,7 @@ function stubCharacterCollectionCommandFetch({
   failCreate?: boolean
   failCreateAndSelect?: boolean
   failDelete?: boolean
+  deleteCharacterId?: string
   onCreate?: () => void | Promise<void>
   onCreateAndSelect?: () => void | Promise<void>
   onDelete?: () => void | Promise<void>
@@ -229,13 +232,13 @@ function stubCharacterCollectionCommandFetch({
           characterId: 'char-selected',
         })
       }
-      if (url === '/api/v1/commands/characters/char-b' && method === 'DELETE') {
+      if (url === `/api/v1/commands/characters/${encodeURIComponent(deleteCharacterId)}` && method === 'DELETE') {
         await onDelete?.()
         if (failDelete) return jsonResponse({ error: 'delete failed' }, 500)
         return jsonResponse({
           revision: 11,
           event: { type: 'character.deleted', revision: 11, resource: 'character' },
-          characterId: 'char-b',
+          characterId: deleteCharacterId,
           selectedCharacterId: null,
         })
       }
@@ -397,13 +400,14 @@ describe('character create command payloads', () => {
   it('dispatchCreateCharacter carries an id-bearing empty imported starter chat', async () => {
     const calls = stubCreateCharacterCommandFetch()
     const previous = currentCharacterStateSnapshot()
-    const starterChat = {
+    const expectedStarterChat = {
       id: 'chat-imported',
       name: 'Chat 1',
       note: '',
       message: [],
       localLore: [{ id: 'local-lore', content: 'Local lore' }],
     }
+    const starterChat = cloneForExpect(expectedStarterChat)
     const character = {
       chaId: 'char-created',
       name: 'Imported card',
@@ -411,14 +415,16 @@ describe('character create command payloads', () => {
       chats: [starterChat],
     } as any
 
-    dispatchCreateCharacter(character, previous)
+    const settlement = dispatchCreateCharacter(character, previous)
     await waitForCallCount(calls, 2)
 
     expect(calls[1].body).toMatchObject({
       character: { chaId: 'char-created', name: 'Imported card', chatPage: 0 },
-      initialChat: starterChat,
+      initialChat: expectedStarterChat,
     })
     expect((calls[1].body as { character: Record<string, unknown> }).character).not.toHaveProperty('chats')
+    await expect(settlement).resolves.toMatchObject({ status: 'accepted' })
+    expect(character.chats).toEqual([expectedStarterChat])
   })
 
   it('dispatchCreateAndSelectCharacter omits embedded chats while keeping local selection data intact', async () => {
@@ -438,7 +444,7 @@ describe('character create command payloads', () => {
       lastInteraction: 5555,
     } as any
 
-    dispatchCreateAndSelectCharacter(character, previous, 5555)
+    const settlement = dispatchCreateAndSelectCharacter(character, previous, 5555)
     await waitForCallCount(calls, 2)
 
     expect(calls[1]).toMatchObject({
@@ -458,6 +464,7 @@ describe('character create command payloads', () => {
     })
     expect(calls[1].body).not.toHaveProperty('character.chats')
     expect(character.chats).toEqual([starterChat])
+    await expect(settlement).resolves.toMatchObject({ status: 'accepted' })
     expect(character.lastInteraction).toBe(5555)
   })
 })
@@ -661,10 +668,13 @@ describe('character list create/delete rollback', () => {
     const previous = currentCharacterStateSnapshot()
     const imported = { chaId: 'char-imported', name: 'Imported', chats: [] } as any
 
-    dispatchCreateCharacter(imported, previous)
+    const settlement = dispatchCreateCharacter(imported, previous)
 
     await waitForCallCount(calls, 2)
-    await flushAsyncWork()
+    await expect(settlement).resolves.toMatchObject({
+      status: 'failed',
+      result: { status: 'error', error: 'create failed' },
+    })
     expect(testDatabaseState.db.characters).toEqual([
       { chaId: 'char-a', name: 'Local edit after import dispatch', chats: [] },
     ])
@@ -752,15 +762,25 @@ describe('character list create/delete rollback', () => {
     withTestDatabaseWrite(() => {
       testDatabaseState.db.characters.splice(1, 1)
     })
-    dispatchDeleteCharacter('char-b', previous)
+    const settlement = dispatchDeleteCharacterWithOutcome('char-b', previous)
 
     expect(charactersResourceState.currentChar).toBe(0)
     expect(charactersResourceState.characterOrder).toEqual(['char-a'])
     await waitForCallCount(calls, 2)
+    expect(calls[1]).toEqual({
+      url: '/api/v1/commands/characters/char-b',
+      method: 'DELETE',
+      authHeader: 'character-command-token',
+      body: { baseRevision: 10 },
+    })
+    await expect(settlement).resolves.toMatchObject({ status: 'accepted' })
+    expect(charactersResourceState.currentChar).toBe(0)
+    expect(testDatabaseState.db.characters[charactersResourceState.currentChar].chaId).toBe('char-a')
+    expect(testDatabaseState.db.characters.some((character) => character.chaId === 'char-b')).toBe(false)
   })
 
   it('keeps the current character pointer on the same row when an earlier character is deleted', async () => {
-    const calls = stubCharacterCollectionCommandFetch()
+    const calls = stubCharacterCollectionCommandFetch({ deleteCharacterId: 'char-trash' })
     testDatabaseState.db = {
       characters: [
         { chaId: 'char-trash', name: 'Trash', chats: [], trashTime: 123 },
@@ -776,12 +796,22 @@ describe('character list create/delete rollback', () => {
     withTestDatabaseWrite(() => {
       testDatabaseState.db.characters.splice(0, 1)
     })
-    dispatchDeleteCharacter('char-trash', previous)
+    const settlement = dispatchDeleteCharacterWithOutcome('char-trash', previous)
 
     expect(testDatabaseState.db.characters.map((character: any) => character.chaId)).toEqual(['char-b', 'char-c'])
     expect(charactersResourceState.currentChar).toBe(0)
     expect(testDatabaseState.db.characters[charactersResourceState.currentChar].chaId).toBe('char-b')
     await waitForCallCount(calls, 2)
+    expect(calls[1]).toEqual({
+      url: '/api/v1/commands/characters/char-trash',
+      method: 'DELETE',
+      authHeader: 'character-command-token',
+      body: { baseRevision: 10 },
+    })
+    await expect(settlement).resolves.toMatchObject({ status: 'accepted' })
+    expect(charactersResourceState.currentChar).toBe(0)
+    expect(testDatabaseState.db.characters[charactersResourceState.currentChar].chaId).toBe('char-b')
+    expect(testDatabaseState.db.characters.some((character) => character.chaId === 'char-trash')).toBe(false)
   })
 
   it('failed permanent delete preserves a newer selection of the shifted next character after rollback', async () => {
@@ -839,7 +869,7 @@ describe('character list create/delete rollback', () => {
     withTestDatabaseWrite(() => {
       testDatabaseState.db.characters.splice(1, 1)
     })
-    dispatchDeleteCharacter('char-b', previous)
+    const settlement = dispatchDeleteCharacterWithOutcome('char-b', previous)
     repairCharacterOrderOptimistically({ dispatchReorder: false })
     withTestDatabaseWrite(() => {
       testDatabaseState.db.characters.push({ chaId: 'char-b', name: 'Replacement B', chats: [] } as any)
@@ -847,7 +877,10 @@ describe('character list create/delete rollback', () => {
     charactersResourceState.characterOrder.push('char-b')
 
     await waitForCallCount(calls, 2)
-    await flushAsyncWork()
+    await expect(settlement).resolves.toMatchObject({
+      status: 'failed',
+      result: { status: 'error', error: 'delete failed' },
+    })
     const charBRows = testDatabaseState.db.characters.filter((character: any) => character.chaId === 'char-b')
     expect(charBRows).toEqual([{ chaId: 'char-b', name: 'Replacement B', chats: [] }])
     expect(charactersResourceState.characterOrder).toEqual(['char-a', 'char-c', 'char-b'])
@@ -1469,7 +1502,7 @@ describe('character select command rollback', () => {
       selectedCharID.set(1)
     })
     charactersResourceState.currentChar = 1
-    dispatchSelectCharacter('char-b', previous, 2000)
+    const settlement = dispatchSelectCharacterWithOutcome('char-b', previous, 2000)
 
     await waitForCallCount(calls, 2)
     expect(calls[1]).toMatchObject({
@@ -1485,9 +1518,11 @@ describe('character select command rollback', () => {
 
     selectResponse.resolve(jsonResponse({ error: 'select failed' }, 500))
 
-    await vi.waitFor(() => {
-      expect(get(selectedCharID)).toBe(0)
+    await expect(settlement).resolves.toMatchObject({
+      status: 'failed',
+      result: { status: 'error', error: 'select failed' },
     })
+    expect(get(selectedCharID)).toBe(0)
     expect(charactersResourceState.currentChar).toBe(0)
     expect(testDatabaseState.db.characters[1].lastInteraction).toBe(200)
   })
@@ -1502,7 +1537,7 @@ describe('character select command rollback', () => {
       selectedCharID.set(1)
     })
     charactersResourceState.currentChar = 1
-    dispatchSelectCharacter('char-b', previous, 2000)
+    const settlement = dispatchSelectCharacterWithOutcome('char-b', previous, 2000)
     await waitForCallCount(calls, 2)
 
     withTestDatabaseWrite(() => {
@@ -1512,12 +1547,62 @@ describe('character select command rollback', () => {
     charactersResourceState.currentChar = 2
     selectResponse.resolve(jsonResponse({ error: 'select failed' }, 500))
 
-    await flushAsyncWork()
+    await expect(settlement).resolves.toMatchObject({
+      status: 'failed',
+      result: { status: 'error', error: 'select failed' },
+    })
     expect(get(selectedCharID)).toBe(2)
     expect(charactersResourceState.currentChar).toBe(2)
     expect(testDatabaseState.db.characters[1].lastInteraction).toBe(2000)
     expect(testDatabaseState.db.characters[2].lastInteraction).toBe(3000)
   })
+
+  it.each(['newer interaction', 'replacement owner'] as const)(
+    'preserves a %s at unchanged selection indices when an older selection fails',
+    async (scenario) => {
+      const response = deferredResponse()
+      const calls = stubDelayedSelectCommandFetch(response.promise)
+      const previous = currentCharacterSelectionSnapshot('char-b')
+      expect(applyCharacterSelectionOptimistically('char-b', 2_000)).toBe(1)
+      const settlement = dispatchSelectCharacterWithOutcome('char-b', previous, 2_000)
+      try {
+        await waitForCallCount(calls, 2)
+
+        withTestDatabaseWrite(() => {
+          if (scenario === 'newer interaction') {
+            testDatabaseState.db.characters[1].lastInteraction = 3_000
+          } else {
+            // Keep char-b's attempted timestamp and both indices unchanged so
+            // only the stable-id fence can protect the replacement at index 1.
+            testDatabaseState.db.characters = [
+              testDatabaseState.db.characters[0],
+              testDatabaseState.db.characters[2],
+              testDatabaseState.db.characters[1],
+            ]
+          }
+        })
+        response.resolve(jsonResponse({ error: 'select failed' }, 500))
+
+        await expect(settlement).resolves.toMatchObject({
+          status: 'failed',
+          result: { status: 'error', error: 'select failed' },
+        })
+        expect(get(selectedCharID)).toBe(1)
+        expect(charactersResourceState.currentChar).toBe(1)
+        expect(testDatabaseState.db.characters[1]).toMatchObject(
+          scenario === 'newer interaction'
+            ? { chaId: 'char-b', lastInteraction: 3_000 }
+            : { chaId: 'char-c', lastInteraction: 300 },
+        )
+        expect(testDatabaseState.db.characters.find((character) => character.chaId === 'char-b')?.lastInteraction).toBe(
+          scenario === 'newer interaction' ? 3_000 : 2_000,
+        )
+      } finally {
+        response.resolve(jsonResponse({ error: 'select failed' }, 500))
+        await settlement
+      }
+    },
+  )
 })
 
 describe('character order command helpers', () => {
@@ -2576,8 +2661,8 @@ describe('select supa memory flag patch', () => {
         {
           characters: [{ chaId: 'char-a', name: 'Character', chats: [], supaMemory: false }],
           hypaV3: false,
-          hypaV3PresetId: 'preset-on',
-          hypaV3Presets: { 'preset-on': { settings: { alwaysToggleOn: true } } },
+          selectedHypaV3PresetId: 'preset-on',
+          hypaV3Presets: [{ id: 'preset-on', name: 'Always on', settings: { alwaysToggleOn: true } }],
         },
       ],
       [
@@ -2585,8 +2670,8 @@ describe('select supa memory flag patch', () => {
         {
           characters: [{ chaId: 'char-a', name: 'Character', chats: [], supaMemory: false }],
           hypaV3: true,
-          hypaV3PresetId: 'missing',
-          hypaV3Presets: {},
+          selectedHypaV3PresetId: 'missing',
+          hypaV3Presets: [],
         },
       ],
       [
@@ -2594,8 +2679,8 @@ describe('select supa memory flag patch', () => {
         {
           characters: [{ chaId: 'char-a', name: 'Character', chats: [], supaMemory: false }],
           hypaV3: true,
-          hypaV3PresetId: 'preset-off',
-          hypaV3Presets: { 'preset-off': { settings: { alwaysToggleOn: false } } },
+          selectedHypaV3PresetId: 'preset-off',
+          hypaV3Presets: [{ id: 'preset-off', name: 'Manual', settings: { alwaysToggleOn: false } }],
         },
       ],
       [
@@ -2603,8 +2688,8 @@ describe('select supa memory flag patch', () => {
         {
           characters: [],
           hypaV3: true,
-          hypaV3PresetId: 'preset-on',
-          hypaV3Presets: { 'preset-on': { settings: { alwaysToggleOn: true } } },
+          selectedHypaV3PresetId: 'preset-on',
+          hypaV3Presets: [{ id: 'preset-on', name: 'Always on', settings: { alwaysToggleOn: true } }],
         },
       ],
       [
@@ -2612,8 +2697,8 @@ describe('select supa memory flag patch', () => {
         {
           characters: [{ name: 'Character', chats: [], supaMemory: false }],
           hypaV3: true,
-          hypaV3PresetId: 'preset-on',
-          hypaV3Presets: { 'preset-on': { settings: { alwaysToggleOn: true } } },
+          selectedHypaV3PresetId: 'preset-on',
+          hypaV3Presets: [{ id: 'preset-on', name: 'Always on', settings: { alwaysToggleOn: true } }],
         },
       ],
       [
@@ -2621,8 +2706,8 @@ describe('select supa memory flag patch', () => {
         {
           characters: [{ chaId: 'char-a', name: 'Character', chats: [], supaMemory: true }],
           hypaV3: true,
-          hypaV3PresetId: 'preset-on',
-          hypaV3Presets: { 'preset-on': { settings: { alwaysToggleOn: true } } },
+          selectedHypaV3PresetId: 'preset-on',
+          hypaV3Presets: [{ id: 'preset-on', name: 'Always on', settings: { alwaysToggleOn: true } }],
         },
       ],
     ]
