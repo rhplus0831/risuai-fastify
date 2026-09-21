@@ -1361,6 +1361,20 @@ describe('authenticated resource read routes', () => {
       alternates: [],
     })
 
+    const first = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/chats/chat-a/messages?start=0&limit=1',
+      headers: authHeaders(),
+    })
+    expect(first.statusCode).toBe(200)
+    expect(first.json()).toMatchObject({
+      revision,
+      chatId: 'chat-a',
+      message: [{ uid: 'message-a', data: 'one' }],
+      messageStart: 0,
+      messageTotal: 2,
+    })
+
     const tail = await harness.app.inject({
       method: 'GET',
       url: '/api/v1/chats/chat-a/messages?tail=1',
@@ -1459,6 +1473,47 @@ describe('authenticated resource read routes', () => {
     })
     expect(invalidGenerationWindow.statusCode).toBe(400)
     expect(invalidGenerationWindow.json().error).toBe('invalid_chat_message_range')
+  })
+
+  it.each([
+    'tail=1e0',
+    'tail=0x1',
+    'tail=1.0',
+    'tail=%201',
+    'tail=0',
+    'tail=-1',
+    'tail=9007199254740992',
+    'start=1e0&limit=1',
+    'start=-1&limit=1',
+    'start=9007199254740992&limit=1',
+    'start=0&limit=1e0',
+    'start=0&limit=9007199254740992',
+    'start=0',
+    'limit=1',
+  ])('rejects malformed message range %s without changing persisted data', async (query) => {
+    const tail = query.startsWith('tail=')
+    const valid = await harness.app.inject({
+      method: 'GET',
+      url: `/api/v1/chats/chat-a/messages?${tail ? 'tail=1' : 'start=0&limit=1'}`,
+      headers: authHeaders(),
+    })
+    expect(valid.statusCode).toBe(200)
+    expect(valid.json()).toMatchObject({
+      revision,
+      chatId: 'chat-a',
+      message: [tail ? { uid: 'message-b', data: 'two' } : { uid: 'message-a', data: 'one' }],
+      messageStart: tail ? 1 : 0,
+      messageTotal: 2,
+    })
+    const before = readAllDatabaseRows()
+    const response = await harness.app.inject({
+      method: 'GET',
+      url: `/api/v1/chats/chat-a/messages?${query}`,
+      headers: authHeaders(),
+    })
+    expect(response.statusCode).toBe(400)
+    expect(response.json()).toMatchObject({ error: 'invalid_chat_message_range' })
+    expect(readAllDatabaseRows()).toEqual(before)
   })
 
   it('bounds raw ids and request bodies on both bulk resource routes', async () => {

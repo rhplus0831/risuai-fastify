@@ -491,6 +491,15 @@ describe('selected generation repository inputs', () => {
     expect(records(loaded.agents).map((agent) => agent.id)).toEqual(['selected-agent'])
     expect(records(loaded.agentPresets).map((preset) => preset.id)).toEqual(['selected-agent-preset'])
     const preflight = record(loadPersistedForGenerationPreflight(db, directory, target).preflightInputs?.database)
+    expect(records(preflight.modules).map((module) => module.id)).toEqual([
+      'persona-module',
+      'duplicated',
+      'duplicated',
+      'prompt-module',
+      'character-module',
+      'chat-module',
+      'agent-module',
+    ])
     expect(records(preflight.modules).every((module) => !('lorebook' in module) && !('name' in module))).toBe(true)
   })
 
@@ -548,9 +557,28 @@ describe('selected generation repository inputs', () => {
     ]
     records(records(database.characters)[0].chats)[0].hypaV3Data = { summaries: ['Stored memory'] }
     const { db, directory } = openFixture(database)
+    // Persist contradictory legacy bodies alongside canonical rows: agreement
+    // between two loaders alone cannot prove which owner supplied the result.
+    db.prepare(
+      "UPDATE chats SET data_json = json_set(data_json, '$.message', json(?), '$.hypaV3Data', json(?)) WHERE id = ?",
+    ).run(
+      JSON.stringify([{ role: 'char', data: 'Stale embedded transcript', chatId: 'stale-message' }]),
+      JSON.stringify({ summaries: ['Stale embedded memory'] }),
+      target.chatId,
+    )
+    const storedBefore = db.prepare('SELECT data_json FROM chats WHERE id = ?').get(target.chatId)
     const broad = record(loadPersistedForAssembly(db, directory, target.chatId).database)
     const loaded = record(loadPersistedForGenerationAssembly(db, directory, target).database)
-    expect(records(records(loaded.characters)[0].chats)[0]).toEqual(records(records(broad.characters)[0].chats)[0])
+    const selectedChat = records(records(loaded.characters)[0].chats)[0]
+    expect(selectedChat).toEqual(records(records(broad.characters)[0].chats)[0])
+    expect(selectedChat.message).toEqual([
+      { role: 'user', data: 'Message 0', chatId: 'message-0' },
+      { role: 'char', data: 'Message 1', chatId: 'message-1' },
+      { role: 'user', data: 'Message 2', chatId: 'message-2' },
+      { role: 'char', data: 'Message 3', chatId: 'message-3' },
+    ])
+    expect(selectedChat.hypaV3Data).toEqual({ summaries: ['Stored memory'] })
+    expect(db.prepare('SELECT data_json FROM chats WHERE id = ?').get(target.chatId)).toEqual(storedBefore)
     expect(records(loaded.hypaV3Presets).map((preset) => preset.id)).toEqual(['selected-hypa'])
     expect(loaded.hypaV3PresetId).toBe(0)
     const preflight = observed(db, () => loadPersistedForGenerationPreflight(db, directory, target))

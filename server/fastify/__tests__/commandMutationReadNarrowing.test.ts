@@ -187,6 +187,35 @@ function readStoredChatGenerationSettings(chatId: string): ChatGenerationSetting
   }
 }
 
+// Observe persisted outcomes outside the instrumentation window so the
+// assertion's own reads do not become part of the command's read budget.
+function readDefinitionRows(table: 'characters' | 'modules') {
+  const db = openDatabase(harness.dataDir)
+  try {
+    return db.prepare(`SELECT rowid, data_json FROM ${table} ORDER BY rowid`).all() as Array<{
+      rowid: number
+      data_json: string
+    }>
+  } finally {
+    db.close()
+  }
+}
+
+function expectDefinitionPersisted(
+  table: 'characters' | 'modules',
+  ownerId: string,
+  field: 'customscript' | 'triggerscript' | 'regex' | 'trigger',
+  expected: unknown,
+  before: ReturnType<typeof readDefinitionRows>,
+): void {
+  const after = readDefinitionRows(table)
+  const idKey = table === 'characters' ? 'chaId' : 'id'
+  const target = before.find((row) => JSON.parse(row.data_json)[idKey] === ownerId)!
+  const changed = after.find((row) => row.rowid === target.rowid)!
+  expect(JSON.parse(changed.data_json)).toEqual({ ...JSON.parse(target.data_json), [field]: expected })
+  expect(after.filter((row) => row.rowid !== target.rowid)).toEqual(before.filter((row) => row.rowid !== target.rowid))
+}
+
 describe('command-mutation read narrowing on the large-corpus fixture', () => {
   it('a scriptstate PATCH performs zero whole-corpus payload reads', async () => {
     const fixture = buildLargeCorpusFixture()
@@ -221,6 +250,7 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     let revision = await importDatabase(fixture.database)
 
     async function runExactCharacterDefinitionCommand(path: 'scripts' | 'triggers'): Promise<void> {
+      const before = readDefinitionRows('characters')
       const payload =
         path === 'scripts'
           ? { scripts: [{ id: 'scoped-script', comment: 'Scoped', in: 'a', out: 'b', type: 'editinput' }] }
@@ -244,10 +274,18 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
         settings: 1,
         characters: 1,
       })
+      expectDefinitionPersisted(
+        'characters',
+        fixture.hot.characterId,
+        path === 'scripts' ? 'customscript' : 'triggerscript',
+        payload.scripts ?? payload.triggers,
+        before,
+      )
       revision = loadRun.result.json().revision
     }
 
     async function runScopedModuleDefinitionCommand(path: 'scripts' | 'triggers'): Promise<void> {
+      const before = readDefinitionRows('modules')
       const payload =
         path === 'scripts'
           ? { scripts: [{ id: 'module-script', comment: 'Scoped', in: 'a', out: 'b', type: 'editinput' }] }
@@ -266,6 +304,13 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
       expect(loadRun.result.statusCode, JSON.stringify(loadRun.result.json())).toBe(200)
       expectCollectionCommandReadOnlyTables(readCountByTable, ['modules'])
       expectCollectionLoadOnlyTables(loadRun.loadCountByTable, ['modules'])
+      expectDefinitionPersisted(
+        'modules',
+        'corpus-module-0',
+        path === 'scripts' ? 'regex' : 'trigger',
+        payload.scripts ?? payload.triggers,
+        before,
+      )
       revision = loadRun.result.json().revision
     }
 
@@ -307,6 +352,7 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     }
 
     async function runCharacterPatch(path: 'scripts' | 'triggers'): Promise<void> {
+      const before = readDefinitionRows('characters')
       const { result: loadRun, readCountByTable } = await withSqliteSelectReadInstrumentation(() =>
         withServerLoadInstrumentation(() =>
           command('PATCH', `/api/v1/commands/characters/${fixture.hot.characterId}/${path}`, {
@@ -324,10 +370,18 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
         settings: 1,
         characters: 1,
       })
+      expectDefinitionPersisted(
+        'characters',
+        fixture.hot.characterId,
+        path === 'scripts' ? 'customscript' : 'triggerscript',
+        [rows[path]],
+        before,
+      )
       revision = loadRun.result.json().revision
     }
 
     async function runModulePatch(path: 'scripts' | 'triggers'): Promise<void> {
+      const before = readDefinitionRows('modules')
       const { result: loadRun, readCountByTable } = await withSqliteSelectReadInstrumentation(() =>
         withServerLoadInstrumentation(() =>
           command('PATCH', `/api/v1/commands/modules/corpus-module-0/${path}`, {
@@ -340,6 +394,13 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
       expect(loadRun.result.statusCode, JSON.stringify(loadRun.result.json())).toBe(200)
       expectCollectionCommandReadOnlyTables(readCountByTable, ['modules'])
       expectCollectionLoadOnlyTables(loadRun.loadCountByTable, ['modules'])
+      expectDefinitionPersisted(
+        'modules',
+        'corpus-module-0',
+        path === 'scripts' ? 'regex' : 'trigger',
+        [{ ...rows[path], id: `module-${rows[path].id}` }],
+        before,
+      )
       revision = loadRun.result.json().revision
     }
 
@@ -1051,6 +1112,21 @@ describe('command-mutation read narrowing on the large-corpus fixture', () => {
     expect(patched.statusCode).toBe(200)
     expect(patched.json().chatId).toBe(chatId)
     revision = patched.json().revision
+    const db = openDatabase(harness.dataDir)
+    try {
+      const row = db
+        .prepare('SELECT chat_id, uid, role, data, json FROM messages WHERE uid = ? AND alternate = 0')
+        .get('scoped-msg-1') as { chat_id: string; uid: string; role: string; data: string; json: string }
+      expect(row).toMatchObject({
+        chat_id: chatId,
+        uid: 'scoped-msg-1',
+        role: 'user',
+        data: 'scoped append (edited)',
+      })
+      expect(JSON.parse(row.json)).toEqual({ role: 'user', data: 'scoped append (edited)', chatId: 'scoped-msg-1' })
+    } finally {
+      db.close()
+    }
 
     // Delete by message id.
     const deleted = await assertScopedLoadOnHotPath(() =>
