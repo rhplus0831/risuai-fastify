@@ -5,6 +5,7 @@ import {
   canUseClientWriteAccess,
   getClientSessionSnapshot,
   resetClientSessionForTests,
+  settleClientReader,
 } from './clientSession'
 import { resolveConnectedClientStartup } from './connectedClientStartup'
 
@@ -335,6 +336,108 @@ describe('connected startup ownership discovery', () => {
     expect(canUseClientWriteAccess()).toBe(false)
     release(runtime('local-tab', { writerEpoch: 5, writer: { sessionId: 'local-tab', epoch: 5 } }))
     expect((await startup).role).toBe('writer')
+  })
+
+  for (const stage of ['acquisition', 'reread'] as const) {
+    const rejectAtStage = (httpStatus: number) => {
+      const failure = { status: 'error', error: 'bootstrap_rejected', httpStatus }
+      api.read.mockResolvedValueOnce(runtime(null))
+      if (stage === 'acquisition') api.acquire.mockResolvedValue(failure)
+      else {
+        api.acquire.mockResolvedValue({ status: 'error', error: 'active_writer_changed' })
+        api.read.mockResolvedValueOnce(failure)
+      }
+    }
+
+    it(`revokes authenticated ownership after an unauthorized ${stage}`, async () => {
+      rejectAtStage(401)
+      await expect(resolveConnectedClientStartup()).rejects.toThrow('bootstrap_rejected')
+      expect(getClientSessionSnapshot()).toMatchObject({
+        lifecycle: 'auth-required',
+        authenticated: false,
+        databaseLineage: null,
+        writer: null,
+        projectionReady: false,
+      })
+      expect(canUseClientRecoveryAccess()).toBe(false)
+      expect(canUseClientWriteAccess()).toBe(false)
+      expect(api.acquire).toHaveBeenCalledOnce()
+      expect(api.read).toHaveBeenCalledTimes(stage === 'acquisition' ? 1 : 2)
+    })
+
+    it(`preserves authenticated ownership after a transient ${stage} failure`, async () => {
+      rejectAtStage(503)
+      await expect(resolveConnectedClientStartup()).rejects.toThrow('bootstrap_rejected')
+      expect(getClientSessionSnapshot()).toMatchObject({
+        lifecycle: 'resolving',
+        authenticated: true,
+        databaseLineage: 'lineage-a',
+        writer: { sessionId: null, epoch: 4 },
+        projectionReady: false,
+      })
+      expect(canUseClientRecoveryAccess()).toBe(false)
+      expect(canUseClientWriteAccess()).toBe(false)
+      expect(api.acquire).toHaveBeenCalledOnce()
+      expect(api.read).toHaveBeenCalledTimes(stage === 'acquisition' ? 1 : 2)
+    })
+  }
+
+  it('settles a stale acquisition as a reader of the newly observed writer', async () => {
+    api.read
+      .mockResolvedValueOnce(runtime(null))
+      .mockResolvedValueOnce(runtime('race-winner', { writerEpoch: 5, writer: { sessionId: 'race-winner', epoch: 5 } }))
+    api.acquire.mockResolvedValue({ status: 'error', error: 'active_writer_stale' })
+
+    await expect(resolveConnectedClientStartup()).resolves.toMatchObject({
+      role: 'reader',
+      runtime: { revision: 17, writer: { sessionId: 'race-winner', epoch: 5 } },
+    })
+    expect(getClientSessionSnapshot()).toMatchObject({
+      lifecycle: 'reading',
+      authenticated: true,
+      writer: { sessionId: 'race-winner', epoch: 5 },
+    })
+    expect(api.acquire).toHaveBeenCalledExactlyOnceWith(null, {
+      expectedWriter: { epoch: 4, databaseLineage: 'lineage-a' },
+    })
+    expect(api.read.mock.calls).toEqual([
+      [null, { cacheRevision: false }],
+      [null, { cacheRevision: false }],
+    ])
+    expect(canUseClientRecoveryAccess()).toBe(false)
+    expect(canUseClientWriteAccess()).toBe(false)
+  })
+
+  it('cannot revoke a newer authenticated reader when a superseded conflict reread returns unauthorized', async () => {
+    let release!: (value: { status: string; error: string; httpStatus: number }) => void
+    api.read.mockResolvedValueOnce(runtime(null)).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    api.acquire.mockResolvedValue({ status: 'error', error: 'active_writer_changed' })
+    const pending = resolveConnectedClientStartup()
+    await vi.waitFor(() => expect(api.read).toHaveBeenCalledTimes(2))
+
+    const replacement = beginClientSession('newer-tab')
+    expect(
+      settleClientReader(replacement, {
+        databaseLineage: 'lineage-b',
+        writer: { sessionId: 'new-writer', epoch: 7 },
+      }),
+    ).toBe(true)
+    const current = getClientSessionSnapshot()
+    expect(current).toMatchObject({ lifecycle: 'reading', authenticated: true, sessionId: 'newer-tab' })
+    release({ status: 'error', error: 'unauthorized', httpStatus: 401 })
+
+    const failure = await pending.catch((error: unknown) => error)
+    expect(getClientSessionSnapshot()).toEqual(current)
+    expect(failure).toBeInstanceOf(Error)
+    expect(failure).toMatchObject({ message: expect.stringContaining('superseded') })
+    expect(api.acquire).toHaveBeenCalledOnce()
+    expect(canUseClientRecoveryAccess()).toBe(false)
+    expect(canUseClientWriteAccess()).toBe(false)
   })
 
   it('requires authentication instead of retrying writer startup after an unauthorized discovery', async () => {

@@ -9,15 +9,11 @@ const telemetry = vi.hoisted(() => ({ configure: vi.fn() }))
 vi.mock('./startupTelemetry', () => ({ configureStartupTelemetry: telemetry.configure }))
 
 import {
-  DISCONNECT_EXISTING_WRITER_HEADER,
-  EXPECTED_DATABASE_LINEAGE_HEADER,
-  EXPECTED_WRITER_EPOCH_HEADER,
   SERVER_CONTROL_REQUEST_TIMEOUT_MS,
   fetchServerBootstrap,
   fetchServerBootstrapReadOnly,
   fetchServerOwnership,
 } from './bootstrap'
-import { ACTIVE_WRITER_SESSION_HEADER } from './activeWriterSession'
 import {
   clearCachedServerCommandRevision,
   peekCachedServerCommandRevision,
@@ -53,16 +49,17 @@ function stubBootstrapFetch(body: unknown | (() => unknown)): CapturedFetch[] {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      const headers = init.headers as Record<string, string> | undefined
+      // Wire names are independent of the implementation constants used to send them.
+      const headers = new Headers(init.headers)
       calls.push({
         url: String(input),
         method: init.method ?? 'GET',
-        authHeader: headers?.['risu-auth'] ?? null,
-        writerSessionHeader: headers?.[ACTIVE_WRITER_SESSION_HEADER] ?? null,
-        observerSessionHeader: headers?.['risu-writer-observer-session'] ?? null,
-        disconnectExistingWriterHeader: headers?.[DISCONNECT_EXISTING_WRITER_HEADER] ?? null,
-        expectedWriterEpochHeader: headers?.[EXPECTED_WRITER_EPOCH_HEADER] ?? null,
-        expectedDatabaseLineageHeader: headers?.[EXPECTED_DATABASE_LINEAGE_HEADER] ?? null,
+        authHeader: headers.get('risu-auth'),
+        writerSessionHeader: headers.get('risu-writer-session'),
+        observerSessionHeader: headers.get('risu-writer-observer-session'),
+        disconnectExistingWriterHeader: headers.get('risu-disconnect-existing-writer'),
+        expectedWriterEpochHeader: headers.get('risu-expected-writer-epoch'),
+        expectedDatabaseLineageHeader: headers.get('risu-expected-database-lineage'),
         cache: init.cache ?? null,
       })
       const value = typeof body === 'function' ? body() : body
@@ -773,6 +770,48 @@ describe('server runtime bootstrap helper', () => {
       vi.fn(async () => Promise.reject(new Error('offline'))),
     )
     await expect(fetchServerBootstrap()).resolves.toEqual({ status: 'error', error: 'Network error: offline' })
+  })
+
+  it.each([-1, 1.5])('rejects numeric revision %s without replacing accepted metadata', async (revision) => {
+    stubBootstrapFetch({
+      initialized: true,
+      revision: 8,
+      databaseLineage: 'database-a',
+      writerEpoch: 3,
+      writer: { sessionId: 'writer-a', epoch: 3 },
+    })
+    await expect(fetchServerBootstrapReadOnly()).resolves.toMatchObject({ status: 'ok', bootstrap: { revision: 8 } })
+    expect(peekCachedServerCommandRevision()).toBe(8)
+    expect(telemetry.configure).toHaveBeenCalledOnce()
+
+    stubBootstrapFetch({
+      initialized: true,
+      revision,
+      databaseLineage: 'database-a',
+      writerEpoch: 3,
+      writer: { sessionId: 'writer-a', epoch: 3 },
+    })
+    await expect(fetchServerBootstrapReadOnly()).resolves.toEqual({
+      status: 'error',
+      error: 'Invalid bootstrap revision',
+    })
+    expect(peekCachedServerCommandRevision()).toBe(8)
+    expect(telemetry.configure).toHaveBeenCalledOnce()
+  })
+
+  it('accepts and caches revision zero for an uninitialized server with valid ownership', async () => {
+    stubBootstrapFetch({
+      initialized: false,
+      revision: 0,
+      databaseLineage: 'database-a',
+      writerEpoch: 0,
+      writer: { sessionId: null, epoch: 0 },
+    })
+    await expect(fetchServerBootstrapReadOnly()).resolves.toMatchObject({
+      status: 'ok',
+      bootstrap: { initialized: false, revision: 0, writer: { sessionId: null, epoch: 0 } },
+    })
+    expect(peekCachedServerCommandRevision()).toBe(0)
   })
 
   it('requires initialized and a non-negative integer revision', async () => {

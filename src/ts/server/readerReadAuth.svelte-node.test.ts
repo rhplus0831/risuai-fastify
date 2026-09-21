@@ -238,6 +238,29 @@ describe('reader read authentication continuations', () => {
     expect(authReset.discard).toHaveBeenCalledExactlyOnceWith('auth-loss')
   })
 
+  for (const status of [403, 503]) {
+    it.each(readers)(`preserves the authenticated %s reader session on HTTP ${status}`, async (_label, read) => {
+      const current = getClientSessionSnapshot()
+      expect(current).toMatchObject({ lifecycle: 'reading', authenticated: true })
+      const fetch = vi.fn(
+        async () =>
+          new Response(JSON.stringify({ error: 'resource_unavailable' }), {
+            status,
+            headers: { 'content-type': 'application/json' },
+          }),
+      )
+      vi.stubGlobal('fetch', fetch)
+
+      await expect(read(new AbortController().signal)).resolves.toMatchObject({
+        status: 'error',
+        error: 'resource_unavailable',
+      })
+      expect(fetch).toHaveBeenCalledOnce()
+      expect(authReset.discard).not.toHaveBeenCalled()
+      expect(getClientSessionSnapshot()).toEqual(current)
+    })
+  }
+
   it('preserves the HTTP status on read-only bootstrap for coordinator auth classification', async () => {
     vi.stubGlobal(
       'fetch',
