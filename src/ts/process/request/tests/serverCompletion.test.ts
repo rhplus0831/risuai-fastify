@@ -84,10 +84,13 @@ describe('requestServerCompletion', () => {
       }),
     )
 
-    const result = await requestServerCompletion(makeTarg(), null)
+    const controller = new AbortController()
+    const result = await requestServerCompletion(makeTarg(), controller.signal)
 
     expect(result).toEqual({ type: 'success', result: 'ok' })
     expect(captured!.url).toBe('/api/v1/generate/completion')
+    expect(captured!.init.method).toBe('POST')
+    expect(captured!.init.signal).toBe(controller.signal)
     expect((captured!.init.headers as Record<string, string>)['risu-auth']).toBe('test-auth-token')
     const payload = JSON.parse(captured!.init.body as string)
     expect(payload).toEqual({
@@ -257,28 +260,98 @@ describe('requestServerCompletion', () => {
   })
 
   it('reads server completion SSE streams', async () => {
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const encoder = new TextEncoder()
-        controller.enqueue(
-          encoder.encode(
-            `event: chunk\ndata: ${JSON.stringify({ type: 'token', content: 'he' })}\n\n` +
-              `event: chunk\ndata: ${JSON.stringify({ type: 'token', content: 'llo' })}\n\n` +
-              `event: done\ndata: ${JSON.stringify({ finishReason: 'stop' })}\n\n`,
-          ),
-        )
-        controller.close()
-      },
+    const bytes = new TextEncoder().encode(
+      'event: chunk\ndata: {"type":"token","content":"he"}\n\n' +
+        'event: chunk\ndata: {"type":"token","content":"llo 안녕 🌊"}\n\n' +
+        'event: chunk\ndata: malformed-json\n\n' +
+        'event: chunk\ndata: {"type":"metadata","content":"not text"}\n\n' +
+        'event: done\ndata: {"finishReason":"stop"}\n\n' +
+        'event: chunk\ndata: {"type":"token","content":"after terminal"}\n\n',
+    )
+    // Keep coalesced-frame coverage as well as byte-by-byte network fragmentation.
+    for (const chunks of [[bytes], Array.from(bytes, (byte) => Uint8Array.of(byte))]) {
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(chunk)
+          controller.close()
+        },
+      })
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => new Response(stream, { status: 200 })),
+      )
+
+      await expect(requestServerCompletion(makeTarg({ useStreaming: true }), null)).resolves.toEqual({
+        type: 'success',
+        result: 'hello 안녕 🌊',
+      })
+    }
+  })
+
+  it('rejects streaming tools before dispatch while permitting the buffered tool request', async () => {
+    const tool = {
+      name: 'risu-get-character-info',
+      description: 'Get character information.',
+      inputSchema: { type: 'object' },
+    }
+    const fetchMock = vi.fn(
+      async () => new Response(JSON.stringify({ type: 'success', result: 'buffered reply' }), { status: 200 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestServerCompletion(makeTarg({ tools: [tool] }), null)).resolves.toEqual({
+      type: 'success',
+      result: 'buffered reply',
     })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    fetchMock.mockClear()
+
+    await expect(requestServerCompletion(makeTarg({ tools: [tool], useStreaming: true }), null)).resolves.toEqual({
+      type: 'fail',
+      result: 'Server tool requests must use buffered completion',
+      noRetry: true,
+    })
+    expect(fetchMock).not.toHaveBeenCalled()
+  })
+
+  it('cancels an active completion reader and reports abort instead of returning partial success', async () => {
+    const owner = new AbortController()
+    const cancel = vi.fn()
+    let streamController!: ReadableStreamDefaultController<Uint8Array>
+    let resolveRead!: () => void
+    const reading = new Promise<void>((resolve) => {
+      resolveRead = resolve
+    })
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start(controller) {
+          streamController = controller
+          controller.enqueue(new TextEncoder().encode('event: chunk\ndata: {"type":"token","content":"partial"}\n\n'))
+        },
+        pull() {
+          resolveRead()
+        },
+        cancel,
+      },
+      { highWaterMark: 0 },
+    )
     vi.stubGlobal(
       'fetch',
-      vi.fn(async () => new Response(stream, { status: 200 })),
+      vi.fn(async () => new Response(body, { status: 200 })),
     )
+    const pending = requestServerCompletion(makeTarg({ useStreaming: true }), owner.signal)
 
-    await expect(requestServerCompletion(makeTarg({ useStreaming: true }), null)).resolves.toEqual({
-      type: 'success',
-      result: 'hello',
-    })
+    try {
+      // With no prefetch, pull starts the read after the queued token was consumed.
+      await reading
+      owner.abort()
+      expect(cancel).toHaveBeenCalledOnce()
+      await expect(pending).resolves.toEqual({ type: 'fail', result: 'Aborted' })
+    } finally {
+      // Let a broken abort-listener implementation settle too, avoiding a leaked reader.
+      if (cancel.mock.calls.length === 0) streamController.close()
+      await pending
+    }
   })
 
   it('adds provider status and code details to streamed completion errors', async () => {

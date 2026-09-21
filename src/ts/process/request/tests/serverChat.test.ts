@@ -871,6 +871,8 @@ describe('requestServerChat', () => {
 
   it('reattaches a durable stream after a mobile-style transport drop without duplicating replayed tokens', async () => {
     const first = controlledGenerationStream()
+    const replayedEffect = { kind: 'tts', payload: { text: 'partial', characterId: 'char-1' } }
+    const laterEffect = { kind: 'tts', payload: { text: 'recovered', characterId: 'char-1' } }
     const calls: Array<{ url: string; method: string }> = []
     const encoder = new TextEncoder()
     vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -888,6 +890,8 @@ describe('requestServerChat', () => {
               'event: info\ndata: {"generationId":"job-mobile","generationInfo":{"generationId":"job-mobile","model":"m"}}\n\n',
             ),
           )
+          controller.enqueue(encoder.encode(`event: side_effect\ndata: ${JSON.stringify(replayedEffect)}\n\n`))
+          controller.enqueue(encoder.encode(`event: side_effect\ndata: ${JSON.stringify(laterEffect)}\n\n`))
           controller.enqueue(encoder.encode('event: token\ndata: {"content":"partial"}\n\n'))
           controller.enqueue(encoder.encode('event: token\ndata: {"content":" recovered"}\n\n'))
           controller.enqueue(
@@ -909,10 +913,11 @@ describe('requestServerChat', () => {
     sendGenerationReadyFrames(first, 'job-mobile')
     const served = await pending
     expect(served.status).toBe('ok')
-    if (served.status !== 'ok' || served.req.type !== 'streaming') return
+    if (served.status !== 'ok' || served.req.type !== 'streaming') throw new Error('Expected streaming result')
     expect(get(activeGenerationJobs)).toEqual([{ chatId: 'chat-1', jobId: 'job-mobile', mode: 'send' }])
 
     const reader = served.req.result.getReader()
+    first.send('side_effect', replayedEffect)
     first.send('token', { content: 'partial' })
     await expect(reader.read()).resolves.toEqual({
       done: false,
@@ -934,6 +939,7 @@ describe('requestServerChat', () => {
     await expect(reader.read()).resolves.toEqual({ done: true, value: undefined })
     await expect(served.terminal).resolves.toMatchObject({
       status: 'done',
+      sideEffects: [replayedEffect, laterEffect],
       done: { result: 'partial recovered', generationId: 'job-mobile' },
     })
     expect(calls).toEqual([
@@ -1026,6 +1032,43 @@ describe('requestServerChat', () => {
         caller: 'chat-terminal-snapshot',
       },
     ])
+  })
+
+  it('rejects a terminal snapshot reference for a different durable job without fetching it', async () => {
+    const wire = controlledGenerationStream()
+    const fetchMock = vi.fn(async () => wire.response)
+    vi.stubGlobal('fetch', fetchMock)
+
+    const pending = requestServerChatGeneration(baseInput, null, 'job-own')
+    sendGenerationReadyFrames(wire, 'job-own')
+    const served = await pending
+    expect(served.status).toBe('ok')
+    if (served.status !== 'ok' || served.req.type !== 'streaming') throw new Error('Expected streaming result')
+
+    wire.send('done', {
+      jobId: 'job-own',
+      terminalSnapshot: {
+        version: 1,
+        href: '/api/v1/generate/chat/job-other/terminal-snapshot',
+        bytes: 64,
+      },
+    })
+    wire.close()
+
+    await expect(served.terminal).resolves.toMatchObject({
+      status: 'error',
+      error: 'Server returned an invalid durable terminal snapshot reference.',
+      reattachOutcome: 'missing_job',
+    })
+    await expect(served.req.result.getReader().read()).resolves.toEqual({ done: true, value: undefined })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/v1/generate/chat/job-own/stream',
+      expect.objectContaining({ method: 'GET' }),
+    )
+    expect(generationOperationMocks.applySseEvent).not.toHaveBeenCalled()
+    expect(generationOperationMocks.stopOperation).not.toHaveBeenCalled()
+    expect(get(activeGenerationJobs)).toContainEqual({ chatId: 'chat-1', jobId: 'job-own', mode: 'send' })
   })
 
   it('consumes a canonical terminal after a replay gap evicts prompt and info readiness', async () => {
@@ -1833,6 +1876,41 @@ describe('requestServerChat', () => {
     })
   })
 
+  it('preserves retained partial text and post-generation data from a terminal error', async () => {
+    const wire = controlledGenerationStream()
+    vi.stubGlobal('fetch', async () => wire.response)
+    const pending = requestServerChatGeneration(baseInput, null, 'job-partial-error')
+    sendGenerationReadyFrames(wire, 'job-partial-error')
+    const served = await pending
+    expect(served.status).toBe('ok')
+    if (served.status !== 'ok' || served.req.type !== 'streaming') throw new Error('Expected streaming result')
+
+    wire.send('token', { content: 'uncommitted partial' })
+    wire.send('error', {
+      error: 'provider interrupted',
+      result: 'retained partial',
+      postGeneration: { revision: 12, messageId: 'assistant-retained', finalText: 'processed retained partial' },
+    })
+    wire.close()
+
+    const reader = served.req.result.getReader()
+    await expect(reader.read()).resolves.toEqual({ done: false, value: { 'job-partial-error': 'uncommitted partial' } })
+    await expect(reader.read()).resolves.toEqual({ done: false, value: { 'job-partial-error': 'retained partial' } })
+    await expect(reader.read()).resolves.toEqual({ done: true, value: undefined })
+    await expect(served.terminal).resolves.toMatchObject({
+      status: 'error',
+      error: 'provider interrupted',
+      reattachOutcome: 'terminal_failure',
+      done: {
+        result: 'retained partial',
+        generationId: 'job-partial-error',
+        postGeneration: { revision: 12, messageId: 'assistant-retained', finalText: 'processed retained partial' },
+      },
+    })
+    expect(get(activeGenerationJobs)).toEqual([])
+    expect(generationOperationMocks.stopOperation).not.toHaveBeenCalled()
+  })
+
   it('preserves committed-cleanup-pending on a successful done frame', async () => {
     const controlled = controlledGenerationStream()
     vi.stubGlobal('fetch', async () => controlled.response)
@@ -2166,7 +2244,8 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
       projectionEpoch: 4,
       href: '/api/v1/generation-operations/11111111-1111-4111-8111-111111111111/stream?attemptNo=1&jobId=job-operation-a&projectionEpoch=4',
     }
-    const pending = requestServerChatGeneration(baseInput, null, undefined, stream)
+    const owner = new AbortController()
+    const pending = requestServerChatGeneration(baseInput, owner.signal, undefined, stream)
     await vi.waitFor(() => expect(generationOperationMocks.registerViewer).toHaveBeenCalled())
     wire.send('prompt', { messages: [{ role: 'user', content: 'hi' }] })
     wire.send('info', {
@@ -2176,8 +2255,10 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     })
     const served = await pending
     expect(served.status).toBe('ok')
-    if (served.status !== 'ok' || served.req.type !== 'streaming') return
+    if (served.status !== 'ok' || served.req.type !== 'streaming') throw new Error('Expected streaming result')
 
+    owner.abort()
+    expect(generationOperationMocks.stopOperation).toHaveBeenCalledExactlyOnceWith(stream.operationId)
     detachViewer?.()
     expect(viewerSignal?.aborted).toBe(false)
     wire.send('done', {
@@ -2394,6 +2475,81 @@ describe('requestServerChatGeneration durable cancel-on-abort', () => {
     expect(generationOperationMocks.applySseEvent).toHaveBeenCalledWith(
       expect.objectContaining({ type: 'done', jobId: 'job-current', operationId }),
     )
+  })
+
+  it('rejects a stale-attempt redirect belonging to another operation', async () => {
+    const operationId = '11111111-1111-4111-8111-111111111111'
+    const stream = {
+      operationId,
+      attemptNo: 1,
+      jobId: 'job-own',
+      projectionEpoch: 1,
+      href: `/api/v1/generation-operations/${operationId}/stream?attemptNo=1&jobId=job-own&projectionEpoch=1`,
+    }
+    const otherOperationId = '33333333-3333-4333-8333-333333333333'
+    generationOperationMocks.reconcileErrorBody.mockReturnValueOnce({
+      disposition: 'redirected',
+      operation: { operationId: otherOperationId, state: 'owned_by_job' },
+      stream: {
+        ...stream,
+        operationId: otherOperationId,
+        jobId: 'job-other',
+        href: `/api/v1/generation-operations/${otherOperationId}/stream?attemptNo=1&jobId=job-other&projectionEpoch=1`,
+      },
+    })
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL) =>
+        new Response(JSON.stringify({ error: 'stale_generation_attempt' }), { status: 409 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestServerChatGeneration(baseInput, null, undefined, stream)).resolves.toEqual({
+      status: 'error',
+      error: 'stale_generation_attempt',
+      code: 'stale_generation_attempt',
+      reattachOutcome: 'authority_reconciliation_required',
+    })
+    expect(fetchMock).toHaveBeenCalledOnce()
+    expect(fetchMock).toHaveBeenCalledWith(stream.href, expect.objectContaining({ method: 'GET' }))
+    expect(generationOperationMocks.reconcileErrorBody).toHaveBeenCalledOnce()
+    expect(generationOperationMocks.applySseEvent).not.toHaveBeenCalled()
+    expect(get(activeGenerationJobs)).toEqual([])
+  })
+
+  it('bounds stale-attempt redirects while preserving the latest reconciliation requirement', async () => {
+    const operationId = '11111111-1111-4111-8111-111111111111'
+    const streams = [1, 2, 3, 4, 5].map((attemptNo) => ({
+      operationId,
+      attemptNo,
+      jobId: `job-attempt-${attemptNo}`,
+      projectionEpoch: attemptNo,
+      href: `/api/v1/generation-operations/${operationId}/stream?attemptNo=${attemptNo}&jobId=job-attempt-${attemptNo}&projectionEpoch=${attemptNo}`,
+    }))
+    for (const stream of streams.slice(1)) {
+      generationOperationMocks.reconcileErrorBody.mockReturnValueOnce({
+        disposition: 'redirected',
+        operation: { operationId, state: 'owned_by_job' },
+        stream,
+      })
+    }
+    const fetchMock = vi.fn(
+      async (_url: RequestInfo | URL) =>
+        new Response(JSON.stringify({ error: 'stale_generation_attempt' }), { status: 409 }),
+    )
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(requestServerChatGeneration(baseInput, null, undefined, streams[0])).resolves.toEqual({
+      status: 'error',
+      error: 'stale_generation_attempt',
+      code: 'stale_generation_attempt',
+      reattachOutcome: 'authority_reconciliation_required',
+    })
+    // One initial GET and three redirects; the coordinator owns further retry.
+    expect(fetchMock.mock.calls.map(([url]) => url)).toEqual(streams.slice(0, 4).map((stream) => stream.href))
+    expect(generationOperationMocks.reconcileErrorBody).toHaveBeenCalledTimes(3)
+    expect(generationOperationMocks.applySseEvent).not.toHaveBeenCalled()
+    expect(generationOperationMocks.stopOperation).not.toHaveBeenCalled()
+    expect(get(activeGenerationJobs)).toEqual([])
   })
 
   it('returns terminal stale-attempt authority for coordinator reconciliation', async () => {
