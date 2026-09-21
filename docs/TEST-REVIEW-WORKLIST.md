@@ -129,6 +129,12 @@ protection. No production source, configuration, test ownership, or tags changed
 and no split or deletion was needed. These are focused results, not a full-suite
 or exhaustive mutation claim.
 
+A subsequent user-requested [full repository validation](test-reviews/pilot-full-validation.md)
+ran every `pnpm test:all` lane. The report records the results and the stale
+architecture inventory discovered in the server-check lane, its correction,
+and follow-up validation. This integration check does not complete additional
+worklist audits.
+
 The wave completed five additional original entries, bringing recorded outcomes
 to ten `improved`, one `verified_unchanged`, and 432 `pending` at that checkpoint.
 Use the JSON queries below for subsequent progress. The reports retain each

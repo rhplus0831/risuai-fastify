@@ -6,15 +6,9 @@
     "inventoryCursor": "244713c5e",
     "policyCount": 9,
     "consumerGroupCount": 30,
-    "referenceCount": 4284
+    "referenceCount": 4289
   },
-  "capabilityKeys": [
-    "selectors",
-    "resourceState",
-    "commands",
-    "draftRecovery",
-    "contractTests"
-  ],
+  "capabilityKeys": ["selectors", "resourceState", "commands", "draftRecovery", "contractTests"],
   "owners": {
     "broad-settings-shell": {
       "dependencies": {
@@ -29,10 +23,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/server/settingsOwner.svelte.ts",
-        "src/ts/server/resourceState.svelte.ts"
-      ]
+      "evidence": ["src/ts/server/settingsOwner.svelte.ts", "src/ts/server/resourceState.svelte.ts"]
     },
     "character-chat": {
       "dependencies": {
@@ -47,10 +38,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/server/characterDraft.svelte.ts",
-        "src/ts/server/chatMessageHydration.svelte.ts"
-      ]
+      "evidence": ["src/ts/server/characterDraft.svelte.ts", "src/ts/server/chatMessageHydration.svelte.ts"]
     },
     "compatibility-infrastructure": {
       "dependencies": {
@@ -65,10 +53,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/lib/_audit/frontendArchitecture.static.test.ts",
-        "src/ts/server/ownerMutationLifecycle.ts"
-      ]
+      "evidence": ["src/lib/_audit/frontendArchitecture.static.test.ts", "src/ts/server/ownerMutationLifecycle.ts"]
     },
     "cross-cutting": {
       "dependencies": {
@@ -83,10 +68,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/bootstrap.ts",
-        "src/ts/server/replacementDatabaseOwnership.ts"
-      ]
+      "evidence": ["src/ts/bootstrap.ts", "src/ts/server/replacementDatabaseOwnership.ts"]
     },
     "leaf-settings-collections": {
       "dependencies": {
@@ -101,10 +83,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/server/resourceState.svelte.ts",
-        "src/ts/server/settingsOwner.svelte.ts"
-      ]
+      "evidence": ["src/ts/server/resourceState.svelte.ts", "src/ts/server/settingsOwner.svelte.ts"]
     },
     "lorebook": {
       "dependencies": {
@@ -119,10 +98,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/server/lorebookOwner.svelte.ts",
-        "src/ts/server/resourceState.svelte.test.ts"
-      ]
+      "evidence": ["src/ts/server/lorebookOwner.svelte.ts", "src/ts/server/resourceState.svelte.test.ts"]
     },
     "model-translator": {
       "dependencies": {
@@ -137,10 +113,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/model/modelProfileResolver.ts",
-        "src/ts/translator/presets.ts"
-      ]
+      "evidence": ["src/ts/model/modelProfileResolver.ts", "src/ts/translator/presets.ts"]
     },
     "prompt-template": {
       "dependencies": {
@@ -155,10 +128,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/server/promptTemplateHydration.ts",
-        "src/ts/server/promptTemplateMutations.svelte.ts"
-      ]
+      "evidence": ["src/ts/server/promptTemplateHydration.ts", "src/ts/server/promptTemplateMutations.svelte.ts"]
     },
     "script-definition": {
       "dependencies": {
@@ -173,10 +143,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": [
-        "src/ts/server/scriptDefinitionOwner.svelte.ts",
-        "src/ts/server/resourceState.svelte.ts"
-      ]
+      "evidence": ["src/ts/server/scriptDefinitionOwner.svelte.ts", "src/ts/server/resourceState.svelte.ts"]
     }
   },
   "policies": {
@@ -215,13 +182,7 @@
       "ownerApi": "src/ts/server/lorebookPageOwner.svelte.ts#lorebookPageOwner",
       "workstream1Cursor": "standalone read 33d1643ae; durable command 3f275e9dc; route relation 6a6d0ac1f",
       "workstream2Cursor": "already-singular settings row",
-      "capabilities": [
-        "selectors",
-        "resourceState",
-        "commands",
-        "draftRecovery",
-        "contractTests"
-      ],
+      "capabilities": ["selectors", "resourceState", "commands", "draftRecovery", "contractTests"],
       "remaining": "Closed for production ownership; the test-only aggregate fixture and classified external compatibility seams remain outside normal application state."
     }
   }

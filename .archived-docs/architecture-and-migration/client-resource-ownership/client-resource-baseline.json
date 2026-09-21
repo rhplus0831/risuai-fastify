@@ -98,8 +98,32 @@
           "count": 2
         },
         {
+          "file": "src/ts/bootstrap.acknowledgements.collections.dom.test.ts",
+          "count": 61
+        },
+        {
+          "file": "src/ts/bootstrap.acknowledgements.extensions.dom.test.ts",
+          "count": 13
+        },
+        {
+          "file": "src/ts/bootstrap.acknowledgements.settings.dom.test.ts",
+          "count": 33
+        },
+        {
+          "file": "src/ts/bootstrap.readiness.dom.test.ts",
+          "count": 6
+        },
+        {
+          "file": "src/ts/bootstrap.resourceEvents.dom.test.ts",
+          "count": 1
+        },
+        {
           "file": "src/ts/bootstrap.test.ts",
-          "count": 196
+          "count": 2
+        },
+        {
+          "file": "src/ts/bootstrap.writerSwitching.dom.test.ts",
+          "count": 4
         },
         {
           "file": "src/ts/storage/database.svelte.test.ts",
@@ -122,8 +146,36 @@
           "count": 8
         },
         {
-          "file": "src/ts/chatCommands.test.ts",
-          "count": 642
+          "file": "src/ts/bootstrap.acknowledgements.charactersAndChats.dom.test.ts",
+          "count": 27
+        },
+        {
+          "file": "src/ts/chatCommands.durableBatch.dom.test.ts",
+          "count": 7
+        },
+        {
+          "file": "src/ts/chatCommands.generationSettings.dom.test.ts",
+          "count": 49
+        },
+        {
+          "file": "src/ts/chatCommands.imports.dom.test.ts",
+          "count": 16
+        },
+        {
+          "file": "src/ts/chatCommands.messages.dom.test.ts",
+          "count": 176
+        },
+        {
+          "file": "src/ts/chatCommands.metadata.dom.test.ts",
+          "count": 128
+        },
+        {
+          "file": "src/ts/chatCommands.notesAndScriptstate.dom.test.ts",
+          "count": 49
+        },
+        {
+          "file": "src/ts/chatCommands.organization.dom.test.ts",
+          "count": 218
         },
         {
           "file": "src/ts/process/mcp/risuaccess/tests/characters.setCharacterInfo.test.ts",
@@ -288,6 +340,10 @@
         {
           "file": "src/ts/agentPresets.test.ts",
           "count": 67
+        },
+        {
+          "file": "src/ts/bootstrap.acknowledgements.presets.dom.test.ts",
+          "count": 53
         },
         {
           "file": "src/ts/moduleCommands.test.ts",
@@ -602,8 +658,28 @@
           "count": 2
         },
         {
-          "file": "src/ts/chatCommands.test.ts",
-          "count": 18
+          "file": "src/ts/chatCommands.generationSettings.dom.test.ts",
+          "count": 1
+        },
+        {
+          "file": "src/ts/chatCommands.messages.dom.test.ts",
+          "count": 5
+        },
+        {
+          "file": "src/ts/chatCommands.metadata.dom.test.ts",
+          "count": 6
+        },
+        {
+          "file": "src/ts/chatCommands.notesAndScriptstate.dom.test.ts",
+          "count": 2
+        },
+        {
+          "file": "src/ts/chatCommands.organization.dom.test.ts",
+          "count": 3
+        },
+        {
+          "file": "src/ts/chatCommands.testSupport.ts",
+          "count": 1
         },
         {
           "file": "src/ts/process/mcp/risuaccess/tests/characters.setCharacterInfo.test.ts",
