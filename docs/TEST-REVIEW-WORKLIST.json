@@ -435,10 +435,30 @@
         "protectedBehavior": "Mocked HTTP and SSE flows cover protocol and auth headers, prompt and result parsing, errors and message restoration, cancellation and recovery obligations, half-streaming and progress, durable replay gaps and terminal snapshots, reattachment and stale attempts, occupancy fencing, concurrent-chat isolation, and reader/writer lifecycle."
       },
       "currentFiles": ["src/ts/process/request/tests/serverChat.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-generation-transport",
-      "owner": "wave2_generation; worktree /home/codex/worktrees/risuai-wave-2-generation-transport",
-      "review": null
+      "owner": "/root/wave2_generation; branch codex/wave-2-generation-transport; worktree /home/codex/worktrees/risuai-wave-2-generation-transport",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Strengthened replay side-effect and operation Stop assertions; added foreign-operation redirect, retry-bound, wrong-job terminal-reference and retained-error-result cases.",
+        "reportedFamilyCases": 90,
+        "evidence": {
+          "commits": ["0ddadb44aa81e95a72df7d12a99ad089a2298c86"],
+          "documents": ["docs/test-reviews/wave-2-generation-transport.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Generation transport batch: 97 original cases retained, six added, 103 passed.",
+            "All 14 selected mutation probes detected; twelve survived the entire original 97-case batch.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "HTTP/SSE and operation coordination remain mocked; real server/browser recovery and every malformed stream variant are outside this review. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0011",
@@ -451,10 +471,30 @@
         "protectedBehavior": "It verifies cancellation/deadline replacement, single-flight ownership probes, bounded read-only and writer requests, strict metadata validation, conditional acquisition and disconnect headers, active-writer conflicts, revision caching, diagnostics negotiation, and generation jobs/effects/finalizations parsing."
       },
       "currentFiles": ["src/ts/server/bootstrap.svelte-node.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-bootstrap-auth",
-      "owner": "wave2_bootstrap; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
-      "review": null
+      "owner": "/root/wave2_bootstrap; branch codex/wave-2-bootstrap-auth; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Replaced shared header constants in the request oracle with normalized literal wire names; added invalid numeric revision rejection and valid zero-revision acceptance with cache controls.",
+        "reportedFamilyCases": 50,
+        "evidence": {
+          "commits": ["12ec1412a3b865b5230551dc99f65d0dbb5eeca3"],
+          "documents": ["docs/test-reviews/wave-2-bootstrap-auth.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Bootstrap/auth batch: 99 original cases retained, nineteen added, 118 passed.",
+            "All ten selected mutation probes detected; seven survived the entire original 99-case batch.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Mocked bootstrap responses; optional projection fields and all metadata variants are not exhaustively mutation tested. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0012",
@@ -503,10 +543,30 @@
         "protectedBehavior": "SQLite-backed repository and decoder tests cover selected-owner precedence, invalid configuration rejection, bounded query reads and caching, module and agent activation, prompt/Hypa fallbacks and repair, embedded legacy ownership, speaker names, duplicate identity handling, missing targets, and expression-index plans without a real provider call."
       },
       "currentFiles": ["server/fastify/__tests__/generationInputLoaders.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-server-reads",
-      "owner": "wave2_reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
-      "review": null
+      "owner": "/root/wave2_reads; branch codex/wave-2-server-reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added conflicting nonempty legacy transcript/Hypa fixtures with literal canonical expectations and row immutability; replaced a vacuous preflight module check with explicit selected IDs.",
+        "reportedFamilyCases": 32,
+        "evidence": {
+          "commits": ["e84c21b2bbfc723c524a3db5824f6bef14150107"],
+          "documents": ["docs/test-reviews/wave-2-server-reads.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Server reads batch: 86 original cases retained, fourteen added, 100 passed.",
+            "All ten selected mutation probes detected; eight survived their original owning suite. These were selected-suite gaps, not repository-wide coverage claims.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Selected generation loader boundaries and query budgets were reviewed; not every malformed owner or activation combination was mutation tested. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0014",
@@ -519,10 +579,30 @@
         "protectedBehavior": "Mocked fetch and auth cases verify stale sessions and superseded waits do not dispatch or revoke current state, asynchronous cache negotiation retains its original auth scope, delayed 401 bodies revoke current projections before parsing completes, old bootstrap results cannot restore cleared cache or diagnostics, aborted/old 401s are ignored, current 401s use the shared auth-loss boundary, and read-only bootstrap preserves HTTP status."
       },
       "currentFiles": ["src/ts/server/readerReadAuth.svelte-node.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-bootstrap-auth",
-      "owner": "wave2_bootstrap; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
-      "review": null
+      "owner": "/root/wave2_bootstrap; branch codex/wave-2-bootstrap-auth; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added HTTP 403 and 503 cases across five reader adapters that require error delivery while preserving authentication and the complete session snapshot.",
+        "reportedFamilyCases": 40,
+        "evidence": {
+          "commits": ["12ec1412a3b865b5230551dc99f65d0dbb5eeca3"],
+          "documents": ["docs/test-reviews/wave-2-bootstrap-auth.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Bootstrap/auth batch: 99 original cases retained, nineteen added, 118 passed.",
+            "All ten selected mutation probes detected; seven survived the entire original 99-case batch.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Projection discard remains mocked; these assertions verify admission to the auth-loss boundary, not actual mounted projection clearing or every resource adapter. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0015",
@@ -535,10 +615,30 @@
         "protectedBehavior": "Fastify integration tests verify authenticated versioned shell and settings projections, secret masking and allowlists, content-hash cache inventories, legacy and prompt-template hydration, character summaries and lorebooks, ranged and bulk chat messages with alternates, malformed-state immutability, migration normalization, and request-size bounds."
       },
       "currentFiles": ["server/fastify/__tests__/resourceReads.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-server-reads",
-      "owner": "wave2_reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
-      "review": null
+      "owner": "/root/wave2_reads; branch codex/wave-2-server-reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added fourteen malformed message-range cases with same-fixture successful requests, exact rejection errors and unchanged database rows; strengthened valid zero-start range coverage.",
+        "reportedFamilyCases": 42,
+        "evidence": {
+          "commits": ["e84c21b2bbfc723c524a3db5824f6bef14150107"],
+          "documents": ["docs/test-reviews/wave-2-server-reads.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Server reads batch: 86 original cases retained, fourteen added, 100 passed.",
+            "All ten selected mutation probes detected; eight survived their original owning suite. These were selected-suite gaps, not repository-wide coverage claims.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Does not exhaust every query-parser branch, malformed JSON shape or HTTP ownership combination; resource selectors retain additional possible probes. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0016",
@@ -587,10 +687,30 @@
         "protectedBehavior": "Through a Fastify and SQLite large-corpus harness, exercises scoped read budgets and persistence for chat, message, character, module, prompt, settings, plugin, and collection mutations; validates lifecycle writes, legacy broad fallbacks, canonical-row precedence, malformed-row rejection, sibling preservation, and the data-loss guard."
       },
       "currentFiles": ["server/fastify/__tests__/commandMutationReadNarrowing.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-server-reads",
-      "owner": "wave2_reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
-      "review": null
+      "owner": "/root/wave2_reads; branch codex/wave-2-server-reads; worktree /home/codex/worktrees/risuai-wave-2-server-reads",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Retained scoped read budgets while asserting persisted definition fields and sibling byte preservation; checked message PATCH columns and JSON before later DELETE masks its result.",
+        "reportedFamilyCases": 26,
+        "evidence": {
+          "commits": ["e84c21b2bbfc723c524a3db5824f6bef14150107"],
+          "documents": ["docs/test-reviews/wave-2-server-reads.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Server reads batch: 86 original cases retained, fourteen added, 100 passed.",
+            "All ten selected mutation probes detected; eight survived their original owning suite. These were selected-suite gaps, not repository-wide coverage claims.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Detailed definition CRUD remains owned by adjacent command suites; probes establish effects in the selected performance-contract cases, not repository-wide missing coverage. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0018",
@@ -603,10 +723,30 @@
         "protectedBehavior": "Vitest cases cover foreign-writer reader fallback, automatic disconnected-writer acquisition, no-owner and first-run confirmation, losing acquisition races, startup supersession, empty-server ownership checks, projection and recovery/write gating, and unauthorized discovery handling."
       },
       "currentFiles": ["src/ts/connectedClientStartup.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-bootstrap-auth",
-      "owner": "wave2_bootstrap; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
-      "review": null
+      "owner": "/root/wave2_bootstrap; branch codex/wave-2-bootstrap-auth; worktree /home/codex/worktrees/risuai-wave-2-bootstrap-auth",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Added acquisition/conflict-reread authentication loss and transient-error controls, stale-acquisition reader fallback, and superseded unauthorized-reread isolation.",
+        "reportedFamilyCases": 28,
+        "evidence": {
+          "commits": ["12ec1412a3b865b5230551dc99f65d0dbb5eeca3"],
+          "documents": ["docs/test-reviews/wave-2-bootstrap-auth.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Bootstrap/auth batch: 99 original cases retained, nineteen added, 118 passed.",
+            "All ten selected mutation probes detected; seven survived the entire original 99-case batch.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Bootstrap, identity and preferences remain mocked; real network authentication and mounted browser behavior remain with neighboring integration coverage. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0019",
@@ -715,10 +855,30 @@
         "protectedBehavior": "It verifies server-intent routing and preview rejection, provider-agnostic payloads and static model forwarding, bounded tool history and returned-call validation, no-retry failures, status/code preservation, SSE token/error parsing, and Anthropic system extraction."
       },
       "currentFiles": ["src/ts/process/request/tests/serverCompletion.test.ts"],
-      "status": "in_progress",
+      "status": "improved",
       "batchId": "wave-2-generation-transport",
-      "owner": "wave2_generation; worktree /home/codex/worktrees/risuai-wave-2-generation-transport",
-      "review": null
+      "owner": "/root/wave2_generation; branch codex/wave-2-generation-transport; worktree /home/codex/worktrees/risuai-wave-2-generation-transport",
+      "review": {
+        "completedOn": "2026-09-21",
+        "summary": "Preserved coalesced multi-token SSE coverage while adding fragmented UTF-8 and terminal-boundary assertions, caller signal forwarding, stream abort, and buffered-tool positive controls.",
+        "reportedFamilyCases": 13,
+        "evidence": {
+          "commits": ["0ddadb44aa81e95a72df7d12a99ad089a2298c86"],
+          "documents": ["docs/test-reviews/wave-2-generation-transport.md", "docs/TEST-LIST-UPDATE.md"],
+          "tasks": []
+        },
+        "validation": {
+          "basis": "Executed from a690473965903f0f36c68ff3ff457f87d25d5b7f in three isolated worktrees; reviewed and revalidated after integration on fastify. Temporary production mutations restored.",
+          "checks": [
+            "Generation transport batch: 97 original cases retained, six added, 103 passed.",
+            "All 14 selected mutation probes detected; twelve survived the entire original 97-case batch.",
+            "Integrated focused runs: 221 frontend tests in five files and 100 server tests in three files passed, with no skips. All 282 original file/full-name/tag identities retained; 39 added.",
+            "pnpm check passed with zero errors/warnings; pnpm check:server passed protocol/shared-core/Fastify/browser-smoke typechecks and architecture inventory (4289 fixture references, unchanged baseline)."
+          ],
+          "limitations": "Mocked fetch responses; CRLF interoperability and abort during pending fetch remain outside these probes. No already-aborted no-dispatch contract is claimed. Targeted mutations are not exhaustive. Full test:agent/test:all and browser suites were not rerun for this localized test-only wave."
+        },
+        "remainingGaps": []
+      }
     },
     {
       "id": "TL-0026",

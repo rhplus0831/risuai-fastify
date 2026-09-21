@@ -62,3 +62,20 @@ production code is unchanged. See the [provider](test-reviews/pilot-providers.md
 validation, and limitations. The [worklist](TEST-REVIEW-WORKLIST.md) records four
 improved outcomes and one verified-unchanged outcome for this wave; the historical
 inventory retains its original counts and ratings.
+
+Post-snapshot second-wave update (2026-09-21): eight more Critical entries were
+improved across [generation transport](test-reviews/wave-2-generation-transport.md),
+[bootstrap and reader authentication](test-reviews/wave-2-bootstrap-auth.md), and
+[server reads and mutation scope](test-reviews/wave-2-server-reads.md).
+`serverChat.test.ts` now has 90 cases; `serverCompletion.test.ts`, 13;
+`bootstrap.svelte-node.test.ts`, 50; `readerReadAuth.svelte-node.test.ts`, 40;
+`connectedClientStartup.test.ts`, 28; and `resourceReads.test.ts`, 42.
+`generationInputLoaders.test.ts` retains 32 and
+`commandMutationReadNarrowing.test.ts` retains 26 with stronger assertions.
+All 282 original cases remain, and all 321 resulting cases pass after integration.
+All 34 sampled regressions are detected, including 27 that survived their original
+selected suites. Client/server typechecks and architecture validation pass;
+production code and the architecture baseline are unchanged. The
+[worklist](TEST-REVIEW-WORKLIST.md#completed-second-wave) records the evidence
+and 19 completed original entries overall. Historical inventory counts and
+ratings remain unchanged.

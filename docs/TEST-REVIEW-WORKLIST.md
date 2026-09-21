@@ -142,6 +142,38 @@ batch's limitations, commands, and sizing observations. Review and mutation
 interpretation dominated execution time; continue grouping by shared behavior
 and fixture ownership rather than treating every file as a separate task.
 
+## Completed second wave
+
+Eight Critical entries completed on 2026-09-21 in three isolated batches:
+
+| Batch report                                                                 | Entries                         | Baseline → final cases | Main improvements                                                                                                     |
+| ---------------------------------------------------------------------------- | ------------------------------- | ---------------------: | --------------------------------------------------------------------------------------------------------------------- |
+| [Generation transport](test-reviews/wave-2-generation-transport.md)          | `TL-0010`, `TL-0025`            |               97 → 103 | Operation/job identity, replay effects, Stop, retained error text, UTF-8 framing, cancellation, and tool controls.    |
+| [Bootstrap and reader authentication](test-reviews/wave-2-bootstrap-auth.md) | `TL-0011`, `TL-0014`, `TL-0018` |               99 → 118 | Independent wire headers, numeric revisions, auth-loss classification, acquisition fallback, and superseded rereads.  |
+| [Server reads and mutation scope](test-reviews/wave-2-server-reads.md)       | `TL-0013`, `TL-0015`, `TL-0017` |               86 → 100 | Canonical owner conflicts, nonempty module selection, range validation, and persisted effects alongside read budgets. |
+
+All eight outcomes are `improved`. Integration passes **321 tests**: 221 in
+five frontend files and 100 in three server files, with no skips. All 282 original
+file/full-name/tag identities remain and 39 cases were added. Existing multi-token
+and coalesced-stream behavior was retained alongside stronger fragmentation
+checks. No tests moved, and production code, shared helpers, routing, and tags
+are unchanged.
+
+All 34 sampled mutations were detected after improvement. Of those, 27 survived
+the original selected suites; seven were already caught. Server-read probes ran
+their owning file, while the other probes ran their entire batch. These results
+describe the selected suites, not a repository-wide mutation score.
+
+`pnpm check` and `pnpm check:server` passed, including the architecture inventory
+with its existing 4,289 fixture references. No inventory refresh was needed.
+The earlier [full repository validation](test-reviews/pilot-full-validation.md)
+remains a separate checkpoint; this wave used focused execution and typechecks.
+Temporary execution evidence uses `/tmp/wave2-*`; the reports preserve findings,
+commands, mutations, and limitations in version control.
+
+This checkpoint has **18 `improved`, one `verified_unchanged`, and 424 `pending`**
+original entries. Passing neighboring tests does not change their audit status.
+
 ## Finding and assigning work
 
 Run these commands from the repository root. Show current progress:
