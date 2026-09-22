@@ -42,12 +42,19 @@ describe('test:all orchestration', () => {
       'test-topology',
       'frontend-core-tests',
       'frontend-check',
+      'compat-registers',
+      'compat-current',
       'server-core-tests',
       'browser-smoke-build',
       'browser-core-tests',
     ])
 
     const byId = new Map(agentQualityLanes.map((lane) => [lane.id, lane]))
+    expect(byId.get('compat-current')).toMatchObject({
+      args: ['exec', 'tsx', 'test/compat-harness/run.ts', '--current-only'],
+      after: ['compat-registers'],
+      isolated: true,
+    })
     expect(byId.get('server-check')).toMatchObject({
       args: ['exec', 'tsx', 'util/check-server.ts', '--typechecks-only'],
     })

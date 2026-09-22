@@ -222,6 +222,10 @@ export const agentQualityLanes: readonly QualityLane[] = [
     },
   },
   requiredQualityLane('frontend-check'),
+  // The compatibility goldens are the only record of what the current stack sends
+  // to a model provider, so the agent profile runs the current-stack lane too.
+  requiredQualityLane('compat-registers'),
+  requiredQualityLane('compat-current'),
   {
     ...requiredQualityLane('server-tests'),
     id: 'server-core-tests',
