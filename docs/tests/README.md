@@ -62,7 +62,9 @@ authentication and egress, durable commands, generation and streaming, recovery,
 backup/restore, assets, provider wires, and client rollback fences. A case entered
 this tier only after it killed a production mutation that the previous core
 survived; the evidence is in `docs/test-reviews/core-suite-phase-2.md` and
-`docs/test-reviews/core-suite-phase-3.md`.
+`docs/test-reviews/core-suite-phase-3.md`. The tests outside that tier were
+reduced from 1,016 files to 305 on 2026-09-22;
+`docs/test-reviews/core-suite-phase-5.md` records what went and what stayed.
 
 `util/core-test-contract.ts` is the reviewed file inventory. A wholly core file
 uses `@module-tag core`; mixed files tag only the relevant cases. Playwright uses
