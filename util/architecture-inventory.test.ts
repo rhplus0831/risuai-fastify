@@ -227,14 +227,14 @@ describe('client resource ownership gate', () => {
     ) as ClientResourceOwnerGapMatrix
     expect(validateClientResourceOwnerGapMatrix(REPO_ROOT, baseline, matrix)).toEqual([])
 
-    delete matrix.policies['lorebook:test-fixture']
-    matrix.owners.lorebook.capabilities.aggregateSnapshot = 'complete'
+    delete matrix.policies['character-chat:test-fixture']
+    matrix.owners['character-chat'].capabilities.aggregateSnapshot = 'complete'
     matrix.foundations['lorebook-page-standalone'].ownerApi = 'src/ts/server/lorebookPageOwner.svelte.ts#missingOwner'
 
     expect(validateClientResourceOwnerGapMatrix(REPO_ROOT, baseline, matrix)).toEqual(
       expect.arrayContaining([
         'client resource owner gap matrix policy rows do not exactly match the frozen baseline',
-        'client resource owner lorebook must classify every owner capability exactly once',
+        'client resource owner character-chat must classify every owner capability exactly once',
         'client resource owner foundation lorebook-page-standalone owner API anchor is missing: missingOwner',
       ]),
     )
