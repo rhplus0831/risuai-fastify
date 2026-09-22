@@ -1,4 +1,4 @@
-> This snapshot predates the Phase 5 deletion; `docs/test-reviews/core-suite-phase-5.md` records what was removed.
+> Archived 2026-09-22 (Phase 6). This snapshot predates the Phase 5 deletion; `docs/test-reviews/core-suite-phase-5.md` records what was removed. Relative links below were written for `docs/` and are not maintained.
 
 # Priority Test Review Worklist
 

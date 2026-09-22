@@ -3,7 +3,8 @@
 Completed on 2026-09-22. Baseline `1adda76bc` (the Phase 3 result), result
 `fastify` at the commit that adds this report. Inputs:
 [core-suite-phase-2.md](core-suite-phase-2.md), [core-suite-phase-3.md](core-suite-phase-3.md),
-the `docs/TEST-LIST.md` priority snapshot (tiers), and the owner's audit finding
+the `TEST-LIST.md` priority snapshot (tiers; now archived under
+`.archived-docs/performance-and-stability/test-suite-reduction-2026-09/`), and the owner's audit finding
 that the agent-generated tests mostly failed to protect the product. Phase 4,
 the gate, was the mutation replay recorded in the Phase 3 report; it is
 repeated here on the reduced suite.
@@ -149,9 +150,11 @@ lost its last test-fixture consumer, so it now mutates `character-chat`.
    owner gap matrix from nine resource families to four. The compatibility
    baseline re-points five `historicalFixture` entries from deleted tests to
    the production modules that own the behaviour.
-3. **`docs/TEST-LIST.md` and the review worklist are stale by design.** They
-   describe the 1,034-file suite of 2026-09-19. Phase 6 retires them; until
-   then each carries a one-line note pointing here.
+3. **The priority inventory and the review worklist are retired.** They
+   describe the 1,034-file suite of 2026-09-19; Phase 6 moved them to
+   `.archived-docs/performance-and-stability/test-suite-reduction-2026-09/`
+   and wrote the test policy into `AGENTS.md` (see
+   [core-suite-phase-6.md](core-suite-phase-6.md)).
 4. **One src-lib keeper was considered and rejected.** The owner had named
    `src/lib/ChatScreens/Chat.deletion.dom.test.ts` as borderline. It has no
    `vi.mock` call, but its `Chat.testSupport` harness replaced the repository's

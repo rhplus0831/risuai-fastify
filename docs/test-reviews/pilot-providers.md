@@ -1,7 +1,7 @@
 # Provider execution pilot review
 
 Reviewed 2026-09-21 from baseline `949e401cfbd7dcb37f45c57db485eb938d2ee001`.
-This report records the provider pilot in the [priority worklist](../TEST-REVIEW-WORKLIST.md).
+This report records the provider pilot in the [priority worklist](../../.archived-docs/performance-and-stability/test-suite-reduction-2026-09/TEST-REVIEW-WORKLIST.md).
 
 ## Outcomes and ownership
 

@@ -1,7 +1,7 @@
 # Full repository validation after the pilot wave
 
 On 2026-09-21, the user requested one full `pnpm test:all` run after the
-[three pilot reviews](../TEST-REVIEW-WORKLIST.md#completed-pilot-wave). The run
+[three pilot reviews](../../.archived-docs/performance-and-stability/test-suite-reduction-2026-09/TEST-REVIEW-WORKLIST.md#completed-pilot-wave). The run
 started at `2026-09-21T13:12:03.641Z` on clean revision
 `03c66265a116eb33432869dd520d55af4ad67b72` and finished in 9.46 minutes.
 No tracked files changed during that run.

@@ -2,7 +2,7 @@
 
 Reviewed 2026-09-21 from baseline `a69047396` in an isolated worktree.
 This report records TL-0010 and TL-0025 in the
-[priority worklist](../TEST-REVIEW-WORKLIST.md).
+[priority worklist](../../.archived-docs/performance-and-stability/test-suite-reduction-2026-09/TEST-REVIEW-WORKLIST.md).
 
 ## Outcomes
 

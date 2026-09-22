@@ -21,7 +21,7 @@ source was changed. This report is the only file added.
 5. The parent session spot-checked the most consequential claims. Three are
    recorded under [Spot checks](#spot-checks).
 
-Only Critical and High consequences from the `docs/TEST-LIST.md` rubric were
+Only Critical and High consequences from the `.archived-docs/performance-and-stability/test-suite-reduction-2026-09/TEST-LIST.md` rubric were
 considered. Medium and Low behaviour is deliberately left out of core.
 
 ## Measured execution by the core Vitest lanes
