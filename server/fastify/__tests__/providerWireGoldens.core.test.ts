@@ -543,8 +543,9 @@ describe('provider wire goldens', () => {
     })
     const events = await sendChat(assertion, 'Golden OpenAI current user turn.')
 
+    expect(captures[0]).toBeDefined()
+    expectGolden('profile-ignores-attacker-baseurl', captures[0]!)
     expect(captures).toHaveLength(1)
-    expectGolden('profile-ignores-attacker-baseurl', captures[0])
     expectSuccessfulSend(events)
     expect((await persistedMessages(assertion)).at(-1)).toMatchObject({
       role: 'char',
