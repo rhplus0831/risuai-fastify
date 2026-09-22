@@ -263,8 +263,9 @@ Successful empty windows return 200 with no entries.
 Restart invalidates cursor snapshots; retained journal evidence and sequence
 numbers remain available within their ordinary limits.
 
-In the development environment, set `RISU_DIAGNOSTICS_REMOTE_CONFIG` to the
-private transferred config before querying:
+In the development environment, the helper tries `~/.config/production.json`
+when `RISU_DIAGNOSTICS_REMOTE_CONFIG` is unset. Set the variable to use a
+different private transferred config:
 
 ```sh
 export RISU_DIAGNOSTICS_REMOTE_CONFIG=/private/development/directory/production.json

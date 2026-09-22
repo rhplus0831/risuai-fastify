@@ -1,5 +1,6 @@
 import { constants, closeSync, fstatSync, openSync, readSync, realpathSync } from 'node:fs'
 import { request } from 'node:https'
+import { homedir } from 'node:os'
 import { isAbsolute, resolve } from 'node:path'
 import { Transform, Writable, type TransformCallback } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -503,7 +504,9 @@ export async function investigateRemoteDiagnostics(
 async function run(): Promise<void> {
   try {
     const { investigate, query } = parseCliArguments(process.argv.slice(2))
-    const config = readRemoteDiagnosticsConfig(process.env.RISU_DIAGNOSTICS_REMOTE_CONFIG)
+    const config = readRemoteDiagnosticsConfig(
+      process.env.RISU_DIAGNOSTICS_REMOTE_CONFIG ?? resolve(homedir(), '.config/production.json'),
+    )
     const response = investigate
       ? await investigateRemoteDiagnostics(config, query)
       : await fetchRemoteDiagnostics(config, query)
