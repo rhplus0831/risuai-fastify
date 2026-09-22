@@ -194,8 +194,11 @@ describe('request trace', () => {
     expect(existsSync(tracePath(harness, 'agent'))).toBe(false)
   })
 
-  it('appends API request trace entries as JSONL', async () => {
+  it('appends API request trace entries as JSONL', { tags: 'core' }, async () => {
     harness = await startHarness('agent')
+
+    const authorizationSecret = 'Bearer TRACE-AUTHORIZATION-SENTINEL'
+    const apiKeySecret = 'TRACE-X-API-KEY-SENTINEL'
 
     const res = await harness.app.inject({
       method: 'GET',
@@ -203,6 +206,8 @@ describe('request trace', () => {
       headers: {
         'risu-auth': 'secret-auth-token',
         'sec-websocket-protocol': 'risu-stream-v1, risu-auth.secret-websocket-token',
+        authorization: authorizationSecret,
+        'x-api-key': apiKeySecret,
         'user-agent': '',
         'x-debug-test': 'trace-me',
       },
@@ -224,11 +229,16 @@ describe('request trace', () => {
     expect(requestHeaders['x-debug-test']).toBe('trace-me')
     expect(requestHeaders['risu-auth']).toBe('[redacted]')
     expect(requestHeaders['sec-websocket-protocol']).toBe('[redacted]')
+    expect(requestHeaders.authorization).toBe('[redacted]')
+    expect(requestHeaders['x-api-key']).toBe('[redacted]')
     expect(requestHeaders[uidHeaderName]).toBe(responseUid)
     expect(responseHeaders[uidHeaderName]).toBe(responseUid)
+    const persisted = readFileSync(tracePath(harness, 'agent'), 'utf8')
+    expect(persisted).not.toContain(authorizationSecret)
+    expect(persisted).not.toContain(apiKeySecret)
   })
 
-  it('records route metadata, explicit caller, and redacted query params', async () => {
+  it('records route metadata, explicit caller, and redacted query params', { tags: 'core' }, async () => {
     harness = await startHarness('agent')
 
     const res = await harness.app.inject({
@@ -266,7 +276,7 @@ describe('request trace', () => {
     )
   })
 
-  it('inlines small JSON request and response bodies with body redaction', async () => {
+  it('inlines small JSON request and response bodies with body redaction', { tags: 'core' }, async () => {
     harness = await startHarness('agent')
 
     await harness.app.inject({

@@ -1282,71 +1282,87 @@ describe('generation effect ledger', () => {
     expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(0)
   })
 
-  it('rejects foreign, expired, stale-target, and corrupt-scope chat-only IGP commits without mutation', async () => {
-    const cases = ['foreign', 'expired', 'stale-target', 'corrupt-scope'] as const
-    for (const testCase of cases) {
-      const harness = await openRouteHarness()
-      const suffix = testCase.replace('-', '_')
-      const seeded = seedChatOnlyCompletion(harness, {
-        operationId: `operation-${suffix}`,
-        generationId: `generation-${suffix}`,
-        messageId: `message-${suffix}`,
-      })
-      skipGeneratedTranslation(harness, seeded)
-      const headers = (sessionId: string) => ({
-        'risu-auth': harness.assertion,
-        'risu-writer-session': sessionId,
-        'risu-database-lineage': harness.lineage,
-      })
-      const claimed = await harness.app.inject({
-        method: 'POST',
-        url: `/api/v1/generation-effects/${seeded.generationId}/igp/claims`,
-        headers: headers(seeded.sessionId),
-        payload: { delivery: 'live_terminal', messageId: seeded.messageId },
-      })
-      expect(claimed.statusCode, claimed.body).toBe(201)
-      const claimId = claimed.json().claimId as string
-      if (testCase === 'expired') {
-        harness.db
-          .prepare(
-            `UPDATE generation_effects SET lease_expires_at = '2000-01-01T00:00:00.000Z'
-             WHERE generation_id = ? AND effect_kind = 'igp'`,
-          )
-          .run(seeded.generationId)
-      } else if (testCase === 'stale-target') {
-        harness.db
-          .prepare("UPDATE messages SET data = 'Changed', json = json_set(json, '$.data', 'Changed') WHERE uid = ?")
-          .run(seeded.messageId)
-      } else if (testCase === 'corrupt-scope') {
-        harness.db
-          .prepare(
-            `UPDATE generation_effects SET occupancy_epoch = occupancy_epoch + 1
-             WHERE generation_id = ? AND effect_kind = 'igp'`,
-          )
-          .run(seeded.generationId)
-      }
-      const beforeRevision = getSchemaState(harness.db).revision
-      const beforeMessage = resolveActiveMessageLocationById(harness.db, seeded.messageId)
-      const result = await harness.app.inject({
-        method: 'PUT',
-        url: `/api/v1/generation-effects/${seeded.generationId}/igp/commit`,
-        headers: headers(testCase === 'foreign' ? 'reader-b' : seeded.sessionId),
-        payload: {
-          baseRevision: beforeRevision,
-          claimId,
-          data: 'Reply[IGP]',
-          expectedData: 'Reply',
-          expectedGenerationId: seeded.generationId,
-        },
-      })
-      expect(result.statusCode, `${testCase}: ${result.body}`).toBe(testCase === 'foreign' ? 423 : 409)
-      expect(getSchemaState(harness.db).revision).toBe(beforeRevision)
-      expect(resolveActiveMessageLocationById(harness.db, seeded.messageId)).toEqual(beforeMessage)
-      expect(listGenerationEffects(harness.db, seeded.generationId, harness.lineage)).toContainEqual(
-        expect.objectContaining({ kind: 'igp', status: 'claimed', claimId }),
-      )
-      await harness.app.close()
-      apps.splice(apps.indexOf(harness.app), 1)
+  async function attemptRejectedChatOnlyIgpCommit(testCase: 'foreign' | 'expired' | 'stale-target' | 'corrupt-scope') {
+    const harness = await openRouteHarness()
+    const suffix = testCase.replace('-', '_')
+    const seeded = seedChatOnlyCompletion(harness, {
+      operationId: `operation-${suffix}`,
+      generationId: `generation-${suffix}`,
+      messageId: `message-${suffix}`,
+    })
+    skipGeneratedTranslation(harness, seeded)
+    const headers = (sessionId: string) => ({
+      'risu-auth': harness.assertion,
+      'risu-writer-session': sessionId,
+      'risu-database-lineage': harness.lineage,
+    })
+    const claimed = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/generation-effects/${seeded.generationId}/igp/claims`,
+      headers: headers(seeded.sessionId),
+      payload: { delivery: 'live_terminal', messageId: seeded.messageId },
+    })
+    expect(claimed.statusCode, claimed.body).toBe(201)
+    const claimId = claimed.json().claimId as string
+    if (testCase === 'expired') {
+      harness.db
+        .prepare(
+          `UPDATE generation_effects SET lease_expires_at = '2000-01-01T00:00:00.000Z'
+           WHERE generation_id = ? AND effect_kind = 'igp'`,
+        )
+        .run(seeded.generationId)
+    } else if (testCase === 'stale-target') {
+      harness.db
+        .prepare("UPDATE messages SET data = 'Changed', json = json_set(json, '$.data', 'Changed') WHERE uid = ?")
+        .run(seeded.messageId)
+    } else if (testCase === 'corrupt-scope') {
+      harness.db
+        .prepare(
+          `UPDATE generation_effects SET occupancy_epoch = occupancy_epoch + 1
+           WHERE generation_id = ? AND effect_kind = 'igp'`,
+        )
+        .run(seeded.generationId)
+    }
+    const beforeRevision = getSchemaState(harness.db).revision
+    const beforeMessage = resolveActiveMessageLocationById(harness.db, seeded.messageId)
+    const result = await harness.app.inject({
+      method: 'PUT',
+      url: `/api/v1/generation-effects/${seeded.generationId}/igp/commit`,
+      headers: headers(testCase === 'foreign' ? 'reader-b' : seeded.sessionId),
+      payload: {
+        baseRevision: beforeRevision,
+        claimId,
+        data: 'Reply[IGP]',
+        expectedData: 'Reply',
+        expectedGenerationId: seeded.generationId,
+      },
+    })
+    expect(getSchemaState(harness.db).revision).toBe(beforeRevision)
+    expect(resolveActiveMessageLocationById(harness.db, seeded.messageId)).toEqual(beforeMessage)
+    expect(listGenerationEffects(harness.db, seeded.generationId, harness.lineage)).toContainEqual(
+      expect.objectContaining({ kind: 'igp', status: 'claimed', claimId }),
+    )
+    await harness.app.close()
+    apps.splice(apps.indexOf(harness.app), 1)
+    return result
+  }
+
+  it('rejects a foreign-session chat-only IGP commit without mutation', { tags: 'core' }, async () => {
+    const result = await attemptRejectedChatOnlyIgpCommit('foreign')
+    expect(result.statusCode, result.body).toBe(423)
+    expect(result.json()).toEqual({ error: 'generation_effect_foreign_session' })
+  })
+
+  it('rejects a stale-target chat-only IGP commit without mutation', { tags: 'core' }, async () => {
+    const result = await attemptRejectedChatOnlyIgpCommit('stale-target')
+    expect(result.statusCode, result.body).toBe(409)
+    expect(result.json()).toEqual({ error: 'generation_effect_target_stale' })
+  })
+
+  it('rejects expired and corrupt-scope chat-only IGP commits without mutation', async () => {
+    for (const testCase of ['expired', 'corrupt-scope'] as const) {
+      const result = await attemptRejectedChatOnlyIgpCommit(testCase)
+      expect(result.statusCode, `${testCase}: ${result.body}`).toBe(409)
     }
   })
 

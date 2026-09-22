@@ -543,6 +543,52 @@ describe('server Lua runtime — request() egress guard (SSRF)', () => {
 })
 
 describe('server Lua runtime — request() binding + low-level gate', () => {
+  it(
+    'blocks localhost, private, link-local, and metadata targets through the Lua request() binding',
+    { tags: 'core' },
+    async () => {
+      const fetchedUrls: string[] = []
+      const resolvedAddresses: Record<string, string> = {
+        'metadata.test': '169.254.169.254',
+        'private.test': '10.23.45.67',
+        localhost: '93.184.216.34',
+      }
+      const egress: EgressDeps = {
+        lookup: async (host) => [{ address: resolvedAddresses[host] ?? '93.184.216.34', family: 4 }],
+        fetchImpl: async (url) => {
+          fetchedUrls.push(url)
+          return { status: 599, data: 'UNSAFE-EGRESS-REACHED' }
+        },
+      }
+      const code = `
+        listenEdit('editRequest', function(id, data, meta)
+          local targets = {
+            'https://metadata.test/latest/meta-data',
+            'https://private.test/internal',
+            'https://localhost/admin'
+          }
+          local statuses = {}
+          for index, target in ipairs(targets) do
+            local response = request(id, target):await()
+            statuses[index] = json.decode(response).status
+          end
+          data[1].content = json.encode(statuses)
+          return data
+        end)
+      `
+      const runtime = makeRuntime({ egress, rateState: { count: 0, resetAt: 0 } })
+
+      const result = await runServerLua(
+        { code, mode: 'editRequest', data: rows('sentinel'), lowLevelAccess: true },
+        runtime.ctx,
+      )
+
+      expect(result.error).toBeUndefined()
+      expect(JSON.parse((result.res as PromptMessage[])[0].content)).toEqual([403, 403, 403])
+      expect(fetchedUrls).toEqual([])
+    },
+  )
+
   it('exposes request() only with low-level access; injected egress deps flow through', async () => {
     const egress: EgressDeps = {
       lookup: async () => [{ address: '93.184.216.34', family: 4 }],

@@ -2168,6 +2168,56 @@ describe('Durable generation', () => {
     }
   })
 
+  coreIt('rejects a stale regenerate target at submit without creating an operation or changing messages', async () => {
+    await seedChatWithMessages([
+      { role: 'user', data: 'stale target question', chatId: 'msg-user-stale-target' },
+      { role: 'char', data: 'authoritative assistant reply', chatId: 'msg-char-authoritative', saying: 'char-1' },
+    ])
+
+    const authority = await operationAuthority()
+    const operationId = randomUUID()
+    const readPersistedState = () => {
+      const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+      try {
+        return {
+          operationCount: (
+            db
+              .prepare('SELECT COUNT(*) AS count FROM generation_operations WHERE operation_id = ?')
+              .get(operationId) as {
+              count: number
+            }
+          ).count,
+          messages: db
+            .prepare(
+              `SELECT uid, chat_id AS chatId, seq, role, data, json
+               FROM messages WHERE chat_id = ? ORDER BY seq`,
+            )
+            .all('chat-1'),
+        }
+      } finally {
+        db.close()
+      }
+    }
+    const before = readPersistedState()
+
+    const submitted = await postAtomicOperation(
+      authority.databaseLineage,
+      atomicTargetedRequest({
+        operationId,
+        baseRevision: authority.revision,
+        mode: 'regenerate',
+        targetMessageId: 'msg-char-previous-revision',
+      }),
+    )
+
+    expect(submitted.status).toBe(409)
+    expect(await submitted.json()).toEqual({ error: 'operation_target_stale' })
+    const after = readPersistedState()
+    expect(before.operationCount).toBe(0)
+    expect(after.operationCount).toBe(0)
+    expect(after.messages).toEqual(before.messages)
+  })
+
   it('accepts a targeted regenerate while the assistant remains authoritative through admission', async () => {
     await seedChatWithMessages([
       { role: 'user', data: 'greet me', chatId: 'msg-user-1' },
