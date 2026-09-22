@@ -39,8 +39,8 @@ function fixture(name: string): Record<string, unknown> {
   return database
 }
 
-async function bootWriter(page: Page, harness: FastBootstrapHarness): Promise<void> {
-  await page.goto(harness.baseUrl + CHARACTER_ROUTE, { waitUntil: 'domcontentloaded' })
+async function bootWriter(page: Page, harness: FastBootstrapHarness, route = CHARACTER_ROUTE): Promise<void> {
+  await page.goto(harness.baseUrl + route, { waitUntil: 'domcontentloaded' })
   await page.waitForFunction(() => Boolean(window.__RISU_FASTIFY_BROWSER_SMOKE__))
   await page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.waitForStartupMilestone('background-ready', 30_000))
 }
@@ -227,6 +227,180 @@ test(
       await readerContext.setOffline(false).catch(() => undefined)
       await readerContext.close().catch(() => undefined)
       await writerContext.close().catch(() => undefined)
+      await closeFastBootstrapHarness(harness)
+    }
+  },
+)
+
+test(
+  'a writer restore rejects its old-lineage settings cache and paints the restored value without reload',
+  { tag: '@core' },
+  async ({ browser }) => {
+    test.setTimeout(60_000)
+    const database = fixture('WRITER-CACHE-CHARACTER')
+    database.showMemoryLimit = true
+    const harness = await startFastBootstrapHarness(database, {
+      temporaryDirectoryPrefix: 'risu-core-lineage-writer-cache-',
+    })
+    const context = await browser.newContext()
+    const page = await context.newPage()
+    let restoreStarted = false
+    let replacementSettingsSeen = false
+    let advertisedOldLineageHashes: string[] = []
+
+    try {
+      await bootWriter(page, harness, '/settings/display')
+      await page.getByRole('button', { name: 'Chat appearance', exact: true }).click()
+      const checkbox = page.getByRole('checkbox', { name: 'Show Memory Limit', exact: true })
+      await expect(checkbox).toBeChecked()
+      const headers = await writerHeaders(page)
+      const backup = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/backups',
+        headers,
+        payload: { label: 'writer cache baseline' },
+      })
+      expect(backup.statusCode, backup.body).toBe(201)
+
+      const changed = page.waitForResponse(
+        (response) =>
+          response.request().method() === 'PATCH' &&
+          new URL(response.url()).pathname === '/api/v1/commands/settings/display',
+      )
+      await checkbox.focus()
+      await checkbox.press('Space')
+      expect((await changed).status()).toBe(200)
+      await expect(checkbox).not.toBeChecked()
+      await expect.poll(() => durableState(harness).settings.showMemoryLimit).toBe(false)
+
+      const seededCacheHash = await page.evaluate(async () => {
+        const headers = await window.__RISU_FASTIFY_BROWSER_SMOKE__!.activeWriterHeaders()
+        const response = await fetch('/api/v1/settings', { headers })
+        const { settings } = (await response.json()) as { settings: Record<string, unknown> }
+        const serialized = JSON.stringify(settings)
+        const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(serialized))
+        const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+        const database = await new Promise<IDBDatabase>((resolve, reject) => {
+          const request = indexedDB.open('risu-resource-cache-v1', 1)
+          request.onupgradeneeded = () => {
+            if (!request.result.objectStoreNames.contains('entries')) request.result.createObjectStore('entries')
+            if (!request.result.objectStoreNames.contains('manifests')) request.result.createObjectStore('manifests')
+          }
+          request.onsuccess = () => resolve(request.result)
+          request.onerror = () => reject(request.error)
+        })
+        await new Promise<void>((resolve, reject) => {
+          const transaction = database.transaction(['entries', 'manifests'], 'readwrite')
+          transaction.objectStore('entries').put(settings, hash)
+          transaction.objectStore('manifests').put(
+            {
+              version: 1,
+              hashes: [hash],
+              sizes: [new TextEncoder().encode(serialized).byteLength],
+              updatedAt: Date.now(),
+            },
+            'settings:all',
+          )
+          transaction.oncomplete = () => resolve()
+          transaction.onerror = () => reject(transaction.error)
+          transaction.onabort = () => reject(transaction.error)
+        })
+        database.close()
+        return hash
+      })
+      expect(seededCacheHash).toMatch(/^[a-f0-9]{64}$/)
+      await expect
+        .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getPendingResourceCacheWriteCount()))
+        .toBe(0)
+      await page.evaluate(() => {
+        const state = window as typeof window & {
+          __writerRestoreDocumentMarker?: string
+          __writerRestoreProjectionTrail?: unknown[]
+          __writerRestoreProjectionTimer?: number
+        }
+        state.__writerRestoreDocumentMarker = 'same-document'
+        state.__writerRestoreProjectionTrail = []
+        state.__writerRestoreProjectionTimer = window.setInterval(() => {
+          state.__writerRestoreProjectionTrail!.push(
+            window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().showMemoryLimit,
+          )
+        }, 10)
+      })
+
+      await page.route('**/api/v1/settings', async (route) => {
+        if (!restoreStarted || route.request().method() !== 'POST') return route.continue()
+        const requestBody = route.request().postDataJSON() as {
+          cache?: { hashes?: { settings?: unknown } }
+        }
+        const hashes = requestBody.cache?.hashes?.settings
+        advertisedOldLineageHashes = Array.isArray(hashes)
+          ? hashes.filter((value): value is string => typeof value === 'string')
+          : []
+        const response = await route.fetch()
+        replacementSettingsSeen = true
+        await route.fulfill({ response })
+      })
+
+      await page.evaluate((route) => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo(route), '/settings/backup')
+      await expect(page.getByRole('button', { name: 'Load Server Backup', exact: true })).toBeVisible()
+      restoreStarted = true
+      await page.getByRole('button', { name: 'Load Server Backup', exact: true }).click()
+      await page.getByRole('alertdialog').getByRole('button', { name: 'YES', exact: true }).click()
+      await page.getByRole('alertdialog').getByRole('button', { name: 'YES', exact: true }).click()
+      await page.getByRole('button', { name: /writer cache baseline/i }).click()
+      const loaded = page.getByRole('dialog', { name: 'Loaded server backup', exact: true })
+      await expect(loaded).toBeVisible()
+      await expect.poll(() => replacementSettingsSeen).toBe(true)
+      await expect
+        .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().showMemoryLimit))
+        .toBe(true)
+      const projection = await page.evaluate(() => {
+        const state = window as typeof window & {
+          __writerRestoreDocumentMarker?: string
+          __writerRestoreProjectionTrail?: unknown[]
+          __writerRestoreProjectionTimer?: number
+        }
+        if (state.__writerRestoreProjectionTimer !== undefined) clearInterval(state.__writerRestoreProjectionTimer)
+        return {
+          showMemoryLimit: window.__RISU_FASTIFY_BROWSER_SMOKE__!.getDatabaseSnapshot().showMemoryLimit,
+          documentMarker: state.__writerRestoreDocumentMarker,
+          trail: state.__writerRestoreProjectionTrail ?? [],
+        }
+      })
+      expect(projection.showMemoryLimit).toBe(true)
+      expect(projection.documentMarker).toBe('same-document')
+      const restoredIndex = projection.trail.findIndex((value) => value === true)
+      expect(restoredIndex).toBeGreaterThanOrEqual(0)
+      expect(projection.trail.slice(restoredIndex)).not.toContain(false)
+      expect(
+        advertisedOldLineageHashes,
+        'the writer replacement refresh must not advertise a superseded-lineage settings snapshot',
+      ).toEqual([])
+      await loaded.getByRole('button', { name: 'OK', exact: true }).click()
+      await page.locator('[data-reader-use-this-device]').click()
+      const takeoverConfirmation = page.getByRole('button', { name: 'Disconnect existing client', exact: true })
+      if (
+        await takeoverConfirmation.waitFor({ state: 'visible', timeout: 1_000 }).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        await takeoverConfirmation.click()
+      }
+      await expect
+        .poll(() => page.evaluate(() => window.__RISU_FASTIFY_BROWSER_SMOKE__!.getClientSessionSnapshot().lifecycle), {
+          timeout: 30_000,
+        })
+        .toBe('writing')
+      await page.evaluate((route) => window.__RISU_FASTIFY_BROWSER_SMOKE__!.navigateTo(route), '/settings/display')
+      const appearance = page.getByRole('button', { name: 'Chat appearance', exact: true })
+      await expect(appearance).toBeVisible()
+      await appearance.click()
+      await expect(page.getByRole('checkbox', { name: 'Show Memory Limit', exact: true })).toBeChecked()
+      expect(durableState(harness).settings.showMemoryLimit).toBe(true)
+    } finally {
+      await page.unrouteAll({ behavior: 'ignoreErrors' }).catch(() => undefined)
+      await context.close().catch(() => undefined)
       await closeFastBootstrapHarness(harness)
     }
   },
