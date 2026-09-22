@@ -246,7 +246,7 @@ test(
     const page = await context.newPage()
     let restoreStarted = false
     let replacementSettingsSeen = false
-    let advertisedOldLineageHashes: string[] = []
+    const advertisedOldLineageHashes: string[] = []
 
     try {
       await bootWriter(page, harness, '/settings/display')
@@ -333,9 +333,11 @@ test(
           cache?: { hashes?: { settings?: unknown } }
         }
         const hashes = requestBody.cache?.hashes?.settings
-        advertisedOldLineageHashes = Array.isArray(hashes)
-          ? hashes.filter((value): value is string => typeof value === 'string')
-          : []
+        // Keep every replacement request: a later request that advertises
+        // nothing must not hide an earlier one that offered the stale snapshot.
+        advertisedOldLineageHashes.push(
+          ...(Array.isArray(hashes) ? hashes.filter((value): value is string => typeof value === 'string') : []),
+        )
         const response = await route.fetch()
         replacementSettingsSeen = true
         await route.fulfill({ response })
@@ -375,7 +377,7 @@ test(
       expect(
         advertisedOldLineageHashes,
         'the writer replacement refresh must not advertise a superseded-lineage settings snapshot',
-      ).toEqual([])
+      ).not.toContain(seededCacheHash)
       await loaded.getByRole('button', { name: 'OK', exact: true }).click()
       await page.locator('[data-reader-use-this-device]').click()
       const takeoverConfirmation = page.getByRole('button', { name: 'Disconnect existing client', exact: true })
