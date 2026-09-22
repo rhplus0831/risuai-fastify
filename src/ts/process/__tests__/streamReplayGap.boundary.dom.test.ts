@@ -91,7 +91,10 @@ describe('durable stream replay gap boundary', () => {
       throw new Error(`Generation did not start: ${detail}`)
     }
 
-    const reader = generation.req.result.getReader()
+    expect(generation.req.type).toBe('streaming')
+    if (generation.req.type !== 'streaming') throw new Error(`Generation did not stream: ${generation.req.type}`)
+    const streamingRequest = generation.req
+    const reader = streamingRequest.result.getReader()
     const first = await reader.read()
     expect(first.done).toBe(false)
     expect(Object.values(first.value ?? {})).toEqual([chunkText(0)])
@@ -112,7 +115,7 @@ describe('durable stream replay gap boundary', () => {
     }
     const terminal = await generation.terminal
 
-    expect(generation.req.replayGapTruncated).toBe(true)
+    expect(streamingRequest.replayGapTruncated).toBe(true)
     expect(terminal.status).toBe('done')
     expect(projected.at(-1)).toBe(harness.terminalText)
     expect(projected.at(-1)).not.toBe(`${chunkText(CHUNK_COUNT - 1)}${harness.terminalText}`)
