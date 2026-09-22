@@ -538,7 +538,7 @@
       "missingBehavior": "The touch projection defaults to an empty name until a loadout is explicitly touched.",
       "malformedBehavior": "Non-string settings values normalize at the loadout command boundary.",
       "damagedDatabaseBehavior": "Do not infer or rewrite the last-touched name from unrelated collection reads.",
-      "historicalFixture": "server/fastify/__tests__/commandCollectionRange.test.ts",
+      "historicalFixture": "server/fastify/src/routes/commands.ts",
       "provenance": "Loadout touch co-write, optimistic projection, authoritative replacement, and rollback fixtures.",
       "disposition": "explicit-compatibility",
       "targetOwner": "loadout touch event/row plus a narrowly scoped last-touched projection",
@@ -564,9 +564,9 @@
           "expectedCount": 7
         },
         {
-          "path": "server/fastify/__tests__/commandCollectionRange.test.ts",
+          "path": "server/fastify/src/routes/commands.ts",
           "kind": "text",
-          "value": "co-writes settings (lastLoadedLoadoutName)",
+          "value": "target.lastLoadedLoadoutName = loadout.name",
           "expectedCount": 1
         }
       ]
@@ -586,7 +586,7 @@
       "missingBehavior": "Selection without a body resolves disabled/null rather than stale top-level data.",
       "malformedBehavior": "Prompt normalizers validate rows, normalize roles, and mint stable row ids at explicit boundaries.",
       "damagedDatabaseBehavior": "Ordinary generation must validate without rewriting the preset body.",
-      "historicalFixture": "server/fastify/__tests__/templates.test.ts",
+      "historicalFixture": "packages/shared-core/src/effectivePromptTemplate.ts",
       "provenance": "Prompt precedence/parity fixtures including stale top-level and chat-scoped selections.",
       "disposition": "canonical",
       "targetOwner": "modern prompt preset body selected by stable preset id",
@@ -663,7 +663,7 @@
       "missingBehavior": "Empty table currently yields an empty/absent compatibility projection depending on caller.",
       "malformedBehavior": "Rows are JSON-decoded and normalized at repository/command boundaries.",
       "damagedDatabaseBehavior": "Corrupt SQLite remains a database recovery concern, not a prompt command repair.",
-      "historicalFixture": "server/fastify/__tests__/commandCollectionRange.test.ts",
+      "historicalFixture": "server/fastify/src/repository.ts",
       "provenance": "Command range/write-table fixtures prove current table ownership and mutation range.",
       "disposition": "explicit-compatibility",
       "targetOwner": "prompt_presets rows for selected modern bodies; prompt_templates only for the explicit root owner",
@@ -730,7 +730,7 @@
       "missingBehavior": "Returns null/default formatting without mutating persisted state.",
       "malformedBehavior": "Consumes normalized rows; malformed persisted data is a boundary validation error.",
       "damagedDatabaseBehavior": "Never repairs or selects a sibling preset while resolving.",
-      "historicalFixture": "server/fastify/__tests__/templates.test.ts",
+      "historicalFixture": "packages/shared-core/src/effectivePromptTemplate.ts",
       "provenance": "Cross-runtime prompt precedence and stale-mirror parity cases.",
       "disposition": "explicit-compatibility",
       "targetOwner": "canonical modern-preset resolver with no top-level runtime fallback",
