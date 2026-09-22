@@ -1,0 +1,66 @@
+{
+  "normalization": {
+    "replaced": [
+      "request.headers.x-amz-date",
+      "request.headers.authorization.credential-date",
+      "request.headers.authorization.signature"
+    ]
+  },
+  "request": {
+    "method": "POST",
+    "url": "https://bedrock-runtime.ap-southeast-2.amazonaws.com/model/us.anthropic.claude-3-5-sonnet-20241022-v2%3A0/invoke",
+    "headers": {
+      "accept": "application/json",
+      "authorization": "AWS4-HMAC-SHA256 Credential=GOLDENAKID7F3A/<date>/ap-southeast-2/bedrock/aws4_request, SignedHeaders=accept;content-type;host;x-amz-content-sha256;x-amz-date, Signature=<signature>",
+      "content-type": "application/json",
+      "x-amz-content-sha256": "f1aacd389676b4dd2030194764164909315dd0d1af4ea4cce35d4277e596c876",
+      "x-amz-date": "<x-amz-date>"
+    },
+    "body": {
+      "anthropic_version": "bedrock-2023-05-31",
+      "messages": [
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Golden greeting."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Golden prior user turn."
+            }
+          ]
+        },
+        {
+          "role": "assistant",
+          "content": [
+            {
+              "type": "text",
+              "text": "Golden prior assistant turn."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "content": [
+            {
+              "type": "text",
+              "text": "Golden Bedrock current user turn."
+            }
+          ]
+        }
+      ],
+      "max_tokens": 37,
+      "system": "GOLDEN SYSTEM RULES\n\nGOLDEN CHARACTER DESCRIPTION\n\n[Start a new chat]",
+      "temperature": 0.8,
+      "top_p": 1,
+      "top_k": 0
+    }
+  }
+}

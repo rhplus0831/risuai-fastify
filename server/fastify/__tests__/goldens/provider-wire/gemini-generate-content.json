@@ -1,0 +1,84 @@
+{
+  "normalization": {
+    "replaced": []
+  },
+  "request": {
+    "method": "POST",
+    "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-golden-wire-model:generateContent?key=golden-gemini-key-a32c",
+    "headers": {
+      "content-type": "application/json"
+    },
+    "body": {
+      "contents": [
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Golden greeting."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Golden prior user turn."
+            }
+          ]
+        },
+        {
+          "role": "model",
+          "parts": [
+            {
+              "text": "Golden prior assistant turn."
+            }
+          ]
+        },
+        {
+          "role": "user",
+          "parts": [
+            {
+              "text": "Golden Gemini current user turn."
+            }
+          ]
+        }
+      ],
+      "generationConfig": {
+        "maxOutputTokens": 37,
+        "temperature": 0.8,
+        "topP": 1,
+        "presencePenalty": 0.7,
+        "frequencyPenalty": 0.7
+      },
+      "safetySettings": [
+        {
+          "category": "HARM_CATEGORY_SEXUALLY_EXPLICIT",
+          "threshold": "BLOCK_NONE"
+        },
+        {
+          "category": "HARM_CATEGORY_HATE_SPEECH",
+          "threshold": "BLOCK_NONE"
+        },
+        {
+          "category": "HARM_CATEGORY_HARASSMENT",
+          "threshold": "BLOCK_NONE"
+        },
+        {
+          "category": "HARM_CATEGORY_DANGEROUS_CONTENT",
+          "threshold": "BLOCK_NONE"
+        },
+        {
+          "category": "HARM_CATEGORY_CIVIC_INTEGRITY",
+          "threshold": "BLOCK_NONE"
+        }
+      ],
+      "systemInstruction": {
+        "parts": [
+          {
+            "text": "GOLDEN SYSTEM RULES\n\nGOLDEN CHARACTER DESCRIPTION\n\n[Start a new chat]"
+          }
+        ]
+      }
+    }
+  }
+}

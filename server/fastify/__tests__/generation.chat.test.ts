@@ -1920,43 +1920,47 @@ describe('POST /api/v1/generate/chat', () => {
     expect(bootstrap.resourceDatabase.characters[0].chats[0].scriptstate?.$llmResult).toBeUndefined()
   })
 
-  it('resolves browser language and screen dimensions from request-local client context', async () => {
-    await restartHarness({
-      dispatchProvider: () =>
-        (async function* (): AsyncGenerator<CompletionStreamFrame> {
-          yield { kind: 'token', content: 'context reply' }
-          yield { kind: 'done', finishReason: 'stop' }
-        })(),
-    })
-    const { assertion } = await setupAuthedClient(harness.app)
-    await seedDatabase(harness.app, assertion, {
-      ...fixtureDatabase,
-      characters: [
-        {
-          ...fixtureDatabase.characters[0],
-          desc: 'WIDTH={{screenwidth}} LANG={{metadata::browserlanguage}} HEIGHT={{screenheight}}',
+  it(
+    'resolves browser language and screen dimensions from request-local client context',
+    { tags: 'core' },
+    async () => {
+      await restartHarness({
+        dispatchProvider: () =>
+          (async function* (): AsyncGenerator<CompletionStreamFrame> {
+            yield { kind: 'token', content: 'context reply' }
+            yield { kind: 'done', finishReason: 'stop' }
+          })(),
+      })
+      const { assertion } = await setupAuthedClient(harness.app)
+      await seedDatabase(harness.app, assertion, {
+        ...fixtureDatabase,
+        characters: [
+          {
+            ...fixtureDatabase.characters[0],
+            desc: 'WIDTH={{screenwidth}} LANG={{metadata::browserlanguage}} HEIGHT={{screenheight}}',
+          },
+        ],
+      })
+
+      const res = await harness.app.inject({
+        method: 'POST',
+        url: '/api/v1/generate/chat',
+        headers: { 'risu-auth': assertion },
+        payload: {
+          ...basePayload,
+          clientContext: { browserLanguage: 'ko-KR', screenWidth: 777, screenHeight: 555 },
         },
-      ],
-    })
+      })
+      expect(res.statusCode).toBe(200)
 
-    const res = await harness.app.inject({
-      method: 'POST',
-      url: '/api/v1/generate/chat',
-      headers: { 'risu-auth': assertion },
-      payload: {
-        ...basePayload,
-        clientContext: { browserLanguage: 'ko-KR', screenWidth: 777, screenHeight: 555 },
-      },
-    })
-    expect(res.statusCode).toBe(200)
-
-    const events = parseEvents(res.body)
-    const promptText = JSON.stringify(events.find((event) => event.type === 'prompt')?.data.formated ?? [])
-    expect(promptText).toContain('WIDTH=777 LANG=ko-KR HEIGHT=555')
-    expect(promptText).not.toContain('{{screenheight}}')
-    expect(events.filter((event) => event.type === 'warning')).toEqual([])
-    expect(events.at(-1)?.type).toBe('done')
-  })
+      const events = parseEvents(res.body)
+      const promptText = JSON.stringify(events.find((event) => event.type === 'prompt')?.data.formated ?? [])
+      expect(promptText).toContain('WIDTH=777 LANG=ko-KR HEIGHT=555')
+      expect(promptText).not.toContain('{{screenheight}}')
+      expect(events.filter((event) => event.type === 'warning')).toEqual([])
+      expect(events.at(-1)?.type).toBe('done')
+    },
+  )
 
   it('keeps implemented browser-context CBS non-throwing when older clients report no context', async () => {
     const { assertion } = await setupAuthedClient(harness.app)

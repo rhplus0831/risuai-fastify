@@ -1,0 +1,44 @@
+{
+  "normalization": {
+    "replaced": []
+  },
+  "request": {
+    "method": "POST",
+    "url": "https://api.openai.com/v1/chat/completions",
+    "headers": {
+      "authorization": "Bearer golden-profile-openai-key-4bd2",
+      "content-type": "application/json"
+    },
+    "body": {
+      "model": "gpt-4o-mini",
+      "messages": [
+        {
+          "role": "system",
+          "content": "GOLDEN SYSTEM RULES\n\nGOLDEN CHARACTER DESCRIPTION"
+        },
+        {
+          "role": "assistant",
+          "content": "Golden greeting."
+        },
+        {
+          "role": "user",
+          "content": "Golden prior user turn."
+        },
+        {
+          "role": "assistant",
+          "content": "Golden prior assistant turn."
+        },
+        {
+          "role": "user",
+          "content": "Golden OpenAI current user turn."
+        }
+      ],
+      "stream": false,
+      "max_tokens": 37,
+      "temperature": 0.8,
+      "top_p": 1,
+      "frequency_penalty": 0.7,
+      "presence_penalty": 0.7
+    }
+  }
+}

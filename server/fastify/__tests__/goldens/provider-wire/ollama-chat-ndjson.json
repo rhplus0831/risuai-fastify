@@ -1,0 +1,49 @@
+{
+  "normalization": {
+    "replaced": []
+  },
+  "request": {
+    "method": "POST",
+    "url": "https://ollama.golden.test/api/chat",
+    "headers": {
+      "authorization": "Bearer golden-ollama-key-91de",
+      "content-type": "application/json"
+    },
+    "body": {
+      "model": "golden-ollama-model",
+      "messages": [
+        {
+          "role": "system",
+          "content": "GOLDEN SYSTEM RULES\n\nGOLDEN CHARACTER DESCRIPTION\n\n[Start a new chat]"
+        },
+        {
+          "role": "user",
+          "content": " "
+        },
+        {
+          "role": "assistant",
+          "content": "Golden greeting."
+        },
+        {
+          "role": "user",
+          "content": "Golden prior user turn."
+        },
+        {
+          "role": "assistant",
+          "content": "Golden prior assistant turn."
+        },
+        {
+          "role": "user",
+          "content": "Golden Ollama current user turn."
+        }
+      ],
+      "stream": true,
+      "options": {
+        "num_predict": 37,
+        "temperature": 0.42,
+        "top_p": 0.73
+      },
+      "think": false
+    }
+  }
+}
