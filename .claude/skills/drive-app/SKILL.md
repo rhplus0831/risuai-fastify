@@ -35,3 +35,9 @@ History-based router on `location.pathname` (`src/ts/router.ts`):
 - **`waitForLoadState('networkidle')` never resolves** — the app holds SSE connections open. Wait for a concrete element instead (e.g. the Mood Light toggle `button[aria-label="Enable Mood Light mode"]`).
 - **`alertConfirm` dialogs render literal `YES` / `NO` buttons** (AlertComp `ask` branch) — not OK/Cancel, and not localized.
 - **The Grid catalog opens from the Menu flyout**: click `button[aria-label="Menu"]` first, then the `Grid` BarIcon; there is no always-visible grid button in the sidebar rail.
+
+## Driving gotchas (learned 2026-09-22, Agent-only lorebook keys session)
+
+- **An empty sandbox cannot be seeded by API.** Before a browser boots, `POST /api/v1/commands/characters` fails with `database must be an object`; after boot it still fails with `currentChar must be an integer`. Ask the user to import sandbox data into `data/`, then restart `dev:agent` so it re-clones.
+- **Full character reads**: `GET http://127.0.0.1:6419/api/v1/characters/<chaId>` returns `{ character }` with `globalLore` and `chats` (the list route returns shells only). Good for asserting persisted lorebook state after a UI edit.
+- **Character lorebook editor**: on `/character/<chaId>/<chatId>`, click the `Character` tab and wait for its `Loading` text to detach, then click `Lorebook`. Rows are `[data-risu-lorebook-row="true"]`; click the row's name button to expand. Entry edits save through `PUT /api/v1/commands/characters/<chaId>/lorebooks/entries/<entryId>` about 1–2s after the change.
