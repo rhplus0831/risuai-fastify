@@ -4,11 +4,17 @@
     "baseline": ".archived-docs/architecture-and-migration/client-resource-ownership/client-resource-baseline.json",
     "openingAnchor": "c0df82d5240a29a33efa5995e08cc970e0147573",
     "inventoryCursor": "244713c5e",
-    "policyCount": 9,
-    "consumerGroupCount": 30,
-    "referenceCount": 3959
+    "policyCount": 4,
+    "consumerGroupCount": 12,
+    "referenceCount": 464
   },
-  "capabilityKeys": ["selectors", "resourceState", "commands", "draftRecovery", "contractTests"],
+  "capabilityKeys": [
+    "selectors",
+    "resourceState",
+    "commands",
+    "draftRecovery",
+    "contractTests"
+  ],
   "owners": {
     "broad-settings-shell": {
       "dependencies": {
@@ -23,7 +29,10 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/server/settingsOwner.svelte.ts", "src/ts/server/resourceState.svelte.ts"]
+      "evidence": [
+        "src/ts/server/settingsOwner.svelte.ts",
+        "src/ts/server/resourceState.svelte.ts"
+      ]
     },
     "character-chat": {
       "dependencies": {
@@ -38,22 +47,10 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/server/characterDraft.svelte.ts", "src/ts/server/chatMessageHydration.svelte.ts"]
-    },
-    "compatibility-infrastructure": {
-      "dependencies": {
-        "workstream1": "Released owner contracts; Workstream 1 is archived at 377a3610b.",
-        "workstream2": "Canonical persisted owners and retained compatibility boundaries are released for Workstream 3 closeout."
-      },
-      "capabilities": {
-        "selectors": "not-applicable",
-        "resourceState": "not-applicable",
-        "commands": "not-applicable",
-        "draftRecovery": "not-applicable",
-        "contractTests": "complete"
-      },
-      "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["util/architecture-inventory.ts", "src/ts/server/ownerMutationLifecycle.ts"]
+      "evidence": [
+        "src/ts/server/characterDraft.svelte.ts",
+        "src/ts/server/chatMessageHydration.svelte.ts"
+      ]
     },
     "cross-cutting": {
       "dependencies": {
@@ -68,7 +65,10 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/bootstrap.ts", "src/ts/server/replacementDatabaseOwnership.ts"]
+      "evidence": [
+        "src/ts/bootstrap.ts",
+        "src/ts/server/replacementDatabaseOwnership.ts"
+      ]
     },
     "leaf-settings-collections": {
       "dependencies": {
@@ -83,67 +83,10 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/server/resourceState.svelte.ts", "src/ts/server/settingsOwner.svelte.ts"]
-    },
-    "lorebook": {
-      "dependencies": {
-        "workstream1": "Released owner contracts; Workstream 1 is archived at 377a3610b.",
-        "workstream2": "Canonical persisted owners and retained compatibility boundaries are released for Workstream 3 closeout."
-      },
-      "capabilities": {
-        "selectors": "complete",
-        "resourceState": "complete",
-        "commands": "complete",
-        "draftRecovery": "complete",
-        "contractTests": "complete"
-      },
-      "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/server/lorebookOwner.svelte.ts", "src/ts/server/resourceState.svelte.test.ts"]
-    },
-    "model-translator": {
-      "dependencies": {
-        "workstream1": "Released owner contracts; Workstream 1 is archived at 377a3610b.",
-        "workstream2": "Canonical persisted owners and retained compatibility boundaries are released for Workstream 3 closeout."
-      },
-      "capabilities": {
-        "selectors": "complete",
-        "resourceState": "complete",
-        "commands": "complete",
-        "draftRecovery": "complete",
-        "contractTests": "complete"
-      },
-      "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/model/modelProfileResolver.ts", "src/ts/translator/presets.ts"]
-    },
-    "prompt-template": {
-      "dependencies": {
-        "workstream1": "Released owner contracts; Workstream 1 is archived at 377a3610b.",
-        "workstream2": "Canonical persisted owners and retained compatibility boundaries are released for Workstream 3 closeout."
-      },
-      "capabilities": {
-        "selectors": "complete",
-        "resourceState": "complete",
-        "commands": "complete",
-        "draftRecovery": "complete",
-        "contractTests": "complete"
-      },
-      "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/server/promptTemplateHydration.ts", "src/ts/server/promptTemplateMutations.svelte.ts"]
-    },
-    "script-definition": {
-      "dependencies": {
-        "workstream1": "Released owner contracts; Workstream 1 is archived at 377a3610b.",
-        "workstream2": "Canonical persisted owners and retained compatibility boundaries are released for Workstream 3 closeout."
-      },
-      "capabilities": {
-        "selectors": "complete",
-        "resourceState": "complete",
-        "commands": "complete",
-        "draftRecovery": "complete",
-        "contractTests": "complete"
-      },
-      "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/ts/server/scriptDefinitionOwner.svelte.ts", "src/ts/server/resourceState.svelte.ts"]
+      "evidence": [
+        "src/ts/server/resourceState.svelte.ts",
+        "src/ts/server/settingsOwner.svelte.ts"
+      ]
     }
   },
   "policies": {
@@ -153,26 +96,11 @@
     "character-chat:test-fixture": {
       "owner": "character-chat"
     },
-    "compatibility-infrastructure:test-fixture": {
-      "owner": "compatibility-infrastructure"
-    },
     "cross-cutting:test-fixture": {
       "owner": "cross-cutting"
     },
     "leaf-settings-collections:test-fixture": {
       "owner": "leaf-settings-collections"
-    },
-    "lorebook:test-fixture": {
-      "owner": "lorebook"
-    },
-    "model-translator:test-fixture": {
-      "owner": "model-translator"
-    },
-    "prompt-template:test-fixture": {
-      "owner": "prompt-template"
-    },
-    "script-definition:test-fixture": {
-      "owner": "script-definition"
     }
   },
   "foundations": {
@@ -182,7 +110,13 @@
       "ownerApi": "src/ts/server/lorebookPageOwner.svelte.ts#lorebookPageOwner",
       "workstream1Cursor": "standalone read 33d1643ae; durable command 3f275e9dc; route relation 6a6d0ac1f",
       "workstream2Cursor": "already-singular settings row",
-      "capabilities": ["selectors", "resourceState", "commands", "draftRecovery", "contractTests"],
+      "capabilities": [
+        "selectors",
+        "resourceState",
+        "commands",
+        "draftRecovery",
+        "contractTests"
+      ],
       "remaining": "Closed for production ownership; the test-only aggregate fixture and classified external compatibility seams remain outside normal application state."
     }
   }
