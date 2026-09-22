@@ -347,19 +347,19 @@ mocks can support classification, but they are not enough for stale-visible-UI
 bugs. If behavior includes optimistic updates or rollback, assert both the
 visible optimistic change and the visible rollback after settlement.
 
-Use helper Vitest for pure helpers and resource-invalidation calculations,
-Svelte DOM Vitest for state-to-DOM contracts, and sparse Fastify browser smoke
-for end-to-end boot/API/SSE wiring. Add state-to-DOM coverage when touching
-resource slice state, `selectedCharID`, `chatPage`, startup readiness,
-authoritative resource applies, bootstrap/refresh/SSE, optimistic command
-helpers, bridge
-watchers, router selection, array create/delete/reorder flows, `$derived`,
-`$effect`, keyed lists, memo signatures, or render dependency keys.
+Use mock-free Vitest for pure helpers and resource-invalidation calculations,
+Fastify `inject` over real SQLite for server contracts, and Playwright against
+the smoke build for state-to-DOM contracts and end-to-end boot/API/SSE wiring.
+When touching resource slice state, `selectedCharID`, `chatPage`, startup
+readiness, authoritative resource applies, bootstrap/refresh/SSE, optimistic
+command helpers, router selection, or array create/delete/reorder flows, the
+protection is a browser journey that asserts the visible outcome; tag it
+`@core` only with mutation proof, per the Test Policy in `AGENTS.md`.
 
-The former mounted cross-cutting audit probe was removed in Phase 5 because its
-component harness was implementation-coupled. New visible-state coverage should
-prefer a real browser/process boundary and must assert a user-visible outcome;
-do not restore source-text or own-module-mock audit probes.
+The mounted Svelte component tests and the cross-cutting audit probe were
+removed in Phase 5 because their harnesses replaced the repository's own
+modules and their oracles were implementation details. Do not restore
+source-text, own-module-mock, or mounted-component probes.
 
 Browser-smoke contracts protect reload/reconciliation behavior:
 `server/fastify/browser-smoke/visibleStateRecovery.spec.ts` covers chat-switch

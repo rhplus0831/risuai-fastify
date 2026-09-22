@@ -64,6 +64,17 @@ Start by reading `STRUCTURE.md` to understand the project structure.
 - The user and CI retain `pnpm test:all` for formatting, compatibility, Realm scale, performance, and full Playwright verification. Do not run it unless explicitly requested.
 - In the final response, briefly state what validation was performed and any material gaps. If broader validation was needed, identify the specific reason.
 
+# Test Policy
+
+The suite has two tiers. The core tier is the files listed in `util/core-test-contract.ts` (cases tagged `core`) plus the `@core` Playwright journeys; every core case was accepted only after a production mutation proved it, and `pnpm test:agent` runs it. Everything else is the extended tier: real-boundary tests that run in `pnpm test:all` and CI but are not protection an agent may rely on. `docs/test-reviews/core-suite-phase-5.md` records how the suite was reduced and why.
+
+- A behavior-preserving change that breaks an extended-tier test means the test was implementation-coupled: delete the test, do not repair it. If the failure reveals a real regression, fix the code instead. When a change intentionally alters behavior a core case observes, update the core case's expected outcome and say so in the commit message.
+- Write a new test only when it drives a public boundary and fails before the fix or under a production mutation. Public boundaries are Fastify `inject` or a listening Fastify over real SQLite, Playwright against the smoke build, or real production modules with only process edges replaced (`globalThis.fetch`, an injected `fetchImpl` or `lookup`, timers, storage, `crypto`).
+- Never `vi.mock`, `vi.doMock`, or `vi.spyOn` a module under `src/`, `server/`, or `packages/`. Do not assert call counts or call order of the repository's own functions, internal state shape, or source text. Assert responses, persisted rows or bytes, rendered DOM, emitted events, or returned values against explicit expected data.
+- User-visible behavior is protected by Playwright journeys, not by mounted Svelte component tests; do not add tests under `src/lib`. Structural rules (import boundaries, caller allowlists, ownership) belong in `util/architecture-inventory.ts` as closed-world checks, not in tests.
+- Do not add a file to `util/core-test-contract.ts` or tag a case `core` without recording the mutation that the previous core lane survived and the new case catches, in `docs/test-reviews/`.
+- Do not create test inventories, priority lists, or per-file review worklists. Runner discovery is the inventory.
+
 # Language File
 
 When adding strings that appear in the frontend UI, create an appropriate key for them under `src/lang`.
