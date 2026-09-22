@@ -1,9 +1,12 @@
+import { createHash } from 'node:crypto'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
+import type { FastifyInstance } from 'fastify'
 import * as fflate from 'fflate'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { buildApp } from '../src/app.js'
 import {
   createBardWikiDocument,
   hashBardWikiDocumentContent,
@@ -17,6 +20,7 @@ import {
   planBardWikiVaultImport,
 } from '../src/bardWikiVault.js'
 import { openDatabase } from '../src/db.js'
+import { setupAuthedClient } from './helpers/auth.js'
 
 let dataDir: string
 let db: DatabaseSync
@@ -39,6 +43,10 @@ function seedChat(characterId: string, chatId: string): void {
     characterId,
     '{}',
   )
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
 }
 
 function createDocument(
@@ -90,17 +98,132 @@ describe('BardWiki Markdown vault export', () => {
     ])
   })
 
-  it('does not export raw source transcript text in provenance', () => {
-    createDocument('document-a', 'Events/Arrival', {
+  it('does not export raw source transcript text in provenance', { tags: 'core' }, async () => {
+    const userSentinel = 'H39_USER_TRANSCRIPT_SENTINEL_7d4318'
+    const assistantSentinel = 'H39_ASSISTANT_TRANSCRIPT_SENTINEL_1af92c'
+    const receiptErrorSentinel = 'H39_RECEIPT_ERROR_SENTINEL_c9e652'
+    const insertMessage = db.prepare(
+      `INSERT INTO messages (chat_id, seq, uid, role, data, disabled, json, alternate)
+       VALUES ('chat-a', ?, ?, ?, ?, NULL, ?, 0)`,
+    )
+    insertMessage.run(
+      0,
+      'message-user-h39',
+      'user',
+      userSentinel,
+      JSON.stringify({ chatId: 'message-user-h39', role: 'user', data: userSentinel }),
+    )
+    insertMessage.run(
+      1,
+      'message-assistant-h39',
+      'char',
+      assistantSentinel,
+      JSON.stringify({ chatId: 'message-assistant-h39', role: 'char', data: assistantSentinel }),
+    )
+    db.prepare(
+      `INSERT INTO bardwiki_turn_receipts (
+         id, chat_id, user_message_id, user_content_hash,
+         assistant_message_id, assistant_content_hash, confirmation_mode,
+         state, change_set_id, error_code, error_summary
+       ) VALUES (?, 'chat-a', ?, ?, ?, ?, 'explicit', 'failed', ?, 'provider_failure', ?)`,
+    ).run(
+      'receipt-h39',
+      'message-user-h39',
+      sha256(userSentinel),
+      'message-assistant-h39',
+      sha256(assistantSentinel),
+      'change-set-h39',
+      receiptErrorSentinel,
+    )
+    createDocument('document-h39-linked', 'Events/Arrival', {
       actor: 'model',
       reason: 'analysis',
-      receiptId: null,
+      receiptId: 'receipt-h39',
       jobId: null,
       markdown: '## Arrival\nSafe summary only.',
     })
-    const archive = encodeBardWikiVault(db, 'chat-a')
-    expect(Buffer.from(archive).includes(Buffer.from('raw source message'))).toBe(false)
-    expect(decodeBardWikiVault(archive).documents[0]).not.toHaveProperty('provenance')
+    createDocument('document-h39-manual', 'People/Guide', {
+      title: 'Guide',
+      markdown: '## Guide\nSafe manual context.',
+    })
+    const insertSource = db.prepare(
+      `INSERT INTO bardwiki_document_sources (
+         document_id, document_version, receipt_id, message_id, role, content_hash
+       ) VALUES ('document-h39-linked', 1, 'receipt-h39', ?, ?, ?)`,
+    )
+    insertSource.run('message-user-h39', 'user', sha256(userSentinel))
+    insertSource.run('message-assistant-h39', 'assistant', sha256(assistantSentinel))
+
+    let app: FastifyInstance | undefined
+    const previousLogLevel = process.env.LOG_LEVEL
+    process.env.LOG_LEVEL = 'silent'
+    try {
+      ;({ app } = await buildApp({
+        config: {
+          host: '127.0.0.1',
+          port: 0,
+          dataDir,
+          bodyLimit: 1024 * 1024,
+          importMaxBytes: Infinity,
+          trustProxy: false,
+          hubUrl: 'https://sv.risuai.xyz',
+        },
+        assetGc: false,
+        memoryWorker: false,
+        bardWikiWorker: false,
+      }))
+      const { assertion } = await setupAuthedClient(app)
+      const response = await app.inject({
+        method: 'GET',
+        url: '/api/v1/bardwiki/chats/chat-a/export',
+        headers: { 'risu-auth': assertion },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.headers['content-type']).toBe('application/zip')
+
+      const archive = new Uint8Array(response.rawPayload)
+      const entries = fflate.unzipSync(archive)
+      for (const [entryName, bytes] of Object.entries(entries)) {
+        const entryText = Buffer.from(bytes).toString('utf8')
+        expect(entryText, `${entryName} leaked the user transcript`).not.toContain(userSentinel)
+        expect(entryText, `${entryName} leaked the assistant transcript`).not.toContain(assistantSentinel)
+        expect(entryText, `${entryName} leaked the receipt error`).not.toContain(receiptErrorSentinel)
+      }
+
+      const decoded = decodeBardWikiVault(archive)
+      expect(decoded.manifest.documents.map(({ bardwikiId }) => bardwikiId)).toEqual([
+        'document-h39-linked',
+        'document-h39-manual',
+      ])
+      expect(decoded.documents.map(({ markdown }) => markdown)).toEqual([
+        '## Arrival\nSafe summary only.',
+        '## Guide\nSafe manual context.',
+      ])
+
+      const acceptedFrontmatterFields = new Set([
+        'bardwikiId',
+        'kind',
+        'title',
+        'logicalPath',
+        'aliases',
+        'contextPolicy',
+        'reviewState',
+        'version',
+        'contentHash',
+        'provenance',
+      ])
+      for (const record of decoded.manifest.documents) {
+        const markdownFile = Buffer.from(entries[record.exportPath]).toString('utf8')
+        const frontmatterEnd = markdownFile.indexOf('\n---\n', 4)
+        expect(frontmatterEnd).toBeGreaterThan(4)
+        const frontmatter = JSON.parse(markdownFile.slice(4, frontmatterEnd)) as Record<string, unknown>
+        expect(Object.keys(frontmatter).every((field) => acceptedFrontmatterFields.has(field))).toBe(true)
+      }
+    } finally {
+      await app?.close()
+      if (previousLogLevel === undefined) delete process.env.LOG_LEVEL
+      else process.env.LOG_LEVEL = previousLogLevel
+    }
   })
 })
 
