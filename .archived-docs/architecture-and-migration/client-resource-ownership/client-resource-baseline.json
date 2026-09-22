@@ -842,6 +842,10 @@
           "count": 1
         },
         {
+          "file": "src/ts/plugins/pluginDatabaseBridge.core.test.ts",
+          "count": 1
+        },
+        {
           "file": "src/ts/plugins/plugins.test.ts",
           "count": 5
         },
