@@ -19,7 +19,6 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "check:protocol": "tsc -p packages/protocol/tsconfig.json --noEmit",
     "check:shared-core": "tsc -p packages/shared-core/tsconfig.json --noEmit",
-    "check:shared-core:boundary": "vitest run packages/shared-core/src/importBoundary.test.ts packages/shared-core/src/ownership.test.ts",
     "check:docs": "tsx util/current-documentation-validator.ts",
     "check:server": "tsx util/check-server.ts",
     "format": "prettier --write .",

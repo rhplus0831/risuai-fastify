@@ -218,10 +218,6 @@
           "count": 4
         },
         {
-          "file": "src/lib/Setting/Pages/BotSettings.pendingFlush.svelte.test.ts",
-          "count": 17
-        },
-        {
           "file": "src/lib/Setting/Pages/CustomGUISettingMenu.svelte.test.ts",
           "count": 9
         },
@@ -232,10 +228,6 @@
         {
           "file": "src/lib/Setting/Pages/Display/NotificationToggle.svelte.test.ts",
           "count": 1
-        },
-        {
-          "file": "src/lib/Setting/pickerGenerationSettings.test.ts",
-          "count": 60
         },
         {
           "file": "src/lib/Setting/SettingRenderer.svelte.test.ts",
@@ -390,10 +382,6 @@
           "count": 2
         },
         {
-          "file": "src/ts/process/__tests__/lorebook.owner.test.ts",
-          "count": 22
-        },
-        {
           "file": "src/ts/server/lorebookOwner.durable.svelte.test.ts",
           "count": 71
         },
@@ -410,10 +398,6 @@
       "policy": "model-translator:test-fixture",
       "files": [
         {
-          "file": "src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte.test.ts",
-          "count": 204
-        },
-        {
           "file": "src/lib/Setting/Pages/Model/ModelPresetList.svelte.test.ts",
           "count": 1
         },
@@ -428,10 +412,6 @@
         {
           "file": "src/lib/Setting/Pages/Model/ModelRuntimeDefaultsEditor.svelte.test.ts",
           "count": 6
-        },
-        {
-          "file": "src/lib/Setting/Pages/Model/ModelSettingsShell.svelte.test.ts",
-          "count": 7
         },
         {
           "file": "src/lib/Setting/Pages/Model/ProviderCredentialList.svelte.test.ts",
@@ -730,10 +710,6 @@
           "count": 2
         },
         {
-          "file": "src/lib/Setting/Pages/BotSettings.pendingFlush.svelte.test.ts",
-          "count": 15
-        },
-        {
           "file": "src/lib/Setting/Pages/CustomGUISettingMenu.svelte.test.ts",
           "count": 2
         },
@@ -748,10 +724,6 @@
         {
           "file": "src/lib/Setting/Pages/OtherBotSettings.svelte.test.ts",
           "count": 5
-        },
-        {
-          "file": "src/lib/Setting/pickerGenerationSettings.test.ts",
-          "count": 1
         },
         {
           "file": "src/lib/Setting/SettingRenderer.svelte.test.ts",
@@ -874,10 +846,6 @@
           "count": 6
         },
         {
-          "file": "src/ts/process/__tests__/lorebook.owner.test.ts",
-          "count": 1
-        },
-        {
           "file": "src/ts/server/lorebookOwner.durable.svelte.test.ts",
           "count": 12
         },
@@ -893,10 +861,6 @@
       "symbol": "setDatabaseLite",
       "policy": "model-translator:test-fixture",
       "files": [
-        {
-          "file": "src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte.test.ts",
-          "count": 2
-        },
         {
           "file": "src/lib/Setting/Pages/Model/ModelPresetList.svelte.test.ts",
           "count": 2
@@ -916,10 +880,6 @@
         {
           "file": "src/lib/Setting/Pages/Model/ModelRuntimeDefaultsEditor.svelte.test.ts",
           "count": 3
-        },
-        {
-          "file": "src/lib/Setting/Pages/Model/ModelSettingsShell.svelte.test.ts",
-          "count": 2
         },
         {
           "file": "src/lib/Setting/Pages/Model/ProviderCredentialList.svelte.test.ts",

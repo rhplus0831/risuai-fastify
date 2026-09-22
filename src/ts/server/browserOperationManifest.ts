@@ -785,7 +785,7 @@ export const BROWSER_OPERATION_NON_OVERLAPS = [
     id: 'raw-generation-callsite-inventory',
     family: 'raw-generation',
     reason: 'browser-capability-gate',
-    owner: 'src/ts/process/rawGenerationCallerAllowlist.test.ts#raw chat generation caller allowlist',
+    owner: 'util/architecture-inventory.ts#raw-generation-callers',
     detail: 'Source callsite inventory enforces browser coordination but does not identify an HTTP operation.',
   },
   {

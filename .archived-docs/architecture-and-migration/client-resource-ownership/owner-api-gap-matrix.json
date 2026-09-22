@@ -6,7 +6,7 @@
     "inventoryCursor": "244713c5e",
     "policyCount": 9,
     "consumerGroupCount": 30,
-    "referenceCount": 4290
+    "referenceCount": 3959
   },
   "capabilityKeys": ["selectors", "resourceState", "commands", "draftRecovery", "contractTests"],
   "owners": {
@@ -53,7 +53,7 @@
         "contractTests": "complete"
       },
       "gap": "Closed; aggregate helpers remain only in the test-only owner-state adapter, and normal application consumers are zero.",
-      "evidence": ["src/lib/_audit/frontendArchitecture.static.test.ts", "src/ts/server/ownerMutationLifecycle.ts"]
+      "evidence": ["util/architecture-inventory.ts", "src/ts/server/ownerMutationLifecycle.ts"]
     },
     "cross-cutting": {
       "dependencies": {

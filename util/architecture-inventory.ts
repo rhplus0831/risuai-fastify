@@ -236,6 +236,897 @@ function sourceKind(file: string): ts.ScriptKind {
   return ts.ScriptKind.TS
 }
 
+interface ModuleReference {
+  kind: ImportKind
+  specifier: string | null
+}
+
+const PACKAGE_IMPORT_BOUNDARIES = [
+  {
+    id: 'protocol-import-boundary',
+    root: 'packages/protocol/src',
+    allowedBareImports: new Set(['@sinclair/typebox', '@sinclair/typebox/value']),
+  },
+  {
+    id: 'shared-core-import-boundary',
+    root: 'packages/shared-core/src',
+    allowedBareImports: new Set<string>(),
+  },
+] as const
+
+function moduleReferences(file: string, source: string): ModuleReference[] {
+  const sourceFile = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, sourceKind(file))
+  const references: ModuleReference[] = []
+  const record = (kind: ImportKind, node: ts.Expression | undefined): void => {
+    references.push({ kind, specifier: node && ts.isStringLiteralLike(node) ? node.text : null })
+  }
+  const visit = (node: ts.Node): void => {
+    if (ts.isImportDeclaration(node)) {
+      record('static', node.moduleSpecifier)
+    } else if (ts.isExportDeclaration(node) && node.moduleSpecifier) {
+      record('re-export', node.moduleSpecifier)
+    } else if (ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)) {
+      record('import-equals', node.moduleReference.expression)
+    } else if (ts.isImportTypeNode(node) && ts.isLiteralTypeNode(node.argument)) {
+      record('import-type', node.argument.literal)
+    } else if (ts.isCallExpression(node)) {
+      if (node.expression.kind === ts.SyntaxKind.ImportKeyword) record('dynamic', node.arguments[0])
+      else if (ts.isIdentifier(node.expression) && node.expression.text === 'require') {
+        record('require', node.arguments[0])
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return references
+}
+
+function isInsideDirectory(root: string, target: string): boolean {
+  const relative = path.relative(root, target)
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && relative !== '..' && !path.isAbsolute(relative))
+}
+
+function resolvePackageModule(importer: string, specifier: string): string | null {
+  const rawTarget = path.resolve(path.dirname(importer), specifier)
+  const candidates = [
+    rawTarget,
+    `${rawTarget}.ts`,
+    `${rawTarget}.tsx`,
+    `${rawTarget}.mts`,
+    `${rawTarget}.cts`,
+    path.join(rawTarget, 'index.ts'),
+    rawTarget.replace(/\.js$/, '.ts'),
+    rawTarget.replace(/\.mjs$/, '.mts'),
+    rawTarget.replace(/\.cjs$/, '.cts'),
+  ]
+  return candidates.find((candidate) => fs.existsSync(candidate) && fs.statSync(candidate).isFile()) ?? null
+}
+
+export function validatePackageImportBoundaries(repoRoot: string): string[] {
+  const errors: string[] = []
+  for (const boundary of PACKAGE_IMPORT_BOUNDARIES) {
+    const absoluteRoot = path.join(repoRoot, boundary.root)
+    const runtimeFiles = walkSourceFiles(absoluteRoot).filter(
+      (file) => file.endsWith('.ts') && !file.endsWith('.test.ts'),
+    )
+    if (runtimeFiles.length === 0) errors.push(`${boundary.id}: no runtime modules found under ${boundary.root}`)
+    for (const file of runtimeFiles) {
+      const relative = repoPath(repoRoot, file)
+      const references = moduleReferences(file, fs.readFileSync(file, 'utf8'))
+      for (const reference of references) {
+        if (reference.specifier === null) {
+          errors.push(`${boundary.id}: ${relative} has a non-literal ${reference.kind} module reference`)
+          continue
+        }
+        if (!reference.specifier.startsWith('.')) {
+          if (!boundary.allowedBareImports.has(reference.specifier)) {
+            errors.push(`${boundary.id}: ${relative} imports disallowed bare module ${reference.specifier}`)
+          }
+          continue
+        }
+        const target = resolvePackageModule(file, reference.specifier)
+        if (!target || !isInsideDirectory(absoluteRoot, target)) {
+          errors.push(`${boundary.id}: ${relative} imports outside its package boundary via ${reference.specifier}`)
+        }
+      }
+    }
+  }
+  return errors
+}
+
+interface RawSendBinding {
+  file: string
+  localName: string
+}
+
+function runtimeClientSourceFiles(repoRoot: string, directory = path.join(repoRoot, 'src')): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const absolute = path.join(directory, entry.name)
+    if (entry.isDirectory()) {
+      if (['__fixtures__', '__tests__', 'docs'].includes(entry.name)) return []
+      return runtimeClientSourceFiles(repoRoot, absolute)
+    }
+    const relative = repoPath(repoRoot, absolute)
+    if (!/\.(?:svelte|ts)$/.test(entry.name) || /\.(?:d|spec|test)\.ts$/.test(entry.name)) return []
+    return [relative]
+  })
+}
+
+function clientModuleSource(repoRoot: string, file: string): string {
+  const source = fs.readFileSync(path.join(repoRoot, file), 'utf8')
+  if (!file.endsWith('.svelte')) return source
+  return [...source.matchAll(/<script(?:\s[^>]*)?>([\s\S]*?)<\/script>/g)].map((match) => match[1]).join('\n')
+}
+
+function resolvesToRawGenerationModule(file: string, specifier: string): boolean {
+  const rawGenerationModule = 'src/ts/process/index.svelte'
+  if (specifier.startsWith('src/')) return specifier === rawGenerationModule
+  return repoPath('', path.normalize(path.join(path.dirname(file), specifier))) === rawGenerationModule
+}
+
+function importedRawSendBindings(repoRoot: string, file: string): RawSendBinding[] {
+  const source = clientModuleSource(repoRoot, file)
+  const bindings: RawSendBinding[] = []
+  for (const match of source.matchAll(/import\s*{([\s\S]*?)}\s*from\s*['"]([^'"]+)['"]/g)) {
+    if (!resolvesToRawGenerationModule(file, match[2])) continue
+    for (const imported of match[1].split(',')) {
+      const sendBinding = /^\s*sendChat(?:\s+as\s+([A-Za-z_$][\w$]*))?\s*$/.exec(imported)
+      if (sendBinding) bindings.push({ file, localName: sendBinding[1] ?? 'sendChat' })
+    }
+  }
+  for (const match of source.matchAll(/(?:const|let)\s*{([\s\S]*?)}\s*=\s*await\s+import\(\s*['"]([^'"]+)['"]\s*\)/g)) {
+    if (!resolvesToRawGenerationModule(file, match[2])) continue
+    for (const imported of match[1].split(',')) {
+      const sendBinding = /^\s*sendChat(?:\s*:\s*([A-Za-z_$][\w$]*))?\s*$/.exec(imported)
+      if (sendBinding) bindings.push({ file, localName: sendBinding[1] ?? 'sendChat' })
+    }
+  }
+  return bindings
+}
+
+function callCount(source: string, localName: string): number {
+  const escaped = localName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return [...source.matchAll(new RegExp(`\\b${escaped}\\s*\\(`, 'g'))].length
+}
+
+function stringRecordInitializer(repoRoot: string, file: string, name: string): Record<string, string> | null {
+  const initializer = namedInitializer(repoRoot, file, name)
+  if (!ts.isObjectLiteralExpression(initializer)) return null
+  const result: Record<string, string> = {}
+  for (const property of initializer.properties) {
+    if (!ts.isPropertyAssignment(property) || !ts.isStringLiteralLike(property.initializer)) return null
+    const key = ts.isIdentifier(property.name) || ts.isStringLiteralLike(property.name) ? property.name.text : undefined
+    if (!key) return null
+    result[key] = property.initializer.text
+  }
+  return result
+}
+
+export function validateRawGenerationBoundary(repoRoot: string): string[] {
+  const errors: string[] = []
+  const expectedBindings = [
+    { file: 'src/lib/ChatScreens/DefaultChatScreen.svelte', localName: 'sendChat', calls: 1 },
+    { file: 'src/lib/SideBars/DevTool.svelte', localName: 'sendChat', calls: 1 },
+    { file: 'src/ts/hotkey.ts', localName: 'sendChat', calls: 1 },
+    { file: 'src/ts/plugins/apiV3/v3.svelte.ts', localName: 'processSendChat', calls: 1 },
+    { file: 'src/ts/process/acceptedSendCoordinator.svelte.ts', localName: 'sendChat', calls: 2 },
+  ]
+  const bindings = runtimeClientSourceFiles(repoRoot)
+    .flatMap((file) => importedRawSendBindings(repoRoot, file))
+    .map((binding) => ({
+      ...binding,
+      calls: callCount(clientModuleSource(repoRoot, binding.file), binding.localName),
+    }))
+    .sort((left, right) => left.file.localeCompare(right.file))
+  if (stableJson(bindings) !== stableJson(expectedBindings)) {
+    errors.push(
+      `raw-generation-callers: expected ${JSON.stringify(expectedBindings)}, observed ${JSON.stringify(bindings)}`,
+    )
+  }
+
+  const internalCoordinator = clientModuleSource(repoRoot, 'src/ts/process/index.svelte.ts')
+  if (callCount(internalCoordinator, 'sendChat') !== 2) {
+    errors.push(
+      'raw-generation-callers: src/ts/process/index.svelte.ts must contain exactly two internal sendChat calls',
+    )
+  }
+  const requiredMarkers = [
+    ['src/lib/ChatScreens/DefaultChatScreen.svelte', 'continue: continued'],
+    ['src/lib/SideBars/DevTool.svelte', "preview: previewJoin !== 'prompt'"],
+    ['src/ts/hotkey.ts', 'previewPrompt: true'],
+    ['src/ts/plugins/apiV3/v3.svelte.ts', 'return processSendChat(-1'],
+    ['src/ts/process/acceptedSendCoordinator.svelte.ts', 'async function attemptGeneration'],
+    ['src/ts/process/reattach.ts', 'getGenerationProcessRuntime()'],
+    ['src/ts/process/reattach.ts', 'reattachJobId: job.jobId'],
+  ] as const
+  for (const [file, marker] of requiredMarkers) {
+    if (!fs.readFileSync(path.join(repoRoot, file), 'utf8').includes(marker)) {
+      errors.push(`raw-generation-callers: ${file} is missing required marker ${JSON.stringify(marker)}`)
+    }
+  }
+  const operationIds = stringRecordInitializer(
+    repoRoot,
+    'src/ts/server/browserOperationManifest.ts',
+    'BROWSER_RAW_GENERATION_OPERATION_IDS',
+  )
+  const expectedOperationIds = {
+    atomicSubmit: 'generation-operation-submit',
+    compatibilityChat: 'generation-chat',
+  }
+  if (stableJson(operationIds) !== stableJson(expectedOperationIds)) {
+    errors.push(
+      `raw-generation-callers: BROWSER_RAW_GENERATION_OPERATION_IDS expected ${JSON.stringify(expectedOperationIds)}, observed ${JSON.stringify(operationIds)}`,
+    )
+  }
+  const expectedAtomicCalls = [
+    ['src/lib/ChatScreens/DefaultChatScreen.svelte', 'message: userMessage'],
+    ['src/lib/SideBars/DevTool.svelte', 'message: autopilot[i]'],
+    ['src/ts/plugins/apiV3/v3.svelte.ts', 'coordinateAcceptedChatSend({ target, message })'],
+    ['src/ts/process/command.ts', 'message: e'],
+    ['src/ts/process/files/multisend.ts', 'message: text'],
+  ] as const
+  for (const [file, atomicCall] of expectedAtomicCalls) {
+    const source = fs.readFileSync(path.join(repoRoot, file), 'utf8')
+    if (!source.includes('canUseGenerationOperationProtocol')) {
+      errors.push(`raw-generation-callers: ${file} is missing the capability gate`)
+    }
+    if (!source.includes(atomicCall)) {
+      errors.push(`raw-generation-callers: ${file} is missing atomic submit marker ${JSON.stringify(atomicCall)}`)
+    }
+    if (!source.includes('appendCurrentChatUserMessageForSend')) {
+      errors.push(`raw-generation-callers: ${file} is missing the compatibility append path`)
+    }
+  }
+  return errors
+}
+
+/**
+ * Closed-world inventory for the flat model/runtime fields which are being
+ * retired. This intentionally scans only database-shaped receivers; request
+ * DTOs and canonical profile/runtime objects also have fields named
+ * `temperature`, `maxResponse`, etc., but are not flat Database access.
+ *
+ * Every entry is a literal source marker with an expected occurrence count.
+ * A changed count is a deliberate regeneration signal: add or remove an
+ * entry here with its exact disposition before landing a new access.
+ */
+type ModelRuntimeClassification =
+  | 'effective-projection'
+  | 'context-free-fallback'
+  | 'compatibility'
+  | 'static-import-export'
+  | 'ordinary-pending'
+
+type ModelRuntimeInventoryEntry = {
+  path: string
+  marker: string
+  classification: ModelRuntimeClassification
+  expectedCount: number
+  reason: string
+}
+
+type ModelRuntimeAccessOccurrence = {
+  marker: string
+  line: number
+}
+
+const MODEL_RUNTIME_ROOTS = ['src/ts', 'src/lib', 'server/fastify/src', 'packages/shared-core/src'] as const
+const MODEL_RUNTIME_FIELDS = [
+  'aiModel',
+  'subModel',
+  'modelRoles',
+  'maxContext',
+  'maxResponse',
+  'temperature',
+  'top_p',
+  'top_k',
+] as const
+
+const MODEL_RUNTIME_INVENTORY: readonly ModelRuntimeInventoryEntry[] = [
+  {
+    path: 'server/fastify/src/prompt/cbsAdapter.ts',
+    marker: 'database.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason:
+      'checked generation projection adapted to required legacy CBS scalars; resolved prompt scope takes precedence',
+  },
+  {
+    path: 'server/fastify/src/prompt/cbsAdapter.ts',
+    marker: 'database.subModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason:
+      'checked generation projection adapted to required legacy CBS scalars; resolved prompt scope takes precedence',
+  },
+  {
+    path: 'server/fastify/src/prompt/cbsAdapter.ts',
+    marker: 'database.maxContext',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason:
+      'checked generation projection adapted to required legacy CBS scalars; resolved prompt scope takes precedence',
+  },
+  // Effective database projections intentionally feed legacy-shaped helpers.
+  {
+    path: 'server/fastify/src/translation/rawMessageTranslation.ts',
+    marker: 'dispatchDatabase.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'profile-backed translation dispatch projection',
+  },
+  {
+    path: 'server/fastify/src/translation/rawMessageTranslation.ts',
+    marker: 'dispatchDatabase.maxResponse',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'translator-step response override',
+  },
+  {
+    path: 'server/fastify/src/prompt/luaRuntime.ts',
+    marker: 'database.maxResponse',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'profile-backed Lua runtime projection',
+  },
+  {
+    path: 'server/fastify/src/prompt/luaRuntime.ts',
+    marker: 'database.temperature',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'profile-backed Lua runtime projection',
+  },
+  {
+    path: 'server/fastify/src/prompt/profileGenerationFields.ts',
+    marker: 'database.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'materializes the selected profile for legacy prompt helpers',
+  },
+  {
+    path: 'server/fastify/src/routes/generation.ts',
+    marker: 'next.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'completion request profile projection',
+  },
+  {
+    path: 'server/fastify/src/routes/generation.ts',
+    marker: 'next.maxResponse',
+    classification: 'effective-projection',
+    expectedCount: 2,
+    reason: 'completion request profile projection/explicit override',
+  },
+  {
+    path: 'server/fastify/src/routes/generation.ts',
+    marker: 'next.temperature',
+    classification: 'effective-projection',
+    expectedCount: 2,
+    reason: 'completion request profile projection/explicit override',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'db.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 5,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'db.maxContext',
+    classification: 'effective-projection',
+    expectedCount: 3,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'db.maxResponse',
+    classification: 'effective-projection',
+    expectedCount: 2,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'state.database.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'state.database.maxContext',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'input.state.database.maxContext',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/assemble.ts',
+    marker: 'input.state.database.maxResponse',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'assembly receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/history.ts',
+    marker: 'db.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'history formatting receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/templates.ts',
+    marker: 'db.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'template formatting receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/prompt/templates.ts',
+    marker: 'ctx.database.aiModel',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'template formatting receives an effective database snapshot',
+  },
+  {
+    path: 'server/fastify/src/routes/generationChat.ts',
+    marker: 'database.maxContext',
+    classification: 'effective-projection',
+    expectedCount: 2,
+    reason: 'generation info is projected from the effective database',
+  },
+  {
+    path: 'server/fastify/src/routes/generationChat.ts',
+    marker: 'db.maxContext',
+    classification: 'effective-projection',
+    expectedCount: 1,
+    reason: 'generation info is projected from the effective database',
+  },
+
+  // Deliberate fallback branches retain compatibility for context-free callers.
+  {
+    path: 'packages/shared-core/src/modelProfileResolver.ts',
+    marker: 'database.modelRoles',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'legacy role selection fallback',
+  },
+  {
+    path: 'packages/shared-core/src/modelProfileResolver.ts',
+    marker: 'database.maxContext',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'legacy runtime default fallback',
+  },
+  {
+    path: 'packages/shared-core/src/modelProfileResolver.ts',
+    marker: 'database.maxResponse',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'legacy runtime default fallback',
+  },
+  {
+    path: 'packages/shared-core/src/modelProfileResolver.ts',
+    marker: 'database.temperature',
+    classification: 'context-free-fallback',
+    expectedCount: 2,
+    reason: 'legacy runtime default fallback',
+  },
+  {
+    path: 'packages/shared-core/src/modelProfileResolver.ts',
+    marker: 'database.top_p',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'legacy runtime default fallback',
+  },
+  {
+    path: 'packages/shared-core/src/modelProfileResolver.ts',
+    marker: 'database.top_k',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'legacy runtime default fallback',
+  },
+  {
+    path: 'packages/shared-core/src/cbsRegistry.ts',
+    marker: 'db.aiModel',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'CBS context-free fallback when host supplies no role context',
+  },
+  {
+    path: 'packages/shared-core/src/cbsRegistry.ts',
+    marker: 'db.subModel',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'CBS context-free fallback when host supplies no role context',
+  },
+  {
+    path: 'packages/shared-core/src/cbsRegistry.ts',
+    marker: 'db.maxContext',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'CBS context-free fallback when host supplies no role context',
+  },
+  {
+    path: 'src/ts/process/request/request.ts',
+    marker: 'db.maxContext',
+    classification: 'context-free-fallback',
+    expectedCount: 3,
+    reason: 'request adapter fallback without a resolved profile',
+  },
+  {
+    path: 'src/ts/process/request/request.ts',
+    marker: 'db.maxResponse',
+    classification: 'context-free-fallback',
+    expectedCount: 5,
+    reason: 'request adapter fallback without a resolved profile',
+  },
+  {
+    path: 'src/ts/process/request/request.ts',
+    marker: 'db.temperature',
+    classification: 'context-free-fallback',
+    expectedCount: 6,
+    reason: 'request adapter fallback without a resolved profile',
+  },
+  {
+    path: 'src/ts/process/request/request.ts',
+    marker: 'db.top_p',
+    classification: 'context-free-fallback',
+    expectedCount: 4,
+    reason: 'request adapter fallback without a resolved profile',
+  },
+  {
+    path: 'src/ts/process/request/request.ts',
+    marker: 'db.top_k',
+    classification: 'context-free-fallback',
+    expectedCount: 2,
+    reason: 'request adapter fallback without a resolved profile',
+  },
+  {
+    path: 'src/ts/process/request/shared.ts',
+    marker: 'db.temperature',
+    classification: 'context-free-fallback',
+    expectedCount: 2,
+    reason: 'request parameter fallback without runtime options',
+  },
+  {
+    path: 'src/ts/process/request/shared.ts',
+    marker: 'db.top_p',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'request parameter fallback without runtime options',
+  },
+  {
+    path: 'src/ts/process/request/shared.ts',
+    marker: 'db.top_k',
+    classification: 'context-free-fallback',
+    expectedCount: 2,
+    reason: 'request parameter fallback without runtime options',
+  },
+  {
+    path: 'src/ts/process/sendChatContext.ts',
+    marker: 'database.maxContext',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'send-context fallback for incomplete profile data',
+  },
+  {
+    path: 'src/ts/process/memory/hypav3.ts',
+    marker: 'database.maxResponse',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'Hypa response fallback for incomplete profile data',
+  },
+  {
+    path: 'src/ts/process/memory/hypav3.ts',
+    marker: 'db.subModel',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'diagnostic-only legacy model label',
+  },
+  {
+    path: 'src/ts/process/models/modelString.ts',
+    marker: 'db.aiModel',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'explicit name/context-free generation label fallback',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'db.aiModel',
+    classification: 'context-free-fallback',
+    expectedCount: 6,
+    reason: 'provider dispatch fallback when no profile context is supplied',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'args.database.maxResponse',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'dispatch metadata fallback',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'args.database.maxContext',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'dispatch metadata fallback',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'db.maxResponse',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'dispatch fallback without output-token override',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'db.maxContext',
+    classification: 'context-free-fallback',
+    expectedCount: 3,
+    reason: 'dispatch fallback without profile context',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'db.temperature',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'dispatch fallback without profile context',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'db.top_p',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'dispatch fallback without profile context',
+  },
+  {
+    path: 'server/fastify/src/prompt/chatDispatch.ts',
+    marker: 'db.top_k',
+    classification: 'context-free-fallback',
+    expectedCount: 1,
+    reason: 'dispatch fallback without profile context',
+  },
+  {
+    path: 'server/fastify/src/prompt/tokenizerConfig.ts',
+    marker: 'db.aiModel',
+    classification: 'context-free-fallback',
+    expectedCount: 8,
+    reason: 'tokenizer helper fallback for a database-shaped caller',
+  },
+
+  // Explicit compatibility and current authoring/import/export boundaries.
+  {
+    path: 'src/lib/Setting/Pages/OtherBotSettings.svelte',
+    marker: 'database.maxResponse',
+    classification: 'compatibility',
+    expectedCount: 1,
+    reason: 'legacy settings fallback after profile read',
+  },
+  {
+    path: 'src/lib/Setting/Pages/OtherBotSettings.svelte',
+    marker: 'database.maxContext',
+    classification: 'compatibility',
+    expectedCount: 1,
+    reason: 'legacy settings fallback after profile read',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.aiModel',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.subModel',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.modelRoles',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.maxContext',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.maxResponse',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.temperature',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.top_p',
+    classification: 'static-import-export',
+    expectedCount: 2,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'db.top_k',
+    classification: 'static-import-export',
+    expectedCount: 3,
+    reason: 'database snapshot/import/export compatibility shape',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.aiModel',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.subModel',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.modelRoles',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.maxContext',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.maxResponse',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.temperature',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.top_p',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'src/ts/storage/database.svelte.ts',
+    marker: 'newPres.top_k',
+    classification: 'static-import-export',
+    expectedCount: 1,
+    reason: 'legacy preset application',
+  },
+  {
+    path: 'server/fastify/src/databaseDefaults.ts',
+    marker: 'database.modelRoles',
+    classification: 'static-import-export',
+    expectedCount: 2,
+    reason: 'schema/default/import normalization boundary',
+  },
+  {
+    path: 'src/ts/process/sendChatPromptAssembly.ts',
+    marker: 'database.maxResponse',
+    classification: 'compatibility',
+    expectedCount: 1,
+    reason: 'explicit fallback for profiles without a response-token budget',
+  },
+]
+
+function modelRuntimeProductionFiles(repoRoot: string): string[] {
+  const files: string[] = []
+  for (const root of MODEL_RUNTIME_ROOTS) {
+    const absoluteRoot = path.join(repoRoot, root)
+    for (const entry of fs.readdirSync(absoluteRoot, { withFileTypes: true, recursive: true })) {
+      if (!entry.isFile() || !/\.(ts|svelte)$/.test(entry.name)) continue
+      const relative = repoPath(repoRoot, path.join(entry.parentPath, entry.name))
+      if (
+        relative.endsWith('.test.ts') ||
+        relative.endsWith('.test.svelte') ||
+        relative.includes('/__tests__/') ||
+        relative.includes('/__fixtures__/')
+      )
+        continue
+      files.push(relative)
+    }
+  }
+  return files.sort()
+}
+
+function scanModelRuntimeAccesses(repoRoot: string): Map<string, ModelRuntimeAccessOccurrence[]> {
+  const receivers =
+    '(?:db|database|state\\.database|scope\\.database|context\\.database|ctx\\.database|args\\.database|input\\.state\\.database|input\\.settings|dispatchDatabase|next|newPres|getDatabase\\(\\))'
+  const access = new RegExp(`(?<![A-Za-z0-9_.])${receivers}\\.(${MODEL_RUNTIME_FIELDS.join('|')})\\b`, 'g')
+  const found = new Map<string, ModelRuntimeAccessOccurrence[]>()
+  for (const relative of modelRuntimeProductionFiles(repoRoot)) {
+    const lines = fs.readFileSync(path.join(repoRoot, relative), 'utf8').split(/\r?\n/)
+    lines.forEach((line, index) => {
+      const trimmed = line.trimStart()
+      if (trimmed.startsWith('//') || trimmed.startsWith('/*') || trimmed.startsWith('*') || trimmed.startsWith('*/'))
+        return
+      const code = line.replace(/\/\/.*$/, '')
+      for (const match of code.matchAll(access)) {
+        const marker = match[0]
+        const key = `${relative}\u0000${marker}`
+        const occurrences = found.get(key) ?? []
+        occurrences.push({ marker, line: index + 1 })
+        found.set(key, occurrences)
+      }
+    })
+  }
+  return found
+}
+
+function describeModelRuntimeOccurrences(occurrences: readonly ModelRuntimeAccessOccurrence[] | undefined): string {
+  return occurrences?.map(({ marker, line }) => `${marker} (line ${line})`).join(', ') ?? 'none'
+}
+
+export function validateModelRuntimeFlatAccessBoundary(repoRoot: string): string[] {
+  const errors: string[] = []
+  const found = scanModelRuntimeAccesses(repoRoot)
+  const expected = new Map<string, ModelRuntimeInventoryEntry>()
+  for (const entry of MODEL_RUNTIME_INVENTORY) {
+    const key = `${entry.path}\u0000${entry.marker}`
+    if (expected.has(key)) {
+      errors.push(`model-runtime-flat-access: duplicate inventory marker ${entry.path}:${entry.marker}`)
+      continue
+    }
+    expected.set(key, entry)
+    const count = found.get(key)?.length ?? 0
+    if (count !== entry.expectedCount) {
+      errors.push(
+        `model-runtime-flat-access: ${entry.path}:${entry.marker} expected ${entry.expectedCount}, observed ${count} (${describeModelRuntimeOccurrences(found.get(key))})`,
+      )
+    }
+  }
+  for (const [key, occurrences] of found) {
+    if (expected.has(key)) continue
+    const [relative, marker] = key.split('\u0000')
+    errors.push(
+      `model-runtime-flat-access: unclassified ${relative}:${describeModelRuntimeOccurrences(occurrences)} for ${marker}`,
+    )
+  }
+  for (const entry of MODEL_RUNTIME_INVENTORY) {
+    if (entry.classification === 'ordinary-pending') {
+      errors.push(
+        `model-runtime-flat-access: ordinary pending access remains at ${entry.path}:${entry.marker} (${entry.reason})`,
+      )
+    }
+  }
+  return errors
+}
+
 function literalText(node: ts.Expression | undefined): string | null {
   return node && ts.isStringLiteralLike(node) ? node.text : null
 }
@@ -870,6 +1761,9 @@ async function run(): Promise<void> {
   const compatibilityBaseline = loadCompatibilityBaseline(compatibilityBaselinePath)
   const clientResourceBaseline = loadClientResourceBaseline(clientResourceBaselinePath)
   const errors = [
+    ...validatePackageImportBoundaries(repoRoot),
+    ...validateRawGenerationBoundary(repoRoot),
+    ...validateModelRuntimeFlatAccessBoundary(repoRoot),
     ...compareCrossRuntimeBaseline(observation, loadBaseline(baselinePath)),
     ...validateCompatibilityBaseline(repoRoot, compatibilityBaseline),
     ...compareClientResourceBaseline(clientResourceObservation, clientResourceBaseline),
@@ -911,6 +1805,9 @@ async function run(): Promise<void> {
   )
   console.log(
     `[architecture-inventory] PASS ${Object.keys(clientResourceBaseline.policies).length} client resource owner gap rows`,
+  )
+  console.log(
+    `[architecture-inventory] PASS ${PACKAGE_IMPORT_BOUNDARIES.length} package import boundaries, raw generation caller ownership, and ${MODEL_RUNTIME_INVENTORY.length} model/runtime access classifications`,
   )
 }
 

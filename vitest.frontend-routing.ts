@@ -3,10 +3,7 @@ export type FrontendVitestProject = 'frontend-node' | 'frontend-svelte-node' | '
 export const frontendTestFileGlob = '**/*.test.ts'
 export const svelteNodeTestFileGlob = '**/*.svelte-node.test.ts'
 export const explicitDomTestFileGlobs = ['**/*.svelte.test.ts', '**/*.dom.test.ts'] as const
-export const isolatedCompatibilityTestFiles = [
-  'test/compat-harness/phase9CbsBaseline.test.ts',
-  'test/compat-harness/phase9LuaFailureSemantics.test.ts',
-] as const
+export const isolatedCompatibilityTestFiles = [] as const
 
 // These pre-suffix suites are probe-backed DOM owners. Registering them
 // explicitly avoids rename-only churn while still making new plain tests
@@ -27,7 +24,6 @@ export const legacyDomTestFiles = [
   'src/lib/Others/HypaV3Modal/tag-manager-modal.test.ts',
   'src/lib/Others/ownerPaths.test.ts',
   'src/lib/Playground/PlaygroundSubtitle.test.ts',
-  'src/lib/Setting/pickerGenerationSettings.test.ts',
   'src/lib/SideBars/chatGenerationSettingsControls.test.ts',
   'src/ts/__tests__/renderCostHarness.test.ts',
   'src/ts/__tests__/sendCloneCountProbe.test.ts',
@@ -64,7 +60,6 @@ export const legacyDomTestFiles = [
   'src/ts/gui/visualViewportCoordinator.test.ts',
   'src/ts/hotkey.navigation.test.ts',
   'src/ts/hotkey.preview.test.ts',
-  'src/ts/hotkey.owner.test.ts',
   'src/ts/hubAdditionalHtml.test.ts',
   'src/ts/loadout.test.ts',
   'src/ts/media/compressImage/tests/lossyCompression.test.ts',
@@ -92,7 +87,6 @@ export const legacyDomTestFiles = [
   'src/ts/process/__tests__/buildPlainPromptSections.test.ts',
   'src/ts/process/__tests__/buildStaticPromptSections.test.ts',
   'src/ts/process/__tests__/charEmotionStore.test.ts',
-  'src/ts/process/__tests__/command.owner.test.ts',
   'src/ts/process/__tests__/dispatchRequest.test.ts',
   'src/ts/process/__tests__/emotionFallbackEmbedding.test.ts',
   'src/ts/process/__tests__/emotionFallbackLlm.test.ts',
@@ -100,7 +94,6 @@ export const legacyDomTestFiles = [
   'src/ts/process/__tests__/formatHistoryMessage.test.ts',
   'src/ts/process/__tests__/igp.test.ts',
   'src/ts/process/__tests__/imggenStableDiff.test.ts',
-  'src/ts/process/__tests__/lorebook.owner.test.ts',
   'src/ts/process/__tests__/nonStreamResponse.test.ts',
   'src/ts/process/__tests__/normalizeTemplate.test.ts',
   'src/ts/process/__tests__/orchestrateResponse.test.ts',
@@ -117,7 +110,6 @@ export const legacyDomTestFiles = [
   'src/ts/process/__tests__/sendChatPromptAssembly.lazyPromptTemplate.test.ts',
   'src/ts/process/__tests__/stage4Finalize.test.ts',
   'src/ts/process/__tests__/streamResponse.test.ts',
-  'src/ts/process/__tests__/triggers.owner.test.ts',
   'src/ts/process/dynamicutils/pdf.test.ts',
   'src/ts/process/files/multisend.test.ts',
   'src/ts/process/files/tests/inlays.test.ts',
@@ -144,7 +136,6 @@ export const legacyDomTestFiles = [
   'src/ts/process/request/tests/serverChat.test.ts',
   'src/ts/process/request/tests/serverPromptAssembly.test.ts',
   'src/ts/process/rerollNavigation.chatOnly.test.ts',
-  'src/ts/process/rerollNavigation.owner.test.ts',
   'src/ts/process/rerollNavigation.rollback.test.ts',
   'src/ts/process/rerollNavigation.test.ts',
   'src/ts/process/scriptings.test.ts',
