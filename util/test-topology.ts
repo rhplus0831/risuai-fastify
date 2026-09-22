@@ -8,7 +8,6 @@ import {
   type FrontendVitestProject,
 } from '../vitest.frontend-routing.js'
 import { performanceTestFiles as configuredPerformanceTestFiles } from '../vitest.performance-tests.js'
-import { uiCoverageTestFiles as configuredUiCoverageTestFiles } from '../vitest.ui-coverage-tests.js'
 import { browserCoreTestFiles, frontendCoreTestFiles, serverCoreTestFiles } from './core-test-contract.js'
 
 export interface ListedTestFile {
@@ -21,7 +20,6 @@ export interface TestTopologySnapshot {
   gatesFrontend: ListedTestFile[]
   server: ListedTestFile[]
   trackedTests: string[]
-  uiExcludedFrontend: ListedTestFile[]
 }
 
 export interface ConfiguredTestFileGroup {
@@ -36,7 +34,6 @@ export interface CoreTestMarkerGroup extends ConfiguredTestFileGroup {
 type ExpectedTestFiles = Map<string, FrontendVitestProject | undefined>
 
 const performanceTestFiles = new Set<string>(configuredPerformanceTestFiles)
-const uiCoverageTestFiles = new Set<string>(configuredUiCoverageTestFiles)
 
 function normalizeRepoPath(file: string): string {
   return file.split(path.sep).join('/')
@@ -92,7 +89,6 @@ function validateListedFiles(label: string, entries: readonly ListedTestFile[], 
 export function validateTestTopology(snapshot: TestTopologySnapshot): string[] {
   const frontend = expectedFrontendTests(snapshot.trackedTests)
   const defaultFrontend = withoutFiles(frontend, performanceTestFiles)
-  const uiExcludedFrontend = withoutFiles(defaultFrontend, uiCoverageTestFiles)
   const expectedServer: ExpectedTestFiles = new Map(
     snapshot.trackedTests
       .filter((file) => file.startsWith('server/fastify/__tests__/'))
@@ -102,7 +98,6 @@ export function validateTestTopology(snapshot: TestTopologySnapshot): string[] {
   return [
     ...validateListedFiles('frontend default', snapshot.defaultFrontend, defaultFrontend),
     ...validateListedFiles('frontend gates', snapshot.gatesFrontend, frontend),
-    ...validateListedFiles('frontend UI-map exclusion', snapshot.uiExcludedFrontend, uiExcludedFrontend),
     ...validateListedFiles('server', snapshot.server, expectedServer),
   ]
 }
@@ -111,7 +106,6 @@ export function validateConfiguredTestFiles(
   trackedTests: readonly string[],
   groups: readonly ConfiguredTestFileGroup[] = [
     { label: 'performance tests', files: configuredPerformanceTestFiles },
-    { label: 'UI-map tests', files: configuredUiCoverageTestFiles },
     { label: 'isolated compatibility tests', files: isolatedCompatibilityTestFiles },
     { label: 'frontend core tests', files: frontendCoreTestFiles },
     { label: 'server core tests', files: serverCoreTestFiles },
@@ -181,7 +175,6 @@ function parseListedTests(output: string): ListedTestFile[] {
 function frontendEnvironment(overrides: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env = { ...process.env }
   delete env.RISU_TEST_INCLUDE_GATES
-  delete env.RISU_TEST_EXCLUDE_UI_MAP
   return { ...env, ...overrides }
 }
 
@@ -213,7 +206,6 @@ export function runTestTopologyCli(): number {
   const snapshot: TestTopologySnapshot = {
     defaultFrontend: listVitestFiles([], frontendEnvironment()),
     gatesFrontend: listVitestFiles([], frontendEnvironment({ RISU_TEST_INCLUDE_GATES: 'true' })),
-    uiExcludedFrontend: listVitestFiles([], frontendEnvironment({ RISU_TEST_EXCLUDE_UI_MAP: 'true' })),
     server: listVitestFiles(['--config', 'server/fastify/vitest.config.ts']),
     trackedTests: loadTrackedTests(),
   }
@@ -227,7 +219,7 @@ export function runTestTopologyCli(): number {
     return 1
   }
   console.log(
-    `Test topology: PASS (frontend=${snapshot.defaultFrontend.length}, gates=${snapshot.gatesFrontend.length}, UI-map-excluded=${snapshot.uiExcludedFrontend.length}, server=${snapshot.server.length})`,
+    `Test topology: PASS (frontend=${snapshot.defaultFrontend.length}, gates=${snapshot.gatesFrontend.length}, server=${snapshot.server.length})`,
   )
   return 0
 }

@@ -15,26 +15,19 @@ function healthySnapshot(): TestTopologySnapshot {
   const plain = 'src/plain.test.ts'
   const dom = 'src/view.svelte.test.ts'
   const performance = 'src/ts/__tests__/renderCostHarness.test.ts'
-  const uiMap = 'src/lib/Others/GridCatalog.svelte.test.ts'
   const isolated = 'test/compat-harness/phase9CbsBaseline.test.ts'
   const server = 'server/fastify/__tests__/app.test.ts'
 
   return {
-    trackedTests: [plain, dom, performance, uiMap, isolated, server],
-    defaultFrontend: [listed(plain, 'frontend-node'), listed(dom, 'frontend-dom'), listed(uiMap, 'frontend-dom')],
-    gatesFrontend: [
-      listed(plain, 'frontend-node'),
-      listed(dom, 'frontend-dom'),
-      listed(performance, 'frontend-dom'),
-      listed(uiMap, 'frontend-dom'),
-    ],
-    uiExcludedFrontend: [listed(plain, 'frontend-node'), listed(dom, 'frontend-dom')],
+    trackedTests: [plain, dom, performance, isolated, server],
+    defaultFrontend: [listed(plain, 'frontend-node'), listed(dom, 'frontend-dom')],
+    gatesFrontend: [listed(plain, 'frontend-node'), listed(dom, 'frontend-dom'), listed(performance, 'frontend-dom')],
     server: [listed(server)],
   }
 }
 
 describe('test topology validation', () => {
-  it('accepts disjoint project routing and the specialized exclusion modes', () => {
+  it('accepts disjoint project routing and the performance-gate mode', () => {
     expect(validateTestTopology(healthySnapshot())).toEqual([])
   })
 
@@ -51,7 +44,6 @@ describe('test topology validation', () => {
         'frontend default: duplicate test discovery for src/plain.test.ts',
         'frontend default: src/plain.test.ts routed to frontend-dom; expected frontend-node',
         'frontend default: missing tracked test src/view.svelte.test.ts',
-        'frontend default: missing tracked test src/lib/Others/GridCatalog.svelte.test.ts',
         'frontend default: unexpected test discovery for src/untracked.test.ts',
       ]),
     )

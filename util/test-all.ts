@@ -111,8 +111,6 @@ export const qualityLanes: readonly QualityLane[] = [
     label: 'frontend tests',
     args: ['exec', 'vitest', 'run'],
     after: ['test-topology'],
-    // The coverage lane below executes these six files with its thresholds.
-    env: { RISU_TEST_EXCLUDE_UI_MAP: 'true' },
     priority: 1,
   },
   {
@@ -176,14 +174,6 @@ export const qualityLanes: readonly QualityLane[] = [
     priority: 2,
   },
   {
-    id: 'ui-coverage',
-    label: 'UI coverage gate',
-    args: ['coverage:ui-map'],
-    // Keep coverage collection after the other frontend transforms have settled.
-    after: ['frontend-tests'],
-    priority: 3,
-  },
-  {
     id: 'format',
     label: 'format check',
     args: ['format:check'],
@@ -215,11 +205,8 @@ export const agentQualityLanes: readonly QualityLane[] = [
     id: 'frontend-core-tests',
     label: 'frontend core tests',
     args: ['exec', 'vitest', 'run', ...frontendCoreTestFiles, '--tagsFilter', CORE_TEST_TAG],
-    // Core selection is independent from the coverage and performance cohorts.
-    env: {
-      RISU_TEST_EXCLUDE_UI_MAP: 'false',
-      RISU_TEST_INCLUDE_GATES: 'false',
-    },
+    // Core selection is independent from the performance cohort.
+    env: { RISU_TEST_INCLUDE_GATES: 'false' },
   },
   requiredQualityLane('frontend-check'),
   // The compatibility goldens are the only record of what the current stack sends

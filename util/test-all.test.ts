@@ -1,6 +1,5 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { uiCoverageSupportFiles, uiCoverageTestFiles } from '../vitest.ui-coverage-tests.js'
 import { performanceTestFiles } from '../vitest.performance-tests.js'
 import {
   browserCoreTestFiles,
@@ -62,10 +61,7 @@ describe('test:all orchestration', () => {
       args: ['exec', 'vitest', 'run', ...frontendCoreTestFiles, '--tagsFilter', 'core'],
       after: ['test-topology'],
     })
-    expect(byId.get('frontend-core-tests')?.env).toEqual({
-      RISU_TEST_EXCLUDE_UI_MAP: 'false',
-      RISU_TEST_INCLUDE_GATES: 'false',
-    })
+    expect(byId.get('frontend-core-tests')?.env).toEqual({ RISU_TEST_INCLUDE_GATES: 'false' })
     expect(byId.get('server-core-tests')).toMatchObject({
       args: [
         'exec',
@@ -118,7 +114,7 @@ describe('test:all orchestration', () => {
       after: ['test-topology'],
       args: ['exec', 'vitest', 'run'],
     })
-    expect(byId.get('frontend-tests')?.env).toEqual({ RISU_TEST_EXCLUDE_UI_MAP: 'true' })
+    expect(byId.get('frontend-tests')?.env).toBeUndefined()
     expect(byId.get('compat-registers')?.args).toEqual(['validate:compat-registers'])
     expect(byId.get('compat-registers')?.isolated).toBeUndefined()
     expect(byId.get('compat-current')).toMatchObject({
@@ -126,7 +122,6 @@ describe('test:all orchestration', () => {
       after: ['compat-registers'],
       isolated: true,
     })
-    expect(byId.get('ui-coverage')?.after).toContain('frontend-tests')
     expect(byId.get('server-tests')?.isolated).toBe(true)
     expect(byId.get('realm-scale')).toMatchObject({
       isolated: true,
@@ -148,7 +143,6 @@ describe('test:all orchestration', () => {
     ])
 
     const packageScripts = JSON.parse(readFileSync('package.json', 'utf8')).scripts as Record<string, string>
-    expect(packageScripts['coverage:ui-map'].match(/src\/\S+\.test\.ts/g)).toEqual([...uiCoverageTestFiles])
     expect(packageScripts['check:docs']).toBe('tsx util/current-documentation-validator.ts')
     expect(packageScripts['test:agent']).toBe('tsx util/test-agent.ts')
     expect(packageScripts['test:all']).toBe('tsx util/test-all.ts')
@@ -382,7 +376,6 @@ describe('test:all orchestration', () => {
       ['browser-smoke', ['smoke', 'pnpm smoke:fastify-browser']],
       ['browser-smoke-build', ['smoke', 'pnpm smoke:fastify-browser']],
       ['frontend-check', ['check', 'pnpm check']],
-      ['ui-coverage', ['ui-coverage', 'pnpm coverage:ui-map']],
       ['format', ['format', 'pnpm format:check']],
       [
         'performance-gates',
@@ -408,8 +401,6 @@ describe('test:all orchestration', () => {
     )
     expect(smokeUpload).toContain('fast-bootstrap-results/fast-bootstrap-integration.*')
     expect(smokeUpload).toContain('if-no-files-found: error')
-    const uiUpload = workflow.slice(workflow.indexOf('name: ui-coverage'), workflow.indexOf('\n\n  server:'))
-    expect(uiUpload).toContain('if-no-files-found: error')
   })
 
   it('keeps compatibility history and baseline setup in their owning CI lanes', () => {
@@ -431,10 +422,5 @@ describe('test:all orchestration', () => {
       'RISU_COMPAT_BASELINE_ROOT: ${{ github.workspace }}/../risu-baseline-71c476e9c',
     )
     expect(differentialWorkflow).not.toContain('${{ runner.temp }}')
-  })
-
-  it('keeps configured UI coverage support exclusions unique and present', () => {
-    expect(new Set(uiCoverageSupportFiles).size).toBe(uiCoverageSupportFiles.length)
-    for (const file of uiCoverageSupportFiles) expect(existsSync(file), file).toBe(true)
   })
 })

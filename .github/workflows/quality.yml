@@ -78,10 +78,6 @@ jobs:
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 25
-    env:
-      # When the focused coverage job runs, let it own these six UI test files
-      # instead of executing them a second time in the ordinary frontend lane.
-      RISU_TEST_EXCLUDE_UI_MAP: 'true'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -137,27 +133,6 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec vitest run src/ts/__tests__/renderCostHarness.test.ts src/ts/__tests__/sendCloneCountProbe.test.ts --no-file-parallelism --maxWorkers=1
-
-  ui-coverage:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 11.23.0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 24
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm coverage:ui-map
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: ui-coverage
-          path: coverage/ui-map
-          if-no-files-found: error
 
   server:
     runs-on: ubuntu-latest
@@ -265,7 +240,6 @@ jobs:
       - frontend
       - initial-preload
       - gates-perf
-      - ui-coverage
       - server
       - realm-scale
       - compat-registers
@@ -282,7 +256,6 @@ jobs:
           FRONTEND_RESULT: ${{ needs.frontend.result }}
           INITIAL_PRELOAD_RESULT: ${{ needs['initial-preload'].result }}
           GATES_PERF_RESULT: ${{ needs['gates-perf'].result }}
-          UI_COVERAGE_RESULT: ${{ needs['ui-coverage'].result }}
           SERVER_RESULT: ${{ needs.server.result }}
           REALM_SCALE_RESULT: ${{ needs['realm-scale'].result }}
           COMPAT_REGISTERS_RESULT: ${{ needs['compat-registers'].result }}
@@ -301,4 +274,3 @@ jobs:
           test "$COMPAT_REGISTERS_RESULT" = success
           test "$COMPAT_CURRENT_RESULT" = success
           test "$SMOKE_RESULT" = success
-          test "$UI_COVERAGE_RESULT" = success

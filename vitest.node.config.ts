@@ -7,7 +7,6 @@ import {
   legacyDomTestFiles,
   svelteNodeTestFileGlob,
 } from './vitest.frontend-routing'
-import { excludeUiCoverageTests, uiCoverageTestFiles } from './vitest.ui-coverage-tests'
 import { testTags } from './vitest.test-tags'
 
 export default defineProject({
@@ -36,7 +35,6 @@ export default defineProject({
       ...explicitDomTestFileGlobs,
       ...legacyDomTestFiles,
       ...isolatedCompatibilityTestFiles,
-      ...(excludeUiCoverageTests ? uiCoverageTestFiles : []),
     ],
   },
 })

@@ -44,7 +44,6 @@ const blockedRunnerFiles = new Set([
   'vitest.setup.ts',
   'vitest.svelte-node.config.ts',
   'vitest.svelte-node.environment.ts',
-  'vitest.ui-coverage-tests.ts',
 ])
 
 function normalizeRepoPath(file: string): string {
@@ -200,7 +199,6 @@ async function run(): Promise<void> {
     console.log(`[test] ${command.label}: ${displayCommand(command)}`)
     const exitCode = await new Promise<number>((resolve) => {
       const env = { ...process.env }
-      delete env.RISU_TEST_EXCLUDE_UI_MAP
       delete env.RISU_TEST_INCLUDE_GATES
       Object.assign(env, command.env)
       const options: SpawnOptions = { cwd: process.cwd(), env, stdio: 'inherit' }

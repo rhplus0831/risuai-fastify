@@ -10,21 +10,6 @@ export const isolatedCompatibilityTestFiles = [] as const
 // Node-default. Remove an entry when a fresh smaller-runtime probe passes or
 // when its owner is renamed to an explicit DOM suffix.
 export const legacyDomTestFiles = [
-  'src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts',
-  'src/lib/ChatScreens/Chat.customHtml.test.ts',
-  'src/lib/ChatScreens/Chat.parserDependencies.test.ts',
-  'src/lib/ChatScreens/ChatBody.parseMemo.test.ts',
-  'src/lib/ChatScreens/DefaultChatScreen.composerDrafts.test.ts',
-  'src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts',
-  'src/lib/ChatScreens/PartialEditController.sharedHover.test.ts',
-  'src/lib/ChatScreens/partialEditLayer.test.ts',
-  'src/lib/ChatScreens/partialEditTouchTrigger.test.ts',
-  'src/lib/Others/HypaV3Modal.resetRace.test.ts',
-  'src/lib/Others/HypaV3Modal.serverReliability.test.ts',
-  'src/lib/Others/HypaV3Modal/tag-manager-modal.test.ts',
-  'src/lib/Others/ownerPaths.test.ts',
-  'src/lib/Playground/PlaygroundSubtitle.test.ts',
-  'src/lib/SideBars/chatGenerationSettingsControls.test.ts',
   'src/ts/__tests__/renderCostHarness.test.ts',
   'src/ts/__tests__/sendCloneCountProbe.test.ts',
   'src/ts/activeChatGenerationSettings.test.ts',
