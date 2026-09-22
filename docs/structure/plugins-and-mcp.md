@@ -205,8 +205,8 @@ live in `server/fastify/src/routes/commands.ts`, with mutation logic in
 `server/fastify/src/commands/plugins.ts` and `pluginStorage.ts`. The route and
 storage contracts are guarded by
 `server/fastify/__tests__/routeProtection.test.ts`,
-`server/fastify/__tests__/commands.plugins.test.ts`, and
-`server/fastify/__tests__/commandSettingsAndPluginStorageRange.test.ts`.
+`server/fastify/__tests__/commands.test.ts`, and
+`src/ts/plugins/pluginDatabaseBridge.core.test.ts`.
 
 Plugin record `PATCH` requests contain only changed fields. Because JSON omits
 `undefined`, `null` is reserved as a deletion sentinel for optional plugin
@@ -241,9 +241,9 @@ Standalone module import/export strips `folderId`; full `.risu`
 snapshots retain folders and assignments. Activation, prompt assembly, and MCP
 selection do not read folder metadata.
 
-Focused guards: `src/ts/moduleOrganization.test.ts`,
-`src/ts/moduleCommands.test.ts`, `server/fastify/__tests__/commands.modules.test.ts`,
-and `src/ts/server/resourceInvalidation.test.ts`.
+Focused guards are `src/ts/moduleOrganization.test.ts`,
+`server/fastify/__tests__/commands.test.ts`, and
+`src/ts/server/resourceInvalidation.test.ts`.
 
 ### Plugin Storage And Collection Sequences
 
@@ -274,8 +274,8 @@ The pure `resolveActiveModuleStates()` helper in `src/ts/moduleActivation.ts`
 matches module ids or namespaces, deduplicates module rows, and preserves the
 activation sources for runtime and UI consumers. This resolution is guarded by
 `src/ts/moduleActivation.test.ts`,
-`packages/shared-core/src/moduleIntegration.test.ts`, and
-`src/ts/process/modules.test.ts`.
+`packages/shared-core/src/moduleActivation.test.ts`, and
+`packages/shared-core/src/moduleIntegration.test.ts`.
 Initialization dedupes concurrent construction, removes stale clients when the
 active URL inputs change, indexes tools with the first MCP URL winning duplicate
 tool names, and isolates failed internal handshakes so other MCP clients remain
@@ -373,10 +373,9 @@ through the ordinary revisioned module commands. It does not rewrite
 `moduleIntergration` text. The module UI displays imported MCP rows, supports
 those two global lifecycle actions, hides edit/export, and hides unsupported
 scoped-link controls. Server behavior is guarded by
-`server/fastify/__tests__/commands.modules.test.ts`; UI restrictions are guarded by
-`src/lib/Setting/Pages/Module/ModuleSettings.svelte.test.ts` and
-`src/lib/Setting/Pages/Module/ModuleChatMenu.svelte.test.ts`. The import-picker
-exclusion is guarded by `src/ts/process/mcp/mcp.test.ts`.
+`server/fastify/__tests__/commands.test.ts`. The former module UI and MCP picker
+unit suites were removed in Phase 5 because they relied on own-module mocks;
+those restrictions no longer have dedicated unit coverage.
 Command-based stdio MCPs remain unsupported by the browser runtime; only a
 parseable URL-wrapped `stdio:{...}` row can initialize.
 
@@ -421,8 +420,9 @@ and `setChatPanel`. `src/ts/plugins/apiV3/v3.svelte.ts` replaces an existing
 entry from the same plugin owner and removes owned entries on unload/reset;
 `src/lib/Setting/Settings.svelte`, `src/lib/SideBars/Sidebar.svelte`, and
 `src/lib/ChatScreens/DefaultChatScreen.svelte` consume the stores.
-`src/ts/plugins/apiV3/v3.svelte.test.ts` guards registration, replacement, and
-cleanup. UI placement is mapped in the
+`src/ts/plugins/apiV3/factory.test.ts` retains the real factory boundary; the
+mock-heavy registration/cleanup unit suite was removed in Phase 5. UI placement
+is mapped in the
 [Svelte Settings UI](../../src/docs/svelte-settings-ui.md),
 [Svelte Navigation UI](../../src/docs/svelte-navigation-ui.md), and
 [Svelte Chat UI](../../src/docs/svelte-chat-ui.md) guides.

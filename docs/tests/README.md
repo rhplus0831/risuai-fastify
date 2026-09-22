@@ -1,7 +1,7 @@
 # Test Suite Guide
 
-Last audited: 2026-09-03.
-Targeted source check: 2026-09-12 (current test families and documentation routing).
+Last audited: 2026-09-22.
+Targeted source check: 2026-09-22 (Phase 5 suite deletion and tier ownership).
 
 This documentation groups the current suite by protected product behavior. Treat `package.json` and the runner configuration files as the source of truth for commands and discovery; this guide intentionally avoids snapshot case counts and pass totals, which become stale whenever tests are added or parameterized matrices change.
 
@@ -31,8 +31,8 @@ entries rated Frequently or Often.
 
 - [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md) — prompt construction, CBS history/index semantics, preflight, generation, SSE, durability, reroll, Agent Presets, and cost gates.
 - [Providers, Models, and Media](providers-models-and-media.md) — model profiles, Strip CoT, translation, image/audio/transcription, and codecs.
-- [Provider Adapter Conformance](providers-models-and-media.md#test-groups) — dispatch options, request/response shaping, catalogs, streams, aborts, and errors across first-class, local, legacy, free-model, and compatibility transports.
-- [Credential and Secret Integrity](providers-models-and-media.md#test-groups) — stored and draft credentials, masking, stable identity, stale inline-secret migration, endpoint binding, sanitized projections, and provider-operation boundaries; command-side preservation is covered by [Persistence, Revisioned Commands, and Events](persistence-commands-and-events.md#command-api-behavior-inventory).
+- [Provider Adapter Conformance](providers-models-and-media.md#provider-wire-and-dispatch-contracts) — dispatch options, request/response shaping, catalogs, streams, aborts, and errors across first-class, local, legacy, free-model, and compatibility transports.
+- [Credential and Secret Integrity](providers-models-and-media.md#model-profiles-and-credentials) — stored and draft credentials, masking, stable identity, stale inline-secret migration, endpoint binding, sanitized projections, and provider-operation boundaries; command-side preservation is covered by [Persistence, Revisioned Commands, and Events](persistence-commands-and-events.md#command-coverage-ownership).
 - [Memory and Embeddings](memory-and-embeddings.md) — Hypa planning, summaries, embeddings, ranking, job execution, worker/API/browser reconciliation, and memory UI.
 - [Scripting, Parsing, and Automation](scripting-parsing-and-automation.md) — CBS, regex scripts, triggers, Lua, HTML/chat parsing, templates, and bounded execution.
 - [Plugins, Modules, and MCP](plugins-modules-and-mcp.md) — plugin permissions/sandboxing, module lifecycle, MCP transports/OAuth/tools, and RisuAccess resources.
@@ -55,46 +55,21 @@ covers tracked `*.test.ts` files.
 
 ### Minimal agent protection
 
-`pnpm test:agent` is the small safety harness used before broader test cleanup or
-for cross-area agent validation. Vitest cases tagged `core` protect startup,
-authentication, data integrity, durable mutations, message sending/streaming,
-recovery, backup/restore, and shared provider transport. They also protect
-access and egress fences, secret masking and credential binding, writer
-ownership and chat occupancy, targeted command persistence, generation
-operation and prompt assembly boundaries, asset retention, and client-side
-ownership and rollback fences. Each of those promotions was accepted only after
-a production mutation survived the previous core lane and failed the promoted
-case; `docs/test-reviews/core-suite-phase-2.md` records the evidence. Gaps
-with no trustworthy existing case were closed by new boundary tests under the
-same mutation proof: the Lua `request()` egress fence, generation-effect and
-stale-regenerate fences, persisted trace redaction, vault export text
-exclusion, plugin grant and database-bridge fences, first-run initialization,
-truncated replay windows, and provider wire goldens for Anthropic, Gemini,
-Ollama, Bedrock, and profile credential binding;
-`docs/test-reviews/core-suite-phase-3.md` records that evidence. The agent
-aggregate also runs the current compatibility goldens. A file whose complete
-scope is core uses a top-level `@module-tag core`; mixed files tag only the
-relevant `describe` blocks or tests. Untagged cases are extended coverage and
-remain in `test:all`, CI, and focused execution.
-`util/core-test-contract.ts` is the reviewed file-level inventory that keeps the
-agent run from importing the complete suite before applying those case tags;
-test topology rejects missing inventory entries.
+`pnpm test:agent` runs the mutation-proven core: tagged frontend and Fastify
+Vitest cases, current compatibility goldens, a browser-smoke build, and the
+sixteen `@core` Playwright journeys. The contract covers startup and ownership,
+authentication and egress, durable commands, generation and streaming, recovery,
+backup/restore, assets, provider wires, and client rollback fences. A case entered
+this tier only after it killed a production mutation that the previous core
+survived; the evidence is in `docs/test-reviews/core-suite-phase-2.md` and
+`docs/test-reviews/core-suite-phase-3.md`.
 
-Playwright uses the equivalent `@core` tag. The agent aggregate runs sixteen
-cross-layer journeys: bootstrap/event/command refresh with secret-free shell
-reads and a byte-checked bundle round trip, send/stream/reload with one
-persisted reply, durable edit replay after a real revision gap, server backup
-restore of database, asset, and save bytes followed by reload, failed-mutation
-rollback, reroll alternates surviving a reload, reader updates through a writer
-takeover, two concurrent chats staying isolated, bounded viewer reconnect
-with a canonical terminal snapshot, message edit and delete by exact id on a
-mobile viewport, chat create and delete scoped to one character with a
-character trashed, chat import re-keying colliding ids, a reader and a writer
-crossing a backup restore without repainting old-lineage data, encrypted
-old-lineage edits rejected after a restore, and a 401 ownership probe clearing
-the projection. Layout, responsive, performance, optional feature depth, and
-provider-specific adapter conformance beyond the wire goldens remain outside
-the minimal profile unless they block one of those core contracts.
+`util/core-test-contract.ts` is the reviewed file inventory. A wholly core file
+uses `@module-tag core`; mixed files tag only the relevant cases. Playwright uses
+`@core`. Untagged real-boundary Vitest cases and non-core browser-smoke specs form
+the extended tier and run through focused commands, `pnpm test:all`, and CI.
+Performance gates and the complete compatibility/browser matrices also belong to
+that extended tier.
 
 ### Compatibility evidence ownership
 
@@ -108,14 +83,14 @@ Intermediate-display wire, scope, queue/cache, diagnostics, and browser-bridge
 coverage is mapped in
 [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md#intermediate-display).
 Visible paging and scroll-anchor coverage is mapped in
-[App Navigation and Chat](app-navigation-and-chat.md#connected-reader-navigation-and-transcript).
+[App Navigation and Chat](app-navigation-and-chat.md#connected-readers-and-visible-navigation).
 
-1. Outbox, dispatch, replay, bootstrap, and invalidation: `pendingMutationOutbox`, `durableMutationDispatch`, `durableMutationTerminalRejection`, `pendingMutationReplay`, browser `commands`, `bootstrap`, `startupReadiness`, `resourceState`, `resourceInvalidation`, and the startup/recovery browser matrices. These are the core protection against lost, duplicated, or stale user edits.
-2. Generation goldens and durable lifecycle: `sendChat.fixtures*`, server `assemble`, `generation.chat`, `durableGeneration`, provider transport/terminal assertions, and the reroll Playwright journey. They protect model-visible context and durable transcripts.
-3. Persistence transactions, identity repair, and recovery: command/revision/idempotency/concurrency suites, migrations, lorebook and record identity normalization, backups, save/bundle codecs, asset GC, and Realm atomic staging. These defend user data at rest and through destructive operations.
-4. Provider conformance, credentials, and egress: provider request/stream/catalog contracts, dispatch-option parity, stale inline-secret migration, model-profile secret tests, provider operation allowlists, OAuth refresh, SSRF, redaction, and request/body/decompression limits. Regressions here have security impact beyond functional breakage.
-5. Memory jobs: repository transitions, embed/summarize handlers, worker fairness/cancellation/shutdown, selection/ranking, browser terminal fences, and prompt-memory fixtures. Partial failures otherwise risk corrupt indexes or permanently active jobs.
-6. Performance gates: render/clone probes and server load-cost assertions. They are the only direct defense against accidentally restoring whole-corpus work to common actions.
+1. Outbox, replay, bootstrap, and invalidation: `src/ts/server/pendingMutationOutbox.test.ts`, `src/ts/server/durableMutationDispatch.test.ts`, `src/ts/server/pendingMutationReplay.test.ts`, `src/ts/bootstrap.test.ts`, and `src/ts/server/resourceInvalidation.test.ts` protect against lost, duplicated, or stale edits.
+2. Generation and durable lifecycle: `src/ts/process/__tests__/sendChat.fixtures.serverBacked.test.ts`, `server/fastify/__tests__/generation.chat.test.ts`, `server/fastify/__tests__/durableGeneration.test.ts`, and `server/fastify/browser-smoke/rerollSwipePersistence.spec.ts` protect model-visible context and durable transcripts.
+3. Persistence and recovery: the core command files, `server/fastify/__tests__/legacyDatabaseImport.test.ts`, `server/fastify/__tests__/backups.test.ts`, `server/fastify/__tests__/risuSaveCodec.test.ts`, and `server/fastify/__tests__/assetGc.test.ts` protect user data through mutations, migration, backup, and import.
+4. Providers, credentials, and egress: `server/fastify/__tests__/providerWireGoldens.core.test.ts`, `server/fastify/__tests__/staleInlineModelProfileSecrets.test.ts`, `server/fastify/__tests__/providerOperations.test.ts`, `server/fastify/__tests__/pluginNetwork.test.ts`, and `server/fastify/__tests__/requestTrace.test.ts` guard security-sensitive boundaries.
+5. Memory jobs: retained real-SQLite suites such as `server/fastify/__tests__/memoryRepository.test.ts` and `server/fastify/__tests__/memoryWorker.test.ts`, plus `server/fastify/__tests__/promptMemoryAdapter.test.ts`, protect repository transitions, workers, ranking, and prompt injection in the extended tier.
+6. Performance gates: `src/ts/__tests__/renderCostHarness.test.ts`, `src/ts/__tests__/sendCloneCountProbe.test.ts`, and `server/fastify/__tests__/serverLoadCostHarness.test.ts` protect common paths from whole-corpus work.
 
 ## Reading the detailed documents
 
@@ -127,20 +102,22 @@ use runner discovery when an exact current count is needed.
 
 ## Maintaining focused coverage
 
-Shared algorithm behavior belongs in `packages/shared-core/src/*.test.ts`.
-Browser facade tests should cover browser-specific adaptation; pure re-exports
-use the consolidated `packages/shared-core/src/ownership.test.ts` dependency
-rules. `packages/shared-core/src/importBoundary.test.ts` discovers every shared
-runtime module without a manually maintained filename inventory.
+Shared algorithm behavior belongs beside its implementation in
+`packages/shared-core/src/`. Browser facade tests should cover browser-specific
+adaptation rather than pure re-export identity. The deleted source-text ownership
+tests were not replaced with more unit tests: `util/architecture-inventory.ts`
+now enforces the protocol and shared-core import boundaries as closed-world
+checks in `pnpm check:server`. The same inventory owns the raw-generation caller
+classification and model/runtime flat-access classification that replaced two
+other structural tests.
 
 UI interaction tests should assert bound state, emitted actions, or saved results
 after an event. Reading back a DOM value assigned by the test does not prove the
 application handled it. Keep explicit input/output fixtures; avoid copying the
 implementation when those expected values already provide the oracle.
 
-Repository-wide documentation and architecture validation belong to `check:docs`
-and the full `check:server`, reached by `test:all`; the minimal agent profile runs
-only the server typecheck portion. Validator unit tests focus on small valid/invalid fixtures and distinct policy assertions. Compatibility
-governance unit tests construct valid in-memory fixtures for mutation checks;
+Repository-wide documentation and architecture validation belong to
+`pnpm check:docs` and `pnpm check:server`; `test:all` runs both, while the agent
+profile uses the typecheck-only server mode. Validator tests use small fixtures.
 `test/compat-harness/run.ts` separately validates committed manifests and digests
-in its designated compatibility lane.
+in the compatibility lane.

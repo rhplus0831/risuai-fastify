@@ -1,120 +1,40 @@
 # API Security, Runtime, and Network Boundaries
 
-Last audited: 2026-08-30.
-Targeted source check: 2026-09-10 (v3 fact privacy and correlated helper pagination).
-
-This area covers the Fastify composition boundary: authentication, exactly one
-general owner plus exclusive per-chat occupancy, route policy, bootstrap and
-resource hydration, configuration and shutdown, agent data sandboxing, static
-serving, request tracing, Web Push, generic and permissioned egress, and local
-stream jobs.
+Phase 5 keeps security coverage at real process and HTTP boundaries. Source-text
+checks, own-module mocks, and implementation call-count tests were removed.
 
 ## Authentication, active writer, and route policy
 
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| First-run and browser-compatible auth — `server/fastify/__tests__/smoke.test.ts`: setup/login plus fallback-session flow. `auth.test.ts`: loopback agent bypass, explicit non-loopback `buildApp` rejection before data-directory effects, whitespace-password rejection, fallback expiry, and stored-hash cleanup. | Password setup, ECDSA assertion login, expiry, server-issued fallback sessions, and the deliberate loopback-only development bypass. | Critical: a regression can lock out users or expose every protected route. |
-| Bounded known-key state — `auth.test.ts`: `keeps the known-key set bounded by the soft cap and evicts the LRU`; `persists the bounded set to disk on every register`; `trims a pre-existing oversize cache on load`. | Prevents an unbounded persistent accumulator while preserving recently authorized keys. | High availability/security value. |
-| Auth occurs once and before work — `auth.test.ts`: bulk route `rejects unauthenticated requests and verifies authenticated requests exactly once`; proxy/hub `verifies exactly once when protected`; unauthenticated proxy/hub requests `stop before body parsing or forwarding`. | Avoids duplicated expensive signature checks and prevents oversized/untrusted bodies or egress before authentication. | Critical security and denial-of-service protection. |
-| Active-writer ownership — the cases in `activeWriter.test.ts`: ownership/epoch survives restart; most recently bootstrapped session wins; passive bootstrap cannot reclaim; stale writers are rejected for commands, import, asset upload, backups, legacy storage, backup restore/delete, memory job create/cancel, memory planning; observe/public asset exceptions remain open. | Stops stale tabs or sessions from overwriting current authoritative state while keeping reads/observers usable. | Critical data-integrity protection. |
-| Writer-header edge cases — `routeProtection.test.ts`: missing header after latch is stale; empty/whitespace/over-128-byte headers are rejected; fresh servers accept authenticated mutation before latch; hash-aware resource POST reads are exempt. | Defines the bootstrap window and rejects ambiguous/spoofed writer identities. | Critical for consistent multi-tab behavior. |
-| Table-wide route inventory and auth — `routeProtection.test.ts`: every live API route has a protocol-manifest decision; every protected route returns 401 without auth; independent literal allowlists pin every public/conditional auth and mutating active-writer exception; hash-aware POSTs remain read-only; durable-generation routes require auth; raw proxy bodies authenticate before parsing. | Makes a newly registered or newly exempted route fail unless both live enforcement and the reviewed exception oracle agree. | One of the suite’s highest-value security groups. |
-| Explicit rate limits — `routeProtection.test.ts`: login accepts the configured number of bad attempts then returns 429; durable-generation reattach streams and authenticated active-writer asset uploads remain outside ordinary submission limits; the public asset-existence limit permits at least the 137-request burst required by the 4,361-asset CharX fixture at 32 assets per batch. | Protects login and the public existence probe without throttling long-lived observation paths or authorized asset writes. | High security and reliability value. |
+Core Fastify coverage lives in `server/fastify/__tests__/auth.test.ts`,
+`server/fastify/__tests__/activeWriter.test.ts`,
+`server/fastify/__tests__/routeProtection.test.ts`, and
+`server/fastify/__tests__/chatOccupancyEnforcement.test.ts`. These suites exercise
+real Fastify injection and SQLite state, including credential, writer, and scoped
+chat authority.
 
-## Bootstrap, configuration, lifecycle, and static serving
+## External egress and credentials
 
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Runtime bootstrap — `bootstrap.test.ts` cases: fresh and post-password unauthenticated rejection; exact uninitialized metadata; initialized revision without database transfer; large-response gzip with byte-identical body. | Keeps bootstrap small, authenticated, lineage/revision aware, and compressible. | Critical to every browser boot and recovery flow. |
-| Startup telemetry advertisement and ingestion — `bootstrap.test.ts`, server `startupTelemetry.test.ts`, and browser `src/ts/server/startupTelemetryProtocol.test.ts` / `startupTelemetry.test.ts`: opt-in bootstrap configuration, exact-key event variants, auth without writer ownership, 16 KiB/32-event caps, bounded values, unknown/content-field rejection, omitted trace bodies including invalid sentinels, queue/drop behavior, listener/logger isolation, and no readiness coupling. | Keeps startup metrics privacy-safe, bounded, authenticated, and unable to alter startup capability. | Critical to using real-environment startup measurements without creating a content or credential side channel. |
-| Environment parsing — `config.test.ts` covers import/Realm limits, request and generation trace modes, safety-snapshot policy, selected initialization options, and loopback-only auth-bypass host forms. | Protects bounded import and trace behavior, explicit opt-in of prompt sidecars, safe destructive replacement defaults, and a non-network-reachable development bypass. | High where limits, prompt privacy, recovery, and auth are involved. |
-| Disposable agent data sandbox — `agentDataSandbox.test.ts` covers clone/keep/fresh modes, WAL-visible rows, hard-linked assets, exclusion of credentials/backups/traces, canonical overlap through symlinks, non-directory/symlink destinations, staged replacement rollback, missing-source behavior, and invalid-SQLite cleanup. | Keeps `pnpm dev:agent` isolated from the human database while providing a realistic disposable copy. | Critical to safe agent-driven browser work. |
-| Entrypoint shutdown — `index.test.ts` cases: SIGTERM and SIGINT call `app.close`/`onClose`; duplicate signals reuse one close; hung-shutdown backstop is unrefed and exits with signal-style code. | Prevents database/file corruption and hung deployments during shutdown. | High operational value. |
-| Health and static SPA — `smoke.test.ts`: `reports health`. `static.test.ts` cases: root and fallback documents; nested files; immutable `/assets` caching; gzip byte identity; small API uncompressed; API 404 and non-GET separation; API works with and without `staticRoot`; disabled root returns Fastify 404. | Protects deployment boot checks and the built SPA/API routing boundary. | High for packaged/self-hosted deployments. |
-| Non-security browser UUIDs — `src/ts/nonSecurityUuid.test.ts`: prefer `crypto.randomUUID`; otherwise use `getRandomValues` with RFC 4122 version/variant bits; otherwise retain unique RFC-shaped fallback IDs. | Keeps local row/operation identifiers well shaped and collision-resistant enough on restricted browser surfaces. | High data-identity value, but deliberately not an authentication primitive. |
+`server/fastify/__tests__/hub.test.ts`, `server/fastify/__tests__/proxy.test.ts`,
+`server/fastify/__tests__/pluginNetwork.test.ts`, and
+`server/fastify/__tests__/mcpOAuthRefresh.test.ts` form the core egress fence.
+Credential masking and provider binding are covered by
+`server/fastify/__tests__/staleInlineModelProfileSecrets.test.ts` and
+`server/fastify/__tests__/providerOperations.test.ts`.
 
-## Resource hydration, compatibility, and communication cost
+## Runtime, diagnostics, and limits
 
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Hash-aware authoritative resources — `resourceReads.test.ts` cases: masked settings; shared legacy/malformed shell normalization across shell, full, hash-cache, and settings-group reads; partial theme defaults; bounded character selection; allowlisted groups; exact hash substitutions; aggregate/targeted collections with masked secrets; changed-item inventories; strict inventory validation/cap; root prompt fallbacks and malformed/duplicate preset pointers; character/chat/lorebook stubs; inventory-order-independent substitution; resident lorebooks; narrow order/selection; full/ranged/bulk messages; full/bulk character lorebooks; masked legacy preset and prompt-template detail. | Protects the thin-browser read protocol, recovery-safe settings, secret masking, cache correctness, and scoped hydration. | Critical to startup, invalidation, and large saves. |
-| Legacy storage bridge — `legacyStorage.test.ts` cases: auth; raw hex-path write/read; mid-write and rename failure preserve old bytes/remove temp; missing read; common path validation; empty write; UTF-8 list; single/multi remove; validate-all-before-delete; idempotent missing remove; SHA-256 crypto success and non-string rejection. | Preserves compatibility without permitting traversal or partial writes. | Medium-high while the bridge remains live. |
-| `Prefer` parsing — both `http.test.ts` cases: recognizes `return=minimal` through casing/combined headers/parameters; rejects absent or partial tokens. | Protects compact command acknowledgements. | Medium; small helper with broad protocol effect. |
-| Payload metrics — `payloadBudgets.test.ts`: composite cases emit bootstrap, character, and chat-message metrics; verify character shells omit messages/Hypa; metric bytes equal serialization; bootstrap/character responses are smaller than hydration. | Detects a loss of message-light projections and verifies observability. | High intent, moderate gate strength. |
-| Large-corpus server load gates — `serverLoadCostHarness.test.ts`: SQL classifier positive/negative cases plus hot-path cases covering scoped chat/Hypa and bulk hydration, legacy fallbacks, chat create, append cost, character lorebooks, prompt assembly/editinput, asset lookup/table sharing, memory cleanup/selection, scoped-vs-broad loaders, character/collection reads, server-intent completion, clone narrowing, triggers, Realm append, generation finalization, asset GC, secret masking, bootstrap, SSE replay, and disabled/enabled metric work. | Prevents O(database-size) reads, clones, and serialization on user-visible hot paths. | Critical performance coverage for large saves. |
+The core owns request redaction and bounded inputs through
+`server/fastify/__tests__/requestTrace.test.ts`,
+`server/fastify/__tests__/requestHistory.test.ts`,
+`server/fastify/__tests__/clientDiagnostics.test.ts`, and
+`server/fastify/__tests__/risuSaveBoundedInflate.test.ts`. Remote diagnostics is
+also core in `server/fastify/__tests__/remoteDiagnostics.test.ts`. Extended real-boundary
+coverage remains in
+`server/fastify/__tests__/supportDiagnosticsAuth.test.ts`,
+`server/fastify/__tests__/pushNotifications.test.ts`, and
+`server/fastify/browser-smoke/remoteDiagnostics.spec.ts`.
 
-## External egress, streaming, and observability
+## Primary inventory
 
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Permissioned plugin network validation — `pluginNetwork.test.ts`: IP classification cases for `127.0.0.1`, `10.0.0.1`, metadata/link-local, `::1`, mapped loopback/metadata, ULA/link-local/site-local, and documentation IPv6; accepts public hostname only when every DNS answer is public; rejects direct private/metadata/mapped/first-party targets (including `api.risuai.xyz`); rejects mixed public/private DNS; uses hostname boundaries; pins new target connections; follows a public redirect with fetch-compatible method rewriting and cross-origin credential stripping; blocks metadata redirect pivot; aborts pending DNS; preserves encoded bytes. | Prevents SSRF, DNS rebinding between validation/connect, redirect pivots, and credential leakage from plugins. | Critical security coverage. |
-| Generic proxy lifecycle and wire policy — `proxy.test.ts` cases. Disconnect group: complete request/response do not abort; premature close and pre-destroyed input do. Fetch group: timeout normalization/cleanup; framing, hop-by-hop, cookies/auth challenges and `risu-*` stripping; auth/missing URL; plugin-private-target blocking without narrowing generic proxy; PATCH/HEAD/OPTIONS plugin methods; status/body/header forwarding; gzip decompression; GET/POST/PUT/DELETE bodies; header override; default/capped/explicit/invalid deadlines; multi-chunk streaming; generous receive timeout; client-disconnect abort. | Protects the legacy generic proxy and stricter plugin route from stale headers, leakage, incorrect aborts, and buffering. | Critical security/compatibility value. Exact upstream requests and local multi-chunk responses are strong. Real close/timer ordering is a modest flake risk. |
-| Browser proxy-job lifecycle and parser — `src/ts/globalApi.proxy.test.ts`, `network/localNetwork.test.ts`, and `network/proxyJobWs.test.ts`: HTTP(S)-only local classification; full loopback, mapped-IPv6, and trailing-dot cases; exact frame-shape/base64/status/header validation; cancellation and nonterminal close/error DELETE propagation; pre-header 502 and post-header body failure; no DELETE after valid terminal frames. | Prevents browser/server classifier disagreement, truncated-success responses, malformed-frame confusion, and abandoned live proxy jobs. | High SSRF-adjacent and availability value. |
-| Hub passthrough — `hub.test.ts` cases: shared deadline; public GET and authenticated mutations/overrides; Realm query translation; no zstd compression; path/query/body/origin forwarding; exact persisted-token injection and rejection of caller credentials/extras/overrides/query variants/missing token; independent body cap; shared response/request header stripping; timeout and upload cap; complete URL overrides; same-origin/relative redirects; cross-origin/non-HTTP/body-bearing redirect rejection; disconnect abort; 502 connection failure. | Protects public content access while containing privileged Realm removal and authenticated override behavior. | Critical wherever a stored Realm token is involved. |
-| Local stream target matrix — `streamJobs.test.ts` accepts intended loopback/private/link-local IPv4 and IPv6 targets and rejects public, mapped-public, non-HTTP, malformed, userinfo, mixed-DNS, and public-DNS targets. Execution resolves every answer, pins the selected private address, preserves the logical Host/SNI identity, and revalidates and repins every redirect. | Restricts the local-device/model streaming feature to intended local networks without a validation/connect rebinding window. | High security and reliability value. |
-| Job registry and upstream execution — `streamJobs.test.ts`: activity, buffer/flush/broadcast, replay compaction, slow-client detach, event/byte caps, direct inactivity timers, a non-refreshable absolute lifetime, durable terminal snapshot cap, detach/delete/GC, and upstream abort. `streamBackpressure.test.ts` and completion-route cases cover bounded raw writes. | Prevents memory/disk growth, indefinitely refreshed jobs, incoherent replay, and slow-viewer process pressure. | High availability value. |
-| Legacy completion output budgets — `generation.completion.test.ts` and `generationBodyCap.test.ts`: request body bounds, a 32 MiB decoded UTF-8 aggregate response cap, 2 MiB slow-consumer write ceiling, upstream abort, and no extra generator consumption after overflow. | Stops legacy buffered and SSE completion compatibility routes from becoming unbounded provider-output accumulators. | High availability value. |
-| Stream-job HTTP/WebSocket API — `streamJobsRoutes.test.ts` cases. POST: pre-setup/agent-bypass/post-password auth, success shape, non-local URL, method, body cap. DELETE: cancel and unknown idempotency. WebSocket: ordered accepted/headers/chunk/done; auth through subprotocol; query credential rejection; unauthenticated/unknown rejection; pre-attach flush; completed-job viewer closes. | Protects authentication and replay semantics across HTTP-to-WebSocket handoff. | High, particularly the no-query-credential rule. |
-| Request abort helpers — `requestAbort.test.ts` cases: default 600-second reference; valid request remains alive; deadline abort; refresh extension; max cap; completed/incomplete request and response close distinctions; manual abort; listener/timer cleanup; detached work survives caller close but honors its deadline. | Defines when server work belongs to a request and when it must survive a browser disconnect. | Critical for generation/provider correctness and leak prevention. |
-| Post-upload import abort — save-route, local-backup decoder, and repository cases attach the request abort through upload/decode/staging and recheck after the asynchronous safety backup but before the destructive transaction. | Prevents a disconnected browser from continuing expensive decode or replacing live data after it abandons an import. | High data-integrity and availability value. |
-| Request tracing — `requestTrace.test.ts` cases: disabled behavior; non-API UID without JSONL; API JSONL; route/caller/query redaction; referer/user-agent/writer fallback; small-body redaction; large gzip sidecars; compressed cap omission; streaming omission; selected mode; 5,000-row retention and sidecar cleanup. | Preserves useful diagnostics without leaking secrets or unbounded disk use. | High privacy/operations value. |
-| Browser startup telemetry — server `startupTelemetry.test.ts` plus browser `startupTelemetryProtocol.test.ts` and `startupTelemetry.test.ts`: schema validation, failure taxonomy, bounded memory queue/batches, opt-in publishing, attempt/milestone ordering, auth/transport drops, keepalive, and diagnostic isolation. | Supplies startup duration, retry, and stable-failure data without user/domain content. | High operational and privacy value. |
-| Web Push — `pushNotifications.test.ts`: sends bounded completion payloads with a 10-second delivery timeout, resolves chat/character context, skips disabled delivery, prunes gone subscriptions, rejects malformed/insecure/credential-bearing/oversized fields, and authenticates before parsing 16 KiB-capped mutation bodies. `src/ts/server/pushNotificationRetryStorage.test.ts` validates bounded endpoint hydration plus persistent, corruption-safe cleanup retry state. | Protects notifications without accepting unsafe endpoints, unbounded bodies/payloads, or permanently stranded stale subscriptions. | Medium-high user value. |
-
-## API-centered browser coverage
-
-`server/fastify/browser-smoke` runs a built SPA against an in-process Fastify server on a random port. The suite is serial and has no retries.
-
-| Browser case | Server/API behavior included |
-| --- | --- |
-| `fastifyBrowserSmoke.spec.ts > Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command` | Real bootstrap, SSE subscription, settings/collections/characters hash-aware reads, settings command/event, refreshed projection, echo completion, memory reads, `.risu` export/import, bundle export, asset upload/read, no legacy `/storage` requests, and no OPFS writes. |
-| `visibleStateRecovery.spec.ts > a scrolled sidebar toggle keeps the shell fixed through command + resource refresh` | A real generation-settings command followed by SSE/resource refresh; the DOM and stored projection remain off. |
-| `visibleStateRecovery.spec.ts`: role-first old-lineage reload and connected import-recovery cases | A held pre-import command receives an exact lineage conflict. Role-first startup reloads; connected startup first installs a new-lineage Reader in place, then restores the original sidebar through Use this device at unchanged same-owner epoch. |
-| `visibleStateRecovery.spec.ts > switching chats repaints the active-chat generation picker` | Initial authoritative resource hydration; the transition itself is client routing/rendering. |
-| `rerollSwipePersistence.spec.ts > rerolled candidates survive a reload and stay swipe-recoverable` | Server generation and alternate persistence are central. |
-| `fastifyBrowserSmoke.spec.ts > core chat controls and blocking alerts remain accessible across responsive viewports` | Static serving and initial boot only; checks control naming, focus, ownership, scrolling, and viewport geometry. |
-| `startupCachePopulationMatrix.spec.ts > startup matrix keeps cold and warm small/large populations separate` | Disposable authenticated servers, shell/resource payload metrics, cache hits/misses, request UIDs/traces, ordered milestones, and no early mutation/generation. |
-| `startupDirectLinks.spec.ts` and `startupRecoveryIntegrationMatrix.spec.ts` | Isolated batches of manifest-derived direct links, role-first startup telemetry and response-loss replay, real event-gap recovery, multi-tab denial/takeover/promotion, and slow/failing resource Retry. |
-
-## Complete primary file manifest
-
-| Protection area | Primary test files |
-| --- | --- |
-| Auth and route policy | `agentDataSandbox.test.ts`; `auth.test.ts`; `config.test.ts`; `routeProtection.test.ts`; `smoke.test.ts` |
-| Startup and deployment | `bootstrap.test.ts`; `startupTelemetry.test.ts`; `index.test.ts`; `static.test.ts`; `browserLocalSurface.test.ts`; `polyfill.test.ts`; `sourcemap.test.ts` |
-| Resources and compatibility | `http.test.ts`; `payloadBudgets.test.ts`; `nonSecurityUuid.test.ts`; `globalApi.fetchNative.test.ts` |
-| Egress and Hub | `hub.test.ts`; `proxy.test.ts`; `globalApi.proxy.test.ts`; `network/localNetwork.test.ts`; `network/proxyJobWs.test.ts` |
-| Streaming and tracing | `generationBodyCap.test.ts`; `generationTraceSidecar.test.ts`; `requestAbort.test.ts`; `requestTrace.test.ts`; `streamBackpressure.test.ts`; `streamJobs.test.ts`; `streamJobsRoutes.test.ts` |
-| Web Push and teardown | server `pushNotifications.test.ts`; browser `process/__tests__/notification.test.ts`, `process/index.svelte.stop.test.ts`, `server/pushNotificationRetryStorage.test.ts`, `server/pushNotificationSetting.test.ts`, `server/pushNotifications.test.ts`, and `server/serviceWorker.test.ts` |
-| Telemetry counterparts | `src/ts/server/startupTelemetryProtocol.test.ts`; `src/ts/server/startupTelemetry.test.ts`; `server/fastify/browser-smoke/startupCachePopulationMatrix.spec.ts`; `startupRecoveryIntegrationMatrix.spec.ts` |
-
-## Remote Support Diagnostics
-
-`server/fastify/__tests__/supportDiagnosticsAuth.test.ts` covers the independent
-32-byte bearer verifier, expiry/rotation/revocation, private file placement and
-permissions, bounded lifecycle storage, and fixed operator output.
-`server/fastify/__tests__/remoteDiagnostics.test.ts` checks every registered
-protected route with a valid support token, opt-in/auth states, useful sanitized
-failure metadata, query/rate limits, no raw diagnostic transport artifacts,
-display-source load/decode stage metadata without persisted values or IDs,
-volatile loss, immutable cursor pages, exact v2 fact stripping, and build-bound
-v3 source locations. The protocol grammar/privacy suite is
-`packages/protocol/src/remoteDiagnostics.test.ts`. Manual Diagnostics remains
-covered by the existing client collector and panel tests.
-
-V2 exact-family and browser-ingestion contracts live in
-`packages/protocol/src/diagnosticEvents.test.ts` and
-`packages/protocol/src/browserDiagnostics.test.ts`. Journal and scoped runtime
-suites exercise restart revalidation, corruption/full/stalled storage, bounded
-retention/queue/close, source/event deduplication, history reset, stale cursors,
-UID eviction, and unchanged domain authority. Provider/script/generation suites
-inject transport and commit/recovery failures and verify useful content-free
-evidence. `server/fastify/__tests__/remoteDiagnosticsJourney.test.ts` uses a real
-local provider, failed SQLite commit, restart recovery, and the actual HTTPS
-CLI helper; browser upload uses the independent focused journey in
-`server/fastify/browser-smoke/remoteDiagnostics.spec.ts`. Fixtures are disposable
-synthetic data with temporary credentials and a test CA; these checks do not
-claim a production configuration audit. `util/diagnostics-remote.test.ts`
-additionally covers v3 preference, v2 fallback, complete bounded pagination,
-correlation summaries, cursor cycles, metadata/order inconsistencies, and
-credential/content canaries through real CLI subprocesses and temporary HTTPS.
+- Core: `server/fastify/__tests__/auth.test.ts`, `server/fastify/__tests__/routeProtection.test.ts`, `server/fastify/__tests__/pluginNetwork.test.ts`, `server/fastify/__tests__/requestTrace.test.ts`, `server/fastify/__tests__/remoteDiagnostics.test.ts`.
+- Extended: `server/fastify/__tests__/remoteDiagnosticsJourney.test.ts`, `server/fastify/__tests__/http.test.ts`, `server/fastify/__tests__/static.test.ts`, `src/ts/network/localNetwork.test.ts`.

@@ -113,10 +113,9 @@ use the async browser tokenizer and ask the chat screen to hydrate enough pages
 for the largest referenced count. The chat target and composer operation are
 checked again after hydration and hook completion so a navigation change cannot
 apply stale output. That UI coordination is documented in the Svelte Chat UI
-guide. Shared browser/server slot behavior and bounded hydration are pinned by
-`src/ts/process/inputHooks.test.ts`,
-`src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts`, and
-`server/fastify/__tests__/rawMessageTranslation.test.ts`.
+guide. The former mocked input-hook, chat-component, and raw-translation suites
+were removed in Phase 5; server translation eligibility remains covered by
+`server/fastify/__tests__/serverAutoTranslationEligibility.test.ts`.
 
 ## Browser Translation Caches
 
@@ -138,9 +137,9 @@ invalidate LLM hits; unrelated settings do not. Forward and reverse keys remain
 separate. Browser translation captures the effective chat binding before
 asynchronous work and threads it through pipeline execution and every cache
 signature; explicitly no-chat surfaces such as Playground stay global, while
-inactive-chat export passes the exported chat's binding. `src/ts/translator/translator.cache.svelte-node.test.ts`
-pins signatures, deterministic eviction, chat-scope clearing, quota fallback,
-and secret exclusion.
+inactive-chat export passes the exported chat's binding. The former cache suite
+was removed in Phase 5 because it mocked repository modules. The pure pipeline contract remains in
+`packages/shared-core/src/translatorPipeline.test.ts`.
 
 These browser caches are not an authority for server message persistence.
 `autoTranslateCachedOnly` disables generated-message LLM auto-translation
@@ -204,8 +203,8 @@ terminal retention and 128-entry cap as message jobs. Bootstrap publishes
 refreshes the character/chat projection and rejects settings/source-mismatched
 rows.
 Greeting store and recovery contracts are covered by
-`server/fastify/__tests__/greetingTranslationStore.test.ts` and
-`src/ts/server/greetingTranslations.test.ts`.
+`server/fastify/__tests__/greetingTranslationStore.test.ts`; the mocked browser
+projection suite was removed in Phase 5.
 
 ## Generated-Message Auto-Translation
 
@@ -227,8 +226,8 @@ immediately and maps running/failure outcomes into the shared job state.
 `src/ts/process/generatedMessageTranslationEligibility.ts` prevents the older
 rendered-message compatibility trigger from starting a duplicate job. Guards
 live in
-`server/fastify/__tests__/generationChatCompletionTranslation.test.ts` and
-`src/ts/process/serverGeneratedMessageTranslation.test.ts`.
+`server/fastify/__tests__/generationChatCompletionTranslation.test.ts`. The
+mocked client orchestration suite was removed in Phase 5.
 
 ## Draft And BTW Input Hooks
 
@@ -269,12 +268,10 @@ stores the original composer text as its source-bound `MessageTranslation`.
 `sourceHash` and the hook id/prompt/model selection as `settingsHash`. Later
 message edits invalidate the paired original through the normal source-hash
 rule. `src/ts/process/draftHookTranslation.test.ts` and
-`src/ts/process/inputHooks.test.ts` pin these behaviors. The chat-level Draft
-Translation, exact inlay-inclusive source hash, empty-result, and stale-owner
-guards are covered by
-`src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts`; server source-hash
-and settings-identity behavior remains covered by
-`server/fastify/__tests__/rawMessageTranslation.test.ts`.
+`packages/shared-core/src/translatorPipeline.test.ts` pin the retained pure
+behaviors. The former mocked input-hook, chat-component, and raw-translation
+suites were removed in Phase 5, so their orchestration details no longer have
+dedicated unit coverage.
 
 ## Change Checklist
 

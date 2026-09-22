@@ -34,7 +34,7 @@ CSS, and plugin execution.
 | Sidebar, character folder, character/chat list, or reorder is wrong | `src/lib/SideBars/Sidebar.svelte`, `src/lib/SideBars/SideChatList.svelte` | [Navigation UI](svelte-navigation-ui.md) |
 | Settings nav, row, authoring editor, model profile, or shared control is wrong | `src/lib/Setting/Settings.svelte`, `src/lib/Setting/SettingRenderer.svelte` | [Settings UI](svelte-settings-ui.md) |
 | Theme, motion, clipping, font, scale, or custom CSS is wrong | `src/styles.css`, `src/ts/gui/colorscheme.ts`, `src/ts/gui/animation.ts`, `src/ts/gui/guisize.ts` | [Styling, Theme, And Layout](#styling-theme-and-layout) |
-| URL, back/forward, settings section, Playground tool, or character route is wrong | `src/ts/router.ts`, route effects in `src/App.svelte` | `src/ts/router.test.ts`, `src/App.routeEffect.dom.test.ts` |
+| URL, back/forward, settings section, Playground tool, or character route is wrong | `src/ts/router.ts`, route effects in `src/App.svelte` | `src/ts/routerRoute.test.ts`, `server/fastify/browser-smoke/startupDirectLinks.spec.ts` |
 | The document moved or window scrolling appeared | `src/ts/gui/viewportScrollGuard.ts`, `src/appStartup.ts`, `src/styles.css` | Code that scrolls `window` or `document.scrollingElement` |
 
 ## Entrypoints And Shell
@@ -159,9 +159,10 @@ Blocking dialogs share `src/ts/gui/modalFocusTrap.ts`, which stacks nested
 modals, makes background branches inert, traps focus, locks body scrolling, and
 restores focus and background state. Migrated backdrop-closing dialogs use
 `src/ts/gui/modalBackdropDismiss.ts`; dismissal requires the same primary
-pointer gesture to start and end on the backdrop. Guards are
-`src/ts/gui/modalFocusTrap.test.ts` and
-`src/ts/gui/modalBackdropDismiss.test.ts`. Not every overlay has migrated to
+pointer gesture to start and end on the backdrop. The former helper unit tests
+were removed in Phase 5 because they asserted implementation behavior through
+mocked DOM setup; `server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts`
+retains the integrated focus/modal boundary. Not every overlay has migrated to
 both actions. For a focus escape or clickable background, inspect the local
 `data-modal-root`, `use:modalFocusTrap`, and `use:modalBackdropDismiss` wiring
 instead of assuming the shared backdrop behavior is present.
@@ -241,8 +242,8 @@ Important route and store facts:
 - `src/ts/server/resourceState.svelte.ts` owns the settings, collections, and
   character resources that UI reads. Its compatibility proxy and snapshot
   helpers compose a database-shaped view over those slices; they do not own a
-  second database state tree. `src/ts/server/resourceState.svelte.test.ts`
-  guards that composition.
+  second database state tree. Core projection behavior is guarded by
+  `src/ts/storage/database.resourceState.test.ts`.
 - `selectedCharID` drives the writer character, sidebar, and chat surfaces;
   reader selection comes from explicit local route IDs.
 - `settingsOpen` and `SettingsMenuIndex` drive the settings shell.
@@ -261,7 +262,7 @@ Important route and store facts:
 - Writer route application canonicalizes active durable generation navigation
   to its owner; delayed work is fenced against newer navigation. A missing
   chat ID canonicalizes to the bare selected-character route; the focused guard
-  is `src/ts/router.test.ts`.
+  is `src/ts/routerRoute.test.ts`.
 
 ## Component Ownership
 
@@ -321,9 +322,8 @@ and input-translation controls. For an LLM translator with Send Text As-Is,
 source, source/translated history, and greeting text before dispatch. The
 effective setting participates in translation-cache identity. Automatic message
 translation is chat-scoped in the sidebar. The removed UI-translation-template
-download must not return; `src/ts/setting/languageSettingsData.test.ts` guards
-the setting visibility and absence of that action. Translation and input-hook
-runtime behavior belongs to
+download must not return. Its catalog-shape test was removed in Phase 5 because
+it asserted implementation structure. Translation and input-hook runtime behavior belongs to
 [Translation And Input Hooks](../../docs/structure/translation-and-input-hooks.md).
 
 ## Styling, Theme, And Layout
@@ -461,9 +461,10 @@ intentionally restores that shell. `GridCatalog.svelte` and
 `MobileCharacters.svelte` are live. Lite mode is controlled by
 `VITE_RISU_LITE` and `src/ts/lite.ts`, not `LiteMain.svelte`.
 
-Focused live-surface guards include `src/lib/Others/ChatList.svelte.test.ts`,
-`src/lib/Others/WelcomeRisu.svelte.test.ts`, and
-`src/lib/Others/IrisModal.svelte.test.ts`.
+The former live-surface component tests were removed in Phase 5. Integrated
+navigation and modal behavior remains in
+`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts` and
+`server/fastify/browser-smoke/readOnlyAppUx.spec.ts`.
 
 ## Playground
 
@@ -482,17 +483,15 @@ aligned with the slug maps in `src/ts/router.ts`.
 
 Tool-specific problems normally belong in the matching component under
 `src/lib/Playground/` after the route/store mapping is confirmed.
-Focused guards include `src/lib/Playground/ToolConversion.svelte.test.ts`,
-`src/lib/Playground/PlaygroundSubtitle.svelte.test.ts`,
-`src/lib/Playground/PlaygroundSubtitle.test.ts`, and
-`src/lib/Playground/PlaygroundImageTrans.svelte.test.ts`.
+The former mocked Playground component tests were removed in Phase 5; route
+reachability remains in `server/fastify/browser-smoke/startupDirectLinks.spec.ts`.
 
 ## Visible-State Testing
 
 The canonical policy is
 [Testing And Operations](../../docs/structure/testing-and-operations.md#visible-state-test-contract).
-For a Svelte UI regression, choose the focused colocated DOM test for the
-surface and assert the rendered state after its transition. The repository
-command inventory and `pnpm dev:agent` runner are in
+For a Svelte UI regression, prefer a retained real browser/process boundary and
+assert the rendered state after its transition; do not restore own-module-mock
+component tests. The repository command inventory and `pnpm dev:agent` runner are in
 [Testing And Operations](../../docs/structure/testing-and-operations.md#scripts);
 this guide does not duplicate them.

@@ -82,10 +82,10 @@ Server defaults and migration normalization live in
 `ScrollToMessageStore`, transcript-window identity, image-load waits, folded
 message state, and route freshness all affect scroll behavior. A queued bookmark
 jump expands and hydrates the necessary window only after its target route is
-current. `DefaultChatScreen.loadPages.test.ts`, the shared-core load-page tests,
-`src/ts/setting/advancedSettingsData.test.ts`,
-`src/ts/server/chatMessageHydration.test.ts` and
-`src/ts/server/chatMessageHydration.freshness.dom.test.ts` guard this boundary.
+current. `packages/shared-core/src/chatLoadPages.test.ts` guards the pure paging
+calculation, while `server/fastify/browser-smoke/chatHistoryScroll.spec.ts`
+guards the visible hydration/scroll boundary. The former mocked component and
+browser orchestration suites were removed in Phase 5.
 
 `Chats.svelte` separately selects DOM residency from that logical window using
 `transcriptResidency.ts`. It starts with 30 working rows and reserves room for
@@ -435,8 +435,8 @@ additional/module assets, and optional partial edit. Parser code lives under
 `risu-ctrl="bgm___..."` markers. `src/ts/observer.svelte.ts` turns highlighted
 code into copy/download context targets, starts BGM, retries blocked autoplay on
 the next user activation, and stops playback on chat change.
-`src/ts/observer.svelte.test.ts` guards that DOM contract. Runtime parser
-ownership remains in the
+The former observer unit suite was removed in Phase 5 because it was
+implementation-coupled. Runtime parser ownership remains in the
 [client TypeScript map](client-runtime.md#client-typescript-areas).
 
 ### Translation Layers And Greeting Ownership
@@ -631,9 +631,10 @@ Draft and BTW hook execution registers a chat-keyed activity in
 abort controller, hook kind, and composer-operation token/version; different
 chats may run concurrently while one chat remains single-flight. The composer
 spinner is amber (`#f59e0b`), and ID-scoped cleanup prevents
-one hook from clearing another chat's state. Stage mapping is covered by
-`chatGenerationLoading.test.ts`, the registry by `inputHookActivity.test.ts`,
-and the DOM behavior by `DefaultChatScreen.loadPages.test.ts`.
+one hook from clearing another chat's state. These implementation-oriented unit
+suites were removed in Phase 5. Retained pure hook translation behavior is in
+`src/ts/process/draftHookTranslation.test.ts`; activity/DOM orchestration no
+longer has a dedicated unit test.
 
 ### Progress And Recovery Controls
 
@@ -733,7 +734,8 @@ that the same chat still owns the operation, and retries generation once.
 Decline, acknowledgement failure, abort, or chat change does not retry. The
 field is allowed by both `src/ts/chatCommands.ts` and
 `server/fastify/src/commands/chats.ts`; behavior is covered in
-`src/ts/process/__tests__/sendChat.serverPreview.test.ts`.
+`server/fastify/__tests__/generation.chat.test.ts` and
+`server/fastify/browser-smoke/acceptedSendProtocol.spec.ts`.
 
 ## Advanced Tools Token Estimates
 
@@ -766,32 +768,13 @@ Failed hydration cannot present a partial transcript count as a complete total.
 
 ## Focused Tests
 
-Start with `src/lib/ChatScreens/DefaultChatScreen.loadPages.test.ts`,
-`src/lib/ChatScreens/BardWikiWorkspace.svelte.test.ts`,
-`src/lib/ChatScreens/BardWikiWorkspace.lazy.test.ts`,
-`src/lib/ChatScreens/ChatBody.translation.dom.test.ts`,
-`src/lib/ChatScreens/ChatBody.assets.dom.test.ts`,
-`src/lib/ChatScreens/ChatBody.displayLifecycle.dom.test.ts`,
-`src/lib/ChatScreens/ChatBody.parseMemo.test.ts`,
-`src/lib/ChatScreens/Chat.parserDependencies.test.ts`,
-`src/lib/ChatScreens/Chat.editing.dom.test.ts`,
-`src/lib/ChatScreens/Chat.deletion.dom.test.ts`,
-`src/lib/ChatScreens/Chat.partialEditing.dom.test.ts`,
-`src/lib/ChatScreens/Chat.generationFeedback.dom.test.ts`,
-`src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts`,
-`src/lib/ChatScreens/Chat.customHtml.test.ts`,
-`src/lib/ChatScreens/PartialEditController.sharedHover.test.ts`,
-`src/lib/ChatScreens/partialEditFreshness.test.ts`,
-`src/lib/ChatScreens/partialEditLayer.test.ts`,
-`src/lib/ChatScreens/partialEditTouchTrigger.test.ts`,
-`src/lib/ChatScreens/chatButtonTriggerFreshness.test.ts`,
-`src/lib/ChatScreens/Suggestion.svelte.test.ts`, and
-`src/lib/ChatScreens/newMessageTranslationEligibility.test.ts`.
-
-Translation, input-hook, and observer guards include
-`src/ts/translator/bilingualInterleave.test.ts`,
-`src/ts/translator/bilingualInterleave.dom.test.ts`,
-`src/ts/process/inputHooks.test.ts`,
-`src/ts/process/serverGeneratedMessageTranslation.test.ts`, and
-`src/ts/observer.svelte.test.ts`. The visible-state policy is canonical in
+Phase 5 removed the mock-heavy ChatScreens component inventory. Start with the
+mutation-proven client owners `src/ts/chatCommands.messages.dom.test.ts`,
+`src/ts/server/chatMessageHydration.completion.dom.test.ts`, and
+`src/ts/process/__tests__/streamResponse.test.ts`. Use
+`server/fastify/browser-smoke/acceptedSendProtocol.spec.ts`,
+`server/fastify/browser-smoke/coreLifecycle.spec.ts`, and the extended
+`server/fastify/browser-smoke/chatHistoryScroll.spec.ts` for visible cross-layer
+behavior. Pure translation behavior remains in
+`src/ts/translator/bilingualInterleave.test.ts`. The visible-state policy is canonical in
 [Testing And Operations](../../docs/structure/testing-and-operations.md#visible-state-test-contract).

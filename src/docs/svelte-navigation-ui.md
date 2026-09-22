@@ -194,9 +194,8 @@ record approval. Closing and reopening an approved folder is immediate until a
 full page refresh creates a new module lifetime. Concurrent attempts for one
 folder share the same confirmation.
 
-Tests include `src/ts/characterFolderOpening.test.ts`,
-`src/lib/SideBars/Sidebar.keyboard.dom.test.ts`,
-`src/lib/SideBars/Sidebar.charList.test.ts`, and
+The folder-confirmation unit suites were removed in Phase 5 because they asserted
+UI implementation shape. Durable character mutation and rollback remain core in
 `src/ts/characterCommands.test.ts`.
 
 ## Chat Lists And Folders
@@ -251,14 +250,16 @@ successful, still-current export does the UI offer two confirmations to replace
 all chats with an empty `Chat 1`. The optimistic durable reset preserves chat
 folders, routes the still-current view to the replacement, and rolls back on
 failure. Canceling, a failed export, or a changed export fence leaves chat
-structure unchanged. Guards are `SideChatList.svelte.test.ts`,
-`src/ts/characters.exportChat.test.ts`, and `src/ts/chatCommands.organization.dom.test.ts`.
+structure unchanged. The former mocked client/component guards were removed in
+Phase 5; the server transaction remains covered by
+`server/fastify/__tests__/commands.test.ts`.
 
 The branch-graph action also strictly hydrates every chat and abandons its
 result if the character owner changes. It passes a read-only graph of hashed
 greetings and message prefixes from `src/ts/gui/branches.ts` to
 `AlertComp.svelte`; branch details appear on pointer hover and keyboard focus.
-`AlertComp.dom.test.ts` covers the dialog surface.
+The former dialog component test was removed in Phase 5; this surface no longer
+has dedicated unit coverage.
 
 ## Chat-Scoped Generation Controls
 
@@ -287,10 +288,9 @@ Toggle reconciliation has an additional readiness contract:
    against authoritative post-update activation. It rejects removal of an
    existing value whose toggle is still required.
 
-Regression owners: `src/ts/activeChatGenerationSettings.test.ts`,
-`src/lib/SideBars/chatGenerationSettingsControls.test.ts`, and
-`server/fastify/__tests__/commands.chatGenerationSettings.test.ts` (delayed Persona-module hydration
-and required-value removal).
+The retained pure owners are `src/ts/chatGenerationSettings.test.ts` and
+`src/ts/chatGenerationTogglePresets.test.ts`. The former mocked sidebar and
+split server command suites were removed in Phase 5.
 
 ### Saved Toggles Presets
 
@@ -308,7 +308,7 @@ comparison logic live in
 and commands live in
 `src/ts/chatGenerationTogglePresets.ts`; focused guards are
 `src/ts/chatGenerationTogglePresets.test.ts` and
-`src/lib/SideBars/chatGenerationSettingsControls.test.ts`.
+`packages/shared-core/src/chatGenerationTogglePresetRecords.test.ts`.
 
 `ChatTranslationSettings.svelte` owns the active chat's automatic translation,
 bot-only, and bilingual controls. Translation execution belongs to
@@ -322,9 +322,9 @@ The add-character flow selects a successfully imported character only while
 its captured navigation scope remains current. Import normalization in
 `src/ts/characterCards.ts` supplies a missing chat `fmIndex` from the
 character's `firstMsgIndex`, falling back to `-1`, so the first selected chat
-can render its greeting. Guards are
-`src/ts/characterCards.pngImport.svelte-node.test.ts` and
-`src/ts/characters.changeChar.test.ts`.
+can render its greeting. The former mocked browser import/selection suites were
+removed in Phase 5; the real Realm/CharX persistence boundary remains covered by
+`server/fastify/__tests__/realmImport.test.ts`.
 
 `src/lib/SideBars/CharConfig.svelte` owns profile, icon/view/media, advanced,
 scripts, TTS, lorebook, import/export, and character deletion surfaces. Its
@@ -332,7 +332,8 @@ server-backed profile draft is created synchronously before initial render:
 `createCharacterOwnerDraft()` reads the current selected character owner and
 clones the requested fields before installing reactive synchronization. The
 first frame therefore reflects the server projection rather than empty control
-defaults. `CharConfig.svelte.test.ts` includes an initial-draft rendering guard.
+defaults. `src/ts/server/characterDraft.svelte.test.ts` retains the authoritative
+draft/dirty-field contract; the component rendering test was removed in Phase 5.
 
 Profile edits, chat metadata, script definitions, and uploaded media use
 separate focused bridges and freshness guards under `src/ts/server/`. Keep
@@ -358,8 +359,8 @@ and its selector when changing navigation controls.
 `application/x-risu-app-internal-drag`; feature owners add their narrower
 marker. The app-level importer ignores either the general internal marker or
 `application/x-risu-sidebar-drag` before looking for files. External `Files`
-drags remain available to import. `src/App.routeEffect.dom.test.ts` and
-`src/ts/dragTypes.test.ts` guard this boundary.
+drags remain available to import. `src/ts/dragTypes.test.ts` guards the retained
+pure marker contract; the mocked app route-effect suite was removed in Phase 5.
 
 Character and folder organization in `Sidebar.svelte` uses native drag events.
 `sidebarDrag.ts` captures both the source position and a structural signature of
@@ -371,9 +372,9 @@ mutation. `dropList.ts`, `sidebarCharList.ts`, and folder rendering keep the DOM
 projection aligned with the durable order.
 
 Keyboard and menu organization must use the pure movement/position resolvers in
-`sidebarOrganizer.ts`, not reproduce pointer math.
-`Sidebar.keyboard.dom.test.ts`, `sidebarOrganizer.test.ts`, and
-`sidebarDrag.test.ts` cover both access paths.
+`sidebarOrganizer.ts`, not reproduce pointer math. The former keyboard,
+organizer, and drag unit suites were removed in Phase 5 because they asserted
+component/implementation behavior.
 
 Chat and chat-folder reordering in `SideChatList.svelte` uses Sortable instances
 for each chat group plus the folder list. On drop it reconstructs order from
@@ -390,11 +391,12 @@ replace the projection. The command/outbox contract is canonical in
 
 ## Focused Tests
 
-Start with `src/lib/SideBars/SideChatList.svelte.test.ts`,
-`src/lib/SideBars/Sidebar.keyboard.dom.test.ts`,
-`src/lib/SideBars/sidebarOrganizer.test.ts`,
-`src/lib/SideBars/sidebarDrag.test.ts`,
-`src/lib/SideBars/chatGenerationSettingsControls.test.ts`,
-`src/lib/SideBars/CharConfig.svelte.test.ts`, and the narrower colocated tests
-under `src/lib/SideBars/`. The visible-state policy is canonical in
+Phase 5 removed the SideBars component and organization unit-test inventory.
+Start with the surviving pure/client owners `src/ts/dragTypes.test.ts`,
+`src/ts/chatGenerationSettings.test.ts`,
+`src/ts/chatGenerationTogglePresets.test.ts`, and
+`src/ts/characterCommands.test.ts`. Use
+`server/fastify/browser-smoke/coreLifecycle.spec.ts` and
+`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts` for visible
+cross-layer behavior. The visible-state policy is canonical in
 [Testing And Operations](../../docs/structure/testing-and-operations.md#visible-state-test-contract).

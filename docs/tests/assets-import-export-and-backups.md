@@ -1,203 +1,47 @@
 # Assets, Import/Export, and Backups
 
-Last audited: 2026-08-30.
-Targeted source checks: 2026-09-12 (paired import recovery, storage usage, and maintenance families).
-
-This area covers content-addressed assets, metadata and garbage collection, local backup/restore, legacy database migration, current and legacy `.risu` codecs, ordinary and bundled import/export, inlay catalogs, and Realm character packages. `realmImport.test.ts` defines an additional stress case that is skipped in the normal server lane and enabled when that file is selected directly.
-
-## Replacement lifecycle verification
-
-`server/fastify/browser-smoke/importRestoreRecovery.spec.ts` drives real Settings
-file selection and server-backup selection against built Chromium/Fastify/SQLite.
-It covers invalid upload then explicit retry, committed response loss, failed
-replacement refresh then reload, writer takeover while the response is held,
-and server restore followed by a durable visible setting check. Each accepted
-upload asserts exactly one additional persisted import event. The retained
-`fastifyBrowserSmoke.spec.ts` local `.bin` download/upload journey complements
-this ZIP fixture; `visibleStateRecovery.spec.ts` covers old command/lineage recovery.
-
-Focused replacement schedules live in `risuSaveBundleImportRoute.test.ts`
-(actual HTTP disconnect and stale upload admission), `backupMaintenance.test.ts`
-(cancel/takeover during safety copying), and `backups.test.ts` (same-ID live
-parents with the complete BardWiki graph, directory/SQLite crash points).
-`serverMessageTranslation.test.ts`, `memoryEmbedJobHandler.test.ts`,
-`memorySummarizeJobHandler.test.ts`, `bardWikiApplyTurnHandler.test.ts`, and
-`bardWikiRebuildHandler.test.ts` hold provider results across actual replacement
-and verify no old output/status mutation plus current-work recovery.
-`durableGeneration.test.ts` retains real HTTP generation through import/restore
-with identical source IDs for modern and compatibility requests.
-
-`src/ts/server/backups.svelte-node.test.ts` qualifies accepted replacements when
-ownership preparation throws; `src/ts/storage/backup.test.ts` rejects stale result
-alerts. `bardWikiLifecycle.test.ts` imports a real encoded/decoded vault during
-queued source reconciliation, then verifies exact imported manual content survives
-the next full rebuild. Existing vault route tests own transaction/error atomicity.
-Fault injection and in-process SQLite reopen do not certify power-loss behavior.
+Asset and replacement coverage now favors real bytes, real SQLite, and real
+browser reloads. Mocked browser import/export suites were removed in Phase 5.
 
 ## Content-addressed assets
 
-Storage usage is covered by `server/fastify/__tests__/storageUsage.test.ts`
-(real file lengths, nested categories, hard links, symlinks, cancellation, auth,
-and fresh reads) and `src/lib/Setting/Pages/StorageUsage.svelte.test.ts`
-(loading, category explanations, disk capacity, refresh failure/retry, invalid
-responses, partial/empty results, and cancellation on exit).
+`server/fastify/__tests__/assetGc.test.ts` and
+`server/fastify/__tests__/assetGcScheduling.test.ts` are mutation-proven core
+coverage for reference discovery and maintenance scheduling. Extended coverage
+includes `server/fastify/__tests__/assetMetadataIndex.test.ts`,
+`server/fastify/__tests__/risuSaveAssetReferences.test.ts`, and
+`server/fastify/__tests__/inlayCatalog.test.ts`.
 
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Upload and transactional staging — `assets.test.ts`: unauthenticated raw upload rejected; oversized unauthenticated body rejected before parsing; stale writer rejected before parsing; PNG upload computes SHA-256/writes bytes/metadata; compact acknowledgement; ONNX metadata; inlay-signature metadata; asset-only write does not change projected database revision; asset upload does not stale an already captured command revision; metadata write does not depend on command-event persistence; bulk metadata likewise; later bulk file failure removes earlier staged bytes; multipart bulk returns ordered results; binary-framed bulk returns ordered results; existing assets make bulk idempotent; same-byte reupload idempotent; reupload heals missing blob; unsupported content type 415. | Preserves content-addressing, idempotency, command revision independence and all-or-nothing staging. | Critical to every image/audio/model/save reference and to avoiding orphaned partial files. |
-| Read, HEAD, existence and index — `assets.test.ts`: GET serves bytes/content type/immutable cache; unknown and malformed GET 404; existing HEAD gives headers/no body; unknown HEAD 404; `/assets/exists` reports present/missing and handles empty; rejects non-array, missing IDs, non-string IDs, non-SHA IDs and oversized batches; uploads persist exact SQLite metadata. `assetMetadataIndex.test.ts`: insert/get; unknown null; invalid ID null; list; count; delete IDs; missing IDs; duplicate insert ignored. | Ensures public content-addressed reads and bounded existence probes agree with SQLite metadata. | High correctness/cache value. |
-| Byte-read observability — two `asset byte read fanout measurement` cases in `assets.test.ts`: each GET emits a found metric including repeats, and missing assets emit a not-found metric. | Makes repeated disk reads diagnosable. | Medium operational value. |
-| Garbage collection — `assetGc.test.ts` cases: reclaim old orphan only while retaining referenced/shared/fresh; never delete within grace; drop metadata for missing blob; sweep old stray file without metadata; no-op when clean; never hydrate messages; scoped walker matches hydrated referenced/missing/orphan sets; preserve references from settings/collections/characters/chats/messages; preserve message-only inlay token reference. | Prevents both disk leaks and deletion of live content, including references stored outside top-level JSON. | Critical data-integrity protection. |
-| Command-side reference integrity — `commands.assets.test.ts`: uploaded IDs persist through character/module/persona/settings/folder owners; malformed/missing refs reject without revision; malformed/missing character audio refs reject on create/patch; optional audio refs may be cleared. `commands.botPresets.test.ts` additionally validate preset image references. | Stops commands from persisting dangling or malformed asset IDs. | Critical because GC/export depend on complete references. |
+## Backups and database replacement
 
-## Local backup and restore
+Core replacement contracts live in `server/fastify/__tests__/backups.test.ts`,
+`server/fastify/__tests__/legacyDatabaseImport.test.ts`, and
+`server/fastify/__tests__/risuSaveBundleImportRoute.test.ts`. The core
+`server/fastify/browser-smoke/importRestoreRecovery.spec.ts` journey verifies
+database, asset, and save bytes across restore and reload. Extended cases cover
+copy pooling and local backup storage in
+`server/fastify/__tests__/backupCopyPool.test.ts` and
+`server/fastify/__tests__/localBackupDatabase.test.ts`.
 
-The focused route coverage lives in `server/fastify/__tests__/backups.test.ts`.
-`maintenanceCoordinator.test.ts`, `maintenanceCosts.test.ts`,
-`maintenanceStaging.test.ts`, and `backupCopyPool.test.ts` protect bounded
-exclusive/save/staging/GC admission,
-request cancellation, copy/hash worker limits, shutdown drain, cost ceilings,
-and publication cleanup. These tests are the focused owners when a backup,
-import, live staging, compatibility save, or GC change affects shared
-maintenance scheduling.
+## Save codecs and imports
 
-| Included individual cases | Behavior protected |
-| --- | --- |
-| Reject all four routes without auth; create on fresh data directory; persist explicit label; reject non-string label; capture live revision/asset count; list newest-first; fresh list empty. | Backup creation, metadata and authentication. |
-| Round-trip import A → backup → import B → restore A; repair stable lorebook IDs from pre-v23 SQLite; round-trip split model/prompt preset tables; preserve pre-restore state when restore-event persistence fails; round-trip messages and per-chat Hypa; round-trip asset bytes; restore legacy `db.json` into SQLite. | Complete, atomic recovery across current, migrated and legacy persistence owners. |
-| Skip corrupt manifest during list; failed legacy `db.json` re-import rolls back with no event; unknown restore 404; delete directory; unknown delete 404; reject path traversal. | Corruption isolation and safe destructive endpoints. |
-| Round-trip all SQLite memory tables; round-trip `data/save` directory. | Preserves secondary stores that are easy to omit from backup work. |
+`server/fastify/__tests__/risuSaveCodec.test.ts`,
+`server/fastify/__tests__/risuSaveBoundedInflate.test.ts`, and
+`server/fastify/__tests__/realmImport.test.ts` are core. The extended
+`server/fastify/__tests__/risuSaveImportRoute.test.ts` preserves the real import
+route, while `server/fastify/browser-smoke/realmProgressConfirmation.spec.ts`
+protects the built-browser confirmation flow.
 
-The same suite now also covers automatic safety snapshots before destructive import/restore, unusable database payload rejection, WAL checkpointing, foreign-tab intent retention, and journaled database swaps. Failure injection distinguishes pre-commit rollback, ambiguous commit lineage, post-commit cleanup, and next-boot forward/backward convergence. `legacyDatabaseImport.test.ts` separately verifies atomic boot migration from `db.json`: late-failure rollback, successful checkpoint-and-retire behavior, quarantine without clobbering an existing quarantine, and actionable preservation of unparseable source data. `localBackupDatabase.test.ts` directly pins all legacy local-asset reference rewrites and proves complete JSON traversal; it replaced an unreachable Kei-only adapter rather than a supported product format.
+## Browser-side media owners
 
-## `.risu` codec, normalization, and bounded decoding
+Narrow real-boundary client coverage remains in
+`src/ts/server/characterEmotionUpload.test.ts`,
+`src/ts/server/characterTtsAssetUpload.test.ts`, and
+`src/ts/media/tests/imageType.test.ts`. Other browser import/export unit suites
+were removed because they depended on own-module mocks or implementation shape.
 
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Codec fixture harness — `risuSaveCodec.test.ts` cases: classify legacy raw/compressed/stream/block/malformed; pin legacy decoded shapes; legacy encode round-trip; reject non-legacy input in legacy codec; pin block families; decode production block fixtures; block encode round-trip; remote/cache-only classified unsupported; malformed fixtures remain available; normalize legacy to current snapshot; assemble/normalize block snapshots; validated root components; report unsupported remote/cache without local fallback; reject malformed decoded rows; export repository as legacy; export as block; reject export without database; validate block export inputs; reject invalid compression markers, excessive physical blocks, duplicate physical names, duplicate singleton block types and duplicate root-component keys. | Preserves compatibility with old and current save envelopes at the byte and normalized-shape levels without permitting ambiguous last-write-wins decoding. | Critical portability coverage. |
-| Streaming inflate limits — `risuSaveBoundedInflate.test.ts` cases: byte-identical output within cap; abort oversize at cap without full materialization; reject malformed compression like sync decoders; enforce cap for legacy compressed/stream envelopes; enforce cumulative cap across blocks. | Prevents zip/decompression bombs and memory spikes while retaining compatibility. | Critical untrusted-input security. |
-| Asset reference walker — `risuSaveAssetReferences.test.ts` cases: walk known server fields and compare metadata; dedupe IDs while retaining all paths; accept legacy local paths; ignore arbitrary non-server strings; keep discovery and local-backup rewrite owner paths in parity. | Selects exactly the assets that save/bundle export and import diagnostics should include. | High data-completeness and privacy/size value. |
+## Primary inventory
 
-## Ordinary `.risu` import and export
-
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| JSON import compatibility and normalization — `risuSaveImportRoute.test.ts`: retain JSON fixture import; normalize missing `characters`, `botPresets`, `modules`, `loadouts`, `plugins`, and `pluginCustomStorage`; normalize malformed resource families to exportable current shape; run current-shape normalizer; force imported chat generation settings incomplete while retaining prefill; repair legacy lorebook key arrays/external aliases; use normalized throwaway object without repository `structuredClone`; reject malformed JSON without mutation; event-persistence failure writes nothing; report referenced/missing/orphaned assets. | Makes incomplete/legacy JSON imports safe, canonical and immediately exportable without pretending chats are generation-ready. | Critical compatibility and data-integrity value. |
-| Multipart legacy/block import — remaining `risuSaveImportRoute.test.ts` cases: reject unauthenticated multipart; import legacy `.risu`; force multipart chat settings incomplete and report count; reject legacy expanded oversize; import block envelope and report unsupported refs; reject block expanded oversize; import non-reserved root components; reject reserved resource-family overwrites without mutation; reject missing uploaded file; reject malformed upload without mutation; malformed block structure returns 400 rather than 500. | Protects the public upload boundary, bounded expansion, root ownership and atomic state replacement. | Critical untrusted-input and portability coverage. |
-| Ordinary export route — `risuSaveExportRoute.test.ts`: default downloadable block bytes; explicit compressed block; route-ready legacy envelope; normalize missing families; auth; invalid query; missing/malformed database. Materialization cases: snapshot/encode split and size; legacy envelope/compression flag; optional summary output. | Guarantees current state remains exportable in current and compatibility formats. | Critical recoverability. |
-
-## Bundle/device backup import and export
-
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Bundle export — `risuSaveBundleExportRoute.test.ts`: zip contains `.risu`, manifest and only walked present assets; query options reach embedded save/manifest; original-app `.bin` with `database.risudat` and asset records; legacy local asset paths included; disappearing asset reported without abort; corrupt hash or declared-size mismatch fails before response; stream-time mutation fails closed; auth; invalid query; missing database validation; materialization records `bundle:true`; premature close terminates entry loop and destroys active asset streams. | Creates portable complete backups without over-including or emitting corrupt bytes and cleans up on client disconnect. | Critical recoverability and server-resource value. |
-| Bundle import — `risuSaveBundleImportRoute.test.ts` cases: fresh database+asset restore; legacy original `.bin`; canonicalize legacy media with non-SHA record names; preserve supported non-media assets; malformed current or legacy embedded database leaves no asset side effects; reject duplicate legacy database records and oversized legacy names; accept upload larger than ordinary body limit; reject configured device-backup ceiling; auth; require multipart; reject invalid zip; cap expanded embedded database even when overall import unlimited; reject unsupported manifest version; reject asset hash mismatch; stale writer rejection; stream current and legacy asset records to `.part` files while hashing; skip unrelated legacy records without allocating them; remove staging on abort/hash failure. | Restores full backups while preventing ambiguous records, traversal-by-format, hash corruption, decompression abuse, peak-memory growth and partial assets. | Critical data-integrity/security coverage. |
-
-## Realm card and `charx` import
-
-`realmImport.test.ts` has cases in the ordinary lane and one direct-only stress case.
-
-| Included individual cases | Behavior protected |
-| --- | --- |
-| Stream progress for JSON Realm cards; stream low-level confirmation without writing assets; stream `charx` extraction/assets; preserve scripts in module metadata; fetch Realm assets server-side and create character in one request; preserve inline JSON scripts; starter chats remain without generation settings. | User-visible progress and compatibility conversion for both card formats. |
-| JSON asset import uses one batched asset revision/event; character-append failure removes newly persisted assets; dynamic download deadline; SSE disconnect aborts upstream resource fetch. | Atomic staging and cancellation. |
-| Reject known-length oversized dynamic JSON before reading; abort unknown-length at cap; reject per-asset known length; reject cumulative fetched assets and clean staging; valid disk-staged JSON output unchanged. | Bounded untrusted input with early failure and cleanup. |
-| Reject duplicate character ID without revision/event; require low-level confirmation; reuse downloaded low-level `charx` after confirmation; import package server-side without client asset fallback. | Stable IDs, explicit privilege consent and efficient confirmation workflow. |
-| Reject known-length package above staging cap before reading; abort unknown-length package at cap; accept valid package within cap; reject expanded archive over limit; accept JPEG-prefixed package. | Bounds both compressed download and expanded content while retaining format compatibility. |
-| Direct-only: `imports Realm charx packages with thousands of display assets` using 7,000 assets. | Scale behavior for large Realm packages. |
-
-Missing direct converter matrices include combinations of v2/v3 emotion/additional/notification/VITS/CC assets, data URI and embedded references, lore extension decorators, and optional metadata defaults. These should be tested at the converter boundary in addition to route fixtures.
-
-## Built-browser Realm confirmation
-
-`server/fastify/browser-smoke/realmProgressConfirmation.spec.ts` drives the visible
-Realm URL/ID import through warning, input, Terms, real streamed download progress
-and low-level confirmation. A local external HTTP source supplies a genuine
-CharX package; the importer, alert queue, resource refresh and SQLite stay real.
-YES verifies exact pending-token reuse, one download, one imported character/event
-and stable identity after reload. NO verifies no import/retry and usable controls.
-Read-only request/wire/storage observations establish the path independently.
-`src/ts/characterCards.realmImport.test.ts` remains the real-queue companion for
-stale operation ownership and finer continuation/refresh outcomes.
-
-## Browser and frontend counterparts
-
-| Test group and included cases | Behavior protected |
-| --- | --- |
-| Asset adapter and inlay storage — `src/ts/server/assets.svelte-node.test.ts` (URL normalization, authenticated read, unsupported/error, visible byte-range upload, revision and diagnostics cases); `src/ts/globalApi.saveAssets.test.ts` (bounded existence batching, binary bulk upload, `Retry-After` retry, hashing concurrency, and operation timeout); `src/ts/globalApi.getFileSrc.test.ts` (accepted server/data/blob and rejected remote/garbage forms); `src/ts/process/files/tests/inlays.test.ts` (server/local fallback, alias, audio/video/image upload, decoding, cleanup, pixel-cap and round-trip cases); `src/ts/characterCards.pngImport.svelte-node.test.ts` (one-decode/multi-asset/export-inline cases). | Protects browser-side addressing, bounded work, batching, media ownership and conversion before data reaches the server. |
-| Upload/import latest-operation guards — server adapters for bias, color scheme, separate parameters, NAI vibe, character additional/emotion/folder/notification/TTS assets, module asset, persona icon, prompt icon, plugin import, and settings media; top-level `characters.imageEmotion.test.ts` and `persona.iconUpload.test.ts`. Each family includes relevant target/context changes, newer-operation wins, cancelled picker behavior, missing/duplicate targets, narrow-field preservation, parser validation, and retained/terminal command outcomes. | Prevents slow uploads or parsers from applying to a newly selected character, preset, folder, plugin, or settings row. |
-| Backup/export clients — `src/ts/server/backups.svelte-node.test.ts` (create/list/restore/delete, refresh, original/bundle download, filename and progress cases), `storage/backup.test.ts` (manual success), and `storage/exportAsDataset.test.ts` (hydration/download/error cases). | Protects destructive refresh after restore, progress/error reporting and complete-data export prerequisites. |
-| Realm, chat, preset, module and CharX import/export — browser `src/ts/server/realmImport.test.ts` (SSE/JSON/pending-token/conflict cases), `src/ts/characterCards.realmImport.test.ts` (catalog/network/latest-response/confirmation/refresh/navigation/outcome cases), `src/ts/characters.importChat.test.ts`, `src/ts/characters.exportChat.test.ts`, preset import/download, module import (cross-indexed with domain mutations), and `src/ts/process/processzip.test.ts` (known/unknown oversize, terminal callback, valid output, 4,361-asset batches of at most 32, decoded-byte backpressure, and writer cleanup). Character-card/navigation cases also pin starter chats to `fmIndex: -1`, so an imported greeting is shown. | Protects stable targets, ID normalization, greeting selection, confirmation, partial durable settlement, bounded streaming and cleanup for user-controlled files. |
-| Legacy/browser compatibility and network file helpers — `storage/autoStorage.test.ts`, `fastifyStorage.test.ts`, `process/coldstorage.test.ts`, `compatibilityAdapters.test.ts` (whole-row/revision/asset/MCP command cases), `globalApi.fetchNative.test.ts` (redaction/abort cases), `globalApi.proxy.test.ts` (buffered/plugin/native/stream cases), and `util.filePicker.test.ts` (cleanup cases). The structural `browserLocalSurface.test.ts` gate is assessed in [Shared UI, Feedback, and Accessibility](shared-ui-feedback-and-accessibility.md). | Keeps older callers and file/network surfaces on authenticated Fastify-owned paths without restoring browser-local persistence. |
-| Corpus diagnostics tool — `util/analyze-database.test.ts`: rehydrate SQLite messages into corpus-shape reporting, measure every export envelope, and report asset inventory/references/per-character fanout. | Keeps the repository's large-save analysis tool aligned with extracted storage and all supported export forms. |
-| Real-browser smoke — `fastifyBrowserSmoke.spec.ts > Fastify-served browser loads bootstrap, subscribes to events, and refreshes after a command` plus its visible settings backup-restore journey; `visibleStateRecovery.spec.ts`: role-first old-lineage reload and connected import-recovery cases. | The first exercises upload/read, ordinary export/import and bundle export, then authors visible settings, downloads a local backup, makes a conflicting edit, restores, resynchronizes, reloads, and verifies durable visible state against a built SPA and SQLite-backed Fastify. The import-recovery cases hold pre-import work through lineage rotation and verify its conflict: role-first startup reloads, while connected startup keeps a Reader in place and restores the sidebar after explicit same-owner recovery. |
-
-### Browser/frontend file manifest
-
-The files below are accounted for here; cross-indexed operation, memory, platform and domain files receive their deeper semantic assessment in the linked feature documents.
-
-| File | Primary protection |
-| --- | --- |
-| `src/ts/browserLocalSurface.test.ts` | Fastify-only manifest/filesystem gate |
-| `src/ts/characterCards.pngImport.svelte-node.test.ts` | PNG card asset import/export |
-| `src/ts/characterCards.realmImport.test.ts` | Realm URL/catalog/import navigation |
-| `src/ts/characters.exportChat.test.ts` | Stable-target chat export |
-| `src/ts/characters.imageEmotion.test.ts` | Avatar/emotion upload freshness and rollback |
-| `src/ts/characters.importChat.test.ts` | Chat import sequencing and ID normalization |
-| `src/ts/compatibilityAdapters.test.ts` | Whole-row/MCP compatibility command routing |
-| `src/ts/globalApi.fetchNative.test.ts` | Redacted diagnostics and abort lifecycle |
-| `src/ts/globalApi.getFileSrc.test.ts` | Server asset URL compatibility |
-| `src/ts/globalApi.proxy.test.ts` | Buffered/plugin/native/stream proxy client |
-| `src/ts/globalApi.saveAssets.test.ts` | Bulk existence probe/upload |
-| `src/ts/persona.iconUpload.test.ts` | Persona icon/import command outcomes |
-| `src/ts/process/coldstorage.test.ts` | Disabled browser-local cold storage |
-| `src/ts/process/files/tests/inlays.test.ts` | Server/local inlay storage and image bounds |
-| `src/ts/process/processzip.test.ts` | CharX streaming caps and writer cleanup |
-| `src/ts/server/assets.svelte-node.test.ts` | Asset URL/read/upload adapter |
-| `src/ts/server/backups.svelte-node.test.ts` | Server/device backup client and progress |
-| `src/ts/server/biasImport.test.ts` | Bias import freshness/parser |
-| `src/ts/server/characterAdditionalAssetUpload.test.ts` | Additional asset upload freshness |
-| `src/ts/server/characterEmotionUpload.test.ts` | Emotion upload freshness |
-| `src/ts/server/characterFolderImageUpload.test.ts` | Folder image upload freshness |
-| `src/ts/server/characterNotificationImageUpload.test.ts` | Notification image freshness |
-| `src/ts/server/characterTtsAssetUpload.test.ts` | Character TTS asset freshness |
-| `src/ts/server/colorSchemeImport.test.ts` | Color-scheme import freshness/parser |
-| `src/ts/server/embeddingOperations.test.ts` | Closed embedding adapter; cross-indexed with memory/providers |
-| `src/ts/server/imageGeneration.test.ts` | Closed image adapter; cross-indexed with providers/media |
-| `src/ts/server/inlayCatalog.test.ts` | Authoritative inlay catalog indexing and restored revisions |
-| `src/ts/server/mcpOAuthRefresh.test.ts` | Stored OAuth refresh adapter; cross-indexed with MCP |
-| `src/ts/server/memoryJobEvents.test.ts` | Memory event subscriber; cross-indexed with memory |
-| `src/ts/server/memoryJobRefresh.test.ts` | Memory job polling/fences; cross-indexed with memory |
-| `src/ts/server/messageTranslationJobs.test.ts` | Active translation refresh; cross-indexed with providers |
-| `src/ts/server/moduleAssetUpload.test.ts` | Module asset freshness |
-| `src/ts/server/naiVibeImport.test.ts` | NovelAI vibe import freshness/parser |
-| `src/ts/server/openAITranscription.test.ts` | Closed transcription adapter; cross-indexed with providers/media |
-| `src/ts/server/personaIconUpload.test.ts` | Persona icon freshness |
-| `src/ts/server/pluginImport.test.ts` | Plugin import latest-operation guard |
-| `src/ts/server/promptPresetIconUpload.test.ts` | Prompt-preset icon freshness |
-| `src/ts/server/pushNotificationSetting.test.ts` | Push setting coalescing; cross-indexed with platform runtime |
-| `src/ts/server/pushNotifications.test.ts` | Browser Web Push adapter; cross-indexed with platform runtime |
-| `src/ts/server/replacementDatabaseOwnership.svelte-node.test.ts` | Replacement-event and local-listener ownership |
-| `src/ts/server/realmImport.test.ts` | Realm SSE/JSON client |
-| `src/ts/server/seperateParametersImport.test.ts` | Separate-parameter import freshness/parser |
-| `src/ts/server/serviceWorker.test.ts` | Push worker behavior; cross-indexed with platform runtime |
-| `src/ts/server/settingsMediaAssetUpload.test.ts` | Provider settings media asset freshness |
-| `src/ts/server/tts.test.ts` | Closed TTS adapter; cross-indexed with providers/media |
-| `src/ts/storage/autoStorage.test.ts` | Fastify storage selection/delegation |
-| `src/ts/storage/backup.test.ts` | Manual backup wrapper |
-| `src/ts/storage/database.downloadPreset.test.ts` | Stable prompt-preset export hydration |
-| `src/ts/storage/database.importPreset.test.ts` | Binary/JSON preset import settlement |
-| `src/ts/storage/exportAsDataset.test.ts` | Strict-hydration dataset export |
-| `src/ts/storage/fastifyStorage.test.ts` | Legacy storage/auth client |
-| `src/ts/util.filePicker.test.ts` | Native picker cancellation cleanup |
-| `util/analyze-database.test.ts` | Corpus/export/asset diagnostic reporting |
-
-## Complete primary file manifest
-
-| Protection area | Primary backend test files |
-| --- | --- |
-| Asset storage and GC | `assetGc.test.ts`; `assetMetadataIndex.test.ts`; `assets.test.ts`; `inlayCatalog.test.ts` |
-| Backup and boot migration | `backups.test.ts`; `legacyDatabaseImport.test.ts`; `localBackupDatabase.test.ts` |
-| Realm packages | `realmImport.test.ts` (includes a direct-file-only stress case) |
-| Save codecs and references | `risuSaveAssetReferences.test.ts`; `risuSaveBoundedInflate.test.ts`; `risuSaveCodec.test.ts` |
-| Save routes | `risuSaveBundleExportRoute.test.ts`; `risuSaveBundleImportRoute.test.ts`; `risuSaveExportRoute.test.ts`; `risuSaveImportRoute.test.ts` |
+- Core server: `server/fastify/__tests__/assetGc.test.ts`, `server/fastify/__tests__/backups.test.ts`, `server/fastify/__tests__/risuSaveCodec.test.ts`, `server/fastify/__tests__/realmImport.test.ts`.
+- Core browser: `server/fastify/browser-smoke/importRestoreRecovery.spec.ts`.
+- Extended: `server/fastify/__tests__/maintenanceCoordinator.test.ts`, `server/fastify/browser-smoke/realmProgressConfirmation.spec.ts`.

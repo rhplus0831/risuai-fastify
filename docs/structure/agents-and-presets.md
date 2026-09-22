@@ -235,8 +235,8 @@ Post-generation placement and persistence are owned by
 [Prompt Assembly And Scripting](prompt-assembly-and-scripting.md#post-generation-order-and-effects).
 Resolver coverage is in `src/ts/agentPresetResolver.test.ts`; execution,
 concurrency, failure, and composition coverage is in
-`server/fastify/__tests__/agentPresetExecution.test.ts` and
-`server/fastify/__tests__/assemble.test.ts`.
+`server/fastify/__tests__/agentPresetExecution.test.ts`. Prompt composition at
+the provider boundary is covered by `server/fastify/__tests__/generation.chat.test.ts`.
 
 ## Provider Dispatch And History
 

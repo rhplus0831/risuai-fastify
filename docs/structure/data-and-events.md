@@ -217,8 +217,10 @@ character identities/trash status, checks duplicate IDs directly, and inserts
 only the new character and optional chat plus the settings order/selection
 update. It never deletes/reinserts existing chats, so BardWiki foreign-key
 records, greeting translations, messages, and unrelated collections survive.
-The HTTP preservation, physical-write, receipt replay, and atomic rollback
-contract is guarded by `server/fastify/__tests__/characterCreationSafety.test.ts`.
+The HTTP preservation, receipt replay, and narrow-write contracts are guarded by
+`server/fastify/__tests__/commands.test.ts` and
+`server/fastify/__tests__/commandMutationReceipts.test.ts`. The implementation-
+coupled character-creation suite was removed in Phase 5.
 
 Sparse command contracts cover settings objects/global scripts, preset and
 persona field patches, chat generation settings (including nested sidebar
@@ -265,8 +267,8 @@ empty replacement chat, resets `chatPage` to `0`, preserves `chatFolders`,
 bumps the revision once, and emits `chats.reset` with resource `characterRow`.
 The response deliberately has no compact local-effect certificate, so normal
 reconciliation rereads `/api/v1/characters/:characterId`. The server contract
-is guarded by `server/fastify/__tests__/commands.chats.test.ts`; browser command
-decoding is guarded by `src/ts/server/commands.chats.test.ts`.
+is covered by `server/fastify/__tests__/commands.test.ts`. The former split
+server and mocked browser command suites were removed in Phase 5.
 The user-facing export, confirmation, and exact-export fence are owned by
 [Assets And Saves](assets-and-saves.md#chats-and-datasets).
 

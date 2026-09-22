@@ -1,3 +1,5 @@
+> This snapshot predates the Phase 5 deletion; `docs/test-reviews/core-suite-phase-5.md` records what was removed.
+
 # Priority Test Review Worklist
 
 The [worklist data](TEST-REVIEW-WORKLIST.json) is the authoritative progress record

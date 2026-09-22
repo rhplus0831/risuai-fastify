@@ -1,109 +1,46 @@
 # Settings, Profiles, and Extensions
 
-Last audited: 2026-08-29.
-Targeted source check: 2026-09-10 (Agent/Preset authoring, Input Hook outcomes, and theme warnings).
+Phase 5 removed the settings component suites because they relied on own-module
+mocks or source/implementation assertions. Durable settings, profile, module,
+plugin, loadout, and Agent Preset behavior remains covered at record, command,
+and built-browser boundaries.
 
-This area covers the Settings shell and data-driven renderer, durable form drafts, translator/prompt/model/Agent presets, provider profiles and credentials, plugins and modules, custom sidebars, loadouts, display options, and hotkey configuration. Provider execution is analyzed in [Providers, Models, and Media](providers-models-and-media.md), extension runtime behavior in [Plugins, Modules, and MCP](plugins-modules-and-mcp.md), and durable bridge/outbox mechanics in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md).
+## Settings and drafts
 
-## Settings shell, renderer, and durable data-driven inputs
+`src/ts/server/settingsDraftAcknowledgement.test.ts`,
+`src/ts/server/writerDraftFields.test.ts`, and
+`src/ts/setting/botSettingsParamsData.test.ts` retain narrow input/output
+coverage. Fastify defaults are exercised by
+`server/fastify/__tests__/databaseDefaults.test.ts`.
 
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `src/lib/Setting/Settings.svelte.test.ts`: supporter cancel/confirm and opt-out; modern model/prompt grouping; responsive selected-page layout; conditional legacy Bot Presets; Agent Presets; global lore/regex routes; mobile return. | Protects Settings navigation, responsive menu/page state, and legacy/modern feature visibility. | High: this is the entry point for all configuration. |
-| `SettingRenderer.svelte.test.ts`, `Wrappers/SettingAccordion.svelte.test.ts`, `SettingInputAccessibility.svelte.test.ts`, `SettingSelect.svelte.test.ts`, and `SettingSegmented.svelte.test.ts`. | Renders matching wrappers, conditions, accessors, nested context, visible labels, Spanish values, unknown/hidden persisted values without mount-time rewrites, explicit invalid translation fallback, and valid targets. | Critical for broad settings correctness: one renderer regression affects many pages. |
-| `src/ts/setting/displaySettingsData.svelte.test.ts` and `languageSettingsData.test.ts`: custom-font label, custom GUI path, fullscreen forwarding; template action excluded from persisted values, Spanish download without locale mutation, cancellation at both selection stages, and chain-of-thought exclusion visible only for active send-text-as-is LLM translation. | Protects data-driven action wiring, prevents action options from becoming stored values, and keeps the privacy filter scoped to the compatible translator path. | Medium-high. |
-| `src/ts/setting/utils.test.ts`: every renderer binding maps to a server command group; removed key-visibility toggle; reduced-motion and default-enabled floating-input locations; disjoint Display watchers; hidden translator secrets; conflict handling; immediate/deferred rollback side effects; custom quote/number rollback; destructive-refresh guard; rapid text and canonical receipt; destroyed-input epoch fence; bounded slider dispatch; sibling-root coalescing; pre-debounce durable staging; total revert; absolute desired root; immediate/deferred merge; rollback rebase; keepalive flush; durable model/prompt corrections; split-preset cascade. | Defines the shared persistence contract for data-driven settings, including debounce, optimistic projection, outbox staging, rollback, and lifecycle teardown. | Critical data-loss prevention. |
+## Model profiles and credentials
 
-`src/lib/Setting/Pages/SourceCode.svelte.test.ts` distinguishes the upstream
-project from this Fastify fork and verifies both repository URLs, accessible
-labels, new-tab targets, and protected `rel` attributes. The Settings shell and
-router suites separately cover the Source Code navigation route and index.
+Core persistence and masking live in
+`server/fastify/__tests__/commands.modelProfiles.test.ts`,
+`server/fastify/__tests__/staleInlineModelProfileSecrets.test.ts`. Extended
+client secret/state owners are `src/ts/providerSecretMask.test.ts`,
+`src/ts/model/modelProfileRecords.test.ts`,
+`src/ts/model/modelProfileResolver.test.ts`, and
+`src/ts/model/modelProfileUiState.test.ts`.
 
-`src/ts/setting/advancedSettingsData.test.ts` keeps the legacy global lorebook/regex visibility toggle, pins the durable 1-64 MiB regex output-limit control, and refuses to advertise retired browser cold-storage, remote-save, preset-chain, and Realm-preview behaviors. This compact inventory keeps the advanced settings catalog aligned with the server-backed product surface.
+## Agents, modules, and loadouts
 
-## Translator preset editing
+Agent Preset coverage remains in `src/ts/agentPresetRecords.test.ts`,
+`src/ts/agentPresetResolver.test.ts`, and
+`server/fastify/__tests__/agentPresetExecution.test.ts`. Module and loadout
+behavior remains in `src/ts/moduleActivation.test.ts`,
+`src/ts/moduleOrganization.test.ts`, `src/ts/server/loadoutCanonical.test.ts`,
+and `server/fastify/__tests__/loadouts.test.ts`.
 
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `src/lib/Setting/Pages/Language/TranslatorPresetSettings.svelte.test.ts`, labels/PATCH group: visible selector/field/toolbar names; optimistic pre-debounce update; exact sparse PATCH and total revert; remotely marked ordering; reverted/net-dirty successor; first-baseline correction; absolute closure with dirty sibling; independent presets; snapshotted multi-edit flush. | Keeps a complex debounced collection editor responsive while producing the exact desired patch. | Critical: translator prompts and credentials are durable user configuration. |
-| Same file, failure/convergence and create/import cases: current/coalesced/two-batch rollback; unsettled target; earlier accepted/later rejected; destructive refresh cleanup; deferred create vs newer state; rejected create before/after edits; imported success/queued/failure; retained create before edit; overlapping creates and destructive refresh. | Prevents failed or retained mutations from losing newer work or falsely reporting success. | Critical data-integrity coverage. |
-| Same file, selection/rename/delete cases: optimistic selection while edit persists; independent row/selection rollback; rapid selection rejection; delete+selection fallback; dialog-owner rename; newer-language projection; dependency ordering; PATCH-before-DELETE; retryable delete reassertion; failed delete with newer rows/edits; authoritative row/index restore; create+delete outcome matrix; ordered rapid delete restoration. | Keeps collection identity and selection stable through concurrent create/edit/delete/reorder-like transitions. | Critical. |
-| Same file, lifecycle/dirty projection cases: destroy and registry keepalive flush; dirty prompt through stale projection; unrelated/contradictory receipts do not settle; matching local effect settles; later dirty value wins; clean siblings refresh; convergence clears dirty; late transport failure cannot undo converged state; disappearing target clears dirty; dirty max-response/rename survive. | Defines when local intent is safe to clear after authoritative refresh. | Critical for state convergence. |
+## Built-browser settings coverage
 
-## Bot, prompt, and active/global generation settings
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `BotSettings.pendingFlush.svelte.test.ts` and `BotSettings.promptToggleDurable.svelte-node.test.ts`: keepalive prompt flush; reverted field with dirty sibling; immediate total-revert correction; remotely marked ordering; row-before-disable across replay; terminal rollback/outbox discard; rollback rebase; `useStreaming` false/true not inferred from URL; one owner sequence; failed predecessor blocks disable and recovers without a late row. | Protects prompt row/toggle ordering and edits during navigation, shutdown, conflict, or offline retention. | Critical data-loss prevention. |
-| `BotSettings.accessibility.test.ts`: nine exact icon labels, 27 direct sliders with unique labels across model sections, five direct form-control types, source-level lifecycle flush sequence, and selected prompt preset passed to RegexList. | Guards broad legacy Bot Settings naming and source wiring. | Medium-high while legacy presets remain. |
-| `ProviderListActions.svelte.test.ts`, `OtherBotSettings.slider-accessibility.test.ts`, `OtherBotSettings.svelte.test.ts`, and `AllSeperateParameters.svelte.test.ts`. | Distinct optional/value and slider names; responsive tabs; WaveSpeed LoRA hydration/reconciliation; display-name model ordering; stale API-key/model and image-read ownership; Hypa preset import/cancel/toolbar; memory ratio; stale rename/delete, including refusal to delete from an authoritative replacement after confirmation resolves. | High for external-provider and memory configuration. |
-| `src/lib/Setting/pickerGenerationSettings.test.ts`: blocking prompt/persona focus; Space in rename; optimistic/exported quick rename and lifecycle flush; encrypted prompt rename intent before debounce; prompt-preset duplication with a fresh ID and independently cloned hydrated template while selection stays put; immediate model rename; target-specific icon names; stable-ID drag/delete after reorder/disappearance; active-chat vs global prompt/persona application, including global persona rows using `changeUserPersona`; one revision-conflict retry and stale-selection guard; rollback rename on slow delete. | Protects the shared picker in both global Settings and active-chat modes, including whole-preset duplication rather than prompt-item duplication. | Critical because wrong mode retargets global or chat configuration. |
-| `promptTokenCounter.test.ts`: slower old count cannot overwrite the latest prompt. | Keeps token feedback aligned with current text. | Medium. |
-
-`src/lib/Setting/listedPersona.svelte.test.ts` keeps global and active-chat persona pickers open and busy while the exact command settles, surfaces terminal/stale-target failures, and announces durably queued selections. `src/ts/chatGenerationTogglePresets.test.ts` pins saved-toggle normalization, similarity, deterministic tie-breaking, and typed-key copying.
-
-## Model profiles, roles, providers, and credentials
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `ModelProfileList.svelte.test.ts`: responsive capability labels; profile/divider rendering and stable-ID reorder; divider add/delete confirmation; unchanged no-op; OpenAI-to-custom/Anthropic credential clearing; frozen baseline vs refresh; disappeared profile; lock through failure; internal secret-preserving duplicate; unexpected reject unlock; queued latch; generated-ID duplicate across remount; dirty Escape rejection; focus trap. | Protects profile creation/editing and UX-only ordering without credential crossover or lost drafts. | Critical security and data-integrity value. |
-| `ModelProfileRoleList.svelte.test.ts`, `ModelRoleEditor.svelte.test.ts`, `ModelProfileEditorDrawer.svelte.test.ts`, `ModelGenerationSettings.svelte.test.ts`, and `ModelRuntimeDefaultsEditor.svelte.test.ts`. | Unique role names; divider placeholder selection reversion; unavailable transport; atomic apply to clicked preset; retry/lock/queued latch; authoritative rebase and dirty convergence; nested picker Escape ownership; empty defaults, failure lock, untouched-field merge, queued close, unexpected reject; persisted Strip CoT default and explicit profile override; effective common defaults and restoring inheritance; inline API/Vertex credential creation, authoritative ID selection, and preserved drafts through queued/failed/discarded saves. | High: role/default errors silently route generation to the wrong profile. |
-| `ModelSettingsShell.svelte.test.ts`, `ModelFallbackEditor.svelte.test.ts`, `ModelPresetList.svelte.test.ts`, `SecretField.svelte.test.ts`, and `CustomModelsSettings.svelte.test.ts`; server legacy-preset route regressions. | Legacy conversion failure/queue/remount; queued create cleanup; fallback row focus/labels and divider selection reversion; Space-safe preset rename; explicit secret clear/replace; every capability flag and model action name; custom-model removal is cancelled until the shared settings-item confirmation succeeds; legacy preset snapshot/apply preserves `additionalParams`. | High migration and authoring coverage. |
-| `ProviderCredentialList.svelte.test.ts`, `RequestHistorySettings.svelte.test.ts`, and `packages/shared-core/src/providerCredentialRecords.test.ts`. | Shared credential create/edit/delete/reference behavior, masked projections, request-history loading/detail/deletion, and stale request ownership. | High security and diagnostics value. |
-| `src/lib/UI/GUI/SecretInput.svelte.test.ts`: masked sentinel never rendered, exact nested/top-level replacement, masked acknowledgement, explicit clear, wildcard owner identity. `SettingsExportButtons.svelte.test.ts`: redacts optimistic secrets; clipboard denial still reports download; repeat-click lock; failure avoids copy. | Prevents saved credentials from appearing in fields or bug reports while preserving/clearing them intentionally. | Critical privacy coverage. |
-| `ModelProviderPanel.svelte.test.ts`, `ModelList.svelte.test.ts`, `OpenrouterProviderList.svelte.test.ts`, `NanoGPTDashboard.svelte.test.ts`, `ProviderListActions.svelte.test.ts`, and `PromptDataItem.svelte.test.ts`. | Neuralwatt catalog load/selection; stable expanded provider under filtering; picker focus; provider dialog names/Tab; subscription failure/success/malformed state; target-specific list actions; prompt row disclosure/actions/field names. | Medium-high shared picker/dashboard/accessibility value. |
-
-## Agents and Agent presets
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `AgentPresetSettings.svelte.test.ts`: truthful Ready/Empty/blocked states; standalone Agent sharing/dependencies; field-linked diagnostics and repairs; ChatML preview; token/autocomplete insertion; nested Agent creation; phase-first use add/reorder; module chips; output-reference repair/sample preview; sticky Save reasons; accepted/queued/failed retention; certified deletion preview/recheck/focus; complete compact action names and targets. | Protects the modular split between reusable Agent behavior and preset-owned orchestration while making authoring and destructive outcomes explicit. | High: crossing those ownership boundaries can silently change every preset that shares an Agent. |
-| `src/ts/agentLorebookInputs.test.ts`: chat-before-character resolution; invalid chat override without fallback; duplicate display names; Agent-only activation constraints; portable character-card marker. | Keeps named Agent input resolution deterministic and excluded from ordinary lore activation. | High prompt-integrity value. |
-| `agentPresetStepPatch.test.ts`: omits IDs/unchanged values; preserves false/null/empty; normalized JSON-equivalent no-op. | Keeps step updates sparse without losing meaningful falsy values. | High payload correctness. |
-
-## Input Hook settings
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `InputHookSettings.svelte.test.ts`: outcome labels, full prompt access, Translation flow copy, Saving/queued/accepted/failed announcements, retained newer drafts, Retry, named deletion cancel/accept, and focus recovery. | Keeps automatic persistence truthful and makes Draft/BTW outcomes scannable without changing their durable/runtime meanings. | High authored-input and accessibility value. |
-
-## Modules, plugins, custom sidebars, and loadouts
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `ModuleSettings.svelte.test.ts`: names/enabled state/MCP lock; stable edit targets; authoritative rebase; nested save/create; rejected/conflicted command retention; reload recovery with stable create id; deleted-target Copy/Export/Discard; queued/final-failure retention. `src/ts/server/moduleEditorDraftStore.test.ts`: nested round-trip, separate encrypted storage, writer/lineage isolation, generation-fenced deletion, bounds/expiry, oversize/quota/corruption failures, and held decrypt success/failure/scope change while a newer draft commits. | Protects module collection authoring and reload-durable nested lore/regex/trigger/asset drafts without treating recovery storage as server acceptance. Real crypto with fake IndexedDB proves the stale read/cleanup boundary; mounted editor tests cover UI separately. | High data-loss and confidentiality value. |
-| `ModuleMenu.svelte.test.ts` and `ModuleChatMenu.svelte.test.ts`: delayed lore/regex import merges concurrent edits; cancel/empty results; latest triggers; source-level asset token timing across module/OtherBot/Bot pickers; per-chat toggle naming; modal focus/Escape/backdrop. | Keeps imports and per-chat activation scoped to the current draft/owner. | High for import races; medium for modal mechanics. |
-| `PluginSettings.svelte.test.ts`: option labels/action names/state; queued durable action; stale failed argument; numeric/string radio and checkbox values; starter cleanup; developer-mode cancellation; owned hot reload replace/destroy; no late start; update only on request; denied/failed errors; second confirmation to install. | Protects plugin configuration, developer mode, update consent, and long-lived hot reload ownership. | Critical extension safety. |
-| `CustomSidebarConfig.svelte.test.ts`, `CustomGUISettingMenu.svelte.test.ts`, and `CustomSidebar.svelte.test.ts`. | Safe modal focus, UUID fallback, tree keyboard/delete, server GUI load/add, stable selected container, Back/Escape without blocking on save, malformed-row filtering. | High for user-authored navigation UI. |
-| `LoadoutModal.svelte.test.ts`: focus; apply-scope state; apply lock/success/failure/queued/hydration failure; create success/failure draft; one destructive confirmation and repeated-action lock. | Prevents partial/duplicated loadout application and lost save names. | High. |
-| `src/ts/stores.modulesEffect.svelte.test.ts`: update-signal reads cause zero clone primitives; reruns only on consumed fields; absent modules tolerated. | Guards reactive cost and safe empty bootstrap state. | Medium performance/reliability value. |
-
-## Display, hotkeys, support, and miscellaneous settings
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `ColorSettingsAccessibility.svelte.test.ts`, `CustomBackgroundToggle.svelte.test.ts`, and `DisplaySettings.svelte.test.ts`. | Visible names for scheme/theme/nullable colors; upload failure/cancel no-op; persist completed asset only; stale completion/cancel/error after disable; destroy guard; old-placeholder clear; selected panel announcement. | High for background asset ownership, medium for names/navigation. |
-| `HotkeySettings.svelte.test.ts`: recorder name/modifiers, responsive layout, native Tab, Escape cancel, ordinary key record. | Makes shortcut configuration keyboard-operable. | High accessibility value. |
-| `ThanksPage.svelte.test.ts` and `supporters.test.ts`. | Native/named supporter actions and categorized grouping. | Low-medium, user-visible but low risk. |
-
-`FullscreenToggle.svelte.test.ts` tracks successful entry plus browser-driven exit and restores actual browser state after a rejected transition. `NotificationToggle.svelte.test.ts` protects shared pending state, compensation retry, partial cleanup across remount, device-ledger retry, and unexpected-operation recovery. These belong here rather than in the generic controls inventory because they own persisted Display settings and browser capability state.
-
-## Especially critical tests
-
-- `TranslatorPresetSettings`, `src/ts/setting/utils.ts`, and Bot prompt durability protect the hardest convergence and data-loss paths.
-- Model secret masking/clearing and bug-report redaction prevent credential disclosure.
-- Profile role/default tests prevent generation from silently using the wrong provider/profile.
-- Plugin confirmation/hot-reload ownership and module stable-ID editing protect extension boundaries.
-- Active/global generation picker mode tests prevent changes from landing on the wrong owner.
-- The shared settings-item confirmation has one focused custom-model proof; expand direct cancel/confirm assertions before relying on it for every repeatable editor.
+`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts` retains the
+extended integrated settings/navigation journey. Core rollback and recovery are
+covered by `server/fastify/browser-smoke/durableMutationRecovery.spec.ts` and
+`server/fastify/browser-smoke/visibleStateRecovery.spec.ts`. There is no longer a
+component-unit inventory for settings controls.
 
 ## Primary inventory
 
-| Group | Complete in-scope file inventory |
-| --- | --- |
-| Shell/renderer | `src/lib/Setting/Settings.svelte.test.ts`; `SettingRenderer.svelte.test.ts`; `Wrappers/SettingAccordion.svelte.test.ts`; `SettingInputAccessibility.svelte.test.ts`; `SettingSegmented.svelte.test.ts`; `SettingSelect.svelte.test.ts`; `src/ts/setting/advancedSettingsData.test.ts`; `displaySettingsData.svelte.test.ts`; `languageSettingsData.test.ts`; `utils.test.ts` |
-| Bot/prompt/translator | `src/lib/Others/AllSeperateParameters.svelte.test.ts`; `src/lib/Setting/Pages/BotSettings.accessibility.test.ts`; `BotSettings.pendingFlush.svelte.test.ts`; `BotSettings.promptToggleDurable.svelte-node.test.ts`; `Language/TranslatorPresetSettings.svelte.test.ts`; `ProviderListActions.svelte.test.ts`; `OtherBotSettings.slider-accessibility.test.ts`; `OtherBotSettings.svelte.test.ts`; `promptTokenCounter.test.ts`; `src/lib/Setting/listedPersona.svelte.test.ts`; `pickerGenerationSettings.test.ts`; `src/ts/chatGenerationTogglePresets.test.ts` |
-| Models/providers | `src/lib/Setting/Pages/Advanced/CustomModelsSettings.svelte.test.ts`; `SettingsExportButtons.svelte.test.ts`; tests under `Pages/Model/`, including `ProviderCredentialList.svelte.test.ts`; `src/lib/Setting/Pages/RequestHistorySettings.svelte.test.ts`; `ProviderListActions.svelte.test.ts`; `src/lib/UI/GUI/SecretInput.svelte.test.ts`; `src/lib/UI/ModelList.svelte.test.ts`; `packages/shared-core/src/providerCredentialRecords.test.ts`; `NanoGPTDashboard.svelte.test.ts`; `OpenrouterProviderList.svelte.test.ts`; `PromptDataItem.svelte.test.ts` |
-| Agents and presets | `src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`; `agentPresetStepPatch.test.ts`; `src/ts/agentLorebookInputs.test.ts` |
-| Extensions/loadouts | `src/lib/Others/CustomSidebarConfig.svelte.test.ts`; `LoadoutModal.svelte.test.ts`; `src/lib/Setting/Pages/CustomGUISettingMenu.svelte.test.ts`; all three tests under `Pages/Module/`; `PluginSettings.svelte.test.ts`; `src/lib/SideBars/CustomSidebar.svelte.test.ts`; `src/ts/server/moduleEditorDraftStore.test.ts`; `src/ts/stores.modulesEffect.svelte.test.ts` |
-| Display/support | `src/lib/Setting/Pages/Display/ColorSettingsAccessibility.svelte.test.ts`; `CustomBackgroundToggle.svelte.test.ts`; `DisplaySettings.svelte.test.ts`; `FullscreenToggle.svelte.test.ts`; `NotificationToggle.svelte.test.ts`; `HotkeySettings.svelte.test.ts`; `ThanksPage.svelte.test.ts`; `supporters.test.ts` |
+- Core: `server/fastify/__tests__/commands.modelProfiles.test.ts`, `server/fastify/__tests__/staleInlineModelProfileSecrets.test.ts`, `server/fastify/browser-smoke/durableMutationRecovery.spec.ts`.
+- Extended: `src/ts/providerSecretMask.test.ts`, `server/fastify/__tests__/agentPresetExecution.test.ts`, `server/fastify/__tests__/loadouts.test.ts`, `server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts`.

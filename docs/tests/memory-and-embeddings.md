@@ -1,72 +1,44 @@
 # Memory and Embeddings
 
-Last audited: 2026-08-02.
-Targeted source check: 2026-09-12 (background job lifecycle and native worker recovery).
+Memory remains an extended real-boundary area, with core protection where memory
+enters generation or crosses ownership and recovery fences. Mocked Hypa UI and
+client orchestration tests were removed in Phase 5.
 
-This area covers legacy memory-window construction and the Hypa V3 lifecycle: planning conversation chunks, summarizing and embedding them, selecting memories for a prompt, operating the background queue, exposing the API, and keeping browser state coherent. Prompt placement is also discussed in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md); the modal's broader character-management context is covered in [Character Content, Memory, and Catalogs](character-content-memory-and-catalogs.md).
+## Repository and planning
 
-## Test groups
+`server/fastify/__tests__/memoryRepository.test.ts`,
+`server/fastify/__tests__/memoryPlanner.test.ts`,
+`server/fastify/__tests__/memoryChunkPlanner.test.ts`, and
+`server/fastify/__tests__/memoryBudgetAllocator.test.ts` exercise real data and
+explicit planning results.
 
-| Logical group | Relevant test locations and included cases | Behavior and regression importance |
-| --- | --- | --- |
-| Legacy window construction and prompt placement | Client `src/ts/process/__tests__/buildMemoryWindow.test.ts` and server `server/fastify/__tests__/memory.test.ts`; memory-stage cases in `assemble.test.ts` and golden `sendChat.fixtures*` | Cases cover Hypa stage transitions and errors, server-backed non-persistence of legacy fields, budget trimming/no-op/overflow, last-memory capture, memory-card extraction/wrapping, last-chat promotion, empty-row filtering, template placement, and inline memory rows. These protect both compatibility and the exact context sent to a model. |
-| Planning and chunk creation | `memoryPlanner.test.ts` and `memoryChunkPlanner.test.ts` | Individual scenarios cover defaults and invalid settings; windows, budgets, fallbacks, skip rules, memo invalidation and planner errors; chunk/job persistence, idempotent replanning, preservation of summarized chunks, selected indexes/memos, and validation without writes. |
-| Repository lifecycle and legacy import | `memoryRepository.test.ts` and `memoryLegacyImport.test.ts` | Covers chunk/summary/embedding storage; dimension and vector handling; orphan cleanup; queued/running/completed/failed/cancelled job transitions; retry, recovery, and retention; legacy backfill, replacement, boot import, idempotency, and deletion tombstones. |
-| Similarity ranking, selection, and budget allocation | `memorySimilarityRanking.test.ts`, `memorySelectionService.test.ts`, and `memoryBudgetAllocator.test.ts` | Cases include defensive cosine behavior, query and multi-query ranking, Voyage semantics, invalid/missing vectors, stable ties and diagnostics; legacy precedence, empty/lazy-validation/shared-snapshot selection; importance-first allocation, exhaustion, ratio spillover, deterministic seeds, deduplication, and pressure diagnostics. |
-| Embedding model resolution and wire adapters | Server `memoryEmbeddingModel.test.ts`, `memoryEmbeddingAdapter.test.ts`, and `embeddingOperations.test.ts`; browser `src/ts/server/embeddingOperations.test.ts`, `src/ts/process/memory/{contextualEmbedding,embeddingCacheKey,remoteEmbeddingPaths}.test.ts` | Server cases cover aliases, stored profile/credential resolution, OpenAI/custom/Voyage URL/model rules, browser-local rejection, grouped/contextual request shapes, aborts, provider errors, count/dimension/finite-vector limits, and fixed embedding operations. Browser cases cover masked versus one-shot credentials, authenticated/no-store/abort semantics, response validation, endpoint-sensitive cache identity, contextual document/query batches, and Hypa routing. |
-| Summary model, prompt, and wire adapters | `memorySummaryModel.test.ts`, `memorySummaryPrompt.test.ts`, and `memorySummaryAdapter.test.ts` | Scenarios resolve memory-role aliases and profile providers; reject unsupported/reverse-proxy/custom misconfiguration; build default and custom ChatML summarize/re-summarize prompts; sanitize input and parse/scrub output; and verify OpenAI-compatible, NanoGPT, and OpenRouter requests, empty output, abort, and errors. |
-| Embed and summarize job execution | `memoryEmbedJobHandler.test.ts` and `memorySummarizeJobHandler.test.ts` | Cases cover success and idempotency; missing/invalid input and model/provider failures; batching, ordering, independent groups, concurrency/rate/deadline limits, cancellation, contextual grouping/splitting, retry, transaction rollback, vector validation, and load-cost/read bounds. |
-| Worker scheduling and lifecycle | `memoryWorker.test.ts` | Individual tests cover start/stop and Fastify lifecycle, handler dispatch, events and best-effort listeners, fairness, bounded drain/polling, claiming, failures/retries, cancellation, recovery, retention, graceful shutdown, and avoiding starvation or overlap. |
-| Memory HTTP API | Server `memoryJobsRoutes.test.ts` and `memoryReadRoutes.test.ts`; browser `src/ts/process/request/tests/serverMemory.test.ts` | Server tests include auth and active-writer enforcement; enqueue, list/filter, ETag/event and cancel behavior; chunk/summary reads; compact and full edit/delete/regeneration; validation, empty results, and 404s. Browser cases include encoded IDs/filters, conditional lists, patch/delete/cancel envelopes, stale-writer and sanitized network/JSON failures, malformed-success rejection, and Hypa progress application. |
-| Event presentation and browser reconciliation | Server `memoryEvents.test.ts`; client `src/ts/server/memoryJobEvents.test.ts` and `memoryJobRefresh.test.ts` | Covers credential-redacted terminal errors, publish/unsubscribe, active-job detection, non-overlapping refresh with one queued pass, polling only while active, ETag/not-modified reuse, terminal-update fences against stale running responses, filtering after terminal events, cross-controller shared fences, chat switching, and clearing/stopping on an empty chat. |
-| Memory editor and job UI | `src/lib/Others/HypaV3Modal.{resetRace,serverReliability}.test.ts`, `HypaV3Modal/{modal-header,modal-summary-item,server-memory-jobs,server-summary-patch,tag-manager-modal}*.test.ts`, plus Hypa cases in `src/lib/Others/ownerPaths.test.ts` | Included scenarios cover owner/chat changes during confirmation, keyboard search and focus restoration, named bulk/resummary actions, delete/edit/translation races, dirty-summary flush before close, failed flush retention, connected-message hydration, field-only patches and tag normalization/removal, job refresh/cancel tab order, duplicate-tag rejection, and guarded live mounting. |
+## Embedding, ranking, and summaries
 
-## Especially critical tests
+Extended coverage lives in `server/fastify/__tests__/memoryEmbeddingAdapter.test.ts`,
+`server/fastify/__tests__/memoryEmbeddingModel.test.ts`,
+`server/fastify/__tests__/memorySimilarityRanking.test.ts`,
+`server/fastify/__tests__/memorySummaryAdapter.test.ts`, and
+`server/fastify/__tests__/memorySummaryModel.test.ts`. The client retains the
+pure cache-key contract in `src/ts/process/memory/embeddingCacheKey.test.ts`.
 
-- `memoryEmbedJobHandler.test.ts` and `memorySummarizeJobHandler.test.ts` protect transactional behavior under cancellation and partial provider failure; without them, users could receive corrupt or incomplete memories.
-- `memoryRepository.test.ts` is the durable-state authority for job transitions, retention, embeddings, and cleanup.
-- `memoryWorker.test.ts` prevents duplicate execution, starvation, unbounded draining, and jobs stranded during shutdown.
-- The terminal-fence cases in `memoryJobRefresh.test.ts` protect the browser from stale responses that make completed work appear active again.
-- Golden prompt fixtures and `promptMemoryAdapter.test.ts` verify that selected memories actually reach the prompt in canonical order and shape.
+## Jobs, API, and generation
+
+`server/fastify/__tests__/memoryEmbedJobHandler.test.ts`,
+`server/fastify/__tests__/memorySummarizeJobHandler.test.ts`,
+`server/fastify/__tests__/memoryWorker.test.ts`, and
+`server/fastify/__tests__/memoryJobsRoutes.test.ts` cover job transitions.
+Memory selection through a real generation route is core in
+`server/fastify/__tests__/generation.chat.test.ts`; real-SQLite occupancy
+recovery remains in the extended
+`server/fastify/__tests__/generationMemoryOccupancyRecovery.test.ts` suite.
+
+## Browser recovery
+
+`server/fastify/browser-smoke/backgroundJobRecovery.spec.ts` and
+`server/fastify/browser-smoke/chatOccupancyRecovery.spec.ts` retain extended
+browser reconciliation coverage.
 
 ## Primary inventory
 
-| Layer | Test files / case groups |
-| --- | --- |
-| Legacy and prompt integration | `src/ts/process/__tests__/buildMemoryWindow.test.ts`; server `memory.test.ts`; `promptMemoryAdapter.test.ts`; memory-stage cases in `assemble.test.ts` and `sendChat.fixtures*`. |
-| Planning, storage, and retrieval | `memoryPlanner`, `memoryChunkPlanner`, `memoryRepository`, `memoryLegacyImport`, `memorySimilarityRanking`, `memorySelectionService`, `memoryBudgetAllocator`. |
-| Models and provider adapters | `memoryEmbeddingModel`, `memoryEmbeddingAdapter`, server `embeddingOperations`, `memorySummaryModel`, `memorySummaryPrompt`, `memorySummaryAdapter`; client `embeddingOperations`, `contextualEmbedding`, `embeddingCacheKey`, `remoteEmbeddingPaths`. |
-| Jobs and worker | `memoryEmbedJobHandler`, `memorySummarizeJobHandler`, `memoryWorker`. |
-| API, events, and reconciliation | Server `memoryJobsRoutes`, `memoryReadRoutes`, `memoryEvents`; client `serverMemory`, `memoryJobEvents`, `memoryJobRefresh`. |
-| UI | `HypaV3Modal.resetRace` and `HypaV3Modal.serverReliability`; component suites for modal header, summary item, memory jobs, summary patch, and tag manager; Hypa cases in `ownerPaths.test.ts`. |
-
-## Background-job lifecycle recovery
-
-`server/fastify/browser-smoke/backgroundJobRecovery.spec.ts` uses the built SPA,
-authentication, SQLite, SSE and a local deterministic OpenAI-compatible provider.
-The harness explicitly opts into the real memory worker; its normal default stays
-disabled. The selected summary journey drops the actual terminal SSE frame,
-returns a failed list read, and checks rendered completion, stopped polling,
-reload and exactly one durable summary. Fastify and provider teardown are awaited.
-
-The same spec covers real message/greeting translation with held older bootstrap
-responses and BardWiki rebuild with a failed operational completion write, a held
-older read, manual document editing, another rebuild and reload. It asserts durable
-output as well as rendered controls. It does not certify external provider quality.
-
-Focused embed/summarize tests cover abort-insensitive dependencies, sibling
-completion before old success/failure, and a recreated logical job with a fresh
-instance before the old callback arrives. Summary coverage also composes source
-invalidation with held work and reopens SQLite after committed output followed by
-a failed job-status write, proving that the next attempt reuses the output.
-`memoryJobRefresh.test.ts` covers error/unavailable/thrown list failures followed
-by automatic terminal reconciliation and timer cleanup. Existing cancellation,
-contextual embedding, retry, retention and projection cases remain in place.
-
-BardWiki's `bardWikiRebuildHandler.test.ts` additionally checks manually edited
-prior rebuild documents, abort-insensitive completion after cancel/delete, a fresh
-build after source changes, and checkpoint recovery with SQLite reopened.
-`bardWikiWorker.test.ts` checks graceful drain and stopped scheduling;
-`src/ts/server/bardWikiResource.test.ts` checks equal-revision read ordering for
-both workspace and invalidation owners. Receipt inversion/manual-review coverage
-remains in `server/fastify/__tests__/bardWikiLifecycle.test.ts`.
+- Core boundary: `server/fastify/__tests__/generation.chat.test.ts`.
+- Extended: `server/fastify/__tests__/generationMemoryOccupancyRecovery.test.ts`, `server/fastify/__tests__/memoryRepository.test.ts`, `server/fastify/__tests__/memoryWorker.test.ts`, `server/fastify/browser-smoke/backgroundJobRecovery.spec.ts`.

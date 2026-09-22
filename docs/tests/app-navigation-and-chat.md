@@ -1,209 +1,39 @@
 # App Navigation and Chat
 
-Last audited: 2026-09-04.
+The remaining navigation and chat protection is concentrated in mutation-proven
+client contracts and real Chromium journeys. Phase 5 removed the component suites
+that mocked repository modules or asserted implementation wiring.
 
-Targeted source check: 2026-09-09 (read-only conversation-shell parity and role-transition frame sampling).
-Targeted source check: 2026-09-10 (mobile writer reconnect DOM continuity).
-Targeted source check: 2026-09-10 (compact drawer/menu hierarchy and BardWiki opener restoration).
+## Routing, selection, and chat mutation
 
-This area covers URL/store routing, history and hotkey ownership, character/chat selection, chat folders and forks, transcript hydration, composer and attachment behavior, message rendering/editing/translation, active-chat generation settings, and the browser journeys that prove visible state survives command settlement and reload. Durable command mechanics are analyzed in [Persistence, Commands, and Events](persistence-commands-and-events.md), browser projection mechanics in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md), and generation internals in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
+`src/ts/characterCommands.test.ts`, `src/ts/chatCommands.messages.dom.test.ts`,
+`src/ts/chatFork.test.ts`, and `src/ts/chatImportPlanning.test.ts` cover durable
+character/chat changes and planning. Pure route interpretation remains covered by
+`src/ts/routerRoute.test.ts` and `src/ts/readerRouteScope.test.ts`.
 
-## Connected-reader navigation and transcript
+## Transcript, send, and recovery
 
-`src/ts/readerRouteScope.ts`, `src/lib/Workspace.svelte` and
-`src/lib/ReaderTranscript.svelte` own local Reader selection and conversation rendering.
-Their focused suites cover stable character/chat IDs, direct URLs and history,
-authoritative deletion fallback, failed reads that retain usable content, local
-Refresh and gated authoring routes. `src/App.routeEffect.dom.test.ts` verifies
-that managed read-route capability never invokes writer route handlers or mounts
-writer authoring overlays. Reader route capability is intentional; canonical
-writer selection and persistence effects have a separate gate.
+Core transcript behavior lives in
+`src/ts/server/chatMessageHydration.completion.dom.test.ts`,
+`src/ts/process/__tests__/streamReplayGap.boundary.dom.test.ts`, and
+`src/ts/process/__tests__/streamResponse.test.ts`. The browser core adds exact-id
+editing, deletion, import re-keying, concurrent-chat isolation, reconnect, and
+reroll persistence through `server/fastify/browser-smoke/coreLifecycle.spec.ts`,
+`server/fastify/browser-smoke/acceptedSendProtocol.spec.ts`, and
+`server/fastify/browser-smoke/rerollSwipePersistence.spec.ts`.
 
-Shared-view regressions in `Workspace.svelte.test.ts` exercise committed
-folders/pins/search/cards, local writer-independent selection, restricted-route
-Return to reading, auth-loss activation denial, the top-right device action, and
-mobile focus handling. The responsive drawer remains mounted while hidden so
-reader-local folder/search state survives close and reopen, while the focus trap
-is active only for the visible dialog.
-`readerTranscriptProjection.svelte.test.ts` and
-`gui/displaySettings.dom.test.ts` prove pending appearance/metadata isolation,
-accepted receipt refresh and auth/lineage clearing. Route prefetch tests hold
-idle work across demotion, and App rejects restored restricted overlays while
-retaining explicit session takeover dialogs.
+## Connected readers and visible navigation
 
-`server/fastify/browser-smoke/readOnlyAppUx.spec.ts` adds actual desktop/mobile
-shared-frame navigation, themes/backgrounds, keyboard/focus, history/copy/disclosures,
-blocked script invocations and authoring entries. Its oracles compare SQLite
-events/receipts, native outbox state, local and writer selection and network
-traffic. Authenticated cache POSTs are classified as reads. Controlled failure
-responses exercise replay exhaustion/auth loss; writer deletion verifies local
-missing-target recovery. These fixtures complement the lifecycle journeys below.
-
-The mounted App suite also holds route promises to verify that newer writer
-navigation supersedes a different retained Reader route, equivalent aliases
-retain retry behavior, and an obsolete completion cannot consume the newer
-intent. `selectedLocaleRuntime.spec.ts` provides the built-browser companion:
-it holds the actual emitted character-handler request after writer readiness,
-uses the production router to open Settings, and requires the visible language
-selector before releasing the older handler. It then checks the same document
-and Settings after real delivery and two paint frames; precise completion
-ordering remains the mounted test's assertion.
-
-`src/lib/ReaderTranscript.svelte.test.ts` mounts the transcript to verify certified
-committed content, history/copy controls, failed-refresh retention, exclusion of
-parked writer edits, transient generation rows, exact terminal handoff and auth-loss
-clearing. `src/lib/ChatScreens/readerGenerationRows.test.ts` covers row identities;
-the stream, retry and effect owners are indexed in
-[Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
-App's auth test replaces the Reader shell with sign-in, while the actual transcript
-test independently proves protected message content is removed.
-
-`server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts` exercises Pixel 7
-emulation with actual committed DOM updates, clipboard/history/local navigation,
-reload and offline catch-up, plus SQL ownership and forbidden-request checks.
-`connectedWriterSwitching.spec.ts` verifies in-place A → B → A transfer, continued
-Reader navigation and preservation of the originating draft. Its shared
-`layoutFrameSampler.ts` samples the navigation rail, sidebar panel, and main
-column on every animation frame from before transfer through settled readiness,
-reports the exact element/property/time for a largest baseline delta, and
-records Performance Observer layout-shift entries as supporting evidence. The
-primary oracle requires every sampled left edge and width to remain within one
-CSS pixel; layout shifts with recent input remain in the artifact rather than
-being silently excluded. The separate
-`connectedReaderGeneration.spec.ts` verifies live output, viewer detachment and
-terminal convergence during transfers. These specs use built Chromium/Fastify
-fixtures; controlled lifecycle events and mobile emulation do not establish
-physical-device behavior. The browsing case keeps a second Reader live through
-shared commits and independent navigation. `connectedReaderRollout.spec.ts`
-verifies retained content and reconnect after an actual server-instance restart.
-`visibleStateRecovery.spec.ts` separately checks the character sidebar after
-role-first old-lineage reload and after connected import recovery followed by
-explicit same-owner writer promotion.
-`mobileWriterConnectionRecovery.spec.ts` complements those role-change journeys
-with a no-change Pixel 7 writer journey: a destroyed HTTP event stream and a
-temporary offline browser context must retain the same inert composer DOM and
-draft, avoid a transient Reader layout and unchanged resource refresh, and return
-to editable writer state in the same document.
-
-Initial acquisition stays behind the loading boundary, with mounted checks that
-prevent transcript/detail reads before the first resolved role; established
-Readers retain readable content during later recovery.
-
-`chatHistoryScroll.spec.ts` retains both fixed passes of seven reversal gestures
-and every original pause, traversal, remount and residency oracle. One additional
-pause at the proven ordinary-row remount return waits, within five seconds, for
-the first geometric visible row to become readable. That exact snapshot is
-sample zero; all 30 samples must retain its identity, readability and position
-within one pixel. Preparation and measured frames both count toward the existing
-76-row bound. This guarantees a measured readable pause without choosing a later
-surviving row; it does not make all immediate post-gesture samples readable.
-The cached-parser-owner fault protects direct remount readability separately.
-
-`chatDisplayScrollStability.spec.ts` runs a four-case delayed-success versus
-handled-fallback matrix in bounded and diagnostic legacy paging. Each case uses
-tall custom cards and deterministic data images, completes multiple sequential
-older-row display responses during real CDP wheel input, and samples each wheel
-frame before dispatching the next step. It rejects visible-row discontinuities
-and bounds movement of already-readable rows that the input should leave visible,
-including unexpected displacement outside the viewport. First-render placeholder
-expansion is not treated as movement of an already-readable anchor. Each case
-then pauses for 1,800 milliseconds with unfinished
-newer rows still below a readable anchor. While those late bodies render,
-animation-frame, after-frame, and DOM-mutation samples require the same anchor
-node and readable body to remain mounted within one pixel of its original
-offset. This catches transient displacement between HTML commits and later
-residency correction, as well as accumulated fractional drift in legacy paging.
-
-The lazy-manifest case checks every registered boundary; separate first-open
-journeys exercise their named route/dialog entries and visible loading/recovery.
-The 44 direct-link rows verify manifest-declared resource hydration and routing.
-Their expected resources share the production manifest, so a joint omission is
-not independent completeness evidence; route-specific domain UI remains in its
-owning tests.
-
-## Routing, history, hotkeys, and shell ownership
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `src/ts/router.test.ts`: initial root/deep-link application; bare Settings parse/serialize; Agent Presets route and removed context-agent slug; in-app/direct grid history; marked Settings sessions; queued message jumps; same-entry sidebar state; generation-owner canonicalization across navigation/history/refusal/missing chats; stale route fencing; live index re-resolution; async Playground ownership; and direct routing for characters carrying retired visibility metadata. | Keeps URLs, stores, browser history, selected character/chat, pending jumps, and durable-generation route ownership consistent. | Critical: a regression can open the wrong chat, lose a bookmark jump, or trap users in Settings/grid state. |
-| `src/App.routeEffect.dom.test.ts`: Character tab survives resource refresh; state-to-route subscription remains while applying a route; desktop/responsive grid buttons and close use history helpers; responsive sidebar traps/restores focus and owns Escape; failed dropped preset/character imports show failure. | Protects the two-way App route effects and the visible shell during resource replacement and responsive navigation. | Critical for the SPA shell and authoritative refresh. |
-| `src/lib/Workspace.svelte.test.ts`, reader cases in `src/App.routeEffect.dom.test.ts`, `src/ts/readerRouteIntent.test.ts`, and `src/ts/server/routeResourceLoader.test.ts`: shared read-only render boundary, accessible status/retry, keyboard character/chat navigation, no command/outbox writes, latest-intent replacement, manifest-owned route requirements, supersession, route-local Retry, and one-time intent consumption after promotion. | Keeps managed Reader navigation local and writer route effects gated; each empty-cache direct link must load its declared resources before writer persistence. | Critical to the fast-bootstrap shell: a regression could mutate in read-only mode, apply the wrong route, or leave a deep link indefinitely loading. |
-| `src/ts/hotkey.navigation.test.ts` and `hotkey.owner.test.ts`: Settings/Home/Escape routing; confirmation/plugin Enter; modal/card-export Escape ownership; route/send shortcut suppression; native editable/focus keys; component-owned events; adjacent-character navigation; modifier matching; modern preset shortcuts; active-chat preset switching; settings patching without projection mutation; and composition of resource guards through the installed document listener. | Keeps global shortcuts from stealing keys from dialogs or editors and routes mutations through the Fastify-safe path. | High: accidental global handling can submit, close, or navigate behind a modal. |
-| `src/lib/SideBars/Sidebar.keyboard.dom.test.ts`: all-character visibility; developer-tab state; no ghost button; avatar Space activation; inert obscured controls; folder color/image cancellation and stable folder targeting; durable Ask-before-opening toggle; cancellation; one confirmation per folder until refresh. | Protects keyboard-accessible live sidebar controls and character-folder navigation. | High accessibility/navigation value. |
-
-## Chat selection, folders, bookmarks, and stable targets
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `src/lib/SideBars/SideChatList.svelte.test.ts`: seeded root/folder rows; sortable isolation; named native sibling buttons for chat/folder actions; stale branch graph; keyboard organizer reorder/move/folder reorder; focus restoration; duplicate/incomplete ID guards; copy with reminted IDs and strict hydration; list/chat modes; original indices; drag using DOM IDs under live projections; folded state; debounced names; optimistic fold/color/persona binding; selection, chat/folder create, and delete with rollback and one-chat guard; all-chat reset only after a successful export and two confirmations. | Protects the primary desktop chat lifecycle and ensures delayed actions remain bound to stable chat/folder IDs; failed/cancelled exports cannot erase chats. | Critical data-integrity and navigation coverage. |
-| `src/lib/Others/ChatList.svelte.test.ts`: blocking focus/backdrop/Escape; selected rows; owner disappearance and stale actions; stable export IDs; optimistic rename/draft preservation/select/create/delete; rollback; original delete target; one-chat guard. | Protects the modal chat-list surface, including actions performed while selection changes. | High. It covers a separate user surface from SideChatList. |
-| `src/lib/Others/BookmarkList.svelte.test.ts`: hydrate nonresident bookmarks; queued chat-message navigation and close; final queued settlement; stale hydration after owner switch; newly selected owner. Bookmark cases in `src/lib/Others/ownerPaths.test.ts` additionally cover optimistic rename/remove, disappeared targets, and overlapping rollback. | Makes old bookmarks navigable without acting on a newly selected chat and exposes completion only after the queued route actually settles. | High for long transcripts and stored navigation. |
-| `chatFolderGrouping.test.ts`, `dropList.test.ts`, `DropList.svelte.test.ts`, `sidebarDrag.test.ts`, `sidebarOrganizer.test.ts`, and `Sidebar.charList.test.ts`, all under `src/lib/SideBars/`. | Covers single-pass stable folder grouping and indices, boundary wrapping, item-specific move names, drag cancellation/order invalidation, stable organizer positions, folder moves/creation, and character-list memo invalidation. | Medium-high: these helpers underpin every reorder surface. |
-
-## Composer, transcript hydration, screenshots, and progress
-
-`server/fastify/browser-smoke/chatEntryLayout.spec.ts` checks the initial reveal
-of short and tall final messages through direct links and chat-list clicks at
-mobile and desktop widths. It holds the initial display response, samples
-geometry after each animation-frame callback turn from before navigation, and
-rejects any readable sample whose last-message start is displaced by more than
-one pixel. The JSON frame artifact retains loading state, row/viewport heights,
-scroll position, and spacer size. This catches the natural-end flash that
-eventual alignment assertions miss; DOM tracing is disabled because it changes
-scheduling.
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `DefaultChatScreen.loadPages.test.ts`: accessible overflow/plugin controls; false/missing in-flow composer placement and true dock separation; floating-button reveal threshold, button-triggered opening, return-to-flow, hide/reopen/go-to-bottom behavior, fixed/toggle gating, and draft/scroll preservation; mode-correct menu and custom containing-block geometry; content-width alignment and narrow-viewport height bounds; Load More and folded/deep jump expansion; hydration failure; TTS stop modes; bounded initial/reset windows; character-without-chat state; screenshot success/failure, owner changes, and transparent background; incomplete-chat send guard; append rollback; queued plain/translated sends; translation rollback; tall composer shrink; newer draft/owner preservation; continue/reroll hydration races; translated Shift+Enter and IME guard; delayed menu/paste files; per-chat/remounted drafts; upload failures. | Protects the densest chat coordinator: transcript visibility, composer placement/contents, attachments, send/continue/reroll, screenshots, and owner changes. | Critical: regressions can lose typed text/files, send to the wrong chat, clip the mobile composer, or hide transcript rows. |
-| `DefaultChatScreen.shellGreeting.dom.test.ts`: hydrated greeting, shell lacking `alternateGreetings`, actionable history retry, transient first Playground chat, and previous-chat abort control suppression. `DefaultChatScreen.composerDrafts.test.ts`: cloned read/write, LRU bounds, five-field reload restoration, transcript isolation, writer/lineage scope, generation-fenced deletion, corruption/expiry cleanup, quota reporting, and bounded synchronous writes. | Protects bootstrap shells and reload-durable per-transcript draft retention without crossing writer/database ownership. | High; the shell case is a direct first-paint regression and the draft cases prevent lost or cross-database composer text. |
-| `OwnerChatOccupancyControls.svelte.test.ts`: exact chat-only release then owner reacquisition, pin rejection, claim-only retry after a completed release, and rollout-disabled release. | Protects the writer-visible recovery path for retained occupancy after device promotion and for destructive-operation cleanup. | Critical: an unmanaged retained tuple can block Continue and leave reset, import, or restore permanently unavailable. |
-| `AssetInput.svelte.test.ts`, `AgentPresetProgress.svelte.test.ts`, `PostGenerationScriptProgress.svelte.test.ts`, `chatGenerationLoading.test.ts`, and `ChatsUnread.test.ts`. | Covers duplicate content-addressed attachments, case-insensitive persisted attachment preview extensions, chat-scoped Agent/Post-generation progress, status/progress mapping, and unread state independent of auto-scroll policy. | Medium-high supporting-state value. |
-| `memoryLimitMarker.test.ts`. | Marks only the hydrated cutoff row while the memory-limit display setting is enabled. | Medium-high transcript presentation value. |
-| Playwright `uiUxImprovementBaseline.spec.ts`: compact screenshot and keyboard/reflow journeys. | Exercises writer navigation at 550×775 and 655×691; rail overflow and long names; chat/folder disclosure and popup End/Escape behavior; modal background inertness; BardWiki compact/desktop navigation; and restored focus on the persistent chat-menu opener. | High navigation and cross-surface accessibility value. |
-
-## Message rendering, parsing, editing, translation, and suggestions
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `Chat.customHtml.test.ts`: template memo reuse/invalidation/fallback/failure; rendered-button trigger supersession and chat changes; popup edit freshness; rich-copy fallback; stable bookmarks/branches; fold/disable actions; raw message translation ownership; and synthetic-greeting manual translation, projection refresh, source restore, cached reuse, and auto-translation exclusion. | Protects custom HTML, message actions, branch metadata, clipboard fallback, and message/greeting translation from stale transcript targets. | Critical because these actions mutate, translate, or copy user content. |
-| `Chat.parserDependencies.test.ts`, `Chat.editing.dom.test.ts`, `Chat.deletion.dom.test.ts`, `Chat.partialEditing.dom.test.ts`, `Chat.generationFeedback.dom.test.ts`, `BackgroundDom.parserDependencies.test.ts`, `ChatBody.parseMemo.test.ts`, `ChatBodyParseMemo.dom.test.ts`, `ChatBody.translation.dom.test.ts`, `ChatBody.assets.dom.test.ts`, and `ChatBody.displayLifecycle.dom.test.ts`. | Avoids unrelated reparsing while invalidating on changed rows, greetings, chat/scriptstate/prompt regex/module/reload inputs; distinguishes no-op/changed inline edits; stable-ID deletion; stale partial edits; reuses parse/LLM work; handles translation/parser failure without retry amplification. | High correctness and performance value. |
-| `PartialEditController.sharedHover.test.ts`, `partialEditFreshness.test.ts`, `partialEditLayer.test.ts`, `partialEditTouchTrigger.test.ts`, and `messageEditPopup.test.ts`. | Covers singleton hover listener lifecycle, selection/leave/scroll behavior, original-versus-translation layer routing, bilingual cross-side rejection, translation invalidation after an original-layer partial edit, touch long-press ownership, captured source ranges and stable IDs, dialog focus/choices/Escape, stale source/chat rejection, and auto-popup/stable editor rules. | High: prevents editing or deleting replacement content or retaining a translation for text that no longer exists. |
-| `Suggestion.svelte.test.ts` and `chatButtonTriggerFreshness.test.ts`. | Keeps only the newest translation/generation, rejects changed source/owner/token/trigger/transcript, cleans loading on failure/unmount, routes through resolved `otherAx`, and persists clear/send correctly. | High async ownership value. |
-| `ChatScreenBackground.test.ts`, `TransitionImage.svelte.test.ts`, `branchComment.test.ts`, `RerollList.svelte.test.ts`, `ResizeBox.svelte.test.ts`, and `ResizeBoxPointer.test.ts`. | Latest background/emotion source, sentinel normalization, structured/legacy branch markers, reroll announcement/disable, keyboard/touch resize and bounds. | Medium-high presentation and compatibility coverage. |
-| `newMessageTranslationEligibility.test.ts` and `src/ts/process/serverGeneratedMessageTranslation.test.ts`. | Distinguishes a newly appended tail from initial, prepended, replaced, disabled, or owner-switched history, then applies success/failure/running server translation frames to the matching generated row. | High because stale eligibility can translate or decorate the wrong transcript. |
-| `src/ts/alternateGreetingMutation.test.ts`, `alternateGreetingCommands.test.ts`, and `chatFork.test.ts`. | Atomically repairs alternate-greeting indices, fences durable optimistic greeting edits, and rekeys retained/pruned message references when a chat is forked. | Critical transcript integrity. |
-
-## Active-chat generation settings and visible-state layers
-
-| Relevant locations and included cases | Behavior and scenarios verified | Importance |
-| --- | --- | --- |
-| `src/lib/SideBars/chatGenerationSettingsControls.test.ts`: default presence/no legacy duplicate; unconfigured/missing/deleted preset/persona states; Agent Preset save/clear; remediation and rollback; chat switch/projection refresh; group/groupEnd accordion and owner reset; generated control names; active-chat picker mode and stale picker; toggle defaults/reset confirmation and reset-control placement below HypaMemory; reusable toggle-preset save/apply/delete/type mismatch/overwrite-or-create/stale prompts; chat-only jailbreak/sidebar writes. | Protects the visible controls that determine how the current chat generates. | Critical: wrong ownership silently changes model/persona/prompt behavior. |
-| `src/lib/_audit/optimisticTogglePaint.dom.test.ts`. | Proves jailbreak/custom checkboxes paint before deferred save and grouped preset toggles paint as an accordion; compares DOM, store, and command payload. | Critical immediate-paint gates. |
-| Playwright `visibleStateRecovery.spec.ts`: `switching chats repaints the active-chat generation picker`; `a scrolled sidebar toggle keeps the shell fixed through command + resource refresh`; role-first reload and connected import-recovery cases. | Checks built-app paint after route application, native checkbox focus without sidebar/shell/document displacement, command/SSE refresh, and authoritative replacement. Role-first import recovery reloads; connected recovery retains the document as a Reader and restores the sidebar after explicit same-owner writer recovery. | Highest-value UI integration coverage. |
-| Playwright `rerollSwipePersistence.spec.ts`: `rerolled candidates survive a reload and stay swipe-recoverable`. | Rebuilds persisted alternates after reload and makes the prior response visible again. | Critical reload/data-recovery coverage. |
-| Playwright `fastifyBrowserSmoke.spec.ts`: `core chat controls and blocking alerts remain accessible across responsive viewports`; `latest-message start alignment never mutates spacer geometry during free scrolling`; `mobile in-flow composer opens from a button above the stable keyboard viewport`. | Desktop/mobile-sized composer/menu/send names, latest-row start alignment for short and overflowing rows, frozen zero and expanded spacer states while free-scrolling through zero, true dock/transcript geometry, false in-flow ownership, initial pencil reveal, button-triggered floating-card opening, hide/reopen/go-to-bottom behavior, focused bottom pinning and floating-card bounds after the height-only visual-viewport clamp, transient-to-stable keyboard height, absence of page-position transforms, focused root-scroll repinning, Draft-enabled geometry, no nested buttons, and modal focus containment/restoration. | High accessibility/visual smoke value. |
-| Playwright `debugEchoLayoutStability.spec.ts`: `debug echo send stays visually stable through the first-token wait and foreground recovery`. | Sends through the real Debug Echo Fastify generation-operation and SSE path with a ten-second server delay, triggers the visible-page recovery path, checks the final client transcript projection and visible rows, and records per-frame plus mutation-time geometry and DOM identity across send, preparation, cancellation, projected-assistant loading, observer replacement, and terminal response. | High visual/generation smoke value: it targets transient movement, focus/opacity loss, and loading-animation remounts that ordinary DevTools inspection can miss. |
-| Playwright `lazyFirstOpen.spec.ts`: Settings/Playground route sweep plus Grid, character, Sidebar, ChatList, and ModuleChatMenu first opens. | Proves the real production route handlers and emitted feature chunks remain first-use boundaries while the shell stays visible. | High startup/navigation integration value. |
-| Playwright `startupDirectLinks.spec.ts` and `startupRecoveryIntegrationMatrix.spec.ts`: four isolated batches of manifest-derived empty-cache direct links plus reader denial/promotion/writer takeover. | Proves all Settings, Playground, home, grid, inlay, not-found, character, and chat route families request their declared surfaces, and that reader navigation sends no mutation before promotion. | Highest-value fast-bootstrap navigation evidence. |
-
-## Especially critical tests
-
-- Startup browser journeys plus the `_audit` immediate-paint gates protect different stages of the same visible-state contract and should remain layered.
-- Direct-link and reader journeys protect route-resource ownership and the pre-writer UI boundary across the built browser and real API.
-- `DefaultChatScreen.loadPages` protects typed drafts, files, send ownership, hydration, and rollback—the highest-risk chat interaction surface.
-- Character-folder opening cases pair the mounted sidebar behavior with the page-lifetime helper and durable character-order command tests.
-- `SideChatList` and `ChatList` protect optimistic create/delete/select/reorder and stable IDs across the two actual list surfaces.
-- `Chat.customHtml`, parser dependencies, and partial-edit freshness protect mutation targets inside a live, changing transcript.
-- Reroll persistence is the only real reload proof for alternate response recovery.
+`server/fastify/browser-smoke/fastifyBrowserSmoke.spec.ts` and
+`server/fastify/browser-smoke/coreLineage.spec.ts` are core ownership/recovery
+journeys. Extended layout and navigation coverage remains in
+`server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts`,
+`server/fastify/browser-smoke/chatHistoryScroll.spec.ts`,
+`server/fastify/browser-smoke/chatDisplayScrollStability.spec.ts`, and
+`server/fastify/browser-smoke/chatEntryLayout.spec.ts`.
 
 ## Primary inventory
 
-| Group | Complete in-scope file inventory |
-| --- | --- |
-| Route/shell/hotkeys | `src/App.routeEffect.dom.test.ts`; `src/lib/Workspace.svelte.test.ts`; `src/ts/readerRouteIntent.test.ts`; `src/ts/router.test.ts`; `src/ts/server/routeResourceLoader.test.ts`; `src/ts/hotkey.navigation.test.ts`; `src/ts/hotkey.owner.test.ts`; `src/lib/SideBars/Sidebar.keyboard.dom.test.ts`; `server/fastify/browser-smoke/startupRecoveryIntegrationMatrix.spec.ts` |
-| Connected-reader UI | `src/ts/gui/shellGeometry.test.ts`; `src/ts/readerRouteScope.test.ts`; `src/lib/DeviceAccessAction.svelte.test.ts`; `src/lib/ChatScreens/ReadOnlyComposer.svelte.test.ts`; `src/lib/ReaderTranscript.svelte.test.ts`; `src/lib/ChatScreens/readerGenerationRows.test.ts`; `src/lib/WriterDraftRecovery.svelte.test.ts`; `server/fastify/__tests__/layoutFrameSampler.test.ts`; `server/fastify/browser-smoke/readOnlyAppUx.spec.ts`; `server/fastify/browser-smoke/connectedReaderBrowsing.spec.ts`; `server/fastify/browser-smoke/connectedWriterSwitching.spec.ts` |
-| Organization/navigation | `src/lib/Others/BookmarkList.svelte.test.ts`; `src/lib/Others/ChatList.svelte.test.ts`; `src/lib/SideBars/SideChatList.svelte.test.ts`; `DropList.svelte.test.ts`; `dropList.test.ts`; `chatFolderGrouping.test.ts`; `sidebarDrag.test.ts`; `sidebarOrganizer.test.ts`; `Sidebar.charList.test.ts` |
-| Composer/transcript | `src/lib/ChatScreens/AgentPresetProgress.svelte.test.ts`; `AssetInput.svelte.test.ts`; `ChatsUnread.test.ts`; `DefaultChatScreen.composerDrafts.test.ts`; `DefaultChatScreen.loadPages.test.ts`; `DefaultChatScreen.shellGreeting.dom.test.ts`; `OwnerChatOccupancyControls.svelte.test.ts`; `PostGenerationScriptProgress.svelte.test.ts`; `chatGenerationLoading.test.ts`; `memoryLimitMarker.test.ts` |
-| Message/rendering | `src/lib/ChatScreens/BackgroundDom.parserDependencies.test.ts`; `Chat.customHtml.test.ts`; `Chat.parserDependencies.test.ts`; `Chat.editing.dom.test.ts`; `Chat.deletion.dom.test.ts`; `Chat.partialEditing.dom.test.ts`; `Chat.generationFeedback.dom.test.ts`; `ChatBody.parseMemo.test.ts`; `ChatBodyParseMemo.dom.test.ts`; `ChatBody.translation.dom.test.ts`; `ChatBody.assets.dom.test.ts`; `ChatBody.displayLifecycle.dom.test.ts`; `ChatScreenBackground.test.ts`; `PartialEditController.sharedHover.test.ts`; `RerollList.svelte.test.ts`; `ResizeBox.svelte.test.ts`; `ResizeBoxPointer.test.ts`; `Suggestion.svelte.test.ts`; `TransitionImage.svelte.test.ts`; `branchComment.test.ts`; `chatButtonTriggerFreshness.test.ts`; `messageEditPopup.test.ts`; `newMessageTranslationEligibility.test.ts`; `partialEditFreshness.test.ts`; `partialEditLayer.test.ts`; `partialEditTouchTrigger.test.ts`; `src/ts/process/serverGeneratedMessageTranslation.test.ts` |
-| Chat graph helpers | `src/ts/chatFork.test.ts` (alternate-greeting durable mutations are owned by [Domain Mutations and Editing Owners](domain-mutations-and-editing-bridges.md)) |
-| Active-chat settings/gates | `src/lib/SideBars/chatGenerationSettingsControls.test.ts`; `src/lib/_audit/optimisticTogglePaint.dom.test.ts` |
+- Client core: `src/ts/chatCommands.messages.dom.test.ts`, `src/ts/server/chatMessageHydration.completion.dom.test.ts`.
+- Browser core: `server/fastify/browser-smoke/coreLifecycle.spec.ts`, `server/fastify/browser-smoke/acceptedSendProtocol.spec.ts`.
+- Extended browser: `server/fastify/browser-smoke/readOnlyAppUx.spec.ts`, `server/fastify/browser-smoke/transcriptResidency.spec.ts`.

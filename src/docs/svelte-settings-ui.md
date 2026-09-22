@@ -211,9 +211,9 @@ Manual editors call `src/ts/setting/confirmSettingsItemRemoval.ts` before
 deleting embedded rows. The shared confirmation covers prompt templates, input
 hooks, custom models, Agent toggles/lorebook inputs, translator steps, module
 rows, model fallbacks/key-value rows, and legacy stop/bias/parameter lists. A
-canceled confirmation must leave the draft untouched;
-`src/lib/Setting/Pages/Advanced/CustomModelsSettings.svelte.test.ts` is the
-focused cancel/accept guard.
+canceled confirmation must leave the draft untouched. Its former component test
+was removed in Phase 5 because it mocked repository modules; there is no
+dedicated unit guard for this confirmation helper.
 
 ## Shared Controls And Focus
 
@@ -227,7 +227,8 @@ snapshots the device-specific `useMonacoEditorOnDesktop` or
 `useMonacoEditorOnMobile` choice when it opens. Plain text is the default:
 Monaco lazy-loads only when enabled, while disabled mode renders a full-size
 textarea. The popup toolbar and Interaction settings update the device
-preference. `PopupEditor.svelte.test.ts` guards both modes.
+preference. The former popup component test was removed with the Phase 5
+mock-heavy UI suites.
 
 `SliderInput.svelte` supports disabled sentinels, bounded typed numeric entry,
 and touch-safe horizontal dragging without taking over vertical page pan.
@@ -335,8 +336,8 @@ when opened. Its filtering is now owned by
 bounded newest-first history for
 `src/lib/Setting/Pages/AgentPresetDiagnosticsPanel.svelte`.
 `src/ts/router.ts` explicitly treats the removed `/settings/context-agent`
-route as not found; it is not a compatibility alias, and
-`src/ts/router.test.ts` guards that removal.
+route as not found; it is not a compatibility alias. The source-layout router
+test was removed in Phase 5.
 
 Keep editor/status/persistence behavior here. Record normalization, reference
 resolution, planning, execution, completeness, and diagnostic payload meaning
@@ -353,16 +354,17 @@ clones the whole prompt preset with a new top-level ID and Copy name; it does
 not duplicate one template row in place. Archived prompt presets remain valid
 references and are partitioned only in the picker. Legacy bot-preset prompt
 templates remain compatibility UI for old saves and explicit extraction paths.
-`src/lib/Setting/pickerGenerationSettings.test.ts` guards the whole-preset
-duplicate behavior. Prompt assembly and CBS semantics belong to
+`server/fastify/__tests__/splitPresets.test.ts` guards the retained persisted
+preset boundary; the component picker test was removed in Phase 5. Prompt
+assembly and CBS semantics belong to
 [Prompt Assembly And Scripting](../../docs/structure/prompt-assembly-and-scripting.md).
 
 `showGlobalLorebookAndRegex` is defined in
 `src/ts/setting/advancedSettingsData.ts`. It gates the two legacy navigation
 entries but does not disable imported legacy data. Visibility and defaults are
-guarded by `src/lib/Setting/Settings.svelte.test.ts`,
-`src/ts/setting/advancedSettingsData.test.ts`, and
-`server/fastify/__tests__/databaseDefaults.test.ts`.
+guarded at the persisted default boundary by
+`server/fastify/__tests__/databaseDefaults.test.ts`; the settings implementation-
+shape suites were removed in Phase 5.
 
 ## Input-Hook Authoring
 
@@ -524,34 +526,14 @@ Custom Sidebar shortcuts.
 
 ## Focused Tests
 
-Shell, renderer, and authoring guards include
-`src/lib/Setting/Settings.svelte.test.ts`,
-`src/lib/Setting/SettingRenderer.svelte.test.ts`,
-`src/lib/Setting/SettingsSections.svelte.test.ts`,
-`src/lib/Setting/Pages/SourceCode.svelte.test.ts`,
-`src/lib/Setting/Wrappers/SettingAccordion.svelte.test.ts`,
-`src/lib/Setting/Pages/AgentPresetSettings.svelte.test.ts`,
-`src/lib/Setting/Pages/InputHookSettings.svelte.test.ts`,
-`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts`,
-`src/ts/agentLorebookInputs.test.ts`, and
-`src/lib/Setting/pickerGenerationSettings.test.ts`.
-
-Model UI guards include
-`src/lib/Setting/Pages/Model/ModelProfileRoleList.svelte.test.ts`,
-`src/lib/Setting/Pages/Model/ModelProfileList.svelte.test.ts`,
-`src/lib/Setting/Pages/Model/ProviderCredentialList.svelte.test.ts`,
-`src/lib/Setting/Pages/Model/ModelProfileEditorDrawer.svelte.test.ts`,
-`src/lib/Setting/Pages/Model/ModelGenerationSettings.svelte.test.ts`,
-`src/lib/Setting/Pages/Model/ModelProviderPanel.svelte.test.ts`, and
-`src/lib/Setting/Pages/Model/ModelRuntimeDefaultsEditor.svelte.test.ts`.
-
-Persistence and primitive-control guards include
-`src/lib/Setting/Pages/PluginSettings.svelte.test.ts`,
-`src/lib/Setting/Pages/Module/ModuleSettings.svelte.test.ts`,
-`src/lib/Setting/Pages/RequestHistorySettings.svelte.test.ts`,
-`src/lib/UI/GUI/TextAreaInput.svelte.test.ts`,
-`src/lib/UI/GUI/TextAreaResizable.svelte.test.ts`,
-`src/ts/setting/displaySettingsData.svelte.test.ts`, and
-`src/ts/setting/settingsPageSections.test.ts`, and
-`src/ts/setting/utils.test.ts`. The visible-state policy is canonical in
+Phase 5 removed the settings and shared-control component-test inventory. Use
+`server/fastify/browser-smoke/uiUxImprovementBaseline.spec.ts` for integrated
+visible settings behavior. Durable profile and secret behavior is core in
+`server/fastify/__tests__/commands.modelProfiles.test.ts` and
+`src/ts/providerSecretMask.test.ts`; retained client record/state coverage is in
+`src/ts/model/modelProfileRecords.test.ts`,
+`src/ts/model/modelProfileResolver.test.ts`, and
+`src/ts/model/modelProfileUiState.test.ts`. Agent authoring and settings drafts
+remain in `src/ts/agentAuthoringIssues.test.ts` and
+`src/ts/server/settingsDraftAcknowledgement.test.ts`. The visible-state policy is canonical in
 [Testing And Operations](../../docs/structure/testing-and-operations.md#visible-state-test-contract).

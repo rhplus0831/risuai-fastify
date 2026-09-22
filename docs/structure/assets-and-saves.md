@@ -37,8 +37,9 @@ with a failure message when refresh fails. Missing filesystem-capacity support
 does not hide file totals. Requests are rate limited and concurrent scans are
 coalesced; completed results are not cached. Cancellation on server shutdown
 stops the scan. Coverage lives in
-`server/fastify/__tests__/storageUsage.test.ts`, the route-protection suite, and
-`src/lib/Setting/Pages/StorageUsage.svelte.test.ts`.
+`server/fastify/__tests__/storageUsage.test.ts` and
+`server/fastify/__tests__/routeProtection.test.ts`. The settings component no
+longer has a dedicated unit test after Phase 5 removed mock-heavy UI suites.
 
 ## Assets
 
@@ -69,7 +70,10 @@ than the byte target remains a single-item batch instead of being split. Asset
 requests time out after five minutes; transient rate-limit responses honor
 `Retry-After` and retry the affected request up to three times. These contracts
 are named by the `SERVER_ASSET_*` constants in `src/ts/globalApi.svelte.ts` and
-guarded by `src/ts/globalApi.saveAssets.test.ts`.
+exercised at the persisted server boundary by
+`server/fastify/__tests__/assetMetadataIndex.test.ts` and
+`server/fastify/__tests__/assetGcScheduling.test.ts`; the deleted browser unit
+suite depended on repository-module mocks.
 Callers that supply `saveAssets()` progress reporting opt into independently
 acknowledged missing-asset uploads with the same four-worker bound. Progress
 counts an input only after its id is confirmed by an existence probe or its
@@ -154,9 +158,9 @@ authenticated catalog. `PUT /api/v1/commands/inlay-assets/:assetId` and
 the catalog outside the aggregate compatibility database and refreshes it as a
 fourth root resource. See
 [Server Resources And Hydration](server-resources-and-bridges.md#bootstrap-and-initial-resources)
-for reconciliation behavior. Persistence and client projection behavior are
-guarded by `server/fastify/__tests__/inlayCatalog.test.ts` and
-`src/ts/server/inlayCatalog.test.ts`.
+for reconciliation behavior. Persisted catalog behavior is guarded by
+`server/fastify/__tests__/inlayCatalog.test.ts`. The browser projection no longer
+has a dedicated unit test after the Phase 5 mock-heavy client-suite deletion.
 
 `src/ts/process/files/inlays.ts` owns browser ingestion and compatibility
 migration. New decoded-image ingestion rejects sources above 16 Mi-pixels and
@@ -253,9 +257,11 @@ localized completion report. Exported whole-database saves contain raw
 credential-bearing settings, including shared
 provider API keys and Vertex private keys; treat these files as secrets. The
 Settings UI requires the localized secret-warning confirmation before requesting
-the ZIP-style local-backup export; this is guarded by
-`src/lib/Setting/Pages/UserSettings.svelte.test.ts`. The separate bug-report
-export masks registered secrets.
+the ZIP-style local-backup export. Its former component unit test was removed in
+Phase 5 because it mocked repository modules; bundle and restore bytes remain
+protected by `server/fastify/__tests__/risuSaveBundleImportRoute.test.ts` and
+`server/fastify/browser-smoke/importRestoreRecovery.spec.ts`. The separate
+bug-report export masks registered secrets.
 
 ## Content Exchange
 
@@ -319,10 +325,11 @@ input validation and a fresh writer-epoch check. Callers without `stream=1`
 retain the temporary-upload/pending-token compatibility path. Those older
 callers can answer password/permission challenges without uploading again.
 The older browser `CharXImporter` remains for non-picker compatibility callers
-and export-adjacent tests. Regression coverage lives in
-`server/fastify/__tests__/localFileImport.test.ts` and
-`src/ts/server/localFilePreflight.test.ts`, including metadata-last archives,
-pre-upload encryption inspection, and incremental input above 310 MiB.
+and export-adjacent tests. Retained regression coverage lives in
+`server/fastify/__tests__/realmImport.test.ts` for the real import and
+asset-staging boundary. The former mocked local-file/preflight suites were
+removed in Phase 5; those browser-only details no longer have dedicated unit
+coverage.
 
 Local character-card callers can opt into an SSE response with
 `Accept: text/event-stream`. The upload remains a single multipart request;
@@ -388,17 +395,17 @@ any mismatch aborts reset and requires a new export. Chat folders remain.
 Export failure, a fence mismatch, either cancellation, or terminal command
 failure leaves or restores the chats. This does not change the export bytes or
 affect single-chat, dataset, character-card, `.risu`, bundle, or local-backup
-exports. The client contract is guarded by
-`src/ts/characters.exportChat.test.ts`,
-`src/lib/SideBars/SideChatList.svelte.test.ts`, and
-`src/ts/chatCommands.organization.dom.test.ts`. The server-side transaction, revision, and event
-contract belongs to
+exports. The former mocked client/component suites were removed in Phase 5.
+The server-side transaction, revision, and event contract is covered by
+`server/fastify/__tests__/commands.test.ts` and belongs to
 [Data And Events](data-and-events.md#revision-contract).
 
 Module and MCP-bearing `.risum` exchange is owned by
 [Plugins And MCP](plugins-and-mcp.md#fastify-mode-limits). The remaining
-dataset/chat import guards are `src/ts/storage/exportAsDataset.test.ts` and
-`src/ts/characters.importChat.test.ts`.
+chat-import planning and exact-id persistence guards are
+`src/ts/chatImportPlanning.test.ts` and
+`server/fastify/browser-smoke/coreLifecycle.spec.ts`. Dataset export no longer
+has a dedicated unit test after the Phase 5 mocked-suite deletion.
 
 ## BardWiki Vaults
 

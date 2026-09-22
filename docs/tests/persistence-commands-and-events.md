@@ -1,141 +1,46 @@
 # Persistence, Revisioned Commands, and Events
 
-Last audited: 2026-08-29.
+The surviving persistence suite uses real SQLite and Fastify boundaries. Phase 5
+removed redundant split command suites, source ownership checks, and tests whose
+oracle was internal call shape.
 
-This area covers SQLite initialization/schema/defaults, missing-database safety, revisioned domain commands, transactional mutation receipts, persisted/live event delivery, surgical character/chat/message writes, and the load/write-range gates that keep large databases responsive.
+## Database and migrations
 
-## Database initialization, defaults, and migrations
-
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Command transaction foundation — `commands.test.ts`: rejects unauthenticated settings after password; rejects missing/invalid `baseRevision`; stale revision returns 409/current revision; stale write changes no event/revision/state; successful runtime setting emits event and reads back; validation failure does not advance; thrown JSON mutation rolls back; thrown message-free mutation rolls back; two ordinary same-base writes produce one winner/one 409; ordinary event persistence failure rolls back state/revision/event/receipt. | The common authentication, optimistic-concurrency, validation, transaction and event contract shared by every command. | Critical: failures can silently lose or overwrite authoritative state. |
-| First database seed — `commands.test.ts`: unseeded settings reject; initialize creates defaults/event and unblocks; event-persistence failure rolls back; repeated initialize is no-op and does not clobber; request-shaped payload rejects; non-object body rejects. | Safe first run and idempotent recovery. | Critical to new installations and failed setup recovery. |
-| Default normalization — `databaseDefaults.test.ts` cases: canonical model roles/script keys; enabled reduced motion; floating chat input defaults on while an explicit opt-out survives; translator thought exclusion defaults off and preserves opt-in; retired character-visibility metadata is discarded without removing characters; old model maps retain script roles; missing Agent default clears; retired PIP keepalive falls back; retired hotkeys are removed while custom bindings survive. | Keeps old saves usable while establishing canonical server-owned defaults. | High compatibility value. |
-| Schema migrations — `db.test.ts` cases: fresh current schema; finalization alternates; memory delete tombstones; retired body-cache tables; stable global lorebook/entry IDs; durable receipts; v24 receipt lineage; WAL synchronous NORMAL; version bump without domain revision; v6 alternate column; v7 event table; v9 event-table rebuild; safe reopen; memory status/kind/payload constraints; memory cascades; reject newer schema; require singleton schema row. | Preserves data through upgrades and enforces the physical invariants assumed by commands/workers. | Critical data-loss prevention. |
-| Initialization classification and missing-database guard — `databaseInitialization.test.ts` distinguishes empty, valid, and malformed settings schemas and only permits replacement when every current/future user-state table is empty; known technical seed rows remain safe. `missingDatabaseGuard.test.ts` refuses database creation when prior-install evidence exists, while allowing explicitly approved fresh starts and genuinely new/empty data directories. | Prevents silent reseeding over evidence of an existing installation or partially damaged database. | Critical recoverability and data-loss prevention. |
+Core database protection lives in `server/fastify/__tests__/db.test.ts`,
+`server/fastify/__tests__/databaseInitialization.test.ts`,
+`server/fastify/__tests__/legacyDatabaseImport.test.ts`,
+`server/fastify/__tests__/messageStore.test.ts`, and
+`server/fastify/__tests__/missingDatabaseGuard.test.ts`. Extended defaults and
+migration coverage remains in `server/fastify/__tests__/databaseDefaults.test.ts`
+and `server/fastify/__tests__/migrationFoundation.test.ts`.
 
 ## Command coverage ownership
 
-Updated 2026-09-21: the original 244 cases are retained across these 20 files,
-with three finalization rejection cases added (**247 cases total**). All 21
-`core` cases remain in `commands.test.ts`, including the two direct mutation
-rollback tests. Those pure tests and prompt-owner validation do not start Fastify.
+`server/fastify/__tests__/commands.test.ts` owns transaction and initialization
+behavior. Domain core owners are `server/fastify/__tests__/commands.messages.test.ts`,
+`server/fastify/__tests__/commands.lorebooks.test.ts`,
+`server/fastify/__tests__/commands.modelProfiles.test.ts`,
+`server/fastify/__tests__/commands.scripts.test.ts`, and
+`server/fastify/__tests__/commands.coldStorage.test.ts`.
 
-| Test file (under `server/fastify/__tests__/`) | Cases | Ownership |
-| --- | ---: | --- |
-| [commands.test.ts](../../server/fastify/__tests__/commands.test.ts) | 21 | Core authentication, revisions, transactions, initialization, and JSON mutation rollback. |
-| [commands.settings.test.ts](../../server/fastify/__tests__/commands.settings.test.ts) | 31 | Grouped settings, secret masking, sparse objects, Hypa settings, and validation. |
-| [commands.modelProfiles.test.ts](../../server/fastify/__tests__/commands.modelProfiles.test.ts) | 15 | Model profiles, credentials, bindings, and legacy conversion. |
-| [commands.botPresets.test.ts](../../server/fastify/__tests__/commands.botPresets.test.ts) | 18 | Bot preset CRUD, selection, snapshots, and asset/secret validation. |
-| [commands.agentPresets.test.ts](../../server/fastify/__tests__/commands.agentPresets.test.ts) | 8 | Agents and Agent Preset commands, references, and resource projections. |
-| [commands.prompts.test.ts](../../server/fastify/__tests__/commands.prompts.test.ts) | 6 | Prompt settings and prompt item CRUD, ordering, and enablement. |
-| [commands.personas.test.ts](../../server/fastify/__tests__/commands.personas.test.ts) | 8 | Persona CRUD, selection, stable IDs, and legacy profile projection. |
-| [commands.translatorPresets.test.ts](../../server/fastify/__tests__/commands.translatorPresets.test.ts) | 6 | Translator preset CRUD, selection, and sparse acknowledgements. |
-| [commands.loadouts.test.ts](../../server/fastify/__tests__/commands.loadouts.test.ts) | 6 | Loadout CRUD, favorites, touches, membership, and stable IDs. |
-| [commands.characters.test.ts](../../server/fastify/__tests__/commands.characters.test.ts) | 11 | Character CRUD/selection, greeting cascades, scripts, and secret preservation. |
-| [commands.chats.test.ts](../../server/fastify/__tests__/commands.chats.test.ts) | 20 | Chat/folder CRUD, reset, hydration, identity, metadata, and scriptstate. |
-| [commands.chatGenerationSettings.test.ts](../../server/fastify/__tests__/commands.chatGenerationSettings.test.ts) | 12 | Generation settings ownership, sparse certificates, validation, and fork inheritance. |
-| [commands.messages.test.ts](../../server/fastify/__tests__/commands.messages.test.ts) | 22 | Message CRUD, write isolation, finalization preconditions, memory invalidation, and generation results. |
-| [commands.translation.test.ts](../../server/fastify/__tests__/commands.translation.test.ts) | 12 | Message/greeting translation publication, races, occupancy, and requester disconnects. |
-| [commands.lorebooks.test.ts](../../server/fastify/__tests__/commands.lorebooks.test.ts) | 14 | Lorebook and scoped entry commands, sparse changes, and identity validation. |
-| [commands.scripts.test.ts](../../server/fastify/__tests__/commands.scripts.test.ts) | 9 | Full and compact script/trigger definition mutations. |
-| [commands.modules.test.ts](../../server/fastify/__tests__/commands.modules.test.ts) | 9 | Module records, folders, links, enablement, and MCP lifecycle. |
-| [commands.plugins.test.ts](../../server/fastify/__tests__/commands.plugins.test.ts) | 9 | Plugin records, configuration, provider selection, and custom storage. |
-| [commands.assets.test.ts](../../server/fastify/__tests__/commands.assets.test.ts) | 4 | Command-owned asset and character audio reference validation. |
-| [commands.coldStorage.test.ts](../../server/fastify/__tests__/commands.coldStorage.test.ts) | 6 | Legacy character/chat recovery and preservation of existing memory. |
+## Revision, receipts, and events
 
-`helpers/commandHarness.ts` shares app lifecycle, fixture import, and resource/row reads.
-Each integration case starts its own app with a disposable SQLite directory; domain
-fixtures remain local. The ordinary finalization route tests independently reject
-wrong text, chat, and generation preconditions while preserving rows, revision,
-and persisted/live events. Message write isolation checks both complete rows and
-SQL audit triggers, which catch in-place corruption and content-preserving updates.
-
-The dedicated receipt, event, read/write-scope, and storage suites below remain
-separate. Shared endpoints do not imply identical assertions: for example,
-`commands.agentPresets.test.ts` checks settings/resource projections after deletion,
-while `agentPresetDeletionSafety.test.ts` audits physical writes and data preservation.
-
-## Command API behavior inventory
-
-The command route suites are grouped below by the product behavior it protects. Each row names every collected case in that logical group, compacting only repeated route-family wording.
-
-| Logical command group and included individual cases | Behavior / importance |
-| --- | --- |
-| Settings, provider secrets, and model profiles — display update; omit large verbatim response; shallow-patch large object without replacing untouched data; masked shallow override; malformed shallow update/no revision; normalized override plus acknowledged keys; grouped updates across families; compact global-script mutation; malformed custom sidebar rejection; sidebar sanitation; translator thought-exclusion persistence; provider scalar update masked in bootstrap; selected-model compatibility setting; malformed profile scaffold rejection; create+bind profile atomically; role bindings and selected-preset mirror atomically; preserve masked secrets and clear omitted secrets on full save; reject stale profile row despite current global revision; duplicate without/with secrets; delete reassignment/direct role update; stale legacy conversion rollback; legacy conversion into profiles/bindings/defaults; chat format setting; masked provider placeholder replacement; provider-array secret restoration after reorder; no secret transplant after earlier-row delete; reject unmatched masked row; manual settings roots; distinguish memory settings from Hypa preset collection; strict prompt setting with sparse acknowledgement; reject unknown key; reject retired Context Agent key while retaining imported data; reject collection fields in prompt group; reject unsupported group; keep dedicated read-only groups command-owned. | Protects settings ownership, sparse acknowledgements, credential masking, profile authority, atomic conversion and stale-row concurrency. Critical for preventing secret loss/leakage and partial profile state. |
-| Bot presets — missing durable IDs; create/update with events; masked sparse canonical result; masked legacy PATCH restoration; valid image references; malformed/missing refs with no revision; select/apply while saving previous snapshot; exact no-apply shape; copy/delete/reorder; withhold reorder receipt when selected pointer normalizes; reject missing/duplicate IDs on copy/import; malformed reorder/no revision; 404/409 missing/stale. | Protects preset CRUD, selection snapshots, secret/asset integrity and compact receipts. |
-| Agents and Agent Presets — standalone Agent create/update/duplicate/delete/reorder, shared Agent use across presets, referenced-Agent delete rejection, modular use attach/update/delete/reorder, legacy embedded-step migration, preset create/update/default/reorder, last before-main user-input modifier plus invalid phase/order, exact metadata/compatibility-step PATCH receipts, acknowledgement withholding after normalization/repair, and preset delete cascades. Context binding is rejected as out of scope. | Protects reusable auxiliary-agent behavior, preset composition, and cross-resource references. |
-| Prompt items — prompt setting/event; create/update/delete/reorder stable IDs; sparse selected-preset field/delete; malformed command/no revision; enable/disable; missing/stale 404/409. Personas — CRUD/reorder; select while saving previous legacy mirror; no-save selection certificate; selected PATCH projection; malformed/no revision; missing/stale. Translator presets — CRUD/select; selected preset syncs legacy fields; non-selected stable receipt; withhold receipt after baseline normalization; malformed/no revision; missing/stale. Loadouts — create/update/favorite/touch/delete; no duplicate character membership on touch; malformed/no revision; missing/stale. | Protects user-owned configuration collections, stable IDs, selection mirrors and compact receipts. |
-| Characters — live events alone gain writer origin; select without unrelated character/chat rewrites; create/update/select/reorder/delete; create+select atomically; malformed/no revision; missing/stale. | Protects top-level character identity, selection and ordering. |
-| Chats and folders — full CRUD/fork/reorder/delete; atomically replace one character's chats and messages with one empty selected `Chat 1` while preserving folders and sibling characters; sparse reorder preserves omitted folder; create at head with `select:false`; long created/forked transcript hydration; create defaults incomplete and persists explicit generation settings; metadata update avoids message rewrite; explicit-off generation settings prune stale toggles; sparse generation-setting certificate; reject ambiguous sparse and invalid settings; generic chat PATCH cannot carry settings; bootstrap normalizes malformed stored settings; global persona/preset moves do not alter chat settings; fork inherits complete/incomplete settings unless overridden; fork requires caller ID; repair duplicate chat IDs; reject cross-character chat/message ID reuse; reject cross-character folder ID reuse; repair duplicate folder IDs; reject missing/MCP module links; malformed/no revision; missing/stale. | Protects chat identity, selected state, generation readiness, folders, forks and globally unique IDs. Critical to visible conversation state. |
-| Surgical message writes — append one target row only; update/delete/truncate/replace without unrelated chat writes; non-message command preserves complete message rows and performs no message-table writes; independent text/chat/generation finalization mismatches preserve rows/revision/events; chat delete drops message rows. Message history API — append/update/delete/truncate/replace IDs; preserve truncated assistant tail as alternates; replace requested tail only; server raw translation persists; unrelated edit may proceed during translation; changed source rejects stale translation; translation survives requester disconnect; normalize missing IDs and reject malformed/no revision; repair duplicate IDs and references; reject cross-chat ID reuse; missing/stale. Generation result — append/replace generated row; malformed/no revision; missing/stale. Scriptstate — partial patch/delete with event; remove empty state; malformed/no revision; missing/stale. | Protects transcript integrity, translation races, rerolls, generation persistence and script variables. Data-loss-critical. |
-| Lorebook commands — global CRUD/reorder; cannot delete last book without replacement ID; replace entries in global/character/chat/module scopes; scoped upsert without siblings; sparse patches preserve siblings/fields; malformed sparse/no revision; withhold receipt after sibling normalization; malformed full commands/no revision; reject missing nested IDs on POST; reject missing/duplicate IDs on scoped PUTs; skip unrelated child validation while target remains strict; missing parent/stale. | Protects nested knowledge collections and scoped row ownership. |
-| Script and trigger definitions — full replace on character/module; malformed definitions/no revision; replace owned field on sparse raw rows; reject duplicate raw character IDs; skip unrelated definition validation while target remains strict; missing parent/stale; compact update/create/reorder/delete across four owners; compact shape/row-operation validation/no revision; absent-array create vs non-array/current-ID/stale rejection. | Protects automation definitions without overwriting other row fields. |
-| Modules — create MCP with identifier validation; create/patch/enable/reorder/relink/delete; add/remove character links; null sentinel deletes optional fields; malformed/no revision; MCP-row 404 and stale 409. Plugins — create/patch/enable/provider select/reorder/delete; null optional deletion; malformed/no revision; missing/stale. Plugin storage — put/delete/bulk; malformed/no revision; stale. | Protects extension records, links, provider selection and custom storage. |
-| Asset references — persist uploaded IDs through character/module/persona/settings/folder commands; reject malformed/missing general refs; reject malformed/missing character audio refs; allow optional audio clear. | Prevents persisted dangling or malformed content-addressed references. |
-
-## Transactional idempotency and event delivery
-
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Mutation receipts — `commandMutationReceipts.test.ts` cases: replay before revision without second write/event; replay before validation; replay create/fork/append before duplicate checks; replay chat/folder edits/reorders; cross-writer replay and global semantic collision rejection; valid writer required with mutation ID; current lineage required; unacknowledged receipts retained; current writer acknowledges earlier session; restore rotates lineage and next autosave uses returned scope; receipt persistence failure rolls back domain/revision/event; receipts thread through model-profile/Agent wrappers. | Guarantees durable browser intents are idempotent across crashes, retries, writer handoff and restores. | Critical to offline/outbox recovery. |
-| Durable delete matrix — `durableDeleteIdempotency.test.ts`. Second intent after removal: characters, chats, chat folders, prompt items, root prompt items, personas, model presets, prompt presets, translator presets, modules, global lorebooks, and global/character/chat/module lorebook entries. Absent target before last-item guard: model preset, prompt preset, persona, translator preset, chat, global lorebook. Existing target still rejects missing replacement: model preset, prompt preset, persona, translator preset. Missing owner treated as absent target: prompt item and four lorebook-entry scopes. | Defines safe retry semantics for destructive commands, including replacement/last-item edge cases. | Critical data-integrity coverage. Parameterized cases assert response event, revision, receipt/event counts and physical revision. A second distinct mutation ID intentionally advances revision/emits again even though the target is absent; document this contract to avoid accidental “optimization.” |
-| Event retention, replay, and teardown — `events.test.ts` cases: bounded live and persisted history; bounded revision-range prune; best-effort memory bus; unauthenticated rejection; authenticated SSE setup; successful command delivery; retained replay; replayed writer origin; restart replay; setup-race replay; `Last-Event-ID`; unavailable behind/ahead; invalid cursor; memory progress; external memory sink failure isolation; unsubscribe on close; snapshot-read HTTP 500 releases subscriptions and permits retry; no heartbeat/subscription after mid-handler teardown. | Preserves ordered browser invalidation and recovery after disconnect/restart without unbounded history. | Critical to consistent visible state. |
-
-## Physical message storage and writer primitives
-
-| Test group and included cases | Behavior protected | Importance |
-| --- | --- | --- |
-| Message CRUD and ranges — `messageStore.test.ts`: round-trip in sequence order; logical ranges tolerate sparse stored sequence; replace target chat only; delete target chat only; empty replace removes active rows; duplicate active message IDs are ambiguous rather than arbitrarily mutated. | Basic transcript persistence and target isolation. | Critical: transcript corruption is difficult to recover. |
-| Reroll alternate rows — alternates excluded from active queries; unique negative sequences newest-first; clear alternates without active transcript; active append/diff leaves alternates; chat delete removes alternates; per-chat isolation. | Preserves and scopes assistant reroll candidates without polluting active history. | High user-visible value. |
-| Surgical diff — append exactly one row and keep prior bytes; reject append after a same-length prefix edit; unchanged array writes nothing; divergence deletes/resequences tail; truncate drops trailing rows only; append-only long-prefix cost/byte identity; edit/truncate exercise generic diff. | Avoids rewriting long transcripts without attaching a stale generated tail. | Critical integrity, performance, and row-stability protection. |
-| Hypa blob and repository extraction — chat-Hypa CRUD/group behavior; repository coverage for splitting messages out of JSON, splitting/joining Hypa, load-write-load round trips, empty messages with extracted characters, no-op without legacy `db.json`, legacy import, and reclaiming rows for removed chats. | Defines ownership between JSON projections and SQLite message/Hypa tables and migrates legacy state. | Critical migration and no-data-loss value. |
-| Targeted writer kit — `repositoryWriterKit.test.ts` cases: settings-only; character row strips chats; chat row strips messages/Hypa; exact chat write does not repair siblings; single collection row preserves row IDs; rebuild one collection only; reject unknown collection; plugin key upsert/delete; character delete relies on FK chat cascade. | Provides the physical primitives assumed by narrow commands. | High architectural value. |
-
-## Narrow read/write and performance contracts
-
-These tests protect a product behavior—large saves remain responsive—but their assertions deliberately name SQL tables, loader calls, and mutation-path labels. They should be updated only with an intentional storage redesign, not weakened to avoid refactoring effort.
-
-| Matrix and included individual cases/parameters | Behavior protected |
-| --- | --- |
-| Collection table ranges — `commandCollectionRange.test.ts`. Plugins: create; one-row patch; delete non-provider; delete active provider plus settings; enable; reorder. Presets: create/patch/copy/import; reorder pointer; delete no-apply; delete apply; select/apply; prompt-preset select; selected prompt-preset patch; model-preset normalized receipt; selected model overridden by prompt preset; split-preset field/table ranges; selected prompt-preset delete. Prompt items: root create/patch/delete/disable/reorder; selected-preset create/patch/normalize-idless/delete/reorder/disable; stale preset selection rejection. Personas: create no mirror; create mirror; patch; select default; select no-save/no-mirror; delete; reorder. Translators: create/patch/delete/select. Loadouts: create/patch/delete/favorite/touch. Lorebooks: create/patch/delete/reorder/entries. Modules: create/patch/reorder/lorebooks/full scripts/compact script/full triggers. | Proves each collection route writes exactly its owning table plus only documented selection/settings projections. |
-| Character/chat floor unblock — character scripts full PUT; character triggers full PUT; character compact script PATCH; malformed scripts no write; chat delete writes parent+deleted message/Hypa only; refuse only-chat delete; character delete removes/cascades/compacts. | Keeps formerly broad deletes/definition changes at targeted row ranges. |
-| Message-free/dependent ceilings — character delete and chat delete targeted cleanup; module delete stays message-free while stripping references; chat create validates message IDs corpus-wide; character create; create+select; character scripts PUT; character triggers PUT. | Prevents loading the transcript corpus for commands that do not need it while retaining global-ID validation where necessary. |
-| Settings/plugin storage ranges — settings group; settings-memory plus Hypa presets; prompt settings; prompt group; character reorder; plugin provider; module enable; lorebook selection. Plugin storage: key put; key delete; delete-empty suppresses embedded fallback; bulk clear/delete/replace; clear-empty fallback suppression; bulk merge. | Ensures scalar settings and custom storage avoid unrelated collections/corpus loads. |
-| Single-row paths — character patch; character patch+trash settings; character lorebook; folder create/patch/reorder; character module reorder. Chat scriptstate; chat patch; embedded-fallback missing split-row failure; full/sparse generation settings; chat patch+select parent; chat lorebook; degraded sibling preservation. Folder-delete rehome; chat reorder. Fork insert+messages/source preservation; reject unloaded placeholder; reject duplicate forked message. Reject placeholder transcript replacement. | Protects narrow character/chat ownership and validates exceptions requiring a parent/settings co-write. |
-| Read narrowing — scriptstate no whole-corpus reads; definition exact owner reads; compact definitions; chat create no message/Hypa broad reads; character patch target repair; chat patch scoped; module-patch explicit broad fallback; generation settings no message/Hypa; plugin single-key vs bulk; settings scoped and legacy fallback; five root prompt-item reads; five preset prompt-item reads; collection scoped and legacy fallback; full message lifecycle scoped; scoped-vs-broad row equality; exact chat without generation repair; unknown chat broad fallback; pre-extraction broad fallback/dedup; reject scoped read plus whole-database write. | Keeps command reads proportional to the target while preserving compatibility fallbacks and 404/dedup contracts. |
-| Targeted mutation paths — settings, character row, chat row, collection and plugin-storage each bump one revision, persist one event, write only expected tables and emit correct metric; callback error rolls back all. | Proves the common targeted transaction wrapper, not just individual routes. |
-| Mutation gate metadata — emitted runtime paths exactly match review gates through a TypeScript AST scan; every targeted path fixes `dbJsonWriteMs: 0` and table budget; broad baselines retain budgets; every table name belongs to the known physical universe. | Prevents a new/renamed path from escaping review gates. |
-| Composite command metrics — one large-save case executes settings, plugin storage, chat patch, character select, message append/update/delete/truncate/replace, and generation result; checks metric type/resource/revision, mutation path, table set and zero JSON writes where targeted. | Verifies production metrics and comparison gates across representative families. |
-
-## Settings/preset parity gates
-
-- `settingsGroupParity.test.ts` contains three exact ownership tests: every generically writable setting belongs to exactly one canonical group; Agent Preset projection stays readable but not generically writable; model-profile projection stays exact, read-only, and provider-write compatible. This is a compact, high-leverage architecture test tied to three ownership maps.
-- `splitPresets.test.ts` covers model role-adjacent normalization, masked model patches, prompt model overrides, nested prompt-template IDs, coherent create/import/select/reorder lifecycle, receipt behavior after normalization, and duplicate/unknown/stale rejection. Add targeted branch cases before changing this compatibility boundary.
+`server/fastify/__tests__/commandMutationReceipts.test.ts`,
+`server/fastify/__tests__/commandMutationReadNarrowing.test.ts`,
+`server/fastify/__tests__/commandMessageFreeCeiling.test.ts`,
+`server/fastify/__tests__/durableDeleteIdempotency.test.ts`, and
+`server/fastify/__tests__/events.test.ts` guard narrow durable writes and event
+publication. `server/fastify/__tests__/repositoryWriterKit.test.ts` is retained
+extended coverage for writer primitives.
 
 ## Browser cross-reference
 
-`server/fastify/browser-smoke/rerollSwipePersistence.spec.ts > rerolled candidates survive a reload and stay swipe-recoverable` is the strongest visible-state counterpart to the message-store and message-command tests. It runs a real server regenerate, persists both old and new candidates as alternate rows, reloads the built application, reconstructs the buffer from authoritative hydration, and visibly swipes back. Its full assessment is in [Prompting, Generation, and Streaming](prompting-generation-and-streaming.md).
+Client dispatch/replay is mapped in [Browser State Sync and Recovery](browser-state-sync-and-recovery.md).
+Exact-id mutation and restore behavior is exercised by
+`server/fastify/browser-smoke/coreLifecycle.spec.ts` and
+`server/fastify/browser-smoke/coreLineage.spec.ts`.
 
-The broad Fastify browser smoke also proves one settings command produces an event, triggers hash-aware resource refresh, and paints the new value. The visible-state recovery smoke proves a chat generation toggle remains changed after command plus refresh. These close the server-to-visible-state loop; their primary assessments are in [API Security, Runtime, and Network Boundaries](api-security-and-runtime.md) and [Browser State Sync and Recovery](browser-state-sync-and-recovery.md).
+## Primary inventory
 
-`startupRecoveryIntegrationMatrix.spec.ts` adds isolated cross-layer receipt/event evidence:
-response-lost-after-commit replay reuses one mutation ID, advances the server
-exactly once, empties the encrypted outbox, and acknowledges the durable
-receipt. Its event-gap journey removes one persisted
-event, receives `event_replay_unavailable`, rereads every authoritative root
-resource family, and restores mutation capability. The multi-tab journey proves
-the old writer is demoted and only the promoted writer can mutate. These are the
-strongest browser counterparts to the transaction/receipt/event suites, though
-they do not replace their exhaustive route and physical-row matrices.
-
-## Complete primary file manifest
-
-| Protection area | Primary files |
-| --- | --- |
-| Initialization and schema | `databaseDefaults.test.ts`; `databaseInitialization.test.ts`; `db.test.ts`; `missingDatabaseGuard.test.ts`; `splitPresets.test.ts` |
-| Command semantics | The 20 files in [Command coverage ownership](#command-coverage-ownership); `durableDeleteIdempotency.test.ts`; `targetedMutationPaths.test.ts` |
-| Idempotency and events | `commandMutationReceipts.test.ts`; `events.test.ts` |
-| Narrow read/write contracts | `commandCollectionRange.test.ts`; `commandFloorUnblock.test.ts`; `commandMessageFreeCeiling.test.ts`; `commandMutationReadNarrowing.test.ts`; `commandSettingsAndPluginStorageRange.test.ts`; `commandSingleRowPaths.test.ts`; `repositoryWriterKit.test.ts` |
-| Metrics and budgets | `commandMetrics.test.ts`; `commandMutationBudget.test.ts` |
-| Physical state and parity | `messageStore.test.ts`; `settingsGroupParity.test.ts` |
+- Core: `server/fastify/__tests__/commands.test.ts`, `server/fastify/__tests__/commandMutationReceipts.test.ts`, `server/fastify/__tests__/events.test.ts`.
+- Extended: `server/fastify/__tests__/repositoryWriterKit.test.ts`, `server/fastify/__tests__/greetingTranslationStore.test.ts`.

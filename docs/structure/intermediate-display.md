@@ -236,9 +236,7 @@ under `server/fastify/src/prompt/`. Browser owners include
 `ChatBody`/`Chats` components named in the UI guide.
 
 Focused coverage includes `packages/protocol/src/displaySource.test.ts`,
-`src/ts/server/displaySources.test.ts`,
 `server/fastify/__tests__/displaySourceQueue.test.ts`,
 `server/fastify/__tests__/displaySourceCache.test.ts`,
-`server/fastify/__tests__/displaySourceDiagnostics.test.ts`,
 `server/fastify/__tests__/displaySources.test.ts`, and
 `server/fastify/browser-smoke/chatDisplayScrollStability.spec.ts`.

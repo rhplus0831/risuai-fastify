@@ -158,7 +158,9 @@ Retrieval performs no provider call or durable write and never waits for pending
 jobs. The representative 2,000-document timing case lives in
 `server/fastify/__tests__/bardWikiSelection.test.ts`; it records diagnostics
 without enforcing a flaky wall-clock threshold. Deterministic prompt coverage
-also lives in `bardWikiPrompt.test.ts`, `memory.test.ts`, and `assemble.test.ts`.
+also lives in `server/fastify/__tests__/bardWikiPrompt.test.ts`,
+`server/fastify/__tests__/memory.test.ts`, and
+`server/fastify/__tests__/generation.chat.test.ts`.
 
 ## Lifecycle, Interchange, And Recovery
 

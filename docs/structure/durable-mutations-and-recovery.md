@@ -139,9 +139,10 @@ chat, and retains or rolls back that projection according to the normal
 `accepted`/`queued`/`failed` outcome. The low-level `resetChatsCommand()`
 intentionally supplies no compact local effect; its `chats.reset` event
 therefore reconciles through the authoritative
-`/api/v1/characters/:characterId` row. `src/ts/chatCommands.organization.dom.test.ts` guards the
-outcome/rollback path and `src/ts/server/commands.chats.test.ts` guards the wire
-contract.
+`/api/v1/characters/:characterId` row. The former mocked browser suites were
+removed in Phase 5; `server/fastify/__tests__/commands.test.ts` guards the
+transaction and `server/fastify/browser-smoke/coreLifecycle.spec.ts` guards
+exact-id chat behavior in the built application.
 
 Chat organization capture is operation-scoped: identities/order/assignments for
 reordering, attempted rows for creation/fork, and removed target rows for

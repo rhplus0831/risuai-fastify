@@ -123,7 +123,7 @@ Run one exact test or tests related to one source file:
 pnpm test -- <test-or-source-file>
 ```
 
-Validate documentation changes with `pnpm check:docs`. Run the complete quality suite with `pnpm test:all`; it covers formatting, typechecks, documentation, test topology, frontend/server tests, compatibility, UI coverage, scale/performance gates, and browser smoke tests.
+Validate documentation changes with `pnpm check:docs`. Run the complete quality suite with `pnpm test:all`; it covers formatting, typechecks, documentation, test topology, frontend/server tests, current compatibility, the Realm scale and performance gates, and browser smoke tests.
 
 The complete suite defaults to two concurrent regular lanes. Use `pnpm test:all --jobs 3` to adjust concurrency or `pnpm test:all --dry-run` to inspect the schedule. See the [test suite guide](docs/tests/README.md) for focused test discovery and [testing and operations](docs/structure/testing-and-operations.md) for CI details.
 

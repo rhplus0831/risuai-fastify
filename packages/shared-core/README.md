@@ -40,7 +40,7 @@ trigger execution and enforcement remain in Fastify. See
 
 ```sh
 pnpm check:shared-core
-pnpm check:shared-core:boundary
+pnpm check:server
 pnpm test -- packages/shared-core/src/modelProfileResolver.test.ts
 ```
 
@@ -48,11 +48,8 @@ The test command is an example; replace the file with the changed algorithm's
 test or source file. A source target discovers related browser and Fastify tests.
 Follow the root [verification workflow](../../docs/structure/testing-and-operations.md#focused-execution).
 
-The boundary command runs `packages/shared-core/src/importBoundary.test.ts` and
-`packages/shared-core/src/ownership.test.ts`.
-The first discovers shared runtime modules and validates their dependencies. The
-second checks consumer imports, package exports, compatibility facades, and retired
-paths using TypeScript and Svelte syntax. Its maintained consumer table is
-[the shared-core consumer table](../../util/test-support/shared-core-ownership.ts);
-add new ownership rules there.
-Behavioral tests remain beside each shared algorithm.
+`pnpm check:server` runs the closed-world shared-core import boundary in
+`util/architecture-inventory.ts`. It rejects client, server, host, DOM, Svelte,
+Fastify, and Node-only dependencies without relying on a hand-maintained test
+inventory. Behavioral tests remain beside each shared algorithm; browser or
+server adapters own runtime-specific behavior.

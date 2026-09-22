@@ -31,7 +31,6 @@ generated, local-only, historical, vendored, or intentionally no-port.
 | `src/etc/docs/`, `src/etc/airisu.cbs`, `src/etc/patchNote.ts` | Retained unreferenced legacy documentation/script/update payloads; do not infer a live consumer from their location. |
 | `src/ts/rpack/` | Vendored rpack implementation; excluded from Prettier. |
 | `src/ts/process/__fixtures__/expected/` | Prompt/generation golden fixtures; regenerate with `UPDATE_FIXTURES=1`. |
-| `src/ts/process/__fixtures__/upstream/` | Upstream fixture corpus for request/provider tests. |
 | `*.snap` under test fixtures | Tracked Vitest snapshots; update through the relevant test workflow. |
 
 `.archived-docs/` contains historical documentation, not current implementation
@@ -77,8 +76,9 @@ a new roadmap.
 `tsconfig.json` includes `public/service-worker.js`. That worker is active only
 for Web Push chat-completion notifications through
 `src/ts/server/pushNotifications.ts`. Legacy `public/sw.js`
-share/file-handler/offline service-worker surfaces remain absent and guarded by
-`src/ts/browserLocalSurface.test.ts`.
+share/file-handler/offline service-worker surfaces remain absent. The former
+source-surface assertion was removed in Phase 5 because it checked layout rather
+than a security or durable-data boundary.
 
 ## Fastify-Only Runtime
 
@@ -133,13 +133,10 @@ The settings UI intentionally omits these imported/legacy keys:
 - browser-only `localNetworkMode` and `localNetworkTimeoutSec`.
 
 Some keys remain in serialized compatibility shapes, defaults, or import
-normalizers. That does not make them live controls. Absence is guarded by
-`src/ts/setting/advancedSettingsData.test.ts`,
-`src/ts/setting/displaySettingsData.svelte.test.ts`, and
-`src/ts/setting/utils.test.ts`. Language settings
-also intentionally omit the old UI-translation template download, guarded by
-`src/ts/setting/languageSettingsData.test.ts`; translation-cache import/export
-remains current.
+normalizers. That does not make them live controls. The former settings-shape
+unit suites were removed in Phase 5 because they asserted implementation
+catalogs. Language settings also intentionally omit the old UI-translation
+template download; translation-cache import/export remains current.
 
 `showSavingIcon` is the exception to that no-control rule: it has no current
 settings UI, but it remains a live persisted opt-out. It defaults to `true` and
@@ -150,8 +147,8 @@ The automatic cold-storage setting and archive-creation path are retired.
 Recovery/read compatibility for imported legacy character/chat archives remains
 live through `src/ts/process/coldstorage.svelte.ts` and Fastify recovery
 commands; several creation/cleanup helpers are intentional no-ops. The frozen
-Advanced Settings usage-statistics dialog is also absent, guarded by
-`src/lib/Setting/Pages/Advanced/SettingsExportButtons.svelte.test.ts`.
+Advanced Settings usage-statistics dialog is also absent. Its component unit
+test was removed with the Phase 5 mock-heavy UI suites.
 
 - `src/LiteMain.svelte` is unwired. Live lite mode is `VITE_RISU_LITE` driving
   `src/ts/lite.ts` plus consumers such as settings, color scheme, and legacy

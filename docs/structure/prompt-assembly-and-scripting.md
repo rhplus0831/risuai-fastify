@@ -220,7 +220,8 @@ not rewrite global settings.
 | Render and budget | Render the owned prompt template, execute remaining request-time script hooks, retokenize, trim removable history to reserve the configured response budget, and clamp that budget only when pinned rows consume its headroom. |
 
 The stage order is explicit in `server/fastify/src/prompt/assemble.ts` and is
-covered broadly by `server/fastify/__tests__/assemble.test.ts`.
+covered at the real generation boundary by
+`server/fastify/__tests__/generation.chat.test.ts`.
 
 Assembly maintains separate working and authoritative submit transcripts. The
 working transcript is what CBS, triggers, Agent Presets, history, and prompt
@@ -259,13 +260,11 @@ Per-message expansion preserves the row being processed. History formatting
 passes its stored row index to `expandVariables()`; `editinput` uses the newly
 appended user index; `editoutput` uses the target assistant index. Regex pattern
 and replacement CBS receive the same `chatID`, so `{{chat_index}}` is current
-while `{{lastmessageid}}` still means the transcript tail. Regression coverage
-is the exact cases "runs editinput CBS with the appended user row as the current
-message" in `server/fastify/__tests__/assemble.test.ts`, "expands per-message
-data with its current chat index" in
-`server/fastify/__tests__/history.test.ts`, and "expands replacement CBS with
-the supplied current-message index" in
-`server/fastify/__tests__/scripts.test.ts`.
+while `{{lastmessageid}}` still means the transcript tail. Retained regression
+coverage is in `server/fastify/__tests__/generation.chat.test.ts`,
+`server/fastify/__tests__/history.test.ts`, and
+`server/fastify/__tests__/scripts.test.ts`; the former mocked assembly-stage
+unit suite was removed in Phase 5.
 
 The canonical CBS fixes apply server-side too: `{{reverse::...}}` treats a
 missing value as empty before Unicode-aware reversal, and `setdefaultvar`
@@ -315,9 +314,8 @@ the model, including `reverse`, variables, and repaired `setdefaultvar` null
 semantics. The contract is implemented by `countLorebookTokens()` in
 `server/fastify/src/prompt/lorebook.ts` and the lorebook-preflight stage in
 `server/fastify/src/prompt/assemble.ts`.
-`server/fastify/__tests__/lorebook.test.ts`, the "Fastify lorebook template
-injection" cases in `server/fastify/__tests__/assemble.test.ts`, and stable-card
-cases in `server/fastify/__tests__/templates.test.ts` pin the ordering.
+`server/fastify/__tests__/lorebook.test.ts` and the mutation-proven lorebook
+cases in `server/fastify/__tests__/generation.chat.test.ts` pin the ordering.
 
 `Character.additionalText` remains import/export compatibility data. Fastify
 does not implement the old browser embedding-based additional-information
@@ -341,7 +339,7 @@ preset with no template intentionally disables template rendering instead of
 borrowing stale top-level data. Loadout and duplication code must preserve this
 owner boundary; see `src/ts/promptPresetModelOverrides.svelte.ts`,
 `server/fastify/src/commands/splitPresets.ts`, and
-`src/lib/Setting/pickerGenerationSettings.test.ts`.
+`server/fastify/__tests__/splitPresets.test.ts`.
 
 Persona, description, author-note, and memory template blocks can select their
 wire role through `role2`.
@@ -539,7 +537,7 @@ post-generation persistence in
 `server/fastify/src/routes/generationChat.ts` validate freshness before writing
 them. No diff means no state write. Coverage lives in
 `server/fastify/__tests__/luaRuntime.test.ts` and
-`server/fastify/__tests__/assemble.test.ts`.
+`server/fastify/__tests__/generation.chat.test.ts`.
 
 ## V2 Triggers And Unsupported Effects
 
@@ -586,11 +584,10 @@ includes regex-script `@@emo` output, classified only when the string starts
 with `@@emo` followed by a literal space. Matching scripts preserve their rows
 and leave text unchanged, add one `@@emo` warning per generation, and show an
 annotation beside the regex output editor. Shared behavior and facade identity
-are covered by `packages/shared-core/src/triggerCompatibility.test.ts`;
-`packages/shared-core/src/ownership.test.ts` verifies the package export and
-forwarding boundaries, and
-`server/fastify/__tests__/triggerCompatibilityOwnership.test.ts` verifies the
-Fastify consumer imports and diagnostic parity.
+are covered by `packages/shared-core/src/triggerCompatibility.test.ts`; runtime
+behavior is covered by `server/fastify/__tests__/triggers.test.ts`. The deleted
+source-ownership suites were not ported because they asserted file/export shape
+rather than a security or durable-data boundary.
 
 This boundary is specific to V2 trigger effects. It does not make the durable
 Lua setters above unsupported. Keep the two compatibility surfaces distinct in

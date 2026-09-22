@@ -1,39 +1,36 @@
 # Plugins, Modules, and MCP
 
-Last audited: 2026-09-04.
+Plugin and MCP security fences are core; ordinary module composition and
+protocol helpers remain in the extended tier. Phase 5 removed mocked plugin
+orchestration and module UI suites.
 
-This area covers Plugin V3 execution and permissions, V2-series rejection, module import and activation, permissioned network access, MCP client transport/OAuth/tool dispatch, and RisuAccess tools. Durable command mechanics are cross-referenced in [Domain Mutations and Editing Owners](domain-mutations-and-editing-bridges.md); the server egress boundary is also discussed in [API Security and Runtime](api-security-and-runtime.md).
+## Plugin permissions and egress
 
-## Test groups
+`src/ts/plugins/pluginPermissions.test.ts` binds grants to exact script hashes.
+`src/ts/plugins/pluginDatabaseBridge.core.test.ts` protects server-mode database
+keys. `server/fastify/__tests__/pluginNetwork.test.ts` guards DNS, redirects, and
+private-address egress. These are mutation-proven core cases.
 
-| Logical group | Relevant locations and included cases | Behavior and importance |
-| --- | --- | --- |
-| Plugin network permission and icon safety | `src/ts/plugins/pluginNetworkAccess.test.ts`, `pluginIconSafety.test.ts`, server `pluginNetwork.test.ts`, proxy/hub tests, and UI consent cases | Denial prevents transport; grants bind to a snapshotted plugin; tuple headers normalize; loopback, metadata, numeric IPv4, IPv4-in-IPv6, site-owned, and private targets are rejected; hostname substrings are not false positives; remote/icon HTML egress is removed. Server cases add DNS resolution, redirects, byte caps, abort, and socket validation. |
-| Browser local-network and proxy-job protocol helpers | `src/ts/network/localNetwork.test.ts` and `proxyJobWs.test.ts` | Local-network cases allow intended localhost/private URL forms and reject public hosts; proxy-job cases validate event inputs, fail closed on invalid events, decode ArrayBuffer/view/base64 chunks, and distinguish Cloudflare from origin timeouts. These helpers gate browser-side local streaming and error presentation. |
-| Plugin update and import freshness | `src/ts/plugins/pluginUpdates.test.ts`, import/update groups in `src/ts/plugins/plugins.test.ts`, `src/ts/plugins/apiV3/developMode.test.ts`, `src/ts/server/pluginImport.test.ts`, and Plugin Settings UI tests | Covers range probes, byte caps, UTF-8 chunk splits, permission failures, exact-script caching, full downloads, stale file/prompt/fetch results, rollback on rejected create/update, success only after durability, metadata removal, and stopped hot-reload sessions. |
-| V3 permission and runtime lifecycle; V2 rejection | `src/ts/plugins/plugins.test.ts`; `src/ts/plugins/apiV3/{factory,v3.svelte}.test.ts`; server `commands.plugins.test.ts` | Cases reject V2-series source imports, runtime projections, and server records; V3 cases cover capability- and plugin-specific grants, expiry/reconfirmation/coalescing, iframe/RPC aborts and cyclic transferables, cleanup of timers, listeners, observers, UI, providers, and MCP, stale registration ownership, and network-dead main-document helpers. |
-| Plugin database and command bridge | Database-bridge groups in `src/ts/plugins/plugins.test.ts`; V3 character/chat/settings cases in `src/ts/plugins/apiV3/v3.svelte.test.ts`; `src/ts/pluginCommands.svelte-node.test.ts`; server plugin/storage/command tests | Covers supported character/chat/settings/module/plugin/provider writes, exact serialization, enabled-module diffs, collection order, optimistic projections, retained changes, field-scoped rollback, blocked server-owned/unknown families, storage clone isolation, and device-local compatibility mode. |
-| Module import, activation, organization, and aggregation | `packages/protocol/src/moduleOrganization.test.ts`; `src/ts/{moduleOrganization,moduleCommands}.test.ts`; `src/ts/process/modules.test.ts`; `packages/shared-core/src/moduleIntegration.test.ts`; server `commands.modules.test.ts`, `databaseDefaults.test.ts`, `modules.test.ts`, and `modulesMemo.test.ts`; Module settings/picker UI tests | Includes folder normalization/grouping, atomic folder assignment and delete rehoming, folder and module order, durable rollback, narrow invalidation, grouped search/collapse UI, standalone `folderId` stripping, ordinary/MCP import, activation, namespace parsing/deduplication, memo invalidation, and collision-safe cache keys. |
-| MCP initialization, persistence, and indexed dispatch | `src/ts/process/mcp/mcp.test.ts` and `internalClients.test.ts` | Covers remembered call encoding, discovery gating, shared/failed construction, stable masked/raw identity, refresh-token command persistence and rollback/rebase, safe MCP URL validation, durable module import, duplicate tool names, replacement/unregister, cached index rebuild/fencing, and failure isolation. |
-| MCP OAuth, SSE, and custom transport | `src/ts/process/mcp/mcplib.test.ts`, server/browser `mcpOAuthRefresh.test.ts`, and proxy transport tests | Parameterized refresh failures include empty/missing token, invalid JSON, and non-success; cases cover deduped refresh, destroy/abort fencing, one retry after authentication, re-handshake, header/body deadlines, CRLF/LF/CR and optional-space SSE fields, deterministic parse errors, page/item/cursor caps, listener cleanup, custom send/close/error/timeout/destroy, late responses, debug logging, and bounded duplicate-ID memory. |
-| Internal specialized clients | `filesystemclient.test.ts`, `specializedTools.test.ts`, `googlesearchclient.test.ts`, `internalClients.test.ts`, and `aiaccess.test.ts` | Covers PDF/input/output and text/base64 caps, abort before reads, directory-handle reuse/reinitialization guidance, mutation-safe schemas, the exact filesystem catalog, strict bounded Dice notation, fail-closed GraphMem storage and search depth, no browser credential persistence, model-role routing, invalid arguments, and MCP-shaped failures. |
-| RisuAccess read/write tools | `src/ts/process/mcp/risuaccess/tests/{characters.setCharacterInfo,modules.optimisticProjection,modules}.test.ts` plus the tracked module snapshot | Covers pagination and field reads; immediate optimistic character/module/lorebook/regex/Lua visibility; deleted/replaced owner rejection before and after permission; stub hydration; accepted-prefix behavior; attempted-field rollback; and preservation of sibling/concurrent state. |
+## Modules and shared contracts
 
-## Especially critical tests
+Mock-free behavior remains in `src/ts/moduleActivation.test.ts`,
+`src/ts/moduleOrganization.test.ts`,
+`packages/shared-core/src/moduleActivation.test.ts`, and
+`packages/shared-core/src/moduleIntegration.test.ts`. Extended Fastify behavior
+is covered by `server/fastify/__tests__/modules.test.ts` and
+`server/fastify/__tests__/modulesMemo.test.ts`.
 
-- Client `pluginNetworkAccess.test.ts` plus server `pluginNetwork.test.ts` and proxy/hub redirect tests protect against SSRF and credential leakage.
-- Plugin V3 permission identity and lifecycle cleanup cases prevent authority from surviving a script/plugin replacement.
-- MCP deadline/listener/custom-transport tests prevent permanently pending tool calls and resource leaks.
-- RisuAccess narrow rollback tests prevent one failed tool mutation from reverting unrelated character/module edits.
-- Module import retained-suffix and destructive-refresh cases protect multi-step imports across transient failures.
+## MCP and RisuAccess
+
+Core live-owner fences remain in
+`src/ts/process/mcp/risuaccess/tests/characters.setCharacterInfo.test.ts` and
+`src/ts/process/mcp/risuaccess/tests/modules.optimisticProjection.test.ts`.
+OAuth credential handling is core in
+`server/fastify/__tests__/mcpOAuthRefresh.test.ts`; pure wire validation remains
+in `packages/protocol/src/mcpOAuthRefresh.test.ts` and
+`packages/shared-core/src/mcpIdentifier.test.ts`.
 
 ## Primary inventory
 
-| Location | Included test files / parameterized groups |
-| --- | --- |
-| Plugin runtime | `src/ts/plugins/pluginIconSafety.test.ts`, `pluginNetworkAccess.test.ts`, `pluginUpdates.test.ts`, `plugins.test.ts`, `src/ts/plugins/apiV3/developMode.test.ts`, `factory.test.ts`, `v3.svelte.test.ts`. |
-| Modules | `src/ts/moduleActivation.test.ts`; `src/ts/process/modules.test.ts`; `packages/shared-core/src/moduleIntegration.test.ts`; cross-indexed `src/ts/moduleCommands.test.ts` and `src/ts/server/moduleAssetUpload.test.ts`; server `modules.test.ts` and `modulesMemo.test.ts`. |
-| MCP | `src/ts/process/mcp/aiaccess.test.ts`, `filesystemclient.test.ts`, `specializedTools.test.ts`, `googlesearchclient.test.ts`, `internalClients.test.ts`, `mcp.test.ts`, `mcplib.test.ts`, `risuaccess/tests/characters.setCharacterInfo.test.ts`, `modules.optimisticProjection.test.ts`, and `modules.test.ts`. |
-| Network protocol helpers | `src/ts/network/localNetwork.test.ts` and `proxyJobWs.test.ts`. These are cross-indexed with server stream/proxy coverage in [API Security and Runtime](api-security-and-runtime.md). |
-| Server | `server/fastify/__tests__/pluginNetwork.test.ts`, `proxy.test.ts`, `hub.test.ts`, `mcpOAuthRefresh.test.ts`, `commands.plugins.test.ts` and `commands.modules.test.ts`, and the applicable route-protection/provider-operation tests. |
-| UI counterparts | `src/lib/Setting/Pages/PluginSettings.svelte.test.ts`, `ProviderListActions.svelte.test.ts`, `src/lib/Setting/Pages/Module/{ModuleChatMenu,ModuleMenu,ModuleSettings}.svelte.test.ts`, `src/lib/Playground/PlaygroundMCP.svelte.test.ts`, and plugin alert/modal tests. Detailed visible behavior is assessed with the UI feature documents. |
+- Core: `src/ts/plugins/pluginPermissions.test.ts`, `src/ts/plugins/pluginDatabaseBridge.core.test.ts`, `server/fastify/__tests__/pluginNetwork.test.ts`, `server/fastify/__tests__/mcpOAuthRefresh.test.ts`.
+- Extended: `src/ts/plugins/apiV3/factory.test.ts`, `src/ts/plugins/pluginIconSafety.test.ts`, `server/fastify/__tests__/modules.test.ts`.

@@ -281,9 +281,10 @@ ordered sequence, and rolls back or reapplies still-owned projections according
 to accepted, queued, or failed outcomes;
 `src/ts/server/loadoutCanonical.ts` validates canonical response state.
 `characterIds` records recent character use only: applying a loadout does not
-select or navigate to a character. Guards are `src/ts/loadout.test.ts` and
-`src/lib/Others/LoadoutModal.svelte.test.ts`. The shared queue/outcome contract
-is owned by
+select or navigate to a character. Retained guards are
+`src/ts/server/loadoutCanonical.test.ts` and
+`server/fastify/__tests__/loadouts.test.ts`; the mocked client/component suites
+were removed in Phase 5. The shared queue/outcome contract is owned by
 [Durable Mutations And Recovery](../../docs/structure/durable-mutations-and-recovery.md#durable-mutation-recovery-command-queue-and-local-acknowledgements).
 
 ## Draft Recovery Stores
@@ -376,13 +377,10 @@ fallbacks when no client acknowledges. On initial load and whenever the app
 returns to the foreground, the browser coordinator also closes chat-completion
 notifications from the current device's service-worker registration.
 
-The guard set is `src/ts/server/pushNotificationSetting.test.ts`,
-`src/ts/server/pushNotificationRetryStorage.test.ts`,
-`src/ts/server/pushNotifications.test.ts`,
-`src/ts/server/serviceWorker.test.ts`, and
-`src/lib/Setting/Pages/Display/NotificationToggle.svelte.test.ts`. The visible
-states belong in [Svelte Settings UI](svelte-settings-ui.md); server
-subscription persistence remains in
+Server subscription persistence is guarded by
+`server/fastify/__tests__/pushNotifications.test.ts`. The former mocked browser
+and notification-toggle suites were removed in Phase 5; visible states belong
+in [Svelte Settings UI](svelte-settings-ui.md), and server behavior remains in
 [Backend Map](../../docs/structure/backend.md#route-family-index).
 
 ## Active Writer Loss

@@ -288,8 +288,9 @@ unknown keys get positional labels. Nested byte counts overlap and should not
 be summed. Raw JSON row profiling is capped at 64 MiB, field output at 160
 entries, and traversal depth at six; truncation is explicit. Application probes
 still load their normal database inputs and can use significant memory on a
-large database. Focused coverage lives in
-`util/dump-generation-diagnostics.test.ts`.
+large database. The former tooling unit suite was removed in Phase 5 because it
+did not gate the product suite; generation-side diagnostics remain covered at
+the real Fastify boundary by `server/fastify/__tests__/diagnosticsGeneration.test.ts`.
 
 ## Rollback And Owners
 
@@ -319,9 +320,10 @@ Focused coverage includes `server/fastify/__tests__/clientDiagnostics.test.ts`,
 `server/fastify/__tests__/remoteDiagnostics.test.ts`,
 `server/fastify/__tests__/supportDiagnosticsAuth.test.ts`,
 `server/fastify/__tests__/diagnosticsJournal.test.ts`,
-`src/ts/diagnostics.dom.test.ts`,
-`src/lib/Setting/Pages/Advanced/DiagnosticsPanel.svelte.test.ts`, and
-`util/diagnostics-remote.test.ts`.
+`server/fastify/browser-smoke/remoteDiagnostics.spec.ts`, and
+`src/ts/diagnostics.dom.test.ts`. The diagnostics panel and operator-tool unit
+suites were removed in Phase 5; the remote journey retains their end-to-end
+boundary.
 
 The size dump distinguishes the expanded effective configuration from the
 version-2 manifest actually subject to admission's limit. It constructs that

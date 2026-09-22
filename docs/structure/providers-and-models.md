@@ -126,7 +126,7 @@ fixed catalog discovery and fixed
 `https://api.neuralwatt.com/v1/chat/completions` generation; catalog rows retain
 display/provider, context-limit, and per-million-token price metadata. Both use
 reusable credentials for generation and ignore profile-local endpoint
-substitution. Contracts are pinned by `src/ts/model/neuralwatt.test.ts`,
+substitution. Contracts are pinned by
 `server/fastify/__tests__/providerOperations.test.ts`,
 `src/ts/model/modelProfileResolver.test.ts`, and
 `server/fastify/__tests__/chatDispatchProfileOptions.test.ts`.
@@ -208,8 +208,7 @@ Important runtime contracts include:
   the Custom API provider choice. Fastify loads the matching implementation
   through `server/fastify/src/prompt/webTokenizers.cjs`.
   `server/fastify/__tests__/tokenizerGoldenCounts.test.ts` pins client-engine
-  golden counts, while `src/ts/tokenizer.test.ts` keeps the exposed browser and
-  server tokenizer families aligned.
+  golden counts. The mocked browser tokenizer suite was removed in Phase 5.
 - The legacy `additionalParams` table applies to ordinary providers only when
   `applyAdditionalParamsToAll` is literally true. Reverse proxy continues to
   use its flat rows and `xcustom:::` continues to use its own rows regardless.
@@ -425,7 +424,8 @@ Repository/route contracts are covered by
 visible retention behavior are additionally pinned by
 `server/fastify/__tests__/generation.completion.test.ts`,
 `server/fastify/__tests__/agentPresetExecution.test.ts`, and
-`src/lib/Setting/Pages/RequestHistorySettings.svelte.test.ts`.
+`server/fastify/__tests__/requestHistoryRoutes.test.ts`. The settings component
+unit suite was removed with the Phase 5 mock-heavy UI tests.
 
 ## Compatibility Boundaries
 

@@ -1,3 +1,5 @@
+> This snapshot predates the Phase 5 deletion; `docs/test-reviews/core-suite-phase-5.md` records what was removed.
+
 # Test File Priority Inventory
 
 Snapshot: 2026-09-19, source revision `528c6d62b`. **1,034 test files; 14,862 registered test cases.**
