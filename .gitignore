@@ -66,3 +66,6 @@ blobs-for-test
 
 /latest-test-all.log
 /latest-test-all-compact.log
+
+AGENTS.override.md
+CLAUDE.local.md
