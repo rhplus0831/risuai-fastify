@@ -1,13 +1,4 @@
-import { readFile } from 'node:fs/promises'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const HERE = dirname(fileURLToPath(import.meta.url))
-
-/**
- * One line of upstream/<name>.jsonl is one of these. The fake yields them in
- * order; one entry corresponds to one call into `requestChatData`.
- */
+/** One entry corresponds to one call into `requestChatData`. */
 export type ProviderScriptEntry =
   | {
       type: 'success'
@@ -49,16 +40,6 @@ const state: ProviderState = {
   script: [],
   cursor: 0,
   calls: [],
-}
-
-export async function loadProviderScript(name: string): Promise<ProviderScriptEntry[]> {
-  const path = resolve(HERE, 'upstream', `${name}.jsonl`)
-  const raw = await readFile(path, 'utf8')
-  return raw
-    .split('\n')
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as ProviderScriptEntry)
 }
 
 export function installProviderScript(script: ProviderScriptEntry[]): void {
