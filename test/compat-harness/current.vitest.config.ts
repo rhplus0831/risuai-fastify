@@ -9,6 +9,7 @@ export default defineConfig({
   },
   test: {
     allowOnly: false,
+    fsModuleCache: true,
     pool: 'threads',
     environment: 'happy-dom',
     setupFiles: ['vitest.setup.ts'],

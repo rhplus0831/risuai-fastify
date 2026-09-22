@@ -49,8 +49,8 @@ type LaneRunner = (lane: QualityLane) => Promise<QualityLaneResult>
 export type QualityCommandName = 'test:agent' | 'test:all'
 
 const defaultJobsByCommand: Readonly<Record<QualityCommandName, number>> = {
-  'test:agent': 3,
-  'test:all': 2,
+  'test:agent': 4,
+  'test:all': 3,
 }
 
 export const latestTestAllLogPath = 'latest-test-all.log'
@@ -123,8 +123,8 @@ export const qualityLanes: readonly QualityLane[] = [
     id: 'compat-current',
     label: 'current compatibility harness',
     args: ['exec', 'tsx', 'test/compat-harness/run.ts', '--current-only'],
+    // A golden comparison with no wall-clock assertions, so it shares the pool.
     after: ['compat-registers'],
-    isolated: true,
   },
   {
     id: 'server-tests',
@@ -194,12 +194,17 @@ function requiredQualityLane(id: string): QualityLane {
   return lane
 }
 
+// The agent profile has no isolated phase: none of its lanes asserts wall-clock
+// deadlines or load costs, so every lane shares the pool. Priorities start the
+// two longest chains first: svelte-check alone, and the smoke build followed by
+// the core browser journeys.
 export const agentQualityLanes: readonly QualityLane[] = [
   {
     ...requiredQualityLane('server-check'),
     args: ['exec', 'tsx', 'util/check-server.ts', '--typechecks-only'],
+    priority: 1,
   },
-  requiredQualityLane('test-topology'),
+  { ...requiredQualityLane('test-topology'), priority: 1 },
   {
     ...requiredQualityLane('frontend-tests'),
     id: 'frontend-core-tests',
@@ -207,12 +212,13 @@ export const agentQualityLanes: readonly QualityLane[] = [
     args: ['exec', 'vitest', 'run', ...frontendCoreTestFiles, '--tagsFilter', CORE_TEST_TAG],
     // Core selection is independent from the performance cohort.
     env: { RISU_TEST_INCLUDE_GATES: 'false' },
+    priority: 2,
   },
-  requiredQualityLane('frontend-check'),
+  { ...requiredQualityLane('frontend-check'), priority: 0 },
   // The compatibility goldens are the only record of what the current stack sends
   // to a model provider, so the agent profile runs the current-stack lane too.
-  requiredQualityLane('compat-registers'),
-  requiredQualityLane('compat-current'),
+  { ...requiredQualityLane('compat-registers'), priority: 1 },
+  { ...requiredQualityLane('compat-current'), priority: 2 },
   {
     ...requiredQualityLane('server-tests'),
     id: 'server-core-tests',
@@ -227,12 +233,16 @@ export const agentQualityLanes: readonly QualityLane[] = [
       '--tagsFilter',
       CORE_TEST_TAG,
     ],
+    // The core subset carries none of the full suite's deadline or load-cost assertions.
+    isolated: undefined,
+    priority: 2,
   },
   {
     ...requiredQualityLane('browser-smoke-build'),
-    // The agent build has no emitted typecheck prerequisite and can occupy an
-    // immediately available regular-lane slot. Browser tests still consume it.
+    // The agent build has no emitted typecheck prerequisite. It starts immediately
+    // because the browser journeys wait on it.
     after: undefined,
+    priority: 0,
   },
   {
     id: 'browser-core-tests',
@@ -250,7 +260,7 @@ export const agentQualityLanes: readonly QualityLane[] = [
     // The integration artifact belongs to the complete browser matrix, not this four-journey subset.
     env: { VITE_FASTIFY_BROWSER_SMOKE: 'TRUE', RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED: 'false' },
     after: ['browser-smoke-build'],
-    isolated: true,
+    priority: 1,
   },
 ]
 
@@ -289,8 +299,8 @@ export function parseTestAllCli(args: string[], commandName: QualityCommandName 
     } else if (arg === '--help' || arg === '-h') {
       console.log(`Usage: pnpm ${commandName} [--jobs <count>] [--dry-run] [--timings=json]
 
-Runs independent quality lanes with bounded concurrency, then runs dist- or load-sensitive
-lanes in isolation. RISU_TEST_ALL_JOBS overrides the default concurrency (${defaultJobsByCommand[commandName]}).
+Runs independent quality lanes with bounded concurrency, then runs any load-sensitive
+lanes of the profile in isolation. RISU_TEST_ALL_JOBS overrides the default concurrency (${defaultJobsByCommand[commandName]}).
 --timings=json prints a final machine-readable critical-path record.`)
       process.exit(0)
     } else {

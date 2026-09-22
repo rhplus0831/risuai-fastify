@@ -173,15 +173,16 @@ and reviews the scheduled/manual differential.
 
 `pnpm test:agent` uses the same bounded scheduler and failure aggregation as
 `test:all`. It runs the typecheck-only mode of `check:server`, topology, `pnpm check`, the frontend and
-isolated server Vitest projects with `--tagsFilter core`, compatibility-register
+server Vitest projects with `--tagsFilter core`, compatibility-register
 validation, the current compatibility harness, `build:smoke`, and the sixteen
 browser journeys selected by `--grep @core`.
 `util/core-test-contract.ts` supplies the exact frontend, server, and browser
 file filters so tag selection does not collect the complete suite first.
-The agent profile runs up to three regular lanes concurrently by default. The
-smoke build is independent in that profile and fills a free regular-lane slot at
-lower priority than the other checks, overlapping typechecks or remaining
-frontend tests.
+The agent profile has no isolated phase: none of its lanes asserts wall-clock
+deadlines or load costs, so every lane shares one pool of up to four concurrent
+slots by default. `pnpm check` and the smoke build take slots immediately
+because they head the two longest chains; the core browser journeys start as
+soon as the build finishes and overlap the remaining checks.
 Typechecks use `noEmit`, so they do not share build outputs. The agent profile
 explicitly disables the two frontend performance probes. Every selected lane
 still finishes after another lane fails. The core browser subset does not require
@@ -189,7 +190,7 @@ the full browser matrix's merged fast-bootstrap artifact.
 `RISU_TEST_ALL_JOBS`, `--jobs`, `--dry-run`, and `--timings=json` work for
 both commands.
 
-`pnpm test:all` runs up to two ordinary lanes concurrently by default and
+`pnpm test:all` runs up to three ordinary lanes concurrently by default and
 preserves any failure in the final aggregate result. Set
 `RISU_TEST_ALL_JOBS` or pass `--jobs <count>` to tune that outer limit, and use
 `--dry-run` to inspect the lane graph without replacing the last completed-run
@@ -200,7 +201,9 @@ minutes. It also replaces `latest-test-all-compact.log` with only the deduplicat
 failed test file paths (or `none`) and the aggregate elapsed time. Its topology lane validates discovery
 before the ordinary frontend lane starts. The smoke build fills a regular-lane
 slot after `check:server`, overlapping remaining frontend work without sharing
-emitted outputs with the typechecks. Browser smoke then consumes that build
+emitted outputs with the typechecks. The current compatibility harness is a
+golden comparison without timing assertions, so it also runs inside the pool
+after register validation. Browser smoke then consumes that build
 outside the pool; the real browser tests retain load-sensitive isolation.
 Its stateful tests remain serial within each spec, while local runs
 use 75% of available CPUs up to four workers. Set
@@ -225,6 +228,11 @@ is observational only and is intended to expose the real critical path before
 changing concurrency or isolation.
 
 ### Frontend Runtime Classification
+
+The server and current-compatibility Vitest configs persist Vite transforms
+between runs with `fsModuleCache`, like the frontend projects; the cache lives
+under `node_modules/.vitest-cache` and is written atomically, so concurrent
+lanes may share it.
 
 Config details: `vitest.config.ts` composes three isolated thread-pool projects,
 and `vitest.frontend-routing.ts` owns their disjoint filename/registration

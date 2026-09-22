@@ -27,12 +27,12 @@ import {
 
 describe('test:all orchestration', () => {
   it('uses bounded concurrency and validates the jobs override', () => {
-    expect(parseTestAllJobs(undefined)).toBe(2)
+    expect(parseTestAllJobs(undefined)).toBe(3)
     expect(parseTestAllJobs('4')).toBe(4)
     expect(() => parseTestAllJobs('0')).toThrow('positive integer')
     expect(parseTestAllCli(['--timings=json'])).toMatchObject({ timingsJson: true })
-    expect(parseTestAllCli([])).toMatchObject({ jobs: 2, timingsJson: false })
-    expect(parseTestAllCli([], 'test:agent')).toMatchObject({ jobs: 3, timingsJson: false })
+    expect(parseTestAllCli([])).toMatchObject({ jobs: 3, timingsJson: false })
+    expect(parseTestAllCli([], 'test:agent')).toMatchObject({ jobs: 4, timingsJson: false })
   })
 
   it('keeps the agent final profile focused on core tests, typechecks, topology, and browser verification', () => {
@@ -49,14 +49,17 @@ describe('test:all orchestration', () => {
     ])
 
     const byId = new Map(agentQualityLanes.map((lane) => [lane.id, lane]))
+    expect(agentQualityLanes.some((lane) => lane.isolated)).toBe(false)
     expect(byId.get('compat-current')).toMatchObject({
       args: ['exec', 'tsx', 'test/compat-harness/run.ts', '--current-only'],
       after: ['compat-registers'],
-      isolated: true,
+      priority: 2,
     })
     expect(byId.get('server-check')).toMatchObject({
       args: ['exec', 'tsx', 'util/check-server.ts', '--typechecks-only'],
+      priority: 1,
     })
+    expect(byId.get('frontend-check')?.priority).toBe(0)
     expect(byId.get('frontend-core-tests')).toMatchObject({
       args: ['exec', 'vitest', 'run', ...frontendCoreTestFiles, '--tagsFilter', 'core'],
       after: ['test-topology'],
@@ -73,10 +76,12 @@ describe('test:all orchestration', () => {
         '--tagsFilter',
         'core',
       ],
-      isolated: true,
+      priority: 2,
     })
+    expect(byId.get('server-core-tests')?.isolated).toBeUndefined()
     expect(byId.get('browser-smoke-build')).toMatchObject({
       args: ['build:smoke'],
+      priority: 0,
     })
     expect(byId.get('browser-smoke-build')?.after).toBeUndefined()
     expect(byId.get('browser-smoke-build')?.isolated).toBeUndefined()
@@ -93,8 +98,9 @@ describe('test:all orchestration', () => {
       ],
       after: ['browser-smoke-build'],
       env: { VITE_FASTIFY_BROWSER_SMOKE: 'TRUE', RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED: 'false' },
-      isolated: true,
+      priority: 1,
     })
+    expect(byId.get('browser-core-tests')?.isolated).toBeUndefined()
     expect(() => validateQualityLanePhases(agentQualityLanes)).not.toThrow()
   })
 
@@ -120,8 +126,8 @@ describe('test:all orchestration', () => {
     expect(byId.get('compat-current')).toMatchObject({
       args: ['exec', 'tsx', 'test/compat-harness/run.ts', '--current-only'],
       after: ['compat-registers'],
-      isolated: true,
     })
+    expect(byId.get('compat-current')?.isolated).toBeUndefined()
     expect(byId.get('server-tests')?.isolated).toBe(true)
     expect(byId.get('realm-scale')).toMatchObject({
       isolated: true,

@@ -21,6 +21,7 @@ export default defineConfig({
     environment: 'node',
     include: ['__tests__/**/*.test.ts'],
     pool: 'forks',
+    fsModuleCache: true,
     testTimeout: 15000,
     tags: testTags,
     env: {
