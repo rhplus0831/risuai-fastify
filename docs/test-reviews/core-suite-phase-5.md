@@ -26,9 +26,9 @@ support, test configuration, frozen inventory baselines, CI, and documentation.
 | Compatibility cells, performance gates | 18, 6 | 18, 6 |
 | Runner-registered cases, all lanes | 14,993 | 5,833 |
 | Core contract files (frontend / server / browser) | 24 / 55 / 8 | 24 / 55 / 8 |
-| `pnpm test:all` wall time | 9.9 min | 8.8 min |
-| Frontend tests lane | 1.65 min | 0.44 min |
-| Server tests lane | 0.88 min | 0.73 min |
+| `pnpm test:all` wall time | 9.9 min | 8.3 min |
+| Frontend tests lane | 1.65 min | 0.27 min |
+| Server tests lane | 0.88 min | 0.76 min |
 | Saved production mutations caught by the core lanes | 114 of 115 | 114 of 115 |
 
 The core suite did not change: not one file in `util/core-test-contract.ts`
