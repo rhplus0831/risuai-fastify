@@ -9,14 +9,21 @@ import {
   type ClientSessionOwnership,
 } from './clientSession'
 import { fetchServerBootstrap, fetchServerBootstrapReadOnly, type ServerBootstrapRuntime } from './server/bootstrap'
-import { shouldAutoAcquireDisconnectedWriter } from './server/automaticWriterAcquisition'
+import { readAutoAcquireDisconnectedWriterPreference } from './server/automaticWriterAcquisition'
 import { resolveConnectedTabIdentity } from './server/connectedTabIdentity'
 import { setClientChatOccupancyIdentity } from './server/chatOccupancy'
+import { recordRecoveryDiagnostic } from './server/recoveryDiagnostics'
 
 export interface ConnectedStartupResult {
   readonly role: 'reader' | 'writer'
   readonly runtime: ServerBootstrapRuntime
   readonly operation: ClientSessionOperation
+  /**
+   * The page settled as a reader only because the acquisition preference could
+   * not be read. The caller retries automatic acquisition instead of leaving
+   * the role to the next foreground return or an explicit Use this device.
+   */
+  readonly acquisitionDeferred: boolean
 }
 
 export function bootstrapOwnership(runtime: ServerBootstrapRuntime): ClientSessionOwnership {
@@ -37,6 +44,12 @@ export async function resolveConnectedClientStartup(
   const operation = beginClientSession(identity.sessionId)
   setClientChatOccupancyIdentity(identity, operation.generation)
   options.onOperationStarted?.(operation)
+  // A discarded or restarted page re-enters here; `exclusive` says whether it
+  // may acquire at all, and a recovered identity distinguishes resume from restart.
+  recordRecoveryDiagnostic('startup-identity', {
+    outcome: identity.exclusive ? 'ok' : 'rejected',
+    exclusive: identity.exclusive,
+  })
   const assertCurrent = () => {
     if (!isClientSessionOperationCurrent(operation)) throw new Error('Connected startup was superseded')
   }
@@ -59,14 +72,23 @@ export async function resolveConnectedClientStartup(
     initializationConfirmed = await options.onInitializationRequired(operation)
     assertCurrent()
   }
-  const autoAcquire =
+  const foreignWriter =
     identity.exclusive &&
     runtime.initialized &&
     ownership.writer.sessionId !== null &&
     ownership.writer.sessionId !== identity.sessionId
-      ? await shouldAutoAcquireDisconnectedWriter()
-      : false
+  const preference = foreignWriter ? await readAutoAcquireDisconnectedWriterPreference() : null
   assertCurrent()
+  if (preference) {
+    recordRecoveryDiagnostic('startup-auto-acquire-preference', {
+      outcome: preference.status !== 'ok' ? 'failed' : preference.enabled ? 'ok' : 'rejected',
+      attemptCount: preference.attempts,
+    })
+  }
+  // An unreadable preference is not a refusal. It never grants takeover, but
+  // the reader it settles keeps retrying acquisition rather than waiting for a tap.
+  const autoAcquire = preference?.status === 'ok' && preference.enabled
+  const acquisitionDeferred = preference?.status === 'unavailable'
   if (
     (identity.exclusive || initializationConfirmed) &&
     (ownership.writer.sessionId === null || ownership.writer.sessionId === identity.sessionId || autoAcquire)
@@ -81,11 +103,21 @@ export async function resolveConnectedClientStartup(
       },
     })
     assertCurrent()
+    recordRecoveryDiagnostic('startup-acquire', {
+      outcome:
+        acquired.status === 'ok'
+          ? 'ok'
+          : acquired.status === 'active-writer-connected' ||
+              (acquired.status === 'error' && ['active_writer_changed', 'active_writer_stale'].includes(acquired.error))
+            ? 'rejected'
+            : 'failed',
+      exclusive: identity.exclusive,
+    })
     if (acquired.status === 'ok') {
       if (!authorizeClientWriterRecovery(operation, bootstrapOwnership(acquired.bootstrap))) {
         throw new Error('Server did not authorize writer recovery')
       }
-      return { role: 'writer', runtime: acquired.bootstrap, operation }
+      return { role: 'writer', runtime: acquired.bootstrap, operation, acquisitionDeferred: false }
     }
     if (acquired.status === 'error' && acquired.httpStatus === 401) requireClientAuthentication()
     if (
@@ -104,5 +136,9 @@ export async function resolveConnectedClientStartup(
   }
   if (!runtime.initialized) throw new Error('Waiting for the server database to be initialized')
   if (!settleClientReader(operation, bootstrapOwnership(runtime))) throw new Error('Reader startup was superseded')
-  return { role: 'reader', runtime, operation }
+  recordRecoveryDiagnostic('startup-reader', {
+    outcome: acquisitionDeferred ? 'pending' : 'ok',
+    exclusive: identity.exclusive,
+  })
+  return { role: 'reader', runtime, operation, acquisitionDeferred }
 }

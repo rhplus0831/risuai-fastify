@@ -446,7 +446,9 @@ initialized server owned by another session can be acquired automatically when
 that writer is disconnected. Settings → Interaction exposes
 `autoAcquireDisconnectedWriter`, defaulting to true. Startup and foreground
 return read the authoritative sidebar preference before conditional acquisition;
-a failed preference read or a connected writer leaves the page reading. An observed writer frame never grants write access.
+a connected writer leaves the page reading, and a preference read that stays
+unavailable after its inline retries settles a reader that keeps retrying
+automatic acquisition with backoff rather than waiting for Use this device. An observed writer frame never grants write access.
 Explicit Use this device performs fresh discovery, conditional acquisition,
 current-scope outbox recovery, post-replay hydration, and writer event attachment
 before mutation capabilities return. Cancellation or a current failed switch

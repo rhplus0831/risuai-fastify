@@ -108,6 +108,33 @@ function recordForBrowserUpload(entry: DiagnosticEntry): void {
     recordBrowserDiagnostic({ category: 'runtime', level: entry.level, kind: entry.event, errorName: entry.errorName })
   } else if (entry.event === 'online' || entry.event === 'offline') {
     recordBrowserDiagnostic({ category: 'browser', level: entry.level, stage: 'reconnect', outcome: entry.event })
+  } else if (entry.event === 'recovery') {
+    recordBrowserDiagnostic({
+      category: 'browser',
+      level: entry.level,
+      stage: 'recovery',
+      outcome:
+        entry.outcome === 'failed'
+          ? 'failed'
+          : entry.outcome === 'cancelled'
+            ? 'cancelled'
+            : entry.outcome === 'rejected'
+              ? 'stale-rejected'
+              : entry.outcome === 'pending'
+                ? 'pending'
+                : 'ready',
+      reason: entry.reason,
+      lifecycle: entry.lifecycle,
+      connection: entry.connection,
+      lease: entry.lease,
+      visible: entry.visible,
+      online: entry.online,
+      suspensionEvidence: entry.suspensionEvidence,
+      exclusive: entry.exclusive,
+      attemptCount: entry.attemptCount,
+      delayMs: entry.delayMs,
+      durationMs: entry.durationMs,
+    })
   } else {
     const { locations: _locations, ...detail } = entry
     recordBrowserDiagnostic({ category: 'legacy', level: entry.level, detail })

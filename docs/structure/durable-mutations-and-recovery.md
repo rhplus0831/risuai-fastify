@@ -7,6 +7,8 @@ Targeted source check: 2026-09-10 (in-place no-change writer recovery).
 Targeted source check: 2026-09-12 (connected recovery-attempt ownership).
 Targeted source check: 2026-09-12 (bounded command transport, replay ordering, and draft cleanup).
 Targeted source check: 2026-09-15 (selective occupied-chat replay, pins, and rollout drain).
+Targeted source check: 2026-09-22 (connection-recovery reason records).
+Targeted source check: 2026-09-22 (offline-flag probe and deferred automatic acquisition).
 
 This guide owns browser-to-Fastify mutation durability and reconciliation:
 encrypted outbox intent, the serialized command queue, compact optimistic
@@ -31,6 +33,9 @@ Important files:
 | `src/ts/server/resourceInvalidation.ts` | Event-to-endpoint planning, targeted reads, revision fences, and resource application. |
 | `src/ts/server/resourceRefresh.ts` | Coalesced complete refresh for gaps, restores, and broad recovery. |
 | `src/ts/server/lifecycleRecovery.ts` | Shared visibility/page-show/online/focus recovery dispatcher. |
+| `src/ts/server/recoverySuspension.ts` | Shared recovery gate: hidden suspends; a false `navigator.onLine` only defers behind a silent ownership probe that retires the flag once the server answers. |
+| `src/ts/server/automaticWriterAcquisition.ts` | Authoritative `autoAcquireDisconnectedWriter` read with a short inline retry; `unavailable` is never an answer. |
+| `src/ts/server/recoveryDiagnostics.ts` | Content-free `recovery` reason records at every connection-recovery decision point; see [Diagnostics](diagnostics.md#connection-recovery-reasons). |
 | `src/ts/server/resourceState.svelte.ts` | Explicit resource owners, per-owner projection epochs, and acknowledgement fences. |
 | `src/ts/server/persistenceActivity.svelte.ts` | Saving signal for commands and current-writer outbox work. |
 | `src/ts/server/draftRecoveryScope.ts` | Lineage/writer scope for non-authoritative editing recovery. |
@@ -225,7 +230,15 @@ managed writer into connected reading. Use this device requests acquisition;
 the default-on Interaction preference also permits automatic conditional
 acquisition at startup and foreground return when the previous writer is disconnected. `connectedReaderSync.ts` uses the same authenticated
 frame parser without writer headers, with its own bounded backoff, watchdog,
-ownership/lineage checks, and read-only reconciliation. Writer SSE frames carry
+ownership/lineage checks, and read-only reconciliation. Both it and the
+bootstrap dispatcher gate recovery through `recoverySuspension.ts`: a hidden
+page waits for `visibilitychange`, but `navigator.onLine === false` on a
+visible page only defers. Android Chrome can hold that flag on a working
+network without ever firing `online`, so every deferred gate arms one silent
+no-store `GET /api/v1/ownership` probe with backoff (1 s to 30 s) that changes
+no connection state; the first server answer marks the flag stale, dispatches
+the same recovery an `online` event would, and the flag stays ignored until
+the next `online` or `offline` event restores it as evidence. Writer SSE frames carry
 the database lineage with the writer tuple so a restored database is detected
 without waiting for a separate probe. Reader recovery never replays mutations.
 Server writer/memory frames are live-only; only command events are persisted and
@@ -413,8 +426,13 @@ General-owner authority is server-side and singular. Connected startup discovers
 writer-intent bootstrap; conditional acquisition checks the discovered lineage
 and writer epoch. A disconnected foreign writer remains an owner until a
 conditional acquisition succeeds. `autoAcquireDisconnectedWriter` defaults to
-true and enables this acquisition at startup and foreground return. Ordinary
-event reconnection stays read-only. A still-connected foreign
+true and enables this acquisition at startup and foreground return. The
+preference read absorbs a short flap inline (four attempts over about 3.5 s).
+A preference that is still unavailable never grants takeover, but it is not a
+refusal either: startup settles a reader with acquisition deferred and retries
+automatic acquisition with backoff until the read answers or the reader is
+promoted, and writer resume fails that attempt into its own backoff instead of
+demoting the writer. Ordinary event reconnection stays read-only. A still-connected foreign
 writer also requires the explicit disconnect handshake. Stale guarded mutations
 receive `423 active_writer_stale`; local projection epochs are freshness fences,
 not writer authority. Per-chat occupancy remains a separate exclusive authority

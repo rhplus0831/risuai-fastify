@@ -17,6 +17,8 @@ import {
 } from './commands'
 import { subscribeServerCommandEvents, type ServerWriterEvent } from './events'
 import { subscribeBrowserLifecycleRecovery } from './lifecycleRecovery'
+import { recordRecoveryDiagnostic } from './recoveryDiagnostics'
+import { browserRecoverySuspended, scheduleNetworkProbe, subscribeNetworkReachable } from './recoverySuspension'
 import {
   refreshAllServerResources,
   refreshInvalidatedServerResources,
@@ -89,6 +91,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
   let stopSession: (() => void) | null = null
   let stopOffline: (() => void) | null = null
   let stopVisibility: (() => void) | null = null
+  let stopNetworkReachable: (() => void) | null = null
   let stopParentSignal: (() => void) | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
   let watchdogTimer: ReturnType<typeof setTimeout> | null = null
@@ -140,6 +143,8 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     stopOffline = null
     stopVisibility?.()
     stopVisibility = null
+    stopNetworkReachable?.()
+    stopNetworkReachable = null
     stopParentSignal?.()
     stopParentSignal = null
     foregroundRecovery?.controller.abort()
@@ -158,15 +163,34 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
 
   function interrupt(sourceEpoch: number): void {
     if (!current(sourceEpoch)) return
+    const streamAgeMs = lastFrameAt > 0 ? Date.now() - lastFrameAt : undefined
     teardownStream()
     // Fence callbacks already queued by this stream, including completed reads.
     epoch += 1
     setClientConnectionState('interrupted', generation)
-    if (!current() || reconnectTimer || browserRecoverySuspended()) return
+    if (!current() || reconnectTimer) return
+    if (browserRecoverySuspended()) {
+      recordRecoveryDiagnostic('reader-stream-suspended', {
+        outcome: 'pending',
+        lease: 'reader-sync',
+        attemptCount: attempt,
+        ...(streamAgeMs !== undefined ? { durationMs: streamAgeMs } : {}),
+      })
+      scheduleNetworkProbe()
+      return
+    }
+    const delayMs = calculateConnectedReaderReconnectDelayMs(attempt++)
+    recordRecoveryDiagnostic('reader-stream-interrupted', {
+      outcome: 'failed',
+      lease: 'reader-sync',
+      attemptCount: attempt,
+      delayMs,
+      ...(streamAgeMs !== undefined ? { durationMs: streamAgeMs } : {}),
+    })
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null
       void connect()
-    }, calculateConnectedReaderReconnectDelayMs(attempt++))
+    }, delayMs)
   }
 
   function frame(sourceEpoch: number): void {
@@ -368,7 +392,9 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
   ): Promise<void> {
     if (!current()) return
     if (browserRecoverySuspended()) {
+      recordRecoveryDiagnostic('reader-stream-suspended', { outcome: 'pending', lease: 'reader-sync' })
       setClientConnectionState('interrupted', generation)
+      scheduleNetworkProbe()
       resolveReady()
       return
     }
@@ -460,6 +486,7 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
         attempt = 0
         frame(sourceEpoch)
         setClientConnectionState('live', generation)
+        recordRecoveryDiagnostic('reader-stream-connected', { lease: 'reader-sync' })
         requestClientChatOccupancyRecovery({ refresh: true })
       } else if (result.status === 'error' && result.httpStatus === 401) {
         notifyAuthLoss()
@@ -493,6 +520,12 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     if (!context?.suspensionEvidence && streamIsHealthyAndRecent()) return
     if (foregroundRecovery) return
     const recoveryController = new AbortController()
+    recordRecoveryDiagnostic('reader-foreground-probe', {
+      outcome: 'pending',
+      lease: 'reader-sync',
+      suspensionEvidence: context?.suspensionEvidence === true,
+      ...(lastFrameAt > 0 ? { durationMs: Date.now() - lastFrameAt } : {}),
+    })
     let running!: Promise<void>
     running = (async () => {
       const result = await fetchServerOwnership(recoveryController.signal)
@@ -507,6 +540,10 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
         result.ownership.databaseLineage === lineage &&
         result.ownership.writer.sessionId === state.writer?.sessionId &&
         result.ownership.writer.epoch === state.writer?.epoch
+      recordRecoveryDiagnostic('reader-foreground-probe', {
+        outcome: result.status === 'ok' ? (ownershipUnchanged ? 'ok' : 'rejected') : 'failed',
+        lease: 'reader-sync',
+      })
       if (ownershipUnchanged && streamIsHealthyAndRecent()) return
       if (reconnectTimer) clearTimeout(reconnectTimer)
       reconnectTimer = null
@@ -540,6 +577,8 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
       else if (!current()) stop()
     })
     stopLifecycle = subscribeBrowserLifecycleRecovery(recoverForeground)
+    // A probe that answered behind a false offline flag is as good as `online`.
+    stopNetworkReachable = subscribeNetworkReachable(() => recoverForeground('online', { suspensionEvidence: true }))
     if (typeof window !== 'undefined') {
       const offline = () => {
         foregroundRecovery?.controller.abort()
@@ -557,12 +596,4 @@ export function startConnectedReaderSync(options: ConnectedReaderSyncOptions): C
     if (current()) void connect({ ownershipValidation: 'full', signal: options.signal })
   } else stop()
   return { stop, retry, ready }
-}
-
-function browserIsOffline(): boolean {
-  return typeof navigator !== 'undefined' && navigator.onLine === false
-}
-
-function browserRecoverySuspended(): boolean {
-  return browserIsOffline() || (typeof document !== 'undefined' && document.visibilityState === 'hidden')
 }

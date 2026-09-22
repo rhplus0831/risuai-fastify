@@ -22,6 +22,7 @@ import {
 
 import { clearRetainedChatProjections } from './chatRetainedProjection'
 import { beginPersistenceActivity, setPendingMutationOutboxActive } from './persistenceActivity.svelte'
+import { recordRecoveryDiagnostic } from './recoveryDiagnostics'
 import {
   captureBrowserDiagnosticsGeneration,
   isBrowserDiagnosticsGenerationCurrent,
@@ -1904,10 +1905,28 @@ function normalizePendingMutationOrderCounter(
   return counter as StoredPendingMutationOrderCounter
 }
 
+const OUTBOX_LOCK_WAIT_REPORT_MS = 5_000
+
 async function withPendingMutationStageLock<T>(scope: PendingMutationScope, task: () => Promise<T>): Promise<T> {
   const name = `risu:pending-mutation-stage:${JSON.stringify([scope.writerSessionId, scope.databaseLineage])}`
   const lockManager = globalThis.navigator?.locks
-  if (lockManager) return lockManager.request(name, { mode: 'exclusive' }, task)
+  if (lockManager) {
+    // Observation only: a lock held by another page or a discarded tab blocks
+    // writer recovery here without any timeout, so record the wait itself.
+    const requestedAt = Date.now()
+    let reported = false
+    const waitTimer = setTimeout(() => {
+      reported = true
+      recordRecoveryDiagnostic('outbox-lock-waiting', { outcome: 'pending', durationMs: OUTBOX_LOCK_WAIT_REPORT_MS })
+    }, OUTBOX_LOCK_WAIT_REPORT_MS)
+    return lockManager
+      .request(name, { mode: 'exclusive' }, async () => {
+        clearTimeout(waitTimer)
+        if (reported) recordRecoveryDiagnostic('outbox-lock-acquired', { durationMs: Date.now() - requestedAt })
+        return task()
+      })
+      .finally(() => clearTimeout(waitTimer))
+  }
   // This FIFO protects initiation order only within this module/page. Separate
   // tabs without Web Locks are linearized by the IndexedDB CAS commit instead.
   return withLocalPendingMutationStageLock(name, task)

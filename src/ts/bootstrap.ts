@@ -1,4 +1,7 @@
-import { shouldAutoAcquireDisconnectedWriter } from './server/automaticWriterAcquisition'
+import {
+  readAutoAcquireDisconnectedWriterPreference,
+  shouldAutoAcquireDisconnectedWriter,
+} from './server/automaticWriterAcquisition'
 import { get } from 'svelte/store'
 import { botMakerMode } from './stores.svelte'
 import { LoadingStatusState, selectedCharID } from './stores/coreStores.svelte'
@@ -105,6 +108,14 @@ import {
   triggerOpenChatGenerationReattach,
 } from './process/reattach'
 import { subscribeBrowserLifecycleRecovery } from './server/lifecycleRecovery'
+import { recordRecoveryDiagnostic } from './server/recoveryDiagnostics'
+import {
+  browserRecoverySuspended,
+  browserReportsOffline,
+  resetRecoverySuspension,
+  scheduleNetworkProbe,
+  subscribeNetworkReachable,
+} from './server/recoverySuspension'
 import {
   setGenerationFinalizationPersistences,
   startGenerationFinalizationPersistenceRefresh,
@@ -343,6 +354,8 @@ let stopConnectedPageLifecycle: (() => void) | null = null
 let connectedAuthenticationRetry: Promise<void> | null = null
 let connectedReaderRefreshTimer: ReturnType<typeof setTimeout> | null = null
 let connectedReaderRefreshAttempt = 0
+let connectedReaderAutoAcquireTimer: ReturnType<typeof setTimeout> | null = null
+let connectedReaderAutoAcquireAttempt = 0
 let connectedWriterPromotion: {
   operation: ClientSessionOperation
   lease: ConnectedRecoveryLease
@@ -413,6 +426,7 @@ function releaseConnectedRecoveryLease(lease: ConnectedRecoveryLease): boolean {
 function retireConnectedRecoveryLease(lease = connectedRecoveryLease): ConnectedRecoveryLease | null {
   if (!lease || connectedRecoveryLease !== lease) return null
   connectedRecoveryLease = null
+  recordRecoveryDiagnostic('lease-retired', { outcome: 'cancelled', lease: lease.kind })
   lease.controller.abort()
   if (lease.pendingReaderSync) {
     lease.pendingReaderSync.stop()
@@ -524,6 +538,7 @@ async function runLoadDataAttempt(): Promise<StartupRetryTarget | null> {
     })
     if (startup.role === 'reader') {
       await installConnectedReaderProjection(startup.runtime, startup.operation.generation)
+      if (startup.acquisitionDeferred) scheduleConnectedReaderAutoAcquire(startup.operation.generation)
       recordStartupMilestone('background-ready')
       completeStartupAttempt(startupAttemptId)
       return null
@@ -799,6 +814,8 @@ async function confirmConnectedServerInitialization(operation: ClientSessionOper
 /** Reader re-entry never performs acquisition or touches dormant local intent. */
 function refreshConnectedReader(replacement?: ConnectedReaderLineageReplacement): Promise<void> {
   if (browserRecoverySuspended()) {
+    recordRecoveryDiagnostic('reader-refresh-suspended', { outcome: 'pending' })
+    scheduleNetworkProbe()
     void replacement?.projectionDiscard.catch(() => undefined)
     return Promise.resolve()
   }
@@ -821,6 +838,11 @@ function refreshConnectedReader(replacement?: ConnectedReaderLineageReplacement)
       if (!connectedRecoveryLeaseIsCurrent(lease)) return
     }
     setClientConnectionState('connecting', generation)
+    recordRecoveryDiagnostic('reader-refresh-started', {
+      outcome: 'pending',
+      lease: 'reader-refresh',
+      attemptCount: connectedReaderRefreshAttempt,
+    })
     const result = await waitForConnectedRecovery(
       fetchServerBootstrapReadOnly(signal, { cacheRevision: false }),
       signal,
@@ -861,17 +883,24 @@ function refreshConnectedReader(replacement?: ConnectedReaderLineageReplacement)
     if (connectedRecoveryLeaseIsCurrent(lease)) {
       connectedReaderRefreshAttempt = 0
       releaseConnectedRecoveryLease(lease)
+      recordRecoveryDiagnostic('reader-refresh-completed', { lease: 'reader-refresh' })
     }
   })()
   const promise = waitForConnectedRecovery(work, signal)
     .catch((error) => {
       const ownsFailure = connectedRecoveryLease === lease && isClientSessionGenerationCurrent(lease.generation)
+      const cancelled = error instanceof ConnectedRecoveryCancelledError
+      recordRecoveryDiagnostic(cancelled ? 'reader-refresh-cancelled' : 'reader-refresh-failed', {
+        outcome: cancelled ? 'cancelled' : 'failed',
+        lease: 'reader-refresh',
+        attemptCount: connectedReaderRefreshAttempt,
+      })
       retireConnectedRecoveryLease(lease)
       if (ownsFailure && connectedReaderRefresh?.promise === promise) {
         setClientConnectionState('interrupted', lease.generation)
         scheduleConnectedReaderRefresh(lease.generation)
       }
-      if (!(error instanceof ConnectedRecoveryCancelledError)) console.warn('Reader refresh failed:', error)
+      if (!cancelled) console.warn('Reader refresh failed:', error)
     })
     .finally(() => {
       if (connectedReaderRefresh?.promise === promise) connectedReaderRefresh = null
@@ -882,13 +911,26 @@ function refreshConnectedReader(replacement?: ConnectedReaderLineageReplacement)
 }
 
 function scheduleConnectedReaderRefresh(generation = captureClientSessionGeneration()): void {
-  if (connectedReaderRefreshTimer || getClientSessionSnapshot().lifecycle !== 'reading' || browserRecoverySuspended())
+  if (connectedReaderRefreshTimer || getClientSessionSnapshot().lifecycle !== 'reading') return
+  if (browserRecoverySuspended()) {
+    recordRecoveryDiagnostic('reader-refresh-suspended', {
+      outcome: 'pending',
+      attemptCount: connectedReaderRefreshAttempt,
+    })
+    scheduleNetworkProbe()
     return
+  }
+  const delayMs = calculateServerResourceReconnectDelayMs(connectedReaderRefreshAttempt++)
+  recordRecoveryDiagnostic('reader-refresh-scheduled', {
+    outcome: 'pending',
+    attemptCount: connectedReaderRefreshAttempt,
+    delayMs,
+  })
   connectedReaderRefreshTimer = setTimeout(() => {
     connectedReaderRefreshTimer = null
     if (isClientSessionGenerationCurrent(generation) && getClientSessionSnapshot().lifecycle === 'reading')
       void refreshConnectedReader()
-  }, calculateServerResourceReconnectDelayMs(connectedReaderRefreshAttempt++))
+  }, delayMs)
 }
 
 function installConnectedSessionLifecycle(): void {
@@ -922,11 +964,16 @@ function installConnectedSessionLifecycle(): void {
   if (typeof window !== 'undefined') {
     const abortPendingRecoveryRequests = () => retireConnectedRecoveryLease()
     const resumeConnectedSession = () => {
-      if (browserRecoverySuspended()) return
+      if (browserRecoverySuspended()) {
+        recordRecoveryDiagnostic('foreground-suspended', { outcome: 'pending', suspensionEvidence: recoverySuspended })
+        scheduleNetworkProbe()
+        return
+      }
       const returningFromBackground = recoverySuspended
       recoverySuspended = false
       const state = getClientSessionSnapshot()
       if (!state.managed) return
+      recordRecoveryDiagnostic('foreground-dispatch', { suspensionEvidence: returningFromBackground })
       if (state.lifecycle === 'recovering-writer') void resumeConnectedWriter()
       else if (state.lifecycle === 'reading') {
         if (returningFromBackground) void resumeConnectedReader()
@@ -935,14 +982,19 @@ function installConnectedSessionLifecycle(): void {
     }
     const offline = () => {
       if (!isClientSessionManaged()) return
+      recordRecoveryDiagnostic('browser-offline', { level: 'warn' })
       recoverySuspended = true
       abortPendingRecoveryRequests()
       setClientConnectionState('interrupted')
       if (connectedWriterResumeTimer) clearTimeout(connectedWriterResumeTimer)
       connectedWriterResumeTimer = null
     }
-    const online = () => resumeConnectedSession()
+    const online = () => {
+      recordRecoveryDiagnostic('browser-online')
+      resumeConnectedSession()
+    }
     const pageHide = () => {
+      recordRecoveryDiagnostic('page-hide')
       recoverySuspended = true
       if (getClientSessionSnapshot().lifecycle === 'resolving') demoteClientSession()
       abortPendingRecoveryRequests()
@@ -957,60 +1009,137 @@ function installConnectedSessionLifecycle(): void {
       // A persisted page released its exclusivity. Reload preserves its URL and
       // draft stores while running discovery again before any write is admitted.
       if (event.persisted) {
+        recordRecoveryDiagnostic('page-show-persisted')
         window.location.reload()
         return
       }
+      recordRecoveryDiagnostic('page-show')
       resumeConnectedSession()
     }
     const visibilityChange = () => {
       if (document.visibilityState === 'hidden') {
         recoverySuspended = true
         const retired = abortPendingRecoveryRequests()
+        recordRecoveryDiagnostic('page-hidden', {
+          ...(retired ? { lease: retired.kind, outcome: 'cancelled' as const } : {}),
+        })
         if (retired) setClientConnectionState('interrupted')
-      } else queueMicrotask(resumeConnectedSession)
+      } else {
+        recordRecoveryDiagnostic('page-visible', { suspensionEvidence: recoverySuspended })
+        queueMicrotask(resumeConnectedSession)
+      }
     }
+    // Chromium's page lifecycle events are recorded only; freeze already
+    // implies hidden, and resume precedes the visibility change that recovers.
+    const freeze = () => recordRecoveryDiagnostic('page-freeze')
+    const resume = () => recordRecoveryDiagnostic('page-resume')
+    // A probe that answered behind a false offline flag is treated like a
+    // return from background: the flag was suspension evidence, not a fact.
+    const stopNetworkReachable = subscribeNetworkReachable(() => {
+      recoverySuspended = true
+      resumeConnectedSession()
+    })
     window.addEventListener('pagehide', pageHide)
     window.addEventListener('pageshow', pageShow)
     window.addEventListener('offline', offline)
     window.addEventListener('online', online)
     document.addEventListener('visibilitychange', visibilityChange)
+    document.addEventListener('freeze', freeze)
+    document.addEventListener('resume', resume)
     stopConnectedPageLifecycle = () => {
+      stopNetworkReachable()
       window.removeEventListener('pagehide', pageHide)
       window.removeEventListener('pageshow', pageShow)
       window.removeEventListener('offline', offline)
       window.removeEventListener('online', online)
       document.removeEventListener('visibilitychange', visibilityChange)
+      document.removeEventListener('freeze', freeze)
+      document.removeEventListener('resume', resume)
     }
   }
 }
 
-/** Only a foreground return may automatically promote an existing reader. */
+/** Only a foreground return or a deferred startup may automatically promote an existing reader. */
 async function resumeConnectedReader(): Promise<void> {
   const generation = captureClientSessionGeneration()
+  if (connectedReaderAutoAcquireTimer) clearTimeout(connectedReaderAutoAcquireTimer)
+  connectedReaderAutoAcquireTimer = null
   // An existing reader sync owns reconnect and revision-gap recovery. Starting
   // an unfenced full bootstrap beside it can race the stream's minimum-revision
   // refresh and briefly apply an older projection.
   if (!connectedReaderSync) await refreshConnectedReader()
-  const enabled = await shouldAutoAcquireDisconnectedWriter()
-  if (
-    !enabled ||
-    browserRecoverySuspended() ||
-    !isClientSessionGenerationCurrent(generation) ||
-    getClientSessionSnapshot().lifecycle !== 'reading'
-  )
+  const preference = await readAutoAcquireDisconnectedWriterPreference()
+  recordRecoveryDiagnostic('promotion-preference', {
+    outcome: preference.status !== 'ok' ? 'failed' : preference.enabled ? 'ok' : 'rejected',
+    attemptCount: preference.attempts,
+  })
+  if (!isClientSessionGenerationCurrent(generation) || getClientSessionSnapshot().lifecycle !== 'reading') return
+  if (preference.status !== 'ok') {
+    // Unreadable is not "no": keep the reader, retry the read with backoff.
+    scheduleConnectedReaderAutoAcquire(generation)
     return
-  await promoteConnectedReader({ automatic: true })
+  }
+  if (!preference.enabled) {
+    connectedReaderAutoAcquireAttempt = 0
+    return
+  }
+  if (browserRecoverySuspended()) {
+    scheduleNetworkProbe()
+    return
+  }
+  const result = await promoteConnectedReader({ automatic: true })
+  // A promotion interrupted before or while it ran, such as a reader stream
+  // that is not live yet, is transient. Every other outcome is a decision.
+  if (result.status === 'failed' && result.reason === 'interrupted') {
+    if (isClientSessionGenerationCurrent(generation)) scheduleConnectedReaderAutoAcquire(generation)
+    return
+  }
+  connectedReaderAutoAcquireAttempt = 0
+}
+
+/**
+ * A reader that could not read the acquisition preference, or whose automatic
+ * promotion was interrupted, retries with backoff instead of waiting for the
+ * next foreground return. Every other refusal path stays a decision.
+ */
+function scheduleConnectedReaderAutoAcquire(generation = captureClientSessionGeneration()): void {
+  if (connectedReaderAutoAcquireTimer || getClientSessionSnapshot().lifecycle !== 'reading') return
+  if (browserRecoverySuspended()) {
+    // The foreground dispatcher or the network probe re-enters resumeConnectedReader.
+    scheduleNetworkProbe()
+    return
+  }
+  const delayMs = calculateServerResourceReconnectDelayMs(connectedReaderAutoAcquireAttempt++)
+  recordRecoveryDiagnostic('promotion-retry-scheduled', {
+    outcome: 'pending',
+    attemptCount: connectedReaderAutoAcquireAttempt,
+    delayMs,
+  })
+  connectedReaderAutoAcquireTimer = setTimeout(() => {
+    connectedReaderAutoAcquireTimer = null
+    if (isClientSessionGenerationCurrent(generation) && getClientSessionSnapshot().lifecycle === 'reading')
+      void resumeConnectedReader()
+  }, delayMs)
 }
 
 function scheduleConnectedWriterResume(): void {
   if (
-    browserRecoverySuspended() ||
     getClientSessionSnapshot().lifecycle !== 'recovering-writer' ||
     connectedWriterResumeTimer ||
     connectedWriterResume
   )
     return
+  if (browserRecoverySuspended()) {
+    recordRecoveryDiagnostic('resume-suspended', { outcome: 'pending', attemptCount: connectedWriterResumeAttempt })
+    scheduleNetworkProbe()
+    return
+  }
   const delay = calculateServerResourceReconnectDelayMs(connectedWriterResumeAttempt++)
+  recordRecoveryDiagnostic('resume-scheduled', {
+    outcome: 'pending',
+    attemptCount: connectedWriterResumeAttempt,
+    delayMs: delay,
+  })
   connectedWriterResumeTimer = setTimeout(() => {
     connectedWriterResumeTimer = null
     void resumeConnectedWriter()
@@ -1018,7 +1147,11 @@ function scheduleConnectedWriterResume(): void {
 }
 
 async function resumeConnectedWriter(): Promise<void> {
-  if (browserRecoverySuspended()) return
+  if (browserRecoverySuspended()) {
+    recordRecoveryDiagnostic('resume-suspended', { outcome: 'pending', attemptCount: connectedWriterResumeAttempt })
+    scheduleNetworkProbe()
+    return
+  }
   if (connectedWriterResume && connectedRecoveryLeaseIsCurrent(connectedWriterResume.lease))
     return connectedWriterResume.promise
   if (connectedWriterResumeTimer) clearTimeout(connectedWriterResumeTimer)
@@ -1027,6 +1160,11 @@ async function resumeConnectedWriter(): Promise<void> {
   if (!operation) return
   const lease = beginConnectedRecoveryLease('writer-resume', operation.generation, operation)
   const signal = lease.controller.signal
+  recordRecoveryDiagnostic('resume-started', {
+    outcome: 'pending',
+    lease: 'writer-resume',
+    attemptCount: connectedWriterResumeAttempt,
+  })
   const work = (async () => {
     const result = await waitForConnectedRecovery(fetchServerOwnership(signal), signal)
     if (!connectedRecoveryLeaseIsCurrent(lease)) return
@@ -1042,18 +1180,37 @@ async function resumeConnectedWriter(): Promise<void> {
           ? { databaseLineage: current.databaseLineage, writer: current.writer }
           : null
     if (!ownership) {
+      recordRecoveryDiagnostic('resume-ownership-failed', { outcome: 'failed', lease: 'writer-resume' })
       throw new Error(result.status === 'error' ? result.error : 'Server is unavailable')
     }
     const foreignWriter = ownership.writer.sessionId !== getActiveWriterSessionId()
-    const autoAcquire = foreignWriter
-      ? await waitForConnectedRecovery(shouldAutoAcquireDisconnectedWriter(signal), signal)
-      : false
+    const preference = foreignWriter
+      ? await waitForConnectedRecovery(readAutoAcquireDisconnectedWriterPreference(signal), signal)
+      : null
     if (!connectedRecoveryLeaseIsCurrent(lease)) return
+    if (preference?.status === 'unavailable') {
+      // Not a refusal: fail this attempt so the resume backoff retries it
+      // instead of demoting a writer over one unreadable setting.
+      recordRecoveryDiagnostic('resume-preference-unavailable', {
+        outcome: 'failed',
+        lease: 'writer-resume',
+        attemptCount: preference.attempts,
+      })
+      throw new Error('Server acquisition preference is unavailable')
+    }
+    const autoAcquire = preference?.status === 'ok' && preference.enabled
     if (ownership.databaseLineage !== getClientSessionSnapshot().databaseLineage || (foreignWriter && !autoAcquire)) {
+      recordRecoveryDiagnostic(
+        ownership.databaseLineage !== getClientSessionSnapshot().databaseLineage
+          ? 'resume-lineage-changed'
+          : 'resume-foreign-writer',
+        { outcome: 'rejected', lease: 'writer-resume' },
+      )
       failClientSessionOperation(operation)
       await refreshConnectedReader()
       return
     }
+    if (foreignWriter) recordRecoveryDiagnostic('probe-auto-acquire', { outcome: 'pending', lease: 'writer-resume' })
     // Resume is conditional as well: a writer change between this read and
     // recovery cannot override a newer owner or disconnect a connected device.
     const verified = await waitForConnectedRecovery(
@@ -1068,6 +1225,7 @@ async function resumeConnectedWriter(): Promise<void> {
         verified.status === 'active-writer-connected' ||
         (verified.status === 'error' && ['active_writer_changed', 'active_writer_stale'].includes(verified.error))
       ) {
+        recordRecoveryDiagnostic('resume-writer-conflict', { outcome: 'rejected', lease: 'writer-resume' })
         failClientSessionOperation(operation)
         await refreshConnectedReader()
         return
@@ -1076,20 +1234,35 @@ async function resumeConnectedWriter(): Promise<void> {
         await discardReaderProjectionState('auth-loss')
         return
       }
+      recordRecoveryDiagnostic('resume-bootstrap-failed', { outcome: 'failed', lease: 'writer-resume' })
       throw new Error(verified.status === 'unavailable' ? 'Server is unavailable' : verified.error)
     }
     if (!authorizeClientWriterRecovery(operation, bootstrapOwnership(verified.bootstrap))) return
     await recoverConnectedWriter(verified.bootstrap, operation, lease)
     connectedWriterResumeAttempt = 0
+    recordRecoveryDiagnostic('resume-completed', { lease: 'writer-resume' })
     await waitForConnectedRecovery(settleConnectedWriterStartup(lease), signal)
     if (connectedRecoveryLeaseIsCurrent(lease)) releaseConnectedRecoveryLease(lease)
   })()
   const running = waitForConnectedRecovery(work, signal)
     .catch((error) => {
       const ownsFailure = connectedRecoveryLease === lease && isClientSessionGenerationCurrent(lease.generation)
+      const cancelled = error instanceof ConnectedRecoveryCancelledError
+      recordRecoveryDiagnostic(
+        cancelled
+          ? 'resume-cancelled'
+          : error instanceof RetainedWriterRecoveryError
+            ? 'resume-retained-work'
+            : 'resume-failed',
+        {
+          outcome: cancelled ? 'cancelled' : 'failed',
+          lease: 'writer-resume',
+          attemptCount: connectedWriterResumeAttempt,
+        },
+      )
       retireConnectedRecoveryLease(lease)
       if (ownsFailure) setClientConnectionState('interrupted', lease.generation)
-      if (!(error instanceof ConnectedRecoveryCancelledError)) console.warn('Writer reconnection failed:', error)
+      if (!cancelled) console.warn('Writer reconnection failed:', error)
     })
     .finally(() => {
       if (connectedWriterResume?.promise === running) {
@@ -1143,13 +1316,22 @@ export function promoteConnectedReader(options: { automatic?: boolean } = {}): P
   if (connectedWriterPromotion && connectedRecoveryLeaseIsCurrent(connectedWriterPromotion.lease))
     return connectedWriterPromotion.promise
   const operation = beginClientPromotion()
-  if (!operation)
+  if (!operation) {
+    recordRecoveryDiagnostic('promotion-failed', { outcome: 'failed', exclusive: options.automatic !== true })
     return Promise.resolve({
       status: 'failed',
-      reason: browserIsOffline() || getClientSessionSnapshot().connection !== 'live' ? 'interrupted' : 'unavailable',
+      reason:
+        browserReportsOffline() || getClientSessionSnapshot().connection !== 'live' ? 'interrupted' : 'unavailable',
     })
+  }
 
   const lease = beginConnectedRecoveryLease('writer-promotion', operation.generation, operation)
+  // `exclusive` here distinguishes an explicit Use this device tap from an automatic foreground attempt.
+  recordRecoveryDiagnostic('promotion-started', {
+    outcome: 'pending',
+    lease: 'writer-promotion',
+    exclusive: options.automatic !== true,
+  })
   const signal = lease.controller.signal
   let interrupted = false
   const stopOperation = clientSessionStore.subscribe((state) => {
@@ -1264,7 +1446,7 @@ export function promoteConnectedReader(options: { automatic?: boolean } = {}): P
         reason:
           error instanceof RetainedWriterRecoveryError
             ? 'retained-work'
-            : signal.aborted || browserIsOffline() || getClientSessionSnapshot().connection === 'interrupted'
+            : signal.aborted || browserReportsOffline() || getClientSessionSnapshot().connection === 'interrupted'
               ? 'interrupted'
               : 'unavailable',
       })
@@ -1274,16 +1456,31 @@ export function promoteConnectedReader(options: { automatic?: boolean } = {}): P
       if (connectedWriterPromotion?.promise === running) connectedWriterPromotion = null
       if (connectedRecoveryLease === lease) retireConnectedRecoveryLease(lease)
     })
+  void running.then((result) => {
+    recordRecoveryDiagnostic(
+      result.status === 'promoted'
+        ? 'promotion-completed'
+        : result.status === 'cancelled'
+          ? 'promotion-cancelled'
+          : result.status === 'superseded'
+            ? 'promotion-superseded'
+            : 'promotion-failed',
+      {
+        outcome:
+          result.status === 'promoted'
+            ? 'ok'
+            : result.status === 'cancelled'
+              ? 'cancelled'
+              : result.status === 'superseded'
+                ? 'rejected'
+                : 'failed',
+        lease: 'writer-promotion',
+        exclusive: options.automatic !== true,
+      },
+    )
+  })
   connectedWriterPromotion = { operation, lease, promise: running }
   return running
-}
-
-function browserIsOffline(): boolean {
-  return typeof navigator !== 'undefined' && navigator.onLine === false
-}
-
-function browserRecoverySuspended(): boolean {
-  return browserIsOffline() || (typeof document !== 'undefined' && document.visibilityState === 'hidden')
 }
 
 function stopFailedWriterPromotionRuntimes(): void {
@@ -1330,6 +1527,10 @@ export function stopConnectedClientServices(): void {
   if (connectedReaderRefreshTimer) clearTimeout(connectedReaderRefreshTimer)
   connectedReaderRefreshTimer = null
   connectedReaderRefreshAttempt = 0
+  if (connectedReaderAutoAcquireTimer) clearTimeout(connectedReaderAutoAcquireTimer)
+  connectedReaderAutoAcquireTimer = null
+  connectedReaderAutoAcquireAttempt = 0
+  resetRecoverySuspension()
   clearClientChatOccupancyIdentity()
   releaseConnectedTabIdentity()
 }
@@ -2060,6 +2261,10 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     onError: (error) => {
       if (!isCurrentServerResourceEventEpoch(eventEpoch)) return
       if (!initialSubscriptionSettled) return
+      recordRecoveryDiagnostic('stream-error', {
+        outcome: 'failed',
+        durationMs: Date.now() - serverResourceLastFrameAt,
+      })
       console.warn(error)
       if (error.includes('Malformed command event frame')) {
         enqueueServerResourceSync(async () => {
@@ -2074,6 +2279,10 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     onClose: () => {
       if (!isCurrentServerResourceEventEpoch(eventEpoch)) return
       if (!initialSubscriptionSettled) return
+      recordRecoveryDiagnostic('stream-closed', {
+        outcome: 'failed',
+        durationMs: Date.now() - serverResourceLastFrameAt,
+      })
       scheduleServerResourceReconnect(eventEpoch)
     },
   })
@@ -2088,6 +2297,7 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
     recordServerResourceEventFrame(eventEpoch)
     recordStartupMilestone('writer-ready')
     if (isClientSessionManaged()) setClientConnectionState('live')
+    recordRecoveryDiagnostic('stream-connected')
     requestClientChatOccupancyRecovery({ refresh: true })
     setReaderWorkspaceLifecycleMode('promoted')
     if (options.replayPendingMutations !== false) triggerReconnectPendingMutationReplay()
@@ -2104,10 +2314,12 @@ async function startServerResourceEvents(options: { replayPendingMutations?: boo
       return
     }
     setReaderWorkspaceLifecycleMode('unavailable')
+    recordRecoveryDiagnostic('stream-subscribe-failed', { outcome: 'failed' })
     console.warn(`Server event subscription failed: ${subscription.error}`)
     scheduleServerResourceReconnect(eventEpoch)
   } else if (subscription.status === 'replay-unavailable') {
     setReaderWorkspaceLifecycleMode('unavailable')
+    recordRecoveryDiagnostic('stream-replay-unavailable', { outcome: 'failed' })
     console.warn(`Server event replay unavailable at revision ${subscription.currentRevision}; refreshing resources`)
     await refreshAfterUnavailableEventReplay(subscription.currentRevision)
     if (isCurrentServerResourceEventEpoch(eventEpoch)) scheduleServerResourceReconnect(eventEpoch)
@@ -2189,6 +2401,10 @@ function armServerResourceEventWatchdog(eventEpoch: number, delayMs: number): vo
         armServerResourceEventWatchdog(eventEpoch, remainingMs)
         return
       }
+      recordRecoveryDiagnostic('stream-watchdog', {
+        outcome: 'failed',
+        durationMs: Date.now() - serverResourceLastFrameAt,
+      })
       console.warn('Server event stream heartbeat timed out; reconnecting')
       teardownServerResourceSubscription()
       scheduleServerResourceReconnect(eventEpoch)
@@ -2225,12 +2441,22 @@ function serverResourceEventStreamIsHealthyAndRecent(): boolean {
 function restartServerResourceEvents(options: { lifecycle?: boolean; suspensionEvidence?: boolean } = {}): void {
   if (isClientSessionManaged()) {
     if (getClientSessionSnapshot().lifecycle === 'writing') {
-      if (options.lifecycle && !options.suspensionEvidence && serverResourceEventStreamIsHealthyAndRecent()) return
+      const streamAgeMs = Date.now() - serverResourceLastFrameAt
+      if (options.lifecycle && !options.suspensionEvidence && serverResourceEventStreamIsHealthyAndRecent()) {
+        recordRecoveryDiagnostic('probe-skipped', { durationMs: streamAgeMs, suspensionEvidence: false })
+        return
+      }
       if (connectedRecoveryLease?.kind === 'writer-probe' && connectedRecoveryLeaseIsCurrent(connectedRecoveryLease))
         return
       const generation = captureClientSessionGeneration()
       const lease = beginConnectedRecoveryLease('writer-probe', generation)
       const signal = lease.controller.signal
+      recordRecoveryDiagnostic('probe-started', {
+        outcome: 'pending',
+        lease: 'writer-probe',
+        durationMs: streamAgeMs,
+        suspensionEvidence: options.suspensionEvidence === true,
+      })
       const work = (async () => {
         const result = await waitForConnectedRecovery(fetchServerOwnership(signal), signal)
         if (!connectedRecoveryLeaseIsCurrent(lease)) return
@@ -2239,6 +2465,7 @@ function restartServerResourceEvents(options: { lifecycle?: boolean; suspensionE
             await discardReaderProjectionState('auth-loss')
             return
           }
+          recordRecoveryDiagnostic('probe-failed', { outcome: 'failed', lease: 'writer-probe' })
           releaseConnectedRecoveryLease(lease)
           setClientConnectionState('interrupted')
           scheduleConnectedWriterResume()
@@ -2246,6 +2473,7 @@ function restartServerResourceEvents(options: { lifecycle?: boolean; suspensionE
         }
         const before = getClientSessionSnapshot()
         if (result.ownership.databaseLineage !== before.databaseLineage) {
+          recordRecoveryDiagnostic('probe-lineage-changed', { outcome: 'rejected', lease: 'writer-probe' })
           releaseConnectedRecoveryLease(lease)
           demoteClientSession()
           void refreshConnectedReader()
@@ -2261,39 +2489,54 @@ function restartServerResourceEvents(options: { lifecycle?: boolean; suspensionE
         if (!connectedRecoveryLeaseIsCurrent(lease)) return
         if (autoAcquire) {
           // Revalidate through writer recovery before exposing a reader projection.
+          recordRecoveryDiagnostic('probe-auto-acquire', { outcome: 'pending', lease: 'writer-probe' })
           releaseConnectedRecoveryLease(lease)
           setClientConnectionState('interrupted')
           void resumeConnectedWriter()
           return
         }
         if (!observeClientWriter(result.ownership.writer)) {
+          recordRecoveryDiagnostic('probe-stale-writer', { outcome: 'rejected', lease: 'writer-probe' })
           releaseConnectedRecoveryLease(lease)
           setClientConnectionState('interrupted')
           scheduleConnectedWriterResume()
           return
         }
         if (result.ownership.writer.sessionId !== getActiveWriterSessionId()) {
+          recordRecoveryDiagnostic('probe-foreign-writer', { outcome: 'rejected', lease: 'writer-probe' })
           releaseConnectedRecoveryLease(lease)
           void refreshConnectedReader()
           return
         }
         if (writerChanged || !serverResourceEventStreamIsHealthyAndRecent()) {
+          recordRecoveryDiagnostic('probe-stream-stale', {
+            outcome: 'failed',
+            lease: 'writer-probe',
+            durationMs: Date.now() - serverResourceLastFrameAt,
+          })
           teardownServerResourceSubscription()
           releaseConnectedRecoveryLease(lease)
           setClientConnectionState('interrupted')
           scheduleConnectedWriterResume()
+        } else {
+          recordRecoveryDiagnostic('probe-unchanged', {
+            lease: 'writer-probe',
+            durationMs: Date.now() - serverResourceLastFrameAt,
+          })
         }
         releaseConnectedRecoveryLease(lease)
       })()
       const check = waitForConnectedRecovery(work, signal)
         .catch((error) => {
           const ownsFailure = connectedRecoveryLease === lease && isClientSessionGenerationCurrent(generation)
+          const cancelled = error instanceof ConnectedRecoveryCancelledError
+          if (!cancelled) recordRecoveryDiagnostic('probe-failed', { outcome: 'failed', lease: 'writer-probe' })
           retireConnectedRecoveryLease(lease)
           if (ownsFailure) {
             setClientConnectionState('interrupted', generation)
             scheduleConnectedWriterResume()
           }
-          if (!(error instanceof ConnectedRecoveryCancelledError)) console.warn('Writer ownership check failed:', error)
+          if (!cancelled) console.warn('Writer ownership check failed:', error)
         })
         .finally(() => {
           if (connectedRecoveryLease === lease) retireConnectedRecoveryLease(lease)

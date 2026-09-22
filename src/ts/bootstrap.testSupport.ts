@@ -13,7 +13,14 @@ import type { ServerWriterEvent } from './server/events'
 
 const readerApi = vi.hoisted(() => ({ start: vi.fn(), stop: vi.fn(), retry: vi.fn() }))
 const autoWriterApi = vi.hoisted(() => ({ enabled: vi.fn() }))
-vi.mock('./server/automaticWriterAcquisition', () => ({ shouldAutoAcquireDisconnectedWriter: autoWriterApi.enabled }))
+vi.mock('./server/automaticWriterAcquisition', () => ({
+  shouldAutoAcquireDisconnectedWriter: autoWriterApi.enabled,
+  readAutoAcquireDisconnectedWriterPreference: async (signal?: AbortSignal | null) => ({
+    status: 'ok',
+    enabled: (await autoWriterApi.enabled(signal)) === true,
+    attempts: 1,
+  }),
+}))
 const identityApi = vi.hoisted(() => ({ exclusive: true }))
 
 const bootstrapApi = vi.hoisted(() => ({

@@ -12,6 +12,7 @@ import { clearAppliedServerResourceRevision, peekAppliedServerResourceRevision }
 import { dispatchDurableServerBackedSettingsPatch } from './settingsOwner.svelte'
 import { getNodeServerProxyAuth } from '../storage/fastifyStorage'
 import { alertNormal } from '../alert'
+import { getClientDiagnosticsSnapshot } from '../diagnostics'
 import { currentRoute, navigate } from '../router'
 import { CustomGUISettingMenuStore, QuickSettings, VariableReloadGUIPointer } from '../stores.svelte'
 import { generationOperationCancellations, generationOperationProjections } from './generationOperations'
@@ -123,6 +124,7 @@ export function installFastifyBrowserSmokeHook() {
       QuickSettings.open = true
       CustomGUISettingMenuStore.set(true)
     },
+    getClientDiagnostics: () => structuredClone(getClientDiagnosticsSnapshot().entries),
     // Invoke the actual action owners against the hydrated fixture, bypassing
     // controls without bypassing authority. Imports do not initialize Lua.
     probeInteractiveScriptAction: async ({ characterId, chatId, kind, name }) => {

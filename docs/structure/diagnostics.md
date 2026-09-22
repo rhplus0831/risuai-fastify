@@ -3,6 +3,7 @@
 Consolidated from targeted source checks on 2026-09-12 covering the client
 collector, browser upload, support-read protocol, credential lifecycle, journal
 retention/recovery, and remote helper.
+Targeted source check: 2026-09-22 (connection-recovery reasons and read-back).
 
 Use this guide for the bounded diagnostics channel and its operational
 authority. Raw request/generation traces and startup telemetry remain in
@@ -32,10 +33,11 @@ Browser capture starts before bootstrap and retains a bounded pending queue
 until the server opt-in arrives. Missing or unsupported opt-in discards the
 queue. Enabled capture records fetch status, time to response headers, request
 UID, network failures, global errors/rejections, console warnings/errors,
-connectivity, startup events, and generation recovery. It keeps 300 entries in
-memory and best-effort tab-scoped `sessionStorage`, revalidates them after
-reload, and clears them on auth loss or server opt-out. Fetch capture never
-reads or clones response bodies, including streams.
+connectivity, startup events, generation recovery, and connection-recovery
+reasons. It keeps 300 entries in memory and best-effort tab-scoped
+`sessionStorage`, revalidates them after reload, and clears them on auth loss
+or server opt-out. Fetch capture never reads or clones response bodies,
+including streams.
 
 The viewer supports download, clipboard copy, and selectable report text. If a
 server read fails, the report retains browser and previously loaded server
@@ -45,6 +47,51 @@ credentials, headers, URLs, domain IDs, plugin/Lua values, free-form log
 arguments, and error messages. Sanitized stacks retain only application
 file/line/column coordinates. Export adds only app version, coarse browser/OS
 families, connectivity, viewport size, and export time.
+
+## Connection Recovery Reasons
+
+The session store records that `lifecycle` or `connection` changed
+(`ownership` and `reconnect` stages) but not why. `recovery` entries, recorded
+through `src/ts/server/recoveryDiagnostics.ts`, add the decision point. Each
+carries a `reason` from the closed `BROWSER_RECOVERY_REASONS` list in
+`packages/protocol/src/diagnostics.ts`, the `lifecycle` and `connection` it
+observed, `visible` (`document.visibilityState`), `online`
+(`navigator.onLine`), and where relevant the recovery `lease` kind,
+`attemptCount`, a scheduled `delayMs`, an observed `durationMs` such as the age
+of the last event frame, `suspensionEvidence`, and `exclusive` (tab identity
+at startup, or explicit versus automatic promotion). Every value is an
+enumeration, boolean, or bounded number; there is no free text.
+
+Reason families follow the recovery paths in
+[Durable Mutations And Recovery](durable-mutations-and-recovery.md#event-invalidation-and-recovery):
+`page-*` and `browser-*` for the physical lifecycle listeners, including
+Chromium `freeze`/`resume`; `startup-*` for role resolution after a reload,
+which is how a discarded tab returns; `foreground-*` and `probe-*` for the
+foreground dispatcher and the writer ownership probe; `network-probe-*` for
+the silent reachability probe a visible page runs while `navigator.onLine` is
+false, whose `ok` outcome with `online: false` proves the flag stale (a
+genuinely offline streak journals only its first cycle and the answer);
+`stream-*` for the writer event stream, including the heartbeat watchdog;
+`resume-*` for writer resume, including every refusal that settles the page as
+a reader and `resume-preference-unavailable` for the transient failure that
+retries instead; `reader-*` for connected-reader refresh and stream recovery;
+`promotion-*` for automatic and explicit Use this device, including
+`promotion-retry-scheduled` when a reader defers acquisition behind an
+unreadable preference; `lease-retired` when one recovery replaces another; and
+`outbox-lock-*` when the durable outbox waits more than five seconds for its
+cross-tab Web Lock. Recording never changes the recovery
+itself.
+
+Because Settings is closed on writer loss and unavailable while reading, the
+panel cannot be opened from a stuck state on the affected device. With
+`RISU_CLIENT_DIAGNOSTICS=1` and `RISU_BROWSER_DIAGNOSTICS=1` the phone uploads
+its entries within seconds, and any authenticated client can read them back
+with `GET /api/v1/diagnostics?version=2&limit=200`, for example from the
+desktop Settings → Advanced → Diagnostics report. Browser `recovery` events
+appear in v2 as `category: 'browser'`, `stage: 'recovery'` with the same
+fields; the v1 response carries the `recovery` entry as recorded.
+`server/fastify/browser-smoke/mobileBackgroundReturnMatrix.spec.ts` asserts the
+reasons and that read-back path under emulated Android suspension.
 
 ## Remote Support Authority
 
@@ -311,16 +358,18 @@ Primary owners are:
   `server/fastify/src/supportDiagnosticsAuth.ts`, and
   `server/fastify/src/diagnosticsJournal.ts` for collection, reads, auth, and
   storage;
-- `src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts`, and
+- `src/ts/diagnostics.ts`, `src/ts/server/clientDiagnostics.ts`,
+  `src/ts/server/recoveryDiagnostics.ts`, and
   `src/lib/Setting/Pages/Advanced/DiagnosticsPanel.svelte` for browser capture,
-  transport, and UI; and
+  connection-recovery reasons, transport, and UI; and
 - `util/diagnostics-remote.ts` for bounded operator reads.
 
 Focused coverage includes `server/fastify/__tests__/clientDiagnostics.test.ts`,
 `server/fastify/__tests__/remoteDiagnostics.test.ts`,
 `server/fastify/__tests__/supportDiagnosticsAuth.test.ts`,
 `server/fastify/__tests__/diagnosticsJournal.test.ts`,
-`server/fastify/browser-smoke/remoteDiagnostics.spec.ts`, and
+`server/fastify/browser-smoke/remoteDiagnostics.spec.ts`,
+`server/fastify/browser-smoke/mobileBackgroundReturnMatrix.spec.ts`, and
 `src/ts/diagnostics.dom.test.ts`. The diagnostics panel and operator-tool unit
 suites were removed in Phase 5; the remote journey retains their end-to-end
 boundary.

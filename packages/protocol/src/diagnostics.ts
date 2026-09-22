@@ -22,6 +22,103 @@ export const DIAGNOSTIC_METRICS = [
 
 const enumSchema = <T extends string>(values: readonly T[]) => Type.Union(values.map((value) => Type.Literal(value)))
 const boundedNumber = Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })
+const boundedDuration = Type.Number({ minimum: 0, maximum: 86_400_000 })
+
+/** Content-free decision points on the browser's connection-recovery paths, named for where they are recorded. */
+export const BROWSER_RECOVERY_REASONS = [
+  // Physical page lifecycle, recorded as observed.
+  'page-hidden',
+  'page-visible',
+  'page-freeze',
+  'page-resume',
+  'page-hide',
+  'page-show',
+  'page-show-persisted',
+  'browser-offline',
+  'browser-online',
+  // Startup role resolution; a discarded tab returns through here.
+  'startup-identity',
+  'startup-auto-acquire-preference',
+  'startup-acquire',
+  'startup-reader',
+  // Foreground dispatch and the writer ownership probe.
+  'foreground-suspended',
+  'foreground-dispatch',
+  // Silent reachability probe while `navigator.onLine` is false on a visible page.
+  'network-probe-scheduled',
+  'network-probe',
+  'probe-skipped',
+  'probe-started',
+  'probe-failed',
+  'probe-lineage-changed',
+  'probe-auto-acquire',
+  'probe-stale-writer',
+  'probe-foreign-writer',
+  'probe-stream-stale',
+  'probe-unchanged',
+  // Writer event stream.
+  'stream-connected',
+  'stream-subscribe-failed',
+  'stream-replay-unavailable',
+  'stream-error',
+  'stream-closed',
+  'stream-watchdog',
+  // Writer resume.
+  'resume-suspended',
+  'resume-scheduled',
+  'resume-started',
+  'resume-ownership-failed',
+  'resume-lineage-changed',
+  'resume-foreign-writer',
+  'resume-preference-unavailable',
+  'resume-writer-conflict',
+  'resume-bootstrap-failed',
+  'resume-retained-work',
+  'resume-cancelled',
+  'resume-failed',
+  'resume-completed',
+  // Connected reader refresh and stream.
+  'reader-refresh-suspended',
+  'reader-refresh-scheduled',
+  'reader-refresh-started',
+  'reader-refresh-failed',
+  'reader-refresh-cancelled',
+  'reader-refresh-completed',
+  'reader-stream-suspended',
+  'reader-stream-connected',
+  'reader-stream-interrupted',
+  'reader-foreground-probe',
+  // Automatic and explicit promotion.
+  'promotion-preference',
+  'promotion-retry-scheduled',
+  'promotion-started',
+  'promotion-completed',
+  'promotion-cancelled',
+  'promotion-superseded',
+  'promotion-failed',
+  // Recovery lease and durable outbox coordination.
+  'lease-retired',
+  'outbox-lock-waiting',
+  'outbox-lock-acquired',
+] as const
+export type BrowserRecoveryReason = (typeof BROWSER_RECOVERY_REASONS)[number]
+export const CLIENT_SESSION_LIFECYCLES = [
+  'resolving',
+  'reading',
+  'promoting',
+  'recovering-writer',
+  'writing',
+  'auth-required',
+] as const
+export const CLIENT_CONNECTION_STATES = ['connecting', 'live', 'interrupted'] as const
+export const RECOVERY_LEASE_KINDS = [
+  'reader-refresh',
+  'writer-resume',
+  'writer-promotion',
+  'writer-probe',
+  'reader-sync',
+] as const
+export type RecoveryLeaseKind = (typeof RECOVERY_LEASE_KINDS)[number]
 const errorNames = [
   'Error',
   'TypeError',
@@ -58,6 +155,7 @@ export const DiagnosticEntrySchema = Type.Object(
       'startup',
       'protocol',
       'generation-recovery',
+      'recovery',
       'server-started',
     ]),
     routeId: Type.Optional(
@@ -106,6 +204,16 @@ export const DiagnosticEntrySchema = Type.Object(
       ]),
     ),
     errorName: Type.Optional(enumSchema(errorNames)),
+    // Connection-recovery facts: every value is an enumeration, boolean, or bounded duration.
+    reason: Type.Optional(enumSchema(BROWSER_RECOVERY_REASONS)),
+    lifecycle: Type.Optional(enumSchema(CLIENT_SESSION_LIFECYCLES)),
+    connection: Type.Optional(enumSchema(CLIENT_CONNECTION_STATES)),
+    lease: Type.Optional(enumSchema(RECOVERY_LEASE_KINDS)),
+    visible: Type.Optional(Type.Boolean()),
+    online: Type.Optional(Type.Boolean()),
+    suspensionEvidence: Type.Optional(Type.Boolean()),
+    exclusive: Type.Optional(Type.Boolean()),
+    delayMs: Type.Optional(boundedDuration),
     locations: Type.Optional(
       Type.Array(
         Type.String({

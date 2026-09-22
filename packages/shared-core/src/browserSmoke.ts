@@ -128,6 +128,8 @@ export interface FastifyBrowserSmokeHook<
     alert: unknown
   }
   restoreRestrictedOverlays: () => void
+  /** Content-free local diagnostic entries, including `recovery` reasons, when the server enabled collection. */
+  getClientDiagnostics: () => Array<Record<string, unknown>>
   probeInteractiveScriptAction: (input: {
     characterId: string
     chatId: string

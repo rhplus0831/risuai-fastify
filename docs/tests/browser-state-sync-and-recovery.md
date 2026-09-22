@@ -34,7 +34,9 @@ Core lineage and authority recovery live in
 `server/fastify/browser-smoke/coreLineage.spec.ts` and
 `server/fastify/browser-smoke/coreOwnership.spec.ts`. Extended recovery depth is
 kept in `server/fastify/browser-smoke/resourceHydrationRecovery.spec.ts`,
-`server/fastify/browser-smoke/mobileWriterConnectionRecovery.spec.ts`, and
+`server/fastify/browser-smoke/mobileWriterConnectionRecovery.spec.ts`,
+`server/fastify/browser-smoke/mobileBackgroundReturnMatrix.spec.ts` (single-device
+Android return-from-background matrix with recovery reason assertions), and
 `server/fastify/browser-smoke/visibleStateRecovery.spec.ts`.
 
 ## Primary inventory

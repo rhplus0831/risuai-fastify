@@ -380,6 +380,19 @@ response or toggles the browser context offline. Both cases hold or observe the
 transient recovery boundary, require synchronous authority revocation without a
 Reader/workspace or composer remount, reject unchanged projection hydration, and
 prove restored write access with a post-recovery command.
+`server/fastify/browser-smoke/mobileBackgroundReturnMatrix.spec.ts` is the
+single-device Android return-from-background matrix. It routes the Pixel 7
+page through a TCP proxy that can destroy or stall only the browser side of the
+writer event stream, suspends the page with Chromium's frozen lifecycle state
+or a fake-clock timer jump, returns it offline, with a stale `navigator.onLine`
+flag, repeatedly, or through a reload with and without its session, and
+requires a bounded return to `writing/live` on the same composer. It reads the
+`recovery` reason journal locally and through the authenticated v2 diagnostics
+read. The stale-flag mode requires a `network-probe` answer while the flag
+still reads offline, and the preference-read modes require the inline retry
+(one aborted read) and the deferred acquisition path (a six-second outage that
+settles a reader and then promotes it); a mode that reproduces a new suspected
+defect is annotated as an expected failure rather than removed.
 `server/fastify/browser-smoke/rerollSwipePersistence.spec.ts` proves persisted
 reroll alternates reconstruct after reload and remain candidate-recoverable. It
 clicks the real message reroll control, observes the operation request and absence

@@ -27,6 +27,8 @@ export async function startFastBootstrapHarness(
     generationChat?: BuildAppOptions['generationChat']
     /** Opt in only for isolated journeys exercising real background memory work. */
     memoryWorker?: BuildAppOptions['memoryWorker']
+    /** Enable content-free client diagnostics and browser upload so a journey can read recovery reasons. */
+    diagnostics?: boolean
   } = {},
 ): Promise<FastBootstrapHarness> {
   process.env.LOG_LEVEL = 'silent'
@@ -51,6 +53,7 @@ export async function startFastBootstrapHarness(
       hubUrl: 'https://sv.risuai.xyz',
       staticRoot: path.resolve('dist'),
       requestTrace: { mode: 'agent' },
+      ...(options.diagnostics ? { clientDiagnostics: true, browserDiagnostics: { enabled: true } } : {}),
     },
     assetGc: false,
     chatOccupancy: options.chatOccupancy,

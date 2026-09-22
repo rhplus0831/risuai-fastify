@@ -1,6 +1,12 @@
 import { Type, type Static, type TObject } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
-import { DiagnosticEntrySchema } from './diagnostics.js'
+import {
+  BROWSER_RECOVERY_REASONS,
+  CLIENT_CONNECTION_STATES,
+  CLIENT_SESSION_LIFECYCLES,
+  DiagnosticEntrySchema,
+  RECOVERY_LEASE_KINDS,
+} from './diagnostics.js'
 import { PROTOCOL_ROUTE_OPERATION_CATALOG } from './routeOperation.js'
 import { STARTUP_TELEMETRY_FAILURE_CODES } from './startupTelemetry.js'
 
@@ -356,7 +362,7 @@ const eventSchemas = {
   browser: object({
     ...base,
     category: Type.Literal('browser'),
-    stage: enumOf(['startup', 'hydration', 'cache', 'ownership', 'reconnect', 'stale-response', 'queue']),
+    stage: enumOf(['startup', 'hydration', 'cache', 'ownership', 'reconnect', 'stale-response', 'queue', 'recovery']),
     outcome: enumOf([
       'ready',
       'pending',
@@ -375,6 +381,16 @@ const eventSchemas = {
     attemptCount: Type.Optional(count),
     failureCode: Type.Optional(enumOf(STARTUP_TELEMETRY_FAILURE_CODES)),
     build: Type.Optional(Type.String({ pattern: '^(?:[a-f0-9]{40,64}|unknown)$' })),
+    // `recovery` stage facts: the decision point, the session state it observed, and page conditions.
+    reason: Type.Optional(enumOf(BROWSER_RECOVERY_REASONS)),
+    lifecycle: Type.Optional(enumOf(CLIENT_SESSION_LIFECYCLES)),
+    connection: Type.Optional(enumOf(CLIENT_CONNECTION_STATES)),
+    lease: Type.Optional(enumOf(RECOVERY_LEASE_KINDS)),
+    visible: Type.Optional(Type.Boolean()),
+    online: Type.Optional(Type.Boolean()),
+    suspensionEvidence: Type.Optional(Type.Boolean()),
+    exclusive: Type.Optional(Type.Boolean()),
+    delayMs: Type.Optional(duration),
   }),
   legacy: object({
     ...base,
