@@ -46,13 +46,17 @@ describe('shared Agent lorebook input resolution', () => {
     ).toEqual({ status: 'optional_missing', input: { ...requiredInput, required: false } })
   })
 
-  it('preserves activation, entry-shape, and content validation', () => {
-    for (const invalidActivation of [{ alwaysActive: true }, { key: 'primary' }, { secondkey: 'secondary' }]) {
-      expect(resolveAgentLorebookInput(requiredInput, { globalLore: [entry(invalidActivation)] }, {})).toMatchObject({
-        status: 'invalid_activation',
+  it('resolves Agent-only entries that keep inert activation settings', () => {
+    for (const storedActivation of [{ alwaysActive: true }, { key: 'primary' }, { secondkey: 'secondary' }]) {
+      expect(resolveAgentLorebookInput(requiredInput, { globalLore: [entry(storedActivation)] }, {})).toMatchObject({
+        status: 'resolved',
         scope: 'character',
+        content: 'Reference content',
       })
     }
+  })
+
+  it('preserves entry-shape and content validation', () => {
     expect(resolveAgentLorebookInput(requiredInput, { globalLore: [entry({ mode: 'child' })] }, {})).toMatchObject({
       status: 'invalid_entry',
       scope: 'character',

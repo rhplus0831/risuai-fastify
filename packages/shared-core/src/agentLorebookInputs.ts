@@ -38,7 +38,7 @@ export type AgentLorebookInputResolution<
       input: TInput
     }
   | {
-      status: 'missing' | 'ambiguous' | 'not_agent_only' | 'invalid_activation' | 'invalid_entry' | 'empty'
+      status: 'missing' | 'ambiguous' | 'not_agent_only' | 'invalid_entry' | 'empty'
       input: TInput
       scope?: 'chat' | 'character'
       message: string
@@ -79,14 +79,6 @@ export function resolveAgentLorebookInput<TInput extends AgentLorebookInputLike,
       input,
       scope,
       message: `Lorebook entry must be marked Agent-only: ${displayName}`,
-    }
-  }
-  if (entry.alwaysActive !== false || entry.key?.trim() || entry.secondkey?.trim()) {
-    return {
-      status: 'invalid_activation',
-      input,
-      scope,
-      message: `Agent-only lorebook entry must disable Always Active and have no activation keys: ${displayName}`,
     }
   }
   if (entry.mode === 'folder' || entry.mode === 'child') {

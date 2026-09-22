@@ -168,6 +168,8 @@
   let supportsAgentOnly = $derived(
     entryDraftScopeKey?.startsWith('character:') === true || entryDraftScopeKey?.startsWith('chat:') === true,
   )
+  // Agent-only entries keep their Always Active setting stored but inert.
+  let alwaysActiveShown = $derived(draft.alwaysActive && !isAgentOnlyLorebookEntry(draft))
 
   function trackLocalActivation(
     operation: ScopedLorebookMutationOperation | null,
@@ -432,13 +434,7 @@
       risu_case_sensitive: draft.extentions?.risu_case_sensitive ?? false,
       risu_agent_only: check,
     }
-    if (check) {
-      draft.alwaysActive = false
-      draft.key = ''
-      draft.secondkey = ''
-      draft.selective = false
-      draft.useRegex = false
-    }
+    // Activation settings stay stored but inert, so unchecking restores them.
     settleDraftSoon()
   }
   function getParentLoreName(book: loreBook) {
@@ -501,11 +497,11 @@
       </button>
       <button
         class="mr-1"
-        aria-label={`${draft.alwaysActive ? language.disable : language.enable}: ${language.alwaysActive} (${lorebookDisplayName(draft)})`}
-        aria-pressed={draft.alwaysActive}
+        aria-label={`${alwaysActiveShown ? language.disable : language.enable}: ${language.alwaysActive} (${lorebookDisplayName(draft)})`}
+        aria-pressed={alwaysActiveShown}
         disabled={mutationLocked || isAgentOnlyLorebookEntry(draft)}
-        class:text-textcolor2={!draft.alwaysActive}
-        class:text-textcolor={draft.alwaysActive}
+        class:text-textcolor2={!alwaysActiveShown}
+        class:text-textcolor={alwaysActiveShown}
         onclick={async () => {
           if (isAgentOnlyLorebookEntry(draft)) return
           if (draft.mode === 'folder') {
@@ -518,7 +514,7 @@
           draft.alwaysActive = !draft.alwaysActive
           settleDraftSoon()
         }}>
-        {#if draft.alwaysActive}
+        {#if alwaysActiveShown}
           <SunIcon size={20} />
         {:else}
           <LinkIcon size={20} />
@@ -676,10 +672,11 @@
           <p class="m-0 mt-1 text-xs text-textcolor2">{language.agentOnlyLorebookDescription}</p>
         {/if}
         <div class="flex items-center mt-2">
-          <Check
-            bind:check={draft.alwaysActive}
-            disabled={isAgentOnlyLorebookEntry(draft)}
-            name={language.alwaysActive} />
+          {#if isAgentOnlyLorebookEntry(draft)}
+            <Check check={false} disabled name={language.alwaysActive} />
+          {:else}
+            <Check bind:check={draft.alwaysActive} name={language.alwaysActive} />
+          {/if}
         </div>
         {#if !isAgentOnlyLorebookEntry(draft) && !draft.alwaysActive && selectedCharacterOwner()?.globalLore?.some((entry) => entry.id && draft.id && entry.id === draft.id) && localActivationSettingEnabled()}
           <div class="flex items-center mt-2">

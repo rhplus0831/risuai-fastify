@@ -272,7 +272,7 @@ export function validateStoredLorebookEntries(input: unknown, label: string): Lo
     if (typeof entry.id !== 'string' || entry.id.trim() === '') {
       throw new ValidationError(`${entryLabel}.id must be a non-empty string`)
     }
-    validateLorebookEntryRecord(entry, entryLabel, { allowAgentOnlyActivationFields: true })
+    validateLorebookEntryRecord(entry, entryLabel)
     if (seen.has(entry.id)) {
       throw new ValidationError(`Duplicate lorebook entry id: ${entry.id}`)
     }
@@ -652,9 +652,7 @@ function repairLorebookEntry(input: unknown, label: string): LorebookEntryRecord
   if (typeof entry.id !== 'string' || entry.id.trim() === '') {
     entry.id = randomUUID()
   }
-  // Imported state may retain author activation settings behind the inert
-  // Agent-only flag; command payload validation remains strict by default.
-  validateLorebookEntryRecord(entry, label, { allowAgentOnlyActivationFields: true })
+  validateLorebookEntryRecord(entry, label)
   return entry
 }
 
@@ -723,11 +721,7 @@ function validateGlobalLorebookRecord(record: GlobalLorebookRecord, label: strin
   }
 }
 
-function validateLorebookEntryRecord(
-  record: JsonRecord,
-  label: string,
-  options: { allowAgentOnlyActivationFields?: boolean } = {},
-): void {
+function validateLorebookEntryRecord(record: JsonRecord, label: string): void {
   for (const key of ['id', 'key', 'secondkey', 'comment', 'content', 'mode']) {
     if (typeof record[key] !== 'string') {
       throw new ValidationError(`${label}.${key} must be a string`)
@@ -748,18 +742,12 @@ function validateLorebookEntryRecord(
   if ('agentOnly' in record && record.agentOnly !== undefined && typeof record.agentOnly !== 'boolean') {
     throw new ValidationError(`${label}.agentOnly must be a boolean`)
   }
+  // Agent-only entries may keep activation settings; runtime activation skips
+  // them, so the settings stay inert until the flag is cleared.
   const extensions = readOptionalJsonObject(record.extentions ?? record.extensions)
   const agentOnly = record.agentOnly === true || extensions.risu_agent_only === true
-  if (agentOnly) {
-    if (
-      !options.allowAgentOnlyActivationFields &&
-      (record.alwaysActive !== false || (record.key as string).trim() || (record.secondkey as string).trim())
-    ) {
-      throw new ValidationError(`${label} Agent-only entries must disable Always Active and have no activation keys`)
-    }
-    if (record.mode === 'folder' || record.mode === 'child') {
-      throw new ValidationError(`${label} Agent-only entries must be regular lorebook entries`)
-    }
+  if (agentOnly && (record.mode === 'folder' || record.mode === 'child')) {
+    throw new ValidationError(`${label} Agent-only entries must be regular lorebook entries`)
   }
   if ('folder' in record && record.folder !== undefined && typeof record.folder !== 'string') {
     throw new ValidationError(`${label}.folder must be a string`)

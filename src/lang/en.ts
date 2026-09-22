@@ -389,7 +389,7 @@ export const languageEnglish = {
       'Lorebook is a user-made dictionary for AI. AI only sees it when where is an activation keys in the context.',
     loreName: "Name of the lore. It doesn't affect the Ai.",
     agentOnlyLorebook:
-      'Reserves this entry for named Agent input. It is excluded from normal lorebook activation and cannot use activation keys or Always Active.',
+      'Reserves this entry for named Agent input. It is excluded from normal lorebook activation, so its activation keys and Always Active setting are kept but ignored until you uncheck this.',
     loreActivationKey:
       'If one of the activation key exists in context, the lore will be activated and prompt will go in. Separated by commas.',
     loreorder:

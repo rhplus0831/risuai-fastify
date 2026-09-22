@@ -362,8 +362,8 @@ reference validation.
 Character-card import preserves author-supplied activation configuration on
 Agent-only lore entries: Always Active, primary and secondary keys, selective
 activation, and regex mode survive instead of being normalized away. Persisted
-state repair accepts these imported compatibility values, while new Agent-only
-command payloads keep the stricter no-activation validation. The SQLite command
+state repair and command payloads both accept these values; they stay inert
+because normal activation skips Agent-only entries. The SQLite command
 side links back here from
 [Data And Events](data-and-events.md#revision-contract).
 Card and standalone lorebook export project Agent-only entries as inert for

@@ -185,10 +185,11 @@ entry display name, searches the active chat before the selected character, and
 does not fall back when a chat-level name exists but is invalid.
 
 A valid match is a regular nonempty lorebook entry marked `agentOnly` or
-`extensions.risu_agent_only`, with Always Active disabled and both activation
-key fields blank. Agent-only entries are excluded from normal lorebook
-activation. All required inputs across both phases are checked before any
-enabled Agent step or main prompt assembly begins.
+`extensions.risu_agent_only`. Agent-only entries are excluded from normal
+lorebook activation, so any stored Always Active, key, selective, or regex
+settings are inert; the editor keeps them so clearing the flag restores them.
+All required inputs across both phases are checked before any enabled Agent
+step or main prompt assembly begins.
 
 `packages/shared-core/src/agentPresetRecords.ts` validates declarations;
 `server/fastify/src/prompt/agentPresetExecution.ts` owns lookup, precedence,

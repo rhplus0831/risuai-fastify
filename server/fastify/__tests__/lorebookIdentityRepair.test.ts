@@ -116,21 +116,23 @@ describe('command create lorebook identity repair', () => {
     })
   })
 
-  it('rejects command writes that give Agent-only entries activation paths', () => {
-    expect(() =>
+  it('accepts command writes that keep activation settings on Agent-only entries', () => {
+    expect(
       validateLorebookEntry({
         ...lorebookEntry('agent-reference'),
         agentOnly: true,
         key: 'active-key',
+        secondkey: 'secondary-key',
+        selective: true,
       }),
-    ).toThrow('Agent-only entries must disable Always Active and have no activation keys')
+    ).toMatchObject({ agentOnly: true, key: 'active-key', secondkey: 'secondary-key', selective: true })
 
-    expect(() =>
+    expect(
       validateLorebookEntry({
         ...lorebookEntry('portable-agent-reference'),
         alwaysActive: true,
         extentions: { risu_agent_only: true },
       }),
-    ).toThrow('Agent-only entries must disable Always Active and have no activation keys')
+    ).toMatchObject({ alwaysActive: true, extentions: { risu_agent_only: true } })
   })
 })
