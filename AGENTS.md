@@ -60,7 +60,7 @@ Start by reading `STRUCTURE.md` to understand the project structure.
   - there is a concrete integration risk or uncertainty about the change's impact that focused validation cannot adequately resolve.
 - When required, run `pnpm test:agent` after implementation and self-review are complete, with no known remaining work except validation and any fixes it reveals. Do not run it after every edit or intermediate step.
 - After a validation failure, rerun the failing check while fixing it. Repeat the broader suite only when needed to confirm the final changes against the applicable validation requirement.
-- `pnpm test:agent` covers core typechecks, topology validation, core-tagged frontend/server tests, the browser-smoke build, and the four `@core` Playwright journeys. This coverage does not make it mandatory for every task.
+- `pnpm test:agent` covers core typechecks, topology validation, core-tagged frontend/server tests, the current compatibility goldens, the browser-smoke build, and the `@core` Playwright journeys. This coverage does not make it mandatory for every task.
 - The user and CI retain `pnpm test:all` for formatting, compatibility, coverage, scale, performance, and full Playwright verification. Do not run it unless explicitly requested.
 - In the final response, briefly state what validation was performed and any material gaps. If broader validation was needed, identify the specific reason.
 

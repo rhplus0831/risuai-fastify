@@ -64,7 +64,15 @@ ownership and chat occupancy, targeted command persistence, generation
 operation and prompt assembly boundaries, asset retention, and client-side
 ownership and rollback fences. Each of those promotions was accepted only after
 a production mutation survived the previous core lane and failed the promoted
-case; `docs/test-reviews/core-suite-phase-2.md` records the evidence. A file whose complete
+case; `docs/test-reviews/core-suite-phase-2.md` records the evidence. Gaps
+with no trustworthy existing case were closed by new boundary tests under the
+same mutation proof: the Lua `request()` egress fence, generation-effect and
+stale-regenerate fences, persisted trace redaction, vault export text
+exclusion, plugin grant and database-bridge fences, first-run initialization,
+truncated replay windows, and provider wire goldens for Anthropic, Gemini,
+Ollama, Bedrock, and profile credential binding;
+`docs/test-reviews/core-suite-phase-3.md` records that evidence. The agent
+aggregate also runs the current compatibility goldens. A file whose complete
 scope is core uses a top-level `@module-tag core`; mixed files tag only the
 relevant `describe` blocks or tests. Untagged cases are extended coverage and
 remain in `test:all`, CI, and focused execution.
@@ -72,16 +80,21 @@ remain in `test:all`, CI, and focused execution.
 agent run from importing the complete suite before applying those case tags;
 test topology rejects missing inventory entries.
 
-Playwright uses the equivalent `@core` tag. The agent aggregate runs nine
+Playwright uses the equivalent `@core` tag. The agent aggregate runs sixteen
 cross-layer journeys: bootstrap/event/command refresh with secret-free shell
 reads and a byte-checked bundle round trip, send/stream/reload with one
 persisted reply, durable edit replay after a real revision gap, server backup
 restore of database, asset, and save bytes followed by reload, failed-mutation
 rollback, reroll alternates surviving a reload, reader updates through a writer
-takeover, two concurrent chats staying isolated, and bounded viewer reconnect
-with a canonical terminal snapshot. Layout, responsive, performance, optional
-feature depth, and provider-specific adapter conformance remain outside the
-minimal profile unless they block one of those core contracts.
+takeover, two concurrent chats staying isolated, bounded viewer reconnect
+with a canonical terminal snapshot, message edit and delete by exact id on a
+mobile viewport, chat create and delete scoped to one character with a
+character trashed, chat import re-keying colliding ids, a reader and a writer
+crossing a backup restore without repainting old-lineage data, encrypted
+old-lineage edits rejected after a restore, and a 401 ownership probe clearing
+the projection. Layout, responsive, performance, optional feature depth, and
+provider-specific adapter conformance beyond the wire goldens remain outside
+the minimal profile unless they block one of those core contracts.
 
 ### Compatibility evidence ownership
 

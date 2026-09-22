@@ -36,7 +36,7 @@ environment variables live in
 | `pnpm validate:compat-registers` | Validate the compatibility inventory/findings schemas, cross-register references, and pinned upstream commit coverage. |
 | `pnpm test:compat-harness` | Compare pinned local/Fastify generation matrices against a prepared pre-Fastify worktree; opt-in and not part of `test:all`. |
 | `pnpm prepare:compat-baseline` | Create or verify the exact detached compatibility-baseline worktree and install its frozen dependencies. |
-| `pnpm test:agent` | Minimal agent-final protection: typechecks, topology, `core`-tagged frontend/server tests, the browser-smoke build, and four `@core` Playwright journeys. |
+| `pnpm test:agent` | Minimal agent-final protection: typechecks, topology, `core`-tagged frontend/server tests, the current compatibility goldens, the browser-smoke build, and the `@core` Playwright journeys. |
 | `pnpm test:all` | User-owned full local aggregate for format, typechecks, current docs, topology, frontend/server tests, compatibility, coverage, scale, performance, and browser smoke. The complete latest run and its final status summary are written to `latest-test-all.log`; `latest-test-all-compact.log` contains only failed test file paths and total elapsed time. |
 | `pnpm coverage:ui-map` | Run the focused UI coverage gate and write text/JSON reports to `coverage/ui-map`; use `coverage:ui-map:html` for an on-demand HTML report. |
 | `pnpm smoke:fastify-browser` | User/CI command that builds the smoke client without production sourcemaps, then runs the full Playwright Fastify browser smoke suite. |
@@ -75,7 +75,7 @@ Read by task: [focused execution](#focused-execution),
 | Area | Command/config | Environment | Locations |
 | --- | --- | --- | --- |
 | Browser/client/domain tests | `pnpm test -- <file>`, `vitest*.config.ts` | Node + Svelte/Node + `happy-dom` | One exact test, or tests related to one source file, outside the server tree. |
-| Agent-final aggregate | `pnpm test:agent`, `util/test-agent.ts`, `util/test-all.ts` | Node + Svelte/Node + `happy-dom` + Chromium | Typechecks, topology, `core`-tagged frontend/server tests, and four `@core` built-browser journeys. |
+| Agent-final aggregate | `pnpm test:agent`, `util/test-agent.ts`, `util/test-all.ts` | Node + Svelte/Node + `happy-dom` + Chromium | Typechecks, topology, `core`-tagged frontend/server tests, the current compatibility goldens, and the `@core` built-browser journeys. |
 | Current documentation | `pnpm check:docs`, `util/current-documentation-validator.ts` | Node filesystem | `test:all` and CI validate current guides, three focused indexes, local links/anchors, and literal repository paths. |
 | Test topology | `util/test-topology.ts`, `vitest*.config.ts`, `server/fastify/vitest.config.ts` | Static Vitest discovery | Agent/user/CI aggregate owner; validates each tracked `*.test.ts` exactly once in its configured Vitest project. Browser `*.spec.ts` discovery stays with Playwright and the focused runner. |
 | Specialized frontend gates | `vitest.performance-tests.ts`, `vitest.config.ts` | Node + `happy-dom` | Exact performance owners; isolated in `test:all`/CI, or individually selectable through the focused runner. |
@@ -85,9 +85,9 @@ Read by task: [focused execution](#focused-execution),
 | UI coverage map | `pnpm coverage:ui-map`, `vitest.config.ts` | Node + `happy-dom` | Six focused tests mapped over `src/lib/ChatScreens`, `src/lib/Others`, `src/lib/SideBars`, and `src/ts/server`. |
 | Fastify/server tests | `pnpm test -- <file>`, `pnpm test:agent`, `pnpm test:all`, `server/fastify/vitest.config.ts` | Node | Focused feedback, the agent `core` subset, or the complete user/CI suite; the direct Realm scale case remains specialized. |
 | Realm import scale gate | `pnpm test:all`, CI, `server/fastify/vitest.config.ts` | Node | The direct-only 7,000-display-asset Realm/CharX import case; isolated in the user/CI aggregate. |
-| Compatibility harness | `pnpm test:all`, `pnpm test:compat-harness`, `test/compat-harness/*.vitest.config.ts` | Node | User/CI current goldens plus the separately governed full pinned differential. |
+| Compatibility harness | `pnpm test:agent`, `pnpm test:all`, `pnpm test:compat-harness`, `test/compat-harness/*.vitest.config.ts` | Node | Current goldens in the agent and user/CI aggregates, plus the separately governed full pinned differential. |
 | Backend coverage | `pnpm coverage:backend`, `server/fastify/vitest.config.ts` | Node | Broad coverage over `server/fastify/src/**/*.ts`; reports under `coverage/backend`. |
-| Browser smoke | `pnpm test -- <spec-file>`; core journeys via `test:agent`; full suite via user/CI | Chromium | One exact spec, four `@core` journeys, or the complete user/CI suite. |
+| Browser smoke | `pnpm test -- <spec-file>`; core journeys via `test:agent`; full suite via user/CI | Chromium | One exact spec, the `@core` journeys, or the complete user/CI suite. |
 
 ### Focused Execution
 
