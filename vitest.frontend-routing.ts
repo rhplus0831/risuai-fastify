@@ -179,6 +179,7 @@ export function frontendVitestProjectForFile(
   registeredDomFiles: ReadonlySet<string> = legacyDomTestFileSet,
 ): FrontendVitestProject | undefined {
   if (!file.endsWith('.test.ts')) return undefined
+  if (file.startsWith('test/compat-harness/')) return undefined
   if (isolatedCompatibilityTestFileSet.has(file)) return undefined
   if (file.endsWith('.svelte-node.test.ts')) return 'frontend-svelte-node'
   if (file.endsWith('.svelte.test.ts') || file.endsWith('.dom.test.ts') || registeredDomFiles.has(file)) {
