@@ -1493,7 +1493,7 @@
       <span class="text-textcolor">Preset</span>
       <select
         aria-label={`${language.HypaMemory} V3 ${language.presets}`}
-        class={'border border-darkborderc focus:border-borderc rounded-md shadow-xs text-textcolor bg-transparent focus:ring-borderc focus:ring-2 focus:outline-hidden transition-colors duration-200 text-md px-4 py-2 mb-1'}
+        class={'border border-darkborderc focus:border-borderc rounded-md shadow-xs text-textcolor bg-transparent focus:ring-borderc focus:ring-2 focus:outline-hidden transition-colors duration-200 px-4 py-2 mb-1'}
         bind:value={selectedHypaV3PresetIdDraft.value}>
         {#each hypaV3PresetsDraft.value as preset}
           <option class="bg-darkbg appearance-none" value={preset.id}>{preset.name}</option>

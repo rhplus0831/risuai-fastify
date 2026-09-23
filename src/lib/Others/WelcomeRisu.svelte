@@ -447,7 +447,7 @@
                   provider = 'later'
                   void completeOnboardingSetup()
                 }}>
-                <h1 class="text-md font-bold text-start text-gray-500">
+                <h1 class="font-bold text-start text-gray-500">
                   {language.setup.setupMessageOption2}
                 </h1>
               </button>

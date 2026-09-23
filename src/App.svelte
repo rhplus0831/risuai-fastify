@@ -639,7 +639,7 @@
           {/if}
         </div>
       </div>
-      <span class="absolute top-4 left-4 font-bold text-[#bbbbbb] text-md md:text-lg">RisyGTP 9+ Mytho Ultra Free</span>
+      <span class="absolute top-4 left-4 font-bold text-[#bbbbbb] md:text-lg">RisyGTP 9+ Mytho Ultra Free</span>
     </div>
   {:else if $clientSessionStore.managed && $clientSessionStore.lifecycle === 'auth-required'}
     <div

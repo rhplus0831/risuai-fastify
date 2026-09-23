@@ -54,7 +54,6 @@
   class:py-2={size == 'md'}
   class:py-1={size == 'sm'}
   class:py-3={size == 'lg'}
-  class:text-md={size == 'md'}
   class:text-sm={size == 'sm'}
   class:text-lg={size == 'lg'}>
   {@render children?.()}
