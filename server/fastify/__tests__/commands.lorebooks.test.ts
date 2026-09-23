@@ -639,6 +639,71 @@ describe('lorebook commands', () => {
     },
   )
 
+  it('canonicalizes unknown lore modes and numeric-string activation on import while keeping command writes strict', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const legacyEntry = {
+      id: 'entry-legacy',
+      key: 'key',
+      secondkey: '',
+      insertorder: 100,
+      comment: 'Legacy',
+      content: 'body',
+      mode: 'always',
+      alwaysActive: false,
+      selective: false,
+      activationPercent: '3',
+    }
+    const revision = await importDatabase(harness.app, assertion, {
+      characters: [
+        {
+          chaId: 'char-legacy',
+          name: 'Legacy',
+          globalLore: [legacyEntry],
+          chats: [
+            {
+              id: 'chat-legacy',
+              name: 'Chat',
+              note: '',
+              message: [],
+              localLore: [{ ...legacyEntry, id: 'entry-local' }],
+            },
+          ],
+          chatFolders: [],
+          chatPage: 0,
+        },
+      ],
+      characterOrder: ['char-legacy'],
+      modules: [{ id: 'mod-legacy', name: 'Mod', lorebook: [{ ...legacyEntry, id: 'entry-module' }] }],
+    })
+
+    const character = readJsonRow(harness.dataDir, 'characters', 'char-legacy')
+    expect((character.globalLore as unknown[])[0]).toMatchObject({
+      id: 'entry-legacy',
+      mode: 'normal',
+      activationPercent: 3,
+    })
+    const chat = readJsonRow(harness.dataDir, 'chats', 'chat-legacy')
+    expect((chat.localLore as unknown[])[0]).toMatchObject({ id: 'entry-local', mode: 'normal', activationPercent: 3 })
+    const module = readJsonRow(harness.dataDir, 'modules', 'mod-legacy')
+    expect((module.lorebook as unknown[])[0]).toMatchObject({
+      id: 'entry-module',
+      mode: 'normal',
+      activationPercent: 3,
+    })
+
+    // Ordinary entry writes stay non-repairing: the unknown mode is stored as sent.
+    const written = await harness.app.inject({
+      method: 'PUT',
+      url: '/api/v1/commands/characters/char-legacy/lorebooks',
+      headers: { 'risu-auth': assertion },
+      payload: { baseRevision: revision, entries: [{ ...legacyEntry, activationPercent: 3 }] },
+    })
+    expect(written.statusCode).toBe(200)
+    expect((readJsonRow(harness.dataDir, 'characters', 'char-legacy').globalLore as unknown[])[0]).toMatchObject({
+      mode: 'always',
+    })
+  })
+
   it('rejects malformed sparse lorebook entry writes without bumping revision', async () => {
     const { assertion } = await setupAuthedClient(harness.app)
     const canonicalEntry = {

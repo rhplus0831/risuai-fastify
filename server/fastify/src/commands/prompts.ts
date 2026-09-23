@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import { randomUUID } from 'node:crypto'
 import { PROMPT_SETTINGS_KEYS } from '@risuai/shared-core/prompt-settings'
 import { normalizePromptTemplate } from '@risuai/shared-core/prompt-template-normalization'
@@ -119,7 +120,7 @@ function readPromptItemDeleteKeys(value: unknown): string[] {
 }
 
 export function readPromptSettingsPatch(patch: unknown): JsonRecord {
-  const target = readJsonObject(patch, 'patch')
+  const target = canonicalizeLegacyGenerationValues(readJsonObject(patch, 'patch')) as JsonRecord
   const entries = Object.entries(target)
   if (entries.length === 0) {
     throw new ValidationError('patch must include at least one prompt setting')

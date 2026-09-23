@@ -30,6 +30,7 @@
     "./hypa-v3-preset-selection-identity": "./src/hypaV3PresetSelectionIdentity.ts",
     "./inlay-tokens": "./src/inlayTokens.ts",
     "./internal-reasoning": "./src/internalReasoning.ts",
+    "./legacy-generation-value-canonicalization": "./src/legacyGenerationValueCanonicalization.ts",
     "./legacy-openai-model-aliases": "./src/legacyOpenAIModelAliases.ts",
     "./separate-parameter-compatibility": "./src/separateParameterCompatibility.ts",
     "./local-stop-strings": "./src/localStopStrings.ts",

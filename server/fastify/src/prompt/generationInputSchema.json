@@ -4278,10 +4278,16 @@
           "type": "string"
         },
         "useName": {
-          "type": "boolean"
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
         }
-      },
-      "required": ["header", "systemPrefix", "userPrefix", "assistantPrefix", "seperator", "useName"]
+      }
     },
     "record48": {
       "type": "object",
@@ -4574,23 +4580,7 @@
           "type": "string"
         },
         "mode": {
-          "anyOf": [
-            {
-              "const": "multiple"
-            },
-            {
-              "const": "constant"
-            },
-            {
-              "const": "normal"
-            },
-            {
-              "const": "child"
-            },
-            {
-              "const": "folder"
-            }
-          ]
+          "type": "string"
         },
         "alwaysActive": {
           "type": "boolean"
@@ -4615,6 +4605,9 @@
           "anyOf": [
             {
               "type": "null"
+            },
+            {
+              "type": "string"
             },
             {
               "type": "number"
@@ -9683,7 +9676,14 @@
           ]
         },
         "innerFormat": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "role2": {
           "anyOf": [
@@ -9749,7 +9749,14 @@
           "const": "authornote"
         },
         "innerFormat": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "defaultText": {
           "type": "string"
@@ -9820,7 +9827,7 @@
           ]
         }
       },
-      "required": ["type", "name", "depth", "role"]
+      "required": ["type", "name", "role"]
     },
     "record202": {
       "type": "object",
@@ -12617,10 +12624,16 @@
           "type": "string"
         },
         "useName": {
-          "type": "boolean"
+          "anyOf": [
+            {
+              "const": false
+            },
+            {
+              "const": true
+            }
+          ]
         }
-      },
-      "required": ["header", "systemPrefix", "userPrefix", "assistantPrefix", "seperator", "useName"]
+      }
     },
     "record231": {
       "type": "object",
@@ -14516,23 +14529,7 @@
           "type": "string"
         },
         "mode": {
-          "anyOf": [
-            {
-              "const": "multiple"
-            },
-            {
-              "const": "constant"
-            },
-            {
-              "const": "normal"
-            },
-            {
-              "const": "child"
-            },
-            {
-              "const": "folder"
-            }
-          ]
+          "type": "string"
         },
         "alwaysActive": {
           "type": "boolean"
@@ -14557,6 +14554,9 @@
           "anyOf": [
             {
               "type": "null"
+            },
+            {
+              "type": "string"
             },
             {
               "type": "number"
@@ -19625,7 +19625,14 @@
           ]
         },
         "innerFormat": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "role2": {
           "anyOf": [
@@ -19691,7 +19698,14 @@
           "const": "authornote"
         },
         "innerFormat": {
-          "type": "string"
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
         },
         "defaultText": {
           "type": "string"
@@ -19762,7 +19776,7 @@
           ]
         }
       },
-      "required": ["type", "name", "depth", "role"]
+      "required": ["type", "name", "role"]
     },
     "record408": {
       "type": "object",

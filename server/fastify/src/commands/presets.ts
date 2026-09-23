@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import {
   repairLegacySeparateParameterOverrides,
   repairLegacySeparateParameters,
@@ -217,7 +218,7 @@ export function createPresetRecord(
   normalizePresetProfileFields(preset)
   validatePresetAssetRefs(preset, 'preset', options)
   preset.name ??= fallbackName
-  return preset
+  return canonicalizeLegacyGenerationValues(preset) as PresetRecord
 }
 
 export function readPresetPatch(input: JsonRecord, options: AssetValidationOptions = {}): JsonRecord {
@@ -225,7 +226,7 @@ export function readPresetPatch(input: JsonRecord, options: AssetValidationOptio
   normalizePresetLocalStopStrings(patch, 'patch')
   normalizePresetProfileFields(patch)
   validatePresetAssetRefs(patch, 'patch', options)
-  return patch
+  return canonicalizeLegacyGenerationValues(patch) as JsonRecord
 }
 
 export function normalizePresetAgentSettings(record: JsonRecord): void {
@@ -265,10 +266,11 @@ export function saveCurrentPresetSnapshot(database: JsonRecord, presets: PresetR
     }
   }
   snapshot.image = current.image ?? ''
-  presets[index] = snapshot
+  presets[index] = canonicalizeLegacyGenerationValues(snapshot) as PresetRecord
 }
 
 export function applyPreset(database: JsonRecord, preset: PresetRecord): void {
+  preset = canonicalizeLegacyGenerationValues(preset) as PresetRecord
   let appliedAgentPresetSettings = false
   for (const [presetKey, databaseKey] of APPLY_KEYS) {
     if (Object.prototype.hasOwnProperty.call(preset, presetKey)) {

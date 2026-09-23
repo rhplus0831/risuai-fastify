@@ -57,7 +57,7 @@ restore apply the same repair; deleting the field restores inheritance while
 preserving explicit `null` and string arrays. The narrow predicate lives in
 `packages/shared-core/src/localStopStrings.ts`. Preset and settings commands
 reject other malformed stop-string values before saving them; generation input
-validation remains strict and does not repair data on reads.
+validation remains strict and does not repair stop-string values on reads.
 
 SQLite includes settings; character, chat, message, and per-chat memory rows;
 split collections; assets; command events and mutation receipts; the inlay

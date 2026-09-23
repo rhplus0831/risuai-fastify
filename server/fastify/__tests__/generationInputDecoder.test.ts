@@ -68,6 +68,157 @@ describe('selected generation persistence decoder', () => {
     }
   })
 
+  it('maps exact empty original-editor values to the values upstream sends, in every owner and slot', () => {
+    // Original RisuAI's applyPreset uses `??`, so an imported '' asserts a value
+    // instead of inheriting one; its request code then treats '' as medium/default.
+    const emptyOwner = {
+      thinkingType: '',
+      adaptiveThinkingEffort: '',
+      deepseekThinkingType: '',
+      deepseekReasoningEffort: '',
+      systemRoleReplacement: '',
+      verbosity: '',
+      reasoningEffort: '',
+    }
+    const emptySlot = {
+      thinking_type: '',
+      adaptive_thinking_effort: '',
+      deepseek_thinking_type: '',
+      deepseek_reasoning_effort: '',
+      reasoning_effort: '',
+      verbosity: '',
+    }
+    const canonicalOwner = {
+      thinkingType: 'budget',
+      adaptiveThinkingEffort: 'high',
+      deepseekThinkingType: 'off',
+      deepseekReasoningEffort: 'high',
+      systemRoleReplacement: 'user',
+      verbosity: 1,
+      reasoningEffort: 1,
+    }
+    const canonicalSlot = {
+      thinking_type: 'budget',
+      adaptive_thinking_effort: 'high',
+      deepseek_thinking_type: 'off',
+      deepseek_reasoning_effort: 'high',
+      reasoning_effort: 1,
+      verbosity: 1,
+    }
+    const separate = { memory: emptySlot, scriptAux: emptySlot, overrides: { 'model-id': emptySlot } }
+    const database = {
+      ...emptyOwner,
+      seperateParameters: separate,
+      modelPresets: [{ id: 'model', ...emptyOwner, seperateParameters: separate }],
+      promptPresets: [{ id: 'prompt', ...emptyOwner, reasonEffort: '', seperateParameters: separate }],
+    }
+    const input = { database, currentChar: { chaId: 'character' }, currentChat: { id: 'chat' } }
+    const bytes = JSON.stringify(input)
+    const expectedSeparate = {
+      memory: canonicalSlot,
+      scriptAux: canonicalSlot,
+      overrides: { 'model-id': canonicalSlot },
+    }
+
+    const decoded = decodeGenerationPreflightInputs(input)
+    expect(decoded.database).toMatchObject({ ...canonicalOwner, seperateParameters: expectedSeparate })
+    expect(decoded.database.modelPresets?.[0]).toMatchObject({
+      ...canonicalOwner,
+      seperateParameters: expectedSeparate,
+    })
+    expect(decoded.database.promptPresets?.[0]).toMatchObject({
+      ...canonicalOwner,
+      reasonEffort: 1,
+      seperateParameters: expectedSeparate,
+    })
+    expect(JSON.stringify(input)).toBe(bytes)
+    expect(decodeGenerationPreflightInputs(decoded)).toBe(decoded)
+    for (const decode of [
+      decodeGenerationSettings,
+      decodeGenerationDatabase,
+      decodeDisplaySourceDatabase,
+      decodeProviderGenerationSettings,
+      decodeMemoryGenerationSettings,
+    ]) {
+      const root = decode({ ...database, characters: [] }) as Record<string, unknown>
+      expect(root).toMatchObject(canonicalOwner)
+    }
+
+    // Only the exact empty string is a documented artifact; anything else stays strict.
+    for (const invalid of [
+      { systemRoleReplacement: 'bogus' },
+      { thinkingType: ' ' },
+      { reasoningEffort: '1' },
+      { verbosity: null },
+      { seperateParameters: { memory: { thinking_type: 'invalid' } } },
+    ]) {
+      expect(() => decodeGenerationSettings(invalid)).toThrow(GenerationInputValidationError)
+    }
+  })
+
+  it('accepts widened original-Risu shapes by identity without supplying defaults', () => {
+    const base = decodeGenerationDatabase(
+      normalizeRisuSaveSnapshotDatabase({
+        characters: [{ chaId: 'character', name: 'Character', chats: [{ id: 'chat', message: [] }] }],
+      }),
+    )
+    const legacyFormating = {
+      custom: true,
+      userPrefix: 'User: ',
+      assistantPrefix: 'Bot: ',
+      seperator: '\n',
+      useName: true,
+    }
+    const promptTemplate = [
+      { type: 'memory', name: 'Memory', innerFormat: null },
+      { type: 'authornote', innerFormat: null },
+      { type: 'cache', name: 'Cache', role: 'all' },
+    ]
+    const lore = {
+      id: 'lore',
+      key: 'key',
+      secondkey: '',
+      insertorder: 100,
+      comment: '',
+      content: 'Lore',
+      mode: 'always',
+      alwaysActive: false,
+      selective: false,
+      activationPercent: '3',
+    }
+    const input = {
+      ...base,
+      ooba: { formating: legacyFormating },
+      promptPresets: [{ id: 'prompt', name: 'Prompt', ooba: { formating: legacyFormating }, promptTemplate }],
+      characters: [{ ...base.characters[0], globalLore: [lore] }],
+    }
+    const bytes = JSON.stringify(input)
+    for (const decode of [decodeGenerationDatabase, decodeDisplaySourceDatabase]) {
+      const decoded = decode(input) as Record<string, unknown>
+      expect(decoded).toBe(input)
+      expect(decoded.ooba).toEqual({ formating: legacyFormating })
+    }
+    expect(JSON.stringify(input)).toBe(bytes)
+    expect(decodeGenerationSettings({ promptPresets: [{ id: 'prompt', promptTemplate }] })).toBeTruthy()
+
+    // Widening is narrow: wrong types on the same fields remain rejected.
+    for (const invalid of [
+      { ooba: { formating: { ...legacyFormating, userPrefix: 5 } } },
+      { promptPresets: [{ id: 'prompt', promptTemplate: [{ type: 'memory', innerFormat: 5 }] }] },
+      {
+        promptPresets: [{ id: 'prompt', promptTemplate: [{ type: 'cache', name: 'Cache', role: 'all', depth: '2' }] }],
+      },
+    ]) {
+      expect(() => decodeGenerationSettings(invalid)).toThrow(GenerationInputValidationError)
+    }
+    expect(() =>
+      decodeGenerationDatabase({
+        ...input,
+        characters: [{ ...base.characters[0], globalLore: [{ ...lore, activationPercent: true }] }],
+      }),
+    ).toThrow(GenerationInputValidationError)
+  })
+
   it('keeps its standalone code, declaration and schema synchronized with the finite contract', async () => {
     const artifacts = await generateGenerationInputArtifacts()
     expect(JSON.parse(fs.readFileSync(generationInputSchemaPath, 'utf8'))).toEqual(artifacts.schema)
@@ -537,7 +688,7 @@ describe('selected generation persistence decoder', () => {
     decoded.characters[0].chats[0].localLore = []
     expect(JSON.stringify(input)).toBe(bytes)
 
-    for (const invalid of [{ activationPercent: '50' }, { loreCache: [] }, { loreCache: { key: 'key', data: [42] } }]) {
+    for (const invalid of [{ activationPercent: true }, { loreCache: [] }, { loreCache: { key: 'key', data: [42] } }]) {
       expect(() =>
         decodeGenerationSettings({
           modules: [{ ...moduleSettings.modules[0], lorebook: [{ ...lore[0], ...invalid }] }],

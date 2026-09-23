@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import { repairLegacySeparateParameterOverrides } from '@risuai/shared-core/separate-parameter-compatibility'
 import { randomUUID } from 'node:crypto'
 import {
@@ -330,7 +331,7 @@ function createSplitPresetRecord(
     validatePromptPresetRecommendedModelPresetField(preset)
   }
   validateJsonValue(label, preset)
-  return preset
+  return canonicalizeLegacyGenerationValues(preset) as JsonRecord & { id: string }
 }
 
 function readSplitPresetPatch(input: JsonRecord, label: PresetKind): JsonRecord {
@@ -339,7 +340,7 @@ function readSplitPresetPatch(input: JsonRecord, label: PresetKind): JsonRecord 
   normalizeSplitPresetRoleAdjacentFields(patch)
   normalizePromptPresetPromptTemplate(label, patch)
   validateJsonValue(label, patch)
-  return patch
+  return canonicalizeLegacyGenerationValues(patch) as JsonRecord
 }
 
 function normalizePromptPresetPromptTemplate(
@@ -413,6 +414,7 @@ function validateFullSplitPresetIdList<T extends { id: string }>(
 }
 
 function applySplitPreset(database: JsonRecord, preset: JsonRecord, keys: ReadonlyArray<[string, string]>): void {
+  preset = canonicalizeLegacyGenerationValues(preset) as JsonRecord
   for (const [presetKey, databaseKey] of keys) {
     if (Object.prototype.hasOwnProperty.call(preset, presetKey)) {
       database[databaseKey] = normalizeSplitPresetAppliedValue(

@@ -668,7 +668,12 @@ function repairLorebookEntryFields(raw: JsonRecord): JsonRecord {
     100
   repaired.comment = readStringLike(raw.comment ?? raw.name ?? raw.displayName) ?? ''
   repaired.content = readStringLike(raw.content ?? raw.entry ?? raw.text) ?? ''
-  repaired.mode = readStringLike(raw.mode) ?? 'normal'
+  const mode = readStringLike(raw.mode) ?? 'normal'
+  repaired.mode = ['multiple', 'constant', 'normal', 'child', 'folder'].includes(mode) ? mode : 'normal'
+  if (typeof raw.activationPercent === 'string' && raw.activationPercent.trim() !== '') {
+    const activationPercent = Number(raw.activationPercent)
+    if (Number.isFinite(activationPercent)) repaired.activationPercent = activationPercent
+  }
   repaired.alwaysActive = readBoolean(raw.alwaysActive ?? raw.constant ?? raw.forceActivation) ?? false
   repaired.selective = readBoolean(raw.selective) ?? false
   const extensions = readOptionalJsonObject(raw.extentions ?? raw.extensions)

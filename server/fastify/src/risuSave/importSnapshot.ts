@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import { type RisuSaveUnsupportedReferenceKind, RisuSaveBlockType, decodeRisuSaveBlockEnvelope } from './blockCodec.js'
 import {
   type RisuSaveEnvelopeKind,
@@ -457,7 +458,10 @@ function normalizeImportDatabaseShape(database: unknown): JsonRecord {
   // rows always reach SQLite with stable book and entry ids.
   ensureGlobalLorebookCollection(normalized)
   repairPersistedHypaV3PresetSelectionIdentity(normalized)
-  return normalized
+  if (Array.isArray(normalized.botPresets)) {
+    normalized.botPresets = normalized.botPresets.map(canonicalizeLegacyGenerationValues)
+  }
+  return canonicalizeLegacyGenerationValues(normalized) as JsonRecord
 }
 
 function normalizeImportedChatGenerationSettings(database: JsonRecord): number {

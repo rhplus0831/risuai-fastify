@@ -450,19 +450,19 @@ export function renderContentCard(card: PromptItem, deps: ContentCardDeps): Prom
     case 'persona':
       return wrapInnerFormat(
         applyPromptBlockRole(structuredClone(unformated.personaPrompt), card.role2),
-        card.innerFormat,
+        card.innerFormat ?? undefined,
         card.type,
       )
     case 'description':
       return wrapInnerFormat(
         applyDescriptionPromptRole(structuredClone(unformated.description), card.role2, deps.descriptionBaseIndex),
-        card.innerFormat,
+        card.innerFormat ?? undefined,
         card.type,
       )
     case 'authornote':
       return wrapInnerFormat(
         applyPromptBlockRole(structuredClone(unformated.authorNote), card.role2),
-        card.innerFormat,
+        card.innerFormat ?? undefined,
         card.type,
         (row) => row.content || card.defaultText || '',
       )
@@ -641,7 +641,7 @@ export function renderByTemplate(
       // marking up to `depth` rows whose role matches (`all` matches any).
       let pointer = formated.length - 1
       let depthRemaining = card.depth
-      while (pointer >= 0 && depthRemaining > 0) {
+      while (pointer >= 0 && depthRemaining !== undefined && depthRemaining > 0) {
         if (formated[pointer].role === card.role || card.role === 'all') {
           formated[pointer].cachePoint = true
           depthRemaining--

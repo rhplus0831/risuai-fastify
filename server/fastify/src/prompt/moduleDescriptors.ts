@@ -17,7 +17,7 @@ export interface loreBook {
   insertorder: number
   comment: string
   content: string
-  mode: 'multiple' | 'constant' | 'normal' | 'child' | 'folder'
+  mode: string
   alwaysActive: boolean
   selective: boolean
   extentions?: {
@@ -26,7 +26,7 @@ export interface loreBook {
   }
   /** Excludes this entry from normal prompt activation and reserves it for Agent input resolution. */
   agentOnly?: boolean
-  activationPercent?: number | null
+  activationPercent?: number | string | null
   loreCache?: {
     key: string
     data: readonly string[]

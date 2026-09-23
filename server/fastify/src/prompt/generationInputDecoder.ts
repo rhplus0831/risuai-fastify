@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import { repairLegacySeparateParameters } from '@risuai/shared-core/separate-parameter-compatibility'
 import { createHash } from 'node:crypto'
 import {
@@ -132,8 +133,9 @@ export class GenerationInputValidationError extends Error {
   }
 }
 
-// Validation neither coerces, supplies defaults, strips imported extensions,
-// nor copies the selected graph. Its checked implementation is generated at build time.
+// The decoder repairs a finite table of known original-editor artifacts before
+// strict validation. Repairs clone only changed ancestors and never mutate stored
+// rows; validation does not coerce, supply defaults, or strip imported extensions.
 
 /** Compilation is absent at runtime; module import/parsing is measured separately. */
 export function generationInputDecoderInitializationMetrics() {
@@ -167,8 +169,8 @@ function normalizeLegacyHypaSelection(value: unknown): unknown {
   return value
 }
 
-/** Repair the known original-editor artifact without touching model entries or
- * mutating persisted rows. Unchanged inputs retain their identity. */
+/** Repair Hypa selection, then stray separate-parameter keys, then exact empty
+ * generation values. Unchanged inputs retain their identity. */
 function normalizeLegacyGenerationSettings(value: unknown): unknown {
   value = normalizeLegacyHypaSelection(value)
   if (!isRecord(value)) return value
@@ -181,7 +183,7 @@ function normalizeLegacyGenerationSettings(value: unknown): unknown {
     )
     if (normalized.some((preset, index) => preset !== presets[index])) result = { ...result, [key]: normalized }
   }
-  return result
+  return canonicalizeLegacyGenerationValues(result)
 }
 
 function normalizeSeparateParametersOwner(value: Record<string, unknown>): Record<string, unknown> {
@@ -200,7 +202,7 @@ export function decodeGenerationDatabase(value: unknown): FastifyDatabase {
   return checked(normalizeLegacyGenerationSettings(value), database, 'database')
 }
 export function decodeDisplaySourceDatabase(value: unknown): DisplaySourceDatabase {
-  return checked(normalizeLegacyHypaSelection(value), displaySourceDatabase, 'database')
+  return checked(normalizeLegacyGenerationSettings(value), displaySourceDatabase, 'database')
 }
 export function decodeGenerationPreflightInputs(value: unknown): GenerationPreflightInputs {
   if (value && typeof value === 'object' && 'database' in value) {

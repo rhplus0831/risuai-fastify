@@ -579,12 +579,12 @@ export type ServerOobaSettings = {
   epsilon_cutoff?: number
   eta_cutoff?: number
   formating?: {
-    header: string
-    systemPrefix: string
-    userPrefix: string
-    assistantPrefix: string
-    seperator: string
-    useName: boolean
+    header?: string
+    systemPrefix?: string
+    userPrefix?: string
+    assistantPrefix?: string
+    seperator?: string
+    useName?: boolean
   }
 }
 

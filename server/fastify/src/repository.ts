@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import {
   applyEffectivePresetComposition,
   applyPromptPresetModelOverrides,
@@ -1730,9 +1731,14 @@ function readLegacyDatabaseSnapshot(filePath: string): Persisted {
  */
 function importLegacyDatabaseSnapshot(db: DatabaseSync, filePath: string): void {
   const parsed = readLegacyDatabaseSnapshot(filePath)
-  const database = parsed.database as JsonRecord
+  let database = parsed.database as JsonRecord
 
   normalizeDatabaseDefaults(database)
+  if (Array.isArray(database.botPresets)) {
+    database.botPresets = database.botPresets.map(canonicalizeLegacyGenerationValues)
+  }
+  // Canonicalize before deriving durable profile runtime defaults from legacy fields.
+  database = canonicalizeLegacyGenerationValues(database) as JsonRecord
   repairLegacyCharacterCompatibilityShape(database)
   migrateLegacyFlatModelConfiguration(database)
   repairPersistedGlobalLorebookIds(database)

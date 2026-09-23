@@ -1,3 +1,4 @@
+import { canonicalizeLegacyGenerationValues } from './legacyGenerationValueCanonicalization.js'
 import { normalizePromptTemplate } from './promptTemplateNormalization.js'
 import { normalizeModelRoleProfiles } from './modelProfileRecords.js'
 import { repairLegacyLocalStopStrings } from './localStopStrings.js'
@@ -309,7 +310,7 @@ export function extractPromptPresetModelOverrideFields(source: unknown): JsonRec
   if (typeof source[PROMPT_PRESET_MODEL_PARAMETERS_OVERRIDE_KEY] === 'boolean') {
     picked[PROMPT_PRESET_MODEL_PARAMETERS_OVERRIDE_KEY] = source[PROMPT_PRESET_MODEL_PARAMETERS_OVERRIDE_KEY]
   }
-  return picked
+  return canonicalizeLegacyGenerationValues(picked) as JsonRecord
 }
 
 export function createExtractedModelPreset(
@@ -319,7 +320,7 @@ export function createExtractedModelPreset(
   return {
     id: identity.id,
     name: identity.name,
-    ...extractModelPresetFields(legacyPreset),
+    ...(canonicalizeLegacyGenerationValues(extractModelPresetFields(legacyPreset)) as JsonRecord),
   }
 }
 

@@ -470,6 +470,48 @@ describe('split preset command normalization', () => {
     applyPromptPreset(database, preset)
     expect(database.promptTemplate).toBeNull()
   })
+
+  it('stores upstream defaults for empty original-editor values on preset create, patch, and full-save import', () => {
+    const emptyValues = {
+      systemRoleReplacement: '',
+      reasonEffort: '',
+      verbosity: '',
+      thinkingType: '',
+      seperateParameters: { memory: { reasoning_effort: '' }, overrides: { 'model-id': { thinking_type: '' } } },
+    }
+    const expected = {
+      systemRoleReplacement: 'user',
+      reasonEffort: 1,
+      verbosity: 1,
+      thinkingType: 'budget',
+      seperateParameters: { memory: { reasoning_effort: 1 }, overrides: { 'model-id': { thinking_type: 'budget' } } },
+    }
+    expect(createPromptPresetRecord({ id: 'prompt-empty', name: 'Prompt', ...emptyValues })).toMatchObject(expected)
+    expect(createModelPresetRecord({ id: 'model-empty', name: 'Model', ...emptyValues })).toMatchObject(expected)
+    expect(readPromptPresetPatch({ systemRoleReplacement: '', reasonEffort: '' })).toEqual({
+      systemRoleReplacement: 'user',
+      reasonEffort: 1,
+    })
+    expect(createPresetRecord({ id: 'legacy-empty', name: 'Legacy', ...emptyValues })).toMatchObject(expected)
+
+    const imported = normalizeRisuSaveSnapshotDatabase({
+      characters: [],
+      reasoningEffort: '',
+      systemRoleReplacement: '',
+      promptPresets: [{ id: 'prompt-empty', name: 'Prompt', ...emptyValues }],
+      modelPresets: [{ id: 'model-empty', name: 'Model', ...emptyValues }],
+      botPresets: [{ id: 'legacy-empty', name: 'Legacy', ...emptyValues }],
+    }) as Record<string, unknown>
+    expect(imported).toMatchObject({ reasoningEffort: 1, systemRoleReplacement: 'user' })
+    expect((imported.promptPresets as unknown[])[0]).toMatchObject(expected)
+    expect((imported.modelPresets as unknown[])[0]).toMatchObject(expected)
+    expect((imported.botPresets as unknown[])[0]).toMatchObject(expected)
+
+    // Non-empty unknown values are not rewritten; the generation decoder still rejects them.
+    expect(
+      createPromptPresetRecord({ id: 'prompt-bogus', name: 'Prompt', systemRoleReplacement: 'bogus' }),
+    ).toMatchObject({ systemRoleReplacement: 'bogus' })
+  })
 })
 
 describe('split preset command routes', () => {

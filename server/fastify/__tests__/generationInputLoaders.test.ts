@@ -185,6 +185,47 @@ describe('selected generation repository inputs', () => {
     expect(db.prepare('SELECT data_json FROM settings WHERE id = 1').get()).toEqual(before)
   })
 
+  it('composes empty original-editor preset values as upstream defaults without rewriting the row', () => {
+    const input = fixture()
+    // The settings row holds explicit non-default values; the selected prompt
+    // preset asserts '' for the same fields, as original RisuAI exports do.
+    input.systemRoleReplacement = 'assistant'
+    input.reasoningEffort = 2
+    input.verbosity = 2
+    Object.assign(records(input.promptPresets)[0], {
+      overrideModelParameters: true,
+      systemRoleReplacement: '',
+      reasonEffort: '',
+      verbosity: '',
+      thinkingType: '',
+    })
+    const { db, directory } = openFixture(input)
+    // Bypass import-time canonicalization: this row was persisted before the fix.
+    db.prepare(
+      "UPDATE prompt_presets SET data_json = json_set(data_json, '$.systemRoleReplacement', '', '$.reasonEffort', '', '$.verbosity', '', '$.thinkingType', '') WHERE json_extract(data_json, '$.id') = ?",
+    ).run('selected-prompt')
+    const before = db
+      .prepare("SELECT data_json FROM prompt_presets WHERE json_extract(data_json, '$.id') = ?")
+      .get('selected-prompt')
+    expect(JSON.parse((before as { data_json: string }).data_json)).toMatchObject({ systemRoleReplacement: '' })
+
+    const preflight = decodeGenerationPreflightInputs(
+      loadPersistedForGenerationPreflight(db, directory, target).preflightInputs,
+    )
+    const assembly = decodeGenerationSettings(loadPersistedForGenerationAssembly(db, directory, target).database)
+    for (const database of [preflight.database, assembly]) {
+      expect(database.systemRoleReplacement).toBe('user')
+      expect(database.reasoningEffort).toBe(1)
+      expect(database.verbosity).toBe(1)
+      expect(database.thinkingType).toBe('budget')
+    }
+    expect(
+      db
+        .prepare("SELECT data_json FROM prompt_presets WHERE json_extract(data_json, '$.id') = ?")
+        .get('selected-prompt'),
+    ).toEqual(before)
+  })
+
   it('keeps prompt override precedence and rejects invalid selected values', () => {
     const input = fixture()
     input.temperature = 'invalid-global-temperature'

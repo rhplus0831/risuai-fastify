@@ -193,7 +193,7 @@ export interface ChatGenerationPersonaReference {
 export interface ChatGenerationPromptTemplateItemReference {
   type?: string
   text?: string
-  innerFormat?: string
+  innerFormat?: string | null
   defaultText?: string
 }
 
@@ -852,7 +852,7 @@ function presetDisplaysJailbreakToggle(preset: ChatGenerationPresetReference | u
   })
 }
 
-function usesJailbreakToggle(value: string | undefined): boolean {
+function usesJailbreakToggle(value: string | null | undefined): boolean {
   return typeof value === 'string' && value.includes(JAILBREAK_TOGGLE_TOKEN)
 }
 

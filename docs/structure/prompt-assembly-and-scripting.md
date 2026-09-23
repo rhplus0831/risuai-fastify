@@ -138,10 +138,11 @@ bodies, and asset metadata. Legacy embedded-character storage has an explicit
 `server/fastify/src/prompt/serverTypes.ts` owns finite generation, provider,
 memory, preflight, and nested record views. `generationInputDecoder.ts` validates
 unknown persisted inputs without validator coercion, defaults, field stripping,
-or graph cloning. A compatibility adapter preserves established Hypa selection
+or whole-graph cloning. Compatibility repairs clone only changed ancestors and
+leave persisted rows untouched; unchanged inputs retain identity. The first
+adapter preserves established Hypa selection
 behavior: a present, non-null, non-string `selectedHypaV3PresetId` becomes `null`
-in a shallow root overlay (and a preflight envelope when needed). Nested objects
-and the caller's input remain unchanged; valid input retains identity.
+in a shallow root overlay (and a preflight envelope when needed).
 A second targeted adapter repairs original-Risu separate-parameter editor
 artifacts in settings and selected model/prompt records: recognized scalar
 parameter keys directly inside `seperateParameters.overrides` are removed.
@@ -149,6 +150,39 @@ Real model-ID objects and unknown malformed entries remain subject to validation
 The shared `separate-parameter-compatibility` helper also runs in preset writes,
 full-save normalization, and browser normalization. Already imported rows are
 repaired for generation without rewriting persisted data.
+
+After those repairs, `@risuai/shared-core/legacy-generation-value-canonicalization`
+maps only exact empty strings using this finite table. Owner fields apply to the
+root settings and each `modelPresets`/`promptPresets` entry; slot fields apply to
+their `seperateParameters.memory`, `emotion`, `translate`, `otherAx`, `scriptMain`,
+`scriptAux`, and `overrides.<modelId>` objects.
+
+| Owner field | Separate-parameter field | Value for `''` |
+| --- | --- | --- |
+| `thinkingType` | `thinking_type` | `'budget'` |
+| `adaptiveThinkingEffort` | `adaptive_thinking_effort` | `'high'` |
+| `deepseekThinkingType` | `deepseek_thinking_type` | `'off'` |
+| `deepseekReasoningEffort` | `deepseek_reasoning_effort` | `'high'` |
+| `systemRoleReplacement` | — | `'user'` |
+| `reasonEffort`, `reasoningEffort` | `reasoning_effort` | `1` (medium) |
+| `verbosity` | `verbosity` | `1` (medium) |
+
+All six decoders use this sequence; preflight repairs only its `database`.
+Keys remain present so preset composition preserves upstream empty-string
+semantics instead of inheriting base settings. The same canonicalizer runs in
+preset constructors, patches and application, prompt-settings patches, browser
+preset extraction, and full-save/legacy snapshot import (including legacy bot
+presets). Other values, including unknown enums and numeric strings such as
+`temperature: '50'`, remain subject to strict validation. Routing enums are not
+canonicalized. Ordinary scoped mutations do not run broad import repair.
+
+The schema also accepts sparse `ooba.formating` objects, nullable `innerFormat`
+on typed/author-note cards, cache cards without `depth`, arbitrary lorebook mode
+strings, and number/string/null `activationPercent`. These shapes retain existing
+runtime behavior without filling defaults. Lorebook import repair maps unknown
+modes to `normal` and finite numeric-string activation percentages to numbers;
+ordinary lorebook command validation remains non-repairing.
+
 Its checked-in schema and standalone validators are generated from those types
 by `util/generation-input-schema.ts`; the decoder regression checks schema,
 JavaScript and finite declaration synchronization plus runtime-Ajv parity.
