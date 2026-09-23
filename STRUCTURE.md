@@ -18,8 +18,9 @@ Toolchain: Node.js >=24 and pnpm; root `package.json` owns both runtimes.
    contract summaries; if they disagree with shipped code, record the mismatch
    before treating either behavior as intended. `.archived-docs/` is historical;
    only explicit imports from current tooling make an archived artifact a live input.
-5. Discover paths with `rg --files | rg '<name>'`, honoring `.ignore`. Prefer
-   canonical package implementations over browser compatibility re-exports.
+5. Discover paths as the [Search Hygiene](AGENTS.md#search-hygiene) section of
+   `AGENTS.md` describes. Prefer canonical package implementations over browser
+   compatibility re-exports.
 6. Find a relevant test in [docs/tests/README.md](docs/tests/README.md) and choose
    validation by impact. Prefer `pnpm test -- <one-test-or-source-file>` while
    working. Run `pnpm test:agent` only for the cross-area risks and other cases
