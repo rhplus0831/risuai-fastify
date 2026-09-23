@@ -10,8 +10,10 @@
   import { LLMFlags, type LLMFlags as LLMFlagValue } from 'src/ts/model/types'
 
   type RuntimeKey = keyof ModelProfileRecordRuntimeOptions
+  type LLMFlagKey = keyof typeof LLMFlags
 
   interface RuntimeNumberField {
+    kind: 'number'
     key: RuntimeKey
     label: string
     step?: string
@@ -21,14 +23,48 @@
   }
 
   interface RuntimeStringField {
+    kind: 'string'
     key: RuntimeKey
     label: string
     multiline?: boolean
   }
 
   interface RuntimeBooleanField {
+    kind: 'boolean'
     key: RuntimeKey
     label: string
+  }
+
+  interface RuntimeTokenizerField {
+    kind: 'tokenizer'
+    key: 'customTokenizer'
+    label: string
+  }
+
+  interface RuntimeModelToolsField {
+    kind: 'modelTools'
+    key: 'modelTools'
+    label: string
+  }
+
+  interface RuntimeFlagsField {
+    kind: 'flags'
+    key: 'customFlags'
+    label: string
+  }
+
+  type RuntimeField =
+    | RuntimeNumberField
+    | RuntimeStringField
+    | RuntimeBooleanField
+    | RuntimeTokenizerField
+    | RuntimeModelToolsField
+    | RuntimeFlagsField
+
+  interface RuntimeGroup {
+    key: 'sampling' | 'reasoning' | 'outputFormat' | 'other' | 'capabilityFlags'
+    label: string
+    fields: RuntimeField[]
   }
 
   interface Props {
@@ -36,10 +72,12 @@
     scope?: 'defaults' | 'overrides'
     advancedOnly?: boolean
     defaults?: ModelProfileRecordRuntimeOptions
+    hiddenKeys?: RuntimeKey[]
   }
 
-  let { value = $bindable({}), scope = 'overrides', advancedOnly = false, defaults = {} }: Props = $props()
+  let { value = $bindable({}), scope = 'overrides', defaults = {}, hiddenKeys = [] }: Props = $props()
   let inherited = $derived(resolveModelRuntimeDefaults(scope === 'defaults' ? undefined : defaults))
+  let hiddenKeySet = $derived(new Set<RuntimeKey>(hiddenKeys))
 
   function defaultValueLabel(key: RuntimeKey, storageScale?: number): string {
     const current = inherited[key]
@@ -55,66 +93,156 @@
     return language.modelProfiles.runtimeDefaultValue(label)
   }
 
-  const numberFields: RuntimeNumberField[] = [
-    { key: 'maxContext', label: language.modelProfiles.runtimeFields.maxContext, step: '1' },
-    { key: 'maxResponse', label: language.modelProfiles.runtimeFields.maxResponse, step: '1' },
+  const runtimeGroups: RuntimeGroup[] = [
     {
-      key: 'temperature',
-      label: language.modelProfiles.runtimeFields.temperature,
-      step: '0.01',
-      min: 0,
-      max: 2,
-      storageScale: 100,
+      key: 'sampling',
+      label: language.modelProfiles.runtimeGroups.sampling,
+      fields: [
+        {
+          kind: 'number',
+          key: 'temperature',
+          label: language.modelProfiles.runtimeFields.temperature,
+          step: '0.01',
+          min: 0,
+          max: 2,
+          storageScale: 100,
+        },
+        { kind: 'number', key: 'topP', label: language.modelProfiles.runtimeFields.topP, step: '0.01' },
+        { kind: 'number', key: 'topK', label: language.modelProfiles.runtimeFields.topK, step: '1' },
+        { kind: 'number', key: 'minP', label: language.modelProfiles.runtimeFields.minP, step: '0.01' },
+        { kind: 'number', key: 'topA', label: language.modelProfiles.runtimeFields.topA, step: '0.01' },
+        {
+          kind: 'number',
+          key: 'repetitionPenalty',
+          label: language.modelProfiles.runtimeFields.repetitionPenalty,
+          step: '0.01',
+        },
+        {
+          kind: 'number',
+          key: 'frequencyPenalty',
+          label: language.modelProfiles.runtimeFields.frequencyPenalty,
+          step: '0.01',
+          min: 0,
+          max: 2,
+          storageScale: 100,
+        },
+        {
+          kind: 'number',
+          key: 'presencePenalty',
+          label: language.modelProfiles.runtimeFields.presencePenalty,
+          step: '0.01',
+          min: 0,
+          max: 2,
+          storageScale: 100,
+        },
+      ],
     },
-    { key: 'topP', label: language.modelProfiles.runtimeFields.topP, step: '0.01' },
-    { key: 'topK', label: language.modelProfiles.runtimeFields.topK, step: '1' },
-    { key: 'minP', label: language.modelProfiles.runtimeFields.minP, step: '0.01' },
-    { key: 'topA', label: language.modelProfiles.runtimeFields.topA, step: '0.01' },
-    { key: 'repetitionPenalty', label: language.modelProfiles.runtimeFields.repetitionPenalty, step: '0.01' },
     {
-      key: 'frequencyPenalty',
-      label: language.modelProfiles.runtimeFields.frequencyPenalty,
-      step: '0.01',
-      min: 0,
-      max: 2,
-      storageScale: 100,
+      key: 'reasoning',
+      label: language.modelProfiles.runtimeGroups.reasoning,
+      fields: [
+        {
+          kind: 'number',
+          key: 'reasoningEffort',
+          label: language.modelProfiles.runtimeFields.reasoningEffort,
+          step: '1',
+        },
+        {
+          kind: 'number',
+          key: 'thinkingTokens',
+          label: language.modelProfiles.runtimeFields.thinkingTokens,
+          step: '1',
+        },
+        { kind: 'number', key: 'verbosity', label: language.modelProfiles.runtimeFields.verbosity, step: '1' },
+        { kind: 'string', key: 'thinkingType', label: language.modelProfiles.runtimeFields.thinkingType },
+        {
+          kind: 'string',
+          key: 'deepseekThinkingType',
+          label: language.modelProfiles.runtimeFields.deepseekThinkingType,
+        },
+        {
+          kind: 'string',
+          key: 'adaptiveThinkingEffort',
+          label: language.modelProfiles.runtimeFields.adaptiveThinkingEffort,
+        },
+        {
+          kind: 'string',
+          key: 'deepseekReasoningEffort',
+          label: language.modelProfiles.runtimeFields.deepseekReasoningEffort,
+        },
+        { kind: 'boolean', key: 'stripCoT', label: language.modelProfiles.runtimeFields.stripCoT },
+      ],
     },
     {
-      key: 'presencePenalty',
-      label: language.modelProfiles.runtimeFields.presencePenalty,
-      step: '0.01',
-      min: 0,
-      max: 2,
-      storageScale: 100,
+      key: 'outputFormat',
+      label: language.modelProfiles.runtimeGroups.outputFormat,
+      fields: [
+        {
+          kind: 'string',
+          key: 'extractJson',
+          label: language.modelProfiles.runtimeFields.extractJson,
+          multiline: true,
+        },
+        {
+          kind: 'string',
+          key: 'jsonSchema',
+          label: language.modelProfiles.runtimeFields.jsonSchema,
+          multiline: true,
+        },
+        {
+          kind: 'boolean',
+          key: 'jsonSchemaEnabled',
+          label: language.modelProfiles.runtimeFields.jsonSchemaEnabled,
+        },
+        {
+          kind: 'boolean',
+          key: 'strictJsonSchema',
+          label: language.modelProfiles.runtimeFields.strictJsonSchema,
+        },
+        {
+          kind: 'boolean',
+          key: 'outputImageModal',
+          label: language.modelProfiles.runtimeFields.outputImageModal,
+        },
+      ],
     },
-    { key: 'reasoningEffort', label: language.modelProfiles.runtimeFields.reasoningEffort, step: '1' },
-    { key: 'thinkingTokens', label: language.modelProfiles.runtimeFields.thinkingTokens, step: '1' },
-    { key: 'verbosity', label: language.modelProfiles.runtimeFields.verbosity, step: '1' },
-    { key: 'genTime', label: language.modelProfiles.runtimeFields.genTime, step: '1' },
+    {
+      key: 'other',
+      label: language.modelProfiles.runtimeGroups.other,
+      fields: [
+        { kind: 'number', key: 'genTime', label: language.modelProfiles.runtimeFields.genTime, step: '1' },
+        {
+          kind: 'tokenizer',
+          key: 'customTokenizer',
+          label: language.modelProfiles.runtimeFields.customTokenizer,
+        },
+        { kind: 'modelTools', key: 'modelTools', label: language.modelProfiles.runtimeFields.modelTools },
+      ],
+    },
+    {
+      key: 'capabilityFlags',
+      label: language.modelProfiles.runtimeGroups.capabilityFlags,
+      fields: [
+        {
+          kind: 'boolean',
+          key: 'enableCustomFlags',
+          label: language.modelProfiles.runtimeFields.enableCustomFlags,
+        },
+        { kind: 'flags', key: 'customFlags', label: language.modelProfiles.runtimeGroups.capabilityFlags },
+      ],
+    },
   ]
 
-  const stringFields: RuntimeStringField[] = [
-    { key: 'thinkingType', label: language.modelProfiles.runtimeFields.thinkingType },
-    { key: 'deepseekThinkingType', label: language.modelProfiles.runtimeFields.deepseekThinkingType },
-    { key: 'adaptiveThinkingEffort', label: language.modelProfiles.runtimeFields.adaptiveThinkingEffort },
-    { key: 'deepseekReasoningEffort', label: language.modelProfiles.runtimeFields.deepseekReasoningEffort },
-    { key: 'extractJson', label: language.modelProfiles.runtimeFields.extractJson, multiline: true },
-    { key: 'jsonSchema', label: language.modelProfiles.runtimeFields.jsonSchema, multiline: true },
-  ]
+  let visibleRuntimeGroups = $derived(
+    runtimeGroups
+      .map((group) => ({ ...group, fields: group.fields.filter((field) => !hiddenKeySet.has(field.key)) }))
+      .filter((group) => group.fields.length > 0),
+  )
 
-  const booleanFields: RuntimeBooleanField[] = [
-    { key: 'halfStreaming', label: language.modelProfiles.runtimeFields.halfStreaming },
-    { key: 'useStreaming', label: language.modelProfiles.runtimeFields.useStreaming },
-    { key: 'jsonSchemaEnabled', label: language.modelProfiles.runtimeFields.jsonSchemaEnabled },
-    { key: 'strictJsonSchema', label: language.modelProfiles.runtimeFields.strictJsonSchema },
-    { key: 'outputImageModal', label: language.modelProfiles.runtimeFields.outputImageModal },
-    { key: 'enableCustomFlags', label: language.modelProfiles.runtimeFields.enableCustomFlags },
-    { key: 'stripCoT', label: language.modelProfiles.runtimeFields.stripCoT },
-  ]
-
-  const flagOptions = Object.entries(LLMFlags).map(([label, flag]) => ({
-    label,
-    flag: flag as LLMFlagValue,
+  const flagOptions = (Object.keys(LLMFlags) as LLMFlagKey[]).map((key) => ({
+    key,
+    label: language.modelProfiles.capabilityFlags[key],
+    flag: LLMFlags[key] as LLMFlagValue,
   }))
 
   function asRecord(): Record<string, unknown> {
@@ -247,136 +375,126 @@
       ? language.modelProfiles.advancedGlobalDefaultsDescription
       : language.modelProfiles.advancedDefaultsDescription}
   </p>
-  <div>
-    <h4 class="mb-2 text-sm font-semibold">{language.modelProfiles.runtimeNumberSection}</h4>
-    <div class="grid gap-3 md:grid-cols-2">
-      {#each numberFields.filter((field) => !advancedOnly || (field.key !== 'maxResponse' && field.key !== 'maxContext')) as field (field.key)}
-        <label class="flex flex-col gap-1">
-          <span class="text-sm text-textcolor2">{field.label}</span>
-          <input
-            class="w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
-            type="number"
-            step={field.step}
-            min={field.min}
-            max={field.max}
-            value={numberValue(field)}
-            placeholder={defaultValueLabel(field.key, field.storageScale)}
-            oninput={(event) => {
-              setNumber(field, event.currentTarget.value)
-            }} />
-        </label>
-      {/each}
-    </div>
-  </div>
-
-  <div>
-    <h4 class="mb-2 text-sm font-semibold">{language.modelProfiles.runtimeBooleanSection}</h4>
-    <div class="grid gap-3 md:grid-cols-2">
-      {#each booleanFields.filter((field) => !advancedOnly || (field.key !== 'useStreaming' && field.key !== 'halfStreaming')) as field (field.key)}
-        {#if scope === 'defaults' && field.key === 'stripCoT'}
-          <label class="flex items-center gap-2 text-sm text-textcolor2">
-            <input
-              data-runtime-strip-cot
-              type="checkbox"
-              class="h-4 w-4"
-              checked={value?.stripCoT === true}
-              onchange={(event) => {
-                setDefaultCheckbox(field.key, event.currentTarget.checked)
-              }} />
-            <span>{field.label}</span>
-          </label>
-        {:else}
-          <label class="flex flex-col gap-1">
-            <span class="text-sm text-textcolor2">{field.label}</span>
-            <select
-              data-runtime-field={field.key}
-              class="w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
-              value={booleanValue(field.key)}
-              onchange={(event) => {
-                setBoolean(field.key, event.currentTarget.value)
-              }}>
-              <option value="" class="bg-darkbg">{defaultValueLabel(field.key)}</option>
-              <option value="true" class="bg-darkbg">{language.modelProfiles.runtimeOn}</option>
-              <option value="false" class="bg-darkbg">{language.modelProfiles.runtimeOff}</option>
-            </select>
-          </label>
-        {/if}
-      {/each}
-    </div>
-  </div>
-
-  <div>
-    <h4 class="mb-2 text-sm font-semibold">{language.modelProfiles.runtimeTextSection}</h4>
-    <div class="grid gap-3">
-      {#each stringFields as field (field.key)}
-        <label class="flex flex-col gap-1">
-          <span class="text-sm text-textcolor2">{field.label}</span>
-          {#if field.multiline}
-            <textarea
-              class="min-h-24 w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
-              value={stringValue(field.key)}
-              placeholder={defaultValueLabel(field.key)}
-              oninput={(event) => {
-                setString(field.key, event.currentTarget.value)
-              }}></textarea>
+  {#each visibleRuntimeGroups as group (group.key)}
+    <section class="flex min-w-0 flex-col gap-2">
+      <h4 class="text-sm font-semibold">{group.label}</h4>
+      <div class="grid min-w-0 gap-3 md:grid-cols-2">
+        {#each group.fields as field (field.key)}
+          {#if field.kind === 'number'}
+            <label class="flex min-w-0 flex-col gap-1">
+              <span class="text-sm text-textcolor2">{field.label}</span>
+              <input
+                class="w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
+                type="number"
+                step={field.step}
+                min={field.min}
+                max={field.max}
+                value={numberValue(field)}
+                placeholder={defaultValueLabel(field.key, field.storageScale)}
+                oninput={(event) => {
+                  setNumber(field, event.currentTarget.value)
+                }} />
+            </label>
+          {:else if field.kind === 'boolean'}
+            {#if scope === 'defaults' && field.key === 'stripCoT'}
+              <label class="flex min-w-0 items-center gap-2 text-sm text-textcolor2">
+                <input
+                  data-runtime-strip-cot
+                  type="checkbox"
+                  class="h-4 w-4 shrink-0"
+                  checked={value?.stripCoT === true}
+                  onchange={(event) => {
+                    setDefaultCheckbox(field.key, event.currentTarget.checked)
+                  }} />
+                <span>{field.label}</span>
+              </label>
+            {:else}
+              <label class="flex min-w-0 flex-col gap-1">
+                <span class="text-sm text-textcolor2">{field.label}</span>
+                <select
+                  data-runtime-field={field.key}
+                  class="w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
+                  value={booleanValue(field.key)}
+                  onchange={(event) => {
+                    setBoolean(field.key, event.currentTarget.value)
+                  }}>
+                  <option value="" class="bg-darkbg">{defaultValueLabel(field.key)}</option>
+                  <option value="true" class="bg-darkbg">{language.modelProfiles.runtimeOn}</option>
+                  <option value="false" class="bg-darkbg">{language.modelProfiles.runtimeOff}</option>
+                </select>
+              </label>
+            {/if}
+          {:else if field.kind === 'string'}
+            <label class="flex min-w-0 flex-col gap-1">
+              <span class="text-sm text-textcolor2">{field.label}</span>
+              {#if field.multiline}
+                <textarea
+                  class="min-h-24 w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
+                  value={stringValue(field.key)}
+                  placeholder={defaultValueLabel(field.key)}
+                  oninput={(event) => {
+                    setString(field.key, event.currentTarget.value)
+                  }}></textarea>
+              {:else}
+                <TextInput
+                  size="sm"
+                  fullwidth
+                  value={stringValue(field.key)}
+                  placeholder={defaultValueLabel(field.key)}
+                  oninput={(event) => {
+                    setString(field.key, event.currentTarget.value)
+                  }} />
+              {/if}
+            </label>
+          {:else if field.kind === 'tokenizer'}
+            <label class="flex min-w-0 flex-col gap-1">
+              <span class="text-sm text-textcolor2">{field.label}</span>
+              <select
+                data-runtime-tokenizer-picker
+                class="w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
+                value={stringValue(field.key)}
+                onchange={(event) => {
+                  setString(field.key, event.currentTarget.value)
+                }}>
+                <option value="" class="bg-darkbg">{language.modelProfiles.runtimeUnset}</option>
+                {#each FASTIFY_TOKENIZER_OPTIONS as option (option.value)}
+                  <option value={option.value} class="bg-darkbg">{language.tokenizerOptions[option.labelKey]}</option>
+                {/each}
+              </select>
+            </label>
+          {:else if field.kind === 'modelTools'}
+            <label class="flex min-w-0 flex-col gap-1">
+              <span class="text-sm text-textcolor2">{field.label}</span>
+              <TextInput
+                size="sm"
+                fullwidth
+                value={modelToolsValue()}
+                placeholder={language.modelProfiles.commaSeparatedPlaceholder}
+                oninput={(event) => {
+                  setModelTools(event.currentTarget.value)
+                }} />
+            </label>
           {:else}
-            <TextInput
-              size="sm"
-              fullwidth
-              value={stringValue(field.key)}
-              placeholder={defaultValueLabel(field.key)}
-              oninput={(event) => {
-                setString(field.key, event.currentTarget.value)
-              }} />
+            <div class="col-span-full grid min-w-0 gap-2 sm:grid-cols-2" aria-label={field.label}>
+              {#each flagOptions as option (option.flag)}
+                <label class="flex min-w-0 items-start gap-2 text-sm text-textcolor2" title={option.key}>
+                  <input
+                    type="checkbox"
+                    class="mt-0.5 h-4 w-4 shrink-0"
+                    checked={customFlagEnabled(option.flag)}
+                    onchange={(event) => {
+                      setCustomFlag(option.flag, event.currentTarget.checked)
+                    }} />
+                  <span class="min-w-0">
+                    {option.label}
+                    <span class="ml-1 break-all text-xs opacity-70">({option.key})</span>
+                  </span>
+                </label>
+              {/each}
+            </div>
           {/if}
-        </label>
-      {/each}
-
-      <label class="flex flex-col gap-1">
-        <span class="text-sm text-textcolor2">{language.modelProfiles.runtimeFields.customTokenizer}</span>
-        <select
-          data-runtime-tokenizer-picker
-          class="w-full rounded-md border border-darkborderc bg-transparent px-2 py-1 text-sm text-textcolor shadow-xs transition-colors duration-200 focus:border-borderc focus:outline-hidden focus:ring-2 focus:ring-borderc"
-          value={stringValue('customTokenizer')}
-          onchange={(event) => {
-            setString('customTokenizer', event.currentTarget.value)
-          }}>
-          <option value="" class="bg-darkbg">{language.modelProfiles.runtimeUnset}</option>
-          {#each FASTIFY_TOKENIZER_OPTIONS as option (option.value)}
-            <option value={option.value} class="bg-darkbg">{language.tokenizerOptions[option.labelKey]}</option>
-          {/each}
-        </select>
-      </label>
-
-      <label class="flex flex-col gap-1">
-        <span class="text-sm text-textcolor2">{language.modelProfiles.runtimeFields.modelTools}</span>
-        <TextInput
-          size="sm"
-          fullwidth
-          value={modelToolsValue()}
-          placeholder={language.modelProfiles.commaSeparatedPlaceholder}
-          oninput={(event) => {
-            setModelTools(event.currentTarget.value)
-          }} />
-      </label>
-    </div>
-  </div>
-
-  <div>
-    <h4 class="mb-2 text-sm font-semibold">{language.modelProfiles.runtimeCustomFlagsSection}</h4>
-    <div class="grid gap-2 sm:grid-cols-2">
-      {#each flagOptions as option (option.flag)}
-        <label class="flex items-center gap-2 text-sm text-textcolor2">
-          <input
-            type="checkbox"
-            class="h-4 w-4"
-            checked={customFlagEnabled(option.flag)}
-            onchange={(event) => {
-              setCustomFlag(option.flag, event.currentTarget.checked)
-            }} />
-          <span>{option.label}</span>
-        </label>
-      {/each}
-    </div>
-  </div>
+        {/each}
+      </div>
+    </section>
+  {/each}
 </div>

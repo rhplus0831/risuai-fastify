@@ -1,6 +1,14 @@
 <script lang="ts">
   import { untrack } from 'svelte'
-  import { CopyIcon, GripVerticalIcon, MinusIcon, PencilIcon, PlusIcon, TrashIcon } from '@lucide/svelte'
+  import {
+    ChevronRightIcon,
+    CopyIcon,
+    GripVerticalIcon,
+    MinusIcon,
+    PencilIcon,
+    PlusIcon,
+    TrashIcon,
+  } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
   import {
@@ -33,8 +41,10 @@
     reorderModelProfilesDurably,
     subscribePendingModelMutations,
     updateModelProfileDurably,
+    updateModelRoleProfilesDurably,
     type PendingModelMutationProjection,
   } from 'src/ts/model/modelProfileMutations'
+  import { selectedModelPresetId } from 'src/ts/model/modelPresetSelection'
   import type { ModelProfileSnapshot, ServerCommandResult } from 'src/ts/server/commands'
   import type { ProviderCredentialRecord } from 'src/ts/model/providerCredentialRecords'
   import { collectionsResourceState, settingsResourceState } from 'src/ts/server/resourceState.svelte'
@@ -117,11 +127,22 @@
         finishPendingModelMutation(pending.token)
         continue
       }
-      if (pending.phase === 'dispatching' || !isProfileListProjection(pending.projection)) continue
+      if (pending.phase === 'dispatching') continue
+      if (isProfileListProjection(pending.projection)) {
+        if (
+          isPendingModelMutationProjectionApplied(pending.projection, {
+            modelProfiles: profiles,
+            modelProfileOrder: profileOrder,
+          })
+        ) {
+          finishPendingModelMutation(pending.token)
+        }
+        continue
+      }
       if (
+        pending.projection.kind === 'role-bindings' &&
         isPendingModelMutationProjectionApplied(pending.projection, {
-          modelProfiles: profiles,
-          modelProfileOrder: profileOrder,
+          modelRoleProfiles: settingsResourceState.value.modelRoleProfiles,
         })
       ) {
         finishPendingModelMutation(pending.token)
@@ -144,6 +165,33 @@
 
   function requestModelLabel(profile: ModelProfileRecord): string {
     return profile.providerOptions?.requestModel?.trim() || profile.modelId || language.none
+  }
+
+  function baseUrlHost(profile: ModelProfileRecord): string | null {
+    const baseUrl = profile.providerOptions?.baseUrl?.trim()
+    if (!baseUrl) return null
+    try {
+      return new URL(baseUrl).host || null
+    } catch {
+      return null
+    }
+  }
+
+  function profileSubtitleSegments(profile: ModelProfileRecord): string[] {
+    const segments = [providerLabel(profile.providerId)]
+    if (profile.modelId !== profile.providerId) segments.push(modelLabel(profile))
+
+    const requestModel = profile.providerOptions?.requestModel?.trim()
+    if (profile.providerId === 'custom-api') {
+      if (requestModel) segments.push(requestModel)
+      const host = baseUrlHost(profile)
+      if (host) segments.push(host)
+    } else if (requestModel && requestModel !== profile.modelId) {
+      segments.push(requestModelLabel(profile))
+    }
+
+    if (profile.fallbacks?.length) segments.push(fallbackCount(profile))
+    return segments
   }
 
   function fallbackCount(profile: ModelProfileRecord): string {
@@ -358,6 +406,41 @@
     }
   }
 
+  async function useProfileForRole(profile: ModelProfileRecord, role: ModelRole): Promise<void> {
+    if (busy || mutationQueued) return
+    busy = true
+    commandError = ''
+    const bindings: Partial<Record<ModelRole, ModelRoleProfileBinding>> = {
+      [role]: { mode: 'profile', profileId: profile.id },
+    }
+    const pendingToken = beginPendingModelMutation('model-profiles', {
+      kind: 'role-bindings',
+      bindings,
+    })
+    if (!pendingToken) {
+      busy = false
+      return
+    }
+    try {
+      const outcome = await updateModelRoleProfilesDurably(bindings, selectedModelPresetId())
+      if (outcome.status === 'accepted') {
+        finishPendingModelMutation(pendingToken)
+        return
+      }
+      if (outcome.status === 'queued') {
+        retainPendingModelMutation(pendingToken, outcome.mutationId)
+        return
+      }
+      finishPendingModelMutation(pendingToken)
+      commandError = commandErrorMessage(outcome.result)
+    } catch {
+      finishPendingModelMutation(pendingToken)
+      commandError = commandErrorMessage({ status: 'unavailable' })
+    } finally {
+      busy = false
+    }
+  }
+
   async function reorderProfiles(order: ModelProfileOrderEntry[]): Promise<void> {
     if (busy || mutationQueued) return
     busy = true
@@ -495,14 +578,9 @@
       <h3 class="text-lg font-semibold">{language.modelProfiles.profilesTabTitle}</h3>
       <span class="text-sm text-textcolor2">{language.modelProfiles.profilesTabDescription}</span>
     </div>
-    <div class="flex flex-wrap gap-2">
-      <Button size="sm" styled="outlined" disabled={busy || mutationQueued} onclick={addDivider}>
-        <span class="inline-flex items-center gap-2"><MinusIcon size={16} />{language.modelProfiles.addDivider}</span>
-      </Button>
-      <Button size="sm" disabled={busy || mutationQueued} onclick={openCreateEditor}>
-        <span class="inline-flex items-center gap-2"><PlusIcon size={16} />{language.modelProfiles.createProfile}</span>
-      </Button>
-    </div>
+    <Button size="sm" disabled={busy || mutationQueued} onclick={openCreateEditor}>
+      <span class="inline-flex items-center gap-2"><PlusIcon size={16} />{language.modelProfiles.createProfile}</span>
+    </Button>
   </div>
 
   <ModelRuntimeDefaultsEditor compact />
@@ -518,6 +596,7 @@
         <div role="presentation" data-model-profile-drop-key={orderKey} class="contents"></div>
         {#if item.kind === 'profile'}
           {@const profile = item.profile}
+          {@const assignedRoles = rolesUsingProfile(profile.id)}
           <article
             class="flex items-center gap-1 rounded-md border border-darkborderc px-2 text-sm hover:bg-darkbg"
             role="listitem"
@@ -541,24 +620,53 @@
               <span class="flex min-w-0 flex-1 flex-col gap-1">
                 <span class="font-medium break-words">{profile.name}</span>
                 <span class="break-words text-xs text-textcolor2">
-                  {providerLabel(profile.providerId)} · {modelLabel(profile)}
-                  {#if profile.providerOptions?.requestModel?.trim() && profile.providerOptions.requestModel.trim() !== profile.modelId}
-                    · {requestModelLabel(profile)}
-                  {/if}
-                  {#if profile.fallbacks?.length}
-                    · {fallbackCount(profile)}{/if}
+                  {profileSubtitleSegments(profile).join(' · ')}
                 </span>
+                {#if assignedRoles.length > 0}
+                  <span class="flex flex-wrap gap-1">
+                    {#each assignedRoles as role (role)}
+                      <span class="rounded-full border border-darkborderc px-2 py-0.5 text-xs text-textcolor2">
+                        {language.modelRoles.roles[role]}
+                      </span>
+                    {/each}
+                  </span>
+                {/if}
                 {#if statusLabel(profile) !== language.modelProfiles.statusBuckets.ready}
                   <span class="text-xs text-yellow-300">{statusLabel(profile)}</span>
                 {/if}
               </span>
               <span class="pointer-events-none shrink-0 text-textcolor2" aria-hidden="true"
-                ><PencilIcon size={16} /></span>
+                ><ChevronRightIcon size={16} /></span>
             </button>
             <ModelItemActions
               label={language.modelProfiles.itemActions(profile.name)}
               disabled={busy || mutationQueued}>
               {#snippet children(close)}
+                <button
+                  type="button"
+                  class="flex min-h-11 items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-darkbg"
+                  onclick={() => {
+                    close()
+                    openEditEditor(profile)
+                  }}><PencilIcon size={14} />{language.modelProfiles.edit}</button>
+                {#if !assignedRoles.includes('chatMain')}
+                  <button
+                    type="button"
+                    class="flex min-h-11 items-center rounded-md px-3 py-2 text-left hover:bg-darkbg"
+                    onclick={() => {
+                      close()
+                      void useProfileForRole(profile, 'chatMain')
+                    }}>{language.modelProfiles.useForRole(language.modelRoles.roles.chatMain)}</button>
+                {/if}
+                {#if !assignedRoles.includes('chatAux')}
+                  <button
+                    type="button"
+                    class="flex min-h-11 items-center rounded-md px-3 py-2 text-left hover:bg-darkbg"
+                    onclick={() => {
+                      close()
+                      void useProfileForRole(profile, 'chatAux')
+                    }}>{language.modelProfiles.useForRole(language.modelRoles.roles.chatAux)}</button>
+                {/if}
                 <button
                   type="button"
                   class="flex min-h-11 items-center gap-2 rounded-md px-3 py-2 text-left hover:bg-darkbg"
@@ -591,21 +699,36 @@
               aria-hidden="true">
               <GripVerticalIcon size={16} />
             </span>
-            <button
-              type="button"
-              class="flex min-h-11 flex-1 cursor-pointer items-center gap-3 px-2 py-3 text-textcolor2"
-              aria-label={language.modelProfiles.deleteDividerConfirm}
-              disabled={busy || mutationQueued}
-              onclick={() => deleteDivider(item.id)}>
+            <div class="flex min-h-11 min-w-0 flex-1 items-center gap-3 px-2 py-3 text-textcolor2">
               <span class="h-px flex-1 bg-darkborderc"></span>
               <span aria-hidden="true">---</span>
               <span class="h-px flex-1 bg-darkborderc"></span>
-            </button>
+            </div>
+            <ModelItemActions label={language.modelProfiles.dividerActions} disabled={busy || mutationQueued}>
+              {#snippet children(close)}
+                <button
+                  type="button"
+                  class="flex min-h-11 items-center gap-2 rounded-md px-3 py-2 text-left text-draculared hover:bg-darkbg"
+                  onclick={() => {
+                    close()
+                    deleteDivider(item.id)
+                  }}><TrashIcon size={14} />{language.modelProfiles.deleteDivider}</button>
+              {/snippet}
+            </ModelItemActions>
           </div>
         {/if}
       {/each}
     </div>
   {/if}
+
+  <Button
+    size="sm"
+    styled="outlined"
+    className="self-start text-textcolor2"
+    disabled={busy || mutationQueued}
+    onclick={addDivider}>
+    <span class="inline-flex items-center gap-2"><MinusIcon size={16} />{language.modelProfiles.addDivider}</span>
+  </Button>
 
   {#if editorMode}
     {#key editorKey}

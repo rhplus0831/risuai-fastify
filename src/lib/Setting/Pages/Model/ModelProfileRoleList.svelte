@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from 'svelte'
   import { language } from 'src/lang'
   import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
   import SelectInput from 'src/lib/UI/GUI/SelectInput.svelte'
@@ -14,6 +15,7 @@
   } from 'src/ts/model/modelProfileRecords'
   import { MODEL_ROLES, modelRoleProfileInheritSource, type ModelRole } from '@risuai/shared-core/model-roles'
   import { getModelInfo } from 'src/ts/model/modellist'
+  import { selectedModelPresetId } from 'src/ts/model/modelPresetSelection'
   import { ProviderNames } from 'src/ts/model/types'
   import {
     beginPendingModelMutation,
@@ -25,18 +27,38 @@
     updateModelRoleProfilesDurably,
   } from 'src/ts/model/modelProfileMutations'
   import type { ServerCommandResult } from 'src/ts/server/commands'
-  import { collectionsResourceState, settingsResourceState } from 'src/ts/server/resourceState.svelte'
-  import type { Database, ModelPreset } from 'src/ts/storage/database.svelte'
+  import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
+  import type { Database } from 'src/ts/storage/database.svelte'
 
-  type BindingMode = ModelRoleProfileBinding['mode']
+  type BindingFeedback = 'accepted' | 'queued'
+  type RoleGroupKey = 'chat' | 'memory' | 'translation' | 'scripts'
+
+  const INHERIT_SELECT_VALUE = 'binding:inherit'
+  const LEGACY_SELECT_VALUE = 'binding:legacy'
+  const PROFILE_SELECT_VALUE_PREFIX = 'profile:'
+  const ROLE_GROUP_DEFINITIONS: Array<{ key: RoleGroupKey; roles: ModelRole[] }> = [
+    { key: 'chat', roles: ['chatMain', 'chatAux'] },
+    { key: 'memory', roles: ['memory', 'emotion'] },
+    { key: 'translation', roles: ['translate', 'otherAx'] },
+    { key: 'scripts', roles: ['scriptMain', 'scriptAux'] },
+  ]
+  const explicitlyGroupedRoles = new Set(ROLE_GROUP_DEFINITIONS.flatMap((group) => group.roles))
+  const roleGroups = ROLE_GROUP_DEFINITIONS.map((group) => ({
+    key: group.key,
+    roles: MODEL_ROLES.filter(
+      (role) => group.roles.includes(role) || (group.key === 'scripts' && !explicitlyGroupedRoles.has(role)),
+    ),
+  }))
 
   let draftBindings = $state<ModelRoleProfileMap>(normalizeModelRoleProfiles(undefined))
   let serverBaselineBindings = $state<ModelRoleProfileMap>(normalizeModelRoleProfiles(undefined))
   let lastServerSnapshot = $state('')
   let applying = $state(false)
   let profileSelectRevisions = $state<Partial<Record<ModelRole, number>>>({})
+  let bindingFeedback = $state<Partial<Record<ModelRole, BindingFeedback>>>({})
   let pendingMutations = $state(getPendingModelMutations('model-profiles'))
   let commandError = $state('')
+  const bindingFeedbackTimers = new Map<ModelRole, ReturnType<typeof setTimeout>>()
 
   let profiles = $derived(readModelProfileOwners(settingsResourceState.value.modelProfiles))
   let profileItems = $derived(modelProfileListItems(profiles, settingsResourceState.value.modelProfileOrder))
@@ -79,6 +101,7 @@
       if (pending.phase === 'discarded') {
         commandError = language.modelProfiles.commandReplayDiscarded
         if (pending.projection.kind === 'role-bindings') {
+          for (const role of Object.keys(pending.projection.bindings) as ModelRole[]) clearBindingFeedback(role)
           restoreBindingsIfCurrent(pending.projection.bindings)
         }
         finishPendingModelMutation(pending.token)
@@ -154,21 +177,6 @@
     return profiles.find((profile) => profile.id === profileId)?.name ?? profileId
   }
 
-  function effectiveProfileName(role: ModelRole): string {
-    const resolved = uiState.resolvedProfiles[role]
-    if (resolved.source.profileName) return resolved.source.profileName
-    if (resolved.source.kind === 'durable-profile') return profileName(resolved.profileId)
-    if (resolved.status.bucket === 'compatibility') return language.modelProfiles.compatibilityProfile
-    return resolved.profileId || language.none
-  }
-
-  function inheritedSourceLabel(role: ModelRole): string {
-    const source = modelRoleProfileInheritSource(role)
-    const binding = bindingFor(role)
-    if (binding.mode !== 'inherit' || !source) return language.modelProfiles.noInheritedSource
-    return language.modelRoles.sourceInherited(roleLabel(source))
-  }
-
   function modelName(modelId: string): string {
     return getModelInfo(modelId)?.fullName || modelId || language.none
   }
@@ -180,11 +188,24 @@
     return ProviderNames.get(resolved.modelInfo.provider) ?? language.none
   }
 
-  function providerModelSummary(role: ModelRole): string {
+  function effectiveSummary(role: ModelRole): string {
+    const binding = bindingFor(role)
     const resolved = uiState.resolvedProfiles[role]
-    const parts = [providerName(role), modelName(resolved.modelId)]
+    const parts = [providerName(role)]
+    if (resolved.modelId !== resolved.status.providerId) parts.push(modelName(resolved.modelId))
     const requestModel = resolved.providerOptions.requestModel?.trim()
     if (requestModel && requestModel !== resolved.modelId) parts.push(requestModel)
+    if (binding.mode === 'inherit') {
+      const inheritedProfileName =
+        resolved.source.profileName ||
+        (resolved.source.kind === 'durable-profile' ? profileName(resolved.profileId) : '') ||
+        (resolved.status.bucket === 'compatibility' ? language.modelProfiles.compatibilityProfile : '') ||
+        resolved.profileId ||
+        language.none
+      parts.unshift(inheritedProfileName)
+    } else if (binding.mode === 'legacy') {
+      parts.unshift(language.modelProfiles.compatibilityProfile)
+    }
     return parts.join(' · ')
   }
 
@@ -208,7 +229,7 @@
         : { kind: 'divider' as const, id: item.id },
     )
     if (binding.mode === 'profile' && binding.profileId && !profileIdSet.has(binding.profileId)) {
-      options.unshift({
+      options.push({
         kind: 'profile',
         id: binding.profileId,
         name: language.modelProfiles.missingProfile(binding.profileId),
@@ -217,13 +238,46 @@
     return options
   }
 
-  function firstProfileId(): string {
-    return profileItems.find((item) => item.kind === 'profile')?.profile.id ?? ''
+  function profileSelectValue(profileId: string): string {
+    return `${PROFILE_SELECT_VALUE_PREFIX}${profileId}`
+  }
+
+  function bindingSelectValue(binding: ModelRoleProfileBinding): string {
+    if (binding.mode === 'inherit') return INHERIT_SELECT_VALUE
+    if (binding.mode === 'legacy') return LEGACY_SELECT_VALUE
+    return profileSelectValue(binding.profileId)
+  }
+
+  function clearBindingFeedback(role: ModelRole): void {
+    const timer = bindingFeedbackTimers.get(role)
+    if (timer) clearTimeout(timer)
+    bindingFeedbackTimers.delete(role)
+    if (!bindingFeedback[role]) return
+
+    const nextFeedback = { ...bindingFeedback }
+    delete nextFeedback[role]
+    bindingFeedback = nextFeedback
+  }
+
+  function showBindingFeedback(role: ModelRole, feedback: BindingFeedback): void {
+    clearBindingFeedback(role)
+    bindingFeedback = { ...bindingFeedback, [role]: feedback }
+    bindingFeedbackTimers.set(
+      role,
+      setTimeout(() => {
+        clearBindingFeedback(role)
+      }, 2500),
+    )
+  }
+
+  function bindingFeedbackLabel(feedback: BindingFeedback): string {
+    return feedback === 'accepted' ? language.modelProfiles.bindingSaved : language.modelProfiles.bindingQueued
   }
 
   function setBinding(role: ModelRole, binding: ModelRoleProfileBinding): void {
     if (applying || applyQueued) return
     if (snapshotBinding(bindingFor(role)) === snapshotBinding(binding)) return
+    clearBindingFeedback(role)
     draftBindings = {
       ...draftBindings,
       [role]: binding,
@@ -232,38 +286,37 @@
     if (bindingCanBeSaved(role, binding)) void applyBinding(role, binding)
   }
 
-  function setBindingMode(role: ModelRole, mode: BindingMode): void {
-    if (mode === 'inherit') {
-      setBinding(role, { mode: 'inherit' })
-      return
+  function restoreSelectValue(role: ModelRole, select: HTMLSelectElement, previousValue: string): void {
+    select.value = previousValue
+    profileSelectRevisions = {
+      ...profileSelectRevisions,
+      [role]: (profileSelectRevisions[role] ?? 0) + 1,
     }
-    if (mode === 'profile') {
-      const current = bindingFor(role)
-      setBinding(role, {
-        mode: 'profile',
-        profileId: current.mode === 'profile' ? current.profileId : firstProfileId(),
-      })
-      return
-    }
-    setBinding(role, { mode: 'legacy' })
   }
 
-  function setBindingProfile(role: ModelRole, profileId: string): void {
-    setBinding(role, { mode: 'profile', profileId })
-  }
-
-  function handleBindingProfileChange(role: ModelRole, previousProfileId: string, event: Event): void {
+  function handleBindingChange(role: ModelRole, previousValue: string, event: Event): void {
     const select = event.currentTarget
     if (!(select instanceof HTMLSelectElement)) return
     if (isModelProfileDividerSelectValue(select.value)) {
-      select.value = previousProfileId
-      profileSelectRevisions = {
-        ...profileSelectRevisions,
-        [role]: (profileSelectRevisions[role] ?? 0) + 1,
-      }
+      restoreSelectValue(role, select, previousValue)
       return
     }
-    setBindingProfile(role, select.value)
+    if (select.value === INHERIT_SELECT_VALUE) {
+      setBinding(role, { mode: 'inherit' })
+      return
+    }
+    if (select.value === LEGACY_SELECT_VALUE) {
+      setBinding(role, { mode: 'legacy' })
+      return
+    }
+    if (select.value.startsWith(PROFILE_SELECT_VALUE_PREFIX)) {
+      const profileId = select.value.slice(PROFILE_SELECT_VALUE_PREFIX.length)
+      if (profileId) {
+        setBinding(role, { mode: 'profile', profileId })
+        return
+      }
+    }
+    restoreSelectValue(role, select, previousValue)
   }
 
   function restoreBindingsIfCurrent(bindings: Partial<Record<ModelRole, ModelRoleProfileBinding>>): void {
@@ -277,14 +330,6 @@
       changed = true
     }
     if (changed) draftBindings = restored
-  }
-
-  function selectedModelPresetId(): string | null {
-    const selectedIndex = settingsResourceState.value.modelPresetsId
-    const index = Number.isInteger(selectedIndex) ? (selectedIndex as number) : -1
-    const presets = collectionsResourceState.values.modelPresets
-    const preset = Array.isArray(presets) ? (presets[index] as ModelPreset | undefined) : undefined
-    return typeof preset?.id === 'string' && preset.id.trim() ? preset.id : null
   }
 
   function commandErrorMessage(result: Exclude<ServerCommandResult, { status: 'ok' }>): string {
@@ -315,10 +360,12 @@
       const outcome = await updateModelRoleProfilesDurably(bindings, modelPresetId)
       if (outcome.status === 'accepted') {
         finishPendingModelMutation(pendingToken)
+        showBindingFeedback(role, 'accepted')
         return
       }
       if (outcome.status === 'queued') {
         retainPendingModelMutation(pendingToken, outcome.mutationId)
+        showBindingFeedback(role, 'queued')
         return
       }
       finishPendingModelMutation(pendingToken)
@@ -332,6 +379,11 @@
       applying = false
     }
   }
+
+  onDestroy(() => {
+    for (const timer of bindingFeedbackTimers.values()) clearTimeout(timer)
+    bindingFeedbackTimers.clear()
+  })
 </script>
 
 <section class="flex flex-col gap-3">
@@ -343,69 +395,73 @@
   {#if commandError}
     <div class="rounded-md border border-draculared p-3 text-sm text-draculared">{commandError}</div>
   {/if}
-  <div class="flex flex-col gap-2">
-    {#each MODEL_ROLES as role (role)}
-      {@const binding = bindingFor(role)}
-      {@const inheritedSource = modelRoleProfileInheritSource(role)}
-      <article class="flex flex-col gap-2 rounded-md border border-darkborderc p-3 text-sm">
-        <div class="flex flex-wrap items-center gap-2">
-          <span class="font-medium">{roleLabel(role)}</span>
-          {#if uiState.roleStatuses[role].bucket !== 'ready'}
-            <span class="text-xs text-yellow-300">{statusLabel(role)}</span>
-          {/if}
-          {#if uiState.resolvedProfiles[role].fallbacks.length > 0}
-            <span class="ml-auto text-xs text-textcolor2">{fallbackCount(role)}</span>
-          {/if}
-        </div>
-        <span class="text-xs text-textcolor2">{roleDescription(role)}</span>
-        <div class="flex flex-wrap gap-2">
-          <div class="flex flex-1 basis-full sm:basis-0">
-            <SelectInput
-              size="sm"
-              className="w-full"
-              ariaLabel={`${roleLabel(role)}: ${language.modelProfiles.bindingModeColumn}`}
-              disabled={applying || applyQueued}
-              value={binding.mode}
-              onchange={(event) => setBindingMode(role, event.currentTarget.value as BindingMode)}>
-              <OptionInput value="profile">{language.modelProfiles.bindingModes.profile}</OptionInput>
-              {#if inheritedSource}
-                <OptionInput value="inherit">{language.modelProfiles.bindingModes.inherit}</OptionInput>
-              {/if}
-              <OptionInput value="legacy">{language.modelProfiles.bindingModes.legacy}</OptionInput>
-            </SelectInput>
-          </div>
-          {#if binding.mode === 'profile'}
-            <div class="flex flex-1 basis-full sm:basis-0">
-              {#key profileSelectRevisions[role] ?? 0}
-                <SelectInput
-                  size="sm"
-                  className="w-full"
-                  ariaLabel={`${roleLabel(role)}: ${language.modelProfiles.effectiveProfileColumn}`}
-                  disabled={applying || applyQueued}
-                  value={binding.profileId}
-                  onchange={(event) => handleBindingProfileChange(role, binding.profileId, event)}>
-                  {#if profiles.length === 0}
-                    <OptionInput value="">{language.modelProfiles.noProfiles}</OptionInput>
-                  {/if}
-                  {#each profileOptionsForBinding(binding) as profile (`${profile.kind}:${profile.id}`)}
-                    {#if profile.kind === 'divider'}
-                      <option value={modelProfileDividerSelectValue(profile.id)} data-model-profile-divider="true"
-                        >---</option>
-                    {:else}
-                      <OptionInput value={profile.id}>{profile.name}</OptionInput>
-                    {/if}
-                  {/each}
-                </SelectInput>
-              {/key}
+  <div class="flex flex-col gap-4">
+    {#each roleGroups as group (group.key)}
+      <section class="flex flex-col gap-2" aria-labelledby={`model-role-group-${group.key}`}>
+        <h4 id={`model-role-group-${group.key}`} class="text-xs font-medium uppercase tracking-wide text-textcolor2">
+          {language.modelProfiles.roleGroups[group.key]}
+        </h4>
+        {#each group.roles as role (role)}
+          {@const binding = bindingFor(role)}
+          {@const inheritedSource = modelRoleProfileInheritSource(role)}
+          {@const selectValue = bindingSelectValue(binding)}
+          {@const feedback = bindingFeedback[role]}
+          <article
+            class="flex min-w-0 flex-col gap-3 rounded-md border border-darkborderc p-3 text-sm sm:flex-row sm:items-center sm:justify-between">
+            <div class="min-w-0 flex-1">
+              <div class="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                <span class="font-medium">{roleLabel(role)}</span>
+                {#if uiState.roleStatuses[role].bucket !== 'ready'}
+                  <span class="text-xs text-yellow-300">{statusLabel(role)}</span>
+                {/if}
+                {#if uiState.resolvedProfiles[role].fallbacks.length > 0}
+                  <span class="text-xs text-textcolor2 sm:ml-auto">{fallbackCount(role)}</span>
+                {/if}
+              </div>
+              <p class="mt-0.5 text-xs text-textcolor2">{roleDescription(role)}</p>
+              <p class="mt-1 break-words text-xs text-textcolor2">{effectiveSummary(role)}</p>
             </div>
-          {/if}
-        </div>
-        <span class="break-words text-xs text-textcolor2">
-          {effectiveProfileName(role)} · {providerModelSummary(role)}
-          {#if binding.mode === 'inherit'}
-            · {inheritedSourceLabel(role)}{/if}
-        </span>
-      </article>
+            <div
+              class="flex w-full min-w-0 flex-col items-start gap-1 sm:w-auto sm:shrink-0 sm:flex-row sm:items-center sm:gap-2">
+              <div class="w-full min-w-0 sm:w-64">
+                {#key profileSelectRevisions[role] ?? 0}
+                  <SelectInput
+                    size="sm"
+                    className="w-full min-w-0"
+                    ariaLabel={`${roleLabel(role)}: ${language.modelProfiles.effectiveProfileColumn}`}
+                    disabled={applying || applyQueued}
+                    value={selectValue}
+                    onchange={(event) => handleBindingChange(role, selectValue, event)}>
+                    {#if inheritedSource}
+                      <OptionInput value={INHERIT_SELECT_VALUE}
+                        >{language.modelProfiles.sameAsRole(roleLabel(inheritedSource))}</OptionInput>
+                    {/if}
+                    {#each profileOptionsForBinding(binding) as profile (`${profile.kind}:${profile.id}`)}
+                      {#if profile.kind === 'divider'}
+                        <option
+                          value={modelProfileDividerSelectValue(profile.id)}
+                          data-model-profile-divider="true"
+                          disabled>---</option>
+                      {:else}
+                        <OptionInput value={profileSelectValue(profile.id)}>{profile.name}</OptionInput>
+                      {/if}
+                    {/each}
+                    {#if binding.mode === 'legacy' || !uiState.allRolesUseDurableProfiles}
+                      <OptionInput value={LEGACY_SELECT_VALUE}
+                        >{language.modelProfiles.bindingModes.legacy}</OptionInput>
+                    {/if}
+                  </SelectInput>
+                {/key}
+              </div>
+              {#if feedback}
+                <span role="status" class="shrink-0 text-xs text-textcolor2">
+                  {bindingFeedbackLabel(feedback)}
+                </span>
+              {/if}
+            </div>
+          </article>
+        {/each}
+      </section>
     {/each}
   </div>
 </section>

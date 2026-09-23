@@ -1,7 +1,9 @@
 <script lang="ts">
-  import { PencilIcon, PlusIcon, TrashIcon } from '@lucide/svelte'
+  import { ChevronRightIcon, PlusIcon, TrashIcon } from '@lucide/svelte'
   import { language } from 'src/lang'
   import Button from 'src/lib/UI/GUI/Button.svelte'
+  import OptionInput from 'src/lib/UI/GUI/OptionInput.svelte'
+  import SelectInput from 'src/lib/UI/GUI/SelectInput.svelte'
   import {
     beginPendingModelMutation,
     deleteProviderCredentialDurably,
@@ -20,7 +22,6 @@
   import { settingsResourceState } from 'src/ts/server/resourceState.svelte'
   import type { ModelProfileRecord } from 'src/ts/model/modelProfileRecords'
   import ProviderCredentialEditor from './ProviderCredentialEditor.svelte'
-  import ModelItemActions from './ModelItemActions.svelte'
 
   interface Props {
     initialCreateType?: ProviderCredentialType | null
@@ -133,9 +134,7 @@
     if (busy || mutationPending || !modelProfileOwnersValid) return
     const references = referencingProfiles(credential.id)
     if (references.length > 0) {
-      commandError = language.modelProfiles.credentialInUse(
-        references.map((profile) => `${profile.name} (${profile.id})`).join(', '),
-      )
+      commandError = language.modelProfiles.credentialInUse(references.map((profile) => profile.name).join(', '))
       return
     }
     if (!window.confirm(language.modelProfiles.deleteCredentialConfirm(credential.name))) return
@@ -192,20 +191,9 @@
       <h3 class="text-lg font-semibold">{language.modelProfiles.credentialsTabTitle}</h3>
       <p class="text-sm text-textcolor2">{language.modelProfiles.credentialsTabDescription}</p>
     </div>
-    <div class="flex flex-wrap gap-2">
-      <Button size="sm" disabled={busy || mutationPending || editorOpen} onclick={() => openCreate('apiKey')}>
-        <span class="inline-flex items-center gap-1"
-          ><PlusIcon size={14} />{language.modelProfiles.createApiCredential}</span>
-      </Button>
-      <Button
-        size="sm"
-        styled="outlined"
-        disabled={busy || mutationPending || editorOpen}
-        onclick={() => openCreate('vertexServiceAccount')}>
-        <span class="inline-flex items-center gap-1"
-          ><PlusIcon size={14} />{language.modelProfiles.createVertexCredential}</span>
-      </Button>
-    </div>
+    <Button size="sm" disabled={busy || mutationPending || editorOpen} onclick={() => openCreate('apiKey')}>
+      <span class="inline-flex items-center gap-1"><PlusIcon size={14} />{language.modelProfiles.addCredential}</span>
+    </Button>
   </div>
 
   {#if commandError}
@@ -213,6 +201,22 @@
   {/if}
 
   {#if editorOpen}
+    {#if creating}
+      <div class="flex max-w-sm flex-col gap-1">
+        <span class="text-sm font-medium">{language.modelProfiles.credentialType}</span>
+        <SelectInput
+          size="sm"
+          value={credentialType}
+          ariaLabel={language.modelProfiles.credentialType}
+          disabled={busy || mutationPending}
+          onchange={(event) => {
+            credentialType = event.currentTarget.value as ProviderCredentialType
+          }}>
+          <OptionInput value="apiKey">{language.modelProfiles.apiKeyCredentialType}</OptionInput>
+          <OptionInput value="vertexServiceAccount">{language.modelProfiles.vertexCredentialType}</OptionInput>
+        </SelectInput>
+      </div>
+    {/if}
     {#key editingId ?? credentialType}
       <ProviderCredentialEditor
         type={credentialType}
@@ -249,25 +253,17 @@
                 </span>
               </span>
               <span class="pointer-events-none shrink-0 text-textcolor2" aria-hidden="true"
-                ><PencilIcon size={16} /></span>
+                ><ChevronRightIcon size={16} /></span>
             </button>
-            <ModelItemActions
-              label={language.modelProfiles.itemActions(credential.name)}
-              disabled={busy || mutationPending || editorOpen}>
-              {#snippet children(close)}
-                <button
-                  type="button"
-                  class="flex min-h-11 items-center gap-2 rounded-md px-3 py-2 text-left text-draculared hover:bg-darkbg disabled:opacity-50"
-                  disabled={!modelProfileOwnersValid || references.length > 0}
-                  onclick={() => {
-                    close()
-                    void deleteCredential(credential)
-                  }}><TrashIcon size={14} />{language.modelProfiles.delete}</button>
-                {#if references.length > 0}
-                  <span class="px-3 py-2 text-xs text-textcolor2">{language.modelProfiles.credentialInUseShort}</span>
-                {/if}
-              {/snippet}
-            </ModelItemActions>
+            <button
+              type="button"
+              class="flex h-11 w-11 shrink-0 items-center justify-center rounded-md text-draculared hover:bg-darkbg focus:ring-2 focus:ring-borderc disabled:cursor-not-allowed disabled:opacity-50"
+              aria-label={language.modelProfiles.deleteCredentialAction(credential.name)}
+              title={references.length > 0 ? language.modelProfiles.credentialInUseShort : undefined}
+              disabled={busy || mutationPending || editorOpen || !modelProfileOwnersValid || references.length > 0}
+              onclick={() => void deleteCredential(credential)}>
+              <TrashIcon size={16} />
+            </button>
           </div>
           {#if references.length === 0}
             <p class="pb-3 text-xs text-textcolor2">{language.modelProfiles.notUsedByProfiles}</p>

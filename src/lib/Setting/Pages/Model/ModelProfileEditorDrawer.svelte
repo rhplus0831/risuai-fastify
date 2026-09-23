@@ -115,8 +115,7 @@
   let fallbacks = $state<ModelProfileRecordFallbackRef[]>(cloneJsonValue(initialProfile?.fallbacks ?? []))
   let initialSnapshot = $state('')
   let providerCredentialReset = $state(false)
-  // svelte-ignore state_referenced_locally
-  let connectionOpen = $state(mode === 'create')
+  let connectionOpen = $state(true)
   let credentialEditorType = $state<ProviderCredentialType | null>(null)
   let credentialHasChanges = $state(false)
   let credentialSaving = $state(false)
@@ -586,10 +585,14 @@
         <Accordion styled name={language.modelProfiles.runtimeOverridesTitle}>
           <div class="flex min-w-0 flex-col gap-5 p-2">
             <section class="flex flex-col gap-3">
-              <h4 class="text-sm font-semibold">{language.modelProfiles.advancedProviderOptions}</h4>
+              <h4 class="text-sm font-semibold">{language.modelProfiles.advancedSectionProvider}</h4>
               {@render providerPanel('advanced')}
             </section>
-            <ModelRuntimeOptionsEditor bind:value={runtimeOptions} defaults={runtimeDefaults} advancedOnly />
+            <ModelRuntimeOptionsEditor
+              bind:value={runtimeOptions}
+              defaults={runtimeDefaults}
+              advancedOnly
+              hiddenKeys={providerId === 'llmgateway' ? ['reasoningEffort', 'verbosity'] : []} />
             <section class="flex flex-col gap-3 border-t border-darkborderc pt-4">
               <h4 class="text-sm font-semibold">{language.modelProfiles.fallbacksTitle}</h4>
               <ModelFallbackEditor profileId={initialProfile?.id} {profiles} {profileOrder} bind:value={fallbacks} />

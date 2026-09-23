@@ -43,6 +43,8 @@
     label: string
   }
 
+  type LLMFlagKey = keyof typeof LLMFlags
+
   interface Props {
     section?: 'all' | 'setup' | 'advanced'
     credentialEditor?: Snippet
@@ -111,9 +113,10 @@
     })),
   )
   const tokenizerOptions = FASTIFY_TOKENIZER_OPTIONS.filter((option) => option.value !== 'tik')
-  const flagOptions = Object.entries(LLMFlags).map(([label, flag]) => ({
-    label,
-    flag: flag as LLMFlagValue,
+  const flagOptions = (Object.keys(LLMFlags) as LLMFlagKey[]).map((key) => ({
+    key,
+    label: language.modelProfiles.capabilityFlags[key],
+    flag: LLMFlags[key] as LLMFlagValue,
   }))
 
   let llmGatewayModels = $state<LLMGatewayModelInfo[]>([])
@@ -464,15 +467,18 @@
               data-model-custom-api-flags
               class="grid max-h-56 grid-cols-1 gap-2 overflow-y-auto rounded-md border border-darkborderc p-2 sm:grid-cols-2">
               {#each flagOptions as option (option.flag)}
-                <label class="flex min-w-0 items-center gap-2 text-sm text-textcolor2">
+                <label class="flex min-w-0 items-start gap-2 text-sm text-textcolor2" title={option.key}>
                   <input
                     type="checkbox"
-                    class="h-4 w-4"
+                    class="mt-0.5 h-4 w-4 shrink-0"
                     checked={customFlags.includes(option.flag)}
                     onchange={(event) => {
                       setCustomFlag(option.flag, event.currentTarget.checked)
                     }} />
-                  <span class="min-w-0 break-all">{option.label}</span>
+                  <span class="min-w-0">
+                    {option.label}
+                    <span class="ml-1 break-all text-xs opacity-70">({option.key})</span>
+                  </span>
                 </label>
               {/each}
             </div>

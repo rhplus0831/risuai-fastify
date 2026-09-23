@@ -5,11 +5,8 @@
   import Button from 'src/lib/UI/GUI/Button.svelte'
   import SegmentedControl from 'src/lib/UI/GUI/SegmentedControl.svelte'
   import { getModelInfo } from 'src/ts/model/modellist'
-  import {
-    normalizeLegacySeperateModels,
-    normalizeModelRoleOverrides,
-    MODEL_ROLES,
-  } from '@risuai/shared-core/model-roles'
+  import { MODEL_ROLES } from '@risuai/shared-core/model-roles'
+  import { hasLegacyModelFields } from 'src/ts/model/legacyModelSettings'
   import { normalizeModelRoleProfiles, type ModelProfileRecord } from 'src/ts/model/modelProfileRecords'
   import { resolveModelProfileUiState } from 'src/ts/model/modelProfileUiState'
   import {
@@ -23,7 +20,7 @@
   } from 'src/ts/model/modelProfileMutations'
   import type { ServerCommandResult } from 'src/ts/server/commands'
   import { collectionsResourceState, settingsResourceState } from 'src/ts/server/resourceState.svelte'
-  import type { Database } from 'src/ts/storage/database.svelte'
+  import type { Database, PromptPreset } from 'src/ts/storage/database.svelte'
   import { openPresetListModal } from 'src/ts/stores.svelte'
   import LegacyModelRoleList from './ModelRoleList.svelte'
   import ModelProfileList from './ModelProfileList.svelte'
@@ -70,6 +67,12 @@
     const name = typeof preset.name === 'string' ? preset.name.trim() : ''
     return name || language.modelProfiles.defaultPresetName(index + 1)
   })
+  let selectedPromptPreset = $derived.by(() => {
+    const index = selectedOwnerIndex(settingsResourceState.value.promptPresetsId)
+    const promptPresets = collectionsResourceState.values.promptPresets
+    return Array.isArray(promptPresets) ? (promptPresets[index] as PromptPreset | undefined) : undefined
+  })
+  let selectedPromptPresetOverridesRoles = $derived(hasPresetField(selectedPromptPreset, 'modelRoleProfiles'))
   let legacyMainModel = $derived(settingsResourceState.value.aiModel || language.none)
   let legacyAuxModel = $derived(settingsResourceState.value.subModel || language.none)
 
@@ -99,27 +102,16 @@
     }
   })
 
-  function nonBlank(value: unknown): boolean {
-    return typeof value === 'string' && value.trim() !== ''
-  }
-
   function selectedOwnerIndex(value: unknown): number {
     return Number.isInteger(value) ? (value as number) : -1
   }
 
-  function hasLegacyModelFields(): boolean {
-    const settings = settingsResourceState.value
-    if (nonBlank(settings.aiModel) || nonBlank(settings.subModel)) return true
+  function hasPresetField(preset: PromptPreset | undefined, field: string): boolean {
+    return !!preset && Object.prototype.hasOwnProperty.call(preset, field)
+  }
 
-    const roleOverrides = normalizeModelRoleOverrides(settings.modelRoles)
-    if (Object.values(roleOverrides).some(nonBlank)) return true
-
-    if (settings.seperateModelsForAxModels) {
-      const separateModels = normalizeLegacySeperateModels(settings.seperateModels)
-      if (Object.values(separateModels).some(nonBlank)) return true
-    }
-
-    return false
+  function selectedPromptPresetName(): string {
+    return selectedPromptPreset?.name?.trim() || language.promptPresets
   }
 
   function isClearlyLegacyOnly(): boolean {
@@ -129,7 +121,7 @@
     const roleProfiles = normalizeModelRoleProfiles(settingsResourceState.value.modelRoleProfiles)
     if (!MODEL_ROLES.every((role) => roleProfiles[role].mode === 'legacy')) return false
 
-    return hasLegacyModelFields()
+    return hasLegacyModelFields(settingsResourceState.value)
   }
 
   function commandErrorMessage(result: Exclude<ServerCommandResult, { status: 'ok' }>): string {
@@ -237,21 +229,29 @@
   </div>
 
   {#if activeTab === 'roles'}
-    <div class="w-full">
-      <Button
-        size="sm"
-        styled="outlined"
-        onclick={() => {
-          openPresetListModal('global', 'model')
-        }}
-        className="flex w-full min-w-0 items-center justify-start gap-2 text-left">
-        <ListIcon size={16} class="shrink-0" />
-        <span class="min-w-0 flex-1 break-words text-textcolor">
-          <span class="text-textcolor2">{language.modelProfiles.modelPresetLabel}:</span>
-          {selectedModelPresetButtonLabel}
-        </span>
-        <span class="shrink-0">{language.modelProfiles.changeModelPreset}</span>
-      </Button>
+    <div class="rounded-md border border-darkborderc p-4">
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="min-w-0">
+          <span class="text-xs text-textcolor2">{language.modelProfiles.activeModelPresetLabel}</span>
+          <div class="break-words text-lg font-semibold">{selectedModelPresetButtonLabel}</div>
+          <p class="mt-0.5 text-sm text-textcolor2">{language.modelProfiles.activeModelPresetDescription}</p>
+        </div>
+        <Button
+          size="sm"
+          styled="outlined"
+          onclick={() => {
+            openPresetListModal('global', 'model')
+          }}
+          className="flex w-full shrink-0 items-center justify-center gap-2 sm:w-auto">
+          <ListIcon size={16} aria-hidden="true" />
+          {language.modelProfiles.changeModelPreset}
+        </Button>
+      </div>
+      {#if selectedPromptPresetOverridesRoles}
+        <div class="mt-3 border-t border-darkborderc pt-3 text-sm text-textcolor2">
+          {language.modelProfiles.promptPresetRoleOverrideNotice(selectedPromptPresetName())}
+        </div>
+      {/if}
     </div>
     <ModelProfileRoleList />
   {:else if activeTab === 'profiles'}
@@ -284,7 +284,9 @@
     </Accordion>
   {/if}
 
-  <SettingsSections sections={modelSupplementalSettingsSections} />
+  {#if activeTab === 'profiles'}
+    <SettingsSections sections={modelSupplementalSettingsSections} />
+  {/if}
 </section>
 
 <style>

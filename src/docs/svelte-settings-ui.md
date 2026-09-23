@@ -1,7 +1,7 @@
 # Svelte Settings UI Guide
 
 Last audited: 2026-09-04.
-Targeted source checks: 2026-09-12 (Agent issue focus/recovery and authoring states).
+Targeted source checks: 2026-09-23 (models, assignments, credentials, and editor behavior).
 
 This guide owns settings navigation, data-driven rows, shared controls,
 authoring editors, model-profile presentation, and visible settings persistence
@@ -17,7 +17,7 @@ shell and routing model.
 | A data-driven row is hidden, stale, or not saving | `src/lib/Setting/SettingRenderer.svelte`, the matching definition under `src/ts/setting/` | `src/ts/setting/utils.ts`, `src/lib/Setting/Wrappers/` |
 | A primitive control is wrong everywhere | The control in `src/lib/UI/GUI/` | Its settings wrapper if only rows are affected |
 | Agent, prompt, or input-hook editor is wrong | The matching page/drawer under `src/lib/Setting/Pages/` | The canonical runtime guide linked from its section below |
-| Role/profile summary, divider, provider panel, or credential editor is wrong | `src/lib/Setting/Pages/Model/` | `src/ts/model/modelProfileUiState.ts`, [Providers And Models](../../docs/structure/providers-and-models.md) |
+| Role/profile summary, divider, provider panel, or credential editor is wrong | `src/lib/Setting/Pages/Model/` | `src/ts/model/modelProfileUiState.ts`, `src/ts/model/modelPresetSelection.ts`, `src/ts/model/legacyModelSettings.ts`, [Providers And Models](../../docs/structure/providers-and-models.md) |
 | Optimistic value rolls back, queues indefinitely, or survives page exit incorrectly | `src/ts/setting/utils.ts`, `src/ts/server/settingsOwner.svelte.ts` | [Settings Persistence](#settings-persistence) |
 
 ## Shell And Routed Pages
@@ -404,52 +404,97 @@ Chat selection and review controls are in
 
 `src/lib/Setting/Pages/Model/ModelSettingsShell.svelte` opens on Models and owns
 conversion, Model assignments, API keys & accounts, and Advanced Legacy Settings.
-The Model assignments tab uses
-`src/lib/Setting/Pages/Model/ModelProfileRoleList.svelte` to edit
-`Database.modelRoleProfiles`. Valid changes apply automatically, and each role
-shows binding mode, inherited source, effective model, and provider. Internal
-IDs, Ready status, and zero fallback counts are hidden; actionable status reasons
-and configured fallbacks remain visible.
+User-facing strings say model or saved model; the source still calls the records
+profiles, including `Database.modelProfiles` and `Database.modelRoleProfiles`.
 
 The Models tab uses
 `src/lib/Setting/Pages/Model/ModelProfileList.svelte` to present
-`Database.modelProfiles` and profile create/edit/duplicate/delete actions.
-Compact rows open the editor directly and hide internal IDs and routine Ready
-status. `ModelItemActions.svelte` discloses duplicate/delete actions, closes on
-outside pointer or focus movement, and returns focus to its trigger on Escape.
-Before dispatching a
-delete, the UI checks every Model Preset role-binding snapshot and blocks a
-referenced profile; role bindings are explicitly reassigned on an allowed
-delete. The server's authoritative deletion guard remains provider/runtime
-owned.
+`Database.modelProfiles`. Selecting a row opens its editor, with a chevron as
+the affordance. The subtitle starts with the provider and omits the model ID when
+it equals the provider ID. It adds a distinct request model when present; Custom
+API rows show the request model and the configured base URL host. Chips identify
+roles directly bound to that saved model. Internal IDs and routine Ready status
+remain hidden.
+
+`ModelItemActions.svelte` gives each saved-model row a kebab with Edit, Use for
+Main Chat, Use for Auxiliary, Duplicate, and Delete. A Use for action is absent
+when that role is already directly bound. Both Use for actions call
+`updateModelRoleProfilesDurably()` with the selected Model Preset ID from
+`src/ts/model/modelPresetSelection.ts`. Before Delete dispatches, the UI checks
+every Model Preset role-binding snapshot and blocks a referenced saved model;
+role bindings are explicitly reassigned on an allowed delete. The server's
+authoritative deletion guard remains provider/runtime owned.
 
 The profile list uses one handle-based Sortable instance for mouse, pen, and
 touch. Shared `internalReorderSortableOptions` forces the fallback path for all
-pointer types; both profile cards and divider rows expose the same dedicated
-drag handle. `Database.modelProfileOrder` interleaves durable UX-only dividers
-with profiles. Dividers render as `---`, participate in the same reorder, and
-are restored rather than selected in profile dropdowns. Pending profile
-mutations disable sorting.
+pointer types; saved-model rows and divider rows expose the same dedicated drag
+handle. `Database.modelProfileOrder` interleaves durable UX-only dividers with
+saved models. Dividers render as `---`, are not clickable, and have their own
+kebab with Delete divider. The quiet Add divider button sits below the list.
+Pending profile mutations disable sorting.
+
+`src/lib/Setting/Pages/Model/ModelRuntimeDefaultsEditor.svelte` renders Global
+generation defaults as a summary card above the list. Its single-line summary
+shows the effective response limit, context limit, streaming, and half-streaming
+values. Edit expands the form inline; Save, Cancel, and Reset remain explicit.
+`ModelGenerationSettings.svelte` accepts `showHeading`, so the expanded card can
+render the common fields without repeating the heading.
+
+The Model assignments tab starts with an Active model preset card. Change… opens
+the Model Preset modal. When the selected Prompt Preset stores
+`modelRoleProfiles`, the card warns that it may override the applied Model Preset
+during generation.
+
+`src/lib/Setting/Pages/Model/ModelProfileRoleList.svelte` groups roles under
+Chat, Memory & emotion, Translation & other, and Scripts. Each role has one
+select. A role with an inherit source gets Same as `<source>`; saved models follow
+in `modelProfileOrder`, with dividers as disabled `---` options. A missing saved
+model is retained as an explicit option. Legacy appears only for a current legacy
+binding or while `uiState.allRolesUseDurableProfiles` is false. Changes apply
+automatically through `updateModelRoleProfilesDurably()` and briefly show Saved
+or Queued for that role. Effective provider/model summaries, actionable status
+reasons, and configured fallback counts remain visible; internal IDs, routine
+Ready status, and zero fallback counts remain hidden.
+
+`src/ts/model/modelPresetSelection.ts` resolves the selected Model Preset ID used
+by role-binding writes from both lists. `src/ts/model/legacyModelSettings.ts`
+owns legacy-field detection used by the shell. Advanced Legacy Settings remains
+visible until every role resolves through durable saved models, including
+supported inherited bindings.
 
 `src/lib/Setting/Pages/Model/ModelProfileEditorDrawer.svelte` and
 `src/lib/Setting/Pages/Model/ModelProviderPanel.svelte` own provider,
 credential, model, request-model, and visible provider-option controls. The
 first-class panels are OpenAI, LLM Gateway, Neuralwatt, Anthropic, Google,
 Vertex, Ollama, Custom API, and Debug Echo. Neuralwatt uses the catalog-backed
-model grid. Connection setup is expanded for creation and collapsed for editing;
+model grid. The connection section starts expanded in both create and edit mode;
 the provider panel separates setup fields from advanced provider options.
-`ModelGenerationSettings.svelte` keeps maximum response, context limit, streaming,
-and half streaming visible, showing effective inherited values and explicit
-per-model overrides. Other runtime options and fallbacks are under Advanced.
-The model editor states that edits affect every use of the saved model.
+
+`ModelGenerationSettings.svelte` keeps maximum response, context limit,
+streaming, and half streaming visible. Empty values inherit, controls show the
+effective value as `Default · value`, and Use default clears an explicit numeric
+override. `src/lib/Setting/Pages/Model/ModelRuntimeOptionsEditor.svelte` uses the
+same empty-means-inherit and default-value idiom for advanced fields. The
+Advanced accordion is grouped into Provider options, Sampling, Reasoning, Output
+format, Other, Capability flags, and Fallbacks. Capability flags use human labels
+with their identifiers in parentheses. The model editor states that edits affect
+every use of the saved model.
+
+For LLM Gateway, the editor hides the generic Reasoning Effort and Verbosity
+runtime fields because the request uses the LLM Gateway provider options.
+`server/fastify/src/prompt/chatDispatch.ts` selects those provider-specific
+values for LLM Gateway dispatch.
 
 `src/lib/Setting/Pages/Model/ProviderCredentialList.svelte` owns credential list
-presentation and profile-reference deletion checks. `ProviderCredentialEditor.svelte`
-shares credential creation/editing and masked-secret rotation between that list
-and inline model setup. Inline creation preserves the model draft and selects a
-new key only once its server-generated ID appears in the credential projection.
-Queued creation stays pending until the matching projection arrives or replay is
-discarded; it never adds a raw secret to the model profile.
+presentation and saved-model reference checks. It has one Add key or account
+button; create mode then exposes a Type select. Selecting a row opens the editor,
+while its direct delete button is disabled when any saved model references that
+key or account. `ProviderCredentialEditor.svelte` shares credential
+creation/editing and masked-secret rotation between that list and inline model
+setup. Inline creation preserves the model draft and selects a new key only once
+its server-generated ID appears in the credential projection. Queued creation
+stays pending until the matching projection arrives or replay is discarded; it
+never adds a raw secret to the saved model.
 `packages/shared-core/src/providerCredentialRecords.ts` owns
 credential schema/projection normalization; durable credential and profile
 mutation helpers live in `src/ts/model/modelProfileMutations.ts`.
@@ -460,14 +505,11 @@ without replacing their preserved masked values; preset selection must not be
 treated as a raw credential import. The server-side credential contract is in
 [Providers And Models](../../docs/structure/providers-and-models.md#provider-credentials).
 
-`src/lib/Setting/Pages/Model/ModelRuntimeDefaultsEditor.svelte` edits
-`Database.modelRuntimeDefaults` with explicit Edit/Save/Cancel/Reset from a
-compact control above the saved model list. It uses the same common generation controls and an Advanced
-section. `resolveModelRuntimeDefaults()` in the shared resolver supplies the
-canonical built-in/global defaults in stored units without reading legacy flat
+`resolveModelRuntimeDefaults()` in the shared resolver supplies canonical
+built-in and global defaults in stored units without reading legacy flat
 settings. `ModelRuntimeOptionsEditor.svelte` keeps Strip CoT as a default checkbox
-or an inherit/enable/disable profile override. Legacy `BotSettings.svelte` shows
-half-streaming only where its compatibility model supports streaming.
+or an inherit/enable/disable saved-model override. Legacy `BotSettings.svelte`
+shows half-streaming only where its compatibility model supports streaming.
 
 `src/lib/Setting/Pages/Model/ModelPresetList.svelte`, embedded by
 `src/lib/Setting/botpreset.svelte`, owns the Model Preset list and its current
@@ -487,11 +529,10 @@ subscription state, while the picker fetches provider metadata for its filtered
 selection UI.
 
 Advanced Legacy Settings embeds
-`src/lib/Setting/Pages/Model/ModelRoleList.svelte`. It is hidden after every
-role resolves from a durable profile, including supported inherited bindings;
-legacy-inherit keeps it visible. `packages/shared-core/src/modelProfileRecords.ts`
-normalizes profile records, role bindings, runtime defaults, credential
-references, provider options, and fallbacks.
+`src/lib/Setting/Pages/Model/ModelRoleList.svelte`; legacy-inherit keeps it
+visible. `packages/shared-core/src/modelProfileRecords.ts` normalizes profile
+records, role bindings, runtime defaults, credential references, provider
+options, and fallbacks.
 `src/ts/model/modelProfileUiState.ts` maps resolved state to the summaries and
 visibility used by these pages. Effective resolution and readiness live in
 `packages/shared-core/src/modelProfileResolver.ts` and remain canonical in
@@ -503,8 +544,9 @@ accepts 1-64 MiB. Increasing it improves compatibility with large legacy
 scripts at the cost of additional memory exposure; pattern and source limits
 remain fixed.
 
-Model Settings has a collapsed Advanced model behavior section for global
-compatibility controls that do not belong to an individual profile. It includes
+Only the Models tab renders the collapsed Advanced model behavior
+`SettingsSections` block for global compatibility controls that do not belong to
+an individual saved model. It includes
 the experimental OpenAI Flex Processing checkbox (`adv.openAIFlex`) bound to
 the durable `openAIFlexProcessing` field, global request retry/generation
 limits, vision quality, and the legacy custom-model editor.

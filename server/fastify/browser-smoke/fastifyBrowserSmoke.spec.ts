@@ -1335,6 +1335,67 @@ test('prompt presets and model profiles reorder from an immediate mobile touch d
   }
 })
 
+test('model settings assigns a saved model from its row menu and from one select per role', async ({ browser }) => {
+  test.setTimeout(60_000)
+  await importDatabase(harness.app, browserSmokeAssertion, browserSmokeDatabase(true))
+  const context = await browser.newContext()
+  const page = await context.newPage()
+  const roleBindingWrite = () =>
+    page.waitForResponse(
+      (response) =>
+        response.request().method() === 'PUT' &&
+        new URL(response.url()).pathname === '/api/v1/commands/model-role-profiles',
+    )
+
+  try {
+    await page.goto(`${harness.baseUrl}/settings/model`)
+    await waitForBrowserSmokeLoaded(page)
+    await page.getByRole('button', { name: 'Models', exact: true }).click()
+
+    const rowB = page.locator('[data-model-profile-row][data-profile-id="profile-smoke-b"]')
+    await expect(rowB).toBeVisible()
+    await expect(rowB.getByText('Main Chat', { exact: true })).toHaveCount(0)
+    await rowB.getByRole('button', { name: 'More actions for Profile Smoke B' }).click()
+    const mainChatWrite = roleBindingWrite()
+    await page.getByRole('button', { name: 'Use for Main Chat', exact: true }).click()
+    expect((await mainChatWrite).ok()).toBe(true)
+    await expect(rowB.getByText('Main Chat', { exact: true })).toBeVisible()
+
+    await page.getByRole('button', { name: 'Model assignments', exact: true }).click()
+    const mainChatSelect = page.getByLabel(/^Main Chat:/)
+    await expect(mainChatSelect.locator('option:checked')).toHaveText('Profile Smoke B')
+
+    const auxiliarySelect = page.getByLabel(/^Auxiliary:/)
+    const auxiliaryWrite = roleBindingWrite()
+    await auxiliarySelect.selectOption({ label: 'Profile Smoke A' })
+    expect((await auxiliaryWrite).ok()).toBe(true)
+    await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toBeVisible()
+
+    const translationSelect = page.getByLabel(/^Translation:/)
+    const translationWrite = roleBindingWrite()
+    await translationSelect.selectOption({ label: 'Same as Auxiliary' })
+    expect((await translationWrite).ok()).toBe(true)
+    await expect(translationSelect.locator('option:checked')).toHaveText('Same as Auxiliary')
+    await expect(page.getByText('Profile Smoke A · Debug Echo', { exact: false }).first()).toBeVisible()
+
+    const settings = await harness.app.inject({
+      method: 'GET',
+      url: '/api/v1/settings',
+      headers: { 'risu-auth': browserSmokeAssertion },
+    })
+    expect(settings.statusCode).toBe(200)
+    expect(
+      settings.json<{ settings: { modelRoleProfiles: Record<string, unknown> } }>().settings.modelRoleProfiles,
+    ).toMatchObject({
+      chatMain: { mode: 'profile', profileId: 'profile-smoke-b' },
+      chatAux: { mode: 'profile', profileId: 'profile-smoke-a' },
+      translate: { mode: 'inherit' },
+    })
+  } finally {
+    await context.close()
+  }
+})
+
 test('global lorebook page owner hydrates once, selects by stable id, and survives reload', async ({ page }) => {
   await importDatabase(harness.app, browserSmokeAssertion, browserSmokeDatabase())
   const focusedReads: string[] = []
