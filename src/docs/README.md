@@ -14,6 +14,11 @@ source and the matching tests; these guides are not a required reading sequence.
 | [`client-runtime.md`](client-runtime.md) | Startup, resource integration, drafts, freshness, server-operation adapters | [Startup](client-runtime.md#startup-sequence), [runtime boundaries](client-runtime.md#adjacent-runtime-owners) |
 | [`generation-client.md`](generation-client.md) | Durable generation, streams, cancellation, reattach, terminal effects, audio | [Preflight gates](generation-client.md#preflight-persistence-gates), [stream recovery](generation-client.md#operations-streams-and-reattach) |
 
+Before adding or restyling a surface, control, dialog, or state, read the
+[UI/UX Guideline](ui-ux-guideline.md); it states the visual and interaction
+rules every surface keeps and the checklist to run before reporting a UI change
+complete.
+
 Cross-layer contracts have separate canonical owners:
 
 - Read/cache/hydration protocol: [Server Resources And Hydration](../../docs/structure/server-resources-and-bridges.md).

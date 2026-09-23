@@ -62,6 +62,7 @@ Toolchain: Node.js >=24 and pnpm; root `package.json` owns both runtimes.
 | Durable mutations, command events, invalidation, bridges, writer loss, or recovery | [Durable Mutations And Recovery](docs/structure/durable-mutations-and-recovery.md) |
 | Chat, transcript, message, composer, generation UI, drafts, viewport behavior, or completion audio | [Svelte Chat UI](src/docs/svelte-chat-ui.md), then [Generation Client](src/docs/generation-client.md) for durable generation |
 | Sidebars, client URL/navigation routes, chat lists, character selection, or reordering | [Svelte Navigation UI](src/docs/svelte-navigation-ui.md) |
+| New or restyled UI surface, control, dialog, state, or accessibility work | [UI/UX Guideline](src/docs/ui-ux-guideline.md), then the owning Svelte guide below |
 | Settings, shared controls/accessibility, localization, authoring pages, or provider panels | [Svelte Settings UI](src/docs/svelte-settings-ui.md) and [Svelte UI](src/docs/svelte-ui.md#localization) |
 | App shell, styling/themes, responsive/Lite behavior, Playground, or data-dependent rendering | [Svelte UI](src/docs/svelte-ui.md) |
 | Model profiles, credentials, providers, capabilities, runtime options, or request history | [Providers And Models](docs/structure/providers-and-models.md) |
