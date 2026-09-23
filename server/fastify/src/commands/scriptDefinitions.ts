@@ -1,10 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto'
+import type { TriggerMode } from '../prompt/triggers.js'
 import { EntityNotFoundError, ValidationError } from '../repository.js'
 import { type CharacterRecord, readCharacterId, readJsonObject } from './characters.js'
 import { ensureModuleCollection, readModuleId, requireModule, type ModuleRecord } from './lorebooks.js'
 import { serializeScriptDefinitionCollectionDigestInput } from '@risuai/shared-core/mutation-certificates'
 
 type JsonRecord = Record<string, unknown>
+
+const VALID_TRIGGER_MODES = new Set<TriggerMode>(['start', 'manual', 'output', 'input', 'display', 'request'])
 
 export interface ScriptDefinitionRecord extends JsonRecord {
   id: string
@@ -301,6 +304,16 @@ function repairDefinitionRecords(input: unknown[], label: string, kind: 'script'
     const normalizedId = seen.has(id) ? randomUUID() : id
     record.id = normalizedId
     seen.add(normalizedId)
+    if (
+      kind === 'trigger' &&
+      Array.isArray(record.type) &&
+      record.type.length === 1 &&
+      VALID_TRIGGER_MODES.has(record.type[0] as TriggerMode)
+    ) {
+      // See "V2 Triggers And Unsupported Effects": only the import repair path
+      // canonicalizes this legacy/foreign tuple; strict command writes do not.
+      record.type = record.type[0]
+    }
     validateDefinitionRecord(record, `${label}[${index}]`, kind)
     return record
   })

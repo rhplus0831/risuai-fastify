@@ -552,8 +552,11 @@ finite compatibility shape for legacy/foreign rows, not a new authoring format:
 ordinary automatic selection remains scalar-only and never coerces the tuple.
 The historical first-effect `triggercode`/`triggerlua` and manual-name bypasses
 remain unchanged, while string-only trigger attribution omits tuple values.
-Browser editors, imports, and command writes continue to require scalars, and a
-read/display operation never rewrites a tuple row.
+Module imports (`.risum`/JSON), Realm character-card imports, and Risu-save
+snapshot imports canonicalize an exact one-element tuple containing a valid
+mode to its scalar during the repair pass. Browser editors and command writes
+continue to require scalars, and a read/display operation never rewrites a
+tuple row.
 
 Retained legacy guards can end the whole trigger before later effects. This
 applies to malformed literal-container variable names and display/request-state

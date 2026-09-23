@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { getSchemaState, openDatabase } from '../src/db.js'
 import { injectComposedResourceDatabase } from './helpers/resourceDatabase.js'
 import { setupAuthedClient } from './helpers/auth.js'
@@ -13,6 +15,30 @@ import {
 } from './helpers/commandHarness.js'
 
 let harness: Harness
+
+const rpackEncodeMap = readFileSync(path.join(process.cwd(), 'src/ts/rpack/rpack_map.bin')).subarray(0, 256)
+
+function risumFile(module: Record<string, unknown>): Buffer {
+  const encoded = Buffer.from(JSON.stringify({ type: 'risuModule', module }), 'utf8').map(
+    (byte) => rpackEncodeMap[byte],
+  )
+  const header = Buffer.alloc(6)
+  header.writeUInt8(111, 0)
+  header.writeUInt8(0, 1)
+  header.writeUInt32LE(encoded.length, 2)
+  return Buffer.concat([header, Buffer.from(encoded), Buffer.from([0])])
+}
+
+function multipartModuleUpload(bytes: Buffer): { payload: Buffer; contentType: string } {
+  const boundary = 'risu-module-import-boundary'
+  const head = Buffer.from(
+    `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="module.risum"\r\nContent-Type: application/octet-stream\r\n\r\n`,
+  )
+  return {
+    payload: Buffer.concat([head, bytes, Buffer.from(`\r\n--${boundary}--\r\n`)]),
+    contentType: `multipart/form-data; boundary=${boundary}`,
+  }
+}
 
 describe('script and trigger definition commands', () => {
   beforeEach(async () => {
@@ -533,6 +559,51 @@ describe('script and trigger definition commands', () => {
     })
     expect(stale.statusCode).toBe(409)
     expect(stale.json()).toEqual({ error: 'revision_conflict', currentRevision: 1 })
+  })
+
+  it('canonicalizes a one-element legacy trigger-mode tuple on .risum import and rejects wider tuples', async () => {
+    const { assertion } = await setupAuthedClient(harness.app)
+    const revision = await importDatabase(harness.app, assertion, {
+      characters: [],
+      characterOrder: [],
+      modules: [],
+    })
+    const headers = { 'risu-auth': assertion, 'risu-writer-session': 'writer-a' }
+    const trigger = (type: unknown) => ({
+      id: 'trigger-tuple',
+      comment: 'Legacy tuple',
+      type,
+      conditions: [],
+      effect: [{ type: 'triggerlua', code: '' }],
+    })
+
+    const tuple = multipartModuleUpload(
+      risumFile({ id: 'source-module', name: 'Tuple module', trigger: [trigger(['input'])] }),
+    )
+    const imported = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/import/module?baseRevision=${revision}`,
+      headers: { ...headers, 'content-type': tuple.contentType },
+      payload: tuple.payload,
+    })
+    expect(imported.statusCode, imported.body).toBe(200)
+    const moduleId = imported.json().moduleId as string
+    const stored = readJsonRow(harness.dataDir, 'modules', moduleId)
+    expect(stored.trigger).toEqual([expect.objectContaining({ comment: 'Legacy tuple', type: 'input' })])
+
+    const wider = multipartModuleUpload(
+      risumFile({ id: 'source-module', name: 'Wider tuple module', trigger: [trigger(['input', 'output'])] }),
+    )
+    const rejected = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/import/module?baseRevision=${imported.json().revision}`,
+      headers: { ...headers, 'content-type': wider.contentType },
+      payload: wider.payload,
+    })
+    expect(rejected.statusCode, rejected.body).toBe(400)
+    expect(rejected.json().error).toMatch(/^module [0-9a-f-]+\.trigger\[0\]\.type must be a string$/)
+    const persisted = loadPersistedFromDir(harness.dataDir).database as { modules: Array<{ name: string }> }
+    expect(persisted.modules.map((module) => module.name)).toEqual(['Tuple module'])
   })
 })
 
