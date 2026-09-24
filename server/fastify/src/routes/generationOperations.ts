@@ -1202,6 +1202,9 @@ export function registerGenerationOperationRoutes(
           if (!stored?.intent || !isRecord(stored.intent)) {
             throw new OperationHttpError(409, 'operation_intent_missing')
           }
+          if (!replay && current.requestOrigin === 'legacy') {
+            throw new OperationHttpError(409, 'operation_not_retryable', { operation: current })
+          }
           if (stored.effectiveConfiguration) {
             acceptedEffectiveConfiguration(db, stored)
           }

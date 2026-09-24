@@ -159,6 +159,7 @@ interface GenerationOperationRow extends GenerationScopeColumns {
 interface StartupOperationRow {
   database_lineage: string
   operation_id: string
+  request_origin: GenerationOperationRequestOrigin
   chat_id: string | null
   pre_occupancy_authority: 0 | 1
   state: GenerationOperationState
@@ -368,6 +369,7 @@ export interface GenerationOperationStartupSweepResult {
   completedFromResultCount: number
   cancelledFromResultCount: number
   finalizingFromJournalCount: number
+  legacyTerminalFailedCount: number
   abandonedOperationCount: number
   cancelledOperationCount: number
   abandonedAttemptCount: number
@@ -1795,7 +1797,7 @@ function reconcileGenerationOperationsLocked(
   const operations = db
     .prepare(
       `
-        SELECT database_lineage, operation_id, chat_id, pre_occupancy_authority,
+        SELECT database_lineage, operation_id, request_origin, chat_id, pre_occupancy_authority,
                state, state_version, current_attempt_no,
                accepted_message_id, desired_terminal_outcome, provider_may_have_run
         FROM generation_operations
@@ -1858,17 +1860,20 @@ function reconcileGenerationOperationsLocked(
   type Decision = {
     operation: StartupOperationRow
     state: GenerationOperationState
+    attemptNo?: number
     attemptStatus?: GenerationOperationAttemptStatus
     desiredTerminalOutcome?: GenerationOperationTerminalOutcome | null
     resultMessageId?: string | null
     failureCode?: string | null
     providerMayHaveRun?: boolean
+    preserveRunnerSettledAt?: boolean
     terminal: boolean
   }
   const decisions: Decision[] = []
   let completedFromResultCount = 0
   let cancelledFromResultCount = 0
   let finalizingFromJournalCount = 0
+  let legacyTerminalFailedCount = 0
   let abandonedOperationCount = 0
   let cancelledOperationCount = 0
   const protectedAttempts = new Set<string>()
@@ -1921,6 +1926,69 @@ function reconcileGenerationOperationsLocked(
         })
         finalizingFromJournalCount += 1
       }
+      continue
+    }
+
+    // Legacy intents cannot launch a replay. Once result/journal recovery is
+    // ruled out, retaining them as nonterminal would pin the chat indefinitely.
+    if (operation.request_origin === 'legacy') {
+      const legacyAttempt =
+        attempt ??
+        attempts.reduce<StartupAttemptRow | undefined>(
+          (latest, candidate) =>
+            candidate.operation_id === operation.operation_id &&
+            (latest === undefined || candidate.attempt_no > latest.attempt_no)
+              ? candidate
+              : latest,
+          undefined,
+        )
+      const legacyPersistedResult =
+        operation.chat_id === null || legacyAttempt === undefined
+          ? undefined
+          : resultMessagesByOperationAndChat
+              .get(startupResultKey(operation.operation_id, operation.chat_id))
+              ?.find((candidate) =>
+                recoveredResultMatchesAttempt(candidate, legacyAttempt, operation.pre_occupancy_authority === 1),
+              )
+      if (legacyAttempt && legacyPersistedResult) {
+        decisions.push({
+          operation,
+          state: 'completed',
+          attemptNo: legacyAttempt.attempt_no,
+          attemptStatus: 'completed',
+          desiredTerminalOutcome: null,
+          resultMessageId: legacyPersistedResult.uid,
+          failureCode: null,
+          terminal: true,
+        })
+        completedFromResultCount += 1
+        protectedAttempts.add(attemptKey(legacyAttempt.operation_id, legacyAttempt.attempt_no))
+        continue
+      }
+      const settleLegacyAttempt =
+        legacyAttempt !== undefined &&
+        (legacyAttempt.status === 'reserved' ||
+          legacyAttempt.status === 'running' ||
+          legacyAttempt.status === 'stopping' ||
+          legacyAttempt.status === 'finalizing' ||
+          legacyAttempt.status === 'retryable_failed' ||
+          legacyAttempt.status === 'abandoned')
+      decisions.push({
+        operation,
+        state: 'terminal_failed',
+        ...(settleLegacyAttempt
+          ? { attemptNo: legacyAttempt.attempt_no, attemptStatus: 'terminal_failed' as const }
+          : {}),
+        desiredTerminalOutcome: null,
+        failureCode: 'legacy_recovery_unavailable',
+        providerMayHaveRun:
+          operation.provider_may_have_run === 1 ||
+          (legacyAttempt !== undefined && legacyAttempt.provider_dispatch_started_at !== null),
+        preserveRunnerSettledAt: true,
+        terminal: true,
+      })
+      legacyTerminalFailedCount += 1
+      if (legacyAttempt) protectedAttempts.add(attemptKey(legacyAttempt.operation_id, legacyAttempt.attempt_no))
       continue
     }
 
@@ -1988,6 +2056,7 @@ function reconcileGenerationOperationsLocked(
       completedFromResultCount,
       cancelledFromResultCount,
       finalizingFromJournalCount,
+      legacyTerminalFailedCount,
       abandonedOperationCount,
       cancelledOperationCount,
       abandonedAttemptCount: 0,
@@ -1998,7 +2067,8 @@ function reconcileGenerationOperationsLocked(
   const now = new Date().toISOString()
   const projectionEpoch = bumpGenerationOperationProjectionEpoch(db)
   for (const decision of decisions) {
-    if (decision.operation.current_attempt_no !== null && decision.attemptStatus) {
+    const attemptNo = decision.attemptNo ?? decision.operation.current_attempt_no
+    if (attemptNo !== null && decision.attemptStatus) {
       db.prepare(
         `
           UPDATE generation_operation_attempts
@@ -2015,7 +2085,7 @@ function reconcileGenerationOperationsLocked(
         now,
         databaseLineage,
         decision.operation.operation_id,
-        decision.operation.current_attempt_no,
+        attemptNo,
       )
     }
     db.prepare(
@@ -2023,7 +2093,9 @@ function reconcileGenerationOperationsLocked(
         UPDATE generation_operations
         SET state = ?, state_version = state_version + 1, projection_epoch = ?,
             current_attempt_no = ?, desired_terminal_outcome = ?, result_message_id = COALESCE(?, result_message_id),
-            failure_code = ?, provider_may_have_run = ?, runner_settled_at = ?, terminal_at = ?, updated_at = ?
+            failure_code = ?, provider_may_have_run = ?,
+            runner_settled_at = CASE WHEN ? THEN COALESCE(runner_settled_at, ?) ELSE ? END,
+            terminal_at = ?, updated_at = ?
         WHERE database_lineage = ? AND operation_id = ? AND state = ? AND state_version = ?
       `,
     ).run(
@@ -2038,6 +2110,8 @@ function reconcileGenerationOperationsLocked(
         : decision.providerMayHaveRun
           ? 1
           : 0,
+      decision.preserveRunnerSettledAt ? 1 : 0,
+      now,
       decision.state === 'finalizing' ? null : now,
       decision.terminal ? now : null,
       now,
@@ -2074,6 +2148,7 @@ function reconcileGenerationOperationsLocked(
     completedFromResultCount,
     cancelledFromResultCount,
     finalizingFromJournalCount,
+    legacyTerminalFailedCount,
     abandonedOperationCount,
     cancelledOperationCount,
     abandonedAttemptCount: orphanedAttempts.length,

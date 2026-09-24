@@ -316,6 +316,11 @@ Projection epochs plus operation/attempt/job identifiers fence status reads,
 stream attachment, cancellation, and explicit retries. On startup,
 `reconcileGenerationOperationsAtStartup()` turns interrupted ownership into an
 honest retryable, abandoned, cancelled, or terminal state before routes start.
+Legacy-origin operations have no replay path: startup promotes matching persisted
+results and retains matching pending finalization journals, then heals all other
+nonterminal legacy rows, including older `retryable` and `abandoned` rows, as
+`terminal_failed` with `legacy_recovery_unavailable`. Explicit retries reject
+legacy-origin operations with `operation_not_retryable` before reserving an attempt.
 The older `/api/v1/generate/chat` boundary remains the lower-level chat runner
 used by the operation protocol and compatibility callers. A durable operation
 projection is authoritative across process restarts; its `jobId`, numbered
@@ -370,14 +375,18 @@ the completion-effect retry sweep resumes pending server-owned automatic
 translation. Browser execution and late recovery are documented in
 [Generation Client](../../src/docs/generation-client.md).
 Shutdown does not terminalize an operation while that cancellation snapshot is
-still being persisted. If a restart finds an unjournaled `stopping` operation,
-it recovers it as retryable abandoned work rather than claiming cancellation
-completed and losing the partial.
-Provider failures before the first token retain no assistant row. Failures after
-tokens use the same processed partial snapshot and keep it as a failed assistant
-row instead of restoring the pre-generation transcript.
-An abort during prompt assembly before provider dispatch also settles the
-operation as retryable and releases its durable chat claim. Terminal SSE exposes
+still being persisted. If a restart finds an unjournaled protocol-v1 `stopping`
+operation, it recovers it as retryable abandoned work rather than claiming
+cancellation completed and losing the partial.
+Provider failures before the first token retain no assistant row. Legacy-origin
+operations ending without a result settle as `terminal_failed`, preserving the
+failure details, because their stored intents cannot be replayed; protocol-v1
+operations can remain `retryable`. Failures after tokens use the same processed
+partial snapshot and keep it as a failed assistant row instead of restoring the
+pre-generation transcript.
+An abort during prompt assembly before provider dispatch likewise settles a
+legacy-origin operation as `terminal_failed` and a protocol-v1 operation as
+`retryable`, releasing its durable chat claim. Terminal SSE exposes
 the committed `resultMessageId` independently of a targeted patch address.
 Before writing a result, finalization compares the live transcript with the
 assembly-time target snapshot; a stale append/replace target is rejected rather

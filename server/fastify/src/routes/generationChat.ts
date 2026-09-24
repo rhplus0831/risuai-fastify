@@ -6177,7 +6177,7 @@ function settleGenerationOperationWithoutResultOnce(args: {
       operationId: lineage.operationId,
       expectedState: operation.state,
       expectedStateVersion: operation.stateVersion,
-      nextState: args.terminal ? 'terminal_failed' : 'retryable',
+      nextState: operation.requestOrigin === 'legacy' || args.terminal ? 'terminal_failed' : 'retryable',
       failureCode: args.failureCode,
       failurePhase: args.failurePhase,
       ...(args.lastError ? { lastError: args.lastError } : {}),

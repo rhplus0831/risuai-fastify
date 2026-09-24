@@ -196,11 +196,17 @@ role, owns finalization, generated translation, scoped IGP, automatic memory,
 and BardWiki work. Nonterminal operation/finalization rows and transcript-
 mutating effects/jobs are occupancy pins: release, switch, expiry reclaim, and
 normalization either reconcile them first or reject atomically with the blocking
-identities. Stop is durably staged and can drain its admitted operation after
-role transfer or rollout disablement; it cannot cancel a same-chat operation
-that this page did not admit. Terminal failure rolls back only the optimistic
-row still owned by that attempt, while accepted or uncertain work remains
-recoverable.
+identities. Legacy-origin operations have no replay path and settle failures
+without a result as `terminal_failed`, releasing their operation pin. Startup
+heals older nonterminal legacy rows, including `retryable` and `abandoned`, with
+`legacy_recovery_unavailable` unless a matching persisted result or pending
+finalization journal can be recovered. Explicit retries reject legacy-origin
+operations before reserving an attempt; protocol-v1 retryable operations retain
+their recovery pins and retry path. Stop is durably staged and can drain its
+admitted operation after role transfer or rollout disablement; it cannot cancel
+a same-chat operation that this page did not admit. Terminal failure rolls back
+only the optimistic row still owned by that attempt, while accepted or uncertain
+work remains recoverable.
 
 `RISU_API_CHAT_OCCUPANCY_ENABLED=false` disables new claim/switch and chat-only
 submission admission, not the drain path. Snapshot refresh, exact renewal,

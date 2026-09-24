@@ -6488,4 +6488,168 @@ describe('Durable generation', () => {
       rmSync(local.dataDir, { recursive: true, force: true })
     }
   })
+
+  // A legacy-origin operation (POST /generate/chat) stores no replayable
+  // intent, so a provider failure before any token must settle terminal
+  // instead of leaving a recovery pin that blocks every later send.
+  it('settles a legacy-origin provider failure as terminal and keeps the chat sendable', async () => {
+    providerImpl = () =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'error', error: 'Invalid generation options', status: 400, nonRetryable: true }
+      })()
+    await operationAuthority('owner-a')
+
+    const failed = await postDurable({}, { writerSession: 'owner-a' })
+    expect(failed.status).toBe(200)
+    const failedEvents = await readSse(failed, (ev) => ev.type === 'done')
+    const operationId = failedEvents.find((event) => event.type === 'job_accepted')?.data.operationId as string
+    expect(operationId).toEqual(expect.any(String))
+    expect(failedEvents.find((event) => event.type === 'error')?.data.error).toBe('Invalid generation options')
+
+    const db = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        db
+          .prepare(
+            `SELECT request_origin AS requestOrigin, state, failure_code AS failureCode, last_error AS lastError
+             FROM generation_operations WHERE operation_id = ?`,
+          )
+          .get(operationId),
+      ).toEqual({
+        requestOrigin: 'legacy',
+        state: 'terminal_failed',
+        failureCode: 'provider_failed',
+        lastError: 'Invalid generation options',
+      })
+      expect(listGenerationOccupancyPins(db, 'chat-1')).toEqual([])
+    } finally {
+      db.close()
+    }
+
+    providerImpl = () =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'recovered reply' }
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    const durableAgain = await postDurable({ userMessage: 'again' }, { writerSession: 'owner-a' })
+    expect(durableAgain.status).toBe(200)
+    const durableEvents = await readSse(durableAgain, (ev) => ev.type === 'done')
+    expect(durableEvents.at(-1)?.type).toBe('done')
+    expect((await waitForAssistantMessage()).data).toBe('recovered reply')
+  })
+
+  // Older servers left such failures as `retryable`. That row pins the chat
+  // and cannot be retried through the operation protocol, so startup must
+  // heal it and explicit retries must refuse it without reserving an attempt.
+  it('heals a legacy operation left retryable by an older server and rejects explicit retries for it', async () => {
+    providerImpl = () =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'error', error: 'Invalid generation options', status: 400, nonRetryable: true }
+      })()
+    const authority = await operationAuthority('owner-a')
+
+    const failed = await postDurable({}, { writerSession: 'owner-a' })
+    expect(failed.status).toBe(200)
+    const failedEvents = await readSse(failed, (ev) => ev.type === 'done')
+    const operationId = failedEvents.find((event) => event.type === 'job_accepted')?.data.operationId as string
+    expect(operationId).toEqual(expect.any(String))
+
+    // Recreate the settled-but-nonterminal row an older server version left behind.
+    const staleDb = openDatabase(harness.dataDir)
+    let staleRow: { stateVersion: number; runnerSettledAt: string }
+    try {
+      staleDb
+        .prepare(
+          `UPDATE generation_operations
+           SET state = 'retryable', terminal_at = NULL, state_version = state_version + 1
+           WHERE operation_id = ?`,
+        )
+        .run(operationId)
+      staleDb
+        .prepare("UPDATE generation_operation_attempts SET status = 'retryable_failed' WHERE operation_id = ?")
+        .run(operationId)
+      staleRow = staleDb
+        .prepare(
+          `SELECT state_version AS stateVersion, runner_settled_at AS runnerSettledAt
+           FROM generation_operations WHERE operation_id = ?`,
+        )
+        .get(operationId) as { stateVersion: number; runnerSettledAt: string }
+    } finally {
+      staleDb.close()
+    }
+    expect(staleRow.runnerSettledAt).toEqual(expect.any(String))
+
+    const blocked = await postDurable({ userMessage: 'again' }, { writerSession: 'owner-a' })
+    expect(blocked.status).toBe(409)
+    expect(await blocked.json()).toMatchObject({
+      error: 'chat_occupancy_recovery_blocked',
+      blocking: [{ id: operationId, kind: 'generation_operation' }],
+    })
+
+    const retry = await fetch(
+      `${harness.baseUrl}/api/v1/generation-operations/${encodeURIComponent(operationId)}/retries`,
+      {
+        method: 'POST',
+        headers: authHeaders({
+          'content-type': 'application/json',
+          'risu-database-lineage': authority.databaseLineage,
+          'risu-writer-session': 'owner-a',
+        }),
+        body: JSON.stringify({ retryRequestId: randomUUID(), expectedStateVersion: staleRow.stateVersion }),
+      },
+    )
+    expect(retry.status).toBe(409)
+    expect(await retry.json()).toMatchObject({
+      error: 'operation_not_retryable',
+      operation: { operationId, requestOrigin: 'legacy', state: 'retryable', stateVersion: staleRow.stateVersion },
+    })
+    const untouched = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        untouched
+          .prepare('SELECT COUNT(*) AS attempts FROM generation_operation_attempts WHERE operation_id = ?')
+          .get(operationId),
+      ).toEqual({ attempts: 1 })
+    } finally {
+      untouched.close()
+    }
+
+    providerImpl = () =>
+      (async function* (): AsyncGenerator<CompletionStreamFrame> {
+        yield { kind: 'token', content: 'reply after restart' }
+        yield { kind: 'done', finishReason: 'stop' }
+      })()
+    await restartHarness()
+
+    const healedDb = new DatabaseSync(path.join(harness.dataDir, 'risu.db'), { readOnly: true })
+    try {
+      expect(
+        healedDb
+          .prepare(
+            `SELECT state, failure_code AS failureCode, last_error AS lastError,
+                    runner_settled_at AS runnerSettledAt, terminal_at IS NOT NULL AS terminal
+             FROM generation_operations WHERE operation_id = ?`,
+          )
+          .get(operationId),
+      ).toEqual({
+        state: 'terminal_failed',
+        failureCode: 'legacy_recovery_unavailable',
+        lastError: 'Invalid generation options',
+        runnerSettledAt: staleRow.runnerSettledAt,
+        terminal: 1,
+      })
+      expect(
+        healedDb.prepare('SELECT status FROM generation_operation_attempts WHERE operation_id = ?').all(operationId),
+      ).toEqual([{ status: 'terminal_failed' }])
+      expect(listGenerationOccupancyPins(healedDb, 'chat-1')).toEqual([])
+    } finally {
+      healedDb.close()
+    }
+
+    const afterRestart = await postDurable({ userMessage: 'after restart' }, { writerSession: 'owner-a' })
+    expect(afterRestart.status).toBe(200)
+    const afterEvents = await readSse(afterRestart, (ev) => ev.type === 'done')
+    expect(afterEvents.at(-1)?.type).toBe('done')
+    expect((await waitForAssistantMessage()).data).toBe('reply after restart')
+  })
 })
