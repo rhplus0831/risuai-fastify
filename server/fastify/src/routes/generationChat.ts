@@ -167,6 +167,7 @@ import {
   GenerationEffectiveConfigurationTooLargeError,
   generationEffectiveConfigurationFingerprint,
   assertGenerationOperationDispatchable,
+  attachTerminalFailedGenerationResultInTransaction,
   completeGenerationOperationFinalizationInTransaction,
   getGenerationOperationProjection,
   getGenerationOperationAttemptAcceptedConfiguration,
@@ -4740,7 +4741,15 @@ function persistServerGenerationResult(args: {
             if (transitioned.status !== 'applied') {
               throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
             }
-          } else if (failedOperation?.state !== 'terminal_failed') {
+          } else if (failedOperation?.state === 'terminal_failed') {
+            attachTerminalFailedGenerationResultInTransaction(targetDb, {
+              databaseLineage: args.operationLineage.databaseLineage,
+              operationId: args.operationLineage.operationId,
+              attemptNo: args.operationLineage.operationAttemptNo,
+              jobId: args.operationLineage.generationId,
+              resultMessageId: write.messageId,
+            })
+          } else {
             throw new GenerationAdmissionError(409, 'generation_finalization_lineage_stale')
           }
         }

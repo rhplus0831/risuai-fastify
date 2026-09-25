@@ -1507,6 +1507,50 @@ export function completeGenerationOperationFinalizationInTransaction(
   return requireGenerationOperationProjection(db, input.databaseLineage, input.operationId)
 }
 
+/** Attach a retained failed partial while the caller owns the transcript transaction. */
+export function attachTerminalFailedGenerationResultInTransaction(
+  db: DatabaseSync,
+  input: GenerationOperationLineage & {
+    resultMessageId: string
+    updatedAt?: string
+  },
+): GenerationOperationProjection {
+  if (!db.isTransaction) throw new Error('Attaching a terminal failed generation result requires a transaction')
+  const current = requireGenerationOperationProjection(db, input.databaseLineage, input.operationId)
+  if (current.state !== 'terminal_failed' || current.resultMessageId !== undefined) return current
+
+  const latestAttempt = db
+    .prepare(
+      `
+        SELECT attempt_no, job_id
+        FROM generation_operation_attempts
+        WHERE database_lineage = ? AND operation_id = ?
+        ORDER BY attempt_no DESC
+        LIMIT 1
+      `,
+    )
+    .get(input.databaseLineage, input.operationId) as { attempt_no: number; job_id: string } | undefined
+  if (latestAttempt?.attempt_no !== input.attemptNo || latestAttempt.job_id !== input.jobId) return current
+
+  const now = normalizeTimestamp(input.updatedAt)
+  const projectionEpoch = bumpGenerationOperationProjectionEpoch(db)
+  const result = db
+    .prepare(
+      `
+        UPDATE generation_operations
+        SET result_message_id = ?, provider_may_have_run = 1,
+            state_version = state_version + 1, projection_epoch = ?, updated_at = ?
+        WHERE database_lineage = ? AND operation_id = ? AND state = 'terminal_failed'
+          AND state_version = ? AND result_message_id IS NULL
+      `,
+    )
+    .run(input.resultMessageId, projectionEpoch, now, input.databaseLineage, input.operationId, current.stateVersion)
+  if (result.changes !== 1) {
+    throw new Error('Terminal failed generation result attachment guard changed during the transaction')
+  }
+  return requireGenerationOperationProjection(db, input.databaseLineage, input.operationId)
+}
+
 export function listGenerationOperationProjections(
   db: DatabaseSync,
   databaseLineage = getDatabaseLineage(db),

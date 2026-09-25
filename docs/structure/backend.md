@@ -384,6 +384,11 @@ failure details, because their stored intents cannot be replayed; protocol-v1
 operations can remain `retryable`. Failures after tokens use the same processed
 partial snapshot and keep it as a failed assistant row instead of restoring the
 pre-generation transcript.
+When a journaled failed partial commits into an already `terminal_failed`
+operation, the same transaction attaches its message as `resultMessageId`,
+advancing `stateVersion` and `projectionEpoch`. Startup keeps a legacy row
+nonterminal only for matching terminal-outcome (`completed`/`cancelled`)
+journals, not failed-partial journals.
 An abort during prompt assembly before provider dispatch likewise settles a
 legacy-origin operation as `terminal_failed` and a protocol-v1 operation as
 `retryable`, releasing its durable chat claim. Terminal SSE exposes

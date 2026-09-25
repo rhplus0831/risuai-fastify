@@ -370,8 +370,10 @@ describe('safe generation evidence', () => {
       expect(persistence?.operationRef).toMatch(/^[a-f0-9]{32}$/)
       const readOperationState = () =>
         (h.db.prepare('SELECT state FROM generation_operations').get() as { state: string }).state
-      const operationState = readOperationState()
-      expect(operationState).toBe('retryable')
+      // A legacy-origin operation has no replay path, so it settles terminal
+      // immediately; only a protocol-v1 operation stays retryable while the
+      // finalization journal still owns the partial (see backend.md).
+      expect(readOperationState()).toBe(submit === 'generate' ? 'terminal_failed' : 'retryable')
       h.db.exec('DROP TRIGGER fail_partial_commit')
       await h.restart()
       const recovered = await h.read()
