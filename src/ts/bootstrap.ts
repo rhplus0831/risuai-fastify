@@ -1816,7 +1816,12 @@ async function ensureStartupChatReadiness(ownership: StartupWorkOwnership = {}):
         assertCurrent()
         if (target !== currentStartupChatReadinessTarget()) continue
         advanceStartupChatReadinessEvaluation(evaluationId, 'character')
-        const characterHydrated = await hydrateSelectedCharacterShell()
+        // No selected character (character list, a settings route) leaves nothing to
+        // hydrate: only the prompt-template owner still matters for generation. Treat
+        // the character and chat steps as satisfied instead of reporting a false
+        // failure; a later selection change re-runs this loop.
+        const characterSelected = startupChatCharacterSelected()
+        const characterHydrated = characterSelected ? await hydrateSelectedCharacterShell() : true
         assertCurrent()
         if (target !== currentStartupChatReadinessTarget()) continue
         if (!characterHydrated) {
@@ -1828,7 +1833,7 @@ async function ensureStartupChatReadiness(ownership: StartupWorkOwnership = {}):
         const promptPresetId = currentStartupPromptTemplateOwnerId()
         advanceStartupChatReadinessEvaluation(evaluationId, 'chat-and-prompt')
         const [chatHydrated, promptHydrated] = await Promise.all([
-          hydrateActiveChat(),
+          characterSelected ? hydrateActiveChat() : Promise.resolve(true),
           ensurePromptTemplateHydrated({
             ...(promptPresetId !== currentGlobalPromptTemplateOwnerId() ? { applyProjection: false } : {}),
             promptPresetId,
@@ -1911,6 +1916,11 @@ function startStartupChatReadinessSync(startupAttemptId: number): void {
     setActiveChatReadinessRefreshHook(null)
     startupChatReadinessTarget = null
   }
+}
+
+function startupChatCharacterSelected(): boolean {
+  const selectedIndex = get(selectedCharID)
+  return selectedIndex >= 0 && charactersResourceState.characters[selectedIndex] !== undefined
 }
 
 function currentStartupChatReadinessTarget(): string {

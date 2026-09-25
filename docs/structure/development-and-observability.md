@@ -175,7 +175,7 @@ failure rate blocks promotion even if background readiness eventually arrives.
 | `push-initialization-failed` | Optional push-notification runtime initialization failed before background readiness. |
 | `plugin-initialization-failed` | Plugin runtime initialization did not reach coherent plugin readiness. |
 | `generation-recovery-failed` | Startup could not reconcile or reattach the active generation projection. |
-| `selected-character-hydration-failed` | The selected character detail needed for chat readiness could not be hydrated. |
+| `selected-character-hydration-failed` | The selected character detail needed for chat readiness could not be hydrated. Not emitted when no character is selected (character list, settings routes); readiness then skips the character and chat steps. |
 | `selected-chat-hydration-failed` | The selected chat/message projection needed for chat readiness could not be hydrated. |
 | `selected-prompt-template-hydration-failed` | The selected prompt-template detail needed for generation could not be hydrated. |
 | `runtime-initialization-failed` | Another optional background runtime failed before background readiness. |
