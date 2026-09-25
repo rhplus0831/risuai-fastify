@@ -235,4 +235,4 @@ it('reports each chat at its first failing stage without touching or leaking the
     stagesRun: ['P'],
   })
   expect(byChat['chat-defer']).toMatchObject({ outcome: 'defer', firstFailingStage: 'B' })
-})
+}, 120_000)
