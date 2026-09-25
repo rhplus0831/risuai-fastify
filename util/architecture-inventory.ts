@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
+import Ajv2020 from 'ajv/dist/2020.js'
 import {
   collectClientResourceObservation,
   compareClientResourceBaseline,
@@ -1701,6 +1702,332 @@ function loadClientResourceOwnerGapMatrix(file: string): ClientResourceOwnerGapM
   return JSON.parse(fs.readFileSync(file, 'utf8')) as ClientResourceOwnerGapMatrix
 }
 
+// The closed scope is mirrored in the generation rejection guide. There is no
+// code-value ignore list: non-generation and post-dispatch observations need rows.
+export const GENERATION_REJECTION_SCOPE = {
+  roots: ['server/fastify/src', 'packages/shared-core/src'],
+  codeConstructors: { GenerationAdmissionError: 1, OperationHttpError: 1 },
+  codeClasses: [
+    'GenerationAdmissionError',
+    'OperationHttpError',
+    'GenerationEffectiveConfigurationTooLargeError',
+    'ChatGenerationSettingsIncompleteAssemblyError',
+    'AgentPresetGenerationError',
+    'BardWikiPinnedBudgetError',
+    'BoundedRegexError',
+    'RisuParserBudgetError',
+  ],
+  unions: [
+    'AssembleAbortReason',
+    'ChatGenerationSettingsMissingReason',
+    'ModelProfileStatusReason',
+    'ProviderUnsupportedReason',
+  ],
+  constants: ['CHAT_GENERATION_SETTINGS_INCOMPLETE_ERROR', 'HYPA_CONTEXT_TRUNCATION_CONFIRMATION_REQUIRED'],
+  routes: [
+    'server/fastify/src/routes/generation.ts',
+    'server/fastify/src/routes/generationChat.ts',
+    'server/fastify/src/routes/generationOperations.ts',
+    'server/fastify/src/routes/generationEffects.ts',
+  ],
+  operationState: 'server/fastify/src/generationOperations.ts',
+} as const
+
+export interface GenerationRejectionObservation {
+  path: string
+  value: string
+  kind: 'code' | 'union-member'
+}
+
+interface GenerationRejectionRow {
+  id: string
+  kind: GenerationRejectionObservation['kind'] | 'message-family' | 'validator-group'
+  value: string
+  layer: string
+  condition: string
+  transport: string[]
+  anchors: Array<{ path: string; symbol?: string; substring?: string }>
+  preFastify: { behavior: string; anchor: string; note: string }
+  classification: string
+  decision: string
+  tests: string[]
+}
+
+export function collectGenerationRejections(repoRoot: string): {
+  observations: GenerationRejectionObservation[]
+  errors: string[]
+} {
+  const scope = GENERATION_REJECTION_SCOPE
+  const files = scope.roots
+    .flatMap((root) => walkSourceFiles(path.join(repoRoot, root)))
+    .filter((file) => file.endsWith('.ts') && !/\.(?:test|spec|d)\.ts$/.test(file))
+  const program = ts.createProgram(files, {
+    target: ts.ScriptTarget.ESNext,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    skipLibCheck: true,
+    strict: true,
+  })
+  const checker = program.getTypeChecker()
+  const observations = new Map<string, GenerationRejectionObservation>()
+  const errors: string[] = []
+  const seenUnions = new Set<string>()
+  const seenClasses = new Set<string>()
+  const seenConstants = new Set<string>()
+  const stableCode = /^(?:[a-z][a-z0-9]*(?:_[a-z0-9]+)*|[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)$/
+  const strings = (node: ts.Node): string[] => {
+    if (ts.isStringLiteralLike(node)) return [node.text]
+    if (ts.isConditionalExpression(node)) return [...strings(node.whenTrue), ...strings(node.whenFalse)]
+    if (
+      ts.isBinaryExpression(node) &&
+      [ts.SyntaxKind.QuestionQuestionToken, ts.SyntaxKind.BarBarToken].includes(node.operatorToken.kind)
+    ) {
+      return [...strings(node.left), ...strings(node.right)]
+    }
+    const type = checker.getTypeAtLocation(node)
+    return (type.isUnion() ? type.types : [type]).flatMap((part) => (part.isStringLiteral() ? [part.value] : []))
+  }
+  const nameOf = (node: ts.Node): string | undefined => {
+    if (!ts.isIdentifier(node) && !ts.isPropertyAccessExpression(node)) return undefined
+    let symbol = checker.getSymbolAtLocation(ts.isPropertyAccessExpression(node) ? node.name : node)
+    if (symbol && symbol.flags & ts.SymbolFlags.Alias) symbol = checker.getAliasedSymbol(symbol)
+    return symbol?.name ?? (ts.isIdentifier(node) ? node.text : node.name.text)
+  }
+  for (const file of files) {
+    const source = program.getSourceFile(file)!
+    const relative = repoPath(repoRoot, file)
+    const add = (value: string, kind: GenerationRejectionObservation['kind'] = 'code') => {
+      observations.set(`${relative}\0${value}`, { path: relative, value, kind })
+    }
+    const collectCodes = (node: ts.Node) =>
+      strings(node)
+        .filter((value) => stableCode.test(value))
+        .forEach((value) => add(value))
+    const visit = (node: ts.Node, errorClass = false): void => {
+      if (ts.isClassDeclaration(node)) {
+        errorClass = !!node.name && (scope.codeClasses as readonly string[]).includes(node.name.text)
+        if (errorClass) seenClasses.add(node.name!.text)
+      }
+      if (ts.isNewExpression(node)) {
+        const name = nameOf(node.expression)
+        const index =
+          name && Object.hasOwn(scope.codeConstructors, name)
+            ? scope.codeConstructors[name as keyof typeof scope.codeConstructors]
+            : undefined
+        if (index !== undefined) {
+          const argument = node.arguments?.[index]
+          const codes = argument ? strings(argument).filter((value) => stableCode.test(value)) : []
+          if (!codes.length) errors.push(`${relative}: ${name} has no statically resolvable rejection code`)
+          codes.forEach((value) => add(value))
+        }
+        if (name === 'Error' && ts.isThrowStatement(node.parent) && node.arguments?.[0]) {
+          collectCodes(node.arguments[0])
+        }
+      }
+      // Covers .send payloads, SSE reason/code objects, helpers returning error
+      // bodies, and durable failureCode values, including conditional fallbacks.
+      if (ts.isPropertyAssignment(node) || ts.isPropertyDeclaration(node)) {
+        const key = ts.isIdentifier(node.name) || ts.isStringLiteralLike(node.name) ? node.name.text : ''
+        const route = (scope.routes as readonly string[]).includes(relative)
+        if (
+          node.initializer &&
+          ((errorClass && ['code', 'error'].includes(key)) ||
+            (route && ['code', 'error', 'reason', 'failureCode'].includes(key)) ||
+            (relative === scope.operationState && key === 'failureCode'))
+        )
+          collectCodes(node.initializer)
+      }
+      if (ts.isIdentifier(node) && (scope.constants as readonly string[]).includes(node.text)) {
+        const values = strings(node)
+        if (values.length) seenConstants.add(node.text)
+        values.forEach((value) => add(value))
+      }
+      if (ts.isTypeAliasDeclaration(node) && (scope.unions as readonly string[]).includes(node.name.text)) {
+        seenUnions.add(node.name.text)
+        const type = checker.getTypeAtLocation(node)
+        for (const member of type.isUnion() ? type.types : [type]) {
+          if (member.isStringLiteral()) add(member.value, 'union-member')
+          else {
+            const code = member.getProperty('code')
+            if (!code) errors.push(`${relative}: ${node.name.text} has a member without a literal code`)
+            else {
+              const codeType = checker.getTypeOfSymbolAtLocation(code, node)
+              if (codeType.isStringLiteral()) add(codeType.value, 'union-member')
+              else errors.push(`${relative}: ${node.name.text}.code is not a literal`)
+            }
+          }
+        }
+      }
+      ts.forEachChild(node, (child) => visit(child, errorClass))
+    }
+    visit(source)
+  }
+  for (const [expected, seen, label] of [
+    [scope.unions, seenUnions, 'union'],
+    [scope.codeClasses, seenClasses, 'class'],
+    [scope.constants, seenConstants, 'constant'],
+  ] as const) {
+    for (const name of expected)
+      if (!seen.has(name)) errors.push(`generation-rejections: scoped ${label} ${name} is missing or unresolved`)
+  }
+  for (const route of scope.routes)
+    if (!files.includes(path.join(repoRoot, route))) errors.push(`generation-rejections: route missing: ${route}`)
+  return {
+    observations: [...observations.values()].sort(
+      (a, b) => a.path.localeCompare(b.path) || a.value.localeCompare(b.value),
+    ),
+    errors,
+  }
+}
+
+export function validateGenerationRejectionRegister(
+  repoRoot: string,
+  collected = collectGenerationRejections(repoRoot),
+): string[] {
+  const errors = [...collected.errors]
+  const registerPath = 'docs/structure/generation-rejection-register.json'
+  const schemaPath = 'docs/structure/generation-rejection-register.schema.json'
+  let rows: GenerationRejectionRow[]
+  try {
+    const document = JSON.parse(fs.readFileSync(path.join(repoRoot, registerPath), 'utf8'))
+    const schema = JSON.parse(fs.readFileSync(path.join(repoRoot, schemaPath), 'utf8'))
+    const validate = new Ajv2020({ allErrors: true, strict: true }).compile(schema)
+    if (!validate(document))
+      return [
+        ...errors,
+        ...validate.errors!.map(
+          (error) => `generation-rejections: ${registerPath}${error.instancePath}: ${error.message}`,
+        ),
+      ]
+    rows = document.rows
+  } catch (error) {
+    return [...errors, `generation-rejections: ${error instanceof Error ? error.message : String(error)}`]
+  }
+  const ids = new Set<string>()
+  const sourceCache = new Map<string, { text: string; ast: ts.SourceFile }>()
+  const sourceAt = (file: string) => {
+    if (!sourceCache.has(file)) {
+      const text = fs.readFileSync(path.join(repoRoot, file), 'utf8')
+      sourceCache.set(file, { text, ast: ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true) })
+    }
+    return sourceCache.get(file)!
+  }
+  const observed = new Set(collected.observations.map((item) => `${item.path}\0${item.value}`))
+  for (const row of rows) {
+    const label = `generation-rejections: row ${row.id}`
+    if (ids.has(row.id)) errors.push(`${label}: duplicate id`)
+    ids.add(row.id)
+    if (row.decision === 'keep' && row.classification !== 'protective')
+      errors.push(`${label}: keep requires protective classification`)
+    for (const anchor of row.anchors) {
+      try {
+        const source = sourceAt(anchor.path)
+        if (anchor.substring && source.text.split(anchor.substring).length !== 2)
+          errors.push(
+            `${label}: ${anchor.path} anchor substring must occur exactly once: ${JSON.stringify(anchor.substring)}`,
+          )
+        if (anchor.symbol) {
+          let found = false
+          for (const statement of source.ast.statements) {
+            if (
+              !ts.canHaveModifiers(statement) ||
+              !ts.getModifiers(statement)?.some((m) => m.kind === ts.SyntaxKind.ExportKeyword)
+            )
+              continue
+            if (ts.isVariableStatement(statement))
+              found ||= statement.declarationList.declarations.some(
+                (d) => ts.isIdentifier(d.name) && d.name.text === anchor.symbol,
+              )
+            else if ('name' in statement && statement.name && ts.isIdentifier(statement.name as ts.Node))
+              found ||= (statement.name as ts.Identifier).text === anchor.symbol
+          }
+          if (!found) errors.push(`${label}: ${anchor.path} exported symbol ${anchor.symbol} is missing`)
+        }
+      } catch (error) {
+        errors.push(`${label}: cannot read anchor ${anchor.path}: ${String(error)}`)
+      }
+    }
+    if (row.kind === 'code' || row.kind === 'union-member') {
+      for (const anchor of row.anchors) {
+        if (!observed.has(`${anchor.path}\0${row.value}`)) {
+          errors.push(
+            `${label}: ${anchor.path}: value ${JSON.stringify(row.value)} is no longer collected at this anchored source path`,
+          )
+        }
+      }
+    } else if (
+      !row.anchors.some((anchor) => {
+        try {
+          return sourceAt(anchor.path).text.includes(row.value)
+        } catch {
+          return false
+        }
+      })
+    )
+      errors.push(`${label}: value ${JSON.stringify(row.value)} is missing from anchored source`)
+    for (const file of row.tests)
+      if (!fs.existsSync(path.join(repoRoot, file))) errors.push(`${label}: test path missing: ${file}`)
+  }
+  for (const item of collected.observations) {
+    if (
+      !rows.some(
+        (row) =>
+          ['code', 'union-member'].includes(row.kind) &&
+          row.value === item.value &&
+          row.anchors.some((anchor) => anchor.path === item.path),
+      )
+    ) {
+      errors.push(`generation-rejections: ${item.path}: unregistered rejection ${JSON.stringify(item.value)}`)
+    }
+  }
+  if (errors.length === 0) errors.push(...updateGenerationRejectionTable(repoRoot, false))
+  return errors
+}
+
+const REJECTION_TABLE_START = '<!-- generation-rejection-table:start -->'
+const REJECTION_TABLE_END = '<!-- generation-rejection-table:end -->'
+
+function generationRejectionTable(rows: GenerationRejectionRow[]): string {
+  const cell = (value: string) => value.replaceAll('|', '\\|').replaceAll('\n', ' ')
+  return [
+    REJECTION_TABLE_START,
+    '| ID | Value / family | Layer | Transport | Condition | Pre-Fastify | Decision |',
+    '| --- | --- | --- | --- | --- | --- | --- |',
+    ...rows.map(
+      (row) =>
+        `| ${row.id} | ${cell(row.value)} | ${row.layer} | ${row.transport.join(', ')} | ${cell(row.condition)} | ${row.preFastify.behavior} | ${row.decision} |`,
+    ),
+    REJECTION_TABLE_END,
+  ].join('\n')
+}
+
+function updateGenerationRejectionTable(repoRoot: string, write: boolean): string[] {
+  const guidePath = path.join(repoRoot, 'docs/structure/generation-rejection-register.md')
+  const registerPath = path.join(repoRoot, 'docs/structure/generation-rejection-register.json')
+  const guide = fs.readFileSync(guidePath, 'utf8')
+  const start = guide.indexOf(REJECTION_TABLE_START)
+  const end = guide.indexOf(REJECTION_TABLE_END)
+  if (
+    start < 0 ||
+    end < start ||
+    guide.split(REJECTION_TABLE_START).length !== 2 ||
+    guide.split(REJECTION_TABLE_END).length !== 2
+  ) {
+    return ['generation-rejections: guide must contain exactly one generated table marker pair']
+  }
+  const { rows } = JSON.parse(fs.readFileSync(registerPath, 'utf8')) as { rows: GenerationRejectionRow[] }
+  const expected =
+    guide.slice(0, start) + generationRejectionTable(rows) + guide.slice(end + REJECTION_TABLE_END.length)
+  if (guide === expected) return []
+  if (write) {
+    fs.writeFileSync(guidePath, expected)
+    return []
+  }
+  return [
+    'generation-rejections: guide table drifted; run pnpm exec tsx util/architecture-inventory.ts --write-generation-rejection-table',
+  ]
+}
+
 async function run(): Promise<void> {
   const repoRoot = process.cwd()
   const baselinePath = path.join(
@@ -1719,6 +2046,17 @@ async function run(): Promise<void> {
     repoRoot,
     '.archived-docs/architecture-and-migration/client-resource-ownership/owner-api-gap-matrix.json',
   )
+  if (process.argv.includes('--write-generation-rejection-table')) {
+    const errors = updateGenerationRejectionTable(repoRoot, true)
+    if (errors.length) throw new Error(errors.join('\n'))
+    console.log('[architecture-inventory] Updated generation rejection guide table')
+    return
+  }
+  const rejections = collectGenerationRejections(repoRoot)
+  if (process.argv.includes('--print-generation-rejections')) {
+    process.stdout.write(stableJson(rejections))
+    return
+  }
   const observation = collectCrossRuntimeObservation(repoRoot)
   if (process.argv.includes('--print-cross-runtime')) {
     process.stdout.write(
@@ -1761,6 +2099,7 @@ async function run(): Promise<void> {
   const compatibilityBaseline = loadCompatibilityBaseline(compatibilityBaselinePath)
   const clientResourceBaseline = loadClientResourceBaseline(clientResourceBaselinePath)
   const errors = [
+    ...validateGenerationRejectionRegister(repoRoot, rejections),
     ...validatePackageImportBoundaries(repoRoot),
     ...validateRawGenerationBoundary(repoRoot),
     ...validateModelRuntimeFlatAccessBoundary(repoRoot),
@@ -1778,6 +2117,9 @@ async function run(): Promise<void> {
     process.exitCode = 1
     return
   }
+  console.log(
+    `[architecture-inventory] PASS generation rejection register (${rejections.observations.length} source/value observations)`,
+  )
   const runtimeEdges = observation.edges.reduce(
     (total, edge) => total + (edge.usage === 'type-only' ? 0 : edge.count),
     0,

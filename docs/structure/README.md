@@ -22,6 +22,9 @@ for historical links and must not receive current guidance.
 | Document | Owns |
 | --- | --- |
 | [`backend.md`](backend.md) | Fastify composition, security hooks, route families, workers, Web Push, generation operation/effect/job/timer wiring, half-streaming telemetry, and persistence fencing. |
+| [`generation-rejection-register.md`](generation-rejection-register.md) | Generation refusal/stop lookup, pinned browser comparison, surfacing, and closed-world probe scope. |
+| [`generation-rejection-register.json`](generation-rejection-register.json) | Canonical rejection rows with current and historical anchors, classifications, decisions, and existing evidence. |
+| [`generation-rejection-register.schema.json`](generation-rejection-register.schema.json) | Machine-checked rejection row contract, enums, and pinned baseline. |
 | [`data-and-events.md`](data-and-events.md) | SQLite stores, revisions, lineage, active writer, command events, atomic chat reset transactions, and command-event SSE. |
 | [`server-resources-and-bridges.md`](server-resources-and-bridges.md) | Browser bootstrap/root resources, REST endpoint and hydration workflows, cache protocol, route surfaces, and settings/feature projections. |
 | [`durable-mutations-and-recovery.md`](durable-mutations-and-recovery.md) | Encrypted mutation intent, command queue/local effects, event invalidation/recovery, explicit owner lifecycles, active writer, and protocol diagnostics. |

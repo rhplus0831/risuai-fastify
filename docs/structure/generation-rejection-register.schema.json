@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Generation rejection register",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["$schema", "version", "baseline", "rows"],
+  "properties": {
+    "$schema": {
+      "const": "./generation-rejection-register.schema.json"
+    },
+    "version": {
+      "const": 1
+    },
+    "baseline": {
+      "const": "71c476e9c86263fe907105b011ca4dde0a619d66"
+    },
+    "rows": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/row"
+      }
+    }
+  },
+  "$defs": {
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "kind",
+        "value",
+        "layer",
+        "transport",
+        "condition",
+        "anchors",
+        "preFastify",
+        "classification",
+        "decision",
+        "surfaced",
+        "tests",
+        "notes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+        },
+        "kind": {
+          "type": "string",
+          "enum": ["code", "message-family", "validator-group", "union-member"]
+        },
+        "value": {
+          "type": "string",
+          "minLength": 1
+        },
+        "layer": {
+          "type": "string",
+          "enum": [
+            "envelope",
+            "admission",
+            "preflight",
+            "acceptance",
+            "profile-capability",
+            "assembly",
+            "dispatch",
+            "post-dispatch",
+            "out-of-scope"
+          ]
+        },
+        "transport": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:http:[45][0-9]{2}|sse-error|operation-state|stream-reason)$"
+          }
+        },
+        "condition": {
+          "type": "string",
+          "minLength": 1
+        },
+        "anchors": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "symbol"],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^(?:server/fastify/src|packages/shared-core/src|src)/[^#]+\\.(?:ts|js|json)$"
+                  },
+                  "symbol": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "substring"],
+                "properties": {
+                  "path": {
+                    "type": "string",
+                    "pattern": "^(?:server/fastify/src|packages/shared-core/src|src)/[^#]+\\.(?:ts|js|json)$"
+                  },
+                  "substring": {
+                    "type": "string",
+                    "minLength": 1
+                  }
+                }
+              }
+            ]
+          }
+        },
+        "preFastify": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["behavior", "anchor", "note"],
+          "properties": {
+            "behavior": {
+              "type": "string",
+              "enum": ["tolerated", "rejected", "fallback", "not-applicable", "unknown"]
+            },
+            "anchor": {
+              "type": "string",
+              "pattern": "^71c476e9c:src/[^#]+#[A-Za-z_$][\\w$]*$"
+            },
+            "note": {
+              "type": "string",
+              "minLength": 1
+            }
+          }
+        },
+        "classification": {
+          "type": "string",
+          "enum": ["protective", "strictness", "policy"]
+        },
+        "decision": {
+          "type": "string",
+          "enum": ["keep", "coerce", "widen", "warn", "needs-decision"]
+        },
+        "surfaced": {
+          "type": "string",
+          "enum": ["dedicated-string", "raw-reason", "structural-only", "silent"]
+        },
+        "tests": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^(?:server|packages|src|test)/.+\\.(?:test|spec)\\.ts$"
+          }
+        },
+        "notes": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}
