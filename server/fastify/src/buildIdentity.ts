@@ -7,7 +7,6 @@ import { fileURLToPath } from 'node:url'
 const BUILD_ID_PATTERN = /^[a-f0-9]{40,64}$/
 const GIT_TIMEOUT_MS = 3_000
 const GIT_MAX_BUFFER_BYTES = 64 * 1024
-const DEFAULT_SOURCE_ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const gitIdentityBySourceRoot = new Map<string, BuildIdentity>()
 
 export interface BuildIdentity {
@@ -22,6 +21,15 @@ export interface ResolveBuildIdentityOptions {
   sourceRoot?: string
   /** `null` explicitly disables the server environment-variable lookup. */
   configuredBuild?: string | null
+}
+
+function resolveDefaultSourceRoot(): string {
+  try {
+    const sourceRootUrl = new URL('../../../', import.meta.url)
+    return sourceRootUrl.protocol === 'file:' ? fileURLToPath(sourceRootUrl) : process.cwd()
+  } catch {
+    return process.cwd()
+  }
 }
 
 function gitOutput(sourceRoot: string, args: readonly string[]): string | undefined {
@@ -46,7 +54,7 @@ export function resolveBuildIdentity(options: ResolveBuildIdentityOptions = {}):
     return { build: configuredBuild, source: 'env', locationsTrusted: true }
   }
 
-  const requestedSourceRoot = path.resolve(options.sourceRoot ?? DEFAULT_SOURCE_ROOT)
+  const requestedSourceRoot = path.resolve(options.sourceRoot ?? resolveDefaultSourceRoot())
   const requestedCached = gitIdentityBySourceRoot.get(requestedSourceRoot)
   if (requestedCached) return requestedCached
   let sourceRoot: string
