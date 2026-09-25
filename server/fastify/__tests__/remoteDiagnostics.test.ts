@@ -119,7 +119,11 @@ describe('remote support diagnostics', () => {
         pruned: 0,
       }),
     }
-    const reader = createRemoteDiagnosticsReader(source, { build: 'c'.repeat(40), instanceId: 'a'.repeat(32) })
+    const reader = createRemoteDiagnosticsReader(
+      source,
+      { build: 'c'.repeat(40), instanceId: 'a'.repeat(32) },
+      { locationsTrusted: true },
+    )
     const v3 = reader.read(parseRemoteDiagnosticsQuery({ version: '3' }, now)!)
     const v2 = reader.read(parseRemoteDiagnosticsQuery({ version: '2' }, now)!)
     if (typeof v3 === 'string' || typeof v2 === 'string') throw new Error('unexpected diagnostic error')
@@ -166,7 +170,7 @@ describe('remote support diagnostics', () => {
       { build: 'unknown', instanceId: record.instanceId },
       { build: 'c'.repeat(40), instanceId: 'd'.repeat(32) },
     ]) {
-      const response = createRemoteDiagnosticsReader(source, identity).read(
+      const response = createRemoteDiagnosticsReader(source, identity, { locationsTrusted: true }).read(
         parseRemoteDiagnosticsQuery({ version: '3' }, now)!,
       )
       if (typeof response === 'string') throw new Error(response)

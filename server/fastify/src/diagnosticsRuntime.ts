@@ -35,6 +35,7 @@ export function createDiagnosticsRuntime(
   config: AppConfig,
   collector: ClientDiagnostics,
   identity: RemoteDiagnosticsResponse['identity'],
+  locationsTrusted = false,
 ) {
   const { instanceId } = identity
   const browserEnabled = collector.enabled && config.browserDiagnostics?.enabled === true
@@ -201,6 +202,7 @@ export function createDiagnosticsRuntime(
           : {}),
       })
       const facts =
+        locationsTrusted &&
         identity.build !== 'unknown' &&
         (entry.event === 'runtime-error' || entry.event === 'unhandled-rejection') &&
         entry.locations?.length

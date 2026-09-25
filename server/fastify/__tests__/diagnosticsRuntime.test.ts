@@ -18,7 +18,7 @@ afterEach(async () => {
   vi.unstubAllEnvs()
 })
 
-async function harness(blockStorage = false, build = 'unknown') {
+async function harness(blockStorage = false, build = 'unknown', locationsTrusted = false) {
   vi.stubEnv('RISU_PROTOCOL_METRICS', '')
   const dataDir = mkdtempSync(path.join(tmpdir(), 'risu-diagnostics-runtime-'))
   const db = openDatabase(dataDir)
@@ -42,6 +42,7 @@ async function harness(blockStorage = false, build = 'unknown') {
     },
     collector,
     { instanceId: 'ab'.repeat(16), build },
+    locationsTrusted,
   )
   cleanup.push(async () => {
     await runtime.close()
@@ -59,7 +60,7 @@ async function harness(blockStorage = false, build = 'unknown') {
 describe('diagnostics runtime isolation from application authority', () => {
   it('exports sanitized application frames only for the matching known build and only in v3', async () => {
     const build = 'c'.repeat(40)
-    const h = await harness(false, build)
+    const h = await harness(false, build, true)
     const canary = 'PRIVATE_RUNTIME_ERROR_MESSAGE_CANARY'
     h.app.get('/api/v1/build-bound-frame', async () => {
       const error = new Error(canary)
@@ -69,7 +70,7 @@ describe('diagnostics runtime isolation from application authority', () => {
     const failure = await h.app.inject('/api/v1/build-bound-frame')
     await h.settled()
     const identity = { build, instanceId: 'ab'.repeat(16) }
-    const reader = createRemoteDiagnosticsReader(h.runtime.source, identity)
+    const reader = createRemoteDiagnosticsReader(h.runtime.source, identity, { locationsTrusted: true })
     const requestUid = failure.headers['x-request-uid']
     const v3 = reader.read(parseRemoteDiagnosticsQuery({ version: '3', requestUid })!)
     const v2 = reader.read(parseRemoteDiagnosticsQuery({ version: '2', requestUid })!)

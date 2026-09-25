@@ -167,8 +167,9 @@ export function registerClientDiagnosticsRoutes(
   diagnostics: ClientDiagnostics,
   source?: RemoteDiagnosticsSource,
   identity?: RemoteDiagnosticsResponse['identity'],
+  locationsTrusted = false,
 ): void {
-  const reader = source && identity ? createRemoteDiagnosticsReader(source, identity) : undefined
+  const reader = source && identity ? createRemoteDiagnosticsReader(source, identity, { locationsTrusted }) : undefined
   app.addHook('onClose', async () => reader?.clear())
   app.get(
     DIAGNOSTICS_ENDPOINT,

@@ -98,18 +98,27 @@ interface Snapshot {
   snapshotSequence: number
 }
 
+export interface RemoteDiagnosticsReaderOptions {
+  locationsTrusted?: boolean
+  now?: () => number
+}
+
 /** Cursor tokens address immutable pages; retrying a token returns the same page. */
 export function createRemoteDiagnosticsReader(
   source: RemoteDiagnosticsSource,
   identity: RemoteDiagnosticsResponse['identity'],
-  now = Date.now,
+  options: RemoteDiagnosticsReaderOptions | (() => number) = {},
 ) {
+  const now = typeof options === 'function' ? options : (options.now ?? Date.now)
+  const locationsTrusted = typeof options === 'function' ? false : options.locationsTrusted === true
   const snapshots: Snapshot[] = []
   const projectV3Record = (value: unknown) => {
     const record = projectRemoteDiagnosticRecordV3(value)
     if (!record?.facts?.some((fact) => fact.type === 'location')) return record
     const facts = record.facts.filter(
-      (fact) => fact.type !== 'location' || (identity.build !== 'unknown' && record.instanceId === identity.instanceId),
+      (fact) =>
+        fact.type !== 'location' ||
+        (locationsTrusted && identity.build !== 'unknown' && record.instanceId === identity.instanceId),
     )
     const { facts: _facts, ...base } = record
     return projectRemoteDiagnosticRecordV3({
@@ -285,8 +294,9 @@ export function registerRemoteDiagnosticsRoutes(
   source: RemoteDiagnosticsSource,
   options: SupportDiagnosticsOptions,
   identity: RemoteDiagnosticsResponse['identity'],
+  locationsTrusted: boolean,
 ) {
-  const reader = createRemoteDiagnosticsReader(source, identity)
+  const reader = createRemoteDiagnosticsReader(source, identity, { locationsTrusted })
   const audit: { timestamp: number; outcome: RemoteDiagnosticsError | 'ok' }[] = []
   const auditOutcome = (outcome: RemoteDiagnosticsError | 'ok') => {
     audit.push({ timestamp: Date.now(), outcome })

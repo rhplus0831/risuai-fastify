@@ -166,12 +166,16 @@ channel does not export plain content fingerprints.
   admission, restart restoration, read, and export. V1/v2 projection strips
   them, and browser uploads cannot attach them.
 
-V3 server error locations require a valid 40–64 character lowercase
-hexadecimal `RISU_BUILD_ID` and a matching current process/build instance.
-Error messages, absolute paths, plugin/eval frames, and old or unknown build
-locations remain absent. Browser timestamps and request associations are
-client assertions with unknown skew; server receive sequence orders retained
-records. Missing measurements stay absent.
+V3 server error locations require a trusted 40–64 character lowercase
+hexadecimal build identity and a matching current process/build instance. An
+explicit valid `RISU_BUILD_ID` is trusted. Otherwise source-checkout
+deployments derive the identity once at startup from Git `HEAD`, but locations
+are trusted only when the tracked working tree is clean. A dirty checkout still
+reports its head while withholding locations. Error messages, absolute paths,
+plugin/eval frames, and locations from old, dirty, or unknown builds remain
+absent. Browser timestamps and request associations are client assertions with
+unknown skew; server receive sequence orders retained records. Missing
+measurements stay absent.
 
 Display failures and display-performance summaries are server-only v2 event
 families. Browser uploads cannot publish them. Their failure taxonomy and

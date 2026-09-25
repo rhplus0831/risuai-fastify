@@ -331,7 +331,7 @@ Server:
 | `RISU_SUPPORT_DIAGNOSTICS` | disabled | Exact `1` enables separately authenticated support reads; requires collection and a protected verifier file. |
 | `RISU_SUPPORT_DIAGNOSTICS_VERIFIER` | unset | Absolute operator-owned verifier path outside repository/data/static roots. |
 | `RISU_BROWSER_DIAGNOSTICS` | disabled | Exact `1` opts in to ordinary-auth browser upload when client collection is enabled. |
-| `RISU_BUILD_ID` | `unknown` | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics. |
+| `RISU_BUILD_ID` | current Git `HEAD`, then `unknown` | Optional 40–64 lowercase hexadecimal build identity for safe server diagnostics. A valid explicit value takes precedence; source-checkout deployments derive the identity from Git when it is absent or malformed. Dubious repository ownership, no `git` on `PATH`, running outside the source checkout, or another Git failure yields `unknown`. |
 | `RISU_PROTOCOL_METRICS` | unset | Enables structured protocol metrics and advertises v2 browser startup collection when `1`, `true`, `yes`, or `on`. |
 
 Local/dev:
@@ -356,7 +356,7 @@ Client/build:
 | Variable | Notes |
 | --- | --- |
 | `RISU_API_PROXY_TARGET` | Vite dev proxy target for `/api`; defaults to `http://localhost:6002`. |
-| `VITE_RISU_BUILD_ID` | Optional 40–64 lowercase hexadecimal frontend build identity; browser diagnostics explicitly report `unknown` if absent or malformed. |
+| `VITE_RISU_BUILD_ID` | Optional 40–64 lowercase hexadecimal frontend build identity. A valid explicit value takes precedence; production builds derive it from the source checkout's Git `HEAD`, and browser diagnostics report `unknown` when neither is available. |
 | `VITE_FASTIFY_BROWSER_SMOKE` | Enables browser smoke hook and fixed smoke password setup/login. |
 | `VITE_RISU_LITE` | Enables lite-mode consumers in settings/theme/legacy mobile code; does not mount `LiteMain` or the legacy mobile shell. |
 | `VITE_AD_CLIENT`, `VITE_AD_CLIENT_MOBILE`, `VITE_AD_SLOT`, `VITE_AD_SLOT_MOBILE` | Ad UI configuration. |

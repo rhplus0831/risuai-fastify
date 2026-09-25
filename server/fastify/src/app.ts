@@ -121,6 +121,7 @@ import {
 import { registerBrowserDiagnosticsRoutes } from './routes/browserDiagnostics.js'
 import { registerRemoteDiagnosticsRoutes } from './remoteDiagnostics.js'
 import { createDiagnosticsRuntime } from './diagnosticsRuntime.js'
+import { resolveBuildIdentity, type BuildIdentity } from './buildIdentity.js'
 
 /**
  * Node `server.requestTimeout` backstop the wall-clock bound for
@@ -139,6 +140,7 @@ export const STATIC_TOKENIZER_CACHE_CONTROL = 'public, max-age=2592000'
 
 export interface BuildAppOptions {
   config?: AppConfig
+  buildIdentity?: BuildIdentity
   generationChat?: GenerationChatRouteOptions
   realmImport?: {
     deadlineMs?: number
@@ -168,6 +170,7 @@ export interface BuildAppOptions {
 export interface BuiltApp {
   app: FastifyInstance
   config: AppConfig
+  buildIdentity: BuildIdentity
   generationJobs: GenerationJobRegistry
   diagnostics: ReturnType<typeof createDiagnosticsRuntime>
   chatOccupancy: ChatOccupancyService
@@ -185,9 +188,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   assertSupportDiagnosticsConfig(config)
   const diagnostics = createClientDiagnostics(config.clientDiagnostics ?? Boolean(config.requestTrace))
   const diagnosticInstanceId = randomBytes(16).toString('hex')
+  const buildIdentity = opts.buildIdentity ?? resolveBuildIdentity()
   const diagnosticIdentity = {
     instanceId: diagnosticInstanceId,
-    build: /^[a-f0-9]{40,64}$/.test(process.env.RISU_BUILD_ID ?? '') ? process.env.RISU_BUILD_ID! : 'unknown',
+    build: buildIdentity.build,
   }
   const app = Fastify({
     routerOptions: { onBadUrl: onDiagnosticBadUrl },
@@ -322,7 +326,14 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   // Pre-credential-store preset copies must be repaired before routes or
   // workers can load them into a response, command baseline, or export.
   repairPersistedModelProfileInlineSecretsInSqlite(db)
-  const diagnosticsRuntime = createDiagnosticsRuntime(app, db, config, diagnostics, diagnosticIdentity)
+  const diagnosticsRuntime = createDiagnosticsRuntime(
+    app,
+    db,
+    config,
+    diagnostics,
+    diagnosticIdentity,
+    buildIdentity.locationsTrusted,
+  )
   reconcileGenerationOperationsAtStartup(db, serverInstanceId, app.log)
   reconcileGenerationEffectsAtStartup(db)
   const memoryEventBus = createMemoryEventBus(app.log)
@@ -508,12 +519,20 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   registerChatOccupancyRoutes(app, authState, chatOccupancyService, {
     enabled: chatOccupancyEnabled,
   })
-  registerClientDiagnosticsRoutes(app, authState, diagnostics, diagnosticsRuntime.source, diagnosticIdentity)
+  registerClientDiagnosticsRoutes(
+    app,
+    authState,
+    diagnostics,
+    diagnosticsRuntime.source,
+    diagnosticIdentity,
+    buildIdentity.locationsTrusted,
+  )
   registerRemoteDiagnosticsRoutes(
     app,
     diagnosticsRuntime.source,
     config.supportDiagnostics ?? { enabled: false },
     diagnosticIdentity,
+    buildIdentity.locationsTrusted,
   )
   registerBrowserDiagnosticsRoutes(app, authState, {
     enabled: diagnosticsRuntime.browserEnabled,
@@ -723,6 +742,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   return {
     app,
     config,
+    buildIdentity,
     generationJobs: generationJobRegistry,
     diagnostics: diagnosticsRuntime,
     chatOccupancy: chatOccupancyService,

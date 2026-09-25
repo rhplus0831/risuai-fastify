@@ -1,4 +1,5 @@
-import { defineConfig } from 'vite'
+import { defineConfig, loadEnv } from 'vite'
+import { fileURLToPath } from 'node:url'
 import { svelte, vitePreprocess } from '@sveltejs/vite-plugin-svelte'
 import wasm from 'vite-plugin-wasm'
 import strip from '@rollup/plugin-strip'
@@ -6,8 +7,14 @@ import tailwindcss from '@tailwindcss/vite'
 import { createBundleBoundaryReportPlugin } from './util/bundle-boundary-report'
 import { createViteBuildWarningPolicy } from './util/vite-warning-policy'
 import { createLocaleChunkUrlsPlugin } from './util/locale-chunk-urls'
+import { resolveBuildIdentity } from './server/fastify/src/buildIdentity'
 // https://vite.dev/config/
 export default defineConfig(({ command, mode }) => {
+  const sourceRoot = fileURLToPath(new URL('./', import.meta.url))
+  const configuredBuild = loadEnv(mode, sourceRoot, 'VITE_').VITE_RISU_BUILD_ID
+  const frontendBuildIdentity =
+    command === 'build' ? resolveBuildIdentity({ sourceRoot, configuredBuild: configuredBuild ?? null }) : undefined
+  const frontendGitBuild = frontendBuildIdentity?.source === 'git' ? frontendBuildIdentity.build : undefined
   return {
     plugins: [
       createLocaleChunkUrlsPlugin(process.cwd()),
@@ -27,6 +34,13 @@ export default defineConfig(({ command, mode }) => {
     ],
 
     clearScreen: false,
+    ...(frontendGitBuild
+      ? {
+          define: {
+            'import.meta.env.VITE_RISU_BUILD_ID': JSON.stringify(frontendGitBuild),
+          },
+        }
+      : {}),
     server: {
       host: '0.0.0.0', // listen on all addresses
       port: 5174,
