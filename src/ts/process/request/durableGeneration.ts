@@ -58,7 +58,10 @@ export function resolveDurableGeneration(input: ServerPromptAssemblyInput): Dura
     }
   }
 
-  const assembly = resolveServerPromptAssembly(input)
+  const assembly = resolveServerPromptAssembly({
+    ...input,
+    origin: 'durable',
+  })
   if (assembly.type !== 'server') {
     return {
       type: 'non-durable',

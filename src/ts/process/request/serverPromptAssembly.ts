@@ -1,7 +1,14 @@
-import type { character, Chat, Database, triggerscript } from '../../storage/database.svelte'
+import {
+  isServerCharacterShell,
+  type character,
+  type Chat,
+  type Database,
+  type triggerscript,
+} from '../../storage/database.svelte'
 import { LLMFlags } from '../../model/types'
 import { isPluginRuntimeReady, pluginV2 } from '../../plugins/plugins.svelte'
 import { resolveActiveModuleStates } from '../../moduleActivation'
+import { isServerChatMessagePlaceholder } from '../../server/chatMessagePlaceholders'
 import {
   applyEffectivePresetComposition,
   databaseKeyForModelPresetField,
@@ -25,11 +32,22 @@ import { resolveUniquePromptPreset } from '@risuai/shared-core/effective-prompt-
  */
 export type ServerPromptAssemblyRoute = { type: 'local' } | { type: 'server' } | { type: 'unsupported'; reason: string }
 
+export type ServerPromptAssemblyOrigin = 'ui-send-preflight' | 'ui-draft-preflight' | 'send-chat' | 'durable'
+
+export interface ServerPromptAssemblyTranscriptOwnerDiagnostic {
+  messageCount: number
+  sameMessageArray: boolean
+}
+
 export interface ServerPromptAssemblyInput {
   /** Coherent generation-owner snapshot captured before this preflight runs. */
   database: Database
   currentChar: character
   currentChat: Chat
+  origin?: ServerPromptAssemblyOrigin
+  pendingUserMessageSupplied?: boolean
+  transcriptOwner?: ServerPromptAssemblyTranscriptOwnerDiagnostic | null
+  generationOperationProtocol?: boolean
   preview?: boolean
   previewPrompt?: boolean
   continue?: boolean
@@ -45,6 +63,54 @@ function deriveMode(input: ServerPromptAssemblyInput): ServerPromptAssemblyMode 
   if (typeof input.regenerateMessageId === 'string') return 'regenerate'
   if (input.continue) return 'continue'
   return 'send'
+}
+
+function formatTailFlag(value: unknown, allowedString?: string): string {
+  if (typeof value === 'boolean' || value === allowedString) return String(value)
+  return typeof value
+}
+
+function formatSendTailDiagnostic(
+  input: ServerPromptAssemblyInput,
+  mode: ServerPromptAssemblyMode,
+  rawMessages: unknown,
+  messages: unknown[] | undefined,
+): string {
+  const count = rawMessages === undefined ? 'missing' : messages ? String(messages.length) : 'not-array'
+  const hasTail = !!messages && messages.length > 0
+  let tail = 'none'
+  if (hasTail) {
+    const lastMessage = messages.at(-1)
+    const tailRecord =
+      lastMessage !== null && typeof lastMessage === 'object' ? (lastMessage as Record<string, unknown>) : undefined
+    const role = tailRecord?.role
+    const data = tailRecord?.data
+    const tailFacts = [
+      `role:${typeof role === 'string' ? role : typeof role}`,
+      `data:${typeof data}`,
+      ...(typeof data === 'string' ? [`length:${data.length}`] : []),
+      `placeholder:${isServerChatMessagePlaceholder(lastMessage)}`,
+      `chatId:${typeof tailRecord?.chatId === 'string' && tailRecord.chatId.length > 0}`,
+    ]
+    if (tailRecord && Object.prototype.hasOwnProperty.call(tailRecord, 'disabled')) {
+      tailFacts.push(`disabled:${formatTailFlag(tailRecord.disabled, 'allBefore')}`)
+    }
+    if (tailRecord && Object.prototype.hasOwnProperty.call(tailRecord, 'isComment')) {
+      tailFacts.push(`isComment:${formatTailFlag(tailRecord.isComment)}`)
+    }
+    tail = tailFacts.join(',')
+  }
+
+  const owner =
+    input.transcriptOwner === null
+      ? 'none'
+      : input.transcriptOwner
+        ? `${input.transcriptOwner.messageCount}/${input.transcriptOwner.sameMessageArray ? 'same' : 'different'}`
+        : 'unknown'
+  const protocol =
+    typeof input.generationOperationProtocol === 'boolean' ? String(input.generationOperationProtocol) : 'unknown'
+
+  return ` [origin=${input.origin ?? 'unknown'} mode=${mode} count=${count} tail=${tail} pending=${input.pendingUserMessageSupplied === true} shell=${isServerCharacterShell(input.currentChar)} owner=${owner} protocol=${protocol}]`
 }
 
 // Inlay / asset markers the local converter resolves into image/asset bytes.
@@ -318,13 +384,20 @@ export function resolveServerPromptAssembly(input: ServerPromptAssemblyInput): S
 
   const mode = deriveMode(input)
   if (mode === 'send') {
-    const lastMessage = input.currentChat.message.at(-1)
+    const rawMessages: unknown = (input.currentChat as { message?: unknown }).message
+    const messages: unknown[] | undefined = Array.isArray(rawMessages) ? rawMessages : undefined
+    const lastMessage = messages?.at(-1)
+    const lastMessageRecord =
+      lastMessage !== null && typeof lastMessage === 'object' ? (lastMessage as Record<string, unknown>) : undefined
     const isTextSendTail =
-      typeof lastMessage?.data === 'string' && (lastMessage.role === 'user' || lastMessage.role === 'char')
+      typeof lastMessageRecord?.data === 'string' &&
+      (lastMessageRecord.role === 'user' || lastMessageRecord.role === 'char')
     if (!isTextSendTail) {
       return {
         type: 'unsupported',
-        reason: 'Server prompt assembly for a send requires a text user or assistant tail message.',
+        reason:
+          'Server prompt assembly for a send requires a text user or assistant tail message.' +
+          formatSendTailDiagnostic(input, mode, rawMessages, messages),
       }
     }
   }

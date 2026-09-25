@@ -1,4 +1,6 @@
 import type { Message } from '../storage/database.svelte'
+import { getChatMessageOwnerState } from '../server/chatMessageHydration.svelte'
+import { canUseGenerationOperationProtocol } from '../server/generationOperations'
 import {
   resolveServerPromptAssembly,
   type ServerPromptAssemblyInput,
@@ -15,10 +17,31 @@ export interface ChatSendPreflightInput extends ServerPromptAssemblyInput {
  */
 export function preflightChatSendBeforeMutation(input: ChatSendPreflightInput): ServerPromptAssemblyRoute {
   const { pendingUserMessage, ...assemblyInput } = input
-  if (!pendingUserMessage) return resolveServerPromptAssembly(assemblyInput)
+  const ownerState =
+    typeof assemblyInput.currentChat.id === 'string'
+      ? getChatMessageOwnerState(assemblyInput.currentChat.id)
+      : undefined
+  const diagnostics = {
+    pendingUserMessageSupplied: pendingUserMessage != null,
+    transcriptOwner: ownerState
+      ? {
+          messageCount: ownerState.messages.length,
+          sameMessageArray: ownerState.messages === assemblyInput.currentChat.message,
+        }
+      : null,
+    generationOperationProtocol: canUseGenerationOperationProtocol(),
+  } satisfies Partial<ServerPromptAssemblyInput>
+
+  if (!pendingUserMessage) {
+    return resolveServerPromptAssembly({
+      ...assemblyInput,
+      ...diagnostics,
+    })
+  }
 
   return resolveServerPromptAssembly({
     ...assemblyInput,
+    ...diagnostics,
     currentChat: {
       ...assemblyInput.currentChat,
       message: [...(assemblyInput.currentChat.message ?? []), pendingUserMessage],

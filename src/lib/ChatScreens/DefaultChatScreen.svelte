@@ -2106,6 +2106,7 @@
         database: generationSettingsGuard.state.db,
         currentChar: activeOwner.character,
         currentChat: currentChatRecord,
+        origin: 'ui-send-preflight',
         continue: continueResponse,
         pendingUserMessage: userMessage,
       })
@@ -2227,6 +2228,7 @@
         database: generationSettingsGuard.state.db,
         currentChar: selectedCharacter,
         currentChat: liveChat,
+        origin: 'ui-draft-preflight',
         continue: false,
         pendingUserMessage: userMessage,
       })

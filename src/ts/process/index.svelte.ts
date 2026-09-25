@@ -67,6 +67,7 @@ import { isChatVisible, markChatUnread } from './chatUnread.svelte'
 import { registerGenerationProcessRuntime } from './generationRuntimeBridge'
 import { hydrateCharacterShell } from '../server/characterShellHydration.svelte'
 import { captureClientChatOccupancyAuthority, isClientChatOccupancyAuthorityCurrent } from '../server/chatOccupancy'
+import { getChatMessageOwnerState } from '../server/chatMessageHydration.svelte'
 import {
   canUseGenerationOperationProtocol,
   type GenerationOperationChatOccupancy,
@@ -452,12 +453,24 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
       }
     }
 
+    const assemblyOwnerState = typeof currentChat.id === 'string' ? getChatMessageOwnerState(currentChat.id) : undefined
+    const assemblyDiagnostics = {
+      transcriptOwner: assemblyOwnerState
+        ? {
+            messageCount: assemblyOwnerState.messages.length,
+            sameMessageArray: assemblyOwnerState.messages === currentChat.message,
+          }
+        : null,
+      generationOperationProtocol: canUseGenerationOperationProtocol(),
+    } as const
     const assemblyRoute = attachesDurableGeneration
       ? ({ type: 'local' } as const)
       : resolveServerPromptAssembly({
           database: generationSettingsState.db,
           currentChar,
           currentChat,
+          origin: 'send-chat',
+          ...assemblyDiagnostics,
           preview: arg.preview,
           previewPrompt: arg.previewPrompt,
           continue: arg.continue,
@@ -476,6 +489,7 @@ export async function sendChat(chatProcessIndex = -1, arg: SendChatArgs = {}): P
           database: generationSettingsState.db,
           currentChar,
           currentChat,
+          ...assemblyDiagnostics,
           preview: arg.preview,
           previewPrompt: arg.previewPrompt,
           continue: arg.continue,
