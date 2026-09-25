@@ -340,6 +340,80 @@ large database. The former tooling unit suite was removed in Phase 5 because it
 did not gate the product suite; generation-side diagnostics remain covered at
 the real Fastify boundary by `server/fastify/__tests__/diagnosticsGeneration.test.ts`.
 
+## Offline Generation Rejection Replay
+
+From the repository root (tokenizers use `public/token`), operators can replay
+current persisted generation guards without starting Fastify:
+
+```sh
+pnpm replay:generation -- --data-dir /absolute/path/to/data \
+  --json /tmp/generation-replay.json
+```
+
+`util/generation-rejection-replay.ts` uses Node SQLite `backup()` to snapshot
+`risu.db`, including committed WAL contents, into a private scratch directory.
+SQLite never opens the original: even a read-only SQLite connection can create
+WAL/SHM sidecars. The tool first stages the database and WAL/rollback journal
+with file reads, checking inode, size, modification and change times across the
+whole copy. It retries a changing source three times, then refuses with
+`source_changed_during_snapshot`; rerun during a quiet interval. SQLite recovers
+and checks the staged image before `backup()` builds the replay database. All loaders, settings repairs,
+and migrations run on the copy; a schema newer than this checkout is refused.
+The tool never writes application data to the original directory and never calls
+LLM, image, embedding, or network providers. A refusing global `fetch` backstop
+records hostnames; any attempt marks the run as a harness defect. Lua external
+calls are intercepted before DNS, HTTPS, provider dispatch, or asset writes.
+
+Each chat stops at its first failing stage, recording all stages attempted:
+P inspects recovery pins and the current occupancy lease; B decodes normalized
+preflight input and resolves settings; K captures, stores, fingerprints (8 MiB
+manifest cap), and resolves the accepted configuration; C assembles that
+configuration in `preview_prompt` with the copied memory database; D refreshes
+bound credentials from the copy and resolves provider routing, including Ollama's
+base URL guard. Unexpected errors and missing targets are `defer`, never ready.
+Ajv explanations use the decoder's normalization and list all schema failures,
+deduplicating array-index variants. The optional diagnostics journal snapshot
+maps historical validation field hashes back to known schema fields.
+
+`--data-dir` is required. `--chat` and `--character` filter chats, including
+trashed characters. `--all-presets` probes stage B once per stored model/prompt
+preset, retaining the other bindings of `--probe-chat` (default: first non-trashed
+chat) and filling sidebar defaults like the client. These are independent probes,
+not a preset cross product; baseline persona/other preset defects can block them.
+Duplicate preset IDs are reported by positional group, without emitting IDs.
+`--keep-scratch` retains the private copy and prints its location; otherwise it
+is deleted. Scratch copies contain private data. `--json` creates a new report
+with mode 0600 and refuses overwrite or a destination inside the source directory.
+
+Stdout contains per-chat verdicts and aggregates; JSON retains full structured
+details. Only character/chat IDs, schema field names/hashes, generic paths,
+finite reason codes, counts, ages, and fetch hostnames leave the process. Array
+indices collapse to `*`; user map keys become positional labels even if they
+match a schema field name. No names, preset/profile IDs, sidebar keys, exception
+messages, scripts, prompts, messages, or credentials are printed. Offending values
+are limited to finite literal fields; arbitrary strings are still omitted. Server
+and script output is suppressed during replay.
+
+A ready result covers these offline stages only. The report enumerates checks
+not replayed: HTTP/auth/writer and requester-specific occupancy admission,
+send/continue/regenerate transforms and target checks, browser context/unsaved
+edits, per-provider API keys and request builders, OpenRouter free-model lookup,
+query embedding prefetch, asset/inlay bytes (no asset resolver), memory writes
+and enqueue, real Agent outputs (before-main dispatch returns `{}`), after-main
+steps, real Lua external results, per-attempt triggers/retries/fallbacks, historical
+clock/randomness/request state, the client-capability-dependent history-trimming
+confirmation, and post-generation finalization/effects. Lua request returns an
+empty 503 response, LLM/axLLM/simpleLLM return successful `{}`, similarity returns an empty
+list, and image generation returns an empty string; content-dependent branches
+can therefore differ. History truncation and whether a persisting request would
+need its confirmation check are recorded separately. BardWiki/Hypa use the real
+read-only preview path, without waiting for background work. Omitting query
+embeddings can change Hypa selection and token budgets compared with live
+generation. Exit status is zero for a completed sweep (including rejected or
+deferred chats), and nonzero for a harness defect or fatal failure. Historical empty
+`thinkingType`, string lore activation percentages, and null template inner
+formats accepted by today's decoder are not reported as defects.
+
 ## Rollback And Owners
 
 To disable remote collection, turn off `RISU_SUPPORT_DIAGNOSTICS` and

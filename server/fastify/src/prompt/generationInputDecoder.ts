@@ -1,6 +1,7 @@
 import { canonicalizeLegacyGenerationValues } from '@risuai/shared-core/legacy-generation-value-canonicalization'
 import { repairLegacySeparateParameters } from '@risuai/shared-core/separate-parameter-compatibility'
 import { createHash } from 'node:crypto'
+import { AsyncLocalStorage } from 'node:async_hooks'
 import {
   validateGenerationSettings as settings,
   validateFastifyDatabase as database,
@@ -27,6 +28,15 @@ export type GenerationInputValidationOwner = NonNullable<DisplayDiagnosticEvent[
 export type GenerationInputValidationRule = NonNullable<DisplayDiagnosticEvent['validationRule']>
 export type GenerationInputValueKind = NonNullable<DisplayDiagnosticEvent['valueKind']>
 type ValidatorError = NonNullable<GenerationInputValidator<unknown>['errors']>[number]
+
+type ValidationObserver = (error: GenerationInputValidationError, normalizedInput: unknown) => void
+const validationObserver = new AsyncLocalStorage<ValidationObserver>()
+
+/** Optional offline diagnostics scope. Inputs are never attached to thrown errors
+ * or retained by the decoder; normal callers have no observer. */
+export function withGenerationInputValidationObserver<T>(observer: ValidationObserver, run: () => T): T {
+  return validationObserver.run(observer, run)
+}
 
 function jsonPointerSegments(path: string): string[] {
   if (!path.startsWith('/')) return []
@@ -144,18 +154,28 @@ export function generationInputDecoderInitializationMetrics() {
 
 function checked<T>(value: unknown, validate: GenerationInputValidator<T>, domain: GenerationInputValidationDomain): T {
   if (!validate(value)) {
-    const error = validate.errors?.[0]
-    const instancePath = error?.instancePath ?? ''
-    throw new GenerationInputValidationError(
-      domain,
-      instancePath,
-      generationInputValidationOwner(instancePath),
-      validationFieldReference(error),
-      generationInputValidationRule(error?.keyword),
-      generationInputValueKind(valueAtValidationPath(value, error)),
-    )
+    const error = describeGenerationInputValidationError(value, validate.errors?.[0], domain)
+    validationObserver.getStore()?.(error, value)
+    throw error
   }
   return value
+}
+
+/** Share the decoder's content-free attribution with offline all-errors diagnostics. */
+export function describeGenerationInputValidationError(
+  value: unknown,
+  error: ValidatorError | undefined,
+  domain: GenerationInputValidationDomain,
+): GenerationInputValidationError {
+  const instancePath = error?.instancePath ?? ''
+  return new GenerationInputValidationError(
+    domain,
+    instancePath,
+    generationInputValidationOwner(instancePath),
+    validationFieldReference(error),
+    generationInputValidationRule(error?.keyword),
+    generationInputValueKind(valueAtValidationPath(value, error)),
+  )
 }
 
 /** A malformed stable Hypa selection already means no selection, never numeric fallback. */
@@ -171,7 +191,7 @@ function normalizeLegacyHypaSelection(value: unknown): unknown {
 
 /** Repair Hypa selection, then stray separate-parameter keys, then exact empty
  * generation values. Unchanged inputs retain their identity. */
-function normalizeLegacyGenerationSettings(value: unknown): unknown {
+export function normalizeLegacyGenerationSettings(value: unknown): unknown {
   value = normalizeLegacyHypaSelection(value)
   if (!isRecord(value)) return value
   let result = normalizeSeparateParametersOwner(value)
@@ -205,11 +225,16 @@ export function decodeDisplaySourceDatabase(value: unknown): DisplaySourceDataba
   return checked(normalizeLegacyGenerationSettings(value), displaySourceDatabase, 'database')
 }
 export function decodeGenerationPreflightInputs(value: unknown): GenerationPreflightInputs {
+  return checked(normalizeGenerationPreflightInputs(value), preflight, 'preflight')
+}
+
+/** Preflight normalizes only settings, never the selected character/chat envelope. */
+export function normalizeGenerationPreflightInputs(value: unknown): unknown {
   if (value && typeof value === 'object' && 'database' in value) {
     const normalized = normalizeLegacyGenerationSettings(value.database)
-    if (normalized !== value.database) return checked({ ...value, database: normalized }, preflight, 'preflight')
+    if (normalized !== value.database) return { ...value, database: normalized }
   }
-  return checked(value, preflight, 'preflight')
+  return value
 }
 
 export function decodeProviderGenerationSettings(value: unknown): ProviderGenerationSettings {

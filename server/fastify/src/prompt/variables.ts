@@ -2,7 +2,7 @@ import { adaptServerCbsDatabase } from './cbsAdapter.js'
 import type { FastifyCharacter as character, FastifyDatabase as Database } from './serverTypes.js'
 import type { LLMModel } from '@risuai/shared-core/model-types'
 import type { CbsConditions } from '@risuai/shared-core/risuchat-parser-helpers'
-import type { LuaExecBudget } from './luaRuntime.js'
+import type { LuaExecBudget, LuaOfflineReplay } from './luaRuntime.js'
 import type { DatabaseSync } from 'node:sqlite'
 import type { CbsCallbackMemo } from './cbsCallbackMemo.js'
 import { risuChatParser } from '@risuai/shared-core/risuchat-parser'
@@ -35,6 +35,7 @@ const parserChatVariables = { getChatVar, getGlobalChatVar }
  */
 
 export interface ExpandContext {
+  offlineReplay?: LuaOfflineReplay
   database: Database
   resolveSpeakerName?: (characterId: string) => string | undefined
   /** Current chat-message index for CBS callbacks such as `{{chat_index}}`. */

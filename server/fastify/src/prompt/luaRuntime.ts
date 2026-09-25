@@ -696,7 +696,14 @@ end)
  * Everything the server must hand the VM in place of the browser's global stores
  * (`getCurrentChat`/`getCurrentCharacter`/`getDatabase`/`selectedCharID`).
  */
+export interface LuaOfflineReplay {
+  onLowLevelAccess(): void
+  onSuppressedCall(call: 'request' | 'LLM' | 'axLLM' | 'simpleLLM' | 'similarity' | 'generateImage'): void
+}
+
 export interface ServerLuaRuntimeContext {
+  /** Offline diagnostics only: replace external host calls before DNS, providers or asset writes. */
+  offlineReplay?: LuaOfflineReplay
   /** Working chat whose `message[]` the chat host fns read and mutate. */
   chat: Chat
   /** Active database snapshot — `getGlobalVar` reads, `cbs` scope. */
@@ -1176,6 +1183,10 @@ async function runLuaLlmMain(
   traceFn?: 'LLM' | 'axLLM',
 ): Promise<string | undefined> {
   const fn = traceFn ?? (role === 'scriptAux' ? 'axLLM' : 'LLM')
+  if (state.ctx.offlineReplay) {
+    state.ctx.offlineReplay.onSuppressedCall(fn)
+    return JSON.stringify({ success: true, result: '{}' })
+  }
   const promptSummary = summarizeLuaTraceValue(promptStr)
   const prompt = parseLuaLlmPrompt(promptStr, useMultimodal)
   if (!Array.isArray(prompt)) {
@@ -2055,6 +2066,10 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
   // ── Gated: SSRF-guarded egress ──
   declare('request', async (id: string, url: string) => {
     if (!canLowLevel(id)) return
+    if (state.ctx.offlineReplay) {
+      state.ctx.offlineReplay.onSuppressedCall('request')
+      return JSON.stringify({ status: 503, data: '' })
+    }
     return serverLuaRequest(
       String(url ?? ''),
       state.ctx.egress,
@@ -2077,10 +2092,18 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
 
   declare('similarity', async (id: string, source: string, values: unknown) => {
     if (!canLowLevel(id)) return
+    if (state.ctx.offlineReplay) {
+      state.ctx.offlineReplay.onSuppressedCall('similarity')
+      return []
+    }
     return runLuaSimilarity(state, String(source ?? ''), values)
   })
   declare('generateImage', async (id: string, prompt: string, negativePrompt: string = '') => {
     if (!canLowLevel(id)) return
+    if (state.ctx.offlineReplay) {
+      state.ctx.offlineReplay.onSuppressedCall('generateImage')
+      return ''
+    }
     return runLuaImageGeneration(state, prompt, negativePrompt)
   })
   declare('getCharacterImageMain', async (_id: string) => {
@@ -2132,6 +2155,10 @@ function declareHostFunctions(engine: LuaEngine): (next: RuntimeState) => void {
   )
   declare('simpleLLM', async (id: string, prompt: string) => {
     if (!canLowLevel(id)) return
+    if (state.ctx.offlineReplay) {
+      state.ctx.offlineReplay.onSuppressedCall('simpleLLM')
+      return { success: true, result: '{}' }
+    }
     return runLuaLlm(state, 'scriptMain', [{ role: 'user', content: String(prompt ?? '') } as PromptMessage])
   })
 
@@ -2393,6 +2420,7 @@ async function executeServerLua(
   const data = opts.data ?? ''
   const meta = opts.meta ?? {}
   const lowLevelAccess = opts.lowLevelAccess ?? false
+  if (lowLevelAccess) ctx.offlineReplay?.onLowLevelAccess()
   const signal = ctx.signal
   const runRequestedAt = Date.now()
   const budget = ctx.execBudget

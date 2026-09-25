@@ -925,7 +925,7 @@ function resolveProfileOpenAIVariant(
   }
 }
 
-function resolveProfileOllamaBaseUrl(profile: ResolvedModelProfile): string | undefined {
+export function resolveProfileOllamaBaseUrl(profile: ResolvedModelProfile): string | undefined {
   const options = profile.providerOptions
   return asString(options.ollama?.url) ?? asString(options.baseUrl)
 }

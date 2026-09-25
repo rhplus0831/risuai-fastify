@@ -155,6 +155,8 @@ import type { ReadonlyAgentPresetRecord as AgentPresetRecord } from '@risuai/sha
  * means the assembler never imports storage globals.
  */
 export interface AssembleDeps {
+  /** Optional offline diagnostics policy; production leaves this absent. */
+  offlineReplay?: ExpandContext['offlineReplay']
   loadDatabase(): Database | null
   resolveSpeakerName?: (characterId: string) => string | undefined
   loadMemoryDatabase?(): DatabaseSync | null
@@ -812,6 +814,7 @@ export function beginAssembly(input: AssembleInput, deps: AssembleDeps): Assembl
     signal: deps.signal,
     resolveSpeakerName: deps.resolveSpeakerName,
     luaExecBudget,
+    offlineReplay: deps.offlineReplay,
     ...(memoryDatabase ? { requestHistoryDb: memoryDatabase } : {}),
     ...(deps.assetDataDir ? { assetDataDir: deps.assetDataDir } : {}),
     allowGeneratedAssetWrites: input.generationScope?.admissionKind !== 'chat_only',
@@ -1252,6 +1255,7 @@ async function runInputTrigger(state: AssemblyState): Promise<void> {
           ...(state.memoryDatabase ? { requestHistoryDb: state.memoryDatabase } : {}),
           ...(state.assetDataDir ? { assetDataDir: state.assetDataDir } : {}),
           allowGeneratedAssetWrites: state.ctx.allowGeneratedAssetWrites,
+          offlineReplay: state.ctx.offlineReplay,
         },
       )
       throwServerLuaFailure(result, `Lua ${mode} trigger failed`)
@@ -2508,6 +2512,7 @@ function buildLuaEditTriggerContext(state: AssemblyState): {
     ...(state.memoryDatabase ? { requestHistoryDb: state.memoryDatabase } : {}),
     ...(state.assetDataDir ? { assetDataDir: state.assetDataDir } : {}),
     allowGeneratedAssetWrites: state.ctx.allowGeneratedAssetWrites,
+    offlineReplay: state.ctx.offlineReplay,
     moduleTriggers: getModuleTriggers(getActiveModules(db, state.currentChar, state.currentChat)),
   }
   return { editCtx, varEngine }
@@ -3092,6 +3097,7 @@ async function runOutputTrigger(
             ...(state.memoryDatabase ? { requestHistoryDb: state.memoryDatabase } : {}),
             ...(state.assetDataDir ? { assetDataDir: state.assetDataDir } : {}),
             allowGeneratedAssetWrites: state.ctx.allowGeneratedAssetWrites,
+            offlineReplay: state.ctx.offlineReplay,
           },
         )
       } catch (error) {

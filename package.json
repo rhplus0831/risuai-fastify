@@ -33,6 +33,7 @@
     "coverage:frontend": "cross-env RISU_TEST_INCLUDE_GATES=true vitest run --coverage --coverage.provider=v8 --coverage.reportsDirectory=coverage/frontend --coverage.include='src/**/*.{ts,svelte}' --coverage.include='util/**/*.ts' --coverage.exclude='server/**' --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html",
     "coverage:backend": "vitest run --config server/fastify/vitest.config.ts --coverage --coverage.provider=v8 --coverage.reportsDirectory=../../coverage/backend --coverage.include='src/**/*.ts' --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html",
     "analyze:db": "tsx util/analyze-database.ts",
+    "replay:generation": "tsx util/generation-rejection-replay.ts",
     "build:smoke": "cross-env VITE_FASTIFY_BROWSER_SMOKE=TRUE vite build",
     "smoke:fastify-browser": "pnpm build:smoke && cross-env VITE_FASTIFY_BROWSER_SMOKE=TRUE RISU_FAST_BOOTSTRAP_ARTIFACT_REQUIRED=true playwright test -c playwright.fastify-smoke.config.ts",
     "dev:agent": "cross-env RISU_API_TRACE_MODE=agent tsx util/agent-dev.ts",

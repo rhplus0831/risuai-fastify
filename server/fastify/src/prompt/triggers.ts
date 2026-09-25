@@ -1580,6 +1580,7 @@ export async function runStartTrigger(
           ...(ctx.requestHistoryDb ? { requestHistoryDb: ctx.requestHistoryDb } : {}),
           ...(ctx.assetDataDir ? { assetDataDir: ctx.assetDataDir } : {}),
           allowGeneratedAssetWrites: ctx.allowGeneratedAssetWrites,
+          offlineReplay: ctx.offlineReplay,
         },
       )
       throwServerLuaFailure(result, `Lua ${mode} trigger failed`)
