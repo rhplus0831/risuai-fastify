@@ -217,6 +217,17 @@ export const PROTOCOL_ROUTE_POLICIES = [
     },
   },
   {
+    id: 'support-diagnostics-state',
+    auth: {
+      decision: 'diagnostics-read',
+      reason: 'Independent support credential authorizes only sanitized diagnostics reads.',
+    },
+    activeWriter: {
+      decision: 'not-applicable',
+      reason: 'Support access grants no application or writer authority.',
+    },
+  },
+  {
     id: 'browser-diagnostics-upload',
     auth: {
       decision: 'required',

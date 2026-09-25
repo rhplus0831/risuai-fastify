@@ -10,6 +10,9 @@ import {
   REMOTE_DIAGNOSTICS_ERRORS,
   REMOTE_DIAGNOSTICS_MAX_BYTES,
   SUPPORT_DIAGNOSTICS_ENDPOINT,
+  SUPPORT_DIAGNOSTICS_STATE_ENDPOINT,
+  isSupportDiagnosticsStateResponse,
+  type SupportDiagnosticsStateResponse,
   isRemoteDiagnosticsResponse,
   parseRemoteDiagnosticsQuery,
   type RemoteDiagnosticsError,
@@ -179,7 +182,16 @@ export function parseRemoteDiagnosticsArguments(args: readonly string[]): Record
   return input
 }
 
-function parseCliArguments(args: readonly string[]): { investigate: boolean; query: Record<string, string> } {
+function parseCliArguments(args: readonly string[]): {
+  state?: boolean
+  investigate: boolean
+  query: Record<string, string>
+} {
+  const stateArgs = args[0] === '--' ? args.slice(1) : args
+  if (stateArgs.includes('--state')) {
+    if (stateArgs.length !== 1) throw failure('invalid-query')
+    return { state: true, investigate: false, query: {} }
+  }
   const investigateCount = args.filter((argument) => argument === '--investigate').length
   const malformedInvestigationFlag = args.some(
     (argument) => argument.startsWith('--investigate') && argument !== '--investigate',
@@ -221,14 +233,37 @@ export async function fetchRemoteDiagnostics(
   const trustedConfig = validateConfig(config)
   const query = parseRemoteDiagnosticsQuery(input)
   if (!query) throw failure('invalid-query')
+  return fetchSupportResponse(
+    trustedConfig,
+    SUPPORT_DIAGNOSTICS_ENDPOINT,
+    input,
+    (value): value is RemoteDiagnosticsResponse =>
+      isRemoteDiagnosticsResponse(value) && value.version === query.version,
+  )
+}
+
+export function fetchSupportDiagnosticsState(
+  config: RemoteDiagnosticsConfig,
+): Promise<SupportDiagnosticsStateResponse> {
+  return fetchSupportResponse(config, SUPPORT_DIAGNOSTICS_STATE_ENDPOINT, {}, isSupportDiagnosticsStateResponse)
+}
+
+/** Both modes use exactly the same bounded, verified transport. */
+async function fetchSupportResponse<T>(
+  config: RemoteDiagnosticsConfig,
+  endpoint: typeof SUPPORT_DIAGNOSTICS_ENDPOINT | typeof SUPPORT_DIAGNOSTICS_STATE_ENDPOINT,
+  input: Record<string, string>,
+  validate: (value: unknown) => value is T,
+): Promise<T> {
+  const trustedConfig = validateConfig(config)
   // Fail closed before Node emits its insecure-TLS environment warning or opens a socket.
   if (process.env.NODE_TLS_REJECT_UNAUTHORIZED === '0') throw failure('tls-error')
-  const url = new URL(SUPPORT_DIAGNOSTICS_ENDPOINT, trustedConfig.origin)
+  const url = new URL(endpoint, trustedConfig.origin)
   for (const [key, value] of Object.entries(input)) url.searchParams.set(key, value)
 
   return new Promise((resolveResponse, rejectResponse) => {
     let settled = false
-    const finish = (error?: RemoteDiagnosticsHelperError, response?: RemoteDiagnosticsResponse): void => {
+    const finish = (error?: RemoteDiagnosticsHelperError, response?: T): void => {
       if (settled) return
       settled = true
       clearTimeout(deadline)
@@ -300,7 +335,7 @@ export async function fetchRemoteDiagnostics(
                 finish(
                   failure(status >= 400 && status <= 599 ? (responseError(value) ?? 'bad-response') : 'bad-response'),
                 )
-              } else if (!isRemoteDiagnosticsResponse(value) || value.version !== query.version) {
+              } else if (!validate(value)) {
                 finish(failure('bad-response'))
               } else finish(undefined, value)
             } catch {
@@ -503,13 +538,15 @@ export async function investigateRemoteDiagnostics(
 
 async function run(): Promise<void> {
   try {
-    const { investigate, query } = parseCliArguments(process.argv.slice(2))
+    const { state, investigate, query } = parseCliArguments(process.argv.slice(2))
     const config = readRemoteDiagnosticsConfig(
       process.env.RISU_DIAGNOSTICS_REMOTE_CONFIG ?? resolve(homedir(), '.config/production.json'),
     )
-    const response = investigate
-      ? await investigateRemoteDiagnostics(config, query)
-      : await fetchRemoteDiagnostics(config, query)
+    const response = state
+      ? await fetchSupportDiagnosticsState(config)
+      : investigate
+        ? await investigateRemoteDiagnostics(config, query)
+        : await fetchRemoteDiagnostics(config, query)
     process.stdout.write(`${JSON.stringify(response)}\n`)
   } catch (error) {
     const category = error instanceof RemoteDiagnosticsHelperError ? error.category : 'bad-response'

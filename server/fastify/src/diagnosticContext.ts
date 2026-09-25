@@ -8,6 +8,7 @@ import {
   isDiagnosticTransportUrl,
   projectDiagnosticEventV2,
   type DiagnosticEventV2,
+  type DiagnosticReferenceKind,
 } from '@risuai/protocol/remote-diagnostics'
 import { readRequestTraceUid } from './requestTrace.js'
 
@@ -65,13 +66,30 @@ export function diagnosticsContextEnabled(): boolean {
   }
 }
 
-function reference(registration: RegisteredDiagnostics, epoch: string, kind: string, id: string): string {
+function reference(
+  registration: RegisteredDiagnostics,
+  epoch: string,
+  kind: DiagnosticReferenceKind,
+  id: string,
+): string {
   // A secret-keyed private mapping yields stable opaque references after restart.
   // Neither the key, raw domain identity, nor mapping inputs reach the collector.
   return createHmac('sha256', registration.key)
     .update(JSON.stringify([epoch, kind, id]))
     .digest('hex')
     .slice(0, 32)
+}
+
+/** Explicit history epoch avoids calling a potentially resetting history callback during a snapshot. */
+export function diagnosticReferenceForDatabase(
+  db: object,
+  epoch: string,
+  kind: DiagnosticReferenceKind,
+  id: string,
+): string {
+  const registration = registrations.get(db)
+  if (!registration?.active) throw new Error('diagnostics-unavailable')
+  return reference(registration, epoch, kind, id)
 }
 
 function bindIterable<T>(value: T, context: DiagnosticContext): T {

@@ -1,3 +1,4 @@
+import { sendGenerationResponse } from '../generationRejectionCounters.js'
 import {
   storeGenerationConfiguration,
   resolveGenerationConfiguration,
@@ -825,33 +826,36 @@ function operationResponse(operation: GenerationOperationProjection, append?: Ac
 
 function sendOperationError(reply: FastifyReply, error: unknown): unknown {
   if (error instanceof OperationHttpError) {
-    return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+    return sendGenerationResponse(reply, error.statusCode, { error: error.code, ...error.details })
   }
   if (error instanceof DatabaseLineageConflictError) {
-    return reply.code(409).send({ error: 'database_lineage_conflict', databaseLineage: error.databaseLineage })
+    return sendGenerationResponse(reply, 409, {
+      error: 'database_lineage_conflict',
+      databaseLineage: error.databaseLineage,
+    })
   }
   if (error instanceof RevisionMismatchError) {
-    return reply.code(409).send({ error: 'revision_conflict', currentRevision: error.currentRevision })
+    return sendGenerationResponse(reply, 409, { error: 'revision_conflict', currentRevision: error.currentRevision })
   }
-  if (error instanceof ValidationError) return reply.code(400).send({ error: error.message })
-  if (error instanceof EntityNotFoundError) return reply.code(404).send({ error: error.message })
+  if (error instanceof ValidationError) return sendGenerationResponse(reply, 400, { error: error.message })
+  if (error instanceof EntityNotFoundError) return sendGenerationResponse(reply, 404, { error: error.message })
   if (error instanceof GenerationOperationAttemptConflictError) {
-    return reply.code(409).send({ error: 'stale_generation_attempt' })
+    return sendGenerationResponse(reply, 409, { error: 'stale_generation_attempt' })
   }
   if (error instanceof GenerationEffectiveConfigurationTooLargeError) {
-    return reply.code(error.statusCode).send({
+    return sendGenerationResponse(reply, error.statusCode, {
       error: error.code,
       actualBytes: error.actualBytes,
       maxBytes: error.maxBytes,
     })
   }
   if (error instanceof GenerationAdmissionError) {
-    return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+    return sendGenerationResponse(reply, error.statusCode, { error: error.code, ...error.details })
   }
   const sqliteCode =
     error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''
   if (sqliteCode.startsWith('SQLITE_CONSTRAINT')) {
-    return reply.code(409).send({ error: 'generation_in_progress' })
+    return sendGenerationResponse(reply, 409, { error: 'generation_in_progress' })
   }
   throw error
 }
@@ -914,7 +918,7 @@ export function registerGenerationOperationRoutes(
           reply.header('x-risu-generation-attempt-no', String(operation.currentAttempt.attemptNo))
           reply.header('x-risu-generation-projection-epoch', String(operation.projectionEpoch))
         }
-        return reply.code(result.created ? 201 : 200).send(operationResponse(operation, result.append))
+        return sendGenerationResponse(reply, result.created ? 201 : 200, operationResponse(operation, result.append))
       } catch (error) {
         return sendOperationError(reply, error)
       }
@@ -929,8 +933,11 @@ export function registerGenerationOperationRoutes(
       try {
         const operationId = canonicalUuid(req.params.operationId, 'operationId')
         const operation = getGenerationOperationProjection(db, getDatabaseLineage(db), operationId)
-        if (!operation) return reply.code(404).send({ error: 'generation_operation_not_found' })
-        return { operation, projectionEpoch: getGenerationOperationProjectionEpoch(db) }
+        if (!operation) return sendGenerationResponse(reply, 404, { error: 'generation_operation_not_found' })
+        return sendGenerationResponse(reply, 200, {
+          operation,
+          projectionEpoch: getGenerationOperationProjectionEpoch(db),
+        })
       } catch (error) {
         return sendOperationError(reply, error)
       }
@@ -957,11 +964,11 @@ export function registerGenerationOperationRoutes(
         !Number.isSafeInteger(projectionEpoch) ||
         operation.projectionEpoch !== projectionEpoch
       ) {
-        return reply.code(409).send({ error: 'stale_generation_attempt', operation })
+        return sendGenerationResponse(reply, 409, { error: 'stale_generation_attempt', operation })
       }
       const job = dependencies.generationJobs.registry.get(attempt.jobId)
       if (!job || job.operationId !== operationId || job.attemptNo !== attempt.attemptNo) {
-        return reply.code(409).send({ error: 'stale_generation_attempt', operation })
+        return sendGenerationResponse(reply, 409, { error: 'stale_generation_attempt', operation })
       }
       attachGenerationOperationViewer({
         req,
@@ -1143,7 +1150,7 @@ export function registerGenerationOperationRoutes(
           abortJob.projectionEpoch = operation.projectionEpoch
           abortJob.abortController.abort('user_stop')
         }
-        return reply.code(statusCode).send({
+        return sendGenerationResponse(reply, statusCode, {
           disposition,
           knownAttemptMatched,
           operation,
@@ -1297,7 +1304,7 @@ export function registerGenerationOperationRoutes(
         }
         // The persisted retry-request lookup remains valid after the live attempt
         // descriptor disappears. Return its receipt separately from stream authority.
-        return reply.code(createdAttempt ? 202 : 200).send({
+        return sendGenerationResponse(reply, createdAttempt ? 202 : 200, {
           ...operationResponse(operation),
           acceptedRetryRequestId: retryRequestId,
         })

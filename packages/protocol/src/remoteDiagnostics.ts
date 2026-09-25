@@ -2,6 +2,8 @@ import { Type, type Static, type TSchema } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
 import { DiagnosticEntrySchema, projectDiagnosticEntry } from './diagnostics.js'
 export * from './browserDiagnostics.js'
+import { GENERATION_REJECTION_CODES } from './generationRejectionCodes.js'
+export * from './generationRejectionCodes.js'
 import {
   DIAGNOSTIC_EVENT_CATEGORIES,
   DIAGNOSTIC_SIZE_BUCKETS,
@@ -13,6 +15,9 @@ import {
 export * from './diagnosticEvents.js'
 
 export const SUPPORT_DIAGNOSTICS_ENDPOINT = '/api/v1/support/diagnostics'
+export const SUPPORT_DIAGNOSTICS_STATE_ENDPOINT = '/api/v1/support/diagnostics/state'
+export const DIAGNOSTIC_REFERENCE_KINDS = ['operation', 'attempt', 'chat', 'character', 'preset', 'profile'] as const
+export type DiagnosticReferenceKind = (typeof DIAGNOSTIC_REFERENCE_KINDS)[number]
 export const BROWSER_DIAGNOSTICS_ENDPOINT = '/api/v1/diagnostics/browser'
 export const REMOTE_DIAGNOSTICS_MAX_BYTES = 512 * 1024
 export const REMOTE_DIAGNOSTICS_MAX_WINDOW_MS = 86_400_000
@@ -164,6 +169,203 @@ export function isRemoteDiagnosticsResponse(value: unknown): value is RemoteDiag
     if (value.version === 2 && value.entries.some((entry) => !projectDiagnosticJournalRecord(entry))) return false
     if (value.version === 3 && value.entries.some((entry) => !projectRemoteDiagnosticRecordV3(entry))) return false
     return true
+  } catch {
+    return false
+  }
+}
+
+// State is independent of the exact v1/v2/v3 journal envelopes.
+const exact = { additionalProperties: false } as const
+const statusCounts = <T extends string>(statuses: readonly T[]) => Type.Record(enumOf(statuses), count, exact)
+const streamState = Type.Object(
+  {
+    total: count,
+    active: count,
+    clients: count,
+    pendingBytes: count,
+    replayMemoryBytes: count,
+  },
+  exact,
+)
+const workerState = Type.Object({ enabled: Type.Boolean(), running: Type.Boolean(), processing: Type.Boolean() }, exact)
+export const SUPPORT_DIAGNOSTICS_STATE_MAX_ITEMS = 200
+export const SupportDiagnosticsStateResponseSchema = Type.Object(
+  {
+    version: Type.Literal(1),
+    serverTime: timestamp,
+    identity: RemoteDiagnosticsResponseV1Schema.properties.identity,
+    deployment: Type.Object(
+      {
+        buildSource: enumOf(['env', 'git', 'unknown']),
+        locationsTrusted: Type.Boolean(),
+        dirty: Type.Optional(Type.Boolean()),
+        commitTime: Type.Optional(timestamp),
+        startedAt: timestamp,
+      },
+      exact,
+    ),
+    process: Type.Object(
+      {
+        uptimeSeconds: Type.Number({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }),
+        node: Type.Object({ major: count, minor: count, patch: count }, exact),
+        memory: Type.Object(
+          { rss: count, heapTotal: count, heapUsed: count, external: count, arrayBuffers: count },
+          exact,
+        ),
+      },
+      exact,
+    ),
+    config: Type.Object(
+      {
+        diagnostics: Type.Boolean(),
+        supportDiagnostics: Type.Boolean(),
+        browserDiagnostics: Type.Boolean(),
+        rawTrace: Type.Boolean(),
+        fullPrompt: Type.Boolean(),
+        rawMetrics: Type.Boolean(),
+        chatOccupancy: Type.Boolean(),
+        staticServing: Type.Boolean(),
+        agentDevAuthBypass: Type.Boolean(),
+        hub: enumOf(['default', 'custom']),
+        realm: enumOf(['default', 'custom']),
+        trustProxy: enumOf(['disabled', 'enabled', 'hops', 'custom']),
+        bodyLimit: count,
+        importUnlimited: Type.Boolean(),
+        importMaxBytes: Type.Optional(count),
+        automaticBackupRetention: count,
+        realmImportMaxExpandedBytes: count,
+      },
+      exact,
+    ),
+    database: Type.Object(
+      {
+        schemaVersion: count,
+        revision: count,
+        pageCount: count,
+        freelistCount: count,
+        pageSize: count,
+        files: Type.Object({ database: count, wal: count, shm: count }, exact),
+      },
+      exact,
+    ),
+    journal: Type.Object(
+      {
+        source: enumOf(['volatile', 'journal', 'unavailable']),
+        available: Type.Boolean(),
+        epoch: DiagnosticReferenceSchema,
+        retained: count,
+        pending: count,
+        dropped: count,
+        rejected: count,
+        pruned: count,
+        operationContinuity: enumOf(['retained', 'process-only']),
+        limits: Type.Object(
+          {
+            maxAgeMs: count,
+            maxEvents: count,
+            maxBytes: count,
+            maxQueue: count,
+            maxRecordBytes: count,
+            maxFileBytes: count,
+          },
+          exact,
+        ),
+      },
+      exact,
+    ),
+    generation: Type.Object(
+      {
+        activeTotal: count,
+        activeTruncated: Type.Boolean(),
+        active: Type.Array(
+          Type.Object(
+            {
+              chat: DiagnosticReferenceSchema,
+              operation: Type.Optional(DiagnosticReferenceSchema),
+              attempt: DiagnosticReferenceSchema,
+              mode: Type.Optional(enumOf(['send', 'continue', 'regenerate'])),
+              writerEpoch: Type.Optional(count),
+              operationStateVersion: Type.Optional(count),
+              projectionEpoch: Type.Optional(count),
+              attemptNo: Type.Optional(count),
+            },
+            exact,
+          ),
+          { maxItems: SUPPORT_DIAGNOSTICS_STATE_MAX_ITEMS },
+        ),
+        jobs: streamState,
+        streams: streamState,
+        liveOperations: statusCounts(['accepted', 'launching', 'owned_by_job', 'stopping']),
+        effects: statusCounts(['pending', 'claimed', 'completed', 'skipped', 'failed']),
+        finalizationRetries: statusCounts(['pending', 'terminal']),
+      },
+      exact,
+    ),
+    occupancy: Type.Object(
+      {
+        counts: statusCounts(['occupied', 'expired', 'released']),
+        truncated: Type.Boolean(),
+        leases: Type.Array(
+          Type.Object(
+            {
+              chat: DiagnosticReferenceSchema,
+              state: enumOf(['occupied', 'expired']),
+              claimClass: Type.Optional(enumOf(['owner', 'chat_only'])),
+              epoch: count,
+              claimedAt: Type.Optional(timestamp),
+              expiresAt: Type.Optional(timestamp),
+              updatedAt: timestamp,
+            },
+            exact,
+          ),
+          { maxItems: SUPPORT_DIAGNOSTICS_STATE_MAX_ITEMS },
+        ),
+      },
+      exact,
+    ),
+    writer: Type.Object(
+      {
+        present: Type.Boolean(),
+        epoch: count,
+        runtimePresent: Type.Boolean(),
+        runtimeEpoch: count,
+        connectedSessions: count,
+      },
+      exact,
+    ),
+    workers: Type.Object(
+      {
+        memory: workerState,
+        bardWiki: workerState,
+        memoryJobs: statusCounts(['pending', 'running', 'completed', 'failed', 'cancelled']),
+        bardWikiJobs: statusCounts(['pending', 'running', 'completed', 'failed', 'cancelled']),
+        maintenance: Type.Object(
+          {
+            closing: Type.Boolean(),
+            closed: Type.Boolean(),
+            reclamationBlocked: Type.Boolean(),
+            activityVersion: count,
+            protectionVersion: count,
+          },
+          exact,
+        ),
+      },
+      exact,
+    ),
+    rejections: Type.Object(
+      {
+        sinceStartedAt: timestamp,
+        byCode: Type.Partial(statusCounts(GENERATION_REJECTION_CODES), exact),
+      },
+      exact,
+    ),
+  },
+  exact,
+)
+export type SupportDiagnosticsStateResponse = Static<typeof SupportDiagnosticsStateResponseSchema>
+export function isSupportDiagnosticsStateResponse(value: unknown): value is SupportDiagnosticsStateResponse {
+  try {
+    return Value.Check(SupportDiagnosticsStateResponseSchema, value)
   } catch {
     return false
   }

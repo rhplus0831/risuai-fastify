@@ -195,6 +195,16 @@ export const PROTOCOL_ROUTE_OPERATION_CATALOG = [
     response: 'structured',
   },
   {
+    id: 'support-diagnostics-state',
+    methods: ['GET'],
+    path: '/api/v1/support/diagnostics/state',
+    match: 'exact',
+    streaming: 'none',
+    cache: 'no-store',
+    durability: 'none',
+    response: 'structured',
+  },
+  {
     id: 'browser-diagnostics-upload',
     methods: ['POST'],
     path: '/api/v1/diagnostics/browser',

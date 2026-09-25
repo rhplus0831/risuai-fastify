@@ -1,3 +1,4 @@
+import { readSupportDiagnosticsState } from './supportDiagnosticsState.js'
 import fs from 'node:fs'
 import path from 'node:path'
 import { randomUUID, randomBytes } from 'node:crypto'
@@ -116,6 +117,7 @@ import { reconcileGenerationEffectsAtStartup } from './generationEffects.js'
 import {
   isDiagnosticTransportUrl,
   SUPPORT_DIAGNOSTICS_ENDPOINT,
+  SUPPORT_DIAGNOSTICS_STATE_ENDPOINT,
   BROWSER_DIAGNOSTICS_ENDPOINT,
 } from '@risuai/protocol/remote-diagnostics'
 import { registerBrowserDiagnosticsRoutes } from './routes/browserDiagnostics.js'
@@ -225,7 +227,10 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     reply.header('cache-control', 'no-store')
     const pathname = request.url.split('?')[0]
     if (request.method === 'POST' && pathname === BROWSER_DIAGNOSTICS_ENDPOINT) return
-    if (request.method !== 'GET' || !['/api/v1/diagnostics', SUPPORT_DIAGNOSTICS_ENDPOINT].includes(pathname)) {
+    if (
+      request.method !== 'GET' ||
+      !['/api/v1/diagnostics', SUPPORT_DIAGNOSTICS_ENDPOINT, SUPPORT_DIAGNOSTICS_STATE_ENDPOINT].includes(pathname)
+    ) {
       return reply.code(404).send({ error: 'invalid-query' })
     }
     if (request.headers['transfer-encoding'] || Number(request.headers['content-length'] ?? 0) !== 0) {
@@ -270,7 +275,7 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     },
   })
 
-  openMaintenance(config.dataDir)
+  const maintenanceCoordinator = openMaintenance(config.dataDir)
   const db = openDatabase(config.dataDir, { allowMissingDatabase: config.allowMissingDatabase })
   const serverInstanceId = randomUUID()
   // Directory swaps are journaled around the SQLite restore transaction. Finish
@@ -533,6 +538,22 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
     config.supportDiagnostics ?? { enabled: false },
     diagnosticIdentity,
     buildIdentity.locationsTrusted,
+    () =>
+      readSupportDiagnosticsState({
+        db,
+        config,
+        identity: diagnosticIdentity,
+        buildIdentity,
+        source: diagnosticsRuntime.source,
+        generationJobs: generationJobRegistry,
+        streamJobs: streamJobRegistry,
+        occupancy: chatOccupancyService,
+        chatOccupancyEnabled,
+        writer: activeWriterState,
+        memoryWorker,
+        bardWikiWorker,
+        maintenance: maintenanceCoordinator,
+      }),
   )
   registerBrowserDiagnosticsRoutes(app, authState, {
     enabled: diagnosticsRuntime.browserEnabled,

@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import Ajv2020 from 'ajv/dist/2020.js'
+import { GENERATION_REJECTION_CODES } from '../packages/protocol/src/generationRejectionCodes.js'
 import {
   collectClientResourceObservation,
   compareClientResourceBaseline,
@@ -1902,6 +1903,10 @@ export function validateGenerationRejectionRegister(
     rows = document.rows
   } catch (error) {
     return [...errors, `generation-rejections: ${error instanceof Error ? error.message : String(error)}`]
+  }
+  const expectedCodes = [...new Set(rows.filter((row) => row.kind === 'code').map((row) => row.value))].sort()
+  if (JSON.stringify(expectedCodes) !== JSON.stringify(GENERATION_REJECTION_CODES)) {
+    errors.push('generation-rejections: generated protocol codes differ from the register code values')
   }
   const ids = new Set<string>()
   const sourceCache = new Map<string, { text: string; ast: ts.SourceFile }>()

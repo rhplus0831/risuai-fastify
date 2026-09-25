@@ -2,6 +2,9 @@ import { randomBytes } from 'node:crypto'
 import type { FastifyInstance } from 'fastify'
 import {
   SUPPORT_DIAGNOSTICS_ENDPOINT,
+  SUPPORT_DIAGNOSTICS_STATE_ENDPOINT,
+  isSupportDiagnosticsStateResponse,
+  type SupportDiagnosticsStateResponse,
   REMOTE_DIAGNOSTICS_MAX_BYTES,
   isRemoteDiagnosticsResponse,
   parseRemoteDiagnosticsQuery,
@@ -295,6 +298,7 @@ export function registerRemoteDiagnosticsRoutes(
   options: SupportDiagnosticsOptions,
   identity: RemoteDiagnosticsResponse['identity'],
   locationsTrusted: boolean,
+  readState?: () => SupportDiagnosticsStateResponse,
 ) {
   const reader = createRemoteDiagnosticsReader(source, identity, { locationsTrusted })
   const audit: { timestamp: number; outcome: RemoteDiagnosticsError | 'ok' }[] = []
@@ -306,60 +310,85 @@ export function registerRemoteDiagnosticsRoutes(
     reader.clear()
     audit.length = 0
   })
-  app.get(
-    SUPPORT_DIAGNOSTICS_ENDPOINT,
-    {
-      exposeHeadRoute: false,
-      bodyLimit: 1024,
-      config: { rateLimit: supportDiagnosticsRateLimit },
-      onRequest: async (request, reply) => {
-        reply.header('cache-control', 'no-store')
-        const timer = setTimeout(() => {
-          reply.raw.destroy()
-        }, 10_000)
-        timer.unref()
-        reply.raw.once('close', () => clearTimeout(timer))
-        reply.raw.once('finish', () => clearTimeout(timer))
-        let outcome: RemoteDiagnosticsError | undefined
-        if (!options.enabled || !options.verifierFile) outcome = 'disabled'
-        else if (!(await verifySupportDiagnosticsAuthorization(request.headers.authorization, options.verifierFile)))
-          outcome = 'unauthorized'
-        if (outcome) {
-          auditOutcome(outcome)
-          return reply.code(SUPPORT_DIAGNOSTIC_STATUS[outcome]).send({ error: outcome })
-        }
-      },
-      errorHandler: (error, _request, reply) => {
-        const outcome =
-          error.statusCode === 429
-            ? 'rate-limited'
-            : error.statusCode && error.statusCode < 500
-              ? 'invalid-query'
-              : 'internal-error'
+  const routeOptions: import('fastify').RouteShorthandOptions = {
+    exposeHeadRoute: false,
+    bodyLimit: 1024,
+    config: { rateLimit: supportDiagnosticsRateLimit },
+    onRequest: async (request, reply) => {
+      reply.header('cache-control', 'no-store')
+      const timer = setTimeout(() => {
+        reply.raw.destroy()
+      }, 10_000)
+      timer.unref()
+      reply.raw.once('close', () => clearTimeout(timer))
+      reply.raw.once('finish', () => clearTimeout(timer))
+      let outcome: RemoteDiagnosticsError | undefined
+      if (!options.enabled || !options.verifierFile) outcome = 'disabled'
+      else if (!(await verifySupportDiagnosticsAuthorization(request.headers.authorization, options.verifierFile)))
+        outcome = 'unauthorized'
+      if (outcome) {
         auditOutcome(outcome)
-        reply.header('cache-control', 'no-store').code(SUPPORT_DIAGNOSTIC_STATUS[outcome]).send({ error: outcome })
-      },
-    },
-    async (request, reply) => {
-      const query =
-        request.url.length <= SUPPORT_DIAGNOSTICS_ENDPOINT.length + 2048
-          ? parseRemoteDiagnosticsQuery(request.query)
-          : null
-      const result = query ? reader.read(query) : 'invalid-query'
-      if (typeof result === 'string') {
-        auditOutcome(result)
-        return reply.code(SUPPORT_DIAGNOSTIC_STATUS[result]).send({ error: result })
+        return reply.code(SUPPORT_DIAGNOSTIC_STATUS[outcome]).send({ error: outcome })
       }
+    },
+    errorHandler: (error, _request, reply) => {
+      const outcome =
+        error.statusCode === 429
+          ? 'rate-limited'
+          : error.statusCode && error.statusCode < 500
+            ? 'invalid-query'
+            : 'internal-error'
+      auditOutcome(outcome)
+      reply.header('cache-control', 'no-store').code(SUPPORT_DIAGNOSTIC_STATUS[outcome]).send({ error: outcome })
+    },
+  }
+  app.get(SUPPORT_DIAGNOSTICS_ENDPOINT, routeOptions, async (request, reply) => {
+    const query =
+      request.url.length <= SUPPORT_DIAGNOSTICS_ENDPOINT.length + 2048
+        ? parseRemoteDiagnosticsQuery(request.query)
+        : null
+    const result = query ? reader.read(query) : 'invalid-query'
+    if (typeof result === 'string') {
+      auditOutcome(result)
+      return reply.code(SUPPORT_DIAGNOSTIC_STATUS[result]).send({ error: result })
+    }
+    if (
+      !isRemoteDiagnosticsResponse(result) ||
+      Buffer.byteLength(JSON.stringify(result)) > REMOTE_DIAGNOSTICS_MAX_BYTES
+    ) {
+      auditOutcome('internal-error')
+      return reply.code(500).send({ error: 'internal-error' })
+    }
+    auditOutcome('ok')
+    return result
+  })
+  app.get(SUPPORT_DIAGNOSTICS_STATE_ENDPOINT, routeOptions, (request, reply) => {
+    let result: SupportDiagnosticsStateResponse | RemoteDiagnosticsError
+    try {
+      // Even an empty query delimiter is rejected; this route has no query grammar.
+      result =
+        request.url.includes('?') || Object.keys(request.query as object).length
+          ? 'invalid-query'
+          : !source.enabled
+            ? 'collection-disabled'
+            : readState
+              ? readState()
+              : 'internal-error'
       if (
-        !isRemoteDiagnosticsResponse(result) ||
-        Buffer.byteLength(JSON.stringify(result)) > REMOTE_DIAGNOSTICS_MAX_BYTES
-      ) {
-        auditOutcome('internal-error')
-        return reply.code(500).send({ error: 'internal-error' })
-      }
-      auditOutcome('ok')
-      return result
-    },
-  )
+        typeof result !== 'string' &&
+        (!isSupportDiagnosticsStateResponse(result) ||
+          Buffer.byteLength(JSON.stringify(result)) > REMOTE_DIAGNOSTICS_MAX_BYTES)
+      )
+        result = 'internal-error'
+    } catch {
+      result = 'internal-error'
+    }
+    if (typeof result === 'string') {
+      auditOutcome(result)
+      return reply.code(SUPPORT_DIAGNOSTIC_STATUS[result]).send({ error: result })
+    }
+    auditOutcome('ok')
+    return reply.send(result)
+  })
   return { audit: () => audit.map((entry) => ({ ...entry })) }
 }

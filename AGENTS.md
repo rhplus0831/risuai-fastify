@@ -85,4 +85,4 @@ for entry limits and body sidecars.
 # Remote Production Diagnostics
 
 - When an issue originates on an external server and a support config is available, begin with `pnpm diagnostics:remote --investigate`. Add a generated `--requestUid` or opaque `--operationRef` when one is known; prefer the returned correlation groups over guessing category filters.
-- Treat the result as bounded, privacy-safe operational evidence. Missing or truncated evidence is not proof that an operation did not occur, and content-dependent failures require a separately authorized reproduction path rather than widening the standing channel.
+- Treat the result as bounded, privacy-safe operational evidence. Missing or truncated evidence is not proof that an operation did not occur. The standing channel carries operational state and closed facts only, never content; content-dependent failures still require the offline reproduction tools with synthetic or operator-approved data.

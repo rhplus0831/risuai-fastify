@@ -102,7 +102,7 @@ Remote reads require all of the following:
 - `RISU_SUPPORT_DIAGNOSTICS_VERIFIER` naming a private verifier file outside
   the repository, data directory, and static root; and
 - a dedicated bearer credential presented to
-  `GET /api/v1/support/diagnostics` over verified HTTPS.
+  `GET /api/v1/support/diagnostics` or `GET /api/v1/support/diagnostics/state` over verified HTTPS.
 
 The verifier directory must be private, the file mode must be 0600, and
 symlinked paths are rejected. Missing, invalid, revoked, or expired credentials
@@ -139,8 +139,9 @@ lifecycle command is running.
 The route policy is `diagnostics-read`, separate from ordinary application
 `required`. All traffic in the diagnostic namespace, including rejected
 methods, bodies, and subpaths, is excluded from automatic request logging and
-raw tracing. The route reads only the sanitized collector, never Request
-History, trace files, logs, bodies, sidecars, assets, backups, or domain rows.
+raw tracing. The journal route reads only the sanitized collector. The state route reads the
+closed operational projections described below. Neither reads Request History,
+trace files, logs, bodies, assets, backups, or content-bearing domain JSON.
 
 ## Protocol Versions And Provenance
 
@@ -273,6 +274,7 @@ different private transferred config:
 
 ```sh
 export RISU_DIAGNOSTICS_REMOTE_CONFIG=/private/development/directory/production.json
+pnpm diagnostics:remote --state
 pnpm diagnostics:remote --investigate
 pnpm diagnostics:remote --investigate --requestUid=<generated-request-uid>
 pnpm diagnostics:remote --investigate --operationRef=<opaque-operation-reference>
@@ -305,6 +307,85 @@ evidence. A disconnect after dispatch is ambiguous and does not prove that
 replay is safe. Upstream stream-gap timing measures awaited provider reads and
 excludes local consumer work; an absent measurement means the stage was not
 observed, not that it took zero time.
+
+### State Snapshot
+
+`GET /api/v1/support/diagnostics/state` returns the independent exact
+`SupportDiagnosticsStateResponseSchema` version 1. `pnpm diagnostics:remote --state`
+fetches it over the same verified TLS transport, validates the complete response,
+and prints one JSON value. This mode accepts no other flags. The endpoint accepts
+no query parameters (including an empty query delimiter). It has the journal
+route's support credential requirement, diagnostics collection gate, no-store
+policy, 30 reads/minute/IP limit, ten-second reply timer, bounded audit ring,
+fixed errors, and 512 KiB response cap. It requires no active writer and does not
+acquire ownership. Existing journal v1/v2/v3 responses are unchanged.
+
+The grouped sections contain:
+
+- `identity` and `deployment`: build/process identity, build source, location
+  trust, optional dirty/commit time, and process start time.
+- `process` and `config`: memory, uptime, numeric Node version components,
+  diagnostic/trace/occupancy flags, numeric limits, default/custom hub and Realm
+  classifications, and a proxy-trust kind.
+- `database` and `journal`: schema/revision, page/freelist counts, database/WAL/SHM
+  sizes, journal availability, epoch, retention limits, retained/pending events,
+  loss counters, and reference continuity. Journal failure remains visible in a
+  successful state read; it does not hide the other operational sections.
+- `generation` and `occupancy`: active jobs and leases with HMAC chat/operation/
+  attempt references, total counts and explicit truncation above 200 items,
+  stream/client/buffer counts, indexed live-operation counts, effect statuses,
+  and finalization queue statuses. Released occupancy rows are counted only.
+- `writer` and `workers`: durable/runtime writer presence and epochs, connected
+  session count, worker enabled/running/processing flags, indexed memory/BardWiki
+  job statuses, and maintenance state/version getters.
+- `rejections`: process-lifetime `sinceStartedAt` and sparse `byCode` counters.
+  Keys are exactly the `kind: code` values in the
+  [generation rejection register](generation-rejection-register.md), generated
+  into `packages/protocol/src/generationRejectionCodes.ts` and checked by
+  `pnpm check:server`. Each shared generation HTTP response and terminal SSE
+  emission counts each distinct closed code once. Returned operation failure
+  projections also count, so repeated observations can increment a code; these
+  are response counts, not unique-operation counts. Framework/auth middleware
+  failures and background transitions with no emitted response are not counted.
+  Counters reset on process restart, survive data replacement, saturate at the
+  maximum safe integer, and never retain messages or unknown codes.
+
+Reads stay synchronous from the first database query to the last, without
+occupancy reconciliation, writer registration, directory walks, or content
+loading. Queue counts use existing status indexes; live operations use only
+`generation_operations_one_live_chat`. There are no message counts or full
+operation-table counts and no all-chat occupancy-pin queries. Counts can still
+cost time proportional to the indexed status entries; the reply timer cannot
+interrupt synchronous SQLite work. No host name, OS release, absolute path,
+URL value, proxy configuration value, session token, raw domain id, plain content
+hash, secret, or user/provider text is exported. Schema validation rejects
+unknown fields or strings before send; failures return `internal-error` only.
+
+Resolve an opaque reference locally on the server host:
+
+```sh
+pnpm diagnostics:resolve --data-dir /absolute/path/to/data --ref <32-hex-reference>
+pnpm diagnostics:resolve --data-dir /absolute/path/to/data --ref <32-hex-reference> --kind chat
+```
+
+Kinds are `chat`, `character`, `preset`, `profile`, `operation`, and `attempt`.
+The resolver reads the private correlation key and copies SQLite database,
+WAL, and rollback-journal files into private temporary staging. It verifies a
+stable copy interval and integrity, then enumerates ids from a read-only copy;
+it never opens the source files with SQLite or creates source WAL/SHM files.
+It prints `{ "kind": "chat", "id": "..." }` for a match, `not-found` otherwise,
+or the fixed `resolve-error` category on failure. The matching id is local
+operator output and must not be copied into the standing channel.
+
+Existing reference HMACs use the database lineage as their history epoch.
+The journal's separate random pagination epoch is read and validated, and its
+lineage digest must match the copied application database. References therefore
+remain compatible across restart and become unresolvable after history/key
+replacement or removal of candidate ids. Persisted attempt candidates include
+job ids and finalization generation ids; random transient attempts and
+process-only references without the retained key cannot be resolved. The
+resolver may need a quieter interval if the source changes during all three
+copy attempts. Restart the server after deploying changed source.
 
 ## Local Production Size Dump
 

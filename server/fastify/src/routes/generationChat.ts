@@ -1,3 +1,4 @@
+import { sendGenerationResponse, recordGenerationRejection } from '../generationRejectionCounters.js'
 import {
   storeGenerationConfiguration,
   resolveGenerationConfiguration,
@@ -651,7 +652,7 @@ export type GenerationFinalizationTargetSnapshot =
     }
 
 function badRequest(reply: FastifyReply, error: string): void {
-  reply.code(400).send({ error })
+  sendGenerationResponse(reply, 400, { error })
 }
 
 function isNonEmptyString(value: unknown): value is string {
@@ -1384,7 +1385,7 @@ function preflightChatGenerationSettings(
       outcome: 'rejected',
       providerMayHaveRun: false,
     })
-    reply.code(result.statusCode).send(result.body)
+    sendGenerationResponse(reply, result.statusCode, result.body)
     return { status: 'handled' }
   }
   return result
@@ -1411,23 +1412,23 @@ export function preflightGenerationOperationSettings(
 
 function sendAssemblyHttpError(reply: FastifyReply, err: unknown): boolean {
   if (isAgentPresetGenerationError(err)) {
-    reply.code(err.statusCode).send(err.body)
+    sendGenerationResponse(reply, err.statusCode, err.body)
     return true
   }
   if (isChatGenerationSettingsIncompleteAssemblyError(err)) {
-    reply.code(err.statusCode).send(err.body)
+    sendGenerationResponse(reply, err.statusCode, err.body)
     return true
   }
   if (isModelProfileGenerationGuardAssemblyError(err)) {
-    reply.code(err.statusCode).send(err.body)
+    sendGenerationResponse(reply, err.statusCode, err.body)
     return true
   }
   if (err instanceof GenerationInputValidationError) {
-    reply.code(400).send({ error: err.message })
+    sendGenerationResponse(reply, 400, { error: err.message })
     return true
   }
   if (err instanceof EntityNotFoundError) {
-    reply.code(404).send({ error: err.message })
+    sendGenerationResponse(reply, 404, { error: err.message })
     return true
   }
   return false
@@ -3252,6 +3253,7 @@ async function streamAssembly(
       connection: 'keep-alive',
     })
     const emit = (event: PromptChatEvent): void => {
+      if (event.type === 'error') recordGenerationRejection(event)
       const frame = formatPromptChatFrame(event)
       const written = writeBoundedRaw(reply.raw, frame, { onOverflow: abort })
       if (written && isStreamDeadlineActivityFrame(frame)) refresh()
@@ -6323,6 +6325,7 @@ async function runGenerationJob(args: {
   let lastTerminalError: string | undefined
   let deferProviderErrorSettlement = false
   const emit = (event: PromptChatEvent): void => {
+    if (event.type === 'error') recordGenerationRejection(event)
     if (event.type === 'error') lastTerminalError = event.error
     if (event.type === 'done') {
       recordDiagnosticEvent({
@@ -7043,7 +7046,7 @@ function startDurableGeneration(args: {
 }): void {
   const { req, reply, input, generationJobs } = args
   if (generationJobs.hasRunningJob(input.chatId)) {
-    reply.code(409).send({
+    sendGenerationResponse(reply, 409, {
       error: 'generation_in_progress',
       reason: 'A generation is already running for this chat.',
     })
@@ -7064,7 +7067,7 @@ function startDurableGeneration(args: {
       if (pendingFinalization) {
         args.db.exec('ROLLBACK')
         transactionOpen = false
-        reply.code(409).send({
+        sendGenerationResponse(reply, 409, {
           error: 'generation_finalization_pending',
           reason: 'The previous reply is still saving. Try again when it finishes.',
           generationId: pendingFinalization.generationId,
@@ -7169,18 +7172,18 @@ function startDurableGeneration(args: {
     const sqliteCode =
       error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''
     if (!reply.sent && sqliteCode.startsWith('SQLITE_CONSTRAINT')) {
-      reply.code(409).send({
+      sendGenerationResponse(reply, 409, {
         error: 'generation_in_progress',
         reason: 'A generation is already running for this chat.',
       })
       return
     }
     if (!reply.sent && error instanceof GenerationAdmissionError) {
-      reply.code(error.statusCode).send({ error: error.code, ...error.details })
+      sendGenerationResponse(reply, error.statusCode, { error: error.code, ...error.details })
       return
     }
     if (!reply.sent && error instanceof GenerationEffectiveConfigurationTooLargeError) {
-      reply.code(error.statusCode).send({
+      sendGenerationResponse(reply, error.statusCode, {
         error: error.code,
         actualBytes: error.actualBytes,
         maxBytes: error.maxBytes,
@@ -7195,7 +7198,7 @@ function startDurableGeneration(args: {
       }
       return
     }
-    reply.code(500).send({ error: 'generation_job_start_failed' })
+    sendGenerationResponse(reply, 500, { error: 'generation_job_start_failed' })
   }
 }
 
@@ -7237,7 +7240,7 @@ export function registerGenerationChatRoutes(
         input.compatibilityOccupancyEpoch = compatibilityAuthority.occupancyEpoch
       } catch (error) {
         if (error instanceof GenerationAdmissionError) {
-          return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+          return sendGenerationResponse(reply, error.statusCode, { error: error.code, ...error.details })
         }
         throw error
       }
@@ -7283,7 +7286,7 @@ export function registerGenerationChatRoutes(
 
       if (preparedAssembly && assemblyRequiresHypaContextTruncationConfirmation(preparedAssembly, clientCapabilities)) {
         requestAbort.cleanup()
-        return reply.code(409).send({
+        return sendGenerationResponse(reply, 409, {
           error: HYPA_CONTEXT_TRUNCATION_CONFIRMATION_REQUIRED,
           message: 'Confirmation is required before omitting older chat history without Hypa Memory.',
           chatId: input.chatId,
@@ -7353,7 +7356,7 @@ export function registerGenerationChatRoutes(
         req.log,
       )
       if (!job) {
-        reply.code(404).send({
+        sendGenerationResponse(reply, 404, {
           error: 'generation_job_not_found',
           reason: 'Generation job not found or already expired.',
         })
@@ -7382,7 +7385,7 @@ export function registerGenerationChatRoutes(
       if (!(await requireAuth(authState, req, reply))) return
       const snapshot = generationJobs.registry.terminalSnapshotStream(req.params.id)
       if (!snapshot) {
-        reply.code(404).send({
+        sendGenerationResponse(reply, 404, {
           error: 'generation_terminal_snapshot_not_found',
           reason: 'Generation terminal snapshot not found or already expired.',
         })
@@ -7402,7 +7405,7 @@ export function registerGenerationChatRoutes(
     if (!(await requireAuth(authState, req, reply))) return
     const job = generationJobs.registry.get(req.params.id)
     if (!job) {
-      reply.code(404).send({
+      sendGenerationResponse(reply, 404, {
         disposition: 'not_found',
         error: 'generation_job_not_found',
         reason: 'Generation job not found or already expired.',
@@ -7419,7 +7422,7 @@ export function registerGenerationChatRoutes(
         getDatabaseWriterMetadata(db).sessionId === null &&
         (!operation || operation.generationScope?.admissionKind === 'legacy_owner')
       if (!ownerlessCompatibility) {
-        return reply.code(400).send({ error: 'risu-writer-session header is required' })
+        return sendGenerationResponse(reply, 400, { error: 'risu-writer-session header is required' })
       }
       // Before any durable writer has been established, the compatibility
       // generation path records the fixed `legacy` identity. Never recover an
@@ -7437,26 +7440,30 @@ export function registerGenerationChatRoutes(
       })
     } catch (error) {
       if (error instanceof GenerationAdmissionError) {
-        return reply.code(error.statusCode).send({ error: error.code, ...error.details })
+        return sendGenerationResponse(reply, error.statusCode, { error: error.code, ...error.details })
       }
       throw error
     }
     if (operation?.state === 'completed') {
-      return { disposition: 'already_completed', jobId: job.id, operation }
+      return sendGenerationResponse(reply, 200, { disposition: 'already_completed', jobId: job.id, operation })
     }
     if (operation?.state === 'cancelled') {
-      return { disposition: 'already_cancelled', jobId: job.id, operation }
+      return sendGenerationResponse(reply, 200, { disposition: 'already_cancelled', jobId: job.id, operation })
     }
     if (operation?.state === 'finalizing') {
-      return {
+      return sendGenerationResponse(reply, 200, {
         disposition:
           operation.desiredTerminalOutcome === 'cancelled' ? 'cancelled_finalizing' : 'completion_finalizing',
         jobId: job.id,
         operation,
-      }
+      })
     }
     if (operation?.state === 'terminal_failed' || operation?.state === 'invalidated' || job.done) {
-      return { disposition: 'already_terminal', jobId: job.id, ...(operation ? { operation } : {}) }
+      return sendGenerationResponse(reply, 200, {
+        disposition: 'already_terminal',
+        jobId: job.id,
+        ...(operation ? { operation } : {}),
+      })
     }
     if (lineage) {
       if (operation?.state === 'owned_by_job') {
@@ -7479,7 +7486,11 @@ export function registerGenerationChatRoutes(
     // async cancel-persist lands) would let an overlapping send for the same chat
     // start and race the cancel write.
     job.abortController.abort('user_stop')
-    return reply.code(202).send({ disposition: 'cancelling', jobId: job.id, ...(operation ? { operation } : {}) })
+    return sendGenerationResponse(reply, 202, {
+      disposition: 'cancelling',
+      jobId: job.id,
+      ...(operation ? { operation } : {}),
+    })
   })
 
   // One-shot JSON preview. Unlike `/chat`, this never opens an SSE stream, so
