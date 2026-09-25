@@ -19,6 +19,7 @@ import type { MaintenanceCoordinator } from './maintenanceCoordinator.js'
 import type { RemoteDiagnosticsSource } from './remoteDiagnostics.js'
 import { getDatabaseOwnershipSnapshot } from './databaseLineage.js'
 import { getSchemaState } from './db.js'
+import { generationEffectClass, isGenerationEffectKind } from './generationEffects.js'
 import { diagnosticReferenceForDatabase } from './diagnosticContext.js'
 import { DIAGNOSTICS_JOURNAL_HARD_LIMITS } from './diagnosticsJournalProtocol.js'
 import { DIAGNOSTICS_PROCESS_STARTED_AT, generationRejectionSnapshot } from './generationRejectionCounters.js'
@@ -101,6 +102,35 @@ export function readSupportDiagnosticsState(input: SupportDiagnosticsStateSource
     ['pending', 'claimed', 'completed', 'skipped', 'failed'],
     [ownership.databaseLineage],
   )
+  const effectClaims = {
+    durableLive: 0,
+    durableExpired: 0,
+    nonDurable: 0,
+    byKind: {
+      igp: 0,
+      plugin_output: 0,
+      generated_translation: 0,
+      notification: 0,
+      tts: 0,
+      completion_sound: 0,
+      emotion_image_state: 0,
+    },
+  }
+  for (const row of db
+    .prepare(
+      `SELECT effect_kind, (lease_expires_at IS NULL OR lease_expires_at <= ?) AS expired, COUNT(*) AS count
+       FROM generation_effects INDEXED BY generation_effects_recoverable_claims
+       WHERE database_lineage = ? AND status = 'claimed'
+       GROUP BY effect_kind, expired`,
+    )
+    .all(new Date(serverTime).toISOString(), ownership.databaseLineage)) {
+    if (!isGenerationEffectKind(row.effect_kind)) throw new Error('invalid-state')
+    const count = Number(row.count)
+    effectClaims.byKind[row.effect_kind] += count
+    if (generationEffectClass(row.effect_kind) !== 'durable') effectClaims.nonDurable += count
+    else if (row.expired) effectClaims.durableExpired += count
+    else effectClaims.durableLive += count
+  }
   const finalizationRetries = countStatuses(
     'SELECT status, COUNT(*) AS count FROM generation_finalization_retries INDEXED BY idx_generation_finalization_retries_status GROUP BY status',
     ['pending', 'terminal'],
@@ -214,6 +244,7 @@ export function readSupportDiagnosticsState(input: SupportDiagnosticsStateSource
       streams: streams(input.streamJobs),
       liveOperations,
       effects,
+      effectClaims,
       finalizationRetries,
     },
     occupancy: {

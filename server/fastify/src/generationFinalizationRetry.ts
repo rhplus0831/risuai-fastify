@@ -290,6 +290,20 @@ export function createGenerationFinalizationRetryTable(db: DatabaseSync): void {
       ON generation_finalization_retries (status, updated_at);
   `)
   ensureGenerationFinalizationScopeColumns(db)
+  // Older migrations call this before v29 adds operation identity. The v42
+  // retention migration calls it again after those columns are available.
+  const columns = new Set(
+    (db.prepare('PRAGMA table_info(generation_finalization_retries)').all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    ),
+  )
+  if (columns.has('database_lineage') && columns.has('operation_id')) {
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_generation_finalization_retries_operation_pending
+        ON generation_finalization_retries (database_lineage, operation_id)
+        WHERE status = 'pending';
+    `)
+  }
 }
 
 function ensureGenerationFinalizationScopeColumns(db: DatabaseSync): void {

@@ -578,6 +578,10 @@ export function createGenerationOperationTables(db: DatabaseSync): void {
   ensureGenerationOperationScopeColumns(db)
   ensureGenerationOperationConfigurationColumns(db)
   ensureGenerationAttemptScopeColumns(db)
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS generation_operation_attempts_finalization_generation
+      ON generation_operation_attempts (finalization_generation_id);
+  `)
   db.prepare('INSERT OR IGNORE INTO generation_operation_projection_state (id, epoch) VALUES (1, 0)').run()
 }
 

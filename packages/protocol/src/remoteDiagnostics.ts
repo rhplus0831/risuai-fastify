@@ -334,6 +334,25 @@ export const SupportDiagnosticsStateResponseSchema = Type.Object(
         streams: streamState,
         liveOperations: statusCounts(['accepted', 'launching', 'owned_by_job', 'stopping']),
         effects: statusCounts(['pending', 'claimed', 'completed', 'skipped', 'failed']),
+        effectClaims: Type.Optional(
+          Type.Object(
+            {
+              durableLive: count,
+              durableExpired: count,
+              nonDurable: count,
+              byKind: statusCounts([
+                'igp',
+                'plugin_output',
+                'generated_translation',
+                'notification',
+                'tts',
+                'completion_sound',
+                'emotion_image_state',
+              ]),
+            },
+            exact,
+          ),
+        ),
         finalizationRetries: statusCounts(['pending', 'terminal']),
       },
       exact,

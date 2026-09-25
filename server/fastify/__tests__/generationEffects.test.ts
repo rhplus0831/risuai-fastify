@@ -48,8 +48,10 @@ import {
   generationEffectHasExactTerminalTranscriptBinding,
   listGenerationEffects,
   listPendingClientGenerationEffects,
+  pruneSettledGenerationEffects,
   reconcileGenerationEffectsAtStartup,
   renewGenerationEffectClaim,
+  settleExpiredNonDurableGenerationEffectClaims,
   settleGenerationEffect,
 } from '../src/generationEffects.js'
 
@@ -1239,6 +1241,10 @@ describe('generation effect ledger', () => {
         .get(seeded.operationId),
     ).toEqual({ currentAttemptNo: null })
 
+    // App startup already ran the one-shot backfill for this lineage. A database
+    // written before the marker existed has no marker and is walked exactly once.
+    expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(0)
+    harness.db.exec('UPDATE database_metadata SET generation_effects_backfill_lineage = NULL WHERE id = 1')
     expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(7)
     expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(0)
     const effects = listGenerationEffects(harness.db, seeded.generationId, harness.lineage)
@@ -1266,20 +1272,152 @@ describe('generation effect ledger', () => {
     harness.db
       .prepare("DELETE FROM generation_effects WHERE generation_id = ? AND effect_kind = 'generated_translation'")
       .run(seeded.generationId)
-    expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(1)
-    expect(
-      listGenerationEffects(harness.db, seeded.generationId, harness.lineage).map((effect) => ({
+    // The marker now exists, so a later restart never recreates a deleted row.
+    expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(0)
+    const remaining = listGenerationEffects(harness.db, seeded.generationId, harness.lineage).map((effect) => ({
+      kind: effect.kind,
+      status: effect.status,
+      reason: effect.reason,
+    }))
+    expect(remaining).toHaveLength(6)
+    expect(remaining).toEqual(
+      expect.arrayContaining([{ kind: 'igp', status: 'completed', reason: 'already_processed' }]),
+    )
+    expect(remaining).not.toEqual(expect.arrayContaining([expect.objectContaining({ kind: 'generated_translation' })]))
+  })
+
+  it('settles an abandoned non-durable claim after its lease and never delivers it again', () => {
+    const { db, lineage } = openTestDatabase()
+    try {
+      ensureGenerationEffectLedger(db, {
+        databaseLineage: lineage,
+        operationId: 'operation-a',
+        operationProtocolVersion: 1,
+        generationId: 'generation-a',
+        characterId: 'character-a',
+        chatId: 'chat-a',
+        messageId: 'message-a',
+        createdAt: '2026-08-12T00:00:00.000Z',
+      })
+      const claimAt = (kind: 'notification' | 'tts' | 'emotion_image_state', claimedAt: string) =>
+        claimGenerationEffect(db, {
+          databaseLineage: lineage,
+          generationId: 'generation-a',
+          kind,
+          delivery: 'live_terminal',
+          claimedAt,
+          leaseMs: 1_000,
+        })
+      for (const kind of ['notification', 'tts', 'emotion_image_state'] as const) {
+        expect(claimAt(kind, '2026-08-12T00:00:00.000Z')).toMatchObject({ status: 'claimed' })
+      }
+
+      // A second claim attempt after the lease settles the row instead of redelivering.
+      expect(claimAt('notification', '2026-08-12T00:00:01.000Z')).toEqual({
+        status: 'not_claimed',
+        reason: 'already_receipted',
+        effect: expect.objectContaining({
+          kind: 'notification',
+          status: 'skipped',
+          reason: 'claim_lease_expired',
+          delivery: 'live_terminal',
+        }),
+      })
+      expect(claimAt('notification', '2026-08-12T00:00:02.000Z')).toMatchObject({
+        status: 'not_claimed',
+        reason: 'already_receipted',
+      })
+
+      // The sweep settles only leases that have actually expired, and is bounded.
+      expect(settleExpiredNonDurableGenerationEffectClaims(db, { now: '2026-08-12T00:00:00.999Z' })).toBe(0)
+      expect(
+        settleExpiredNonDurableGenerationEffectClaims(db, { now: '2026-08-12T00:00:01.000Z', maxPerSweep: 1 }),
+      ).toBe(1)
+      expect(settleExpiredNonDurableGenerationEffectClaims(db, { now: '2026-08-12T00:00:01.000Z' })).toBe(1)
+      expect(settleExpiredNonDurableGenerationEffectClaims(db, { now: '2026-08-12T00:00:01.000Z' })).toBe(0)
+      const settled = listGenerationEffects(db, 'generation-a', lineage).map((effect) => ({
         kind: effect.kind,
         status: effect.status,
         reason: effect.reason,
-      })),
-    ).toEqual(
-      expect.arrayContaining([
-        { kind: 'igp', status: 'completed', reason: 'already_processed' },
-        { kind: 'generated_translation', status: 'skipped', reason: 'pre_ledger_terminal' },
-      ]),
-    )
+      }))
+      expect(settled).toEqual(
+        expect.arrayContaining([
+          { kind: 'notification', status: 'skipped', reason: 'claim_lease_expired' },
+          { kind: 'tts', status: 'skipped', reason: 'claim_lease_expired' },
+          { kind: 'emotion_image_state', status: 'skipped', reason: 'claim_lease_expired' },
+        ]),
+      )
+      expect(claimAt('tts', '2026-08-12T00:00:05.000Z')).toMatchObject({
+        status: 'not_claimed',
+        reason: 'already_receipted',
+        effect: { status: 'skipped', reason: 'claim_lease_expired' },
+      })
+      // Durable rows are untouched by the sweep: pending ones stay claimable.
+      expect(settled).toEqual(
+        expect.arrayContaining([
+          { kind: 'igp', status: 'pending', reason: undefined },
+          { kind: 'plugin_output', status: 'pending', reason: undefined },
+          { kind: 'generated_translation', status: 'pending', reason: undefined },
+        ]),
+      )
+    } finally {
+      db.close()
+    }
+  })
+
+  it('prunes settled effects after retention, keeps them pruned across restart, and acknowledges pruned claims', async () => {
+    const harness = await openRouteHarness()
+    const seeded = seedChatOnlyCompletion(harness)
+    const settle = (kind: string, settledAt: string) =>
+      harness.db
+        .prepare(
+          `UPDATE generation_effects
+           SET status = 'skipped', claim_id = 'claim-' || effect_kind, delivery = 'server', reason = 'not_configured',
+               claimed_at = ?, settled_at = ?, updated_at = ?
+           WHERE database_lineage = ? AND generation_id = ? AND effect_kind = ?`,
+        )
+        .run(settledAt, settledAt, settledAt, harness.lineage, seeded.generationId, kind)
+    const old = '2026-09-01T00:00:00.000Z'
+    const now = '2026-09-25T00:00:00.000Z'
+    for (const kind of ['igp', 'plugin_output', 'generated_translation', 'tts', 'completion_sound']) settle(kind, old)
+    settle('emotion_image_state', now)
+
+    // A pending sibling keeps every receipt of the generation.
+    expect(pruneSettledGenerationEffects(harness.db, { now })).toBe(0)
+    settle('notification', old)
+    // Bounded, oldest first, and rows inside the window survive.
+    expect(pruneSettledGenerationEffects(harness.db, { now, maxPerSweep: 2 })).toBe(2)
+    expect(pruneSettledGenerationEffects(harness.db, { now })).toBe(4)
+    expect(pruneSettledGenerationEffects(harness.db, { now })).toBe(0)
+    expect(
+      listGenerationEffects(harness.db, seeded.generationId, harness.lineage).map((effect) => effect.kind),
+    ).toEqual(['emotion_image_state'])
+
+    // A restart does not resurrect the pruned rows.
     expect(reconcileGenerationEffectsAtStartup(harness.db)).toBe(0)
+    expect(listGenerationEffects(harness.db, seeded.generationId, harness.lineage)).toHaveLength(1)
+
+    // A pruned durable effect of a completed operation reads as receipted, not missing.
+    const response = await harness.app.inject({
+      method: 'POST',
+      url: `/api/v1/generation-effects/${seeded.generationId}/igp/claims`,
+      headers: {
+        'risu-auth': harness.assertion,
+        'risu-writer-session': seeded.sessionId,
+        'risu-database-lineage': harness.lineage,
+      },
+      payload: { delivery: 'late_recovery', messageId: seeded.messageId },
+    })
+    expect(response.statusCode, response.body).toBe(200)
+    expect(response.json()).toEqual({ status: 'not_claimed', reason: 'already_receipted' })
+    expect(
+      claimGenerationEffect(harness.db, {
+        databaseLineage: harness.lineage,
+        generationId: 'generation-unknown',
+        kind: 'igp',
+        delivery: 'late_recovery',
+      }),
+    ).toEqual({ status: 'not_claimed', reason: 'effect_not_found' })
   })
 
   async function attemptRejectedChatOnlyIgpCommit(testCase: 'foreign' | 'expired' | 'stale-target' | 'corrupt-scope') {

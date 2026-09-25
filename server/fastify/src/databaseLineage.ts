@@ -29,9 +29,14 @@ export function createDatabaseMetadataTable(db: DatabaseSync): void {
       id INTEGER PRIMARY KEY CHECK (id = 1),
       lineage TEXT NOT NULL,
       active_writer_session_id TEXT,
-      writer_epoch INTEGER NOT NULL DEFAULT 0 CHECK (writer_epoch >= 0)
+      writer_epoch INTEGER NOT NULL DEFAULT 0 CHECK (writer_epoch >= 0),
+      generation_effects_backfill_lineage TEXT
     )
   `)
+  const columns = db.prepare('PRAGMA table_info(database_metadata)').all() as Array<{ name: string }>
+  if (!columns.some((column) => column.name === 'generation_effects_backfill_lineage')) {
+    db.exec('ALTER TABLE database_metadata ADD COLUMN generation_effects_backfill_lineage TEXT')
+  }
   db.prepare(
     'INSERT OR IGNORE INTO database_metadata (id, lineage, active_writer_session_id, writer_epoch) VALUES (1, ?, NULL, 0)',
   ).run(randomUUID())
@@ -126,7 +131,9 @@ export function assertDatabaseLineage(db: DatabaseSync, requestedLineage: string
  */
 export function rotateDatabaseLineage(db: DatabaseSync): string {
   const databaseLineage = randomUUID()
-  const updated = db.prepare('UPDATE database_metadata SET lineage = ? WHERE id = 1').run(databaseLineage)
+  const updated = db
+    .prepare('UPDATE database_metadata SET lineage = ?, generation_effects_backfill_lineage = NULL WHERE id = 1')
+    .run(databaseLineage)
   if (updated.changes !== 1) {
     throw new Error('database metadata lineage row is missing')
   }

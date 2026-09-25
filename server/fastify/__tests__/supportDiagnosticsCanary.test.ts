@@ -340,6 +340,16 @@ it('keeps every sensitive source out of every support surface while still record
   const snapshot: unknown = state.json()
   if (!isSupportDiagnosticsStateResponse(snapshot)) throw new Error('expected a validated state snapshot')
   expect(snapshot.rejections.byCode.generation_job_not_found).toBeGreaterThanOrEqual(1)
+  // The claim breakdown is bounded counts keyed by the closed effect-kind set.
+  expect(Object.keys(snapshot.generation.effectClaims?.byKind ?? {}).sort()).toEqual([
+    'completion_sound',
+    'emotion_image_state',
+    'generated_translation',
+    'igp',
+    'notification',
+    'plugin_output',
+    'tts',
+  ])
   for (const url of ['/api/v1/diagnostics', '/api/v1/diagnostics?version=2']) {
     const manual = await built.app.inject({ url, headers: { 'risu-auth': assertion } })
     expect(manual.statusCode).toBe(200)

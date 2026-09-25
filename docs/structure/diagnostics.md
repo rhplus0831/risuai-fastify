@@ -367,6 +367,9 @@ route's support credential requirement, diagnostics collection gate, no-store
 policy, 30 reads/minute/IP limit, ten-second reply timer, bounded audit ring,
 fixed errors, and 512 KiB response cap. It requires no active writer and does not
 acquire ownership. Existing journal v1/v2/v3/v4 responses are unchanged.
+Additive state fields are optional on the wire so the operator helper can still
+validate older version-1 servers. A version bump is reserved for shape changes.
+The current server always includes `generation.effectClaims`.
 
 The grouped sections contain:
 
@@ -383,6 +386,15 @@ The grouped sections contain:
   attempt references, total counts and explicit truncation above 200 items,
   stream/client/buffer counts, indexed live-operation counts, effect statuses,
   and finalization queue statuses. Released occupancy rows are counted only.
+- `generation.effectClaims`: `durableLive` counts claimed durable effects with
+  a valid lease; `durableExpired` counts those with an expired or missing lease.
+  Expired durable claims remain reclaimable; IGP and generated translation can
+  still pin a chat. `nonDurable` counts ephemeral and recomputed claims, including
+  abandoned claims awaiting the maintenance sweep. `byKind` always contains all
+  seven effect kinds (`igp`, `plugin_output`, `generated_translation`,
+  `notification`, `tts`, `completion_sound`, `emotion_image_state`). All values
+  are bounded counts, with zero allowed; existing `generation.effects` status
+  counts retain their meaning.
 - `writer` and `workers`: durable/runtime writer presence and epochs, connected
   session count, worker enabled/running/processing flags, indexed memory/BardWiki
   job statuses, and maintenance state/version getters.
@@ -398,11 +410,27 @@ The grouped sections contain:
   Counters reset on process restart, survive data replacement, saturate at the
   maximum safe integer, and never retain messages or unknown codes.
 
+Effect status counts describe the retained ledger, not lifetime totals. An
+hourly maintenance sweep first skips expired non-durable claims with reason
+`claim_lease_expired`, then prunes settled rows older than seven days in batches
+of at most 1,000 by default. Rows needed by nonterminal operations, pending
+finalization retries, or pending/claimed sibling effects remain retained. The
+lineage-scoped one-shot backfill marker prevents restart or restoration of a
+marked backup from recreating pruned receipts. A missing effect tied by an
+indexed attempt lookup to a completed operation with a result is acknowledged
+as `not_claimed / already_receipted` without a projection; unknown generations
+still return `effect_not_found`. This lets older PWA clients finish recovery.
+See [the backend lifecycle](backend.md#generation-and-background-work) for
+retention guards and marker restoration. State reads never run these sweeps.
+
 Reads stay synchronous from the first database query to the last, without
 occupancy reconciliation, writer registration, directory walks, or content
 loading. Queue counts use existing status indexes; live operations use only
-`generation_operations_one_live_chat`. There are no message counts or full
-operation-table counts and no all-chat occupancy-pin queries. Counts can still
+`generation_operations_one_live_chat`. Claim counts use one covering query on
+`generation_effects_recoverable_claims`, restricted to claimed rows and grouped
+by kind and lease expiry; classes are derived from kind in code. There are no
+message counts, full operation-table scans/counts, or all-chat occupancy-pin
+queries. Counts can still
 cost time proportional to the indexed status entries; the reply timer cannot
 interrupt synchronous SQLite work. No host name, OS release, absolute path,
 URL value, proxy configuration value, session token, raw domain id, plain content

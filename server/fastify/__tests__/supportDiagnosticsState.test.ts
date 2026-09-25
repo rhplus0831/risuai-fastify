@@ -55,6 +55,8 @@ async function start(): Promise<{ built: BuiltApp; token: string; dataDir: strin
     memoryWorker: false,
     bardWikiWorker: false,
     assetGc: false,
+    // The maintenance sweep would settle the expired claims this test seeds.
+    generationEffectMaintenance: false,
   })
   cleanup.push(async () => {
     await built.app.close()
@@ -111,6 +113,40 @@ it('serves a validated content-free state snapshot whose opaque references resol
          claimed_at_ms, lease_expires_at_ms, updated_at_ms, released_at_ms)
        VALUES (?, ?, ?, 1, 'owner', ?, ?, ?, NULL)`,
     ).run(canaries.chatId, lineage, canaries.session, now, now + 3_600_000, now)
+    // Claimed effect rows: a live durable lease, an expired durable lease that
+    // can pin the chat, an abandoned ephemeral claim, and one pending row.
+    const iso = (offsetMs: number) => new Date(now + offsetMs).toISOString()
+    const insertEffect = db.prepare(
+      `INSERT INTO generation_effects (database_lineage, key_type, key_id, effect_kind, effect_class, generation_id,
+         character_id, chat_id, message_id, status, claim_id, delivery, created_at, claimed_at, lease_expires_at, updated_at)
+       VALUES (?, 'generation', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+    const effectRows: Array<[string, string, string, string | null, string | null, string | null]> = [
+      ['igp', 'durable', 'claimed', 'claim-igp', 'live_terminal', iso(300_000)],
+      ['plugin_output', 'durable', 'claimed', 'claim-plugin', 'live_terminal', iso(300_000)],
+      ['generated_translation', 'durable', 'claimed', 'claim-translation', 'server', iso(-1)],
+      ['notification', 'ephemeral', 'claimed', 'claim-notification', 'live_terminal', iso(-60_000)],
+      ['tts', 'ephemeral', 'pending', null, null, null],
+    ]
+    for (const [kind, effectClass, status, claimId, delivery, leaseExpiresAt] of effectRows) {
+      insertEffect.run(
+        lineage,
+        'private-state-generation-2c1e',
+        kind,
+        effectClass,
+        'private-state-generation-2c1e',
+        canaries.characterId,
+        canaries.chatId,
+        'private-state-message-5d9f',
+        status,
+        claimId,
+        delivery,
+        iso(-120_000),
+        claimId === null ? null : iso(-120_000),
+        leaseExpiresAt,
+        iso(-120_000),
+      )
+    }
   } finally {
     db.close()
   }
@@ -144,6 +180,21 @@ it('serves a validated content-free state snapshot whose opaque references resol
   })
   expect(state.journal).toMatchObject({ source: 'journal', available: true })
   expect(state.rejections.byCode.generation_job_not_found).toBeGreaterThanOrEqual(1)
+  expect(state.generation.effects).toEqual({ pending: 1, claimed: 4, completed: 0, skipped: 0, failed: 0 })
+  expect(state.generation.effectClaims).toEqual({
+    durableLive: 2,
+    durableExpired: 1,
+    nonDurable: 1,
+    byKind: {
+      igp: 1,
+      plugin_output: 1,
+      generated_translation: 1,
+      notification: 1,
+      tts: 0,
+      completion_sound: 0,
+      emotion_image_state: 0,
+    },
+  })
   expect(state.occupancy.counts).toEqual({ occupied: 1, expired: 0, released: 0 })
   expect(state.occupancy.leases).toHaveLength(1)
   const lease = state.occupancy.leases[0]

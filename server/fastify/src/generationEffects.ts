@@ -22,6 +22,9 @@ import {
 export const GENERATION_EFFECT_LEDGER_VERSION = 1
 export const GENERATION_EFFECT_CLAIM_LEASE_MS = 5 * 60_000
 export const GENERATION_EFFECT_RECENT_ALERT_RECOVERY_MS = 60_000
+export const GENERATION_EFFECT_MAINTENANCE_INTERVAL_MS = 60 * 60_000
+export const GENERATION_EFFECT_MAINTENANCE_SWEEP_LIMIT = 1000
+export const GENERATION_EFFECT_TERMINAL_RETENTION_MS = 7 * 24 * 60 * 60_000
 export const GENERATED_TRANSLATION_SERVER_OWNED_ERROR = 'generated_translation_server_owned'
 export const GENERATED_TRANSLATION_PREREQUISITE_PENDING = 'generated_translation_prerequisite_pending'
 export const GENERATION_INLAY_PREREQUISITE_PENDING = 'generation_inlay_prerequisite_pending'
@@ -300,6 +303,9 @@ export function createGenerationEffectLedgerTable(db: DatabaseSync): void {
   db.exec(`
     CREATE INDEX IF NOT EXISTS generation_effects_recoverable_claims
       ON generation_effects (database_lineage, status, lease_expires_at, effect_kind);
+    CREATE INDEX IF NOT EXISTS generation_effects_settled_retention
+      ON generation_effects (database_lineage, COALESCE(settled_at, updated_at))
+      WHERE status IN ('completed', 'skipped', 'failed');
   `)
 }
 
@@ -1498,7 +1504,31 @@ export function claimGenerationEffectInTransaction(
     'WHERE database_lineage = ? AND generation_id = ? AND effect_kind = ?',
     [input.databaseLineage, input.generationId, input.kind],
   )[0]
-  if (!current) return { status: 'not_claimed', reason: 'effect_not_found' }
+  if (!current) {
+    // Completion publishes its ledger atomically. Missing rows for a completed
+    // result were pruned, or recovery completed the operation without effects.
+    // Use the existing terminal response so older clients do not retry forever.
+    // Separate the attempt lookups to use the unique job index and the
+    // finalization-generation index without scanning the operation history.
+    const completed = db
+      .prepare(
+        `SELECT 1 FROM (
+           SELECT database_lineage, operation_id FROM generation_operation_attempts WHERE job_id = ?
+           UNION ALL
+           SELECT database_lineage, operation_id FROM generation_operation_attempts
+             INDEXED BY generation_operation_attempts_finalization_generation
+             WHERE finalization_generation_id = ?
+         ) AS attempt
+         JOIN generation_operations AS operation
+           ON operation.database_lineage = attempt.database_lineage
+          AND operation.operation_id = attempt.operation_id
+         WHERE operation.database_lineage = ? AND operation.state = 'completed'
+           AND operation.result_message_id IS NOT NULL
+         LIMIT 1`,
+      )
+      .get(input.generationId, input.generationId, input.databaseLineage)
+    return { status: 'not_claimed', reason: completed ? 'already_receipted' : 'effect_not_found' }
+  }
   if (input.messageId !== undefined && current.message_id !== input.messageId) {
     return { status: 'not_claimed', effect: projectionFromRow(current), reason: 'message_mismatch' }
   }
@@ -1528,6 +1558,23 @@ export function claimGenerationEffectInTransaction(
   }
   const now = normalizeTimestamp(input.claimedAt)
   const leaseExpiresAt = claimLeaseExpiresAt(now, input.leaseMs)
+  if (
+    current.status === 'claimed' &&
+    current.effect_class !== 'durable' &&
+    (current.lease_expires_at === null || current.lease_expires_at <= now)
+  ) {
+    db.prepare(
+      `UPDATE generation_effects
+       SET status = 'skipped', reason = 'claim_lease_expired', lease_expires_at = NULL,
+           settled_at = ?, updated_at = ?
+       WHERE database_lineage = ? AND generation_id = ? AND effect_kind = ?`,
+    ).run(now, now, input.databaseLineage, input.generationId, input.kind)
+    return {
+      status: 'not_claimed',
+      effect: projectionFromRow(requireGenerationEffectRow(db, input.databaseLineage, input.generationId, input.kind)),
+      reason: 'already_receipted',
+    }
+  }
   const reclaiming =
     current.status === 'claimed' &&
     current.effect_class === 'durable' &&
@@ -1645,6 +1692,85 @@ export function renewGenerationEffectClaim(
     .run(leaseExpiresAt, now, input.databaseLineage, input.generationId, input.kind, input.claimId, now)
   if (result.changes !== 1) return undefined
   return projectionFromRow(requireGenerationEffectRow(db, input.databaseLineage, input.generationId, input.kind))
+}
+
+export interface GenerationEffectSweepOptions {
+  now?: string | Date
+  maxPerSweep?: number
+}
+
+export interface PruneSettledGenerationEffectsOptions extends GenerationEffectSweepOptions {
+  retentionMs?: number
+}
+
+function generationEffectSweepLimit(value = GENERATION_EFFECT_MAINTENANCE_SWEEP_LIMIT): number {
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error('maxPerSweep must be a positive safe integer')
+  return value
+}
+
+/** Abandoned one-shot effects must never be delivered again, including after restart. */
+export function settleExpiredNonDurableGenerationEffectClaims(
+  db: DatabaseSync,
+  options: GenerationEffectSweepOptions = {},
+): number {
+  const now = normalizeTimestamp(options.now)
+  const result = db
+    .prepare(
+      `UPDATE generation_effects
+       SET status = 'skipped', reason = 'claim_lease_expired', lease_expires_at = NULL,
+           settled_at = ?, updated_at = ?
+       WHERE rowid IN (
+         SELECT rowid FROM generation_effects INDEXED BY generation_effects_recoverable_claims
+         WHERE database_lineage = ? AND status = 'claimed'
+           AND (lease_expires_at IS NULL OR lease_expires_at <= ?)
+           AND effect_kind IN ('notification', 'tts', 'completion_sound', 'emotion_image_state')
+         ORDER BY lease_expires_at, effect_kind
+         LIMIT ?
+       )`,
+    )
+    .run(now, now, getDatabaseLineage(db), now, generationEffectSweepLimit(options.maxPerSweep))
+  return Number(result.changes)
+}
+
+/** Keep receipts until neither the operation nor a sibling effect can still use them. */
+export function pruneSettledGenerationEffects(
+  db: DatabaseSync,
+  options: PruneSettledGenerationEffectsOptions = {},
+): number {
+  const retentionMs = options.retentionMs ?? GENERATION_EFFECT_TERMINAL_RETENTION_MS
+  if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
+    throw new Error('retentionMs must be a non-negative safe integer')
+  }
+  const maxPerSweep = generationEffectSweepLimit(options.maxPerSweep)
+  const cutoff = new Date(Date.parse(normalizeTimestamp(options.now)) - retentionMs).toISOString()
+  const result = db
+    .prepare(
+      `DELETE FROM generation_effects WHERE rowid IN (
+         SELECT effect.rowid FROM generation_effects AS effect INDEXED BY generation_effects_settled_retention
+         WHERE effect.database_lineage = ? AND effect.status IN ('completed', 'skipped', 'failed')
+           AND COALESCE(effect.settled_at, effect.updated_at) < ?
+           AND NOT EXISTS (
+             SELECT 1 FROM generation_operations AS operation
+             WHERE operation.database_lineage = effect.database_lineage
+               AND operation.operation_id = effect.operation_id
+               AND operation.state NOT IN ('completed', 'cancelled', 'terminal_failed', 'invalidated')
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM generation_finalization_retries AS retry
+             WHERE retry.database_lineage = effect.database_lineage
+               AND retry.operation_id = effect.operation_id AND retry.status = 'pending'
+           )
+           AND NOT EXISTS (
+             SELECT 1 FROM generation_effects AS sibling
+             WHERE sibling.database_lineage = effect.database_lineage
+               AND sibling.generation_id = effect.generation_id AND sibling.status IN ('pending', 'claimed')
+           )
+         ORDER BY COALESCE(effect.settled_at, effect.updated_at), effect.rowid
+         LIMIT ?
+       )`,
+    )
+    .run(getDatabaseLineage(db), cutoff, maxPerSweep)
+  return Number(result.changes)
 }
 
 export function settleGenerationEffect(
@@ -1836,13 +1962,19 @@ export function completeClaimedIgpEffectInTransaction(
 /**
  * Schema upgrades can find completed v29/v30 operations whose result predates
  * the effect table. Backfill their exact lineage without inventing effects for
- * cancelled or failed terminals.
+ * cancelled or failed terminals. The marker commits with the backfill so a
+ * later restart never recreates receipts deleted by retention.
  */
 export function reconcileGenerationEffectsAtStartup(db: DatabaseSync): number {
-  const databaseLineage = getDatabaseLineage(db)
-  const rows = db
-    .prepare(
-      `SELECT o.operation_id AS operationId, o.protocol_version AS protocolVersion,
+  return withImmediateTransaction(db, () => {
+    const databaseLineage = getDatabaseLineage(db)
+    const backfilled = db
+      .prepare('SELECT 1 FROM database_metadata WHERE id = 1 AND generation_effects_backfill_lineage = ?')
+      .get(databaseLineage)
+    if (backfilled) return 0
+    const rows = db
+      .prepare(
+        `SELECT o.operation_id AS operationId, o.protocol_version AS protocolVersion,
               o.character_id AS characterId, o.chat_id AS chatId,
               o.result_message_id AS messageId,
               a.attempt_no AS operationAttemptNo,
@@ -1865,20 +1997,19 @@ export function reconcileGenerationEffectsAtStartup(db: DatabaseSync): number {
          AND o.character_id IS NOT NULL AND o.chat_id IS NOT NULL
          AND o.result_message_id IS NOT NULL
          AND COALESCE(a.finalization_generation_id, a.job_id) IS NOT NULL`,
-    )
-    .all(databaseLineage) as unknown as Array<
-    {
-      operationId: string
-      protocolVersion: number
-      characterId: string
-      chatId: string
-      messageId: string
-      operationAttemptNo: number
-      generationId: string
-    } & GenerationScopeColumns
-  >
-  let inserted = 0
-  withImmediateTransaction(db, () => {
+      )
+      .all(databaseLineage) as unknown as Array<
+      {
+        operationId: string
+        protocolVersion: number
+        characterId: string
+        chatId: string
+        messageId: string
+        operationAttemptNo: number
+        generationId: string
+      } & GenerationScopeColumns
+    >
+    let inserted = 0
     for (const row of rows) {
       const existingKinds = new Set(
         (
@@ -1916,8 +2047,9 @@ export function reconcileGenerationEffectsAtStartup(db: DatabaseSync): number {
         inserted += Number(settled.changes)
       }
     }
+    db.prepare('UPDATE database_metadata SET generation_effects_backfill_lineage = ? WHERE id = 1').run(databaseLineage)
+    return inserted
   })
-  return inserted
 }
 
 function selectGenerationEffectRows(

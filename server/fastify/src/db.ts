@@ -31,7 +31,7 @@ import {
   repairPersistedLegacyLocalStopStringsInSqlite,
 } from './repository.js'
 
-export const CURRENT_SCHEMA_VERSION = 41
+export const CURRENT_SCHEMA_VERSION = 42
 
 export const CURRENT_SCHEMA_TABLES = [
   'assets',
@@ -534,6 +534,16 @@ export const MIGRATIONS: readonly MigrationStep[] = [
     version: 41,
     name: 'immutable-generation-configuration',
     up: createGenerationConfigurationTables,
+  },
+  {
+    version: 42,
+    name: 'generation-effect-retention',
+    up: (db) => {
+      createDatabaseMetadataTable(db)
+      createGenerationOperationTables(db)
+      createGenerationFinalizationRetryTable(db)
+      createGenerationEffectLedgerTable(db)
+    },
   },
 ]
 

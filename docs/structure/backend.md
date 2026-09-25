@@ -369,9 +369,45 @@ Successful persisted results create a `generationEffects.ts` ledger for IGP,
 plugin output, automatic translation, notification, TTS, completion sound, and
 emotion-image state. Effects are durable, ephemeral, or recomputed.
 Authenticated routes provide idempotent claim, lease, and receipt handling:
-expired durable claims may be reclaimed, while ephemeral effects are skipped
-during late recovery. Startup reconciles pre-ledger completed operations, and
-the completion-effect retry sweep resumes pending server-owned automatic
+every claim has a renewable five-minute lease. Expired durable claims may be
+reclaimed. An expired or missing lease on an ephemeral or recomputed claim is
+settled to `skipped` with reason `claim_lease_expired`, preserving delivery and
+clearing the lease. Claim attempts settle these lazily and return
+`not_claimed / already_receipted`; they never deliver the effect again.
+Ephemeral effects are also skipped during late recovery. A separate bounded
+maintenance sweep settles abandoned non-durable claims one second after startup
+and hourly thereafter, then prunes settled effects older than seven days
+(`GENERATION_EFFECT_TERMINAL_RETENTION_MS`). Age uses `settled_at`, falling back
+to `updated_at`; each phase handles at most 1,000 rows by default, configurable
+through `buildApp`'s `generationEffectMaintenance.maxPerSweep`. The sweep skips
+overlapping runs, records cleanup errors, and stops with the other app timers.
+Pruning is restricted to the current lineage and excludes effects whose
+operation is nonterminal, whose operation has a pending finalization retry, or
+whose generation still has any pending/claimed sibling. Missing operations and
+null operation references do not prevent pruning. This preserves settled
+translation receipts and fingerprints needed by unfinished inlay/IGP work.
+The settled-time index orders the bounded batch; operation, retry, and sibling
+guards use indexed lookups. Generation operations themselves are retained.
+
+Startup backfills pre-ledger completed operations once per lineage. The
+`database_metadata.generation_effects_backfill_lineage` marker commits in the
+same transaction as the backfill; subsequent startups skip the operation walk
+entirely, so pruned rows stay absent. Schema migration 42 installs the marker
+and maintenance indexes. State import clears the marker when rotating lineage
+and deletes operations. Backup restore carries a marker matching the backup's
+lineage into the new lineage in its restore transaction. A backup without that
+marker gets one backfill; a marked backup retains its pruned state.
+
+Normal completion creates the ledger in the result transaction. Startup,
+expired-occupancy, and restore recovery can instead complete an operation from
+its existing result without creating effects. For a missing effect, a claim
+returns `not_claimed / already_receipted` without a projection when an indexed
+attempt lookup (`job_id` or `finalization_generation_id`) identifies a completed
+operation in the requested lineage with a non-null result message. This also
+covers pruned receipts and lets older PWA clients finish recovery without
+redelivery. Other missing generations retain `effect_not_found`. Active claims
+are never pruned; old lease/receipt retries after retention remain stale.
+The completion-effect retry sweep resumes pending server-owned automatic
 translation. Browser execution and late recovery are documented in
 [Generation Client](../../src/docs/generation-client.md).
 Shutdown does not terminalize an operation while that cancellation snapshot is

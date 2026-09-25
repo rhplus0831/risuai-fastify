@@ -113,7 +113,13 @@ import {
   reconcileGenerationOperationsAtStartup,
   transitionGenerationOperation,
 } from './generationOperations.js'
-import { reconcileGenerationEffectsAtStartup } from './generationEffects.js'
+import {
+  GENERATION_EFFECT_MAINTENANCE_INTERVAL_MS,
+  pruneSettledGenerationEffects,
+  reconcileGenerationEffectsAtStartup,
+  settleExpiredNonDurableGenerationEffectClaims,
+} from './generationEffects.js'
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import {
   isDiagnosticTransportUrl,
   SUPPORT_DIAGNOSTICS_ENDPOINT,
@@ -144,6 +150,7 @@ export interface BuildAppOptions {
   config?: AppConfig
   buildIdentity?: BuildIdentity
   generationChat?: GenerationChatRouteOptions
+  generationEffectMaintenance?: false | { intervalMs?: number; maxPerSweep?: number }
   realmImport?: {
     deadlineMs?: number
     maxExpandedImportBytes?: number
@@ -446,6 +453,37 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   let generationFinalizationRetryTimer: ReturnType<typeof setInterval> | null = null
   let generationCompletionEffectRetrySweep: Promise<void> | null = null
   let generationCompletionEffectsClosing = false
+  const effectMaintenanceOptions =
+    opts.generationEffectMaintenance === false ? false : (opts.generationEffectMaintenance ?? {})
+  let effectMaintenanceRunning = false
+  const runGenerationEffectMaintenance = (): void => {
+    if (generationCompletionEffectsClosing || effectMaintenanceRunning || effectMaintenanceOptions === false) return
+    effectMaintenanceRunning = true
+    try {
+      settleExpiredNonDurableGenerationEffectClaims(db, effectMaintenanceOptions)
+      pruneSettledGenerationEffects(db, effectMaintenanceOptions)
+    } catch (err) {
+      recordDiagnosticErrorForDatabase(
+        db,
+        { category: 'persistence', level: 'error', phase: 'cleanup', disposition: 'failed', durationMs: 0 },
+        err,
+      )
+      app.log.error({ err }, 'generation effect maintenance sweep failed')
+    } finally {
+      effectMaintenanceRunning = false
+    }
+  }
+  const effectMaintenanceStartupTimer =
+    effectMaintenanceOptions === false ? null : setTimeout(runGenerationEffectMaintenance, 1000)
+  const effectMaintenanceTimer =
+    effectMaintenanceOptions === false
+      ? null
+      : setInterval(
+          runGenerationEffectMaintenance,
+          effectMaintenanceOptions.intervalMs ?? GENERATION_EFFECT_MAINTENANCE_INTERVAL_MS,
+        )
+  effectMaintenanceStartupTimer?.unref()
+  effectMaintenanceTimer?.unref()
 
   // preClose precedes Fastify's HTTP drain: active backup requests must receive
   // shutdown cancellation while they still own their copy leases.
@@ -461,6 +499,8 @@ export async function buildApp(opts: BuildAppOptions = {}): Promise<BuiltApp> {
   app.addHook('onClose', async () => {
     generationCompletionEffectsClosing = true
     if (generationFinalizationRetryTimer) clearInterval(generationFinalizationRetryTimer)
+    if (effectMaintenanceStartupTimer) clearTimeout(effectMaintenanceStartupTimer)
+    if (effectMaintenanceTimer) clearInterval(effectMaintenanceTimer)
     // Abort cooperative copies/staging, reject admission, and drain every
     // started filesystem operation before any continuation can use closed DB.
     await closeMaintenance(config.dataDir)

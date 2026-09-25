@@ -4218,6 +4218,7 @@ function saveDir(dataDir: string): string {
 //   - push_subscriptions: origin/device registrations bound to the live VAPID
 //     identity, whose key file is outside the backup contract.
 //   - database_metadata: live lineage/writer ownership; restore rotates lineage.
+//     Only a matching effect-backfill marker is carried into the new lineage.
 //   - chat_occupancies: live per-chat authority; lineage rotation clears it.
 //   - command_mutation_receipts: lineage-scoped idempotency records that must not
 //     cross a replacement boundary.
@@ -5433,6 +5434,21 @@ function restoreSqliteFromBackup(
       repairPersistedLegacyLocalStopStringsInSqlite(db)
       databaseLineage = rotateDatabaseLineage(db)
       rewriteRestoredGenerationOperationLineage(db, databaseLineage)
+      // The live metadata table is not replaced by restore. Preserve the
+      // snapshot's one-shot backfill state explicitly, rebinding it to the new
+      // lineage in this same transaction. Older backups have no marker.
+      const backupMetadataColumns = db.prepare('PRAGMA bak.table_info(database_metadata)').all() as Array<{
+        name: string
+      }>
+      if (backupMetadataColumns.some((column) => column.name === 'generation_effects_backfill_lineage')) {
+        db.prepare(
+          `UPDATE main.database_metadata SET generation_effects_backfill_lineage = ?
+           WHERE id = 1 AND EXISTS (
+             SELECT 1 FROM bak.database_metadata
+             WHERE id = 1 AND generation_effects_backfill_lineage = lineage
+           )`,
+        ).run(databaseLineage)
+      }
       hooks.beforeCommit?.(databaseLineage)
       migrateLegacyAgentConfigurationInSqlite(db)
       repairPersistedModelProfileInlineSecretsInSqlite(db)
