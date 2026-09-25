@@ -712,7 +712,7 @@ describe('remote support diagnostics', () => {
 
   it('distinguishes bad query, empty result, expired cursor and effective throttling', async () => {
     const h = await harness()
-    for (const query of ['raw=true', 'limit=201', 'limit=1&limit=2', 'version=4', 'from=0&to=86400001']) {
+    for (const query of ['raw=true', 'limit=201', 'limit=1&limit=2', 'version=5', 'from=0&to=86400001']) {
       const response = await h.app.inject({ url: `${SUPPORT_DIAGNOSTICS_ENDPOINT}?${query}`, headers: h.headers })
       expect(response.statusCode).toBe(400)
       expect(response.json()).toEqual({ error: 'invalid-query' })

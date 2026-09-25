@@ -2387,6 +2387,9 @@ export async function runServerLua(opts: RunServerLuaOptions, ctx: ServerLuaRunt
   try {
     result = await executeServerLua(opts, ctx, diagnostics)
     return result
+  } catch (error) {
+    diagnostics?.recordError(error)
+    throw error
   } finally {
     // Edit wrappers reject mismatched concrete output types after this returns.
     // Count that failure here too without exporting the rejected value.
@@ -2525,6 +2528,7 @@ async function executeServerLua(
       // A load failure (syntax error or a top-level runaway loop) leaves nothing to
       // dispatch. Record it and return identity, mirroring the browser's
       // error-swallowing `runLuaEditTrigger`.
+      diagnostics?.recordError(error)
       result.error = error instanceof Error ? error.message : String(error)
       // An abort surfaces through the same deadline machinery; report it as a
       // cancellation, not an exec-limit timeout.
@@ -2594,6 +2598,7 @@ async function executeServerLua(
     } catch (error) {
       // Browser parity: the dispatch switch swallows errors (`scriptings.ts`).
       // We additionally record the cause so a timeout / interactive abort is visible.
+      diagnostics?.recordError(error)
       result.error = error instanceof Error ? error.message : String(error)
       result.timedOut = isTimeoutError(error) && !signal?.aborted
     }

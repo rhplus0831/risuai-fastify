@@ -119,7 +119,7 @@ export const RECOVERY_LEASE_KINDS = [
   'reader-sync',
 ] as const
 export type RecoveryLeaseKind = (typeof RECOVERY_LEASE_KINDS)[number]
-const errorNames = [
+export const errorNames = [
   'Error',
   'TypeError',
   'RangeError',

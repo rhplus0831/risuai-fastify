@@ -1,3 +1,4 @@
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { decodeMemoryGenerationSettings } from './prompt/generationInputDecoder.js'
 import { createHash } from 'node:crypto'
@@ -140,6 +141,23 @@ export function createSummarizeMemoryJobBatchHandler(opts: SummarizeMemoryJobHan
         }
         context.complete(job.id)
       } catch (error) {
+        recordDiagnosticErrorForDatabase(
+          opts.db,
+          {
+            category: 'generation',
+            level: 'error',
+            stage: 'post-generation',
+            outcome: 'failed',
+            providerMayHaveRun: true,
+          },
+          error,
+          {
+            databaseLineage: lineage,
+            operationId: job.operationId,
+            attemptId: job.id,
+            background: true,
+          },
+        )
         const message = error instanceof Error && error.message ? error.message : String(error)
         retryMemoryJobAfterHandlerError(opts, context, job, message || 'summarize job failed')
       }
@@ -455,6 +473,17 @@ function retryMemoryJobAfterHandlerError(
   try {
     if (memoryJobMayApplyResult(opts.db, job)) context.retryOrFail(job.id, error)
   } catch (scopeError) {
+    recordDiagnosticErrorForDatabase(
+      opts.db,
+      { category: 'generation', level: 'error', stage: 'finalization', outcome: 'failed', providerMayHaveRun: true },
+      scopeError,
+      {
+        databaseLineage: job.generationScope?.occupancyDatabaseLineage,
+        operationId: job.operationId,
+        attemptId: job.id,
+        background: true,
+      },
+    )
     if (!memoryJobInstanceMayTransition(opts.db, job)) return
     context.retryOrFail(
       job.id,

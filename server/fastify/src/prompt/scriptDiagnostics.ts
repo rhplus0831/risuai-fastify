@@ -1,3 +1,4 @@
+import { diagnosticErrorFacts } from '../diagnosticFacts.js'
 import { performance } from 'node:perf_hooks'
 import { diagnosticsContextEnabled, recordDiagnosticEvent } from '../diagnosticContext.js'
 import type { FastifyChat, FastifyMessage } from './serverTypes.js'
@@ -99,6 +100,7 @@ export interface LuaDiagnosticsRun {
   hostCall(): void
   blockHostCall(): void
   touchTranscript(): void
+  recordError(error: unknown): void
   finish(input: { failed: boolean; output?: unknown }): void
 }
 
@@ -114,6 +116,7 @@ export function beginLuaDiagnostics(mode: string, chat: FastifyChat, input: unkn
   let blockedCalls = 0
   let transcriptTouched = false
   let finished = false
+  let errorFacts: ReturnType<typeof diagnosticErrorFacts> | undefined
   return {
     hostCall() {
       allowedCalls = Math.min(MAX_COUNT, allowedCalls + 1)
@@ -127,6 +130,9 @@ export function beginLuaDiagnostics(mode: string, chat: FastifyChat, input: unkn
     touchTranscript() {
       transcriptTouched = true
     },
+    recordError(error) {
+      errorFacts ??= diagnosticErrorFacts(error)
+    },
     finish(result) {
       if (finished) return
       finished = true
@@ -139,20 +145,23 @@ export function beginLuaDiagnostics(mode: string, chat: FastifyChat, input: unkn
             : undefined
       const outputChanged =
         !edit || result.output === undefined || result.output === null ? false : contentChanged(input, result.output)
-      recordDiagnosticEvent({
-        category: 'script',
-        level: result.failed ? 'warn' : 'info',
-        hook,
-        runtime: 'lua',
-        runs: 1,
-        failures: result.failed ? 1 : 0,
-        durationMs: Math.min(86_400_000, Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100)),
-        allowedCalls,
-        blockedCalls,
-        comparison: outputChanged === undefined || transcriptChanged === undefined ? 'unavailable' : 'complete',
-        ...(outputChanged === undefined ? {} : { outputChanged }),
-        ...(transcriptChanged === undefined ? {} : { transcriptChanged }),
-      })
+      recordDiagnosticEvent(
+        {
+          category: 'script',
+          level: result.failed ? 'warn' : 'info',
+          hook,
+          runtime: 'lua',
+          runs: 1,
+          failures: result.failed ? 1 : 0,
+          durationMs: Math.min(86_400_000, Math.max(0, Math.round((performance.now() - startedAt) * 100) / 100)),
+          allowedCalls,
+          blockedCalls,
+          comparison: outputChanged === undefined || transcriptChanged === undefined ? 'unavailable' : 'complete',
+          ...(outputChanged === undefined ? {} : { outputChanged }),
+          ...(transcriptChanged === undefined ? {} : { transcriptChanged }),
+        },
+        result.failed ? errorFacts : undefined,
+      )
     },
   }
 }

@@ -1,3 +1,4 @@
+import { diagnosticErrorFacts, diagnosticRejectionFacts, recordDiagnosticErrorForDatabase } from '../diagnosticFacts.js'
 import { sendGenerationResponse, recordGenerationRejection } from '../generationRejectionCounters.js'
 import {
   storeGenerationConfiguration,
@@ -125,7 +126,12 @@ import type { GenerationJobRegistry } from '../generationJobs.js'
 import { isStreamDeadlineActivityFrame, type JobClient, type StreamJob } from '../streamJobs.js'
 import { getWritableBufferedBytes, writeBoundedRaw } from '../streamBackpressure.js'
 import { emitProtocolMetric, protocolDurationMs, protocolMetricsEnabled, protocolNowMs } from '../protocolMetrics.js'
-import { diagnosticsContextEnabled, recordDiagnosticEvent, runWithDiagnosticContext } from '../diagnosticContext.js'
+import {
+  diagnosticsContextEnabled,
+  recordDiagnosticEvent,
+  recordDiagnosticEventForDatabase,
+  runWithDiagnosticContext,
+} from '../diagnosticContext.js'
 import {
   DEFAULT_GENERATION_TRACE_MAX_GZIP_BYTES,
   generationTraceSidecarMetricField,
@@ -260,7 +266,7 @@ type AssemblyPreflightResult =
 
 type GenerationSettingsPreflightResult =
   | Exclude<AssemblyPreflightResult, { status: 'handled' }>
-  | { status: 'rejected'; statusCode: number; body: unknown }
+  | { status: 'rejected'; statusCode: number; body: unknown; error: unknown }
 
 interface AssemblyDeferredFailure {
   error: unknown
@@ -1261,21 +1267,27 @@ async function assemblePromptWithMetrics(
     })
     return { result, deps, promptMs, stage2Ms }
   } catch (err) {
-    recordDiagnosticEvent({
-      category: 'prompt',
-      level: 'error',
-      outcome: 'error',
-      durationMs: protocolDurationMs(metricStartedAt),
-      truncation: 'unknown',
-    })
-    recordDiagnosticEvent({
-      category: 'generation',
-      level: 'error',
-      stage: 'assembly',
-      outcome: 'failed',
-      providerMayHaveRun: false,
-      durationMs: protocolDurationMs(metricStartedAt),
-    })
+    recordDiagnosticEvent(
+      {
+        category: 'prompt',
+        level: 'error',
+        outcome: 'error',
+        durationMs: protocolDurationMs(metricStartedAt),
+        truncation: 'unknown',
+      },
+      assemblyFailureFacts(err),
+    )
+    recordDiagnosticEvent(
+      {
+        category: 'generation',
+        level: 'error',
+        stage: 'assembly',
+        outcome: 'failed',
+        providerMayHaveRun: false,
+        durationMs: protocolDurationMs(metricStartedAt),
+      },
+      assemblyFailureFacts(err),
+    )
     emitProtocolMetric('generation_prompt_assembly', {
       status: 'error',
       ...context,
@@ -1358,13 +1370,13 @@ function inspectChatGenerationSettings(
     }
   } catch (err) {
     if (isChatGenerationSettingsIncompleteAssemblyError(err)) {
-      return { status: 'rejected', statusCode: err.statusCode, body: err.body }
+      return { status: 'rejected', statusCode: err.statusCode, body: err.body, error: err }
     }
     if (isModelProfileGenerationGuardAssemblyError(err)) {
-      return { status: 'rejected', statusCode: err.statusCode, body: err.body }
+      return { status: 'rejected', statusCode: err.statusCode, body: err.body, error: err }
     }
     if (err instanceof GenerationInputValidationError) {
-      return { status: 'rejected', statusCode: 400, body: { error: err.message } }
+      return { status: 'rejected', statusCode: 400, body: { error: err.message }, error: err }
     }
     return { status: 'defer', failure: { error: err } }
   }
@@ -1378,13 +1390,16 @@ function preflightChatGenerationSettings(
 ): AssemblyPreflightResult {
   const result = inspectChatGenerationSettings(input, dataDir, db)
   if (result.status === 'rejected') {
-    recordDiagnosticEvent({
-      category: 'generation',
-      level: 'warn',
-      stage: 'accepted',
-      outcome: 'rejected',
-      providerMayHaveRun: false,
-    })
+    recordDiagnosticEvent(
+      {
+        category: 'generation',
+        level: 'warn',
+        stage: 'accepted',
+        outcome: 'rejected',
+        providerMayHaveRun: false,
+      },
+      [...diagnosticRejectionFacts(result.body), ...diagnosticErrorFacts(result.error)],
+    )
     sendGenerationResponse(reply, result.statusCode, result.body)
     return { status: 'handled' }
   }
@@ -1399,18 +1414,38 @@ export function preflightGenerationOperationSettings(
 ): { status: 'ready' } | { status: 'rejected'; statusCode: number; body: unknown } {
   const result = inspectChatGenerationSettings(input, dataDir, db)
   if (result.status === 'rejected') {
-    recordDiagnosticEvent({
-      category: 'generation',
-      level: 'warn',
-      stage: 'accepted',
-      outcome: 'rejected',
-      providerMayHaveRun: false,
-    })
+    recordDiagnosticEvent(
+      {
+        category: 'generation',
+        level: 'warn',
+        stage: 'accepted',
+        outcome: 'rejected',
+        providerMayHaveRun: false,
+      },
+      [...diagnosticRejectionFacts(result.body), ...diagnosticErrorFacts(result.error)],
+    )
   }
-  return result.status === 'rejected' ? result : { status: 'ready' }
+  return result.status === 'rejected'
+    ? { status: result.status, statusCode: result.statusCode, body: result.body }
+    : { status: 'ready' }
+}
+
+function assemblyFailureFacts(error: unknown) {
+  return [
+    ...(isAgentPresetGenerationError(error) ||
+    isChatGenerationSettingsIncompleteAssemblyError(error) ||
+    isModelProfileGenerationGuardAssemblyError(error)
+      ? diagnosticRejectionFacts(error.body)
+      : []),
+    ...diagnosticErrorFacts(error),
+  ]
 }
 
 function sendAssemblyHttpError(reply: FastifyReply, err: unknown): boolean {
+  recordDiagnosticEvent(
+    { category: 'generation', level: 'error', stage: 'assembly', outcome: 'failed', providerMayHaveRun: false },
+    assemblyFailureFacts(err),
+  )
   if (isAgentPresetGenerationError(err)) {
     sendGenerationResponse(reply, err.statusCode, err.body)
     return true
@@ -2164,15 +2199,18 @@ function persistAssemblyMutations(args: {
       durationMs: protocolDurationMs(persistStartedAt),
       error: errorMessage(err, 'failed to persist assembly mutations'),
     })
-    recordDiagnosticEvent({
-      category: 'persistence',
-      level: 'error',
-      phase: 'assembly',
-      disposition: 'failed',
-      durationMs: protocolDurationMs(persistStartedAt),
-      authoritativeCommitted: false,
-      contention: sqliteContention(err),
-    })
+    recordDiagnosticEvent(
+      {
+        category: 'persistence',
+        level: 'error',
+        phase: 'assembly',
+        disposition: 'failed',
+        durationMs: protocolDurationMs(persistStartedAt),
+        authoritativeCommitted: false,
+        contention: sqliteContention(err),
+      },
+      diagnosticErrorFacts(err),
+    )
     throw err
   }
 }
@@ -2429,6 +2467,7 @@ async function resolvePostGenerationResult(args: {
 }): Promise<{
   postGen?: Awaited<ReturnType<typeof runServerPostGeneration>>
   postGenError?: string
+  postGenErrorFacts?: ReturnType<typeof diagnosticErrorFacts>
   message: Message
   targetMessageId?: string
   chatVarMutations: AssembleMutationPayload['chatVarMutations']
@@ -2508,6 +2547,16 @@ async function resolvePostGenerationResult(args: {
       metricContext: args.metricContext,
     })
     if (args.partial) {
+      recordDiagnosticEvent(
+        {
+          category: 'generation',
+          level: 'error',
+          stage: 'post-generation',
+          outcome: 'failed',
+          providerMayHaveRun: true,
+        },
+        diagnosticErrorFacts(err),
+      )
       emitProtocolMetric('generation_post_generation_fallback', {
         fallbackType: 'interrupted_result_not_persisted',
         generationId: args.generationId,
@@ -2556,6 +2605,7 @@ async function resolvePostGenerationResult(args: {
     })
     return {
       postGenError: error,
+      postGenErrorFacts: diagnosticErrorFacts(err),
       message: raw.message,
       targetMessageId: raw.targetMessageId,
       chatVarMutations: [],
@@ -2936,7 +2986,7 @@ function handlePersistedGenerationCompletion(args: {
     .then(run)
     .then(
       (followup) => {
-        const settle = (status: 'completed' | 'failed' | 'skipped', lastError?: string) => {
+        const settle = (status: 'completed' | 'failed' | 'skipped', lastError?: string, diagnosticError?: unknown) => {
           stopRenewal()
           const settlement = {
             databaseLineage,
@@ -2946,6 +2996,7 @@ function handlePersistedGenerationCompletion(args: {
             status,
             reason: status === 'skipped' ? 'not_applicable' : null,
             ...(lastError ? { lastError } : {}),
+            diagnosticError,
           }
           if (!generationEffectHasDeferredInlayFinalization(args.db, databaseLineage, generationId)) {
             return settleGenerationEffect(args.db, settlement)
@@ -3008,7 +3059,7 @@ function handlePersistedGenerationCompletion(args: {
             .track(
               followup.translation.then(
                 () => settle('completed'),
-                (error) => settle('failed', errorMessage(error, 'generated-message translation failed')),
+                (error) => settle('failed', errorMessage(error, 'generated-message translation failed'), error),
               ),
             )
             .catch(() => {
@@ -3036,6 +3087,7 @@ function handlePersistedGenerationCompletion(args: {
           claimId: claim.claimId,
           status: 'failed',
           lastError: errorMessage(error, 'generated-message translation failed'),
+          diagnosticError: error,
         })
         throw error
       },
@@ -3082,6 +3134,7 @@ async function buildPostGenerationFrame(args: {
   const {
     postGen,
     postGenError,
+    postGenErrorFacts,
     postGenMetricError,
     message,
     targetMessageId,
@@ -3104,14 +3157,17 @@ async function buildPostGenerationFrame(args: {
     generationTrace: args.generationTrace,
     metricContext: args.metricContext,
   })
-  recordDiagnosticEvent({
-    category: 'generation',
-    level: postGenError ? 'warn' : 'info',
-    stage: 'post-generation',
-    outcome: postGenError ? 'failed' : 'completed',
-    providerMayHaveRun: true,
-    durationMs: protocolDurationMs(diagnosticStartedAt),
-  })
+  recordDiagnosticEvent(
+    {
+      category: 'generation',
+      level: postGenError ? 'warn' : 'info',
+      stage: 'post-generation',
+      outcome: postGenError ? 'failed' : 'completed',
+      providerMayHaveRun: true,
+      durationMs: protocolDurationMs(diagnosticStartedAt),
+    },
+    postGenErrorFacts,
+  )
   const alternateMessages = buildProviderAlternateMessages({
     primaryMessage: message,
     alternateTexts,
@@ -3147,6 +3203,18 @@ async function buildPostGenerationFrame(args: {
         : {}),
     })
   } catch (err) {
+    recordDiagnosticErrorForDatabase(
+      args.db,
+      {
+        category: 'persistence',
+        level: 'error',
+        phase: 'authoritative_commit',
+        disposition: 'failed',
+        durationMs: protocolDurationMs(persistStartedAt),
+        authoritativeCommitted: false,
+      },
+      err,
+    )
     emitProtocolMetric('generation_persistence', {
       status: 'inline_error',
       generationId: args.generationId,
@@ -3246,6 +3314,7 @@ async function streamAssembly(
 ): Promise<void> {
   const { signal, refresh, abort, cleanup } = requestAbort
   let terminalDoneEmitted = false
+  let providerMayHaveRun = false
   try {
     reply.raw.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -3253,7 +3322,13 @@ async function streamAssembly(
       connection: 'keep-alive',
     })
     const emit = (event: PromptChatEvent): void => {
-      if (event.type === 'error') recordGenerationRejection(event)
+      if (event.type === 'error') {
+        recordGenerationRejection(event)
+        recordDiagnosticEvent(
+          { category: 'generation', level: 'error', stage: 'complete', outcome: 'failed', providerMayHaveRun },
+          diagnosticRejectionFacts(event),
+        )
+      }
       const frame = formatPromptChatFrame(event)
       const written = writeBoundedRaw(reply.raw, frame, { onOverflow: abort })
       if (written && isStreamDeadlineActivityFrame(frame)) refresh()
@@ -3384,6 +3459,7 @@ async function streamAssembly(
           const providerStartedAt = Date.now()
           let frames: AsyncIterable<CompletionStreamFrame> | null | undefined
           try {
+            providerMayHaveRun = true
             frames = dispatchProviderWithPolicies(
               {
                 input,
@@ -4453,6 +4529,18 @@ function persistServerGenerationResult(args: {
       try {
         args.eventSink.emit(event)
       } catch (err) {
+        recordDiagnosticErrorForDatabase(
+          args.db,
+          {
+            category: 'persistence',
+            level: 'warn',
+            phase: 'bookkeeping',
+            disposition: 'failed',
+            durationMs: 0,
+            authoritativeCommitted: true,
+          },
+          err,
+        )
         bookkeepingErrors.push({
           phase: 'event_emission',
           error: errorMessage(err, 'failed to emit the committed generation event'),
@@ -4978,45 +5066,62 @@ function recordFinalizationDiagnostic(
   startedAt: number,
   phase?: 'journal' | 'bookkeeping',
 ): void {
-  recordDiagnosticEvent({
-    category: 'persistence',
-    level:
-      outcome.kind === 'persisted'
-        ? outcome.persistence.bookkeepingErrors.length > 0
-          ? 'warn'
-          : 'info'
-        : outcome.kind === 'rejected' || outcome.kind === 'unconfirmed'
-          ? 'error'
-          : 'warn',
-    phase:
-      phase ??
-      (outcome.kind === 'persisted'
-        ? outcome.persistence.bookkeepingErrors.length > 0
-          ? 'bookkeeping'
-          : 'complete'
-        : outcome.kind === 'committed_cleanup_pending'
-          ? 'cleanup'
-          : outcome.kind === 'unconfirmed'
-            ? 'journal'
-            : outcome.bookkeepingError
-              ? 'bookkeeping'
-              : 'authoritative_commit'),
-    disposition:
-      outcome.kind === 'persisted'
-        ? 'committed'
-        : outcome.kind === 'committed_cleanup_pending'
-          ? 'cleanup-pending'
-          : outcome.kind === 'rejected'
-            ? 'terminal'
+  recordDiagnosticEvent(
+    {
+      category: 'persistence',
+      level:
+        outcome.kind === 'persisted'
+          ? outcome.persistence.bookkeepingErrors.length > 0
+            ? 'warn'
+            : 'info'
+          : outcome.kind === 'rejected' || outcome.kind === 'unconfirmed'
+            ? 'error'
+            : 'warn',
+      phase:
+        phase ??
+        (outcome.kind === 'persisted'
+          ? outcome.persistence.bookkeepingErrors.length > 0
+            ? 'bookkeeping'
+            : 'complete'
+          : outcome.kind === 'committed_cleanup_pending'
+            ? 'cleanup'
             : outcome.kind === 'unconfirmed'
-              ? 'failed'
-              : 'retryable',
-    durationMs: protocolDurationMs(startedAt),
-    journalConfirmed: outcome.journalConfirmed,
-    authoritativeCommitted: outcome.authoritativeCommitted,
-    cleanupComplete: outcome.cleanupComplete,
-    ...('error' in outcome ? { contention: sqliteContention(outcome.error) } : {}),
-  })
+              ? 'journal'
+              : outcome.bookkeepingError
+                ? 'bookkeeping'
+                : 'authoritative_commit'),
+      disposition:
+        outcome.kind === 'persisted'
+          ? 'committed'
+          : outcome.kind === 'committed_cleanup_pending'
+            ? 'cleanup-pending'
+            : outcome.kind === 'rejected'
+              ? 'terminal'
+              : outcome.kind === 'unconfirmed'
+                ? 'failed'
+                : 'retryable',
+      durationMs: protocolDurationMs(startedAt),
+      journalConfirmed: outcome.journalConfirmed,
+      authoritativeCommitted: outcome.authoritativeCommitted,
+      cleanupComplete: outcome.cleanupComplete,
+      ...('error' in outcome ? { contention: sqliteContention(outcome.error) } : {}),
+    },
+    finalizationErrorFacts(outcome),
+  )
+}
+
+function finalizationErrorFacts(outcome: GenerationFinalizationOutcome) {
+  const errors = [
+    ...('error' in outcome ? [outcome.error] : []),
+    ...('cleanupError' in outcome ? [outcome.cleanupError] : []),
+    ...('bookkeepingError' in outcome && outcome.bookkeepingError !== undefined ? [outcome.bookkeepingError] : []),
+  ]
+  return errors.flatMap((error, index) =>
+    diagnosticErrorFacts(error).map((fact) => ({
+      ...fact,
+      id: index === 0 ? fact.id : fact.id.replace(/^error\./, `error.${index}.`),
+    })),
+  )
 }
 
 function sqliteContention(error: unknown): boolean {
@@ -5288,17 +5393,27 @@ export function retryQueuedGenerationFinalizations(args: {
         bookkeepingError = err
         retryable += 1
       }
-      recordDiagnosticEvent({
-        category: 'persistence',
-        level: bookkeepingError ? 'warn' : 'error',
-        phase: bookkeepingError ? 'bookkeeping' : 'replay_fence',
-        disposition: bookkeepingError ? 'retryable' : 'terminal',
-        durationMs: 0,
-        journalConfirmed: true,
-        authoritativeCommitted: false,
-        cleanupComplete: false,
-        retryCount: retry.failureCount,
-      })
+      recordDiagnosticEventForDatabase(
+        args.db,
+        {
+          category: 'persistence',
+          level: bookkeepingError ? 'warn' : 'error',
+          phase: bookkeepingError ? 'bookkeeping' : 'replay_fence',
+          disposition: bookkeepingError ? 'retryable' : 'terminal',
+          durationMs: 0,
+          journalConfirmed: true,
+          authoritativeCommitted: false,
+          cleanupComplete: false,
+          retryCount: retry.failureCount,
+        },
+        {
+          databaseLineage: retry.databaseLineage,
+          operationId: retry.operationId,
+          attemptId: retry.generationId,
+          background: true,
+        },
+        diagnosticErrorFacts(bookkeepingError ?? retry.parseError, args.db),
+      )
       const diagnostic = {
         generationId: retry.generationId,
         chatId: retry.chatId,
@@ -5399,17 +5514,20 @@ export function retryQueuedGenerationFinalizations(args: {
             })
           } catch (err) {
             retryable += 1
-            recordDiagnosticEvent({
-              category: 'persistence',
-              level: 'warn',
-              phase: 'bookkeeping',
-              disposition: 'retryable',
-              durationMs: protocolDurationMs(startedAt),
-              journalConfirmed: true,
-              authoritativeCommitted: false,
-              cleanupComplete: false,
-              retryCount: retry.failureCount,
-            })
+            recordDiagnosticEvent(
+              {
+                category: 'persistence',
+                level: 'warn',
+                phase: 'bookkeeping',
+                disposition: 'retryable',
+                durationMs: protocolDurationMs(startedAt),
+                journalConfirmed: true,
+                authoritativeCommitted: false,
+                cleanupComplete: false,
+                retryCount: retry.failureCount,
+              },
+              diagnosticErrorFacts(err),
+            )
             args.logger?.error(
               { err, generationId: attempt.generationId, chatId: attempt.chatId, phase: 'bookkeeping' },
               'failed to quarantine a legacy generation finalization retry',
@@ -5699,6 +5817,7 @@ async function buildDurablePostGeneration(args: {
   const {
     postGen,
     postGenError,
+    postGenErrorFacts,
     postGenMetricError,
     message,
     targetMessageId,
@@ -5721,14 +5840,17 @@ async function buildDurablePostGeneration(args: {
     generationTrace: args.generationTrace,
     metricContext: args.metricContext,
   })
-  recordDiagnosticEvent({
-    category: 'generation',
-    level: postGenError ? 'warn' : 'info',
-    stage: 'post-generation',
-    outcome: postGenError ? 'failed' : 'completed',
-    providerMayHaveRun: true,
-    durationMs: protocolDurationMs(diagnosticStartedAt),
-  })
+  recordDiagnosticEvent(
+    {
+      category: 'generation',
+      level: postGenError ? 'warn' : 'info',
+      stage: 'post-generation',
+      outcome: postGenError ? 'failed' : 'completed',
+      providerMayHaveRun: true,
+      durationMs: protocolDurationMs(diagnosticStartedAt),
+    },
+    postGenErrorFacts,
+  )
   const alternateMessages = buildProviderAlternateMessages({
     primaryMessage: message,
     alternateTexts,
@@ -6325,7 +6447,13 @@ async function runGenerationJob(args: {
   let lastTerminalError: string | undefined
   let deferProviderErrorSettlement = false
   const emit = (event: PromptChatEvent): void => {
-    if (event.type === 'error') recordGenerationRejection(event)
+    if (event.type === 'error') {
+      recordGenerationRejection(event)
+      recordDiagnosticEvent(
+        { category: 'generation', level: 'error', stage: 'complete', outcome: 'failed', providerMayHaveRun },
+        diagnosticRejectionFacts(event),
+      )
+    }
     if (event.type === 'error') lastTerminalError = event.error
     if (event.type === 'done') {
       recordDiagnosticEvent({
@@ -7171,6 +7299,15 @@ function startDurableGeneration(args: {
     req.log.error({ err: error, chatId: input.chatId, jobId: job?.id }, 'Durable generation startup failed')
     const sqliteCode =
       error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''
+    const rejection = sqliteCode.startsWith('SQLITE_CONSTRAINT')
+      ? { error: 'generation_in_progress' }
+      : error instanceof GenerationAdmissionError || error instanceof GenerationEffectiveConfigurationTooLargeError
+        ? { error: error.code }
+        : { error: 'generation_job_start_failed' }
+    recordDiagnosticEvent(
+      { category: 'generation', level: 'error', stage: 'accepted', outcome: 'failed', providerMayHaveRun: false },
+      [...diagnosticRejectionFacts(rejection), ...diagnosticErrorFacts(error)],
+    )
     if (!reply.sent && sqliteCode.startsWith('SQLITE_CONSTRAINT')) {
       sendGenerationResponse(reply, 409, {
         error: 'generation_in_progress',

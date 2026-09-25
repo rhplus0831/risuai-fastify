@@ -3,10 +3,13 @@ import path from 'node:path'
 import { Worker } from 'node:worker_threads'
 import {
   isDiagnosticEventV2,
-  projectRemoteDiagnosticRecordV3,
+  projectRemoteDiagnosticFact,
+  dropRemoteDiagnosticFact,
+  REMOTE_DIAGNOSTIC_FACT_LIMIT,
+  projectRemoteDiagnosticRecordV4,
   type DiagnosticEventV2,
   type RemoteDiagnosticFact,
-  type RemoteDiagnosticRecordV3,
+  type RemoteDiagnosticRecordV4,
 } from '@risuai/protocol/remote-diagnostics'
 import {
   DIAGNOSTICS_JOURNAL_HARD_LIMITS,
@@ -53,7 +56,7 @@ export type DiagnosticsJournalStateChange =
   | { state: 'recovered'; recoveryAttempt: number }
 
 export interface DiagnosticsJournalRead {
-  entries: RemoteDiagnosticRecordV3[]
+  entries: RemoteDiagnosticRecordV4[]
   epoch: string
   source: 'journal' | 'unavailable'
   dropped: number
@@ -68,7 +71,7 @@ export interface DiagnosticsJournal {
   available(): boolean
   record(
     entry: DiagnosticEventV2,
-    provenance?: RemoteDiagnosticRecordV3['provenance'],
+    provenance?: RemoteDiagnosticRecordV4['provenance'],
     facts?: readonly RemoteDiagnosticFact[],
   ): boolean
   hasBrowserEvent(sourceId: string, eventId: string): boolean
@@ -96,7 +99,7 @@ const DEFAULT_RECOVERY_DELAYS_MS = Object.freeze([250, 1000, 5000])
 const add = (left: number, right: number) => Math.min(MAX_COUNTER, left + right)
 const newEpoch = () => randomBytes(16).toString('hex')
 const emptyCounters = (): DiagnosticsJournalCounters => ({ dropped: 0, rejected: 0, pruned: 0 })
-const keyOf = (record: Pick<RemoteDiagnosticRecordV3, 'provenance'>): string | undefined =>
+const keyOf = (record: Pick<RemoteDiagnosticRecordV4, 'provenance'>): string | undefined =>
   record.provenance.kind === 'browser' ? `${record.provenance.sourceId}:${record.provenance.eventId}` : undefined
 
 function boundedInteger(value: unknown, minimum = 0, maximum = MAX_COUNTER): value is number {
@@ -144,9 +147,9 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
   let recovering = false
   let resetPending = false
   let maintenancePending = false
-  let restoring: Map<number, RemoteDiagnosticRecordV3> | undefined
+  let restoring: Map<number, RemoteDiagnosticRecordV4> | undefined
   let purgePending: number[] = []
-  let entries = new Map<number, RemoteDiagnosticRecordV3>()
+  let entries = new Map<number, RemoteDiagnosticRecordV4>()
   let queue: PendingDiagnosticRecord[] = []
   let dedup = new Set<string>()
   let nextExpiry = Number.POSITIVE_INFINITY
@@ -348,16 +351,16 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
     )
   }
 
-  function restoreRows(rows: StoredDiagnosticRow[]): { valid: RemoteDiagnosticRecordV3[]; invalid: number[] } {
-    const valid: RemoteDiagnosticRecordV3[] = []
+  function restoreRows(rows: StoredDiagnosticRow[]): { valid: RemoteDiagnosticRecordV4[]; invalid: number[] } {
+    const valid: RemoteDiagnosticRecordV4[] = []
     const invalid: number[] = []
     const keys = new Set<string>()
     let bytes = 0
     for (const row of rows) {
-      let record: RemoteDiagnosticRecordV3 | null = null
+      let record: RemoteDiagnosticRecordV4 | null = null
       try {
         if (typeof row.json === 'string' && Buffer.byteLength(row.json) <= limits.maxRecordBytes) {
-          record = projectRemoteDiagnosticRecordV3(JSON.parse(row.json))
+          record = projectRemoteDiagnosticRecordV4(JSON.parse(row.json))
         }
         const key = record ? keyOf(record) : undefined
         if (
@@ -624,18 +627,35 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
           pump()
           return false
         }
-        const validated = projectRemoteDiagnosticRecordV3({
+        const boundedFacts = facts === undefined ? undefined : [...facts]
+        // Reject malformed direct journal input; valid enrichment may be trimmed.
+        if (
+          boundedFacts?.some((fact) => !projectRemoteDiagnosticFact(fact)) ||
+          (boundedFacts && new Set(boundedFacts.map((fact) => fact.id)).size !== boundedFacts.length)
+        ) {
+          pendingLoss.rejected = add(pendingLoss.rejected, 1)
+          pump()
+          return false
+        }
+        while (boundedFacts && boundedFacts.length > REMOTE_DIAGNOSTIC_FACT_LIMIT)
+          dropRemoteDiagnosticFact(boundedFacts)
+        const validated = projectRemoteDiagnosticRecordV4({
           sequence: MAX_COUNTER,
           receivedAt: now(),
           instanceId: options.instanceId,
           provenance,
           entry,
-          ...(facts === undefined ? {} : { facts: [...facts] }),
+          ...(boundedFacts === undefined ? {} : { facts: boundedFacts }),
         })
+        const maxBytes = Math.min(limits.maxRecordBytes, limits.maxBytes)
+        while (validated?.facts?.length && Buffer.byteLength(JSON.stringify(validated)) > maxBytes) {
+          dropRemoteDiagnosticFact(validated.facts)
+          if (!validated.facts.length) delete validated.facts
+        }
         if (
           !validated ||
           (facts !== undefined && provenance.kind !== 'server') ||
-          Buffer.byteLength(JSON.stringify(validated)) > Math.min(limits.maxRecordBytes, limits.maxBytes)
+          Buffer.byteLength(JSON.stringify(validated)) > maxBytes
         ) {
           pendingLoss.rejected = add(pendingLoss.rejected, 1)
           pump()
@@ -666,8 +686,8 @@ export function createDiagnosticsJournal(options: DiagnosticsJournalOptions): Di
       const visible =
         initialized && !terminal
           ? [...entries.values()]
-              .map((record) => projectRemoteDiagnosticRecordV3(record))
-              .filter((record): record is RemoteDiagnosticRecordV3 => record !== null)
+              .map((record) => projectRemoteDiagnosticRecordV4(record))
+              .filter((record): record is RemoteDiagnosticRecordV4 => record !== null)
           : []
       const inflight = active?.generation === generation ? active.request.loss : { dropped: 0, rejected: 0 }
       const result: DiagnosticsJournalRead = {

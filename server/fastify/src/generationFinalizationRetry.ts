@@ -1,3 +1,4 @@
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { isDeepStrictEqual } from 'node:util'
 import { getChatMessages } from './messageStore.js'
@@ -564,6 +565,17 @@ export function listPendingGenerationFinalizationRetries(
         nextAttemptAt,
       })
     } catch (parseError) {
+      recordDiagnosticErrorForDatabase(
+        db,
+        { category: 'persistence', level: 'error', phase: 'journal', disposition: 'failed', durationMs: 0 },
+        parseError,
+        {
+          databaseLineage: row.database_lineage ?? undefined,
+          operationId: row.operation_id ?? undefined,
+          attemptId: row.generation_id,
+          background: true,
+        },
+      )
       candidates.push({
         generationId: row.generation_id,
         ...(row.database_lineage !== null ? { databaseLineage: row.database_lineage } : {}),

@@ -7,6 +7,8 @@ import type { FastifyInstance } from 'fastify'
 import {
   isDiagnosticTransportUrl,
   projectDiagnosticEventV2,
+  projectRemoteDiagnosticFacts,
+  type RemoteDiagnosticFact,
   type DiagnosticEventV2,
   type DiagnosticReferenceKind,
 } from '@risuai/protocol/remote-diagnostics'
@@ -14,7 +16,8 @@ import { readRequestTraceUid } from './requestTrace.js'
 
 interface DiagnosticRegistration {
   owner?: object
-  record(entry: DiagnosticEventV2, context?: DiagnosticContext): void
+  locationsTrusted?: boolean
+  record(entry: DiagnosticEventV2, context?: DiagnosticContext, facts?: readonly RemoteDiagnosticFact[]): void
   /** Private authority check; raw lineage is never added to a diagnostic event. */
   history(): string
   key?: Uint8Array
@@ -55,6 +58,11 @@ export function registerDiagnosticDatabase(db: object, registration: DiagnosticR
 
 export function getDiagnosticContext(): DiagnosticContext | undefined {
   return contexts.getStore()
+}
+/** Database scope also supports workers outside an active request context. */
+export function diagnosticLocationsTrusted(db?: object): boolean {
+  const registration = db ? registrations.get(db) : contexts.getStore()?.registration
+  return registration?.active === true && registration.locationsTrusted === true
 }
 export function diagnosticsContextEnabled(): boolean {
   const context = contexts.getStore()
@@ -175,7 +183,7 @@ export function runWithDiagnosticAttempt<T>(callback: () => T): T {
 }
 
 /** App-local producers create known facts; this function stamps trusted provenance. */
-export function recordDiagnosticEvent(input: Record<string, unknown>): void {
+export function recordDiagnosticEvent(input: Record<string, unknown>, facts?: readonly RemoteDiagnosticFact[]): void {
   const context = contexts.getStore()
   if (!context) return
   try {
@@ -198,7 +206,8 @@ export function recordDiagnosticEvent(input: Record<string, unknown>): void {
     })
     // A task from replaced history may finish after reset. Omit its evidence
     // altogether rather than associating old operations with unrelated history.
-    if (entry && current) context.registration.record(entry, context)
+    if (entry && current)
+      context.registration.record(entry, context, facts === undefined ? undefined : projectRemoteDiagnosticFacts(facts))
   } catch {
     /* No diagnostic failure may change the observed operation. */
   }
@@ -208,8 +217,9 @@ export function recordDiagnosticEventForDatabase(
   db: object,
   input: Record<string, unknown>,
   refs: DiagnosticOperationReferences = {},
+  facts?: readonly RemoteDiagnosticFact[],
 ): void {
-  runWithDiagnosticContext(db, refs, () => recordDiagnosticEvent(input))
+  runWithDiagnosticContext(db, refs, () => recordDiagnosticEvent(input, facts))
 }
 
 export function registerDiagnosticContextHooks(app: FastifyInstance, db: object): void {

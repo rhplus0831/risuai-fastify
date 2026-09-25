@@ -53,7 +53,11 @@ export type RemoteDiagnosticsHelperCategory =
 
 type RemoteDiagnosticsV2Response = Extract<RemoteDiagnosticsResponse, { version: 2 }>
 type RemoteDiagnosticsV3Response = Extract<RemoteDiagnosticsResponse, { version: 3 }>
-type RemoteDiagnosticsInvestigationResponse = RemoteDiagnosticsV2Response | RemoteDiagnosticsV3Response
+type RemoteDiagnosticsV4Response = Extract<RemoteDiagnosticsResponse, { version: 4 }>
+type RemoteDiagnosticsInvestigationResponse =
+  | RemoteDiagnosticsV2Response
+  | RemoteDiagnosticsV3Response
+  | RemoteDiagnosticsV4Response
 type RemoteDiagnosticsInvestigationRecord = RemoteDiagnosticsInvestigationResponse['entries'][number]
 type RemoteDiagnosticsLevel = RemoteDiagnosticsInvestigationRecord['entry']['level']
 type CorrelationKind = 'request' | 'operation' | 'attempt' | 'background' | 'unavailable' | 'client-asserted'
@@ -61,7 +65,7 @@ type CorrelationKind = 'request' | 'operation' | 'attempt' | 'background' | 'una
 export interface RemoteDiagnosticsInvestigation {
   version: 1
   source: {
-    remoteVersion: 2 | 3
+    remoteVersion: 2 | 3 | 4
     serverTime: number
     identity: RemoteDiagnosticsInvestigationResponse['identity']
     sources: RemoteDiagnosticsInvestigationResponse['sources']
@@ -203,7 +207,7 @@ function parseCliArguments(args: readonly string[]): {
   if (
     query.cursor !== undefined ||
     (query.requestUid !== undefined && query.operationRef !== undefined) ||
-    (query.version !== undefined && query.version !== '2' && query.version !== '3')
+    (query.version !== undefined && query.version !== '2' && query.version !== '3' && query.version !== '4')
   )
     throw failure('invalid-query')
   return { investigate: true, query: { ...query, limit: '200' } }
@@ -501,13 +505,13 @@ async function collectInvestigation(
     if (seenCursors.has(cursor) || reads === MAX_INVESTIGATION_READS) throw failure('bad-response')
     seenCursors.add(cursor)
     const page = await fetchRemoteDiagnostics(config, { version: String(first.version), cursor })
-    if (page.version !== 2 && page.version !== 3) throw failure('bad-response')
+    if (page.version !== 2 && page.version !== 3 && page.version !== 4) throw failure('bad-response')
     response = page
   }
   throw failure('bad-response')
 }
 
-/** Collects one complete immutable snapshot, preferring safe v3 facts and falling back to an older v2 server. */
+/** Collects one immutable snapshot, preferring v4 then falling back to v3 and v2. */
 export async function investigateRemoteDiagnostics(
   config: RemoteDiagnosticsConfig,
   input: Record<string, string> = {},
@@ -515,25 +519,23 @@ export async function investigateRemoteDiagnostics(
   if (
     input.cursor !== undefined ||
     (input.requestUid !== undefined && input.operationRef !== undefined) ||
-    (input.version !== undefined && input.version !== '2' && input.version !== '3')
+    (input.version !== undefined && !['2', '3', '4'].includes(input.version))
   )
     throw failure('invalid-query')
-  const preferredVersion = input.version === '2' ? 2 : 3
-  const initial = (version: 2 | 3) => ({ ...input, version: String(version), limit: '200' })
-  let first: RemoteDiagnosticsResponse
-  try {
-    first = await fetchRemoteDiagnostics(config, initial(preferredVersion))
-  } catch (error) {
-    if (
-      preferredVersion !== 3 ||
-      !(error instanceof RemoteDiagnosticsHelperError) ||
-      error.category !== 'invalid-query'
-    )
-      throw error
-    first = await fetchRemoteDiagnostics(config, initial(2))
+  const preferredVersion = input.version === '2' ? 2 : input.version === '3' ? 3 : 4
+  for (let version = preferredVersion; version >= 2; version--) {
+    let first: RemoteDiagnosticsResponse
+    try {
+      first = await fetchRemoteDiagnostics(config, { ...input, version: String(version), limit: '200' })
+    } catch (error) {
+      if (version === 2 || !(error instanceof RemoteDiagnosticsHelperError) || error.category !== 'invalid-query')
+        throw error
+      continue
+    }
+    if (first.version !== 2 && first.version !== 3 && first.version !== 4) throw failure('bad-response')
+    return collectInvestigation(config, first)
   }
-  if (first.version !== 2 && first.version !== 3) throw failure('bad-response')
-  return collectInvestigation(config, first)
+  throw failure('bad-response')
 }
 
 async function run(): Promise<void> {

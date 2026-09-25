@@ -13,7 +13,7 @@ import { afterEach, expect, it, vi } from 'vitest'
 import {
   isDiagnosticEventV2,
   isRemoteDiagnosticsResponse,
-  projectDiagnosticJournalRecord,
+  projectRemoteDiagnosticRecordV4,
   SUPPORT_DIAGNOSTICS_ENDPOINT,
   type RemoteDiagnosticsResponseV2,
 } from '@risuai/protocol/remote-diagnostics'
@@ -481,7 +481,7 @@ it('diagnoses a real provider disconnect and failed commit through the HTTPS hel
       expect(journalRows.length).toBeGreaterThan(recovered.entries.length)
       for (const row of journalRows) {
         const record: unknown = JSON.parse(row.record)
-        expect(projectDiagnosticJournalRecord(record)).not.toBeNull()
+        expect(projectRemoteDiagnosticRecordV4(record)).not.toBeNull()
         assertNoEncodedCanaries(row.record, secrets)
         assertNoForbiddenFields(record)
       }

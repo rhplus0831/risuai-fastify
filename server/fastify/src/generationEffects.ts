@@ -1,3 +1,4 @@
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import { resolveGenerationConfiguration } from './generationConfiguration.js'
 import { createHash, randomUUID } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
@@ -191,6 +192,7 @@ export interface SettleGenerationEffectInput {
   kind: GenerationEffectKind
   claimId: string
   status: 'completed' | 'skipped' | 'failed'
+  diagnosticError?: unknown
   reason?: string | null
   lastError?: string | null
   settledAt?: string
@@ -1695,7 +1697,23 @@ export function settleGenerationEffect(
     )[0]
     return existing ? projectionFromRow(existing) : undefined
   }
-  return projectionFromRow(requireGenerationEffectRow(db, input.databaseLineage, input.generationId, input.kind))
+  const settled = projectionFromRow(
+    requireGenerationEffectRow(db, input.databaseLineage, input.generationId, input.kind),
+  )
+  if (input.status === 'failed') {
+    recordDiagnosticErrorForDatabase(
+      db,
+      { category: 'generation', level: 'error', stage: 'post-generation', outcome: 'failed', providerMayHaveRun: true },
+      input.diagnosticError,
+      {
+        databaseLineage: input.databaseLineage,
+        operationId: settled.operationId,
+        attemptId: input.generationId,
+        background: true,
+      },
+    )
+  }
+  return settled
 }
 
 /** Complete the generated-translation receipt in the message write transaction. */

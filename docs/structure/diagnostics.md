@@ -167,7 +167,51 @@ channel does not export plain content fingerprints.
   admission, restart restoration, read, and export. V1/v2 projection strips
   them, and browser uploads cannot attach them.
 
-V3 server error locations require a trusted 40–64 character lowercase
+- Version 4 preserves the v3 envelope and adds only closed `rejection-code`,
+  `error-name`, `validation-domain`, `validation-owner`, `validation-rule`,
+  `value-kind`, `field` (16 lowercase hex), `provider-adapter`, and `http-status`
+  (integer 100–599) facts. Rejection codes reuse the generated rejection register;
+  error names and validation classifications reuse the existing diagnostic enums.
+  V3 reads retain only boolean, count, duration-ms, size-bucket, reference, and
+  location facts, while v1/v2 continue stripping all facts. Browser uploads still
+  cannot attach facts. Admission and restart restoration validate the complete
+  v4 fact set. The 32-fact and 4 KiB record limits remain: overflow removes the
+  last location fact first, then the last remaining fact until the record fits.
+
+V4 failure instrumentation uses stable fact ids:
+
+- The shared generation HTTP response boundary and both generation SSE error
+  emitters attach `rejection.code` (and `rejection.code.N` for additional distinct
+  closed codes), using the same detection as rejection counters: `error`,
+  `reason`, `code`, `failureCode`, or `operation.failureCode`.
+- Generation settings preflight rejection, prompt/assembly failure, mapped
+  assembly HTTP errors, and durable startup failure attach the response's closed
+  code plus `error.name` and trusted `error.location.N` when an error is available.
+  Decoder failures also attach `validation.domain`, `validation.owner`,
+  `validation.rule`, `validation.value-kind`, and optional `validation.field`.
+- Provider terminal failures attach `provider.adapter`, `provider.status` for
+  HTTP errors, and the error facts for caught exceptions.
+- Memory embedding batch planning/execution/commit/scope failures, memory
+  summarization batch/scope failures, memory and BardWiki worker handler/tick/
+  retention failures, failed generation-effect settlements, and finalization
+  retry decoding/quarantine/persistence/cleanup/bookkeeping failures attach error
+  facts through a database-scoped event or the existing correlated event.
+- Lua load/dispatch and propagated execution exceptions attach error facts to
+  their existing `script` failure event. Post-generation derivation failures and
+  inline persistence failures also retain the original error facts.
+- Logger warn/error `console` entries with an error attach `error.name` and
+  trusted `error.location.N`. Runtime errors and unhandled rejections also attach
+  `error.name` and keep their existing `runtime.location.N` ids.
+
+Unknown thrown values use `UnknownError`; custom Error names follow the existing
+closed error-name projection. No error message, parser input, provider body,
+Lua output, name, id, or absolute path is added to a fact. Paths are retained only
+as the already-defined application source coordinates. Invalid or duplicate
+producer facts are dropped individually without suppressing their event. When a
+finalization reports both a primary error and a bookkeeping error, the latter
+uses `error.1.name` and `error.1.location.N` to avoid duplicate ids.
+
+V3/V4 server error locations require a trusted 40–64 character lowercase
 hexadecimal build identity and a matching current process/build instance. An
 explicit valid `RISU_BUILD_ID` is trusted. Otherwise source-checkout
 deployments derive the identity once at startup from Git `HEAD`, but locations
@@ -278,14 +322,18 @@ pnpm diagnostics:remote --state
 pnpm diagnostics:remote --investigate
 pnpm diagnostics:remote --investigate --requestUid=<generated-request-uid>
 pnpm diagnostics:remote --investigate --operationRef=<opaque-operation-reference>
+pnpm diagnostics:remote --investigate --version=4
+pnpm diagnostics:remote --version=4 --category=generation
 pnpm diagnostics:remote --investigate --version=2
 pnpm diagnostics:remote --version=2 --category=display-performance --requestUid=<generated-request-uid>
 pnpm diagnostics:remote --version=2 --cursor=<returned-cursor>
 ```
 
 Start without a category filter, then follow the returned correlation groups.
-`--investigate` prefers v3 and falls back once to v2 only when an older server
-rejects v3. It follows cursor-only continuations for at most 20 snapshot pages
+`--investigate` prefers v4, falls back to v3, then v2 only when an older server
+rejects a version with `invalid-query`. Explicit `--version=4` and `--version=3`
+start at that version; `--version=2` makes no fallback attempt. It follows
+cursor-only continuations for at most 20 snapshot pages
 and emits one JSON value after full validation. `collection.complete` means
 cursor traversal completed; it does not override truncation, dropped, rejected,
 or pruned loss counters. Without `--investigate`, the helper retains the
@@ -318,7 +366,7 @@ no query parameters (including an empty query delimiter). It has the journal
 route's support credential requirement, diagnostics collection gate, no-store
 policy, 30 reads/minute/IP limit, ten-second reply timer, bounded audit ring,
 fixed errors, and 512 KiB response cap. It requires no active writer and does not
-acquire ownership. Existing journal v1/v2/v3 responses are unchanged.
+acquire ownership. Existing journal v1/v2/v3/v4 responses are unchanged.
 
 The grouped sections contain:
 

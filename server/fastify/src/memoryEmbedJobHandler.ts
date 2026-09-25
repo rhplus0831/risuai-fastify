@@ -1,3 +1,4 @@
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import { assertDatabaseLineage, getDatabaseLineage } from './databaseLineage.js'
 import { createHash } from 'node:crypto'
 import type { DatabaseSync } from 'node:sqlite'
@@ -135,6 +136,17 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
       try {
         plan = planContextualSubBatches(opts, authority.valid, modelRequest.request)
       } catch (error) {
+        recordDiagnosticErrorForDatabase(
+          opts.db,
+          { category: 'generation', level: 'error', stage: 'assembly', outcome: 'failed', providerMayHaveRun: false },
+          error,
+          {
+            databaseLineage: lineage,
+            operationId: authority.valid[0]?.operationId,
+            attemptId: authority.valid[0]?.id,
+            background: true,
+          },
+        )
         const message = error instanceof Error && error.message ? error.message : String(error)
         commitContextualBatchResults(
           opts,
@@ -151,6 +163,7 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
       for (const subBatch of plan.subBatches) {
         const results = await executeContextualEmbedJobs({
           opts,
+          databaseLineage: lineage,
           jobs: subBatch,
           settings: firstSettings,
           modelRequest: modelRequest.request,
@@ -185,6 +198,23 @@ export function createEmbedMemoryJobBatchHandler(opts: EmbedMemoryJobHandlerOpti
           }),
         } satisfies BatchJobResult
       } catch (error) {
+        recordDiagnosticErrorForDatabase(
+          opts.db,
+          {
+            category: 'generation',
+            level: 'error',
+            stage: 'post-generation',
+            outcome: 'failed',
+            providerMayHaveRun: true,
+          },
+          error,
+          {
+            databaseLineage: lineage,
+            operationId: job?.operationId,
+            attemptId: job?.id,
+            background: true,
+          },
+        )
         return {
           job,
           error: error instanceof Error && error.message ? error.message : String(error),
@@ -485,6 +515,7 @@ function emitContextualSubBatchSplitMetric(
 }
 
 async function executeContextualEmbedJobs(input: {
+  databaseLineage: string
   opts: EmbedMemoryJobHandlerOptions
   jobs: readonly MemoryJob[]
   settings: HypaV3Settings
@@ -611,6 +642,17 @@ async function executeContextualEmbedJobs(input: {
     })
     return [...results, ...isolatedErrors]
   } catch (error) {
+    recordDiagnosticErrorForDatabase(
+      input.opts.db,
+      { category: 'generation', level: 'error', stage: 'post-generation', outcome: 'failed', providerMayHaveRun: true },
+      error,
+      {
+        databaseLineage: input.databaseLineage,
+        operationId: activeJobs[0]?.operationId,
+        attemptId: activeJobs[0]?.id,
+        background: true,
+      },
+    )
     const message = error instanceof Error && error.message ? error.message : String(error)
     return [...activeJobs.map((job) => ({ job, error: message })), ...isolatedErrors]
   }
@@ -636,6 +678,17 @@ function commitIndependentBatchResults(
       }
       context.complete(item.job.id)
     } catch (error) {
+      recordDiagnosticErrorForDatabase(
+        opts.db,
+        { category: 'generation', level: 'error', stage: 'finalization', outcome: 'failed', providerMayHaveRun: true },
+        error,
+        {
+          databaseLineage: item.job?.generationScope?.occupancyDatabaseLineage,
+          operationId: item.job?.operationId,
+          attemptId: item.job?.id,
+          background: true,
+        },
+      )
       const message = error instanceof Error && error.message ? error.message : String(error)
       context.retryOrFail(item.job.id, message)
     }
@@ -664,6 +717,17 @@ function commitContextualBatchResults(
     try {
       if (memoryJobMayApplyResult(opts.db, item.job)) successful.push(item)
     } catch (error) {
+      recordDiagnosticErrorForDatabase(
+        opts.db,
+        { category: 'generation', level: 'error', stage: 'finalization', outcome: 'failed', providerMayHaveRun: true },
+        error,
+        {
+          databaseLineage: item.job?.generationScope?.occupancyDatabaseLineage,
+          operationId: item.job?.operationId,
+          attemptId: item.job?.id,
+          background: true,
+        },
+      )
       retryMemoryJobAfterHandlerError(
         opts,
         context,
@@ -687,6 +751,17 @@ function commitContextualBatchResults(
       context.complete(item.job.id)
     }
   } catch (error) {
+    recordDiagnosticErrorForDatabase(
+      opts.db,
+      { category: 'generation', level: 'error', stage: 'finalization', outcome: 'failed', providerMayHaveRun: true },
+      error,
+      {
+        databaseLineage: successful[0]?.job?.generationScope?.occupancyDatabaseLineage,
+        operationId: successful[0]?.job?.operationId,
+        attemptId: successful[0]?.job?.id,
+        background: true,
+      },
+    )
     retryContextualBatch(
       opts,
       context,
@@ -716,6 +791,17 @@ function retryMemoryJobAfterHandlerError(
   try {
     if (memoryJobMayApplyResult(opts.db, job)) context.retryOrFail(job.id, error)
   } catch (scopeError) {
+    recordDiagnosticErrorForDatabase(
+      opts.db,
+      { category: 'generation', level: 'error', stage: 'finalization', outcome: 'failed', providerMayHaveRun: true },
+      scopeError,
+      {
+        databaseLineage: job.generationScope?.occupancyDatabaseLineage,
+        operationId: job.operationId,
+        attemptId: job.id,
+        background: true,
+      },
+    )
     if (!memoryJobInstanceMayTransition(opts.db, job)) return
     context.retryOrFail(
       job.id,
@@ -888,6 +974,17 @@ function partitionMemoryJobsByAuthority(db: DatabaseSync, jobs: readonly MemoryJ
       assertMemoryJobGenerationScope(db, job)
       valid.push(job)
     } catch (error) {
+      recordDiagnosticErrorForDatabase(
+        db,
+        { category: 'generation', level: 'error', stage: 'accepted', outcome: 'failed', providerMayHaveRun: false },
+        error,
+        {
+          databaseLineage: job?.generationScope?.occupancyDatabaseLineage,
+          operationId: job?.operationId,
+          attemptId: job?.id,
+          background: true,
+        },
+      )
       invalid.push({
         job,
         error: error instanceof Error && error.message ? error.message : String(error),

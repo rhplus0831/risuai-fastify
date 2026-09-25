@@ -1,3 +1,4 @@
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { getDatabaseLineage } from './databaseLineage.js'
 import {
@@ -193,6 +194,11 @@ export class MemoryWorker {
           didWork = result
         })
         .catch((error) => {
+          recordDiagnosticErrorForDatabase(
+            this.db,
+            { category: 'persistence', level: 'error', phase: 'unknown', disposition: 'failed', durationMs: 0 },
+            error,
+          )
           this.onError(error)
         })
         .finally(() => {
@@ -297,6 +303,18 @@ export class MemoryWorker {
       return true
     } catch (error) {
       if (!current()) return true
+      recordDiagnosticErrorForDatabase(
+        this.db,
+        {
+          category: 'generation',
+          level: 'error',
+          stage: 'post-generation',
+          outcome: 'failed',
+          providerMayHaveRun: true,
+        },
+        error,
+        { databaseLineage: lineage, operationId: job.operationId, attemptId: job.id, background: true },
+      )
       const message = error instanceof Error && error.message ? error.message : String(error)
       const failedOrRetried = retryOrFailMemoryJob(this.db, job.id, message || 'memory job handler failed', this.retry)
       if (failedOrRetried) {
@@ -325,6 +343,11 @@ export class MemoryWorker {
       pruneTerminalMemoryJobs(this.db, this.terminalRetention)
       this.lastRetentionSweepAtMs = nowMs
     } catch (error) {
+      recordDiagnosticErrorForDatabase(
+        this.db,
+        { category: 'persistence', level: 'error', phase: 'cleanup', disposition: 'failed', durationMs: 0 },
+        error,
+      )
       this.onError(error)
     }
   }

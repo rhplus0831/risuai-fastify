@@ -1,3 +1,4 @@
+import { recordDiagnosticErrorForDatabase } from './diagnosticFacts.js'
 import type { DatabaseSync } from 'node:sqlite'
 import { getDatabaseLineage } from './databaseLineage.js'
 import {
@@ -174,7 +175,14 @@ export class BardWikiWorker {
         .then((result) => {
           didWork = result
         })
-        .catch(this.onError)
+        .catch((error) => {
+          recordDiagnosticErrorForDatabase(
+            this.db,
+            { category: 'persistence', level: 'error', phase: 'unknown', disposition: 'failed', durationMs: 0 },
+            error,
+          )
+          this.onError(error)
+        })
         .finally(() => this.schedule(didWork ? 0 : this.pollIntervalMs))
     }, delayMs)
     this.timer.unref()
@@ -231,6 +239,18 @@ export class BardWikiWorker {
       }
     } catch (error) {
       if (!current()) return true
+      recordDiagnosticErrorForDatabase(
+        this.db,
+        {
+          category: 'generation',
+          level: 'error',
+          stage: 'post-generation',
+          outcome: 'failed',
+          providerMayHaveRun: true,
+        },
+        error,
+        { databaseLineage: lineage, operationId: job.operationId, attemptId: job.id, background: true },
+      )
       const summary = error instanceof Error && error.message ? error.message : String(error)
       const code = error instanceof BardWikiJobHandlerError ? error.code : 'bardwiki_job_handler_failed'
       const next =
@@ -258,6 +278,11 @@ export class BardWikiWorker {
       pruneTerminalBardWikiJobs(this.db, this.terminalRetention)
       this.lastRetentionSweepAtMs = nowMs
     } catch (error) {
+      recordDiagnosticErrorForDatabase(
+        this.db,
+        { category: 'persistence', level: 'error', phase: 'cleanup', disposition: 'failed', durationMs: 0 },
+        error,
+      )
       this.onError(error)
     }
   }

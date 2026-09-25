@@ -1,9 +1,11 @@
+import { diagnosticErrorFacts } from '../diagnosticFacts.js'
 import { AsyncLocalStorage } from 'node:async_hooks'
 import { performance } from 'node:perf_hooks'
 import {
   DIAGNOSTIC_PROVIDER_ADAPTERS,
   diagnosticSizeBucket,
   type DiagnosticEventV2,
+  type RemoteDiagnosticFact,
 } from '@risuai/protocol/remote-diagnostics'
 import { diagnosticsContextEnabled, recordDiagnosticEvent, runWithDiagnosticAttempt } from '../diagnosticContext.js'
 import type { CompletionStreamFrame } from './frames.js'
@@ -43,6 +45,7 @@ class ProviderAttempt {
   firstTokenAt?: number
   statusCode?: number
   failure?: Failure
+  errorFacts: RemoteDiagnosticFact[] = []
   receivedBytes = 0
   chunkCount = 0
   maxStreamGapMs = 0
@@ -85,7 +88,14 @@ class ProviderAttempt {
         else if (outcome === 'cancelled') event.cancellationOrigin = 'unknown'
         else if (outcome === 'disconnected') event.cancellationOrigin = 'disconnect'
       }
-      this.within(() => recordDiagnosticEvent(event))
+      const facts: RemoteDiagnosticFact[] = []
+      if (stage === 'terminal' && outcome !== 'ok' && outcome !== 'started') {
+        facts.push({ id: 'provider.adapter', type: 'provider-adapter', value: this.adapter }, ...this.errorFacts)
+        if (outcome === 'http-error' && this.statusCode !== undefined) {
+          facts.push({ id: 'provider.status', type: 'http-status', value: this.statusCode })
+        }
+      }
+      this.within(() => recordDiagnosticEvent(event, facts.length ? facts : undefined))
     } catch {
       // Diagnostics are independent of the provider result and cleanup path.
     }
@@ -103,6 +113,7 @@ class ProviderAttempt {
   }
 
   failed(error: unknown, fallback: Failure): void {
+    if (!this.errorFacts.length) this.errorFacts = this.within(() => diagnosticErrorFacts(error))
     this.failure ??= errorIsTimeout(error) || errorIsTimeout(this.signal.reason) ? 'timeout' : fallback
   }
 

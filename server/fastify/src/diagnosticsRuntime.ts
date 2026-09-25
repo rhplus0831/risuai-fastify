@@ -132,7 +132,13 @@ export function createDiagnosticsRuntime(
   })
   // Register before synchronous startup recovery. Only the bounded telemetry
   // queue waits for the key; commands/generation/recovery keep running.
-  const unregister = registerDiagnosticDatabase(db, { owner: collector, key: referenceKey, history, record })
+  const unregister = registerDiagnosticDatabase(db, {
+    owner: collector,
+    key: referenceKey,
+    history,
+    record,
+    locationsTrusted: locationsTrusted && identity.build !== 'unknown',
+  })
   recordDiagnosticEventForDatabase(db, {
     category: 'deployment',
     stage: 'started',
@@ -201,16 +207,22 @@ export function createDiagnosticsRuntime(
             }
           : {}),
       })
-      const facts =
-        locationsTrusted &&
-        identity.build !== 'unknown' &&
-        (entry.event === 'runtime-error' || entry.event === 'unhandled-rejection') &&
-        entry.locations?.length
-          ? entry.locations.map(
-              (value, index): RemoteDiagnosticFact => ({ id: `runtime.location.${index}`, type: 'location', value }),
-            )
-          : undefined
-      if (projected) record(projected, scoped ? context : undefined, facts)
+      const facts: RemoteDiagnosticFact[] = []
+      if (entry.event === 'runtime-error' || entry.event === 'unhandled-rejection' || entry.event === 'console') {
+        if (entry.errorName) facts.push({ id: 'error.name', type: 'error-name', value: entry.errorName })
+        if (locationsTrusted && identity.build !== 'unknown') {
+          facts.push(
+            ...(entry.locations ?? []).map(
+              (value, index): RemoteDiagnosticFact => ({
+                id: entry.event === 'console' ? `error.location.${index}` : `runtime.location.${index}`,
+                type: 'location',
+                value,
+              }),
+            ),
+          )
+        }
+      }
+      if (projected) record(projected, scoped ? context : undefined, facts.length ? facts : undefined)
     } catch {
       /* Sanitized telemetry never controls the observed request. */
     }

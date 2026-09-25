@@ -1,12 +1,17 @@
 import { Type, type Static, type TSchema } from '@sinclair/typebox'
 import { Value } from '@sinclair/typebox/value'
-import { DiagnosticEntrySchema, projectDiagnosticEntry } from './diagnostics.js'
+import { DiagnosticEntrySchema, projectDiagnosticEntry, errorNames } from './diagnostics.js'
 export * from './browserDiagnostics.js'
-import { GENERATION_REJECTION_CODES } from './generationRejectionCodes.js'
+import { GENERATION_REJECTION_CODES, type GenerationRejectionCode } from './generationRejectionCodes.js'
 export * from './generationRejectionCodes.js'
 import {
   DIAGNOSTIC_EVENT_CATEGORIES,
   DIAGNOSTIC_SIZE_BUCKETS,
+  DIAGNOSTIC_PROVIDER_ADAPTERS,
+  DIAGNOSTIC_GENERATION_INPUT_DOMAINS,
+  DIAGNOSTIC_GENERATION_INPUT_OWNERS,
+  DIAGNOSTIC_VALIDATION_RULES,
+  DIAGNOSTIC_VALUE_KINDS,
   DiagnosticJournalRecordSchema,
   projectDiagnosticJournalRecord,
   type DiagnosticJournalRecord,
@@ -59,13 +64,25 @@ const diagnosticSourceLocation = Type.String({
   pattern:
     '^(?!.*\\.\\.)(?:(?:server/fastify/src|src)/[a-zA-Z0-9_./-]+\\.(?:ts|js|svelte)|assets/[a-zA-Z0-9_.-]+\\.js):[0-9]+:[0-9]+$',
 })
-export const RemoteDiagnosticFactSchema = Type.Union([
+export const RemoteDiagnosticFactV3Schema = Type.Union([
   remoteDiagnosticFact('boolean', Type.Boolean()),
   remoteDiagnosticFact('count', Type.Integer({ minimum: 0, maximum: 1_000_000_000 })),
   remoteDiagnosticFact('duration-ms', Type.Number({ minimum: 0, maximum: 86_400_000 })),
   remoteDiagnosticFact('size-bucket', enumOf(DIAGNOSTIC_SIZE_BUCKETS)),
   remoteDiagnosticFact('reference', DiagnosticReferenceSchema),
   remoteDiagnosticFact('location', diagnosticSourceLocation),
+])
+export const RemoteDiagnosticFactSchema = Type.Union([
+  ...RemoteDiagnosticFactV3Schema.anyOf,
+  remoteDiagnosticFact('rejection-code', enumOf(GENERATION_REJECTION_CODES)),
+  remoteDiagnosticFact('error-name', enumOf(errorNames)),
+  remoteDiagnosticFact('validation-domain', enumOf(DIAGNOSTIC_GENERATION_INPUT_DOMAINS)),
+  remoteDiagnosticFact('validation-owner', enumOf(DIAGNOSTIC_GENERATION_INPUT_OWNERS)),
+  remoteDiagnosticFact('validation-rule', enumOf(DIAGNOSTIC_VALIDATION_RULES)),
+  remoteDiagnosticFact('value-kind', enumOf(DIAGNOSTIC_VALUE_KINDS)),
+  remoteDiagnosticFact('field', Type.String({ minLength: 16, maxLength: 16, pattern: '^[a-f0-9]{16}$' })),
+  remoteDiagnosticFact('provider-adapter', enumOf(DIAGNOSTIC_PROVIDER_ADAPTERS)),
+  remoteDiagnosticFact('http-status', Type.Integer({ minimum: 100, maximum: 599 })),
 ])
 export type RemoteDiagnosticFact = Static<typeof RemoteDiagnosticFactSchema>
 export const RemoteDiagnosticRecordSchema = Type.Object(
@@ -82,11 +99,20 @@ export type RemoteDiagnosticRecord = Static<typeof RemoteDiagnosticRecordSchema>
 export const RemoteDiagnosticRecordV3Schema = Type.Object(
   {
     ...DiagnosticJournalRecordSchema.properties,
-    facts: Type.Optional(Type.Array(RemoteDiagnosticFactSchema, { maxItems: REMOTE_DIAGNOSTIC_FACT_LIMIT })),
+    facts: Type.Optional(Type.Array(RemoteDiagnosticFactV3Schema, { maxItems: REMOTE_DIAGNOSTIC_FACT_LIMIT })),
   },
   { additionalProperties: false },
 )
 export type RemoteDiagnosticRecordV3 = Static<typeof RemoteDiagnosticRecordV3Schema>
+
+export const RemoteDiagnosticRecordV4Schema = Type.Object(
+  {
+    ...DiagnosticJournalRecordSchema.properties,
+    facts: Type.Optional(Type.Array(RemoteDiagnosticFactSchema, { maxItems: REMOTE_DIAGNOSTIC_FACT_LIMIT })),
+  },
+  { additionalProperties: false },
+)
+export type RemoteDiagnosticRecordV4 = Static<typeof RemoteDiagnosticRecordV4Schema>
 
 export const RemoteDiagnosticsResponseV1Schema = Type.Object(
   {
@@ -154,27 +180,38 @@ export const RemoteDiagnosticsResponseV3Schema = Type.Object(
   },
   { additionalProperties: false },
 )
+export const RemoteDiagnosticsResponseV4Schema = Type.Object(
+  {
+    ...RemoteDiagnosticsResponseV3Schema.properties,
+    version: Type.Literal(4),
+    entries: Type.Array(RemoteDiagnosticRecordV4Schema, { maxItems: 200 }),
+  },
+  { additionalProperties: false },
+)
 export const RemoteDiagnosticsResponseSchema = Type.Union([
   RemoteDiagnosticsResponseV1Schema,
   RemoteDiagnosticsResponseV2Schema,
   RemoteDiagnosticsResponseV3Schema,
+  RemoteDiagnosticsResponseV4Schema,
 ])
 export type RemoteDiagnosticsResponseV1 = Static<typeof RemoteDiagnosticsResponseV1Schema>
 export type RemoteDiagnosticsResponseV2 = Static<typeof RemoteDiagnosticsResponseV2Schema>
 export type RemoteDiagnosticsResponseV3 = Static<typeof RemoteDiagnosticsResponseV3Schema>
+export type RemoteDiagnosticsResponseV4 = Static<typeof RemoteDiagnosticsResponseV4Schema>
 export type RemoteDiagnosticsResponse = Static<typeof RemoteDiagnosticsResponseSchema>
 export function isRemoteDiagnosticsResponse(value: unknown): value is RemoteDiagnosticsResponse {
   try {
     if (!Value.Check(RemoteDiagnosticsResponseSchema, value)) return false
     if (value.version === 2 && value.entries.some((entry) => !projectDiagnosticJournalRecord(entry))) return false
     if (value.version === 3 && value.entries.some((entry) => !projectRemoteDiagnosticRecordV3(entry))) return false
+    if (value.version === 4 && value.entries.some((entry) => !projectRemoteDiagnosticRecordV4(entry))) return false
     return true
   } catch {
     return false
   }
 }
 
-// State is independent of the exact v1/v2/v3 journal envelopes.
+// State is independent of the exact v1/v2/v3/v4 journal envelopes.
 const exact = { additionalProperties: false } as const
 const statusCounts = <T extends string>(statuses: readonly T[]) => Type.Record(enumOf(statuses), count, exact)
 const streamState = Type.Object(
@@ -355,7 +392,9 @@ export const SupportDiagnosticsStateResponseSchema = Type.Object(
     rejections: Type.Object(
       {
         sinceStartedAt: timestamp,
-        byCode: Type.Partial(statusCounts(GENERATION_REJECTION_CODES), exact),
+        byCode: Type.Unsafe<Partial<Record<GenerationRejectionCode, number>>>(
+          Type.Partial(statusCounts(GENERATION_REJECTION_CODES), exact),
+        ),
       },
       exact,
     ),
@@ -388,7 +427,7 @@ export const RemoteDiagnosticsErrorSchema = Type.Object(
 )
 
 export interface RemoteDiagnosticsQuery {
-  version: 1 | 2 | 3
+  version: 1 | 2 | 3 | 4
   from: number
   to: number
   limit: number
@@ -411,9 +450,15 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
     )
       return null
     if (Object.values(values).some((value) => typeof value !== 'string' || value.length > 64)) return null
-    if (values.version !== undefined && values.version !== '1' && values.version !== '2' && values.version !== '3')
+    if (
+      values.version !== undefined &&
+      values.version !== '1' &&
+      values.version !== '2' &&
+      values.version !== '3' &&
+      values.version !== '4'
+    )
       return null
-    const version = values.version === '3' ? 3 : values.version === '2' ? 2 : 1
+    const version = values.version === '4' ? 4 : values.version === '3' ? 3 : values.version === '2' ? 2 : 1
     const integer = (value: unknown, fallback: number) =>
       value === undefined
         ? fallback
@@ -461,7 +506,15 @@ export function parseRemoteDiagnosticsQuery(input: unknown, now = Date.now()): R
   }
 }
 
-/** V3 enrichment facts are exact, bounded values rather than rendered text. */
+export function isRemoteDiagnosticFactV3(value: unknown): value is Static<typeof RemoteDiagnosticFactV3Schema> {
+  try {
+    return Value.Check(RemoteDiagnosticFactV3Schema, value)
+  } catch {
+    return false
+  }
+}
+
+/** Enrichment facts are exact, bounded values rather than rendered text. */
 export function projectRemoteDiagnosticFact(value: unknown): RemoteDiagnosticFact | null {
   try {
     return Value.Check(RemoteDiagnosticFactSchema, value) ? structuredClone(value) : null
@@ -470,10 +523,42 @@ export function projectRemoteDiagnosticFact(value: unknown): RemoteDiagnosticFac
   }
 }
 
-/** Restoration and complete-response checks reject malformed or ambiguous v3 facts. */
+/** Drop invalid/duplicate facts independently; enrichment cannot suppress the event. */
+export function projectRemoteDiagnosticFacts(values: readonly RemoteDiagnosticFact[]): RemoteDiagnosticFact[] {
+  const facts: RemoteDiagnosticFact[] = []
+  const ids = new Set<string>()
+  for (const value of values) {
+    const fact = projectRemoteDiagnosticFact(value)
+    if (!fact || ids.has(fact.id)) continue
+    ids.add(fact.id)
+    facts.push(fact)
+  }
+  while (facts.length > REMOTE_DIAGNOSTIC_FACT_LIMIT) dropRemoteDiagnosticFact(facts)
+  return facts
+}
+
+/** Stable overflow policy: last location first, then the last remaining fact. */
+export function dropRemoteDiagnosticFact(facts: RemoteDiagnosticFact[]): void {
+  let index = facts.length - 1
+  while (index >= 0 && facts[index].type !== 'location') index--
+  facts.splice(index < 0 ? facts.length - 1 : index, 1)
+}
+
+/** V3 stays frozen: newer fact types must be removed before this exact check. */
 export function projectRemoteDiagnosticRecordV3(value: unknown): RemoteDiagnosticRecordV3 | null {
   try {
-    if (!Value.Check(RemoteDiagnosticRecordV3Schema, value)) return null
+    return Value.Check(RemoteDiagnosticRecordV3Schema, value)
+      ? (projectRemoteDiagnosticRecordV4(value) as RemoteDiagnosticRecordV3 | null)
+      : null
+  } catch {
+    return null
+  }
+}
+
+/** Restoration and complete-response checks reject malformed or ambiguous facts. */
+export function projectRemoteDiagnosticRecordV4(value: unknown): RemoteDiagnosticRecordV4 | null {
+  try {
+    if (!Value.Check(RemoteDiagnosticRecordV4Schema, value)) return null
     const record = projectDiagnosticJournalRecord({
       sequence: value.sequence,
       receivedAt: value.receivedAt,
