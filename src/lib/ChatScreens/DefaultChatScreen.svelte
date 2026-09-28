@@ -207,7 +207,7 @@
   import {
     acceptedSendRecoveries,
     coordinateAcceptedChatSend,
-    dismissAbandonedAcceptedChatSend,
+    dismissAcceptedChatSend,
     findAcceptedSendRecoveries,
     retryAcceptedChatSend,
   } from 'src/ts/process/acceptedSendCoordinator.svelte'
@@ -845,7 +845,7 @@
     acceptedSendRecoveryAction = { id, action }
     try {
       if (action === 'retry') await retryAcceptedChatSend(id)
-      else await dismissAbandonedAcceptedChatSend(id)
+      else await dismissAcceptedChatSend(id)
     } finally {
       if (acceptedSendRecoveryAction?.id === id && acceptedSendRecoveryAction.action === action) {
         acceptedSendRecoveryAction = null
@@ -2969,7 +2969,7 @@
                     ? language.acceptedSendRecovery.retrying
                     : language.acceptedSendRecovery.retry}
                 </button>
-                {#if recovery.operationState === 'abandoned'}
+                {#if recovery.operationId && (recovery.operationState === 'retryable' || recovery.operationState === 'abandoned')}
                   <button
                     type="button"
                     class="shrink-0 rounded-md border border-darkborderc px-3 py-1.5 text-sm text-textcolor transition-colors hover:border-textcolor hover:bg-selected disabled:cursor-not-allowed disabled:opacity-50"

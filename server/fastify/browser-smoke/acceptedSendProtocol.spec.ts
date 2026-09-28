@@ -369,6 +369,7 @@ const chats = {
   heldEffectReceipt: 'chat-held-effect-receipt',
   compatibilityLoss: 'chat-compatibility-loss',
   retryableProviderFailure: 'chat-retryable-provider-failure',
+  retryableDismiss: 'chat-retryable-dismiss',
   retryResponseLoss: 'chat-retry-response-loss',
   retryTerminalResponseLoss: 'chat-retry-terminal-response-loss',
   reloadMobile: 'chat-reload-mobile',
@@ -728,6 +729,53 @@ test('provider failure before tokens exposes an exact Retry that succeeds withou
     { role: 'user', data: userText },
     { role: 'char', data: reply },
   ])
+})
+
+test('Dismiss cancels a retryable send and releases the chat for the next send', async ({ page }) => {
+  const chatId = chats.retryableDismiss
+  const userText = 'retryable dismiss request'
+  const nextText = 'send after dismiss'
+  const reply = 'Reply after dismiss'
+  harness.provider.configure(
+    chatId,
+    { chunks: [], errorBeforeTokens: 'browser smoke retryable dismiss failure' },
+    { chunks: [reply] },
+  )
+
+  await bootChat(page, chatId)
+  await sendMessage(page, userText)
+
+  const recovery = page.getByTestId('accepted-send-recovery')
+  await expect(recovery).toBeVisible({ timeout: 15_000 })
+  const providerError = page.getByRole('alertdialog')
+  await expect(providerError).toContainText('browser smoke retryable dismiss failure')
+  await providerError.getByRole('button', { name: 'OK', exact: true }).click()
+  const operation = await waitForOperation(page, chatId)
+  expect(operation).toMatchObject({ state: 'retryable', providerMayHaveRun: true })
+
+  await recovery.getByTestId('accepted-send-dismiss').click()
+  await expect(recovery).toHaveCount(0, { timeout: 15_000 })
+  await expect
+    .poll(
+      async () =>
+        (await authoritativeBootstrap(page)).generationOperations?.find(
+          (candidate) => candidate.operationId === operation.operationId,
+        )?.state,
+      { timeout: 15_000 },
+    )
+    .toBe('cancelled')
+  expect(summarizeMessages(await authoritativeMessages(page, chatId))).toEqual([{ role: 'user', data: userText }])
+  expect(harness.provider.calls(chatId)).toBe(1)
+
+  await sendMessage(page, nextText)
+  await expect
+    .poll(async () => summarizeMessages(await authoritativeMessages(page, chatId)), { timeout: 20_000 })
+    .toEqual([
+      { role: 'user', data: userText },
+      { role: 'user', data: nextText },
+      { role: 'char', data: reply },
+    ])
+  expect(harness.provider.calls(chatId)).toBe(2)
 })
 
 for (const recoveryState of ['running', 'completed'] as const) {

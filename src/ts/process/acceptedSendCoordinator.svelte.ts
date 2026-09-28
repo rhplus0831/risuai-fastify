@@ -737,13 +737,19 @@ export async function retryAcceptedChatSend(id: string): Promise<boolean> {
   }
 }
 
-/** Permanently dismiss an abandoned accepted-send retry through server authority. */
-export async function dismissAbandonedAcceptedChatSend(id: string): Promise<boolean> {
+/** Permanently dismiss a retryable or abandoned accepted-send recovery through server authority. */
+export async function dismissAcceptedChatSend(id: string): Promise<boolean> {
   const sourceGeneration = captureClientSessionGeneration()
   const isCurrent = () => isClientWriteOperationCurrent(sourceGeneration)
   if (!isCurrent()) return false
   const recovery = get(acceptedSendRecoveries).find((candidate) => candidate.id === id)
-  if (!recovery || recovery.retrying || recovery.operationState !== 'abandoned' || !recovery.operationId) return false
+  if (
+    !recovery ||
+    recovery.retrying ||
+    (recovery.operationState !== 'retryable' && recovery.operationState !== 'abandoned') ||
+    !recovery.operationId
+  )
+    return false
 
   const finishDismiss = beginRecoveryRetry(id, sourceGeneration)
   try {

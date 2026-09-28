@@ -228,11 +228,13 @@ message. The browser rolls back its optimistic append only after acknowledged
 cancellation. A lost or failed acknowledgement keeps the durable Stop
 obligation for replay instead of treating the operation as cancelled.
 
-An interrupted accepted-send recovery can be dismissed only while its durable
-operation is abandoned. Dismiss sends Stop for that exact operation and removes
-the recovery row only after acknowledgement; failure, writer/session scope loss,
-or re-promotion races keep the warning and recovery action. Retry is a separate
-action and asks for confirmation when the provider may already have run.
+An interrupted accepted-send recovery can be dismissed while its server-backed
+durable operation is retryable or abandoned. Compatibility recoveries without
+operation authority remain non-dismissible. Dismiss sends Stop for that exact
+operation and removes the recovery row only after acknowledgement; failure,
+writer/session scope loss, or re-promotion races keep the warning and recovery
+action. Retry is a separate action and asks for confirmation when the provider
+may already have run.
 
 Retry responses carry `acceptedRetryRequestId` separately from the live stream
 descriptor. An idempotent retry replay can therefore acknowledge its exact
