@@ -75,6 +75,7 @@ import {
 } from './server/localFileImport'
 import { refreshServerRealmImportResources } from './server/resourceRefresh'
 import { sanitizeHubAdditionalHtml } from './hubAdditionalHtml'
+import { safeStructuredClone } from './safeStructuredClone'
 import { ensureClientLorebookEntryIds } from './server/lorebookOwner.svelte'
 import {
   ensureClientScriptDefinitionIds,
@@ -973,7 +974,7 @@ function convertOffSpecCards(
 export async function exportChar(charaID: number): Promise<string> {
   const owner = characterOwnerAt(charaID)
   if (!owner) return ''
-  let char = structuredClone(owner)
+  let char = safeStructuredClone(owner)
 
   if (!char.image) {
     const res = await fetch('/none.webp')
